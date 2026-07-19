@@ -1,0 +1,30 @@
+// Hello-world simulation driver for the dino dual-issue CPU. Both language
+// tops expose the same interface, so the same driver serves dino/pyrope and a
+// slang re-emission of dino/verilog (lhd compile ... --emit-dir pyrope:DIR).
+//
+// KNOWN LIMITATION (tracked informationally by //bench:sim_*): lhd sim
+// currently rejects this top with comb-loop-through-instance on the register
+// file (instance-atomic scheduling; the feedback is false at bit level).
+// stagereg_tb.prp is the asserted sim smoke until that lands.
+//
+// Usage: copy this file next to the Pyrope tree of the design, then
+//   lhd sim <dir>/dino_tb.prp --workdir W
+// (`tick N clocks=(clock=1)` advances N cycles; `clock` is the cycle index.)
+const cpu = import("PipelinedDualIssueCPU.PipelinedDualIssueCPU")
+
+test cpu.hello(cycles:u20 = 1000) {
+  mut acc = cpu
+  mut addr = 0
+  tick cycles clocks=(clock=1) {
+    acc.reset = clock < 2
+    acc.io_imem_good = 1
+    acc.io_imem_ready = 1
+    acc.io_imem_instruction = 0x1300000013  // two NOPs (addi x0,x0,0) per fetch
+    acc.io_dmem_good = 1
+    acc.io_dmem_readdata = 0
+    step
+    addr = acc.io_imem_address
+  }
+  assert(addr > 0, "PC advanced past reset on a NOP stream")
+  puts("hello world: dino ran {cycles} cycles, pc={addr}")
+}

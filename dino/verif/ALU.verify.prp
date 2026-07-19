@@ -1,0 +1,26 @@
+// Assert/assume collateral for the dino ALU — a sidecar, so the design files
+// are never touched. io_operation = {word:1, aluop:4}; aluop row 7 is the
+// adder, so 0x17 = ADDW and 0x07 = ADD.
+//
+// NOTE: assumes are GLOBAL environment constraints — every in-force assume
+// from every block constrains the same model, so blocks must not carry
+// mutually-exclusive assumes (the run degrades to "assume set contradictory",
+// all proofs vacuous). That is why the full-width ADD claim below is an
+// implication-style assert rather than a second assume.
+//
+// Usage:
+//   lhd formal verify dino/pyrope/ALU.prp dino/verif/ALU.verify.prp \
+//       --top ALU --set formal.bound=2 --workdir W
+//
+// The first ADDW assert is exactly what dino/tests/bug1/ALU.prp breaks:
+// against that variant this sidecar REFUTES with a counterexample trace.
+const alu = import("ALU.ALU")
+
+formal alu.addw {
+  mut acc = alu
+  assume(acc.io_operation == 0x17)
+  assert(acc.io_result#[0..=31] == (acc.io_inputx#[0..=31] + acc.io_inputy#[0..=31])#[0..=31],
+         "ADDW low 32 bits are the 32-bit sum")
+  assert(acc.io_result#[31..=63] == 0 or acc.io_result#[31..=63] == 0x1ffffffff,
+         "ADDW result is sign-extended")
+}

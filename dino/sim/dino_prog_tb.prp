@@ -1,0 +1,78 @@
+// A real RISC-V program on the dino dual-issue CPU: a loop that INCREMENTS
+// x2 and DECREMENTS x3, then stores both to dmem — the testbench taps the
+// store bus (io_dmem_*) to check the architectural relationship
+//   x2 == iters   and   (x2 + x3) mod 2^64 == 0
+// and computes/prints the IPC (committed instructions / cycles to the final
+// store). Reading the registers through the program's own stores keeps the
+// testbench architectural — no internal register-file taps needed.
+//
+// The program lives in a flat 16-entry ROM of 32-bit instructions (assembly
+// inline below). The CPU is a 2-wide superscalar: each fetch delivers TWO
+// consecutive slots, composed from the aligned fetch address (upper bits
+// dropped, index masked). //bench:sim_* tracks this test as METRIC
+// sim_cpu_prog_ok.
+const cpu = import("PipelinedDualIssueCPU.PipelinedDualIssueCPU")
+
+test cpu.prog(cycles:u20 = 2000) {
+  mut acc = cpu
+  mut rom = [0x06400093,  // [0]  0x00: addi x1, x0, 100   ; x1 = iteration bound
+             0x00000013,  // [1]  0x04: nop
+             0x00000113,  // [2]  0x08: addi x2, x0, 0     ; x2 = 0 (counts up)
+             0x00000193,  // [3]  0x0c: addi x3, x0, 0     ; x3 = 0 (counts down)
+             0x00110113,  // [4]  0x10: addi x2, x2, 1     ; loop: dual-issued pair...
+             0xFFF18193,  // [5]  0x14: addi x3, x3, -1    ; ...independent, same fetch
+             0xFE111CE3,  // [6]  0x18: bne  x2, x1, -8    ; until x2 == x1 (-> 0x10)
+             0xFFF18193,  // [5]  0x14: addi x3, x3, -1    ; Should not execute -- flushed
+             0xFFF18193,  // [5]  0x14: addi x3, x3, -1    ; Should not execute -- flushed
+             0x00000013,  // [9]  0x24: nop                ; write-back before the sd
+             0x00203023,  // [10] 0x28: sd   x2, 0(x0)     ; expose x2 to the tb
+             0x00303423,  // [11] 0x2c: sd   x3, 8(x0)     ; expose x3 to the tb
+             0x00000063,  // [12] 0x30: beq  x0, x0, 0     ; spin forever
+             0x00000013,  // [13] 0x34: nop
+             0x00000013,  // [14] 0x38: nop
+             0x00000013]  // [15] 0x3c: nop
+  mut st0 = 0      // sd x2,0(x0) data
+  mut st8:s64 = 0  // sd x3,8(x0) data
+  mut got0 = 0
+  mut got8 = 0
+  mut done_cycle = 0
+  tick cycles clocks=(clock=1) {
+    acc.reset = clock < 2
+    acc.io_imem_good = 1
+    acc.io_imem_ready = 1
+    // 2 consecutive 32-bit slots from the aligned fetch address (mask to 16)
+    mut i = (acc.io_imem_address >> 2) & 0xE // No RISC-V compress
+    mut w = rom[i] | (rom[i + 1] << 32)
+    acc.io_imem_instruction = w
+    acc.io_dmem_good = 1
+    acc.io_dmem_readdata = 0
+    step
+    if acc.io_dmem_memwrite != 0 {
+      if acc.io_dmem_address == 0 {
+        st0 = acc.io_dmem_writedata
+        got0 = 1
+      } elif acc.io_dmem_address == 8 {
+        st8 = acc.io_dmem_writedata
+        got8 = 1
+      }
+    }
+    if done_cycle==0 {
+      puts("{clock} x2 reg is {acc.registers.regs[2]}")
+      // puts("{clock} is {acc.pc:x}")
+    }
+    if done_cycle == 0 and got0 == 1 and got8 == 1 {
+      done_cycle = clock
+    }
+  }
+  assert(got0 == 1 and got8 == 1, "program stored both counters")
+  assert(st0 == 100, "x2 counted up to the iteration bound")
+  assert(st8 == -102 , "x3 counted down in lockstep: x3 == -100 mod 2^64")
+  // Committed instructions: 3 setup + 100*(addi,addi,bne) + 2 stores = 305
+  // (nops excluded). IPC in milli-units to stay integer-friendly.
+  mut ipc_milli = 0
+  if done_cycle > 0 {
+    ipc_milli = (305 * 1000) / done_cycle
+  }
+  mut neg_x3 = 0xFFFFFFFFFFFFFFFF - st8 + 1
+  puts("dino program: x2={st0} -x3={neg_x3}, done at cycle {done_cycle}, IPC={ipc_milli} milli-instr/cycle")
+}
