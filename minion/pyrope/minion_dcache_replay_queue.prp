@@ -1,0 +1,1299 @@
+const prim_rf_1r1w_par_preview = import("prim_rf_1r1w_par_preview.prim_rf_1r1w_par_preview")
+const prim_rf_1r1w_par_preview_p1 = import("prim_rf_1r1w_par_preview_p1.prim_rf_1r1w_par_preview_p1")
+
+const minion_pkg = import("minion_pkg")
+const minion_dcache_pkg = import("minion_dcache_pkg")
+
+pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc_req_pre_i:u1, alloc_req_val_i:u1, alloc_gsc_i:u1, push_req_i:u1, push_req_prev_i:u1, req_data_i:u406, cacheable_i:u1, req_buf_alloc_i:u1, req_buf_entry_i:minion_dcache_pkg.DcacheBufferIdxWidth_T, req_conf_type_i:(vpu_rf_write:u1, miss_alloc:u1, miss_accepted:u2, miss_assigned:u2), misaligned_1st_i:u1, uc_load_1st_i:u1, uc_load_ok_i:u1, miss_fill_ok_i:u1, rearm_i:u1, rearm_prev_i:u1, rearm_entry_i:minion_dcache_pkg.DcacheReplayqAddrWidth_T, dealloc_i:u1, dealloc_entry_i:minion_dcache_pkg.DcacheReplayqAddrWidth_T, miss_available_i:minion_dcache_pkg.DcacheMhFileSize_T, miss_fill_error_i:minion_dcache_pkg.DcacheMhFileSize_T, uc_load_fill_i:u1, uc_load_fill_id_i:minion_dcache_pkg.DcacheBufferIdxWidth_T, uc_load_fill_ok_i:u1, vpu_rf_in_use_i:u1, replay_grant_i:u1) -> (full_o:u1@[], half_full_o:u1@[], empty_o:minion_pkg.NrThreads_T@[], rq_conflict_o:u1@[], rq_conflict_to_co_o:u1@[], replay_bid_o:u1@[], replay_valid_o:u1@[], replay_req_o:u130@[], replay_entry_o:minion_dcache_pkg.DcacheReplayqAddrWidth_T@[], replay_age_o:minion_dcache_pkg.DcacheReplayqAgeWidth_T@[], replay_uc_ok_o:u1@[], replay_miss_ok_o:u1@[], scoreboard_o:u64@[], fp_sb_dealloc_o:minion_pkg.NrThreads_T@[], int_sb_dealloc_o:minion_pkg.NrThreads_T@[]) {
+  mut replay_entry_d = 0
+  mut replayq_ready_info_q = 0
+  reg empty_o:u2:[clock_pin=ref clk_i]
+  reg replay_valid_o:u1:[clock_pin=ref clk_i]
+  reg replay_entry_o:u3:[clock_pin=ref clk_i]
+  reg fp_sb_dealloc_o:u2:[clock_pin=ref clk_i]
+  reg int_sb_dealloc_o:u2:[clock_pin=ref clk_i]
+  reg s0_alloc_req_pre_q:u1:[clock_pin=ref clk_i]
+  reg s1_alloc_req_q:u1:[clock_pin=ref clk_i]
+  reg s2_alloc_req_q:u1:[clock_pin=ref clk_i]
+  reg s3_alloc_req_q:u1:[clock_pin=ref clk_i]
+  reg s0_alloc_gsc_q:u1:[clock_pin=ref clk_i]
+  reg s1_alloc_gsc_q:u1:[clock_pin=ref clk_i]
+  reg s2_alloc_gsc_q:u1:[clock_pin=ref clk_i]
+  reg entry_count_available_q:u4:[clock_pin=ref clk_i]
+  reg entry_mask_available_q:u8:[clock_pin=ref clk_i]
+  reg alloc_req_pre_applied_q:u1:[clock_pin=ref clk_i]
+  reg age_id_mask_available_q:u16:[clock_pin=ref clk_i]
+  reg push_age_q:u5:[clock_pin=ref clk_i]
+  reg `replayq_ready_info_q.pending`:[8]u1:[fwd=0, clock_pin=ref clk_i]
+  reg `replayq_ready_info_q.store`:[8]u1:[fwd=0, clock_pin=ref clk_i]
+  reg `replayq_ready_info_q.age`:[8]u5:[fwd=0, clock_pin=ref clk_i]
+  reg `replayq_ready_info_q.reason`:[8]u6:[fwd=0, clock_pin=ref clk_i]
+  reg `replayq_ready_info_q.wait_uc_load`:[8]u1:[fwd=0, clock_pin=ref clk_i]
+  reg `replayq_ready_info_q.uc_load_ok`:[8]u1:[fwd=0, clock_pin=ref clk_i]
+  reg `replayq_ready_info_q.miss_fill_ok`:[8]u1:[fwd=0, clock_pin=ref clk_i]
+  reg uc_load_id_q:[8]u3:[fwd=0, clock_pin=ref clk_i]
+  reg rq_conflict_matrix_q:u64:[clock_pin=ref clk_i]
+  reg replay_entry_prev_q:u3:[clock_pin=ref clk_i]
+  reg replay_valid_prev_q:u1:[clock_pin=ref clk_i]
+  reg push_req_spec_q:u1:[clock_pin=ref clk_i]
+  reg prio_bits_q:u64:[clock_pin=ref clk_i]
+  mut replayq_push_q:u608 = 0
+  mut replayq_rearm_q:u432 = 0
+  mut replayq:u1040 = 0
+  mut `req_written_push.dest` = 0
+  mut `req_written_push.cmd` = 0
+  mut `req_written_push.typ` = 0
+  mut `req_written_push.gsc_cnt` = 0
+  mut `req_written_push.ps_mask` = 0
+  mut `req_written_push.buf_alloc` = 0
+  mut `req_written_push.buf_id` = 0
+  mut `req_written_push.cache_op` = 0
+  mut `req_written_push.gsc32_idx` = 0
+  mut `req_written_push.vm_sel` = 0
+  mut `req_written_push.mem_global` = 0
+  mut `req_written_rearm.addr` = 0
+  mut `req_written_rearm.phys` = 0
+  mut `req_written_rearm.misaligned` = 0
+  mut `req_written_rearm.misaligned_2nd` = 0
+  mut `req_written_rearm.cacheable` = 0
+  mut `req_written_rearm.uc_load_2nd` = 0
+  mut replayq_ready_info_d:u128 = 0
+  mut entry_count_available_d = 0
+  mut alloc_req_pre_applied_d = 0
+  mut entry_mask_available_d = 0
+  mut age_id_mask_available_d = 0
+  mut entry_ready = 0
+  mut empty_d = 0
+  mut push_age_d = 0
+  mut uc_load_id_d:[8]u3 = 0
+  mut win_per_client = 0
+  mut prio_bits_d = 0
+  mut rq_to_s2_conflict_array = 0
+  mut s2_to_rq_conflict_array = 0
+  mut rq_conflict_matrix_d = 0
+  mut fp_sb_dealloc_d = 0
+  mut int_sb_dealloc_d = 0
+  full_o = 0ub?
+  half_full_o = 0ub?
+  replay_age_o = 0ub?????
+  replay_bid_o = 0ub?
+  replay_miss_ok_o = 0ub?
+  replay_req_o = 0ub??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+  replay_uc_ok_o = 0ub?
+  rq_conflict_o = 0ub?
+  rq_conflict_to_co_o = 0ub?
+  scoreboard_o = 0ub????????????????????????????????????????????????????????????????
+  const s0_alloc_req__w1 = unsigned((s0_alloc_req_pre_q != 0) and (alloc_req_val_i != 0))
+  const push_age_check_available__w1 = ((((push_age_q#[0..=3] + (s0_alloc_req__w1 & 1))#[0..=3] + (s1_alloc_req_q & 1))#[0..=3] + (s2_alloc_req_q & 1))#[0..=3] + (s3_alloc_req_q & 1))#[0..=3]
+  mut push_entry = if ((entry_mask_available_q >> 1) & 1) != 0 { 1 } else { 0 }
+  if ((entry_mask_available_q >> 2) & 1) != 0 {
+    push_entry = 2
+  }
+  if ((entry_mask_available_q >> 3) & 1) != 0 {
+    push_entry = 3
+  }
+  if ((entry_mask_available_q >> 4) & 1) != 0 {
+    push_entry = 4
+  }
+  if ((entry_mask_available_q >> 5) & 1) != 0 {
+    push_entry = 5
+  }
+  if ((entry_mask_available_q >> 6) & 1) != 0 {
+    push_entry = 6
+  }
+  if ((entry_mask_available_q >> 7) & 1) != 0 {
+    push_entry = 7
+  }
+  if ((req_data_i >> 65) & 1) != 0 {
+    push_entry = rearm_entry_i
+  }
+  const entry_count_available_d__w1 = entry_count_available_q
+  alloc_req_pre_applied_d = 0
+  entry_count_available_d = entry_count_available_d__w1
+  if (alloc_req_pre_i != 0) and (entry_count_available_d__w1 != 0) {
+    alloc_req_pre_applied_d = 1
+    entry_count_available_d = (entry_count_available_d - 1)#[0..=3]
+  }
+  if (alloc_req_pre_applied_q != 0) and (s0_alloc_req__w1 == 0) {
+    entry_count_available_d = (entry_count_available_d + 1)#[0..=3]
+  }
+  if (s2_alloc_req_q != 0) and (s2_alloc_gsc_q == 0) and (push_req_i == 0) {
+    entry_count_available_d = (entry_count_available_d + 1)#[0..=3]
+  }
+  if (s3_alloc_req_q != 0) and (push_req_i == 0) {
+    entry_count_available_d = (entry_count_available_d + 1)#[0..=3]
+  }
+  if (s2_alloc_req_q != 0) and (s2_alloc_gsc_q == 0) and (s3_alloc_req_q != 0) and (push_req_i != 0) {
+    entry_count_available_d = (entry_count_available_d + 1)#[0..=3]
+  }
+  if dealloc_i != 0 {
+    entry_count_available_d = (entry_count_available_d + 1)#[0..=3]
+  }
+  entry_mask_available_d = entry_mask_available_q
+  if push_req_i != 0 {
+    entry_mask_available_d = (entry_mask_available_d & (~(1 << push_entry))) | (0 << push_entry)
+  }
+  if dealloc_i != 0 {
+    entry_mask_available_d = (entry_mask_available_d & (~(1 << dealloc_entry_i))) | (1 << dealloc_entry_i)
+  }
+  age_id_mask_available_d = age_id_mask_available_q
+  if push_req_i != 0 {
+    age_id_mask_available_d = (age_id_mask_available_d & (~(1 << push_age_q#[0..=3]))) | (0 << push_age_q#[0..=3])
+  }
+  if dealloc_i != 0 {
+    age_id_mask_available_d = (age_id_mask_available_d & (~(1 << req_data_i#[57..=61]#[0..=3]))) | (1 << req_data_i#[57..=61]#[0..=3])
+  }
+  const `req_written_push.dest__w1` = req_data_i#[342..=348]#[0..=6]
+  const `req_written_push.cmd__w1` = req_data_i#[337..=341]#[0..=4]
+  const `req_written_push.typ__w1` = req_data_i#[333..=336]#[0..=3]
+  const `req_written_push.gsc_cnt__w1` = req_data_i#[330..=332]#[0..=2]
+  const `req_written_push.ps_mask__w1` = req_data_i#[322..=329]#[0..=7]
+  const `req_written_push.buf_alloc__w1` = req_buf_alloc_i & 1
+  const `req_written_push.buf_id__w1` = req_buf_entry_i#[0..=2]
+  const `req_written_push.cache_op__w1` = (req_data_i >> 56) & 1 & 1
+  const `req_written_push.gsc32_idx__w1` = req_data_i#[4..=43]#[0..=39]
+  const `req_written_push.vm_sel__w1` = req_data_i#[1..=3]#[0..=2]
+  const `req_written_push.mem_global__w1` = req_data_i & 1 & 1
+  const `req_written_rearm.addr__w1` = req_data_i#[357..=405]#[0..=48]
+  const `req_written_rearm.misaligned__w1` = (req_data_i >> 350) & 1 & 1
+  const `req_written_rearm.misaligned_2nd__w1` = (req_data_i >> 349) & 1 & 1
+  const `req_written_rearm.uc_load_2nd__w1` = (req_data_i >> 46) & 1 & 1
+  const `req_written_rearm.phys__w1` = (req_data_i >> 351) & 1 & 1
+  const `req_written_rearm.cacheable__w1` = cacheable_i & 1
+  `req_written_push.buf_alloc` = 0
+  `req_written_push.buf_id` = 0
+  `req_written_push.cache_op` = 0
+  `req_written_push.cmd` = 0
+  `req_written_push.dest` = 0
+  `req_written_push.gsc32_idx` = 0
+  `req_written_push.gsc_cnt` = 0
+  `req_written_push.mem_global` = 0
+  `req_written_push.ps_mask` = 0
+  `req_written_push.typ` = 0
+  `req_written_push.vm_sel` = 0
+  `req_written_rearm.addr` = `req_written_rearm.addr__w1`
+  `req_written_rearm.cacheable` = 0
+  `req_written_rearm.misaligned` = `req_written_rearm.misaligned__w1`
+  `req_written_rearm.misaligned_2nd` = `req_written_rearm.misaligned_2nd__w1`
+  `req_written_rearm.phys` = 0
+  `req_written_rearm.uc_load_2nd` = 0
+  if misaligned_1st_i != 0 {
+    `req_written_rearm.addr`#[5..=48] = (req_data_i#[357..=405]#[5..=48] + 1)#[0..=43]
+    `req_written_rearm.misaligned` = 0
+    `req_written_rearm.misaligned_2nd` = 1
+  }
+  `req_written_rearm.uc_load_2nd` = `req_written_rearm.uc_load_2nd__w1`
+  if uc_load_1st_i != 0 {
+    `req_written_rearm.uc_load_2nd` = 1
+  }
+  mut u_replayq_push = prim_rf_1r1w_par_preview::[name=u_replayq_push](preview_clk_i = clk_i, rf_clk_i = clk_i, wr_data_en_1p_next_i = push_req_prev_i, wr_data_i = (`req_written_push.dest__w1` << 69) | (`req_written_push.cmd__w1` << 64) | (`req_written_push.typ__w1` << 60) | (`req_written_push.gsc_cnt__w1` << 57) | (`req_written_push.ps_mask__w1` << 49) | (`req_written_push.buf_alloc__w1` << 48) | (`req_written_push.buf_id__w1` << 45) | (`req_written_push.cache_op__w1` << 44) | (`req_written_push.gsc32_idx__w1` << 4) | (`req_written_push.vm_sel__w1` << 1) | `req_written_push.mem_global__w1`, wr_addr_i = push_entry, wr_en_i = push_req_i)
+  const replayq_push_flat_q__w1 = u_replayq_push
+  mut u_replayq_rearm = prim_rf_1r1w_par_preview_p1::[name=u_replayq_rearm](preview_clk_i = clk_i, rf_clk_i = clk_i, wr_data_en_1p_next_i = unsigned((push_req_prev_i != 0) or (rearm_prev_i != 0)), wr_data_i = (`req_written_rearm.addr` << 5) | (`req_written_rearm.phys__w1` << 4) | (`req_written_rearm.misaligned` << 3) | (`req_written_rearm.misaligned_2nd` << 2) | (`req_written_rearm.cacheable__w1` << 1) | `req_written_rearm.uc_load_2nd`, wr_addr_i = push_entry, wr_en_i = unsigned((push_req_i != 0) or (rearm_i != 0)))
+  const replayq_rearm_flat_q__w1 = u_replayq_rearm
+  if rst_ni == 0 {
+    age_id_mask_available_q = 65535
+    alloc_req_pre_applied_q = 0
+    entry_count_available_q = minion_dcache_pkg.DcacheReplayqSize#[0..=3]
+    entry_mask_available_q = 255
+    s0_alloc_gsc_q = 0
+    s0_alloc_req_pre_q = 0
+    s1_alloc_gsc_q = 0
+    s1_alloc_req_q = 0
+    s2_alloc_gsc_q = 0
+    s2_alloc_req_q = 0
+    s3_alloc_req_q = 0
+  } elif unsigned((rst_ni == 0) or (alloc_req_pre_i != 0) or (s0_alloc_req_pre_q != 0) or (s1_alloc_req_q != 0) or (s2_alloc_req_q != 0) or (s3_alloc_req_q != 0) or (dealloc_i != 0) or (push_req_i != 0)) != 0 {
+    s1_alloc_req_q = s0_alloc_req__w1
+    s2_alloc_req_q = s1_alloc_req_q
+    
+    s0_alloc_req_pre_q = alloc_req_pre_i
+    s0_alloc_gsc_q = alloc_gsc_i
+    s1_alloc_gsc_q = s0_alloc_gsc_q
+    age_id_mask_available_q = age_id_mask_available_d
+    alloc_req_pre_applied_q = alloc_req_pre_applied_d
+    entry_count_available_q = entry_count_available_d
+    entry_mask_available_q = entry_mask_available_d
+    s2_alloc_gsc_q = s1_alloc_gsc_q
+    s3_alloc_req_q = unsigned((s2_alloc_req_q != 0) and (s2_alloc_gsc_q != 0))
+  }
+  replayq_push_q#[0..=75] = replayq_push_flat_q__w1#[0..=75]
+  replayq#[74..=80] = replayq_push_q#[0..=75]#[69..=75]
+  mut replayq__w1 = replayq
+  replayq__w1#[69..=73] = replayq_push_q#[0..=75]#[64..=68]
+  mut replayq__w2 = replayq__w1
+  replayq__w2#[65..=68] = replayq_push_q#[0..=75]#[60..=63]
+  mut replayq__w3 = replayq__w2
+  replayq__w3#[62..=64] = replayq_push_q#[0..=75]#[57..=59]
+  mut replayq__w4 = replayq__w3
+  replayq__w4#[54..=61] = replayq_push_q#[0..=75]#[49..=56]
+  mut replayq__w5 = replayq__w4
+  replayq__w5#[52..=52] = ((replayq_push_q#[0..=75] >> 48) & 1)
+  mut replayq__w6 = replayq__w5
+  replayq__w6#[49..=51] = replayq_push_q#[0..=75]#[45..=47]
+  mut replayq__w7 = replayq__w6
+  replayq__w7#[48..=48] = ((replayq_push_q#[0..=75] >> 44) & 1)
+  mut replayq__w8 = replayq__w7
+  replayq__w8#[4..=43] = replayq_push_q#[0..=75]#[4..=43]
+  mut replayq__w9 = replayq__w8
+  replayq__w9#[1..=3] = replayq_push_q#[0..=75]#[1..=3]
+  mut replayq__w10 = replayq__w9
+  replayq__w10#[0..=0] = (replayq_push_q#[0..=75] & 1)
+  replayq_rearm_q#[0..=53] = replayq_rearm_flat_q__w1#[0..=53]
+  mut replayq__w11 = replayq__w10
+  replayq__w11#[81..=129] = replayq_rearm_q#[0..=53]#[5..=53]
+  mut replayq__w12 = replayq__w11
+  replayq__w12#[47..=47] = ((replayq_rearm_q#[0..=53] >> 3) & 1)
+  mut replayq__w13 = replayq__w12
+  replayq__w13#[46..=46] = ((replayq_rearm_q#[0..=53] >> 2) & 1)
+  mut replayq__w14 = replayq__w13
+  replayq__w14#[44..=44] = (replayq_rearm_q#[0..=53] & 1)
+  mut replayq__w15 = replayq__w14
+  replayq__w15#[53..=53] = ((replayq_rearm_q#[0..=53] >> 4) & 1)
+  mut replayq__w16 = replayq__w15
+  replayq__w16#[45..=45] = ((replayq_rearm_q#[0..=53] >> 1) & 1)
+  mut replayq_push_q__w1 = replayq_push_q
+  replayq_push_q__w1#[76..=151] = replayq_push_flat_q__w1#[76..=151]
+  mut replayq_rearm_q__w1 = replayq_rearm_q
+  replayq_rearm_q__w1#[54..=107] = replayq_rearm_flat_q__w1#[54..=107]
+  mut replayq__w17 = replayq__w16
+  replayq__w17#[204..=210] = replayq_push_q__w1#[76..=151]#[69..=75]
+  mut replayq__w18 = replayq__w17
+  replayq__w18#[199..=203] = replayq_push_q__w1#[76..=151]#[64..=68]
+  mut replayq__w19 = replayq__w18
+  replayq__w19#[195..=198] = replayq_push_q__w1#[76..=151]#[60..=63]
+  mut replayq__w20 = replayq__w19
+  replayq__w20#[192..=194] = replayq_push_q__w1#[76..=151]#[57..=59]
+  mut replayq__w21 = replayq__w20
+  replayq__w21#[184..=191] = replayq_push_q__w1#[76..=151]#[49..=56]
+  mut replayq__w22 = replayq__w21
+  replayq__w22#[182..=182] = ((replayq_push_q__w1#[76..=151] >> 48) & 1)
+  mut replayq__w23 = replayq__w22
+  replayq__w23#[179..=181] = replayq_push_q__w1#[76..=151]#[45..=47]
+  mut replayq__w24 = replayq__w23
+  replayq__w24#[178..=178] = ((replayq_push_q__w1#[76..=151] >> 44) & 1)
+  mut replayq__w25 = replayq__w24
+  replayq__w25#[134..=173] = replayq_push_q__w1#[76..=151]#[4..=43]
+  mut replayq__w26 = replayq__w25
+  replayq__w26#[131..=133] = replayq_push_q__w1#[76..=151]#[1..=3]
+  mut replayq__w27 = replayq__w26
+  replayq__w27#[130..=130] = (replayq_push_q__w1#[76..=151] & 1)
+  mut replayq__w28 = replayq__w27
+  replayq__w28#[211..=259] = replayq_rearm_q__w1#[54..=107]#[5..=53]
+  mut replayq__w29 = replayq__w28
+  replayq__w29#[177..=177] = ((replayq_rearm_q__w1#[54..=107] >> 3) & 1)
+  mut replayq__w30 = replayq__w29
+  replayq__w30#[176..=176] = ((replayq_rearm_q__w1#[54..=107] >> 2) & 1)
+  mut replayq__w31 = replayq__w30
+  replayq__w31#[174..=174] = (replayq_rearm_q__w1#[54..=107] & 1)
+  mut replayq__w32 = replayq__w31
+  replayq__w32#[183..=183] = ((replayq_rearm_q__w1#[54..=107] >> 4) & 1)
+  mut replayq__w33 = replayq__w32
+  replayq__w33#[175..=175] = ((replayq_rearm_q__w1#[54..=107] >> 1) & 1)
+  mut replayq_push_q__w2 = replayq_push_q__w1
+  replayq_push_q__w2#[152..=227] = replayq_push_flat_q__w1#[152..=227]
+  mut replayq_rearm_q__w2 = replayq_rearm_q__w1
+  replayq_rearm_q__w2#[108..=161] = replayq_rearm_flat_q__w1#[108..=161]
+  mut replayq__w34 = replayq__w33
+  replayq__w34#[334..=340] = replayq_push_q__w2#[152..=227]#[69..=75]
+  mut replayq__w35 = replayq__w34
+  replayq__w35#[329..=333] = replayq_push_q__w2#[152..=227]#[64..=68]
+  mut replayq__w36 = replayq__w35
+  replayq__w36#[325..=328] = replayq_push_q__w2#[152..=227]#[60..=63]
+  mut replayq__w37 = replayq__w36
+  replayq__w37#[322..=324] = replayq_push_q__w2#[152..=227]#[57..=59]
+  mut replayq__w38 = replayq__w37
+  replayq__w38#[314..=321] = replayq_push_q__w2#[152..=227]#[49..=56]
+  mut replayq__w39 = replayq__w38
+  replayq__w39#[312..=312] = ((replayq_push_q__w2#[152..=227] >> 48) & 1)
+  mut replayq__w40 = replayq__w39
+  replayq__w40#[309..=311] = replayq_push_q__w2#[152..=227]#[45..=47]
+  mut replayq__w41 = replayq__w40
+  replayq__w41#[308..=308] = ((replayq_push_q__w2#[152..=227] >> 44) & 1)
+  mut replayq__w42 = replayq__w41
+  replayq__w42#[264..=303] = replayq_push_q__w2#[152..=227]#[4..=43]
+  mut replayq__w43 = replayq__w42
+  replayq__w43#[261..=263] = replayq_push_q__w2#[152..=227]#[1..=3]
+  mut replayq__w44 = replayq__w43
+  replayq__w44#[260..=260] = (replayq_push_q__w2#[152..=227] & 1)
+  mut replayq__w45 = replayq__w44
+  replayq__w45#[341..=389] = replayq_rearm_q__w2#[108..=161]#[5..=53]
+  mut replayq__w46 = replayq__w45
+  replayq__w46#[307..=307] = ((replayq_rearm_q__w2#[108..=161] >> 3) & 1)
+  mut replayq__w47 = replayq__w46
+  replayq__w47#[306..=306] = ((replayq_rearm_q__w2#[108..=161] >> 2) & 1)
+  mut replayq__w48 = replayq__w47
+  replayq__w48#[304..=304] = (replayq_rearm_q__w2#[108..=161] & 1)
+  mut replayq__w49 = replayq__w48
+  replayq__w49#[313..=313] = ((replayq_rearm_q__w2#[108..=161] >> 4) & 1)
+  mut replayq__w50 = replayq__w49
+  replayq__w50#[305..=305] = ((replayq_rearm_q__w2#[108..=161] >> 1) & 1)
+  mut replayq_push_q__w3 = replayq_push_q__w2
+  replayq_push_q__w3#[228..=303] = replayq_push_flat_q__w1#[228..=303]
+  mut replayq_rearm_q__w3 = replayq_rearm_q__w2
+  replayq_rearm_q__w3#[162..=215] = replayq_rearm_flat_q__w1#[162..=215]
+  mut replayq__w51 = replayq__w50
+  replayq__w51#[464..=470] = replayq_push_q__w3#[228..=303]#[69..=75]
+  mut replayq__w52 = replayq__w51
+  replayq__w52#[459..=463] = replayq_push_q__w3#[228..=303]#[64..=68]
+  mut replayq__w53 = replayq__w52
+  replayq__w53#[455..=458] = replayq_push_q__w3#[228..=303]#[60..=63]
+  mut replayq__w54 = replayq__w53
+  replayq__w54#[452..=454] = replayq_push_q__w3#[228..=303]#[57..=59]
+  mut replayq__w55 = replayq__w54
+  replayq__w55#[444..=451] = replayq_push_q__w3#[228..=303]#[49..=56]
+  mut replayq__w56 = replayq__w55
+  replayq__w56#[442..=442] = ((replayq_push_q__w3#[228..=303] >> 48) & 1)
+  mut replayq__w57 = replayq__w56
+  replayq__w57#[439..=441] = replayq_push_q__w3#[228..=303]#[45..=47]
+  mut replayq__w58 = replayq__w57
+  replayq__w58#[438..=438] = ((replayq_push_q__w3#[228..=303] >> 44) & 1)
+  mut replayq__w59 = replayq__w58
+  replayq__w59#[394..=433] = replayq_push_q__w3#[228..=303]#[4..=43]
+  mut replayq__w60 = replayq__w59
+  replayq__w60#[391..=393] = replayq_push_q__w3#[228..=303]#[1..=3]
+  mut replayq__w61 = replayq__w60
+  replayq__w61#[390..=390] = (replayq_push_q__w3#[228..=303] & 1)
+  mut replayq__w62 = replayq__w61
+  replayq__w62#[471..=519] = replayq_rearm_q__w3#[162..=215]#[5..=53]
+  mut replayq__w63 = replayq__w62
+  replayq__w63#[437..=437] = ((replayq_rearm_q__w3#[162..=215] >> 3) & 1)
+  mut replayq__w64 = replayq__w63
+  replayq__w64#[436..=436] = ((replayq_rearm_q__w3#[162..=215] >> 2) & 1)
+  mut replayq__w65 = replayq__w64
+  replayq__w65#[434..=434] = (replayq_rearm_q__w3#[162..=215] & 1)
+  mut replayq__w66 = replayq__w65
+  replayq__w66#[443..=443] = ((replayq_rearm_q__w3#[162..=215] >> 4) & 1)
+  mut replayq__w67 = replayq__w66
+  replayq__w67#[435..=435] = ((replayq_rearm_q__w3#[162..=215] >> 1) & 1)
+  mut replayq_push_q__w4 = replayq_push_q__w3
+  replayq_push_q__w4#[304..=379] = replayq_push_flat_q__w1#[304..=379]
+  mut replayq_rearm_q__w4 = replayq_rearm_q__w3
+  replayq_rearm_q__w4#[216..=269] = replayq_rearm_flat_q__w1#[216..=269]
+  mut replayq__w68 = replayq__w67
+  replayq__w68#[594..=600] = replayq_push_q__w4#[304..=379]#[69..=75]
+  mut replayq__w69 = replayq__w68
+  replayq__w69#[589..=593] = replayq_push_q__w4#[304..=379]#[64..=68]
+  mut replayq__w70 = replayq__w69
+  replayq__w70#[585..=588] = replayq_push_q__w4#[304..=379]#[60..=63]
+  mut replayq__w71 = replayq__w70
+  replayq__w71#[582..=584] = replayq_push_q__w4#[304..=379]#[57..=59]
+  mut replayq__w72 = replayq__w71
+  replayq__w72#[574..=581] = replayq_push_q__w4#[304..=379]#[49..=56]
+  mut replayq__w73 = replayq__w72
+  replayq__w73#[572..=572] = ((replayq_push_q__w4#[304..=379] >> 48) & 1)
+  mut replayq__w74 = replayq__w73
+  replayq__w74#[569..=571] = replayq_push_q__w4#[304..=379]#[45..=47]
+  mut replayq__w75 = replayq__w74
+  replayq__w75#[568..=568] = ((replayq_push_q__w4#[304..=379] >> 44) & 1)
+  mut replayq__w76 = replayq__w75
+  replayq__w76#[524..=563] = replayq_push_q__w4#[304..=379]#[4..=43]
+  mut replayq__w77 = replayq__w76
+  replayq__w77#[521..=523] = replayq_push_q__w4#[304..=379]#[1..=3]
+  mut replayq__w78 = replayq__w77
+  replayq__w78#[520..=520] = (replayq_push_q__w4#[304..=379] & 1)
+  mut replayq__w79 = replayq__w78
+  replayq__w79#[601..=649] = replayq_rearm_q__w4#[216..=269]#[5..=53]
+  mut replayq__w80 = replayq__w79
+  replayq__w80#[567..=567] = ((replayq_rearm_q__w4#[216..=269] >> 3) & 1)
+  mut replayq__w81 = replayq__w80
+  replayq__w81#[566..=566] = ((replayq_rearm_q__w4#[216..=269] >> 2) & 1)
+  mut replayq__w82 = replayq__w81
+  replayq__w82#[564..=564] = (replayq_rearm_q__w4#[216..=269] & 1)
+  mut replayq__w83 = replayq__w82
+  replayq__w83#[573..=573] = ((replayq_rearm_q__w4#[216..=269] >> 4) & 1)
+  mut replayq__w84 = replayq__w83
+  replayq__w84#[565..=565] = ((replayq_rearm_q__w4#[216..=269] >> 1) & 1)
+  mut replayq_push_q__w5 = replayq_push_q__w4
+  replayq_push_q__w5#[380..=455] = replayq_push_flat_q__w1#[380..=455]
+  mut replayq_rearm_q__w5 = replayq_rearm_q__w4
+  replayq_rearm_q__w5#[270..=323] = replayq_rearm_flat_q__w1#[270..=323]
+  mut replayq__w85 = replayq__w84
+  replayq__w85#[724..=730] = replayq_push_q__w5#[380..=455]#[69..=75]
+  mut replayq__w86 = replayq__w85
+  replayq__w86#[719..=723] = replayq_push_q__w5#[380..=455]#[64..=68]
+  mut replayq__w87 = replayq__w86
+  replayq__w87#[715..=718] = replayq_push_q__w5#[380..=455]#[60..=63]
+  mut replayq__w88 = replayq__w87
+  replayq__w88#[712..=714] = replayq_push_q__w5#[380..=455]#[57..=59]
+  mut replayq__w89 = replayq__w88
+  replayq__w89#[704..=711] = replayq_push_q__w5#[380..=455]#[49..=56]
+  mut replayq__w90 = replayq__w89
+  replayq__w90#[702..=702] = ((replayq_push_q__w5#[380..=455] >> 48) & 1)
+  mut replayq__w91 = replayq__w90
+  replayq__w91#[699..=701] = replayq_push_q__w5#[380..=455]#[45..=47]
+  mut replayq__w92 = replayq__w91
+  replayq__w92#[698..=698] = ((replayq_push_q__w5#[380..=455] >> 44) & 1)
+  mut replayq__w93 = replayq__w92
+  replayq__w93#[654..=693] = replayq_push_q__w5#[380..=455]#[4..=43]
+  mut replayq__w94 = replayq__w93
+  replayq__w94#[651..=653] = replayq_push_q__w5#[380..=455]#[1..=3]
+  mut replayq__w95 = replayq__w94
+  replayq__w95#[650..=650] = (replayq_push_q__w5#[380..=455] & 1)
+  mut replayq__w96 = replayq__w95
+  replayq__w96#[731..=779] = replayq_rearm_q__w5#[270..=323]#[5..=53]
+  mut replayq__w97 = replayq__w96
+  replayq__w97#[697..=697] = ((replayq_rearm_q__w5#[270..=323] >> 3) & 1)
+  mut replayq__w98 = replayq__w97
+  replayq__w98#[696..=696] = ((replayq_rearm_q__w5#[270..=323] >> 2) & 1)
+  mut replayq__w99 = replayq__w98
+  replayq__w99#[694..=694] = (replayq_rearm_q__w5#[270..=323] & 1)
+  mut replayq__w100 = replayq__w99
+  replayq__w100#[703..=703] = ((replayq_rearm_q__w5#[270..=323] >> 4) & 1)
+  mut replayq__w101 = replayq__w100
+  replayq__w101#[695..=695] = ((replayq_rearm_q__w5#[270..=323] >> 1) & 1)
+  mut replayq_push_q__w6 = replayq_push_q__w5
+  replayq_push_q__w6#[456..=531] = replayq_push_flat_q__w1#[456..=531]
+  mut replayq_rearm_q__w6 = replayq_rearm_q__w5
+  replayq_rearm_q__w6#[324..=377] = replayq_rearm_flat_q__w1#[324..=377]
+  mut replayq__w102 = replayq__w101
+  replayq__w102#[854..=860] = replayq_push_q__w6#[456..=531]#[69..=75]
+  mut replayq__w103 = replayq__w102
+  replayq__w103#[849..=853] = replayq_push_q__w6#[456..=531]#[64..=68]
+  mut replayq__w104 = replayq__w103
+  replayq__w104#[845..=848] = replayq_push_q__w6#[456..=531]#[60..=63]
+  mut replayq__w105 = replayq__w104
+  replayq__w105#[842..=844] = replayq_push_q__w6#[456..=531]#[57..=59]
+  mut replayq__w106 = replayq__w105
+  replayq__w106#[834..=841] = replayq_push_q__w6#[456..=531]#[49..=56]
+  mut replayq__w107 = replayq__w106
+  replayq__w107#[832..=832] = ((replayq_push_q__w6#[456..=531] >> 48) & 1)
+  mut replayq__w108 = replayq__w107
+  replayq__w108#[829..=831] = replayq_push_q__w6#[456..=531]#[45..=47]
+  mut replayq__w109 = replayq__w108
+  replayq__w109#[828..=828] = ((replayq_push_q__w6#[456..=531] >> 44) & 1)
+  mut replayq__w110 = replayq__w109
+  replayq__w110#[784..=823] = replayq_push_q__w6#[456..=531]#[4..=43]
+  mut replayq__w111 = replayq__w110
+  replayq__w111#[781..=783] = replayq_push_q__w6#[456..=531]#[1..=3]
+  mut replayq__w112 = replayq__w111
+  replayq__w112#[780..=780] = (replayq_push_q__w6#[456..=531] & 1)
+  mut replayq__w113 = replayq__w112
+  replayq__w113#[861..=909] = replayq_rearm_q__w6#[324..=377]#[5..=53]
+  mut replayq__w114 = replayq__w113
+  replayq__w114#[827..=827] = ((replayq_rearm_q__w6#[324..=377] >> 3) & 1)
+  mut replayq__w115 = replayq__w114
+  replayq__w115#[826..=826] = ((replayq_rearm_q__w6#[324..=377] >> 2) & 1)
+  mut replayq__w116 = replayq__w115
+  replayq__w116#[824..=824] = (replayq_rearm_q__w6#[324..=377] & 1)
+  mut replayq__w117 = replayq__w116
+  replayq__w117#[833..=833] = ((replayq_rearm_q__w6#[324..=377] >> 4) & 1)
+  mut replayq__w118 = replayq__w117
+  replayq__w118#[825..=825] = ((replayq_rearm_q__w6#[324..=377] >> 1) & 1)
+  mut replayq_push_q__w7 = replayq_push_q__w6
+  replayq_push_q__w7#[532..=607] = replayq_push_flat_q__w1#[532..=607]
+  mut replayq_rearm_q__w7 = replayq_rearm_q__w6
+  replayq_rearm_q__w7#[378..=431] = replayq_rearm_flat_q__w1#[378..=431]
+  mut replayq__w119 = replayq__w118
+  replayq__w119#[984..=990] = replayq_push_q__w7#[532..=607]#[69..=75]
+  mut replayq__w120 = replayq__w119
+  replayq__w120#[979..=983] = replayq_push_q__w7#[532..=607]#[64..=68]
+  mut replayq__w121 = replayq__w120
+  replayq__w121#[975..=978] = replayq_push_q__w7#[532..=607]#[60..=63]
+  mut replayq__w122 = replayq__w121
+  replayq__w122#[972..=974] = replayq_push_q__w7#[532..=607]#[57..=59]
+  mut replayq__w123 = replayq__w122
+  replayq__w123#[964..=971] = replayq_push_q__w7#[532..=607]#[49..=56]
+  mut replayq__w124 = replayq__w123
+  replayq__w124#[962..=962] = ((replayq_push_q__w7#[532..=607] >> 48) & 1)
+  mut replayq__w125 = replayq__w124
+  replayq__w125#[959..=961] = replayq_push_q__w7#[532..=607]#[45..=47]
+  mut replayq__w126 = replayq__w125
+  replayq__w126#[958..=958] = ((replayq_push_q__w7#[532..=607] >> 44) & 1)
+  mut replayq__w127 = replayq__w126
+  replayq__w127#[914..=953] = replayq_push_q__w7#[532..=607]#[4..=43]
+  mut replayq__w128 = replayq__w127
+  replayq__w128#[911..=913] = replayq_push_q__w7#[532..=607]#[1..=3]
+  mut replayq__w129 = replayq__w128
+  replayq__w129#[910..=910] = (replayq_push_q__w7#[532..=607] & 1)
+  mut replayq__w130 = replayq__w129
+  replayq__w130#[991..=1039] = replayq_rearm_q__w7#[378..=431]#[5..=53]
+  mut replayq__w131 = replayq__w130
+  replayq__w131#[957..=957] = ((replayq_rearm_q__w7#[378..=431] >> 3) & 1)
+  mut replayq__w132 = replayq__w131
+  replayq__w132#[956..=956] = ((replayq_rearm_q__w7#[378..=431] >> 2) & 1)
+  mut replayq__w133 = replayq__w132
+  replayq__w133#[954..=954] = (replayq_rearm_q__w7#[378..=431] & 1)
+  mut replayq__w134 = replayq__w133
+  replayq__w134#[963..=963] = ((replayq_rearm_q__w7#[378..=431] >> 4) & 1)
+  mut replayq__w135 = replayq__w134
+  replayq__w135#[955..=955] = ((replayq_rearm_q__w7#[378..=431] >> 1) & 1)
+  entry_ready = 0ub????????
+  mut entry_ready__w1 = entry_ready
+  entry_ready__w1#[0..=0] = unsigned((`replayq_ready_info_q.pending`[0] != 0) and ((entry_mask_available_q & 1) == 0) and (not (rq_conflict_matrix_q#[0..=7] != 0)) and (`replayq_ready_info_q.wait_uc_load`[0] == 0) and (((`replayq_ready_info_q.reason`[0] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[0]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[0] >> 5) & 1) == 0))
+  mut entry_ready__w2 = entry_ready__w1
+  entry_ready__w2#[1..=1] = unsigned((`replayq_ready_info_q.pending`[1] != 0) and (((entry_mask_available_q >> 1) & 1) == 0) and (not (rq_conflict_matrix_q#[8..=15] != 0)) and (`replayq_ready_info_q.wait_uc_load`[1] == 0) and (((`replayq_ready_info_q.reason`[1] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[1]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[1] >> 5) & 1) == 0))
+  mut entry_ready__w3 = entry_ready__w2
+  entry_ready__w3#[2..=2] = unsigned((`replayq_ready_info_q.pending`[2] != 0) and (((entry_mask_available_q >> 2) & 1) == 0) and (not (rq_conflict_matrix_q#[16..=23] != 0)) and (`replayq_ready_info_q.wait_uc_load`[2] == 0) and (((`replayq_ready_info_q.reason`[2] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[2]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[2] >> 5) & 1) == 0))
+  mut entry_ready__w4 = entry_ready__w3
+  entry_ready__w4#[3..=3] = unsigned((`replayq_ready_info_q.pending`[3] != 0) and (((entry_mask_available_q >> 3) & 1) == 0) and (not (rq_conflict_matrix_q#[24..=31] != 0)) and (`replayq_ready_info_q.wait_uc_load`[3] == 0) and (((`replayq_ready_info_q.reason`[3] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[3]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[3] >> 5) & 1) == 0))
+  mut entry_ready__w5 = entry_ready__w4
+  entry_ready__w5#[4..=4] = unsigned((`replayq_ready_info_q.pending`[4] != 0) and (((entry_mask_available_q >> 4) & 1) == 0) and (not (rq_conflict_matrix_q#[32..=39] != 0)) and (`replayq_ready_info_q.wait_uc_load`[4] == 0) and (((`replayq_ready_info_q.reason`[4] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[4]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[4] >> 5) & 1) == 0))
+  mut entry_ready__w6 = entry_ready__w5
+  entry_ready__w6#[5..=5] = unsigned((`replayq_ready_info_q.pending`[5] != 0) and (((entry_mask_available_q >> 5) & 1) == 0) and (not (rq_conflict_matrix_q#[40..=47] != 0)) and (`replayq_ready_info_q.wait_uc_load`[5] == 0) and (((`replayq_ready_info_q.reason`[5] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[5]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[5] >> 5) & 1) == 0))
+  mut entry_ready__w7 = entry_ready__w6
+  entry_ready__w7#[6..=6] = unsigned((`replayq_ready_info_q.pending`[6] != 0) and (((entry_mask_available_q >> 6) & 1) == 0) and (not (rq_conflict_matrix_q#[48..=55] != 0)) and (`replayq_ready_info_q.wait_uc_load`[6] == 0) and (((`replayq_ready_info_q.reason`[6] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[6]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[6] >> 5) & 1) == 0))
+  mut entry_ready__w8 = entry_ready__w7
+  entry_ready__w8#[7..=7] = unsigned((`replayq_ready_info_q.pending`[7] != 0) and (((entry_mask_available_q >> 7) & 1) == 0) and (not (rq_conflict_matrix_q#[56..=63] != 0)) and (`replayq_ready_info_q.wait_uc_load`[7] == 0) and (((`replayq_ready_info_q.reason`[7] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[7]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[7] >> 5) & 1) == 0))
+  empty_d = 0ub??
+  mut empty_d__w1 = empty_d
+  empty_d__w1#[0..=0] = 1
+  mut empty_d__w2 = empty_d__w1
+  empty_d__w2#[0..=0] = (1 & unsigned(((entry_mask_available_q & 1) != 0) or ((replayq__w135#[0..=129]#[74..=80] & 1) != 0)))
+  mut empty_d__w3 = empty_d__w2
+  empty_d__w3#[0..=0] = (empty_d__w2 & 1 & unsigned((((entry_mask_available_q >> 1) & 1) != 0) or ((replayq__w135#[130..=259]#[74..=80] & 1) != 0)))
+  mut empty_d__w4 = empty_d__w3
+  empty_d__w4#[0..=0] = (empty_d__w3 & 1 & unsigned((((entry_mask_available_q >> 2) & 1) != 0) or ((replayq__w135#[260..=389]#[74..=80] & 1) != 0)))
+  mut empty_d__w5 = empty_d__w4
+  empty_d__w5#[0..=0] = (empty_d__w4 & 1 & unsigned((((entry_mask_available_q >> 3) & 1) != 0) or ((replayq__w135#[390..=519]#[74..=80] & 1) != 0)))
+  mut empty_d__w6 = empty_d__w5
+  empty_d__w6#[0..=0] = (empty_d__w5 & 1 & unsigned((((entry_mask_available_q >> 4) & 1) != 0) or ((replayq__w135#[520..=649]#[74..=80] & 1) != 0)))
+  mut empty_d__w7 = empty_d__w6
+  empty_d__w7#[0..=0] = (empty_d__w6 & 1 & unsigned((((entry_mask_available_q >> 5) & 1) != 0) or ((replayq__w135#[650..=779]#[74..=80] & 1) != 0)))
+  mut empty_d__w8 = empty_d__w7
+  empty_d__w8#[0..=0] = (empty_d__w7 & 1 & unsigned((((entry_mask_available_q >> 6) & 1) != 0) or ((replayq__w135#[780..=909]#[74..=80] & 1) != 0)))
+  mut empty_d__w9 = empty_d__w8
+  empty_d__w9#[0..=0] = (empty_d__w8 & 1 & unsigned((((entry_mask_available_q >> 7) & 1) != 0) or ((replayq__w135#[910..=1039]#[74..=80] & 1) != 0)))
+  mut empty_d__w10 = empty_d__w9
+  empty_d__w10#[0..=0] = (empty_d__w9 & 1 & unsigned(not ((push_req_i != 0) and ((req_data_i#[342..=348] & 1) == 0))))
+  mut empty_d__w11 = empty_d__w10
+  empty_d__w11#[1..=1] = 1
+  mut empty_d__w12 = empty_d__w11
+  empty_d__w12#[1..=1] = ((empty_d__w11 >> 1) & 1 & unsigned(((entry_mask_available_q & 1) != 0) or ((replayq__w135#[0..=129]#[74..=80] & 1) != 1)))
+  mut empty_d__w13 = empty_d__w12
+  empty_d__w13#[1..=1] = ((empty_d__w12 >> 1) & 1 & unsigned((((entry_mask_available_q >> 1) & 1) != 0) or ((replayq__w135#[130..=259]#[74..=80] & 1) != 1)))
+  mut empty_d__w14 = empty_d__w13
+  empty_d__w14#[1..=1] = ((empty_d__w13 >> 1) & 1 & unsigned((((entry_mask_available_q >> 2) & 1) != 0) or ((replayq__w135#[260..=389]#[74..=80] & 1) != 1)))
+  mut empty_d__w15 = empty_d__w14
+  empty_d__w15#[1..=1] = ((empty_d__w14 >> 1) & 1 & unsigned((((entry_mask_available_q >> 3) & 1) != 0) or ((replayq__w135#[390..=519]#[74..=80] & 1) != 1)))
+  mut empty_d__w16 = empty_d__w15
+  empty_d__w16#[1..=1] = ((empty_d__w15 >> 1) & 1 & unsigned((((entry_mask_available_q >> 4) & 1) != 0) or ((replayq__w135#[520..=649]#[74..=80] & 1) != 1)))
+  mut empty_d__w17 = empty_d__w16
+  empty_d__w17#[1..=1] = ((empty_d__w16 >> 1) & 1 & unsigned((((entry_mask_available_q >> 5) & 1) != 0) or ((replayq__w135#[650..=779]#[74..=80] & 1) != 1)))
+  mut empty_d__w18 = empty_d__w17
+  empty_d__w18#[1..=1] = ((empty_d__w17 >> 1) & 1 & unsigned((((entry_mask_available_q >> 6) & 1) != 0) or ((replayq__w135#[780..=909]#[74..=80] & 1) != 1)))
+  mut empty_d__w19 = empty_d__w18
+  empty_d__w19#[1..=1] = ((empty_d__w18 >> 1) & 1 & unsigned((((entry_mask_available_q >> 7) & 1) != 0) or ((replayq__w135#[910..=1039]#[74..=80] & 1) != 1)))
+  mut empty_d__w20 = empty_d__w19
+  empty_d__w20#[1..=1] = ((empty_d__w19 >> 1) & 1 & unsigned(not ((push_req_i != 0) and ((req_data_i#[342..=348] & 1) == 1))))
+  push_age_d = 0ub?????
+  replayq_ready_info_d = (`replayq_ready_info_q.pending`[0] << 15) | (`replayq_ready_info_q.store`[0] << 14) | (`replayq_ready_info_q.age`[0] << 9) | (`replayq_ready_info_q.reason`[0] << 3) | (`replayq_ready_info_q.wait_uc_load`[0] << 2) | (`replayq_ready_info_q.uc_load_ok`[0] << 1) | `replayq_ready_info_q.miss_fill_ok`[0] | (`replayq_ready_info_q.pending`[1] << 31) | (`replayq_ready_info_q.store`[1] << 30) | (`replayq_ready_info_q.age`[1] << 25) | (`replayq_ready_info_q.reason`[1] << 19) | (`replayq_ready_info_q.wait_uc_load`[1] << 18) | (`replayq_ready_info_q.uc_load_ok`[1] << 17) | (`replayq_ready_info_q.miss_fill_ok`[1] << 16) | (`replayq_ready_info_q.pending`[2] << 47) | (`replayq_ready_info_q.store`[2] << 46) | (`replayq_ready_info_q.age`[2] << 41) | (`replayq_ready_info_q.reason`[2] << 35) | (`replayq_ready_info_q.wait_uc_load`[2] << 34) | (`replayq_ready_info_q.uc_load_ok`[2] << 33) | (`replayq_ready_info_q.miss_fill_ok`[2] << 32) | (`replayq_ready_info_q.pending`[3] << 63) | (`replayq_ready_info_q.store`[3] << 62) | (`replayq_ready_info_q.age`[3] << 57) | (`replayq_ready_info_q.reason`[3] << 51) | (`replayq_ready_info_q.wait_uc_load`[3] << 50) | (`replayq_ready_info_q.uc_load_ok`[3] << 49) | (`replayq_ready_info_q.miss_fill_ok`[3] << 48) | (`replayq_ready_info_q.pending`[4] << 79) | (`replayq_ready_info_q.store`[4] << 78) | (`replayq_ready_info_q.age`[4] << 73) | (`replayq_ready_info_q.reason`[4] << 67) | (`replayq_ready_info_q.wait_uc_load`[4] << 66) | (`replayq_ready_info_q.uc_load_ok`[4] << 65) | (`replayq_ready_info_q.miss_fill_ok`[4] << 64) | (`replayq_ready_info_q.pending`[5] << 95) | (`replayq_ready_info_q.store`[5] << 94) | (`replayq_ready_info_q.age`[5] << 89) | (`replayq_ready_info_q.reason`[5] << 83) | (`replayq_ready_info_q.wait_uc_load`[5] << 82) | (`replayq_ready_info_q.uc_load_ok`[5] << 81) | (`replayq_ready_info_q.miss_fill_ok`[5] << 80) | (`replayq_ready_info_q.pending`[6] << 111) | (`replayq_ready_info_q.store`[6] << 110) | (`replayq_ready_info_q.age`[6] << 105) | (`replayq_ready_info_q.reason`[6] << 99) | (`replayq_ready_info_q.wait_uc_load`[6] << 98) | (`replayq_ready_info_q.uc_load_ok`[6] << 97) | (`replayq_ready_info_q.miss_fill_ok`[6] << 96) | (`replayq_ready_info_q.pending`[7] << 127) | (`replayq_ready_info_q.store`[7] << 126) | (`replayq_ready_info_q.age`[7] << 121) | (`replayq_ready_info_q.reason`[7] << 115) | (`replayq_ready_info_q.wait_uc_load`[7] << 114) | (`replayq_ready_info_q.uc_load_ok`[7] << 113) | (`replayq_ready_info_q.miss_fill_ok`[7] << 112)
+  if (miss_available_i & 1) != 0 {
+    if ((replayq_ready_info_d#[0..=15]#[3..=8]#[0..=1] & 1) != 0) or (replayq_ready_info_d#[0..=15]#[3..=8]#[0..=1] == 0) {
+      replayq_ready_info_d#[7..=7] = 0
+    }
+    replayq_ready_info_d#[3..=3] = 0
+    if ((replayq_ready_info_d#[16..=31]#[3..=8]#[0..=1] & 1) != 0) or (replayq_ready_info_d#[16..=31]#[3..=8]#[0..=1] == 0) {
+      replayq_ready_info_d#[23..=23] = 0
+    }
+    replayq_ready_info_d#[19..=19] = 0
+    if ((replayq_ready_info_d#[32..=47]#[3..=8]#[0..=1] & 1) != 0) or (replayq_ready_info_d#[32..=47]#[3..=8]#[0..=1] == 0) {
+      replayq_ready_info_d#[39..=39] = 0
+    }
+    replayq_ready_info_d#[35..=35] = 0
+    if ((replayq_ready_info_d#[48..=63]#[3..=8]#[0..=1] & 1) != 0) or (replayq_ready_info_d#[48..=63]#[3..=8]#[0..=1] == 0) {
+      replayq_ready_info_d#[55..=55] = 0
+    }
+    replayq_ready_info_d#[51..=51] = 0
+    if ((replayq_ready_info_d#[64..=79]#[3..=8]#[0..=1] & 1) != 0) or (replayq_ready_info_d#[64..=79]#[3..=8]#[0..=1] == 0) {
+      replayq_ready_info_d#[71..=71] = 0
+    }
+    replayq_ready_info_d#[67..=67] = 0
+    if ((replayq_ready_info_d#[80..=95]#[3..=8]#[0..=1] & 1) != 0) or (replayq_ready_info_d#[80..=95]#[3..=8]#[0..=1] == 0) {
+      replayq_ready_info_d#[87..=87] = 0
+    }
+    replayq_ready_info_d#[83..=83] = 0
+    if ((replayq_ready_info_d#[96..=111]#[3..=8]#[0..=1] & 1) != 0) or (replayq_ready_info_d#[96..=111]#[3..=8]#[0..=1] == 0) {
+      replayq_ready_info_d#[103..=103] = 0
+    }
+    replayq_ready_info_d#[99..=99] = 0
+    if ((replayq_ready_info_d#[112..=127]#[3..=8]#[0..=1] & 1) != 0) or (replayq_ready_info_d#[112..=127]#[3..=8]#[0..=1] == 0) {
+      replayq_ready_info_d#[119..=119] = 0
+    }
+    replayq_ready_info_d#[115..=115] = 0
+  }
+  if ((miss_available_i >> 1) & 1) != 0 {
+    if (((replayq_ready_info_d#[0..=15]#[3..=8]#[0..=1] >> 1) & 1) != 0) or (replayq_ready_info_d#[0..=15]#[3..=8]#[0..=1] == 0) {
+      replayq_ready_info_d#[7..=7] = 0
+    }
+    replayq_ready_info_d#[4..=4] = 0
+    if (((replayq_ready_info_d#[16..=31]#[3..=8]#[0..=1] >> 1) & 1) != 0) or (replayq_ready_info_d#[16..=31]#[3..=8]#[0..=1] == 0) {
+      replayq_ready_info_d#[23..=23] = 0
+    }
+    replayq_ready_info_d#[20..=20] = 0
+    if (((replayq_ready_info_d#[32..=47]#[3..=8]#[0..=1] >> 1) & 1) != 0) or (replayq_ready_info_d#[32..=47]#[3..=8]#[0..=1] == 0) {
+      replayq_ready_info_d#[39..=39] = 0
+    }
+    replayq_ready_info_d#[36..=36] = 0
+    if (((replayq_ready_info_d#[48..=63]#[3..=8]#[0..=1] >> 1) & 1) != 0) or (replayq_ready_info_d#[48..=63]#[3..=8]#[0..=1] == 0) {
+      replayq_ready_info_d#[55..=55] = 0
+    }
+    replayq_ready_info_d#[52..=52] = 0
+    if (((replayq_ready_info_d#[64..=79]#[3..=8]#[0..=1] >> 1) & 1) != 0) or (replayq_ready_info_d#[64..=79]#[3..=8]#[0..=1] == 0) {
+      replayq_ready_info_d#[71..=71] = 0
+    }
+    replayq_ready_info_d#[68..=68] = 0
+    if (((replayq_ready_info_d#[80..=95]#[3..=8]#[0..=1] >> 1) & 1) != 0) or (replayq_ready_info_d#[80..=95]#[3..=8]#[0..=1] == 0) {
+      replayq_ready_info_d#[87..=87] = 0
+    }
+    replayq_ready_info_d#[84..=84] = 0
+    if (((replayq_ready_info_d#[96..=111]#[3..=8]#[0..=1] >> 1) & 1) != 0) or (replayq_ready_info_d#[96..=111]#[3..=8]#[0..=1] == 0) {
+      replayq_ready_info_d#[103..=103] = 0
+    }
+    replayq_ready_info_d#[100..=100] = 0
+    if (((replayq_ready_info_d#[112..=127]#[3..=8]#[0..=1] >> 1) & 1) != 0) or (replayq_ready_info_d#[112..=127]#[3..=8]#[0..=1] == 0) {
+      replayq_ready_info_d#[119..=119] = 0
+    }
+    replayq_ready_info_d#[116..=116] = 0
+  }
+  if (miss_fill_error_i & 1) != 0 {
+    if (replayq_ready_info_d#[0..=15]#[3..=8]#[2..=3] & 1) != 0 {
+      replayq_ready_info_d#[0..=0] = 0
+    }
+    if (replayq_ready_info_d#[16..=31]#[3..=8]#[2..=3] & 1) != 0 {
+      replayq_ready_info_d#[16..=16] = 0
+    }
+    if (replayq_ready_info_d#[32..=47]#[3..=8]#[2..=3] & 1) != 0 {
+      replayq_ready_info_d#[32..=32] = 0
+    }
+    if (replayq_ready_info_d#[48..=63]#[3..=8]#[2..=3] & 1) != 0 {
+      replayq_ready_info_d#[48..=48] = 0
+    }
+    if (replayq_ready_info_d#[64..=79]#[3..=8]#[2..=3] & 1) != 0 {
+      replayq_ready_info_d#[64..=64] = 0
+    }
+    if (replayq_ready_info_d#[80..=95]#[3..=8]#[2..=3] & 1) != 0 {
+      replayq_ready_info_d#[80..=80] = 0
+    }
+    if (replayq_ready_info_d#[96..=111]#[3..=8]#[2..=3] & 1) != 0 {
+      replayq_ready_info_d#[96..=96] = 0
+    }
+    if (replayq_ready_info_d#[112..=127]#[3..=8]#[2..=3] & 1) != 0 {
+      replayq_ready_info_d#[112..=112] = 0
+    }
+  }
+  if ((miss_fill_error_i >> 1) & 1) != 0 {
+    if ((replayq_ready_info_d#[0..=15]#[3..=8]#[2..=3] >> 1) & 1) != 0 {
+      replayq_ready_info_d#[0..=0] = 0
+    }
+    if ((replayq_ready_info_d#[16..=31]#[3..=8]#[2..=3] >> 1) & 1) != 0 {
+      replayq_ready_info_d#[16..=16] = 0
+    }
+    if ((replayq_ready_info_d#[32..=47]#[3..=8]#[2..=3] >> 1) & 1) != 0 {
+      replayq_ready_info_d#[32..=32] = 0
+    }
+    if ((replayq_ready_info_d#[48..=63]#[3..=8]#[2..=3] >> 1) & 1) != 0 {
+      replayq_ready_info_d#[48..=48] = 0
+    }
+    if ((replayq_ready_info_d#[64..=79]#[3..=8]#[2..=3] >> 1) & 1) != 0 {
+      replayq_ready_info_d#[64..=64] = 0
+    }
+    if ((replayq_ready_info_d#[80..=95]#[3..=8]#[2..=3] >> 1) & 1) != 0 {
+      replayq_ready_info_d#[80..=80] = 0
+    }
+    if ((replayq_ready_info_d#[96..=111]#[3..=8]#[2..=3] >> 1) & 1) != 0 {
+      replayq_ready_info_d#[96..=96] = 0
+    }
+    if ((replayq_ready_info_d#[112..=127]#[3..=8]#[2..=3] >> 1) & 1) != 0 {
+      replayq_ready_info_d#[112..=112] = 0
+    }
+  }
+  if vpu_rf_in_use_i == 0 {
+    replayq_ready_info_d#[8..=8] = 0
+    replayq_ready_info_d#[24..=24] = 0
+    replayq_ready_info_d#[40..=40] = 0
+    replayq_ready_info_d#[56..=56] = 0
+    replayq_ready_info_d#[72..=72] = 0
+    replayq_ready_info_d#[88..=88] = 0
+    replayq_ready_info_d#[104..=104] = 0
+    replayq_ready_info_d#[120..=120] = 0
+  }
+  if uc_load_fill_i != 0 {
+    const t1560 = (uc_load_id_q[uc_load_fill_id_i] * 16) + 2
+    replayq_ready_info_d = (replayq_ready_info_d & (~(1 << t1560))) | (0 << t1560)
+    const t1568 = (uc_load_id_q[uc_load_fill_id_i] * 16) + 1
+    replayq_ready_info_d = (replayq_ready_info_d & (~(1 << t1568))) | (uc_load_fill_ok_i << t1568)
+  }
+  const cmd__w1 = req_data_i#[337..=341]
+  const cmd_s1__w1 = cmd__w1
+  const req_is_write__w1 = unsigned((cmd__w1 == minion_dcache_pkg.DcCmdXwr) or (cmd__w1 == minion_dcache_pkg.DcCmdXsc) or (unsigned((cmd_s1__w1 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaMaxPs)) != 0) or (cmd__w1 == minion_dcache_pkg.DcCmdSc32) or (cmd__w1 == minion_dcache_pkg.DcCmdXwrb))
+  push_age_d = push_age_q
+  if push_req_i != 0 {
+    const t1609 = (push_entry * 16) + 14
+    const t1616 = (push_entry * 16) + 9
+    replayq_ready_info_d = (replayq_ready_info_d & (~(1 << t1609))) | (req_is_write__w1 << t1609)
+    push_age_d = (push_age_q + 1)#[0..=4]
+    replayq_ready_info_d = (replayq_ready_info_d & (~(31 << t1616))) | (push_age_q << t1616)
+  }
+  if (push_req_i != 0) or (rearm_i != 0) {
+    const t1628 = (push_entry * 16) + 15
+    const t1645 = (push_entry * 16) + 3
+    replayq_ready_info_d = (replayq_ready_info_d & (~(1 << t1628))) | (1 << t1628)
+    const t1652 = (push_entry * 16) + 2
+    replayq_ready_info_d = (replayq_ready_info_d & (~(63 << t1645))) | (((req_conf_type_i.vpu_rf_write << 5) | (req_conf_type_i.miss_alloc << 4) | (req_conf_type_i.miss_accepted << 2) | req_conf_type_i.miss_assigned) << t1645)
+    const t1659 = (push_entry * 16) + 1
+    replayq_ready_info_d = (replayq_ready_info_d & (~(1 << t1652))) | (uc_load_1st_i << t1652)
+    const t1665 = push_entry * 16
+    replayq_ready_info_d = (replayq_ready_info_d & (~(1 << t1659))) | (uc_load_ok_i << t1659)
+    replayq_ready_info_d = (replayq_ready_info_d & (~(1 << t1665))) | (miss_fill_ok_i << t1665)
+  }
+  if replay_grant_i != 0 {
+    
+    replay_entry_d = 0ub???
+    const t1673 = (replay_entry_d * 16) + 15
+    replayq_ready_info_d = (replayq_ready_info_d & (~(1 << t1673))) | (0 << t1673)
+  }
+  uc_load_id_d[0] = uc_load_id_q[0]
+  uc_load_id_d[1] = uc_load_id_q[1]
+  uc_load_id_d[2] = uc_load_id_q[2]
+  uc_load_id_d[3] = uc_load_id_q[3]
+  uc_load_id_d[4] = uc_load_id_q[4]
+  uc_load_id_d[5] = uc_load_id_q[5]
+  uc_load_id_d[6] = uc_load_id_q[6]
+  uc_load_id_d[7] = uc_load_id_q[7]
+  if (push_req_i != 0) and (req_buf_alloc_i != 0) {
+    uc_load_id_d[req_buf_entry_i] = push_entry
+  }
+  const arb_clk_en__w1 = unsigned((rst_ni == 0) or (not (empty_o == 3)) or (push_req_spec_q != 0) or (replay_valid_o != 0) or (replay_valid_prev_q != 0))
+  win_per_client = 0ub????????
+  mut win_per_client__w1 = win_per_client
+  win_per_client__w1#[0..=0] = (entry_ready__w8 & 1)
+  mut win_per_client__w2 = win_per_client__w1
+  win_per_client__w2#[0..=0] = unsigned(((win_per_client__w1 & 1) != 0) and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((~(prio_bits_q#[8..=15] & 1)) & 1) != 0)))
+  mut win_per_client__w3 = win_per_client__w2
+  win_per_client__w3#[0..=0] = unsigned(((win_per_client__w2 & 1) != 0) and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((~(prio_bits_q#[16..=23] & 1)) & 1) != 0)))
+  mut win_per_client__w4 = win_per_client__w3
+  win_per_client__w4#[0..=0] = unsigned(((win_per_client__w3 & 1) != 0) and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((~(prio_bits_q#[24..=31] & 1)) & 1) != 0)))
+  mut win_per_client__w5 = win_per_client__w4
+  win_per_client__w5#[0..=0] = unsigned(((win_per_client__w4 & 1) != 0) and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((~(prio_bits_q#[32..=39] & 1)) & 1) != 0)))
+  mut win_per_client__w6 = win_per_client__w5
+  win_per_client__w6#[0..=0] = unsigned(((win_per_client__w5 & 1) != 0) and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((~(prio_bits_q#[40..=47] & 1)) & 1) != 0)))
+  mut win_per_client__w7 = win_per_client__w6
+  win_per_client__w7#[0..=0] = unsigned(((win_per_client__w6 & 1) != 0) and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~(prio_bits_q#[48..=55] & 1)) & 1) != 0)))
+  mut win_per_client__w8 = win_per_client__w7
+  win_per_client__w8#[0..=0] = unsigned(((win_per_client__w7 & 1) != 0) and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~(prio_bits_q#[56..=63] & 1)) & 1) != 0)))
+  mut win_per_client__w9 = win_per_client__w8
+  win_per_client__w9#[1..=1] = ((entry_ready__w8 >> 1) & 1)
+  mut win_per_client__w10 = win_per_client__w9
+  win_per_client__w10#[1..=1] = unsigned((((win_per_client__w9 >> 1) & 1) != 0) and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[8..=15] & 1) != 0)))
+  mut win_per_client__w11 = win_per_client__w10
+  win_per_client__w11#[1..=1] = unsigned((((win_per_client__w10 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((~((prio_bits_q#[16..=23] >> 1) & 1)) & 1) != 0)))
+  mut win_per_client__w12 = win_per_client__w11
+  win_per_client__w12#[1..=1] = unsigned((((win_per_client__w11 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((~((prio_bits_q#[24..=31] >> 1) & 1)) & 1) != 0)))
+  mut win_per_client__w13 = win_per_client__w12
+  win_per_client__w13#[1..=1] = unsigned((((win_per_client__w12 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((~((prio_bits_q#[32..=39] >> 1) & 1)) & 1) != 0)))
+  mut win_per_client__w14 = win_per_client__w13
+  win_per_client__w14#[1..=1] = unsigned((((win_per_client__w13 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((~((prio_bits_q#[40..=47] >> 1) & 1)) & 1) != 0)))
+  mut win_per_client__w15 = win_per_client__w14
+  win_per_client__w15#[1..=1] = unsigned((((win_per_client__w14 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~((prio_bits_q#[48..=55] >> 1) & 1)) & 1) != 0)))
+  mut win_per_client__w16 = win_per_client__w15
+  win_per_client__w16#[1..=1] = unsigned((((win_per_client__w15 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 1) & 1)) & 1) != 0)))
+  mut win_per_client__w17 = win_per_client__w16
+  win_per_client__w17#[2..=2] = ((entry_ready__w8 >> 2) & 1)
+  mut win_per_client__w18 = win_per_client__w17
+  win_per_client__w18#[2..=2] = unsigned((((win_per_client__w17 >> 2) & 1) != 0) and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[16..=23] & 1) != 0)))
+  mut win_per_client__w19 = win_per_client__w18
+  win_per_client__w19#[2..=2] = unsigned((((win_per_client__w18 >> 2) & 1) != 0) and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[16..=23] >> 1) & 1) != 0)))
+  mut win_per_client__w20 = win_per_client__w19
+  win_per_client__w20#[2..=2] = unsigned((((win_per_client__w19 >> 2) & 1) != 0) and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((~((prio_bits_q#[24..=31] >> 2) & 1)) & 1) != 0)))
+  mut win_per_client__w21 = win_per_client__w20
+  win_per_client__w21#[2..=2] = unsigned((((win_per_client__w20 >> 2) & 1) != 0) and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((~((prio_bits_q#[32..=39] >> 2) & 1)) & 1) != 0)))
+  mut win_per_client__w22 = win_per_client__w21
+  win_per_client__w22#[2..=2] = unsigned((((win_per_client__w21 >> 2) & 1) != 0) and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((~((prio_bits_q#[40..=47] >> 2) & 1)) & 1) != 0)))
+  mut win_per_client__w23 = win_per_client__w22
+  win_per_client__w23#[2..=2] = unsigned((((win_per_client__w22 >> 2) & 1) != 0) and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~((prio_bits_q#[48..=55] >> 2) & 1)) & 1) != 0)))
+  mut win_per_client__w24 = win_per_client__w23
+  win_per_client__w24#[2..=2] = unsigned((((win_per_client__w23 >> 2) & 1) != 0) and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 2) & 1)) & 1) != 0)))
+  mut win_per_client__w25 = win_per_client__w24
+  win_per_client__w25#[3..=3] = ((entry_ready__w8 >> 3) & 1)
+  mut win_per_client__w26 = win_per_client__w25
+  win_per_client__w26#[3..=3] = unsigned((((win_per_client__w25 >> 3) & 1) != 0) and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[24..=31] & 1) != 0)))
+  mut win_per_client__w27 = win_per_client__w26
+  win_per_client__w27#[3..=3] = unsigned((((win_per_client__w26 >> 3) & 1) != 0) and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[24..=31] >> 1) & 1) != 0)))
+  mut win_per_client__w28 = win_per_client__w27
+  win_per_client__w28#[3..=3] = unsigned((((win_per_client__w27 >> 3) & 1) != 0) and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((prio_bits_q#[24..=31] >> 2) & 1) != 0)))
+  mut win_per_client__w29 = win_per_client__w28
+  win_per_client__w29#[3..=3] = unsigned((((win_per_client__w28 >> 3) & 1) != 0) and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((~((prio_bits_q#[32..=39] >> 3) & 1)) & 1) != 0)))
+  mut win_per_client__w30 = win_per_client__w29
+  win_per_client__w30#[3..=3] = unsigned((((win_per_client__w29 >> 3) & 1) != 0) and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((~((prio_bits_q#[40..=47] >> 3) & 1)) & 1) != 0)))
+  mut win_per_client__w31 = win_per_client__w30
+  win_per_client__w31#[3..=3] = unsigned((((win_per_client__w30 >> 3) & 1) != 0) and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~((prio_bits_q#[48..=55] >> 3) & 1)) & 1) != 0)))
+  mut win_per_client__w32 = win_per_client__w31
+  win_per_client__w32#[3..=3] = unsigned((((win_per_client__w31 >> 3) & 1) != 0) and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 3) & 1)) & 1) != 0)))
+  mut win_per_client__w33 = win_per_client__w32
+  win_per_client__w33#[4..=4] = ((entry_ready__w8 >> 4) & 1)
+  mut win_per_client__w34 = win_per_client__w33
+  win_per_client__w34#[4..=4] = unsigned((((win_per_client__w33 >> 4) & 1) != 0) and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[32..=39] & 1) != 0)))
+  mut win_per_client__w35 = win_per_client__w34
+  win_per_client__w35#[4..=4] = unsigned((((win_per_client__w34 >> 4) & 1) != 0) and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[32..=39] >> 1) & 1) != 0)))
+  mut win_per_client__w36 = win_per_client__w35
+  win_per_client__w36#[4..=4] = unsigned((((win_per_client__w35 >> 4) & 1) != 0) and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((prio_bits_q#[32..=39] >> 2) & 1) != 0)))
+  mut win_per_client__w37 = win_per_client__w36
+  win_per_client__w37#[4..=4] = unsigned((((win_per_client__w36 >> 4) & 1) != 0) and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((prio_bits_q#[32..=39] >> 3) & 1) != 0)))
+  mut win_per_client__w38 = win_per_client__w37
+  win_per_client__w38#[4..=4] = unsigned((((win_per_client__w37 >> 4) & 1) != 0) and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((~((prio_bits_q#[40..=47] >> 4) & 1)) & 1) != 0)))
+  mut win_per_client__w39 = win_per_client__w38
+  win_per_client__w39#[4..=4] = unsigned((((win_per_client__w38 >> 4) & 1) != 0) and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~((prio_bits_q#[48..=55] >> 4) & 1)) & 1) != 0)))
+  mut win_per_client__w40 = win_per_client__w39
+  win_per_client__w40#[4..=4] = unsigned((((win_per_client__w39 >> 4) & 1) != 0) and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 4) & 1)) & 1) != 0)))
+  mut win_per_client__w41 = win_per_client__w40
+  win_per_client__w41#[5..=5] = ((entry_ready__w8 >> 5) & 1)
+  mut win_per_client__w42 = win_per_client__w41
+  win_per_client__w42#[5..=5] = unsigned((((win_per_client__w41 >> 5) & 1) != 0) and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[40..=47] & 1) != 0)))
+  mut win_per_client__w43 = win_per_client__w42
+  win_per_client__w43#[5..=5] = unsigned((((win_per_client__w42 >> 5) & 1) != 0) and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[40..=47] >> 1) & 1) != 0)))
+  mut win_per_client__w44 = win_per_client__w43
+  win_per_client__w44#[5..=5] = unsigned((((win_per_client__w43 >> 5) & 1) != 0) and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((prio_bits_q#[40..=47] >> 2) & 1) != 0)))
+  mut win_per_client__w45 = win_per_client__w44
+  win_per_client__w45#[5..=5] = unsigned((((win_per_client__w44 >> 5) & 1) != 0) and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((prio_bits_q#[40..=47] >> 3) & 1) != 0)))
+  mut win_per_client__w46 = win_per_client__w45
+  win_per_client__w46#[5..=5] = unsigned((((win_per_client__w45 >> 5) & 1) != 0) and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((prio_bits_q#[40..=47] >> 4) & 1) != 0)))
+  mut win_per_client__w47 = win_per_client__w46
+  win_per_client__w47#[5..=5] = unsigned((((win_per_client__w46 >> 5) & 1) != 0) and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~((prio_bits_q#[48..=55] >> 5) & 1)) & 1) != 0)))
+  mut win_per_client__w48 = win_per_client__w47
+  win_per_client__w48#[5..=5] = unsigned((((win_per_client__w47 >> 5) & 1) != 0) and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 5) & 1)) & 1) != 0)))
+  mut win_per_client__w49 = win_per_client__w48
+  win_per_client__w49#[6..=6] = ((entry_ready__w8 >> 6) & 1)
+  mut win_per_client__w50 = win_per_client__w49
+  win_per_client__w50#[6..=6] = unsigned((((win_per_client__w49 >> 6) & 1) != 0) and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[48..=55] & 1) != 0)))
+  mut win_per_client__w51 = win_per_client__w50
+  win_per_client__w51#[6..=6] = unsigned((((win_per_client__w50 >> 6) & 1) != 0) and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[48..=55] >> 1) & 1) != 0)))
+  mut win_per_client__w52 = win_per_client__w51
+  win_per_client__w52#[6..=6] = unsigned((((win_per_client__w51 >> 6) & 1) != 0) and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((prio_bits_q#[48..=55] >> 2) & 1) != 0)))
+  mut win_per_client__w53 = win_per_client__w52
+  win_per_client__w53#[6..=6] = unsigned((((win_per_client__w52 >> 6) & 1) != 0) and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((prio_bits_q#[48..=55] >> 3) & 1) != 0)))
+  mut win_per_client__w54 = win_per_client__w53
+  win_per_client__w54#[6..=6] = unsigned((((win_per_client__w53 >> 6) & 1) != 0) and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((prio_bits_q#[48..=55] >> 4) & 1) != 0)))
+  mut win_per_client__w55 = win_per_client__w54
+  win_per_client__w55#[6..=6] = unsigned((((win_per_client__w54 >> 6) & 1) != 0) and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((prio_bits_q#[48..=55] >> 5) & 1) != 0)))
+  mut win_per_client__w56 = win_per_client__w55
+  win_per_client__w56#[6..=6] = unsigned((((win_per_client__w55 >> 6) & 1) != 0) and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 6) & 1)) & 1) != 0)))
+  mut win_per_client__w57 = win_per_client__w56
+  win_per_client__w57#[7..=7] = ((entry_ready__w8 >> 7) & 1)
+  mut win_per_client__w58 = win_per_client__w57
+  win_per_client__w58#[7..=7] = unsigned((((win_per_client__w57 >> 7) & 1) != 0) and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[56..=63] & 1) != 0)))
+  mut win_per_client__w59 = win_per_client__w58
+  win_per_client__w59#[7..=7] = unsigned((((win_per_client__w58 >> 7) & 1) != 0) and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 1) & 1) != 0)))
+  mut win_per_client__w60 = win_per_client__w59
+  win_per_client__w60#[7..=7] = unsigned((((win_per_client__w59 >> 7) & 1) != 0) and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 2) & 1) != 0)))
+  mut win_per_client__w61 = win_per_client__w60
+  win_per_client__w61#[7..=7] = unsigned((((win_per_client__w60 >> 7) & 1) != 0) and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 3) & 1) != 0)))
+  mut win_per_client__w62 = win_per_client__w61
+  win_per_client__w62#[7..=7] = unsigned((((win_per_client__w61 >> 7) & 1) != 0) and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 4) & 1) != 0)))
+  mut win_per_client__w63 = win_per_client__w62
+  win_per_client__w63#[7..=7] = unsigned((((win_per_client__w62 >> 7) & 1) != 0) and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 5) & 1) != 0)))
+  mut win_per_client__w64 = win_per_client__w63
+  win_per_client__w64#[7..=7] = unsigned((((win_per_client__w63 >> 7) & 1) != 0) and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 6) & 1) != 0)))
+  replay_entry_d = if (win_per_client__w64 & 1) != 0 { 0 } else { 0 }
+  if ((win_per_client__w64 >> 1) & 1) != 0 {
+    replay_entry_d = 1
+  }
+  if ((win_per_client__w64 >> 2) & 1) != 0 {
+    replay_entry_d = 2
+  }
+  if ((win_per_client__w64 >> 3) & 1) != 0 {
+    replay_entry_d = 3
+  }
+  if ((win_per_client__w64 >> 4) & 1) != 0 {
+    replay_entry_d = 4
+  }
+  if ((win_per_client__w64 >> 5) & 1) != 0 {
+    replay_entry_d = 5
+  }
+  if ((win_per_client__w64 >> 6) & 1) != 0 {
+    replay_entry_d = 6
+  }
+  if ((win_per_client__w64 >> 7) & 1) != 0 {
+    replay_entry_d = 7
+  }
+  prio_bits_d = prio_bits_q
+  if (push_req_i != 0) and (push_entry == 0) {
+    prio_bits_d#[8..=8] = 1
+    prio_bits_d#[16..=16] = 1
+    prio_bits_d#[24..=24] = 1
+    prio_bits_d#[32..=32] = 1
+    prio_bits_d#[40..=40] = 1
+    prio_bits_d#[48..=48] = 1
+    prio_bits_d#[56..=56] = 1
+  }
+  if (push_req_i != 0) and (push_entry == 1) {
+    prio_bits_d#[8..=8] = 0
+    prio_bits_d#[17..=17] = 1
+    prio_bits_d#[25..=25] = 1
+    prio_bits_d#[33..=33] = 1
+    prio_bits_d#[41..=41] = 1
+    prio_bits_d#[49..=49] = 1
+    prio_bits_d#[57..=57] = 1
+  }
+  if (push_req_i != 0) and (push_entry == 2) {
+    prio_bits_d#[16..=16] = 0
+    prio_bits_d#[17..=17] = 0
+    prio_bits_d#[26..=26] = 1
+    prio_bits_d#[34..=34] = 1
+    prio_bits_d#[42..=42] = 1
+    prio_bits_d#[50..=50] = 1
+    prio_bits_d#[58..=58] = 1
+  }
+  if (push_req_i != 0) and (push_entry == 3) {
+    prio_bits_d#[24..=24] = 0
+    prio_bits_d#[25..=25] = 0
+    prio_bits_d#[26..=26] = 0
+    prio_bits_d#[35..=35] = 1
+    prio_bits_d#[43..=43] = 1
+    prio_bits_d#[51..=51] = 1
+    prio_bits_d#[59..=59] = 1
+  }
+  if (push_req_i != 0) and (push_entry == 4) {
+    prio_bits_d#[32..=32] = 0
+    prio_bits_d#[33..=33] = 0
+    prio_bits_d#[34..=34] = 0
+    prio_bits_d#[35..=35] = 0
+    prio_bits_d#[44..=44] = 1
+    prio_bits_d#[52..=52] = 1
+    prio_bits_d#[60..=60] = 1
+  }
+  if (push_req_i != 0) and (push_entry == 5) {
+    prio_bits_d#[40..=40] = 0
+    prio_bits_d#[41..=41] = 0
+    prio_bits_d#[42..=42] = 0
+    prio_bits_d#[43..=43] = 0
+    prio_bits_d#[44..=44] = 0
+    prio_bits_d#[53..=53] = 1
+    prio_bits_d#[61..=61] = 1
+  }
+  if (push_req_i != 0) and (push_entry == 6) {
+    prio_bits_d#[48..=48] = 0
+    prio_bits_d#[49..=49] = 0
+    prio_bits_d#[50..=50] = 0
+    prio_bits_d#[51..=51] = 0
+    prio_bits_d#[52..=52] = 0
+    prio_bits_d#[53..=53] = 0
+    prio_bits_d#[62..=62] = 1
+  }
+  if (push_req_i != 0) and (push_entry == 7) {
+    prio_bits_d#[56..=56] = 0
+    prio_bits_d#[57..=57] = 0
+    prio_bits_d#[58..=58] = 0
+    prio_bits_d#[59..=59] = 0
+    prio_bits_d#[60..=60] = 0
+    prio_bits_d#[61..=61] = 0
+    prio_bits_d#[62..=62] = 0
+  }
+  rq_to_s2_conflict_array = 0ub????????
+  s2_to_rq_conflict_array = 0ub????????
+  const entry1__w1 = `replayq_ready_info_q.age`[0]
+  const entry2__w1 = req_data_i#[57..=61]
+  const cmp__w1 = unsigned(entry1__w1#[0..=3] < entry2__w1#[0..=3])
+  if ((entry1__w1 >> minion_dcache_pkg.DcacheReplayqAgeEraBit) & 1) == ((entry2__w1 >> minion_dcache_pkg.DcacheReplayqAgeEraBit) & 1) {
+  }
+  const dcache_replayq_entry_is_older__w1 = unsigned(cmp__w1 == 0)
+  const rq_entry_pending__w1 = unsigned(((entry_mask_available_q & 1) == 0) and (`replayq_ready_info_q.pending`[0] != 0))
+  rq_conflict_o = 0
+  rq_conflict_to_co_o = 0
+  rq_to_s2_conflict_array = 0
+  s2_to_rq_conflict_array = 0
+  if (rq_entry_pending__w1 != 0) or ((replay_valid_o != 0) and (replay_entry_o == 0)) or ((replay_valid_prev_q != 0) and (replay_entry_prev_q == 0)) {
+    if (req_is_write__w1 != 0) or (`replayq_ready_info_q.store`[0] != 0) {
+      if ((req_data_i#[357..=405] >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == (replayq__w135#[0..=129]#[81..=129] >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9]) or (((req_data_i >> 350) & 1) != 0) or (((replayq__w135#[0..=129] >> 47) & 1) != 0) or (((replayq__w135#[0..=129] >> 46) & 1) != 0) or (((replayq__w135#[0..=129] >> 45) & 1) == 0) {
+        if unsigned((((req_data_i >> 65) & 1) == 0) or (dcache_replayq_entry_is_older__w1 != 0)) != 0 {
+          rq_conflict_o = 1
+          rq_to_s2_conflict_array#[0..=0] = rq_entry_pending__w1
+        } else {
+          s2_to_rq_conflict_array = 1
+          s2_to_rq_conflict_array#[0..=0] = 1
+        }
+      }
+    }
+    rq_conflict_to_co_o = 0 | ((replayq__w135#[0..=129] >> 46) & 1)
+  }
+  const entry1__w2 = `replayq_ready_info_q.age`[1]
+  const entry2__w2 = req_data_i#[57..=61]
+  const cmp__w2 = unsigned(entry1__w2#[0..=3] < entry2__w2#[0..=3])
+  mut dcache_replayq_entry_is_older = if ((entry1__w2 >> minion_dcache_pkg.DcacheReplayqAgeEraBit) & 1) == ((entry2__w2 >> minion_dcache_pkg.DcacheReplayqAgeEraBit) & 1) { cmp__w2 } else { dcache_replayq_entry_is_older__w1 }
+  const dcache_replayq_entry_is_older__w2 = unsigned(cmp__w2 == 0)
+  const rq_entry_pending__w2 = unsigned((((entry_mask_available_q >> 1) & 1) == 0) and (`replayq_ready_info_q.pending`[1] != 0))
+  if (rq_entry_pending__w2 != 0) or ((replay_valid_o != 0) and (replay_entry_o == 1)) or ((replay_valid_prev_q != 0) and (replay_entry_prev_q == 1)) {
+    if (req_is_write__w1 != 0) or (`replayq_ready_info_q.store`[1] != 0) {
+      if ((req_data_i#[357..=405] >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == (replayq__w135#[130..=259]#[81..=129] >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9]) or (((req_data_i >> 350) & 1) != 0) or (((replayq__w135#[130..=259] >> 47) & 1) != 0) or (((replayq__w135#[130..=259] >> 46) & 1) != 0) or (((replayq__w135#[130..=259] >> 45) & 1) == 0) {
+        if unsigned((((req_data_i >> 65) & 1) == 0) or (dcache_replayq_entry_is_older__w2 != 0)) != 0 {
+          rq_conflict_o = 1
+          rq_to_s2_conflict_array#[1..=1] = rq_entry_pending__w2
+        } else {
+          s2_to_rq_conflict_array#[1..=1] = 1
+        }
+      }
+    }
+    rq_conflict_to_co_o = rq_conflict_to_co_o | ((replayq__w135#[130..=259] >> 46) & 1)
+  }
+  const entry1__w3 = `replayq_ready_info_q.age`[2]
+  const entry2__w3 = req_data_i#[57..=61]
+  const cmp__w3 = unsigned(entry1__w3#[0..=3] < entry2__w3#[0..=3])
+  dcache_replayq_entry_is_older = if ((entry1__w3 >> minion_dcache_pkg.DcacheReplayqAgeEraBit) & 1) == ((entry2__w3 >> minion_dcache_pkg.DcacheReplayqAgeEraBit) & 1) { cmp__w3 } else { dcache_replayq_entry_is_older__w2 }
+  const dcache_replayq_entry_is_older__w3 = unsigned(cmp__w3 == 0)
+  const rq_entry_pending__w3 = unsigned((((entry_mask_available_q >> 2) & 1) == 0) and (`replayq_ready_info_q.pending`[2] != 0))
+  if (rq_entry_pending__w3 != 0) or ((replay_valid_o != 0) and (replay_entry_o == 2)) or ((replay_valid_prev_q != 0) and (replay_entry_prev_q == 2)) {
+    if (req_is_write__w1 != 0) or (`replayq_ready_info_q.store`[2] != 0) {
+      if ((req_data_i#[357..=405] >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == (replayq__w135#[260..=389]#[81..=129] >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9]) or (((req_data_i >> 350) & 1) != 0) or (((replayq__w135#[260..=389] >> 47) & 1) != 0) or (((replayq__w135#[260..=389] >> 46) & 1) != 0) or (((replayq__w135#[260..=389] >> 45) & 1) == 0) {
+        if unsigned((((req_data_i >> 65) & 1) == 0) or (dcache_replayq_entry_is_older__w3 != 0)) != 0 {
+          rq_conflict_o = 1
+          rq_to_s2_conflict_array#[2..=2] = rq_entry_pending__w3
+        } else {
+          s2_to_rq_conflict_array#[2..=2] = 1
+        }
+      }
+    }
+    rq_conflict_to_co_o = rq_conflict_to_co_o | ((replayq__w135#[260..=389] >> 46) & 1)
+  }
+  const entry1__w4 = `replayq_ready_info_q.age`[3]
+  const entry2__w4 = req_data_i#[57..=61]
+  const cmp__w4 = unsigned(entry1__w4#[0..=3] < entry2__w4#[0..=3])
+  dcache_replayq_entry_is_older = if ((entry1__w4 >> minion_dcache_pkg.DcacheReplayqAgeEraBit) & 1) == ((entry2__w4 >> minion_dcache_pkg.DcacheReplayqAgeEraBit) & 1) { cmp__w4 } else { dcache_replayq_entry_is_older__w3 }
+  const dcache_replayq_entry_is_older__w4 = unsigned(cmp__w4 == 0)
+  const rq_entry_pending__w4 = unsigned((((entry_mask_available_q >> 3) & 1) == 0) and (`replayq_ready_info_q.pending`[3] != 0))
+  if (rq_entry_pending__w4 != 0) or ((replay_valid_o != 0) and (replay_entry_o == 3)) or ((replay_valid_prev_q != 0) and (replay_entry_prev_q == 3)) {
+    if (req_is_write__w1 != 0) or (`replayq_ready_info_q.store`[3] != 0) {
+      if ((req_data_i#[357..=405] >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == (replayq__w135#[390..=519]#[81..=129] >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9]) or (((req_data_i >> 350) & 1) != 0) or (((replayq__w135#[390..=519] >> 47) & 1) != 0) or (((replayq__w135#[390..=519] >> 46) & 1) != 0) or (((replayq__w135#[390..=519] >> 45) & 1) == 0) {
+        if unsigned((((req_data_i >> 65) & 1) == 0) or (dcache_replayq_entry_is_older__w4 != 0)) != 0 {
+          rq_conflict_o = 1
+          rq_to_s2_conflict_array#[3..=3] = rq_entry_pending__w4
+        } else {
+          s2_to_rq_conflict_array#[3..=3] = 1
+        }
+      }
+    }
+    rq_conflict_to_co_o = rq_conflict_to_co_o | ((replayq__w135#[390..=519] >> 46) & 1)
+  }
+  const entry1__w5 = `replayq_ready_info_q.age`[4]
+  const entry2__w5 = req_data_i#[57..=61]
+  const cmp__w5 = unsigned(entry1__w5#[0..=3] < entry2__w5#[0..=3])
+  dcache_replayq_entry_is_older = if ((entry1__w5 >> minion_dcache_pkg.DcacheReplayqAgeEraBit) & 1) == ((entry2__w5 >> minion_dcache_pkg.DcacheReplayqAgeEraBit) & 1) { cmp__w5 } else { dcache_replayq_entry_is_older__w4 }
+  const dcache_replayq_entry_is_older__w5 = unsigned(cmp__w5 == 0)
+  const rq_entry_pending__w5 = unsigned((((entry_mask_available_q >> 4) & 1) == 0) and (`replayq_ready_info_q.pending`[4] != 0))
+  if (rq_entry_pending__w5 != 0) or ((replay_valid_o != 0) and (replay_entry_o == 4)) or ((replay_valid_prev_q != 0) and (replay_entry_prev_q == 4)) {
+    if (req_is_write__w1 != 0) or (`replayq_ready_info_q.store`[4] != 0) {
+      if ((req_data_i#[357..=405] >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == (replayq__w135#[520..=649]#[81..=129] >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9]) or (((req_data_i >> 350) & 1) != 0) or (((replayq__w135#[520..=649] >> 47) & 1) != 0) or (((replayq__w135#[520..=649] >> 46) & 1) != 0) or (((replayq__w135#[520..=649] >> 45) & 1) == 0) {
+        if unsigned((((req_data_i >> 65) & 1) == 0) or (dcache_replayq_entry_is_older__w5 != 0)) != 0 {
+          rq_conflict_o = 1
+          rq_to_s2_conflict_array#[4..=4] = rq_entry_pending__w5
+        } else {
+          s2_to_rq_conflict_array#[4..=4] = 1
+        }
+      }
+    }
+    rq_conflict_to_co_o = rq_conflict_to_co_o | ((replayq__w135#[520..=649] >> 46) & 1)
+  }
+  const entry1__w6 = `replayq_ready_info_q.age`[5]
+  const entry2__w6 = req_data_i#[57..=61]
+  const cmp__w6 = unsigned(entry1__w6#[0..=3] < entry2__w6#[0..=3])
+  dcache_replayq_entry_is_older = if ((entry1__w6 >> minion_dcache_pkg.DcacheReplayqAgeEraBit) & 1) == ((entry2__w6 >> minion_dcache_pkg.DcacheReplayqAgeEraBit) & 1) { cmp__w6 } else { dcache_replayq_entry_is_older__w5 }
+  const dcache_replayq_entry_is_older__w6 = unsigned(cmp__w6 == 0)
+  const rq_entry_pending__w6 = unsigned((((entry_mask_available_q >> 5) & 1) == 0) and (`replayq_ready_info_q.pending`[5] != 0))
+  if (rq_entry_pending__w6 != 0) or ((replay_valid_o != 0) and (replay_entry_o == 5)) or ((replay_valid_prev_q != 0) and (replay_entry_prev_q == 5)) {
+    if (req_is_write__w1 != 0) or (`replayq_ready_info_q.store`[5] != 0) {
+      if ((req_data_i#[357..=405] >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == (replayq__w135#[650..=779]#[81..=129] >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9]) or (((req_data_i >> 350) & 1) != 0) or (((replayq__w135#[650..=779] >> 47) & 1) != 0) or (((replayq__w135#[650..=779] >> 46) & 1) != 0) or (((replayq__w135#[650..=779] >> 45) & 1) == 0) {
+        if unsigned((((req_data_i >> 65) & 1) == 0) or (dcache_replayq_entry_is_older__w6 != 0)) != 0 {
+          rq_conflict_o = 1
+          rq_to_s2_conflict_array#[5..=5] = rq_entry_pending__w6
+        } else {
+          s2_to_rq_conflict_array#[5..=5] = 1
+        }
+      }
+    }
+    rq_conflict_to_co_o = rq_conflict_to_co_o | ((replayq__w135#[650..=779] >> 46) & 1)
+  }
+  const entry1__w7 = `replayq_ready_info_q.age`[6]
+  const entry2__w7 = req_data_i#[57..=61]
+  const cmp__w7 = unsigned(entry1__w7#[0..=3] < entry2__w7#[0..=3])
+  dcache_replayq_entry_is_older = if ((entry1__w7 >> minion_dcache_pkg.DcacheReplayqAgeEraBit) & 1) == ((entry2__w7 >> minion_dcache_pkg.DcacheReplayqAgeEraBit) & 1) { cmp__w7 } else { dcache_replayq_entry_is_older__w6 }
+  const dcache_replayq_entry_is_older__w7 = unsigned(cmp__w7 == 0)
+  const rq_entry_pending__w7 = unsigned((((entry_mask_available_q >> 6) & 1) == 0) and (`replayq_ready_info_q.pending`[6] != 0))
+  if (rq_entry_pending__w7 != 0) or ((replay_valid_o != 0) and (replay_entry_o == 6)) or ((replay_valid_prev_q != 0) and (replay_entry_prev_q == 6)) {
+    if (req_is_write__w1 != 0) or (`replayq_ready_info_q.store`[6] != 0) {
+      if ((req_data_i#[357..=405] >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == (replayq__w135#[780..=909]#[81..=129] >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9]) or (((req_data_i >> 350) & 1) != 0) or (((replayq__w135#[780..=909] >> 47) & 1) != 0) or (((replayq__w135#[780..=909] >> 46) & 1) != 0) or (((replayq__w135#[780..=909] >> 45) & 1) == 0) {
+        if unsigned((((req_data_i >> 65) & 1) == 0) or (dcache_replayq_entry_is_older__w7 != 0)) != 0 {
+          rq_conflict_o = 1
+          rq_to_s2_conflict_array#[6..=6] = rq_entry_pending__w7
+        } else {
+          s2_to_rq_conflict_array#[6..=6] = 1
+        }
+      }
+    }
+    rq_conflict_to_co_o = rq_conflict_to_co_o | ((replayq__w135#[780..=909] >> 46) & 1)
+  }
+  const entry1__w8 = `replayq_ready_info_q.age`[7]
+  const entry2__w8 = req_data_i#[57..=61]
+  const cmp__w8 = unsigned(entry1__w8#[0..=3] < entry2__w8#[0..=3])
+  dcache_replayq_entry_is_older = if ((entry1__w8 >> minion_dcache_pkg.DcacheReplayqAgeEraBit) & 1) == ((entry2__w8 >> minion_dcache_pkg.DcacheReplayqAgeEraBit) & 1) { cmp__w8 } else { dcache_replayq_entry_is_older__w7 }
+  const rq_entry_pending__w8 = unsigned((((entry_mask_available_q >> 7) & 1) == 0) and (`replayq_ready_info_q.pending`[7] != 0))
+  if (rq_entry_pending__w8 != 0) or ((replay_valid_o != 0) and (replay_entry_o == 7)) or ((replay_valid_prev_q != 0) and (replay_entry_prev_q == 7)) {
+    if (req_is_write__w1 != 0) or (`replayq_ready_info_q.store`[7] != 0) {
+      if ((req_data_i#[357..=405] >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == (replayq__w135#[910..=1039]#[81..=129] >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9]) or (((req_data_i >> 350) & 1) != 0) or (((replayq__w135#[910..=1039] >> 47) & 1) != 0) or (((replayq__w135#[910..=1039] >> 46) & 1) != 0) or (((replayq__w135#[910..=1039] >> 45) & 1) == 0) {
+        if unsigned((((req_data_i >> 65) & 1) == 0) or (unsigned(cmp__w8 == 0) != 0)) != 0 {
+          rq_conflict_o = 1
+          rq_to_s2_conflict_array#[7..=7] = rq_entry_pending__w8
+        } else {
+          s2_to_rq_conflict_array#[7..=7] = 1
+        }
+      }
+    }
+    rq_conflict_to_co_o = rq_conflict_to_co_o | ((replayq__w135#[910..=1039] >> 46) & 1)
+  }
+  rq_conflict_matrix_d = rq_conflict_matrix_q
+  if (push_req_i != 0) or (rearm_i != 0) {
+    const t3141 = push_entry * 8
+    rq_conflict_matrix_d = (rq_conflict_matrix_d & (~(0xff << t3141))) | (rq_to_s2_conflict_array << t3141)
+    const t3155 = push_entry + 8
+    rq_conflict_matrix_d = (rq_conflict_matrix_d & (~(1 << push_entry))) | ((s2_to_rq_conflict_array & 1) << push_entry)
+    const t3163 = push_entry + 16
+    rq_conflict_matrix_d = (rq_conflict_matrix_d & (~(1 << t3155))) | (((s2_to_rq_conflict_array >> 1) & 1) << t3155)
+    const t3171 = push_entry + 24
+    rq_conflict_matrix_d = (rq_conflict_matrix_d & (~(1 << t3163))) | (((s2_to_rq_conflict_array >> 2) & 1) << t3163)
+    const t3179 = push_entry + 32
+    rq_conflict_matrix_d = (rq_conflict_matrix_d & (~(1 << t3171))) | (((s2_to_rq_conflict_array >> 3) & 1) << t3171)
+    const t3187 = push_entry + 40
+    rq_conflict_matrix_d = (rq_conflict_matrix_d & (~(1 << t3179))) | (((s2_to_rq_conflict_array >> 4) & 1) << t3179)
+    const t3195 = push_entry + 48
+    rq_conflict_matrix_d = (rq_conflict_matrix_d & (~(1 << t3187))) | (((s2_to_rq_conflict_array >> 5) & 1) << t3187)
+    const t3203 = push_entry + 56
+    rq_conflict_matrix_d = (rq_conflict_matrix_d & (~(1 << t3195))) | (((s2_to_rq_conflict_array >> 6) & 1) << t3195)
+    rq_conflict_matrix_d = (rq_conflict_matrix_d & (~(1 << t3203))) | (((s2_to_rq_conflict_array >> 7) & 1) << t3203)
+  }
+  if replay_grant_i != 0 {
+    const t3215 = replay_entry_d + 8
+    rq_conflict_matrix_d = (rq_conflict_matrix_d & (~(1 << replay_entry_d))) | (0 << replay_entry_d)
+    const t3221 = replay_entry_d + 16
+    rq_conflict_matrix_d = (rq_conflict_matrix_d & (~(1 << t3215))) | (0 << t3215)
+    const t3227 = replay_entry_d + 24
+    rq_conflict_matrix_d = (rq_conflict_matrix_d & (~(1 << t3221))) | (0 << t3221)
+    const t3233 = replay_entry_d + 32
+    rq_conflict_matrix_d = (rq_conflict_matrix_d & (~(1 << t3227))) | (0 << t3227)
+    const t3239 = replay_entry_d + 40
+    rq_conflict_matrix_d = (rq_conflict_matrix_d & (~(1 << t3233))) | (0 << t3233)
+    const t3245 = replay_entry_d + 48
+    rq_conflict_matrix_d = (rq_conflict_matrix_d & (~(1 << t3239))) | (0 << t3239)
+    const t3251 = replay_entry_d + 56
+    rq_conflict_matrix_d = (rq_conflict_matrix_d & (~(1 << t3245))) | (0 << t3245)
+    rq_conflict_matrix_d = (rq_conflict_matrix_d & (~(1 << t3251))) | (0 << t3251)
+  }
+  mut rq_conflict_matrix_d__w2 = rq_conflict_matrix_d
+  rq_conflict_matrix_d__w2#[0..=0] = 0
+  mut rq_conflict_matrix_d__w3 = rq_conflict_matrix_d__w2
+  rq_conflict_matrix_d__w3#[9..=9] = 0
+  mut rq_conflict_matrix_d__w4 = rq_conflict_matrix_d__w3
+  rq_conflict_matrix_d__w4#[18..=18] = 0
+  mut rq_conflict_matrix_d__w5 = rq_conflict_matrix_d__w4
+  rq_conflict_matrix_d__w5#[27..=27] = 0
+  mut rq_conflict_matrix_d__w6 = rq_conflict_matrix_d__w5
+  rq_conflict_matrix_d__w6#[36..=36] = 0
+  mut rq_conflict_matrix_d__w7 = rq_conflict_matrix_d__w6
+  rq_conflict_matrix_d__w7#[45..=45] = 0
+  mut rq_conflict_matrix_d__w8 = rq_conflict_matrix_d__w7
+  rq_conflict_matrix_d__w8#[54..=54] = 0
+  mut rq_conflict_matrix_d__w9 = rq_conflict_matrix_d__w8
+  rq_conflict_matrix_d__w9#[63..=63] = 0
+  const cmd_s2__w1 = replayq__w135#[0..=129]#[69..=73]
+  const cmd_s1__w2 = cmd_s2__w1
+  mut scoreboard_o__w1 = scoreboard_o
+  scoreboard_o__w1#[56..=56] = unsigned(((entry_mask_available_q & 1) == 0) and (unsigned((cmd_s2__w1 == minion_dcache_pkg.DcCmdXrd) or (cmd_s2__w1 == minion_dcache_pkg.DcCmdXlr) or (cmd_s2__w1 == minion_dcache_pkg.DcCmdXsc) or (unsigned((cmd_s1__w2 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s1__w2 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s1__w2 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s1__w2 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s1__w2 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s1__w2 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMaxPs)) != 0) or (cmd_s2__w1 == minion_dcache_pkg.DcCmdG32) or (cmd_s2__w1 == minion_dcache_pkg.DcCmdXrdb)) != 0))
+  mut scoreboard_o__w2 = scoreboard_o__w1
+  scoreboard_o__w2#[0..=6] = replayq__w135#[0..=129]#[74..=80]
+  const cmd_s2__w2 = replayq__w135#[130..=259]#[69..=73]
+  const cmd_s1__w3 = cmd_s2__w2
+  mut scoreboard_o__w3 = scoreboard_o__w2
+  scoreboard_o__w3#[57..=57] = unsigned((((entry_mask_available_q >> 1) & 1) == 0) and (unsigned((cmd_s2__w2 == minion_dcache_pkg.DcCmdXrd) or (cmd_s2__w2 == minion_dcache_pkg.DcCmdXlr) or (cmd_s2__w2 == minion_dcache_pkg.DcCmdXsc) or (unsigned((cmd_s1__w3 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s1__w3 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s1__w3 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s1__w3 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s1__w3 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s1__w3 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMaxPs)) != 0) or (cmd_s2__w2 == minion_dcache_pkg.DcCmdG32) or (cmd_s2__w2 == minion_dcache_pkg.DcCmdXrdb)) != 0))
+  mut scoreboard_o__w4 = scoreboard_o__w3
+  scoreboard_o__w4#[7..=13] = replayq__w135#[130..=259]#[74..=80]
+  const cmd_s2__w3 = replayq__w135#[260..=389]#[69..=73]
+  const cmd_s1__w4 = cmd_s2__w3
+  mut scoreboard_o__w5 = scoreboard_o__w4
+  scoreboard_o__w5#[58..=58] = unsigned((((entry_mask_available_q >> 2) & 1) == 0) and (unsigned((cmd_s2__w3 == minion_dcache_pkg.DcCmdXrd) or (cmd_s2__w3 == minion_dcache_pkg.DcCmdXlr) or (cmd_s2__w3 == minion_dcache_pkg.DcCmdXsc) or (unsigned((cmd_s1__w4 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s1__w4 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s1__w4 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s1__w4 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s1__w4 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s1__w4 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMaxPs)) != 0) or (cmd_s2__w3 == minion_dcache_pkg.DcCmdG32) or (cmd_s2__w3 == minion_dcache_pkg.DcCmdXrdb)) != 0))
+  mut scoreboard_o__w6 = scoreboard_o__w5
+  scoreboard_o__w6#[14..=20] = replayq__w135#[260..=389]#[74..=80]
+  const cmd_s2__w4 = replayq__w135#[390..=519]#[69..=73]
+  const cmd_s1__w5 = cmd_s2__w4
+  mut scoreboard_o__w7 = scoreboard_o__w6
+  scoreboard_o__w7#[59..=59] = unsigned((((entry_mask_available_q >> 3) & 1) == 0) and (unsigned((cmd_s2__w4 == minion_dcache_pkg.DcCmdXrd) or (cmd_s2__w4 == minion_dcache_pkg.DcCmdXlr) or (cmd_s2__w4 == minion_dcache_pkg.DcCmdXsc) or (unsigned((cmd_s1__w5 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s1__w5 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s1__w5 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s1__w5 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s1__w5 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s1__w5 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMaxPs)) != 0) or (cmd_s2__w4 == minion_dcache_pkg.DcCmdG32) or (cmd_s2__w4 == minion_dcache_pkg.DcCmdXrdb)) != 0))
+  mut scoreboard_o__w8 = scoreboard_o__w7
+  scoreboard_o__w8#[21..=27] = replayq__w135#[390..=519]#[74..=80]
+  const cmd_s2__w5 = replayq__w135#[520..=649]#[69..=73]
+  const cmd_s1__w6 = cmd_s2__w5
+  mut scoreboard_o__w9 = scoreboard_o__w8
+  scoreboard_o__w9#[60..=60] = unsigned((((entry_mask_available_q >> 4) & 1) == 0) and (unsigned((cmd_s2__w5 == minion_dcache_pkg.DcCmdXrd) or (cmd_s2__w5 == minion_dcache_pkg.DcCmdXlr) or (cmd_s2__w5 == minion_dcache_pkg.DcCmdXsc) or (unsigned((cmd_s1__w6 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s1__w6 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s1__w6 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s1__w6 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s1__w6 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s1__w6 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMaxPs)) != 0) or (cmd_s2__w5 == minion_dcache_pkg.DcCmdG32) or (cmd_s2__w5 == minion_dcache_pkg.DcCmdXrdb)) != 0))
+  mut scoreboard_o__w10 = scoreboard_o__w9
+  scoreboard_o__w10#[28..=34] = replayq__w135#[520..=649]#[74..=80]
+  const cmd_s2__w6 = replayq__w135#[650..=779]#[69..=73]
+  const cmd_s1__w7 = cmd_s2__w6
+  mut scoreboard_o__w11 = scoreboard_o__w10
+  scoreboard_o__w11#[61..=61] = unsigned((((entry_mask_available_q >> 5) & 1) == 0) and (unsigned((cmd_s2__w6 == minion_dcache_pkg.DcCmdXrd) or (cmd_s2__w6 == minion_dcache_pkg.DcCmdXlr) or (cmd_s2__w6 == minion_dcache_pkg.DcCmdXsc) or (unsigned((cmd_s1__w7 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s1__w7 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s1__w7 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s1__w7 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s1__w7 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s1__w7 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMaxPs)) != 0) or (cmd_s2__w6 == minion_dcache_pkg.DcCmdG32) or (cmd_s2__w6 == minion_dcache_pkg.DcCmdXrdb)) != 0))
+  mut scoreboard_o__w12 = scoreboard_o__w11
+  scoreboard_o__w12#[35..=41] = replayq__w135#[650..=779]#[74..=80]
+  const cmd_s2__w7 = replayq__w135#[780..=909]#[69..=73]
+  const cmd_s1__w8 = cmd_s2__w7
+  mut scoreboard_o__w13 = scoreboard_o__w12
+  scoreboard_o__w13#[62..=62] = unsigned((((entry_mask_available_q >> 6) & 1) == 0) and (unsigned((cmd_s2__w7 == minion_dcache_pkg.DcCmdXrd) or (cmd_s2__w7 == minion_dcache_pkg.DcCmdXlr) or (cmd_s2__w7 == minion_dcache_pkg.DcCmdXsc) or (unsigned((cmd_s1__w8 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s1__w8 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s1__w8 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s1__w8 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s1__w8 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s1__w8 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMaxPs)) != 0) or (cmd_s2__w7 == minion_dcache_pkg.DcCmdG32) or (cmd_s2__w7 == minion_dcache_pkg.DcCmdXrdb)) != 0))
+  mut scoreboard_o__w14 = scoreboard_o__w13
+  scoreboard_o__w14#[42..=48] = replayq__w135#[780..=909]#[74..=80]
+  const cmd_s2__w8 = replayq__w135#[910..=1039]#[69..=73]
+  const cmd_s1__w9 = cmd_s2__w8
+  mut scoreboard_o__w15 = scoreboard_o__w14
+  scoreboard_o__w15#[63..=63] = unsigned((((entry_mask_available_q >> 7) & 1) == 0) and (unsigned((cmd_s2__w8 == minion_dcache_pkg.DcCmdXrd) or (cmd_s2__w8 == minion_dcache_pkg.DcCmdXlr) or (cmd_s2__w8 == minion_dcache_pkg.DcCmdXsc) or (unsigned((cmd_s1__w9 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s1__w9 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s1__w9 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s1__w9 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s1__w9 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s1__w9 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMaxPs)) != 0) or (cmd_s2__w8 == minion_dcache_pkg.DcCmdG32) or (cmd_s2__w8 == minion_dcache_pkg.DcCmdXrdb)) != 0))
+  mut scoreboard_o__w16 = scoreboard_o__w15
+  scoreboard_o__w16#[49..=55] = replayq__w135#[910..=1039]#[74..=80]
+  fp_sb_dealloc_d = 0ub??
+  mut fp_sb_dealloc_d__w1 = fp_sb_dealloc_d
+  fp_sb_dealloc_d__w1#[0..=0] = unsigned((dealloc_i != 0) and (((((replayq__w135 << 130) >> ((dealloc_entry_i * 130)#[0..=11] + 130))#[0..=129]#[74..=80] >> 6) & 1) != 0) and ((((replayq__w135 << 130) >> ((dealloc_entry_i * 130)#[0..=11] + 130))#[0..=129]#[74..=80] & 1) == 0))
+  int_sb_dealloc_d = 0ub??
+  mut int_sb_dealloc_d__w1 = int_sb_dealloc_d
+  int_sb_dealloc_d__w1#[0..=0] = unsigned((dealloc_i != 0) and (((((replayq__w135 << 130) >> ((dealloc_entry_i * 130)#[0..=11] + 130))#[0..=129]#[74..=80] >> 6) & 1) == 0) and ((((replayq__w135 << 130) >> ((dealloc_entry_i * 130)#[0..=11] + 130))#[0..=129]#[74..=80] & 1) == 0))
+  mut fp_sb_dealloc_d__w2 = fp_sb_dealloc_d__w1
+  fp_sb_dealloc_d__w2#[1..=1] = unsigned((dealloc_i != 0) and (((((replayq__w135 << 130) >> ((dealloc_entry_i * 130)#[0..=11] + 130))#[0..=129]#[74..=80] >> 6) & 1) != 0) and ((((replayq__w135 << 130) >> ((dealloc_entry_i * 130)#[0..=11] + 130))#[0..=129]#[74..=80] & 1) == 1))
+  mut int_sb_dealloc_d__w2 = int_sb_dealloc_d__w1
+  int_sb_dealloc_d__w2#[1..=1] = unsigned((dealloc_i != 0) and (((((replayq__w135 << 130) >> ((dealloc_entry_i * 130)#[0..=11] + 130))#[0..=129]#[74..=80] >> 6) & 1) == 0) and ((((replayq__w135 << 130) >> ((dealloc_entry_i * 130)#[0..=11] + 130))#[0..=129]#[74..=80] & 1) == 1))
+  if rst_ni == 0 {
+    empty_o = 3
+    push_age_q = 0
+    replay_valid_o = 0
+    replay_valid_prev_q = 0
+  } elif arb_clk_en__w1 != 0 {
+    replay_valid_o = replay_grant_i
+    empty_o = empty_d__w20
+    push_age_q = push_age_d
+    replay_valid_prev_q = replay_valid_o
+  }
+  if arb_clk_en__w1 != 0 {
+    replayq_ready_info_q = replayq_ready_info_d
+    replay_entry_o = replay_entry_d
+    replay_entry_prev_q = replay_entry_o
+    uc_load_id_q[0] = uc_load_id_d[0]
+    uc_load_id_q[1] = uc_load_id_d[1]
+    uc_load_id_q[2] = uc_load_id_d[2]
+    uc_load_id_q[3] = uc_load_id_d[3]
+    uc_load_id_q[4] = uc_load_id_d[4]
+    uc_load_id_q[5] = uc_load_id_d[5]
+    uc_load_id_q[6] = uc_load_id_d[6]
+    uc_load_id_q[7] = uc_load_id_d[7]
+  }
+  if rst_ni == 0 {
+    fp_sb_dealloc_o = 0
+    int_sb_dealloc_o = 0
+    prio_bits_q = 0
+    push_req_spec_q = 0
+  } else {
+    push_req_spec_q = push_req_prev_i
+    if push_req_i != 0 {
+      prio_bits_q = prio_bits_d
+    }
+    fp_sb_dealloc_o = fp_sb_dealloc_d__w2
+    int_sb_dealloc_o = int_sb_dealloc_d__w2
+  }
+  if (push_req_i != 0) or (rearm_i != 0) or (replay_grant_i != 0) {
+    rq_conflict_matrix_q = rq_conflict_matrix_d__w9
+  }
+  full_o = unsigned((entry_count_available_q == 0) or ((((age_id_mask_available_q << 1) >> (push_age_check_available__w1#[0..=5] + 1)) & 1) == 0))
+  half_full_o = unsigned((entry_count_available_q <= 4) or ((((age_id_mask_available_q << 1) >> (push_age_check_available__w1#[0..=5] + 1)) & 1) == 0))
+  replay_age_o = `replayq_ready_info_q.age`[replay_entry_o]
+  replay_bid_o = unsigned(entry_ready__w8 != 0)
+  replay_miss_ok_o = `replayq_ready_info_q.miss_fill_ok`[replay_entry_o]
+  replay_req_o = ((replayq__w135 << 130) >> ((replay_entry_o * 130)#[0..=11] + 130))#[0..=129]
+  replay_uc_ok_o = `replayq_ready_info_q.uc_load_ok`[replay_entry_o]
+  scoreboard_o = scoreboard_o__w16
+}

@@ -2,13 +2,20 @@
 """Summarize the last //bench test results from bazel-testlogs.
 
 Reads each target's test.log (the METRIC lines) and test.xml (status +
-duration). Read-only: run `bazel test //bench:all` first.
+duration). Read-only: run `bazel test //bench:all` first (or, for one design,
+`bazel test //bench:minion`).
+
+Targets are named <core>_<scenario>; one section is printed per core. Limit
+the report with `--core <name>` (repeatable).
 """
 
 import re
 import sys
 import time
 from pathlib import Path
+
+# Keep in sync with the CORES table in bench/defs.bzl.
+CORES = ("dino", "minion")
 
 
 def load(root: Path, target: str):
@@ -71,18 +78,22 @@ SHOW_CMDS = True
 
 
 class Report:
-    def __init__(self, root: Path):
+    """Per-core view of bazel-testlogs: `G("lec")` reads <core>_lec."""
+
+    def __init__(self, root: Path, core: str):
         self.root = root
+        self.core = core
         self.missing = []
 
     def tgt(self, name):
-        r = load(self.root, name)
+        full = f"{self.core}_{name}"
+        r = load(self.root, full)
         if r is None:
-            self.missing.append(name)
+            self.missing.append(full)
         return r
 
     def cmds(self, *pairs):
-        """Print each target's executed lhd command lines (from CMD log lines)."""
+        """Print each target's executed lhd command lines (from CMD lines)."""
         if not SHOW_CMDS:
             return
         pairs = [(n, r) for n, r in pairs if r and r[4]]
@@ -107,17 +118,12 @@ class Report:
         print(f"\n== {title:<28} [{tag}]{when}")
 
 
-def main():
-    global SHOW_CMDS
-    root = Path(sys.argv[1])
-    if "--no-cmds" in sys.argv[2:]:
-        SHOW_CMDS = False
-    if not root.is_dir():
-        sys.exit(f"no test logs at {root} — run `bazel test //bench:all` first")
-    rep = Report(root)
+def report_core(root: Path, core: str) -> list:
+    """Print one core's section; return its not-run target names."""
+    rep = Report(root, core)
     G = rep.tgt
 
-    print(f"lhdsuite bench results  (from {root})")
+    print(f"\n{'─' * 72}\n{core}\n{'─' * 72}")
 
     # ---- compile ----------------------------------------------------------
     cv, cp, cpp = G("compile_verilog"), G("compile_pyrope"), G("compile_pyrope_parallel")
@@ -141,9 +147,10 @@ def main():
             seq = cp[3].get("compile_pyrope_ms") if cp else None
             print(f"     per-file: scan {fmt(m.get('scan_ms'), 'ms')},"
                   f" leaves parallel {fmt(m.get('leaves_parallel_ms'), 'ms')},"
-                  f" dependents (--in-dir reuse) {fmt(m.get('deps_reuse_ms'), 'ms')}"
+                  f" dependents (ln: reuse) {fmt(m.get('deps_reuse_ms'), 'ms')}"
                   f"  [vs monolithic: {speedup(seq, total)}]")
-        rep.cmds(("compile_verilog", cv), ("compile_pyrope", cp), ("compile_pyrope_parallel", cpp))
+        rep.cmds(("compile_verilog", cv), ("compile_pyrope", cp),
+                 ("compile_pyrope_parallel", cpp))
 
     # ---- synth: flat vs synth coloring -----------------------------------
     sy = G("synth")
@@ -162,12 +169,16 @@ def main():
     rep.head("synth incremental (3 passes)", si)
     if si:
         m = si[3]
-        print(f"   {'':22} {'compile':>8} {'color':>7} {'abc':>8} {'hits':>5} {'miss':>5}")
+        # `remapped` (miss_ms) is the column that answers "did incremental
+        # help". A hit COUNT does not: minion once showed 199 hits of 264
+        # regions and a 1.0x speedup, because everything expensive sat in the
+        # 65 that missed.
+        print(f"   {'':22} {'compile':>8} {'color':>7} {'abc':>8} {'hits':>5} {'miss':>5} {'remapped':>9}")
         for p, what in (("pass1", "cold"), ("pass2", "comment-only"), ("pass3", "one-line edit")):
             print(f"   {p} ({what})".ljust(25)
                   + f" {fmt(m.get(f'compile_{p}_ms'), 'ms'):>8} {fmt(m.get(f'{p}_color_ms'), 'ms'):>7}"
                   f" {fmt(m.get(f'{p}_abc_ms'), 'ms'):>8} {fmt(m.get(f'{p}_cache_hits')):>5}"
-                  f" {fmt(m.get(f'{p}_cache_misses')):>5}")
+                  f" {fmt(m.get(f'{p}_cache_misses')):>5} {fmt(m.get(f'{p}_cache_miss_ms'), 'ms'):>9}")
         print(f"   abc warm speedup (pass2 vs pass1): "
               f"{speedup(m.get('pass1_abc_ms'), m.get('pass2_abc_ms'))}")
         rep.cmds(("synth_incremental", si))
@@ -187,17 +198,18 @@ def main():
 
     # ---- sim --------------------------------------------------------------
     sp, sv = G("sim_pyrope"), G("sim_verilog")
-    rep.head("sim (StageReg hello world)", sp, sv)
+    rep.head("sim (unit hello world)", sp, sv)
     if sp or sv:
         # the run phase includes the generated driver's host C++ compile
-        print(f"   {'':10} {'transpile':>9} {'setup':>8} {'run(+cc)':>8} {'cycles/s':>9} {'cpu-top':>8}")
-        def cpu_state(m):
-            v = m.get("sim_cpu_top_ok"), m.get("sim_cpu_prog_ok")
+        print(f"   {'':10} {'transpile':>9} {'setup':>8} {'run(+cc)':>8} {'cycles/s':>9} {'top':>8}")
+
+        def top_state(m):
+            v = [m[k] for k in ("sim_cpu_top_ok", "sim_cpu_prog_ok") if k in m]
+            if not v:
+                return "-"
             if 0 in v:
                 return "blocked"
-            if v == (1, 1):
-                return "ok"
-            return "-"
+            return "ok" if all(x == 1 for x in v) else "-"
 
         for name, r in (("pyrope", sp), ("verilog", sv)):
             if not r:
@@ -205,9 +217,8 @@ def main():
             m = r[3]
             print(f"   {name:10} {fmt(m.get('transpile_ms'), 'ms'):>9} {fmt(m.get('sim_setup_ms'), 'ms'):>8}"
                   f" {fmt(m.get('sim_run_ms'), 'ms'):>8} {fmt(m.get('sim_cycles_per_s')):>9}"
-                  f" {cpu_state(m):>8}")
-        print("   cpu-top: NOP smoke (dino_tb) + RISC-V counter program w/ IPC"
-              " (dino_prog_tb) — informational until the comb-loop fix lands")
+                  f" {top_state(m):>8}")
+        print("   top: whole-top drivers are informational, not asserted")
         rep.cmds(("sim_pyrope", sp), ("sim_verilog", sv))
 
     # ---- lec --------------------------------------------------------------
@@ -231,7 +242,7 @@ def main():
 
     # ---- verify ------------------------------------------------------------
     vf, vi = G("verify"), G("verify_incremental")
-    rep.head("verify (ALU assert/assume)", vf, vi)
+    rep.head("verify (unit assert/assume)", vf, vi)
     if vf:
         print(f"   proven:   {fmt(vf[3].get('verify_cold_ms'), 'ms')}")
     if vi:
@@ -242,8 +253,32 @@ def main():
               f" comment-touch {fmt(m.get('verify_touch_ms'), 'ms')}")
     rep.cmds(("verify", vf), ("verify_incremental", vi))
 
-    if rep.missing:
-        print(f"\nnot run yet: {', '.join(rep.missing)}   -> bazel test //bench:all")
+    return rep.missing
+
+
+def main():
+    global SHOW_CMDS
+    argv = sys.argv[2:]
+    root = Path(sys.argv[1])
+    if "--no-cmds" in argv:
+        SHOW_CMDS = False
+    cores = [c for i, a in enumerate(argv) if a == "--core" for c in argv[i + 1:i + 2]]
+    for c in cores:
+        if c not in CORES:
+            sys.exit(f"unknown core '{c}' — known: {', '.join(CORES)}")
+    cores = cores or list(CORES)
+
+    if not root.is_dir():
+        sys.exit(f"no test logs at {root} — run `bazel test //bench:all` first")
+
+    print(f"lhdsuite bench results  (from {root})")
+    missing = []
+    for core in cores:
+        missing += report_core(root, core)
+
+    if missing:
+        print(f"\nnot run yet: {', '.join(missing)}"
+              f"\n  -> bazel test //bench:all   (or //bench:<core> for one design)")
     print()
 
 

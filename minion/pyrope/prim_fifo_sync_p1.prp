@@ -1,0 +1,57 @@
+const minion_dcache_pkg = import("minion_dcache_pkg")
+
+pub mod prim_fifo_sync_p1::[timecheck=false](clk_i:u1, rst_ni:u1, clr_i:u1, wvalid_i:u1, wdata_i:u3, rready_i:u1) -> (wready_o:u1@[], rvalid_o:u1@[], rdata_o:u3@[], depth_o:u3@[], full_o:u1@[], empty_o:u1@[]) {
+  mut _mux_3 = 0
+  mut _mux_4 = 0
+  reg depth_q:u3:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg wptr_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg rptr_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg mem:[4]u3:[fwd=0, clock_pin=ref clk_i]
+  mut wptr_d = 0
+  mut rptr_d = 0
+  depth_o = 0ub???
+  empty_o = 0ub?
+  full_o = 0ub?
+  rdata_o = 0ub???
+  rvalid_o = 0ub?
+  wready_o = 0ub?
+  const full_o__w1 = unsigned(depth_q == 4)
+  const empty_o__w1 = unsigned(depth_q == 0)
+  const wready_o__w1 = (~full_o__w1) & 1
+  const rvalid_o__w1 = (~empty_o__w1) & 1
+  const do_write__w1 = wvalid_i & wready_o__w1
+  const do_read__w1 = rvalid_o__w1 & rready_i
+  const t11 = do_read__w1 | (do_write__w1 << 1)
+  mut depth_d = depth_q
+  depth_d = if t11 == 2 { (depth_q#[0..=2] + 1)#[0..=2] } elif t11 == 1 { (depth_q#[0..=2] - 1)#[0..=31]#[0..=2] } else { depth_q }
+  wptr_d = wptr_q
+  if do_write__w1 != 0 {
+    
+    _mux_3 = if wptr_q == 3 { 0 } else { (wptr_q#[0..=1] + 1)#[0..=31] }
+    wptr_d = _mux_3#[0..=1]
+  }
+  rptr_d = rptr_q
+  if do_read__w1 != 0 {
+    
+    _mux_4 = if rptr_q == 3 { 0 } else { (rptr_q#[0..=1] + 1)#[0..=31] }
+    rptr_d = _mux_4#[0..=1]
+  }
+  if do_write__w1 != 0 {
+    mem[wptr_q] = wdata_i
+  }
+  if clr_i != 0 {
+    depth_q = 0
+    rptr_q = 0
+    wptr_q = 0
+  } else {
+    depth_q = depth_d
+    rptr_q = rptr_d
+    wptr_q = wptr_d
+  }
+  depth_o = depth_q
+  empty_o = empty_o__w1
+  full_o = full_o__w1
+  rdata_o = mem[rptr_q]
+  rvalid_o = rvalid_o__w1
+  wready_o = wready_o__w1
+}

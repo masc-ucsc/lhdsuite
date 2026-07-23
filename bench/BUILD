@@ -1,142 +1,65 @@
-# One bazel target per scenario so a single thing can be benchmarked or
-# debugged in isolation:
+# One bazel target per (core, scenario) so a single thing can be benchmarked
+# or debugged in isolation. Targets are named <core>_<scenario>:
 #
-#   bazel test //bench:compile_verilog --test_output=all
-#   bazel test //bench:synth_incremental --test_output=all
-#   bazel test //bench:lec_bug --test_output=all
+#   bazel test //bench:dino_compile_verilog --test_output=all
+#   bazel test //bench:minion_synth_incremental --test_output=all
+#   bazel test //bench:minion_lec_bug --test_output=all
 #
-# Families share a script; MODE picks the scenario. `bazel test //bench:all`
-# still runs everything (serially — targets are tagged exclusive so timing is
-# not polluted by parallel tests).
+# ALL the tests for ONE core (this is the per-core suite):
+#
+#   bazel test //bench:dino
+#   bazel test //bench:minion
+#
+# Everything, both cores: `bazel test //bench:all` (serially — targets are
+# tagged exclusive so timing is not polluted by parallel tests). Each target
+# also carries a `core_<name>` tag, so `--test_tag_filters=core_minion` is an
+# equivalent way to select one core across a wider pattern.
+#
+# Families share a script; MODE picks the scenario. The per-core knobs (tops,
+# unit under verification, testbench names) live in the CORES table in
+# defs.bzl.
 
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
-load(":defs.bzl", "lhd_bench")
+load(":defs.bzl", "core_benches")
 
 # `bazel run //bench:show` — pretty-print the last `bazel test //bench:...`
 # results from bazel-testlogs (a run target cannot trigger tests, so:
 #   bazel test //bench:all; bazel run //bench:show
-# ).
+# ). Restrict to one core with: bazel run //bench:show -- --core minion
 sh_binary(
     name = "show",
     srcs = ["show.sh"],
     data = ["show.py"],
 )
 
-# --- Lgraph creation throughput (LoC/s, words/s) ---------------------------
-lhd_bench(
-    name = "compile_verilog",
-    mode = "verilog",
-    script = "compile.sh",
-)
+# The dino dual-issue RISC-V CPU: one top, complete in both languages.
+core_benches("dino")
 
-lhd_bench(
-    name = "compile_pyrope",
-    mode = "pyrope",
-    script = "compile.sh",
-)
+# Minion: an industrial multi-threaded RISC-V core with a vector/tensor unit.
+# Whole-design (Pyrope) top is minion_top; Verilog-side and cross-language
+# scenarios use vpu_top, the largest subtree complete in both languages
+# (see minion/BUILD for why).
+core_benches("minion")
 
-# Per-file separate compilation: `lhd scan` dependency discovery, parallel
-# leaf compiles, dependents reuse the pre-compiled units via --in-dir ln:.
-lhd_bench(
-    name = "compile_pyrope_parallel",
-    mode = "pyrope_parallel",
-    script = "compile.sh",
-)
-
-# --- color flat + abc synthesis; cold vs --workdir incremental -------------
-lhd_bench(
-    name = "synth",
-    mode = "cold",
-    script = "synth.sh",
-    timeout = "eternal",
-)
-
-lhd_bench(
-    name = "synth_incremental",
-    mode = "incr",
-    script = "synth.sh",
-    timeout = "eternal",
-)
-
-# Netlist integrity: LEC the 2nd (incremental) synthesis run's netlist against
-# the design, via the partition twin + Liberty gensim models (lgyosys solver).
-lhd_bench(
-    name = "synth_lec_flat",
-    mode = "lec_flat",
-    script = "synth.sh",
-    timeout = "eternal",
-)
-
-lhd_bench(
-    name = "synth_lec_synth",
-    mode = "lec_synth",
-    script = "synth.sh",
-    timeout = "eternal",
-)
-
-# --- hello-world simulation smoke, both language tops ----------------------
-lhd_bench(
-    name = "sim_verilog",
-    mode = "verilog",
-    script = "sim.sh",
-)
-
-lhd_bench(
-    name = "sim_pyrope",
-    mode = "pyrope",
-    script = "sim.sh",
-)
-
-# --- LEC: proven / injected bug caught / warm re-run -----------------------
-lhd_bench(
-    name = "lec",
-    mode = "pass",
-    script = "lec.sh",
-    timeout = "eternal",
-)
-
-lhd_bench(
-    name = "lec_bug",
-    mode = "bug",
-    script = "lec.sh",
-    timeout = "eternal",
-)
-
-lhd_bench(
-    name = "lec_incremental",
-    mode = "incr",
-    script = "lec.sh",
-    timeout = "eternal",
-)
-
-# --- formal assert/assume on the top; cold vs warm -------------------------
-lhd_bench(
-    name = "verify",
-    mode = "cold",
-    script = "verify.sh",
-    timeout = "eternal",
-)
-
-lhd_bench(
-    name = "verify_incremental",
-    mode = "incr",
-    script = "verify.sh",
-    timeout = "eternal",
-)
-
+# Cross-core scenario suites, for comparing one flow across both designs.
 test_suite(
     name = "compile",
     tests = [
-        ":compile_pyrope",
-        ":compile_pyrope_parallel",
-        ":compile_verilog",
+        ":dino_compile_pyrope",
+        ":dino_compile_pyrope_parallel",
+        ":dino_compile_verilog",
+        ":minion_compile_pyrope",
+        ":minion_compile_pyrope_parallel",
+        ":minion_compile_verilog",
     ],
 )
 
 test_suite(
     name = "sim",
     tests = [
-        ":sim_pyrope",
-        ":sim_verilog",
+        ":dino_sim_pyrope",
+        ":dino_sim_verilog",
+        ":minion_sim_pyrope",
+        ":minion_sim_verilog",
     ],
 )

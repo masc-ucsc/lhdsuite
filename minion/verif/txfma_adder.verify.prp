@@ -1,0 +1,34 @@
+// Assert/assume collateral for the minion TxFMA adder — a sidecar, so the
+// design files are never touched. txfma_adder is the 64-bit carry-in adder at
+// the bottom of the vector FMA datapath:
+//
+//   sum_o = (a_i + b_i + cin_i)#[0..=63]
+//
+// It is deliberately a module of BOTH tops: it sits in the vpu_top cone (so
+// the cross-language LEC scenarios see the bug1 edit) and therefore also in
+// the whole-design minion_top cone (so the incremental synthesis scenarios
+// do too).
+//
+// NOTE: assumes are GLOBAL environment constraints — every in-force assume
+// from every block constrains the same model, so blocks must not carry
+// mutually-exclusive assumes (the run degrades to "assume set contradictory",
+// all proofs vacuous). Both claims below therefore live under the single
+// cin_i == 0 assume; the second is written implication-style.
+//
+// Usage:
+//   lhd formal verify minion/pyrope/txfma_adder.prp \
+//       minion/verif/txfma_adder.verify.prp \
+//       --top txfma_adder --set formal.bound=2 --workdir W
+//
+// These asserts are exactly what minion/tests/bug1/txfma_adder.prp breaks
+// (it subtracts b_i): against that variant this sidecar REFUTES.
+const adder = import("txfma_adder.txfma_adder")
+
+formal adder.sum {
+  mut acc = adder
+  assume(acc.cin_i == 0)
+  assert(acc.sum_o == (acc.a_i + acc.b_i)#[0..=63],
+         "with no carry-in the output is the 64-bit sum")
+  assert((acc.b_i == 0) implies (acc.sum_o == acc.a_i),
+         "adding zero is the identity")
+}

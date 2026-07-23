@@ -1,0 +1,176 @@
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+pub mod vpu_tensorreduce::[timecheck=false](clock:u1, reset:u1, reduce_start:u1, tensorstore_start:u1, tensorfma_start:u1, tensorquant_start:u1, reduce_ctrl:u64, scoreboard_pend:u1, tensorfma_pend:u1, tensorquant_pend:u1, dcache_reduce_ctrl:(send_reg:u1, exec_op:u1, nothing:u1)) -> (enabled:u1@[], reduce_wait:u1@[], load_ctrl:(wen:u1, thread_id:u1, broadcast_sel:u3, waddr:u5)@[], reduce_inst_en_next:u1@[], reduce_inst_next:vpu_defs_pkg.INST_SIZE_T@[], vpu_tensorreduce_debug:u25@[]) {
+  mut cur_reg_next = 0
+  reg reg_pending:u7
+  reg cur_reg:u5
+  reg reduce_op:u4
+  reg exec_op_cd:u3
+  reg cols_per_row:u2
+  reg send_reg:u1
+  reg exec_op:u1
+  reg exec_op_s0:u1
+  reg scoreboard_pend_sticky:u1
+  reg tfma_pend_sticky:u1
+  reg tquant_pend_sticky:u1
+  reg is_reduce:u1
+  mut `load_ctrl__bpo.wen` = 0
+  mut `load_ctrl__bpo.thread_id` = 0
+  mut `load_ctrl__bpo.broadcast_sel` = 0
+  mut `load_ctrl__bpo.waddr` = 0
+  mut reg_up = 0
+  mut reg_pending_next = 0
+  mut scoreboard_pend_sticky_next = 0
+  mut tfma_pend_sticky_next = 0
+  mut tquant_pend_sticky_next = 0
+  enabled = 0ub?
+  reduce_inst_en_next = 0ub?
+  reduce_inst_next = 0ub????????????????????????????????
+  reduce_wait = 0ub?
+  vpu_tensorreduce_debug = 0ub?????????????????????????
+  const enabled_int__w1 = unsigned(reg_pending != 0)
+  const enabled__w1 = unsigned((enabled_int__w1 != 0) or (exec_op_cd != 0))
+  const new_req__w1 = unsigned((reduce_start != 0) or (tensorstore_start != 0))
+  reg_up = 0ub?
+  mut reduce_op_next = if tensorstore_start != 0 { reduce_ctrl#[0..=63]#[62..=63] } else { reduce_ctrl#[0..=63]#[24..=27] }
+  reg_pending_next = reg_pending
+  if is_reduce != 0 {
+    
+    cur_reg_next = (cur_reg#[0..=4] + 1)#[0..=4]
+    reg_pending_next = (reg_pending - 1)#[0..=6]
+  } else {
+    reg_pending_next#[0..=2] = (reg_pending#[0..=2] - 1)#[0..=2]
+    cur_reg_next = (cur_reg#[0..=4] + reduce_op#[0..=3] + 1)#[0..=4]
+    if reg_pending_next#[0..=2] == 0 {
+      reg_pending_next#[0..=2] = (((cols_per_row >> 1) & 1) + 1)
+      reg_pending_next#[3..=6] = (reg_pending#[3..=6] - 1)#[0..=3]
+      if reg_pending#[3..=6] == 0 {
+        reg_pending_next = 0
+      }
+    }
+  }
+  if (new_req__w1 != 0) and (reduce_start != 0) {
+    cur_reg_next = reduce_ctrl#[0..=63]#[57..=61]
+    reg_pending_next = reduce_ctrl#[0..=63]#[16..=22]
+  } elif (new_req__w1 != 0) and (tensorstore_start != 0) {
+    reg_pending_next#[0..=2] = (((reduce_ctrl#[0..=63]#[55..=56] >> 1) & 1) + 1)
+    cur_reg_next = reduce_ctrl#[0..=63]#[57..=61]
+    reg_pending_next#[3..=6] = reduce_ctrl#[0..=63]#[51..=54]
+  }
+  reg_up = unsigned((new_req__w1 != 0) or ((send_reg != 0) and (enabled_int__w1 != 0)) or ((exec_op != 0) and (enabled_int__w1 != 0)))
+  if dcache_reduce_ctrl.nothing != 0 {
+    reg_pending_next = 0
+    reg_up = 1
+  }
+  mut exec_op_cd_next = if exec_op_cd == 0 { 0 } else { (exec_op_cd - 1)#[0..=2] }
+  if exec_op != 0 {
+    exec_op_cd_next = 4
+  }
+  scoreboard_pend_sticky_next = scoreboard_pend_sticky
+  tfma_pend_sticky_next = tfma_pend_sticky
+  tquant_pend_sticky_next = tquant_pend_sticky
+  if (new_req__w1 != 0) and (reg_pending_next != 0) {
+    
+    scoreboard_pend_sticky_next = scoreboard_pend
+    
+    tfma_pend_sticky_next = unsigned((tensorfma_pend != 0) or (tensorfma_start != 0))
+    tquant_pend_sticky_next = unsigned((tensorquant_pend != 0) or (tensorquant_start != 0))
+  } else {
+    if (enabled__w1 != 0) and (scoreboard_pend_sticky != 0) and (scoreboard_pend == 0) {
+      scoreboard_pend_sticky_next = 0
+    }
+    if ((enabled__w1 != 0) and (tfma_pend_sticky != 0) and (tensorfma_pend == 0)) or (tensorfma_start != 0) {
+      tfma_pend_sticky_next = 0
+    }
+    if ((enabled__w1 != 0) and (tquant_pend_sticky != 0) and (tensorquant_pend == 0)) or (tensorquant_start != 0) {
+      tquant_pend_sticky_next = 0
+    }
+  }
+  const cur_reg_next_mux__w1 = if reg_up != 0 { cur_reg_next#[0..=4] } else { cur_reg#[0..=4] }
+  mut reduce_inst_next__w2 = 0ub?????????????????110?????0001011
+  reduce_inst_next__w2#[7..=11] = cur_reg_next_mux__w1
+  mut reduce_inst_next__w3 = reduce_inst_next__w2
+  reduce_inst_next__w3#[15..=19] = cur_reg_next_mux__w1
+  mut reduce_inst_next__w4 = reduce_inst_next__w3
+  reduce_inst_next__w4#[20..=24] = cur_reg_next_mux__w1
+  reduce_inst_next = reduce_inst_next__w4
+  if (exec_op_s0 != 0) and (reduce_op == 0) {
+    reduce_inst_next = 0ub0??????????????????1111011
+    reduce_inst_next#[7..=11] = cur_reg_next_mux__w1
+    reduce_inst_next#[12..=14] = 7
+    reduce_inst_next#[15..=19] = cur_reg_next_mux__w1
+    reduce_inst_next#[20..=24] = cur_reg_next_mux__w1
+  } elif (exec_op_s0 != 0) and (reduce_op == 2) {
+    reduce_inst_next = 0ub10100??????????001?????1111011
+    reduce_inst_next#[7..=11] = cur_reg_next_mux__w1
+    reduce_inst_next#[15..=19] = cur_reg_next_mux__w1
+    reduce_inst_next#[20..=24] = cur_reg_next_mux__w1
+  } elif (exec_op_s0 != 0) and (reduce_op == 3) {
+    reduce_inst_next = 0ub10100??????????000?????1111011
+    reduce_inst_next#[7..=11] = cur_reg_next_mux__w1
+    reduce_inst_next#[15..=19] = cur_reg_next_mux__w1
+    reduce_inst_next#[20..=24] = cur_reg_next_mux__w1
+  } elif (exec_op_s0 != 0) and (reduce_op == 4) {
+    reduce_inst_next = 0ub11??????????000?????1111011
+    reduce_inst_next#[7..=11] = cur_reg_next_mux__w1
+    reduce_inst_next#[15..=19] = cur_reg_next_mux__w1
+    reduce_inst_next#[20..=24] = cur_reg_next_mux__w1
+  } elif (exec_op_s0 != 0) and (reduce_op == 6) {
+    reduce_inst_next = 0ub10111??????????001?????1111011
+    reduce_inst_next#[7..=11] = cur_reg_next_mux__w1
+    reduce_inst_next#[15..=19] = cur_reg_next_mux__w1
+    reduce_inst_next#[20..=24] = cur_reg_next_mux__w1
+  } elif (exec_op_s0 != 0) and (reduce_op == 7) {
+    reduce_inst_next = 0ub10111??????????000?????1111011
+    reduce_inst_next#[7..=11] = cur_reg_next_mux__w1
+    reduce_inst_next#[15..=19] = cur_reg_next_mux__w1
+    reduce_inst_next#[20..=24] = cur_reg_next_mux__w1
+  } elif (exec_op_s0 != 0) and (reduce_op == 8) {
+    reduce_inst_next = 0ub0??????????000?????1110111
+    reduce_inst_next#[7..=11] = cur_reg_next_mux__w1
+    reduce_inst_next#[15..=19] = cur_reg_next_mux__w1
+    reduce_inst_next#[20..=24] = cur_reg_next_mux__w1
+  }
+  `load_ctrl__bpo.broadcast_sel` = 0
+  `load_ctrl__bpo.thread_id` = 0
+  `load_ctrl__bpo.waddr` = cur_reg
+  `load_ctrl__bpo.wen` = exec_op
+  if reset != 0 {
+    exec_op_cd = 0
+    reg_pending = 0
+    scoreboard_pend_sticky = 0
+    tfma_pend_sticky = 0
+    tquant_pend_sticky = 0
+  } else {
+    if reg_up != 0 {
+      reg_pending = reg_pending_next
+    }
+    if enabled__w1 != 0 {
+      exec_op_cd = exec_op_cd_next
+    }
+    if unsigned((enabled__w1 != 0) or (new_req__w1 != 0)) != 0 {
+      scoreboard_pend_sticky = scoreboard_pend_sticky_next
+      tfma_pend_sticky = tfma_pend_sticky_next
+      tquant_pend_sticky = tquant_pend_sticky_next
+    }
+  }
+  if reg_up != 0 {
+    cur_reg = cur_reg_next
+  }
+  if new_req__w1 != 0 {
+    cols_per_row = reduce_ctrl#[0..=63]#[55..=56]
+    is_reduce = reduce_start
+    reduce_op = reduce_op_next
+  }
+  exec_op_s0 = dcache_reduce_ctrl.exec_op
+  load_ctrl.thread_id = 0
+  load_ctrl.broadcast_sel = 0
+  enabled = enabled__w1
+  exec_op = exec_op_s0
+  load_ctrl.waddr = `load_ctrl__bpo.waddr`
+  load_ctrl.wen = `load_ctrl__bpo.wen`
+  reduce_inst_en_next = unsigned(((dcache_reduce_ctrl.send_reg != 0) or ((exec_op_s0 != 0) and (reduce_op#[0..=3] != 8))) and (enabled_int__w1 != 0))
+  reduce_wait = unsigned((scoreboard_pend_sticky != 0) or (tfma_pend_sticky != 0) or (tquant_pend_sticky != 0))
+  send_reg = dcache_reduce_ctrl.send_reg
+  vpu_tensorreduce_debug = tquant_pend_sticky | (tfma_pend_sticky << 1) | (scoreboard_pend_sticky << 2) | (cols_per_row << 3) | (is_reduce << 5) | (reduce_op << 6) | (cur_reg << 10) | (exec_op_cd << 15) | (reg_pending << 18)
+}

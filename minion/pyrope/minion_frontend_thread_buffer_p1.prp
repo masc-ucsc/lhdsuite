@@ -1,0 +1,506 @@
+const minion_frontend_rvc_expander = import("minion_frontend_rvc_expander.minion_frontend_rvc_expander")
+const prim_clk_gate = import("prim_clk_gate.prim_clk_gate")
+const prim_rf_1r1w_diff_preview = import("prim_rf_1r1w_diff_preview.prim_rf_1r1w_diff_preview")
+
+const minion_pkg = import("minion_pkg")
+
+pub mod minion_frontend_thread_buffer_p1::[timecheck=false](clk_i:u1, rst_ni:u1, reset_debug_i:u1, chicken_bit_i:u1, dft_i:(scanmode:u1, scan_reset_n:u1, sram_clk_override:u1, ram_rei:u1, ram_wei:u1), f0_thread_enabled_i:u1, f0_reset_vector_i:minion_pkg.VaSizeExt_T, f0_disable_thread_i:u1, f0_enable_thread_i:u1, in_debug_mode_i:u1, vm_status_i:(prv:u2, mprv:u1, mpp:u2, sum:u1, mxr:u1, debug:u1), f0_icache_req_ready_i:u1, f1_icache_req_ready_i:u1, f5_icache_resp_miss_i:u1, f6_icache_resp_valid_i:u1, f6_icache_resp_miss_i:u1, f6_icache_resp_i:(data:u256, page_fault:u1, access_fault:u1, cacheable:u1, bus_err:u1, ecc_err:u1), f7_icache_fill_done_i:u1, f0_core_req_valid_i:u1, f0_core_req_i:u52, f7_inst_ready_i:u1, debug_ffb_wdata_i:u64, debug_ffb_en_i:u4, debug_ffb_exec_i:u1, io_halt_i:u1) -> (f0_icache_req_valid_o:u1@[], f0_icache_req_o:u58@[], f7_inst_rvc_o:u1@[], f7_inst_valid_o:u1@[], f7_inst_data_o:(pc:u49, inst_bits:u32, page_fault0:u1, access_fault0:u1, page_fault1:u1, access_fault1:u1, replay:u1, bus_err:u1, ecc_err:u1)@[], debug_o:(core_req_valid:u1, core_req_pc:u49, f0_pc:u49, f0_pc_next:u49, f0_pc_update:u1, clock_enable:u1, gated_clk_ticks:u4, buffer_empty:u2, buffer_pc0:u49, buffer_pc1:u49, req_buffer:u1, f6_req_buffer:u1, f6_buffer_id:u1, f7_buffer_id:u1, f6_buffer_ptr:u5, f6_buffer_ptr_next:u5, f7_buffer_ptr:u5, icache_inflight:u1, miss_pending:u1, f1_req_valid:u1, f5_req_valid:u1, f6_req_valid:u1, f6_buffer_wr:u1, f6_valid:u1, f6_stall:u1, f7_valid:u1, f7_stall:u1)@[]) {
+  mut _mux_42 = 0
+  mut f6_buffer_wren = 0
+  mut f6_write_ad = 0
+  reg buffer_empty:u2:[init=3, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg f0_miss_pending:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg icache_inflight:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  mut f6_stall__wtmp = 0ub?
+  wire f6_stall:u1
+  mut f6_last_from_buffer__wtmp = 0ub?
+  wire f6_last_from_buffer:u1
+  mut f6_buffer_id__wtmp = 0ub?
+  wire f6_buffer_id:u1
+  mut f6_clear_buffer__wtmp = 0ub??
+  wire f6_clear_buffer:u2
+  mut f0_icache_req_acc__wtmp = 0ub?
+  wire f0_icache_req_acc:u1
+  mut f6_buffer_ptr_next__wtmp = 0ub?????
+  mut f0_icache_req_valid_o__wtmp = 0ub?
+  wire f0_icache_req_valid_o:u1
+  mut f6_valid__wtmp = 0ub?
+  wire f6_valid:u1
+  mut f7_stall__wtmp = 0ub?
+  wire f7_stall:u1
+  mut debug_mode_start__w1 = unsigned((((f0_core_req_i#[0..=1] >> 1) & 1) != 0) and (f0_core_req_valid_i != 0))
+  mut debug_mode_end__w1 = unsigned(((f0_core_req_i#[0..=1] & 1) != 0) and (f0_core_req_valid_i != 0))
+  mut using_pfb_next = 0
+  mut buffer_word_en:[2]u8 = 0
+  mut f6_buffer_wr_1p_next = 0
+  mut f6_wr_data = 0
+  f6_wr_data = f6_icache_resp_i.data
+  wire clock_gated:u1
+  mut dbg_clear_f7 = 0
+  dbg_clear_f7 = 0
+  mut f6_inst_bits = 0
+  f6_inst_bits = 0ub????????????????????????????????
+  mut f6_buffer_id_next__w1 = (f6_buffer_ptr_next__wtmp >> 4) & 1
+  f6_valid__wtmp = unsigned((f6_valid__wtmp != 0) and (dbg_clear_f7 == 0))
+  f7_stall__wtmp = unsigned(f7_inst_ready_i == 0)
+  f6_valid = f6_valid__wtmp
+  f7_stall = f7_stall__wtmp
+  f6_clear_buffer__wtmp#[0..=0] = unsigned((f6_last_from_buffer != 0) and (f6_valid != 0) and (f6_stall == 0) and (f6_buffer_id == 0))
+  mut f6_clear_buffer__wtmp__w1 = f6_clear_buffer__wtmp
+  f6_clear_buffer__wtmp__w1#[1..=1] = unsigned((f6_last_from_buffer != 0) and (f6_valid != 0) and (f6_stall == 0) and (f6_buffer_id == 1))
+  f6_clear_buffer = f6_clear_buffer__wtmp__w1
+  f6_last_from_buffer__wtmp = unsigned(f6_buffer_id_next__w1 != f6_buffer_id__wtmp)
+  f6_last_from_buffer = f6_last_from_buffer__wtmp
+  f0_icache_req_acc = f0_icache_req_acc__wtmp
+  f0_icache_req_valid_o = f0_icache_req_valid_o__wtmp
+  f6_buffer_id = f6_buffer_id__wtmp
+  f6_stall = f6_stall__wtmp
+  reg buffer_pc:[2]u49:[fwd=0, clock_pin=ref clock_gated, clock_pin=ref clock_gated]
+  buffer_word_en[0] = (0xff << buffer_pc[0]#[2..=4])#[0..=7]
+  buffer_word_en[1] = (0xff << buffer_pc[1]#[2..=4])#[0..=7]
+  reg buffer_page_fault:u2:[clock_pin=ref clock_gated, clock_pin=ref clock_gated]
+  reg buffer_access_fault:u2:[clock_pin=ref clock_gated, clock_pin=ref clock_gated]
+  reg buffer_cacheable:u2:[clock_pin=ref clock_gated, clock_pin=ref clock_gated]
+  reg buffer_ecc_err:u2:[clock_pin=ref clock_gated, clock_pin=ref clock_gated]
+  reg buffer_l2_err:u2:[clock_pin=ref clock_gated, clock_pin=ref clock_gated]
+  reg f0_pc:u49:[clock_pin=ref clock_gated]
+  reg f1_req_buffer:u1:[clock_pin=ref clock_gated]
+  reg f1_icache_req_kill_f1:u1:[clock_pin=ref clock_gated]
+  reg f1_req_valid:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clock_gated]
+  reg f2_req_buffer:u1:[clock_pin=ref clock_gated]
+  reg f2_req_valid:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clock_gated]
+  reg f3_req_buffer:u1:[clock_pin=ref clock_gated]
+  reg f3_req_valid:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clock_gated]
+  reg f4_req_buffer:u1:[clock_pin=ref clock_gated]
+  reg f4_req_valid:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clock_gated]
+  reg f5_req_buffer:u1:[clock_pin=ref clock_gated]
+  reg f5_req_valid:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clock_gated]
+  mut f5_req_valid_to_f6__w1 = unsigned((f5_req_valid != 0) and (f0_core_req_valid_i == 0))
+  mut f6_buffer_wr_1p_next__w1 = if (f5_req_valid_to_f6__w1 != 0) and (f5_icache_resp_miss_i == 0) { buffer_word_en[f5_req_buffer]#[0..=7] } else { 0 }
+  f6_buffer_wr_1p_next = f6_buffer_wr_1p_next__w1
+  reg f6_req_buffer:u1:[clock_pin=ref clock_gated]
+  reg f6_req_valid:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clock_gated]
+  mut f6_buffer_wr__w1 = unsigned((f6_req_valid != 0) and (f0_core_req_valid_i == 0) and (((f6_icache_resp_valid_i != 0) and (f6_icache_resp_miss_i == 0)) or (io_halt_i != 0)))
+  reg f6_buffer_ptr:u5:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clock_gated]
+  mut f6_buffer_pos__w1 = f6_buffer_ptr#[0..=3]
+  f6_buffer_id__wtmp = (f6_buffer_ptr >> 4) & 1
+  mut u_inst_data = prim_rf_1r1w_diff_preview::[name=u_inst_data](preview_clk_i = clock_gated, rf_clk_i = clk_i, wr_data_en_1p_next_i = f6_buffer_wr_1p_next, rd_addr_i = f6_buffer_ptr, wr_data_i = f6_wr_data, wr_addr_i = f6_write_ad, wr_en_i = f6_buffer_wren)
+  mut f6_buffer_inst_data__w1 = u_inst_data
+  f6_inst_bits = f6_buffer_inst_data__w1
+  mut _mux_48:u2 = if (((buffer_empty << 1) >> (f6_buffer_id#[0..=2] + 1)) & 1) == 0 { f6_buffer_inst_data__w1#[0..=1]#[0..=1] } else { ((f6_icache_resp_i.data << 2) >> ((f6_buffer_pos__w1#[0..=3] * 16)#[0..=9] + 2))#[0..=1]#[0..=1] }
+  mut f6_inst_rvc = unsigned((io_halt_i == 0) and (_mux_48 != 3))
+  mut f6_split__w1 = unsigned((f6_inst_rvc == 0) and (f6_buffer_pos__w1 == 15))
+  reg f7_valid:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clock_gated]
+  mut clock_enable__w1 = unsigned((f0_core_req_valid_i != 0) or (f0_enable_thread_i != 0) or (f0_icache_req_acc != 0) or (icache_inflight != 0) or ((f0_thread_enabled_i != 0) and (f0_miss_pending == 0) and (buffer_empty != 0)) or ((f6_valid != 0) and (f6_stall == 0)) or ((f7_valid != 0) and (f7_stall == 0)) or (rst_ni == 0) or (reset_debug_i != 0) or (in_debug_mode_i != 0) or (io_halt_i != 0) or (chicken_bit_i != 0))
+  mut u_clk_gate = prim_clk_gate::[name=u_clk_gate](clk_i = clk_i, en_i = clock_enable__w1, dft_i.scanmode = dft_i.scanmode, dft_i.scan_reset_n = dft_i.scan_reset_n, dft_i.sram_clk_override = dft_i.sram_clk_override, dft_i.ram_rei = dft_i.ram_rei, dft_i.ram_wei = dft_i.ram_wei)
+  clock_gated = u_clk_gate
+  reg f7_buffer_ptr:u5:[clock_pin=ref clock_gated]
+  reg f7_inst_bits:u32:[clock_pin=ref clock_gated]
+  reg f7_split:u1:[clock_pin=ref clock_gated]
+  reg f7_inst_pc_msb:u44:[clock_pin=ref clock_gated]
+  reg using_pfb_reg:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clock_gated]
+  reg debug_ffb_en_2:u4:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clock_gated]
+  reg debug_ffb_exec_2:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clock_gated]
+  reg debug_mode_start_ff:u1:[clock_pin=ref clock_gated]
+  reg reset_debug_ff:u1:[clock_pin=ref clock_gated]
+  reg debug_gated_clk_ticks_q:u4:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clock_gated]
+  reg f7_inst_rvc:u1:[clock_pin=ref clock_gated]
+  using_pfb_next = using_pfb_reg
+  mut using_pfb__w1 = unsigned((using_pfb_reg != 0) or (using_pfb_next != 0))
+  mut reset_prog_buffer__w1 = unsigned(((in_debug_mode_i != 0) and (reset_debug_ff != 0)) or (debug_mode_start_ff != 0))
+  mut f0_new_inst_req__w1 = unsigned((f0_thread_enabled_i != 0) and (f0_enable_thread_i == 0) and (not ((f0_miss_pending != 0) and (f7_icache_fill_done_i == 0))) and (f0_core_req_valid_i == 0) and (f1_req_valid == 0) and (f2_req_valid == 0) and (f3_req_valid == 0) and (f4_req_valid == 0) and (f5_req_valid == 0) and (f6_req_valid == 0) and ((buffer_empty != 0) or (f6_clear_buffer != 0)) and (rst_ni != 0) and (using_pfb__w1 == 0))
+  f0_icache_req_valid_o__wtmp = unsigned((f0_new_inst_req__w1 != 0) and (io_halt_i == 0))
+  f0_icache_req_acc__wtmp = unsigned(((f0_icache_req_valid_o != 0) and (f0_icache_req_ready_i != 0)) or ((f0_new_inst_req__w1 != 0) and (io_halt_i != 0)))
+  f6_stall__wtmp = unsigned((f7_valid != 0) and (f7_stall__wtmp != 0))
+  mut `f7_inst_data_o__bpo.pc` = 0
+  mut `f7_inst_data_o__bpo.inst_bits` = 0
+  mut `f7_inst_data_o__bpo.page_fault0` = 0
+  mut `f7_inst_data_o__bpo.access_fault0` = 0
+  mut `f7_inst_data_o__bpo.page_fault1` = 0
+  mut `f7_inst_data_o__bpo.access_fault1` = 0
+  mut `f7_inst_data_o__bpo.replay` = 0
+  mut `f7_inst_data_o__bpo.bus_err` = 0
+  mut `f7_inst_data_o__bpo.ecc_err` = 0
+  mut `debug_o__bpo.core_req_valid` = 0
+  mut `debug_o__bpo.core_req_pc` = 0
+  mut `debug_o__bpo.f0_pc` = 0
+  mut `debug_o__bpo.f0_pc_next` = 0
+  mut `debug_o__bpo.f0_pc_update` = 0
+  mut `debug_o__bpo.clock_enable` = 0
+  mut `debug_o__bpo.gated_clk_ticks` = 0
+  mut `debug_o__bpo.buffer_empty` = 0
+  mut `debug_o__bpo.buffer_pc0` = 0
+  mut `debug_o__bpo.buffer_pc1` = 0
+  mut `debug_o__bpo.req_buffer` = 0
+  mut `debug_o__bpo.f6_req_buffer` = 0
+  mut `debug_o__bpo.f6_buffer_id` = 0
+  mut `debug_o__bpo.f7_buffer_id` = 0
+  mut `debug_o__bpo.f6_buffer_ptr` = 0
+  mut `debug_o__bpo.f6_buffer_ptr_next` = 0
+  mut `debug_o__bpo.f7_buffer_ptr` = 0
+  mut `debug_o__bpo.icache_inflight` = 0
+  mut `debug_o__bpo.miss_pending` = 0
+  mut `debug_o__bpo.f1_req_valid` = 0
+  mut `debug_o__bpo.f5_req_valid` = 0
+  mut `debug_o__bpo.f6_req_valid` = 0
+  mut `debug_o__bpo.f6_buffer_wr` = 0
+  mut `debug_o__bpo.f6_valid` = 0
+  mut `debug_o__bpo.f6_stall` = 0
+  mut `debug_o__bpo.f7_valid` = 0
+  mut `debug_o__bpo.f7_stall` = 0
+  mut buffer_empty_next__wtmp = 0ub??
+  wire buffer_empty_next:u2
+  mut f0_pc_update__wtmp = 0ub?
+  wire f0_pc_update:u1
+  mut f0_miss_pending_next__wtmp = 0ub?
+  wire f0_miss_pending_next:u1
+  wire f6_buffer_ptr_next:u5
+  mut f0_pc_next__wtmp = 0ub?????????????????????????????????????????????????
+  wire f0_pc_next:u49
+  mut f6_buffer_en = 0
+  mut f6_fault_en = 0
+  mut icache_inflight_next = 0
+  mut f0_buffer_pc_en = 0
+  f0_icache_req_o = 0ub??????????????????????????????????????????????????????????
+  f7_inst_rvc_o = 0ub?
+  f7_inst_valid_o = 0ub?
+  const f0_icache_req_kill_f1__w1 = unsigned(((f1_req_valid != 0) and (f0_core_req_valid_i != 0)) or (f1_icache_req_kill_f1 != 0))
+  const f6_req_resp_valid__w1 = unsigned((f6_req_valid != 0) and (f0_core_req_valid_i == 0) and ((f6_icache_resp_valid_i != 0) or (io_halt_i != 0)))
+  f6_buffer_en = 0ub??
+  mut f6_buffer_en__w1 = f6_buffer_en
+  f6_buffer_en__w1#[0..=0] = unsigned((f6_buffer_wr__w1 != 0) and (0 == f6_req_buffer))
+  f6_fault_en = 0ub??
+  mut f6_fault_en__w1 = f6_fault_en
+  f6_fault_en__w1#[0..=0] = unsigned((f6_req_resp_valid__w1 != 0) and (0 == f6_req_buffer))
+  mut f6_buffer_en__w2 = f6_buffer_en__w1
+  f6_buffer_en__w2#[1..=1] = unsigned((f6_buffer_wr__w1 != 0) and (1 == f6_req_buffer))
+  mut f6_fault_en__w2 = f6_fault_en__w1
+  f6_fault_en__w2#[1..=1] = unsigned((f6_req_resp_valid__w1 != 0) and (1 == f6_req_buffer))
+  const ffb_update_read_pointer__w1 = debug_ffb_exec_i
+  if debug_mode_start__w1 != 0 {
+    using_pfb_next = 1
+  } elif debug_mode_end__w1 != 0 {
+    using_pfb_next = 0
+  }
+  if using_pfb__w1 != 0 {
+    
+    
+    
+    f6_buffer_wr_1p_next = if (debug_mode_start__w1 != 0) or (reset_debug_i != 0) { 0xff } else { debug_ffb_en_i#[0..=3]#[0..=7] }
+    f6_buffer_wren = debug_ffb_en_2#[0..=3]
+    f6_write_ad = if (in_debug_mode_i != 0) or (reset_prog_buffer__w1 != 0) { 0 } else { f6_req_buffer }
+    if reset_prog_buffer__w1 != 0 {
+      f6_buffer_wren = 15
+    }
+  } else {
+    
+    f6_buffer_wren = if f6_buffer_wr__w1 != 0 { buffer_word_en[f6_req_buffer]#[0..=7] } else { 0 }
+    f6_write_ad = f6_req_buffer
+  }
+  if using_pfb__w1 != 0 {
+    f6_wr_data#[0..=63] = debug_ffb_wdata_i
+    f6_wr_data#[64..=95] = debug_ffb_wdata_i#[0..=31]
+    f6_wr_data#[96..=127] = debug_ffb_wdata_i#[0..=31]
+    if reset_prog_buffer__w1 != 0 {
+      f6_wr_data#[0..=31] = 0x100073
+      f6_wr_data#[32..=63] = 0x100073
+      f6_wr_data#[64..=95] = 0x100073
+      f6_wr_data#[96..=127] = 0x100073
+      f6_wr_data#[128..=159] = 0x100073
+      f6_wr_data#[160..=161] = 3
+      f6_wr_data#[192..=193] = 3
+      f6_wr_data#[224..=225] = 3
+    }
+  }
+  if reset_debug_i != 0 {
+    debug_ffb_en_2 = 0
+    debug_ffb_exec_2 = 0
+  } elif (unsigned(debug_ffb_en_2 != 0) | unsigned(debug_ffb_en_i != 0) | debug_ffb_exec_2 | debug_ffb_exec_i) != 0 {
+    debug_ffb_en_2 = debug_ffb_en_i
+    debug_ffb_exec_2 = debug_ffb_exec_i
+  }
+  icache_inflight_next = icache_inflight
+  if f0_icache_req_valid_o != 0 {
+    icache_inflight_next = 1
+  } elif (f0_core_req_valid_i != 0) or (f0_icache_req_kill_f1__w1 != 0) or (f6_req_valid != 0) {
+    icache_inflight_next = 0
+  }
+  icache_inflight = icache_inflight_next
+  debug_gated_clk_ticks_q = (debug_gated_clk_ticks_q + 1)#[0..=3]
+  if f0_pc_update != 0 {
+    f0_pc = f0_pc_next
+  }
+  f0_miss_pending = f0_miss_pending_next
+  mut f0_icache_req_o__w1 = f0_icache_req_o
+  f0_icache_req_o__w1#[57..=57] = 1
+  mut f0_icache_req_o__w2 = f0_icache_req_o__w1
+  f0_icache_req_o__w2#[49..=56] = ((vm_status_i.prv << 6) | (vm_status_i.mprv << 5) | (vm_status_i.mpp << 3) | (vm_status_i.sum << 2) | (vm_status_i.mxr << 1) | vm_status_i.debug)
+  mut f0_icache_req_o__w3 = f0_icache_req_o__w2
+  f0_icache_req_o__w3#[0..=48] = f0_pc
+  mut f0_req_buffer = if ((buffer_empty & 1) != 0) or (((f6_clear_buffer & 1) != 0) and ((f6_buffer_en__w2 & 1) == 0)) { 0 } else { 0 }
+  if (((buffer_empty >> 1) & 1) != 0) or ((((f6_clear_buffer >> 1) & 1) != 0) and (((f6_buffer_en__w2 >> 1) & 1) == 0)) {
+    f0_req_buffer = 1
+  }
+  f0_pc_next__wtmp = f0_reset_vector_i#sext[0..=48]#[0..=48]
+  if f6_buffer_wr__w1 != 0 {
+    f0_pc_next__wtmp = 0
+    f0_pc_next__wtmp#[5..=48] = (buffer_pc[f6_req_buffer]#[5..=48] + 1)#[0..=43]
+  }
+  if f0_core_req_valid_i != 0 {
+    f0_pc_next__wtmp = f0_core_req_i#[3..=51]
+  }
+  f0_pc_update__wtmp = unsigned((rst_ni == 0) or (f0_enable_thread_i != 0) or (f6_buffer_wr__w1 != 0) or (f0_core_req_valid_i != 0))
+  f0_miss_pending_next__wtmp = if (f6_req_valid != 0) and (f6_icache_resp_miss_i != 0) and (f0_core_req_valid_i == 0) { 1 } else { f0_miss_pending }
+  if (f0_core_req_valid_i != 0) or (f0_disable_thread_i != 0) or (f7_icache_fill_done_i != 0) or (io_halt_i != 0) {
+    f0_miss_pending_next__wtmp = 0
+  }
+  f0_buffer_pc_en = 0ub??
+  mut f0_buffer_pc_en__w1 = f0_buffer_pc_en
+  f0_buffer_pc_en__w1#[0..=0] = unsigned((f0_icache_req_acc__wtmp != 0) and (0 == f0_req_buffer))
+  mut f0_buffer_pc_en__w2 = f0_buffer_pc_en__w1
+  f0_buffer_pc_en__w2#[1..=1] = unsigned((f0_icache_req_acc__wtmp != 0) and (1 == f0_req_buffer))
+  if f1_icache_req_ready_i != 0 {
+    f1_req_valid = f0_icache_req_acc
+  }
+  if f1_icache_req_ready_i != 0 {
+    f1_req_buffer = f0_req_buffer
+  }
+  f1_icache_req_kill_f1 = if f1_icache_req_ready_i != 0 { 0 } else { f0_icache_req_kill_f1__w1 & 1 }
+  f2_req_valid = unsigned((f1_req_valid != 0) and (f1_icache_req_ready_i != 0) and (f0_icache_req_kill_f1__w1 == 0))
+  f2_req_buffer = f1_req_buffer
+  f3_req_valid = unsigned((f2_req_valid != 0) and (f0_core_req_valid_i == 0))
+  f3_req_buffer = f2_req_buffer
+  f4_req_valid = unsigned((f3_req_valid != 0) and (f0_core_req_valid_i == 0))
+  f4_req_buffer = f3_req_buffer
+  f5_req_valid = unsigned((f4_req_valid != 0) and (f0_core_req_valid_i == 0))
+  f5_req_buffer = f4_req_buffer
+  f6_req_valid = f5_req_valid_to_f6__w1
+  f6_req_buffer = f5_req_buffer
+  if (f6_fault_en__w2 & 1) != 0 {
+    
+    buffer_page_fault#[0..=0] = unsigned((f6_icache_resp_i.page_fault != 0) and (io_halt_i == 0))
+  }
+  if (f6_fault_en__w2 & 1) != 0 {
+    
+    buffer_access_fault#[0..=0] = unsigned((f6_icache_resp_i.access_fault != 0) and (io_halt_i == 0))
+  }
+  if (f6_fault_en__w2 & 1) != 0 {
+    
+    buffer_l2_err#[0..=0] = unsigned((f6_icache_resp_i.bus_err != 0) and (io_halt_i == 0))
+  }
+  if (f6_fault_en__w2 & 1) != 0 {
+    
+    buffer_ecc_err#[0..=0] = unsigned((f6_icache_resp_i.ecc_err != 0) and (io_halt_i == 0))
+  }
+  if (f6_buffer_en__w2 & 1) != 0 {
+    buffer_cacheable#[0..=0] = f6_icache_resp_i.cacheable
+  }
+  if (f0_buffer_pc_en__w2 & 1) != 0 {
+    buffer_pc[0] = f0_pc
+  }
+  if ((f6_fault_en__w2 >> 1) & 1) != 0 {
+    
+    buffer_page_fault#[1..=1] = unsigned((f6_icache_resp_i.page_fault != 0) and (io_halt_i == 0))
+  }
+  if ((f6_fault_en__w2 >> 1) & 1) != 0 {
+    
+    buffer_access_fault#[1..=1] = unsigned((f6_icache_resp_i.access_fault != 0) and (io_halt_i == 0))
+  }
+  if ((f6_fault_en__w2 >> 1) & 1) != 0 {
+    
+    buffer_l2_err#[1..=1] = unsigned((f6_icache_resp_i.bus_err != 0) and (io_halt_i == 0))
+  }
+  if ((f6_fault_en__w2 >> 1) & 1) != 0 {
+    
+    buffer_ecc_err#[1..=1] = unsigned((f6_icache_resp_i.ecc_err != 0) and (io_halt_i == 0))
+  }
+  if ((f6_buffer_en__w2 >> 1) & 1) != 0 {
+    buffer_cacheable#[1..=1] = f6_icache_resp_i.cacheable
+  }
+  if ((f0_buffer_pc_en__w2 >> 1) & 1) != 0 {
+    buffer_pc[1] = f0_pc
+  }
+  buffer_empty = buffer_empty_next
+  buffer_empty_next__wtmp = buffer_empty
+  if (f6_clear_buffer__wtmp & 1) != 0 {
+    buffer_empty_next__wtmp#[0..=0] = 1
+  } elif (f6_buffer_en__w2 & 1) != 0 {
+    buffer_empty_next__wtmp#[0..=0] = 0
+  } elif ((f6_fault_en__w2 & 1) != 0) and ((f6_icache_resp_i.page_fault != 0) or (f6_icache_resp_i.access_fault != 0) or (f6_icache_resp_i.ecc_err != 0) or (f6_icache_resp_i.bus_err != 0)) {
+    buffer_empty_next__wtmp#[0..=0] = 0
+  } elif (f0_core_req_valid_i != 0) or (f0_disable_thread_i != 0) {
+    buffer_empty_next__wtmp#[0..=0] = 1
+  }
+  if ((f6_clear_buffer__wtmp__w1 >> 1) & 1) != 0 {
+    buffer_empty_next__wtmp#[1..=1] = 1
+  } elif ((f6_buffer_en__w2 >> 1) & 1) != 0 {
+    buffer_empty_next__wtmp#[1..=1] = 0
+  } elif (((f6_fault_en__w2 >> 1) & 1) != 0) and ((f6_icache_resp_i.page_fault != 0) or (f6_icache_resp_i.access_fault != 0) or (f6_icache_resp_i.ecc_err != 0) or (f6_icache_resp_i.bus_err != 0)) {
+    buffer_empty_next__wtmp#[1..=1] = 0
+  } elif (f0_core_req_valid_i != 0) or (f0_disable_thread_i != 0) {
+    buffer_empty_next__wtmp#[1..=1] = 1
+  }
+  if debug_mode_start_ff != 0 {
+    buffer_empty_next__wtmp = 3
+    dbg_clear_f7 = 1
+  }
+  if debug_ffb_exec_2 != 0 {
+    buffer_empty_next__wtmp = 0
+  } elif debug_ffb_en_i != 0 {
+    buffer_empty_next__wtmp = 1
+  }
+  if ((f6_valid != 0) and (f6_stall == 0)) or ((buffer_empty == 3) and (f5_req_valid != 0)) or (ffb_update_read_pointer__w1 != 0) {
+    
+    f6_buffer_ptr = if ffb_update_read_pointer__w1 != 0 { 0 } else { f6_buffer_ptr_next#[0..=4] }
+  }
+  if (buffer_empty == 3) and (f5_req_valid != 0) {
+    f6_buffer_ptr_next__wtmp = buffer_pc[f5_req_buffer]#[1..=4] | (f5_req_buffer << 4)
+  } else {
+    
+    
+    _mux_42 = if f6_inst_rvc != 0 { 1 } else { 2 }
+    f6_buffer_ptr_next__wtmp = (f6_buffer_ptr + _mux_42)#[0..=4]
+  }
+  if f6_split__w1 == 0 {
+    
+    f6_valid__wtmp = unsigned((((buffer_empty << 1) >> (f6_buffer_id__wtmp#[0..=2] + 1)) & 1) == 0)
+    if (f6_valid__wtmp == 0) and (f6_buffer_wr__w1 != 0) {
+      f6_inst_bits = ((f6_icache_resp_i.data << 32) >> ((f6_buffer_pos__w1#[0..=3] * 16)#[0..=9] + 32))#[0..=31]
+      f6_valid__wtmp = 1
+    }
+  } else {
+    
+    f6_valid__wtmp = unsigned(((((buffer_empty << 1) >> (f6_buffer_id__wtmp#[0..=2] + 1)) & 1) == 0) and ((((buffer_empty << 1) >> (f6_buffer_id_next__w1#[0..=2] + 1)) & 1) == 0))
+    if (f6_valid__wtmp == 0) and ((((buffer_empty << 1) >> (f6_buffer_id__wtmp#[0..=2] + 1)) & 1) == 0) and ((((buffer_empty << 1) >> (f6_buffer_id_next__w1#[0..=2] + 1)) & 1) != 0) and (f6_buffer_wr__w1 != 0) {
+      f6_inst_bits#[16..=31] = f6_icache_resp_i.data#[0..=15]
+      f6_valid__wtmp = 1
+    }
+  }
+  mut u_rvc_exp = minion_frontend_rvc_expander::[name=u_rvc_exp](in_bits = f6_inst_bits)
+  mut _mux_50:u1 = if f7_inst_ready_i != 0 { 0 } else { f7_valid & 1 }
+  mut _mux_51:u1 = if f6_valid != 0 { 1 } else { _mux_50 & 1 }
+  f7_valid = if (f0_core_req_valid_i != 0) or (dbg_clear_f7 != 0) { 0 } else { _mux_51 & 1 }
+  if (f6_valid != 0) and (f6_stall == 0) {
+    f7_inst_bits = u_rvc_exp
+  }
+  if (f6_valid != 0) and (f6_stall == 0) {
+    f7_inst_rvc = f6_inst_rvc
+  }
+  if (f6_valid != 0) and (f6_stall == 0) {
+    f7_buffer_ptr = f6_buffer_ptr
+  }
+  if (f6_valid != 0) and (f6_stall == 0) {
+    f7_split = f6_split__w1
+  }
+  if (f6_valid != 0) and (f6_stall == 0) {
+    f7_inst_pc_msb = buffer_pc[f6_buffer_id__wtmp]#[5..=48]
+  }
+  const f7_buffer_id__w1 = (f7_buffer_ptr >> 4) & 1
+  `f7_inst_data_o__bpo.pc` = (f7_buffer_ptr#[0..=3] << 1) | (f7_inst_pc_msb << 5)
+  `f7_inst_data_o__bpo.page_fault0` = unsigned(((((buffer_page_fault << 1) >> (f7_buffer_id__w1#[0..=2] + 1)) & 1) != 0) and (using_pfb_reg == 0))
+  `f7_inst_data_o__bpo.access_fault0` = unsigned(((((buffer_access_fault << 1) >> (f7_buffer_id__w1#[0..=2] + 1)) & 1) != 0) and (using_pfb_reg == 0))
+  if (f7_inst_rvc == 0) and (f7_split != 0) {
+    
+    
+    `f7_inst_data_o__bpo.page_fault1` = unsigned(((((buffer_page_fault << 1) >> (f6_buffer_id#[0..=2] + 1)) & 1) != 0) and (using_pfb_reg == 0))
+    
+    `f7_inst_data_o__bpo.access_fault1` = unsigned(((((buffer_access_fault << 1) >> (f6_buffer_id#[0..=2] + 1)) & 1) != 0) and (using_pfb_reg == 0))
+    
+    `f7_inst_data_o__bpo.bus_err` = unsigned((buffer_l2_err != 0) and (using_pfb_reg == 0))
+    `f7_inst_data_o__bpo.ecc_err` = unsigned((buffer_ecc_err != 0) and (using_pfb_reg == 0))
+  } else {
+    
+    `f7_inst_data_o__bpo.access_fault1` = 0
+    `f7_inst_data_o__bpo.page_fault1` = 0
+    
+    `f7_inst_data_o__bpo.bus_err` = unsigned(((((buffer_l2_err << 1) >> (f7_buffer_id__w1#[0..=2] + 1)) & 1) != 0) and (using_pfb_reg == 0))
+    `f7_inst_data_o__bpo.ecc_err` = unsigned(((((buffer_ecc_err << 1) >> (f7_buffer_id__w1#[0..=2] + 1)) & 1) != 0) and (using_pfb_reg == 0))
+  }
+  `f7_inst_data_o__bpo.replay` = unsigned(((((buffer_cacheable << 1) >> (f7_buffer_id__w1#[0..=2] + 1)) & 1) == 0) and (((f0_core_req_i >> 2) & 1) != 0))
+  if using_pfb__w1 != 0 {
+    `f7_inst_data_o__bpo.access_fault0` = 0
+    `f7_inst_data_o__bpo.access_fault1` = 0
+    `f7_inst_data_o__bpo.bus_err` = 0
+    `f7_inst_data_o__bpo.ecc_err` = 0
+    `f7_inst_data_o__bpo.page_fault0` = 0
+    `f7_inst_data_o__bpo.page_fault1` = 0
+    `f7_inst_data_o__bpo.replay` = 0
+  }
+  `f7_inst_data_o__bpo.inst_bits` = f7_inst_bits
+  reset_debug_ff = reset_debug_i
+  if unsigned((debug_mode_start__w1 != 0) or (debug_mode_end__w1 != 0)) != 0 {
+    using_pfb_reg = using_pfb_next
+  }
+  debug_mode_start_ff = debug_mode_start__w1
+  `debug_o__bpo.buffer_empty` = buffer_empty
+  `debug_o__bpo.clock_enable` = clock_enable__w1
+  `debug_o__bpo.core_req_pc` = f0_core_req_i#[3..=51]
+  `debug_o__bpo.core_req_valid` = f0_core_req_valid_i
+  `debug_o__bpo.f0_pc` = f0_pc
+  `debug_o__bpo.f0_pc_next` = f0_pc_next
+  `debug_o__bpo.f0_pc_update` = f0_pc_update
+  `debug_o__bpo.gated_clk_ticks` = debug_gated_clk_ticks_q
+  `debug_o__bpo.buffer_pc0` = buffer_pc[0]
+  `debug_o__bpo.buffer_pc1` = buffer_pc[1]
+  `debug_o__bpo.req_buffer` = f0_req_buffer
+  `debug_o__bpo.f6_req_buffer` = f6_req_buffer
+  `debug_o__bpo.f6_buffer_id` = f6_buffer_id
+  `debug_o__bpo.f7_buffer_id` = f7_buffer_id__w1
+  `debug_o__bpo.f6_buffer_ptr` = f6_buffer_ptr
+  `debug_o__bpo.f6_buffer_ptr_next` = f6_buffer_ptr_next
+  `debug_o__bpo.f7_buffer_ptr` = f7_buffer_ptr
+  `debug_o__bpo.icache_inflight` = icache_inflight
+  `debug_o__bpo.miss_pending` = f0_miss_pending
+  `debug_o__bpo.f1_req_valid` = f1_req_valid
+  `debug_o__bpo.f5_req_valid` = f5_req_valid
+  `debug_o__bpo.f6_req_valid` = f6_req_valid
+  `debug_o__bpo.f6_buffer_wr` = f6_buffer_wr__w1
+  `debug_o__bpo.f6_valid` = f6_valid
+  `debug_o__bpo.f6_stall` = f6_stall
+  `debug_o__bpo.f7_valid` = f7_valid
+  `debug_o__bpo.f7_stall` = f7_stall
+  buffer_empty_next = buffer_empty_next__wtmp
+  debug_o.buffer_empty = `debug_o__bpo.buffer_empty`
+  debug_o.buffer_pc0 = `debug_o__bpo.buffer_pc0`
+  debug_o.buffer_pc1 = `debug_o__bpo.buffer_pc1`
+  debug_o.clock_enable = `debug_o__bpo.clock_enable`
+  debug_o.core_req_pc = `debug_o__bpo.core_req_pc`
+  debug_o.core_req_valid = `debug_o__bpo.core_req_valid`
+  debug_o.f0_pc = `debug_o__bpo.f0_pc`
+  debug_o.f0_pc_next = `debug_o__bpo.f0_pc_next`
+  debug_o.f0_pc_update = `debug_o__bpo.f0_pc_update`
+  debug_o.f1_req_valid = `debug_o__bpo.f1_req_valid`
+  debug_o.f5_req_valid = `debug_o__bpo.f5_req_valid`
+  debug_o.f6_buffer_id = `debug_o__bpo.f6_buffer_id`
+  debug_o.f6_buffer_ptr = `debug_o__bpo.f6_buffer_ptr`
+  debug_o.f6_buffer_ptr_next = `debug_o__bpo.f6_buffer_ptr_next`
+  debug_o.f6_buffer_wr = `debug_o__bpo.f6_buffer_wr`
+  debug_o.f6_req_buffer = `debug_o__bpo.f6_req_buffer`
+  debug_o.f6_req_valid = `debug_o__bpo.f6_req_valid`
+  debug_o.f6_stall = `debug_o__bpo.f6_stall`
+  debug_o.f6_valid = `debug_o__bpo.f6_valid`
+  debug_o.f7_buffer_id = `debug_o__bpo.f7_buffer_id`
+  debug_o.f7_buffer_ptr = `debug_o__bpo.f7_buffer_ptr`
+  debug_o.f7_stall = `debug_o__bpo.f7_stall`
+  debug_o.f7_valid = `debug_o__bpo.f7_valid`
+  debug_o.gated_clk_ticks = `debug_o__bpo.gated_clk_ticks`
+  debug_o.icache_inflight = `debug_o__bpo.icache_inflight`
+  debug_o.miss_pending = `debug_o__bpo.miss_pending`
+  debug_o.req_buffer = `debug_o__bpo.req_buffer`
+  f0_icache_req_o = f0_icache_req_o__w3
+  f0_miss_pending_next = f0_miss_pending_next__wtmp
+  f0_pc_next = f0_pc_next__wtmp
+  f0_pc_update = f0_pc_update__wtmp
+  f6_buffer_ptr_next = f6_buffer_ptr_next__wtmp
+  f7_inst_data_o.access_fault0 = `f7_inst_data_o__bpo.access_fault0`
+  f7_inst_data_o.access_fault1 = `f7_inst_data_o__bpo.access_fault1`
+  f7_inst_data_o.bus_err = `f7_inst_data_o__bpo.bus_err`
+  f7_inst_data_o.ecc_err = `f7_inst_data_o__bpo.ecc_err`
+  f7_inst_data_o.inst_bits = `f7_inst_data_o__bpo.inst_bits`
+  f7_inst_data_o.page_fault0 = `f7_inst_data_o__bpo.page_fault0`
+  f7_inst_data_o.page_fault1 = `f7_inst_data_o__bpo.page_fault1`
+  f7_inst_data_o.pc = `f7_inst_data_o__bpo.pc`
+  f7_inst_data_o.replay = `f7_inst_data_o__bpo.replay`
+  f7_inst_rvc_o = f7_inst_rvc
+  f7_inst_valid_o = unsigned((f7_valid != 0) and (dbg_clear_f7 == 0))
+}

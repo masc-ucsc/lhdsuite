@@ -1,0 +1,58 @@
+const minion_pkg = import("minion_pkg")
+
+pub mod intpipe_csr_file_fl_barrier::[timecheck=false](clk_i:u1, rst_ni:u1, start_valid:u1, start_data:minion_pkg.CsrFlBarrierSize_T, start_waddr:minion_pkg.XregAddrSize_T, start_thread_id:u1, neigh_resp_valid:u1, neigh_resp_data:u1, rf_wen_ready:u1) -> (start_ready:u1@[], neigh_req_valid:u1@[], neigh_req_data:minion_pkg.CsrFlBarrierSize_T@[], rf_wen_valid:u1@[], rf_wen_valid_early:u1@[], rf_wen_thread_id:u1@[], rf_wen_addr:minion_pkg.XregAddrSize_T@[], rf_wen_data:minion_pkg.XregSize_T@[], scoreboard_valid:u1@[], scoreboard_addr:(fp:u1, addr:u5, thread_id:u1)@[]) {
+  reg neigh_req_data:u13:[clock_pin=ref clk_i]
+  reg rf_wen_thread_id:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg rf_wen_addr:u5:[clock_pin=ref clk_i]
+  reg state_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg rf_wen_data_r:u1:[clock_pin=ref clk_i]
+  mut `scoreboard_addr__bpo.fp` = 0
+  mut `scoreboard_addr__bpo.addr` = 0
+  mut `scoreboard_addr__bpo.thread_id` = 0
+  neigh_req_valid = 0ub?
+  rf_wen_data = 0ub????????????????????????????????????????????????????????????????
+  rf_wen_valid = 0ub?
+  rf_wen_valid_early = 0ub?
+  scoreboard_valid = 0ub?
+  start_ready = 0ub?
+  if neigh_resp_valid != 0 {
+    rf_wen_data_r = neigh_resp_data
+  }
+  mut state_d = if (state_q == 0) and (start_valid != 0) { 1 } else { state_q }
+  if state_q == 1 {
+    state_d = 2
+  }
+  if (state_q == 2) and (neigh_resp_valid != 0) {
+    state_d = 3
+  }
+  if (state_q == 3) and (rf_wen_ready != 0) {
+    state_d = 0
+  }
+  const start_ready__w1 = unsigned(state_q == 0)
+  const start_accepted__w1 = unsigned((start_ready__w1 != 0) and (start_valid != 0))
+  const rf_wen_valid__w1 = unsigned(state_q == 3)
+  `scoreboard_addr__bpo.addr` = rf_wen_addr
+  `scoreboard_addr__bpo.fp` = 0
+  `scoreboard_addr__bpo.thread_id` = rf_wen_thread_id
+  if unsigned((start_valid != 0) or (state_q != 0)) != 0 {
+    state_q = state_d
+  }
+  if start_accepted__w1 != 0 {
+    neigh_req_data = start_data
+  }
+  if start_accepted__w1 != 0 {
+    rf_wen_addr = start_waddr
+  }
+  if start_accepted__w1 != 0 {
+    rf_wen_thread_id = start_thread_id
+  }
+  scoreboard_addr.fp = 0
+  neigh_req_valid = unsigned(state_q == 1)
+  rf_wen_data = rf_wen_data_r | 0
+  rf_wen_valid = rf_wen_valid__w1
+  rf_wen_valid_early = unsigned((rf_wen_valid__w1 != 0) or (neigh_resp_valid != 0))
+  scoreboard_addr.addr = `scoreboard_addr__bpo.addr`
+  scoreboard_addr.thread_id = `scoreboard_addr__bpo.thread_id`
+  scoreboard_valid = unsigned(state_q != 0)
+  start_ready = start_ready__w1
+}

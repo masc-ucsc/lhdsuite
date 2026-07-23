@@ -1,0 +1,52 @@
+// Hello-world simulation driver for a real minion module: the VPU tensor-A
+// register file (clocked; wraps a preview/commit RF). This is the asserted
+// sim smoke of the minion side of the suite; the whole-subsystem driver
+// (vpu_top_tb.prp) is tracked separately as informational.
+//
+// vpu_tensora_rf sits in the minion_top cone, so BOTH sim modes reach it —
+// the Pyrope tree directly, and the slang re-emission of minion/verilog.
+//
+// The write path is preview-gated: wr_en_early_i opens the preview latch that
+// captures wr_data_i, and wr_en_i commits it into the array. Holding all three
+// steady drives entry 0 to the written value, which the async read port
+// returns.
+//
+// STATUS: the minion sim scenarios PASS — this is a real elaborate + cgen +
+// host-compile + run smoke, and the RF reads back 0x1234 (bench/sim.sh gates
+// on the "hello world" line AND the printed value, via CORE_SIM_EXPECT
+// data=4660). Minion is pervasively latch-based (preview/commit RFs) and NO
+// module in the vpu_top cone has a latch-free sub-cone, so this module is
+// also the only shape available — do not "fix" this file by picking another
+// module or by loosening the gate.
+//
+// One limitation remains (fixme.md issue 2): the comptime evaluator that
+// folds the testbench does not model this RF's transparent latch + negedge
+// (posclk=false) flop, so an `assert` on the read-back value folds to a
+// comptime-false failure before cgen is reached. That is why the value is
+// printed rather than asserted. The runtime is now trustworthy on this shape
+// — it computes 4660 while the fold still claims false — so restoring the
+// assert is blocked only on the fold learning to decline.
+//
+// (The other half of this note used to describe a silent miscompile: the
+// latch -> negedge-flop enable got an /*UNRESOLVED-CYCLE*/ constant-false
+// commit guard and the RF read back 0. Fixed in cgen_sim.cpp; regression is
+// livehd's inou/prp/tests/sim/latch_sim_negedge_enable.prp.)
+//
+// Usage: copy next to a Pyrope tree of the design (minion/pyrope, or a slang
+// re-emission of minion/verilog), then:  lhd sim <dir>/tensora_rf_tb.prp
+const rf = import("vpu_tensora_rf.vpu_tensora_rf")
+
+test rf.hello(cycles:u20 = 1000) {
+  mut acc = rf
+  mut got = 0
+  tick cycles clocks=(clock=1) {
+    acc.wr_data_i = 0x1234
+    acc.wr_en_early_i = 1
+    acc.wr_en_i = 1
+    acc.wr_addr_i = 0
+    acc.rd_addr_i = 0
+    step
+    got = acc.rd_data_o
+  }
+  puts("hello world: minion vpu_tensora_rf ran {cycles} cycles, data={got}")
+}

@@ -1,0 +1,110 @@
+const minion_pkg = import("minion_pkg")
+
+pub mod minion_debug_apb_slv::[timecheck=false](clk_i:u1, rst_ni:u1, apb_paddr_i:minion_pkg.MinRegApbAddrWidth_T, apb_pwrite_i:u1, apb_psel_i:u1, apb_penable_i:u1, apb_pwdata_i:minion_pkg.MinionDebugApbDataWidth_T, csr_wdata_i:u64, update_ddata0_i:minion_pkg.NrThreads_T, in_debug_mode_i:minion_pkg.NrThreads_T) -> (apb_pready_o:u1@[], apb_prdata_o:minion_pkg.MinionDebugApbDataWidth_T@[], apb_pslverr_o:u1@[], read_ddata0_o:u128@[], ffb_wdata_o:minion_pkg.MinionDebugApbDataWidth_T@[], ffb_en_o:minion_pkg.MinionDebugFfbWords_T@[], ffb_thread_sel_o:u1@[], ex_program_buffer_o:minion_pkg.NrThreads_T@[]) {
+  reg s1_execute_q:u1:[clock_pin=ref clk_i]
+  reg s1_addr_valid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg s1_rdata_q:u32:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg s1_reg_en_q:u10:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg s1_pp_valid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg s2_execute_q:u1:[clock_pin=ref clk_i]
+  reg reg_ddata0_q:[2]u64:[fwd=0, clock_pin=ref clk_i]
+  mut s0_addr_valid = 0
+  mut s0_rdata = 0
+  mut s0_execute = 0
+  mut s0_pp_valid = 0
+  mut s0_reg_en = 0
+  mut reg_ddata0_d = 0
+  const reg_sel__w1 = apb_paddr_i#[0..=8]
+  const thread_sel__w1 = (apb_paddr_i >> 9) & 1
+  apb_prdata_o = 0ub????????????????????????????????????????????????????????????????
+  apb_pready_o = 0ub?
+  apb_pslverr_o = 0ub?
+  ex_program_buffer_o = 0ub??
+  ffb_en_o = 0ub????
+  ffb_thread_sel_o = 0ub?
+  ffb_wdata_o = 0ub????????????????????????????????????????????????????????????????
+  read_ddata0_o = 0ub????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+  const s0_en__w1 = unsigned((apb_psel_i != 0) and (apb_penable_i == 0))
+  s0_addr_valid = 1
+  s0_execute = 0
+  s0_pp_valid = 0
+  s0_rdata = 0
+  s0_reg_en = 0
+  if s0_en__w1 != 0 {
+    
+    s0_pp_valid = unsigned((apb_paddr_i >> 10)#[0..=1] == minion_pkg.AdEsrProtBitsMsg)
+    match reg_sel__w1#[0..=3] {
+      == minion_pkg.minion_debug_nxdata0 {
+        s0_reg_en#[0..=0] = apb_pwrite_i
+        s0_rdata = reg_ddata0_q[thread_sel__w1]#[0..=31]
+      }
+      == minion_pkg.minion_debug_nxdata1 {
+        s0_reg_en#[1..=1] = apb_pwrite_i
+        s0_rdata = reg_ddata0_q[thread_sel__w1]#[32..=63]
+      }
+      == minion_pkg.minion_debug_axdata0 {
+        s0_reg_en#[2..=2] = apb_pwrite_i
+        s0_execute = apb_pwrite_i
+        s0_rdata = reg_ddata0_q[thread_sel__w1]#[0..=31]
+      }
+      == minion_pkg.minion_debug_axdata1 {
+        s0_reg_en#[3..=3] = apb_pwrite_i
+        s0_execute = apb_pwrite_i
+        s0_rdata = reg_ddata0_q[thread_sel__w1]#[32..=63]
+      }
+      in (minion_pkg.minion_debug_abscmd, minion_pkg.minion_debug_axprogbuf0, minion_pkg.minion_debug_axprogbuf1) {
+        s0_execute = apb_pwrite_i
+        s0_reg_en = (s0_reg_en & (~(1 << reg_sel__w1#[0..=3]))) | (apb_pwrite_i << reg_sel__w1#[0..=3])
+      }
+      in (minion_pkg.minion_debug_nxprogbuf0, minion_pkg.minion_debug_nxprogbuf1) {
+        s0_reg_en = (s0_reg_en & (~(1 << reg_sel__w1#[0..=3]))) | (apb_pwrite_i << reg_sel__w1#[0..=3])
+      }
+      else {
+        s0_addr_valid = 0
+        s0_reg_en#[9..=9] = 1
+      }
+    }
+  }
+  const apb_pslverr_o__w1 = unsigned((s1_addr_valid_q == 0) or (s1_pp_valid_q == 0) or ((((in_debug_mode_i << 1) >> (thread_sel__w1#[0..=2] + 1)) & 1) == 0))
+  const apb_pready_o__w1 = unsigned((apb_psel_i != 0) and (apb_penable_i != 0) and ((((s1_reg_en_q >> minion_pkg.minion_debug_invalid) & 1) != 0) or ((s1_addr_valid_q != 0) and (apb_pwrite_i == 0)) or ((s1_addr_valid_q != 0) and (apb_pwrite_i != 0) and (s1_execute_q == 0)) or (s2_execute_q != 0)))
+  const ffb_en_lo__w1 = (s1_reg_en_q >> minion_pkg.minion_debug_abscmd) & 1
+  mut _b2i_7 = if apb_pslverr_o__w1 == 0 { 1 } else { 0 }
+  reg_ddata0_d = reg_ddata0_q
+  if apb_pslverr_o__w1 == 0 {
+    if (((s1_reg_en_q >> minion_pkg.minion_debug_nxdata0) & 1) != 0) or (((s1_reg_en_q >> minion_pkg.minion_debug_axdata0) & 1) != 0) {
+      const t193 = thread_sel__w1 * 64
+      reg_ddata0_d = (reg_ddata0_d & (~(0xffffffff << t193))) | (apb_pwdata_i#[0..=31] << t193)
+    }
+    if (((s1_reg_en_q >> minion_pkg.minion_debug_nxdata1) & 1) != 0) or (((s1_reg_en_q >> minion_pkg.minion_debug_axdata1) & 1) != 0) {
+      const t208 = (thread_sel__w1 * 64) + 32
+      reg_ddata0_d = (reg_ddata0_d & (~(0xffffffff << t208))) | (apb_pwdata_i#[0..=31] << t208)
+    }
+  }
+  if (update_ddata0_i & 1) != 0 {
+    reg_ddata0_d#[0..=63] = csr_wdata_i
+  }
+  if ((update_ddata0_i >> 1) & 1) != 0 {
+    reg_ddata0_d#[64..=127] = csr_wdata_i
+  }
+  if (s0_en__w1 != 0) and (apb_pwrite_i == 0) {
+    s1_rdata_q = s0_rdata
+  }
+  if (s0_en__w1 != 0) or (unsigned((apb_psel_i != 0) and (apb_penable_i != 0) and (apb_pready_o__w1 != 0)) != 0) {
+    s1_reg_en_q = s0_reg_en
+  }
+  if s0_en__w1 != 0 {
+    s1_addr_valid_q = s0_addr_valid
+    s1_pp_valid_q = s0_pp_valid
+  }
+  s1_execute_q = s0_execute
+  reg_ddata0_q = reg_ddata0_d
+  s2_execute_q = s1_execute_q
+  apb_prdata_o = s1_rdata_q | 0
+  apb_pready_o = apb_pready_o__w1
+  apb_pslverr_o = apb_pslverr_o__w1
+  ex_program_buffer_o = (0 & (~(1 << thread_sel__w1))) | (unsigned((s1_execute_q != 0) and (apb_pslverr_o__w1 == 0)) << thread_sel__w1)
+  ffb_en_o = (ffb_en_lo__w1 | (ffb_en_lo__w1 << 1) | ((unsigned((((s1_reg_en_q >> minion_pkg.minion_debug_axprogbuf0) & 1) != 0) or (((s1_reg_en_q >> minion_pkg.minion_debug_nxprogbuf0) & 1) != 0)) | (unsigned((((s1_reg_en_q >> minion_pkg.minion_debug_axprogbuf1) & 1) != 0) or (((s1_reg_en_q >> minion_pkg.minion_debug_nxprogbuf1) & 1) != 0)) << 1)) << 2)) & (_b2i_7 | (_b2i_7 << 1) | (_b2i_7 << 2) | (_b2i_7 << 3))
+  ffb_thread_sel_o = thread_sel__w1
+  ffb_wdata_o = apb_pwdata_i
+  read_ddata0_o = reg_ddata0_q
+}

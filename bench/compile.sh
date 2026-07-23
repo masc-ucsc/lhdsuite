@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # Lgraph-creation throughput: source -> compiled lg: library.
-#   MODE=verilog  slang front-end via the filelist (-F, -DSYNTHESIS)
+#   MODE=verilog  slang front-end via the filelist (-F, -DSYNTHESIS, plus the
+#                 core's $CORE_V_FLAGS). LoC/words count the WHOLE filelist,
+#                 since slang parses every file in it.
 #   MODE=pyrope   top .prp; sibling import discovery pulls the whole tree
 #   MODE=pyrope_parallel
 #                 per-file separate compilation: `lhd scan` (lexer-only import
 #                 discovery) builds the dependency picture, every import-free
 #                 file compiles in PARALLEL into its own ln:+lg: emission, and
-#                 dependents compile with `--in-dir ln:` reuse (pre-compiled
-#                 units ride in; stateful mod/pipe interfaces are not
-#                 re-elaborated). The dependent's lg: emission is a COMPLETE
+#                 dependents reuse them by naming each one as a POSITIONAL
+#                 `ln:DIR` input — never a flag (pre-compiled units ride in;
+#                 stateful mod/pipe interfaces are not re-elaborated). The
+#                 dependent's lg: emission is a COMPLETE
 #                 design library — same shape as the monolithic compile. On a
 #                 design this small, process overhead eats the speedup; the
 #                 value is demonstrating the flow (and scaling on big trees).
@@ -18,25 +21,25 @@ RF="${TEST_SRCDIR:-${RUNFILES_DIR:-$0.runfiles}}"
 
 case "${MODE:?}" in
 verilog)
-  n_loc=$(loc $(dino_v_sources))
-  n_words=$(words $(dino_v_sources))
-  run_timed compile_verilog lhd compile verilog --top PipelinedDualIssueCPU \
-    --emit-dir lg:out_lg --workdir w -- -F "$DINO_V_DIR/filelist.f" -DSYNTHESIS
+  n_loc=$(loc $(core_v_sources))
+  n_words=$(words $(core_v_sources))
+  run_timed compile_verilog lhd compile verilog --top "$CORE_TOP" \
+    --emit-dir lg:out_lg --workdir w -- -F "$CORE_V_DIR/filelist.f" -DSYNTHESIS $CORE_V_FLAGS
   ;;
 pyrope)
-  n_loc=$(loc "$DINO_P_DIR"/*.prp)
-  n_words=$(words "$DINO_P_DIR"/*.prp)
-  run_timed compile_pyrope lhd compile "$DINO_P_DIR/PipelinedDualIssueCPU.prp" \
-    --top PipelinedDualIssueCPU --emit-dir lg:out_lg --workdir w
+  n_loc=$(loc "$CORE_P_DIR"/*.prp)
+  n_words=$(words "$CORE_P_DIR"/*.prp)
+  run_timed compile_pyrope lhd compile "$CORE_P_DIR/$CORE_TOP.prp" \
+    --top "$CORE_TOP" --emit-dir lg:out_lg --workdir w
   ;;
 pyrope_parallel)
-  n_loc=$(loc "$DINO_P_DIR"/*.prp)
-  n_words=$(words "$DINO_P_DIR"/*.prp)
+  n_loc=$(loc "$CORE_P_DIR"/*.prp)
+  n_words=$(words "$CORE_P_DIR"/*.prp)
   NPROC=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8)
 
-  run_timed scan lhd scan "$DINO_P_DIR"/*.prp -q --result-json scan.json --workdir sw
+  run_timed scan lhd scan "$CORE_P_DIR"/*.prp -q --result-json scan.json --workdir sw
   # Split the scan into import-free files (parallel wave) and dependents in
-  # topological order (each sees every previously built unit via --in-dir).
+  # topological order (each sees every previously built unit as an ln: input).
   python3 - scan.json <<'PY'
 import json, sys
 sc = json.load(open(sys.argv[1]))["scan"]
@@ -58,6 +61,7 @@ while pending:
 open("deps.txt", "w").write("\n".join(order) + "\n")
 PY
 
+  pkg_only=0  # type/constant-only leaves, counted by compile_leaves below
   compile_leaves() {  # all import-free files, NPROC at a time
     local n=0 f b
     while IFS= read -r f; do
@@ -68,13 +72,20 @@ PY
       [ $((n % NPROC)) -ne 0 ] || wait
     done <leaves.txt
     wait
+    # A type/constant-only leaf (a `_pkg` file) legitimately produces no
+    # lgraph: lhd emits an EMPTY lg: library and warns, so it is an ordinary
+    # pass. Count those warnings for the metric; any non-pass is a real failure.
     for f in leaf_*.log; do
       grep -q '"status":"pass"' "$f" \
         || { echo "FAIL: leaf compile ${f%.log}:" >&2; tail -5 "$f" >&2; return 1; }
+      if grep -q 'produced no graphs' "$f"; then
+        pkg_only=$((pkg_only + 1))
+      fi
     done
   }
   run_timed leaves_parallel compile_leaves
   wave1_ms=$LAST_MS
+  metric leaves_pkg_only "$pkg_only" files
 
   compile_deps() {  # dependents in topo order, reusing every built ln: unit
     local f b ins d
@@ -82,7 +93,11 @@ PY
       [ -n "$f" ] || continue
       b=$(basename "$f" .prp)
       ins=""
-      for d in ln_*; do ins="$ins --in-dir ln:$d"; done
+      # IR inputs are POSITIONAL — `lhd compile <src> ln:DIR …` (`lhd compile
+      # --help`: files = path[] and/or ln:DIR|lg:DIR). There is no flag form:
+      # passing a pre-compiled unit as an option is an error, so keep these
+      # bare in $ins.
+      for d in ln_*; do ins="$ins ln:$d"; done
       # shellcheck disable=SC2086
       lhd compile "$f" $ins --emit-dir "ln:ln_$b" --emit-dir lg:out_lg --workdir "cw_$b" \
         >"dep_$b.log" 2>&1 || { tail -10 "dep_$b.log" >&2; return 1; }

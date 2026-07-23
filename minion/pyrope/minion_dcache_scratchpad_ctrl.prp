@@ -1,0 +1,67 @@
+const minion_dcache_pkg = import("minion_dcache_pkg")
+
+pub mod minion_dcache_scratchpad_ctrl::[timecheck=false](clk_i:u1, rst_ni:u1, scratchpad_ctrl_i:u2, dcache_idle_i:u1, da_clear_rdy_i:u1) -> (dcache_cfg_stall_o:u1@[], dcache_cfg_clear_all_o:u1@[], dcache_cfg_clear_low_o:u1@[], dcache_cfg_alloc_scp_o:u1@[], da_clear_en_o:u1@[], da_clear_val_o:u1@[], da_clear_set_o:minion_dcache_pkg.DcacheSetIdxWidth_T@[], da_clear_way_o:minion_dcache_pkg.DcacheWayIdxWidth_T@[], da_clear_idx_o:u1@[], dcache_cfg_mode_o:u2@[]) {
+  mut zero_counter_d = 0
+  reg state_q:u2:[clock_pin=ref clk_i]
+  reg current_scp_ctrl_q:u2:[clock_pin=ref clk_i]
+  reg zero_counter_q:u7:[clock_pin=ref clk_i]
+  mut state_d = 0
+  mut current_scp_ctrl_d = 0
+  const DcacheLramRowsLast = (minion_dcache_pkg.DcacheLramRows - 1)#[0..=31]
+  const DcacheLramRowsSplitLast = (minion_dcache_pkg.DcacheLramRowsSplit - 1)#[0..=31]
+  da_clear_en_o = 0ub?
+  da_clear_idx_o = 0ub?
+  da_clear_set_o = 0ub????
+  da_clear_val_o = 0ub?
+  da_clear_way_o = 0ub??
+  dcache_cfg_alloc_scp_o = 0ub?
+  dcache_cfg_clear_all_o = 0ub?
+  dcache_cfg_clear_low_o = 0ub?
+  dcache_cfg_mode_o = 0ub??
+  dcache_cfg_stall_o = 0ub?
+  const zero_count_limit__w1 = if (current_scp_ctrl_q == minion_dcache_pkg.DcacheModeShared) or (scratchpad_ctrl_i == minion_dcache_pkg.DcacheModeShared) { DcacheLramRowsLast#[0..=6]#[0..=6] } else { DcacheLramRowsSplitLast#[0..=6]#[0..=6] }
+  const da_clear_val_o__w1 = unsigned(state_q == 2)
+  const zero_count_up__w1 = unsigned(((da_clear_val_o__w1 != 0) and (da_clear_rdy_i != 0)) or (state_q == 1))
+  if state_q == 1 {
+    
+    zero_counter_d = 0
+  } else {
+    zero_counter_d = (zero_counter_q + 1)#[0..=6]
+  }
+  if zero_count_up__w1 != 0 {
+    zero_counter_q = zero_counter_d
+  }
+  current_scp_ctrl_d = current_scp_ctrl_q
+  state_d = state_q
+  if state_q == 0 {
+    if dcache_idle_i != 0 {
+      state_d = 1
+    }
+  } elif state_q == 1 {
+    state_d = 2
+  } elif state_q == 2 {
+    if unsigned((zero_counter_q == zero_count_limit__w1) and (zero_count_up__w1 != 0)) != 0 {
+      current_scp_ctrl_d = scratchpad_ctrl_i
+      state_d = 3
+    }
+  } elif state_q == 3 {
+    state_d = 0
+  }
+  if rst_ni == 0 {
+    state_q = 0
+    current_scp_ctrl_q = minion_dcache_pkg.DcacheModeShared
+  } elif unsigned((state_q != 3) or (current_scp_ctrl_q != scratchpad_ctrl_i)) != 0 {
+    current_scp_ctrl_q = current_scp_ctrl_d
+    state_q = state_d
+  }
+  da_clear_en_o = unsigned((state_q == 1) or (state_q == 2))
+  da_clear_idx_o = (zero_counter_q >> 2) & 1
+  da_clear_set_o = (zero_counter_q >> 3)#[0..=3]
+  da_clear_val_o = da_clear_val_o__w1
+  da_clear_way_o = zero_counter_q#[0..=1]
+  dcache_cfg_alloc_scp_o = unsigned((state_q == 1) and (current_scp_ctrl_q == minion_dcache_pkg.DcacheModeSplit) and (scratchpad_ctrl_i == minion_dcache_pkg.DcacheModeScratchpad))
+  dcache_cfg_clear_all_o = unsigned((state_q == 1) and ((current_scp_ctrl_q == minion_dcache_pkg.DcacheModeShared) or (scratchpad_ctrl_i == minion_dcache_pkg.DcacheModeShared)))
+  dcache_cfg_clear_low_o = unsigned((state_q == 1) and (not ((current_scp_ctrl_q == minion_dcache_pkg.DcacheModeShared) or (scratchpad_ctrl_i == minion_dcache_pkg.DcacheModeShared))))
+  dcache_cfg_mode_o = current_scp_ctrl_q
+  dcache_cfg_stall_o = unsigned(state_q != 3)
+}

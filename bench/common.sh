@@ -1,10 +1,26 @@
 # Shared helpers for lhdsuite bench/test scripts. Source this; do not execute.
 #
-# Contract with bench/BUILD: every sh_test gets
-#   MODE          scenario selector within a script family
-#   LHD           rlocationpath of @livehd//lhd:lhd
-#   DINO_V_FLIST  rlocationpath of dino/verilog/filelist.f
-#   DINO_P_TOP    rlocationpath of dino/pyrope/PipelinedDualIssueCPU.prp
+# Contract with bench/defs.bzl: every sh_test gets
+#   MODE              scenario selector within a script family
+#   LHD               rlocationpath of @livehd//lhd:lhd
+#   CORE              design under test: dino | minion
+#   CORE_V_FLIST      rlocationpath of <core>/verilog/filelist.f
+#   CORE_P_TOP        rlocationpath of <core>/pyrope/<CORE_TOP>.prp
+#   CORE_TOP          whole-design top module, in both languages
+#   CORE_V_FLAGS      extra slang options for this core (may be empty)
+#   CORE_UNIT         module carrying the verify sidecar + bug1/comment1
+#   CORE_COLOR_ALGS   space-separated `pass color` algorithms this core runs
+#                     (e.g. "flat synth", or just "synth" when the design is
+#                     too big to fuse into one region)
+#   CORE_SIM_TB       asserted sim testbench basename
+#   CORE_SIM_EXPECT   string the asserted sim's output must also contain — the
+#                     testbench's known-good data readback ("" = skip)
+#   CORE_SIM_TOP_TB   informational whole-top testbench ("" = none)
+#   CORE_SIM_PROG_TB  informational program testbench ("" = none)
+#   CORE_LEC_TRUST    comma-separated module-def names the LEC scenarios ASSUME
+#                     equivalent without proving them (latch escape hatch; ""
+#                     = trust nothing). When set, lec.sh also runs strict so a
+#                     witness-free UNKNOWN top is a hard fail. See defs.bzl.
 # Paths are runfiles-relative; resolve them with rloc before use. Scripts run
 # inside $TEST_TMPDIR so every pass/workdir is hermetic per test. Scripts set
 # RF (runfiles root) before sourcing this file, which also makes plain
@@ -24,13 +40,16 @@ rloc() {
   esac
 }
 
-LHD_BIN=$(rloc "${LHD:?LHD env var unset — set in bench/BUILD}")
-DINO_V_DIR=$(cd "$(dirname "$(rloc "${DINO_V_FLIST:?}")")" && pwd)
-DINO_P_DIR=$(cd "$(dirname "$(rloc "${DINO_P_TOP:?}")")" && pwd)
-DINO_DIR=$(dirname "$DINO_P_DIR")
-DINO_SIM_DIR=$DINO_DIR/sim
-DINO_VERIF_DIR=$DINO_DIR/verif
-DINO_TESTS_DIR=$DINO_DIR/tests
+LHD_BIN=$(rloc "${LHD:?LHD env var unset — set in bench/defs.bzl}")
+CORE=${CORE:?CORE env var unset — set in bench/defs.bzl}
+CORE_V_DIR=$(cd "$(dirname "$(rloc "${CORE_V_FLIST:?}")")" && pwd)
+CORE_P_DIR=$(cd "$(dirname "$(rloc "${CORE_P_TOP:?}")")" && pwd)
+CORE_DIR=$(dirname "$CORE_P_DIR")
+CORE_SIM_DIR=$CORE_DIR/sim
+CORE_VERIF_DIR=$CORE_DIR/verif
+CORE_TESTS_DIR=$CORE_DIR/tests
+: "${CORE_TOP:?}" "${CORE_UNIT:?}" "${CORE_COLOR_ALGS:?}"
+: "${CORE_V_FLAGS=}" "${CORE_SIM_EXPECT=}" "${CORE_LEC_TRUST=}"
 WORK=${TEST_TMPDIR:?}
 cd "$WORK"
 
@@ -50,11 +69,11 @@ lhd() {
   local out="lhd" a
   for a in "$@"; do
     case "$a" in
-    "$DINO_P_DIR"*) a="dino/pyrope${a#"$DINO_P_DIR"}" ;;
-    "$DINO_V_DIR"*) a="dino/verilog${a#"$DINO_V_DIR"}" ;;
-    "$DINO_SIM_DIR"*) a="dino/sim${a#"$DINO_SIM_DIR"}" ;;
-    "$DINO_VERIF_DIR"*) a="dino/verif${a#"$DINO_VERIF_DIR"}" ;;
-    "$DINO_TESTS_DIR"*) a="dino/tests${a#"$DINO_TESTS_DIR"}" ;;
+    "$CORE_P_DIR"*) a="$CORE/pyrope${a#"$CORE_P_DIR"}" ;;
+    "$CORE_V_DIR"*) a="$CORE/verilog${a#"$CORE_V_DIR"}" ;;
+    "$CORE_SIM_DIR"*) a="$CORE/sim${a#"$CORE_SIM_DIR"}" ;;
+    "$CORE_VERIF_DIR"*) a="$CORE/verif${a#"$CORE_VERIF_DIR"}" ;;
+    "$CORE_TESTS_DIR"*) a="$CORE/tests${a#"$CORE_TESTS_DIR"}" ;;
     esac
     if [ -n "${HAGENT_TECH_DIR:-}" ]; then
       case "$a" in
@@ -112,21 +131,28 @@ run_expect_fail() {
   LAST_MS=$((t1 - t0))
 }
 
-# abc_incr_counts RESULT_JSON — echo "hits misses" from the pass.abc
-# incremental counters (or "MISSING" when the envelope has none).
+# abc_incr_counts RESULT_JSON — echo "hits misses hit_ms miss_ms store_failed"
+# from the pass.abc incremental report (or "MISSING" when it has none).
+#
+# The counts alone are NOT a speedup measure: minion once reported 199 hits of
+# 264 regions and saved 2% of the runtime, because the regions that missed held
+# essentially all the mapping time. `miss_ms` is the number that answers "did
+# incremental help", and `store_failed` names the bug behind a stuck one — a
+# region the cache could not snapshot re-runs ABC on every iteration forever
+# (unlike `uncacheable`, which is a principled, documented refusal).
 abc_incr_counts() {
   python3 - "$1" <<'PY'
 import json, sys
-def find(o):
+def find(o, key):
     if isinstance(o, dict):
-        if "hits" in o and "misses" in o:
-            return o
+        if key in o:
+            return o[key]
         for v in o.values():
-            if (r := find(v)) is not None:
+            if (r := find(v, key)) is not None:
                 return r
     elif isinstance(o, list):
         for v in o:
-            if (r := find(v)) is not None:
+            if (r := find(v, key)) is not None:
                 return r
     return None
 try:
@@ -134,9 +160,14 @@ try:
 except Exception:
     print("MISSING")
     raise SystemExit
-inc = d.get("incremental") if isinstance(d, dict) else None
-inc = inc if isinstance(inc, dict) else find(d)
-print(f'{inc["hits"]} {inc["misses"]}' if inc else "MISSING")
+inc = find(d, "incremental")
+if not isinstance(inc, dict):
+    print("MISSING")
+    raise SystemExit
+regions = find(d, "regions")
+regions = regions if isinstance(regions, list) else []
+failed = sum(1 for r in regions if r.get("cache") == "store-failed")
+print(inc["hits"], inc["misses"], round(inc.get("hit_ms", 0)), round(inc.get("miss_ms", 0)), failed)
 PY
 }
 
@@ -165,11 +196,15 @@ loc() { cat "$@" | grep -cve '^[[:space:]]*$' || true; }
 words() { cat "$@" | wc -w | tr -d ' '; }
 
 # Verilog source list, resolved from filelist.f (paths are relative to it).
-dino_v_sources() {
+# Blank lines and `//` comments are skipped, matching slang's -F parsing.
+core_v_sources() {
   local f
   while IFS= read -r f; do
-    [ -n "$f" ] && printf '%s\n' "$DINO_V_DIR/$f"
-  done <"$DINO_V_DIR/filelist.f"
+    case "$f" in
+    "" | //*) continue ;;
+    esac
+    printf '%s\n' "$CORE_V_DIR/$f"
+  done <"$CORE_V_DIR/filelist.f"
 }
 
 require_tech_dir() {
@@ -187,22 +222,33 @@ EOF
   fi
 }
 
-# copy_dino_sources DEST — writable copy of both language trees for the
-# edit/rebuild passes (runfiles are read-only symlinks).
-copy_dino_sources() {
-  mkdir -p "$1/verilog" "$1/pyrope"
-  cp -L "$DINO_V_DIR"/*.sv "$DINO_V_DIR"/filelist.f "$1/verilog/"
-  cp -L "$DINO_P_DIR"/*.prp "$DINO_P_DIR"/manifest.json "$1/pyrope/"
+# copy_core_pyrope DEST — writable copy of the Pyrope tree for the
+# edit/rebuild passes (runfiles are read-only symlinks). manifest.json is
+# optional: dino ships one, minion does not.
+copy_core_pyrope() {
+  mkdir -p "$1"
+  cp -L "$CORE_P_DIR"/*.prp "$1"/
+  [ -f "$CORE_P_DIR/manifest.json" ] && cp -L "$CORE_P_DIR/manifest.json" "$1"/
+  return 0
 }
 
-# apply_variant NAME DIR — overlay the checked-in dino/tests/NAME/ files onto
+# copy_core_sources DEST — writable copy of both language trees.
+copy_core_sources() {
+  mkdir -p "$1/verilog"
+  cp -L "$CORE_V_DIR"/*.sv "$CORE_V_DIR"/filelist.f "$1/verilog/"
+  # .svh includes (minion has them; dino does not)
+  cp -L "$CORE_V_DIR"/*.svh "$1/verilog/" 2>/dev/null || true
+  copy_core_pyrope "$1/pyrope"
+}
+
+# apply_variant NAME DIR — overlay the checked-in <core>/tests/NAME/ files onto
 # DIR (same filenames). Variants are ordinary patched source copies, so
-# `diff dino/pyrope/ALU.prp dino/tests/bug1/ALU.prp` shows exactly what a
-# scenario injects: bug1 = the ALU's 32-bit add flipped to subtract (a real
-# bug LEC/formal must catch), comment1 = a comment-only touch (nothing really
-# changed; incremental caches must hit).
+# `diff <core>/pyrope/$CORE_UNIT.prp <core>/tests/bug1/$CORE_UNIT.prp` shows
+# exactly what a scenario injects: bug1 = the unit's adder flipped to subtract
+# (a real bug LEC/formal must catch), comment1 = a comment-only touch (nothing
+# really changed; incremental caches must hit).
 apply_variant() {
-  local vdir="$DINO_TESTS_DIR/$1"
+  local vdir="$CORE_TESTS_DIR/$1"
   [ -d "$vdir" ] || { echo "FAIL: variant '$1' not found at $vdir" >&2; return 1; }
   cp -fL "$vdir"/* "$2"/
 }

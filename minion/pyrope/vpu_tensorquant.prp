@@ -1,0 +1,464 @@
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+pub mod vpu_tensorquant::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:u214, tensorfma_pend:u1, tensorstore_pend:u1, dcache_scp_available:u1, dcache_scp_data:vpu_defs_pkg.DCACHE_DATA_SIZE_T) -> (enabled:u1@[], dcache_scp_req:(read_en:u1, way:u2, addr:u10, size64:u1, size256:u1, bid:u1)@[], quant_en_next:u1@[], quant_inst_next:vpu_defs_pkg.INST_SIZE_T@[], quant_mask_next:vpu_defs_pkg.VPU_LANE_NUM_T@[], quant_tena_en:u1@[], ex_ren:u1@[], ex_rdata:u256@[], vpu_tensorquant_debug:u11@[]) {
+  reg enabled:u1
+  reg ex_ren:u1
+  reg tensorquant_ctrl:u64
+  reg scoreboard_pend_sticky:u1
+  reg tfma_pend_sticky:u1
+  reg tstore_pend_sticky:u1
+  reg tensorquant_last:u1
+  reg scp_read_pending:u1
+  reg scp_data:[2]u256:[fwd=0]
+  reg scp_data_en_s1:u2
+  reg scp_data_en_s2:u2
+  reg scp_read_set_pending:u2
+  reg scp_read_buf:u1
+  reg exec_b_col:u1
+  reg exec_a_row:u4
+  reg id_b_col:u1
+  reg id_a_row:u4
+  reg ex_b_col:u1
+  reg ex_a_row:u4
+  reg ex_rdata_zero:u1
+  reg ex_rdata_col:u1
+  reg exec_hazard_wait:u3
+  reg prev_is_txfma:u1
+  reg prev_is_shsw:u1
+  reg quant_tena_scp_en:u1
+  reg quant_tena_zero_en:u1
+  reg quant_rdata_col:u1
+  mut `tensorquant_ctrl_next.padding2` = 0
+  mut `tensorquant_ctrl_next.start_reg` = 0
+  mut `tensorquant_ctrl_next.cols` = 0
+  mut `tensorquant_ctrl_next.rows` = 0
+  mut `tensorquant_ctrl_next.scp_src` = 0
+  mut `tensorquant_ctrl_next.padding` = 0
+  mut `tensorquant_ctrl_next.trans` = 0
+  mut `dcache_scp_req__bpo.read_en` = 0
+  mut `dcache_scp_req__bpo.way` = 0
+  mut `dcache_scp_req__bpo.addr` = 0
+  mut `dcache_scp_req__bpo.size64` = 0
+  mut `dcache_scp_req__bpo.size256` = 0
+  mut `dcache_scp_req__bpo.bid` = 0
+  mut scoreboard_pend_sticky_next__wtmp = 0ub?
+  wire scoreboard_pend_sticky_next:u1
+  mut scp_read_buf_next__wtmp = 0ub?
+  wire scp_read_buf_next:u1
+  mut scp_data_en_s0__wtmp = 0ub??
+  wire scp_data_en_s0:u2
+  mut quant_tena_zero_en_next__wtmp = 0ub?
+  wire quant_tena_zero_en_next:u1
+  mut scp_read_pending_next__wtmp = 0ub?
+  wire scp_read_pending_next:u1
+  mut exec_hazard_wait_next__wtmp = 0ub???
+  wire exec_hazard_wait_next:u3
+  mut exec_is_txfma__wtmp = 0ub?
+  wire exec_is_txfma:u1
+  mut exec_is_shsw__wtmp = 0ub?
+  wire exec_is_shsw:u1
+  mut tfma_pend_sticky_next__wtmp = 0ub?
+  wire tfma_pend_sticky_next:u1
+  mut enabled_next__wtmp = 0ub?
+  wire enabled_next:u1
+  mut tensorquant_last_next__wtmp = 0ub?
+  wire tensorquant_last_next:u1
+  mut exec_last_op_trans__wtmp = 0ub?
+  wire exec_last_op_trans:u1
+  mut quant_tena_scp_en_next__wtmp = 0ub?
+  wire quant_tena_scp_en_next:u1
+  mut quant_rdata_col_next__wtmp = 0ub?
+  wire quant_rdata_col_next:u1
+  mut exec_adv__wtmp = 0ub?
+  wire exec_adv:u1
+  mut exec_a_row_next__wtmp = 0ub????
+  wire exec_a_row_next:u4
+  mut exec_b_col_next__wtmp = 0ub?
+  wire exec_b_col_next:u1
+  mut quant_tena_en__wtmp = 0ub?
+  wire quant_tena_en:u1
+  mut tensorquant_ctrl_en__wtmp = 0ub?
+  wire tensorquant_ctrl_en:u1
+  mut scp_read_set_pending_next__wtmp = 0ub??
+  wire scp_read_set_pending_next:u2
+  mut clock_en__wtmp = 0ub?
+  wire clock_en:u1
+  mut tstore_pend_sticky_next__wtmp = 0ub?
+  wire tstore_pend_sticky_next:u1
+  ex_rdata = 0ub????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+  quant_en_next = 0ub?
+  quant_inst_next = 0ub????????????????????????????????
+  quant_mask_next = 0ub????????
+  vpu_tensorquant_debug = 0ub???????????
+  if (scp_data_en_s2 & 1) != 0 {
+    scp_data[0] = dcache_scp_data
+  }
+  if ((scp_data_en_s2 >> 1) & 1) != 0 {
+    scp_data[1] = dcache_scp_data
+  }
+  if ex_rdata_zero != 0 {
+    ex_rdata#[0..=31] = 0
+  } elif ex_rdata_col != 0 {
+    ex_rdata#[0..=31] = ((scp_data[ex_a_row#[0..=3] / vpu_defs_pkg.VPU_LANE_NUM] << 32) >> (((ex_a_row#[0..=3] - ((ex_a_row#[0..=3] / vpu_defs_pkg.VPU_LANE_NUM) * vpu_defs_pkg.VPU_LANE_NUM)) * 32)#[0..=9] + 32))#[0..=31]
+  } else {
+    ex_rdata#[0..=31] = scp_data[ex_b_col]#[0..=31]
+  }
+  if ex_rdata_zero != 0 {
+    ex_rdata#[32..=63] = 0
+  } elif ex_rdata_col != 0 {
+    ex_rdata#[32..=63] = ((scp_data[ex_a_row#[0..=3] / vpu_defs_pkg.VPU_LANE_NUM] << 32) >> (((ex_a_row#[0..=3] - ((ex_a_row#[0..=3] / vpu_defs_pkg.VPU_LANE_NUM) * vpu_defs_pkg.VPU_LANE_NUM)) * 32)#[0..=9] + 32))#[0..=31]
+  } else {
+    ex_rdata#[32..=63] = scp_data[ex_b_col]#[32..=63]
+  }
+  if ex_rdata_zero != 0 {
+    ex_rdata#[64..=95] = 0
+  } elif ex_rdata_col != 0 {
+    ex_rdata#[64..=95] = ((scp_data[ex_a_row#[0..=3] / vpu_defs_pkg.VPU_LANE_NUM] << 32) >> (((ex_a_row#[0..=3] - ((ex_a_row#[0..=3] / vpu_defs_pkg.VPU_LANE_NUM) * vpu_defs_pkg.VPU_LANE_NUM)) * 32)#[0..=9] + 32))#[0..=31]
+  } else {
+    ex_rdata#[64..=95] = scp_data[ex_b_col]#[64..=95]
+  }
+  if ex_rdata_zero != 0 {
+    ex_rdata#[96..=127] = 0
+  } elif ex_rdata_col != 0 {
+    ex_rdata#[96..=127] = ((scp_data[ex_a_row#[0..=3] / vpu_defs_pkg.VPU_LANE_NUM] << 32) >> (((ex_a_row#[0..=3] - ((ex_a_row#[0..=3] / vpu_defs_pkg.VPU_LANE_NUM) * vpu_defs_pkg.VPU_LANE_NUM)) * 32)#[0..=9] + 32))#[0..=31]
+  } else {
+    ex_rdata#[96..=127] = scp_data[ex_b_col]#[96..=127]
+  }
+  if ex_rdata_zero != 0 {
+    ex_rdata#[128..=159] = 0
+  } elif ex_rdata_col != 0 {
+    ex_rdata#[128..=159] = ((scp_data[ex_a_row#[0..=3] / vpu_defs_pkg.VPU_LANE_NUM] << 32) >> (((ex_a_row#[0..=3] - ((ex_a_row#[0..=3] / vpu_defs_pkg.VPU_LANE_NUM) * vpu_defs_pkg.VPU_LANE_NUM)) * 32)#[0..=9] + 32))#[0..=31]
+  } else {
+    ex_rdata#[128..=159] = scp_data[ex_b_col]#[128..=159]
+  }
+  if ex_rdata_zero != 0 {
+    ex_rdata#[160..=191] = 0
+  } elif ex_rdata_col != 0 {
+    ex_rdata#[160..=191] = ((scp_data[ex_a_row#[0..=3] / vpu_defs_pkg.VPU_LANE_NUM] << 32) >> (((ex_a_row#[0..=3] - ((ex_a_row#[0..=3] / vpu_defs_pkg.VPU_LANE_NUM) * vpu_defs_pkg.VPU_LANE_NUM)) * 32)#[0..=9] + 32))#[0..=31]
+  } else {
+    ex_rdata#[160..=191] = scp_data[ex_b_col]#[160..=191]
+  }
+  if ex_rdata_zero != 0 {
+    ex_rdata#[192..=223] = 0
+  } elif ex_rdata_col != 0 {
+    ex_rdata#[192..=223] = ((scp_data[ex_a_row#[0..=3] / vpu_defs_pkg.VPU_LANE_NUM] << 32) >> (((ex_a_row#[0..=3] - ((ex_a_row#[0..=3] / vpu_defs_pkg.VPU_LANE_NUM) * vpu_defs_pkg.VPU_LANE_NUM)) * 32)#[0..=9] + 32))#[0..=31]
+  } else {
+    ex_rdata#[192..=223] = scp_data[ex_b_col]#[192..=223]
+  }
+  if ex_rdata_zero != 0 {
+    ex_rdata#[224..=255] = 0
+  } elif ex_rdata_col != 0 {
+    ex_rdata#[224..=255] = ((scp_data[ex_a_row#[0..=3] / vpu_defs_pkg.VPU_LANE_NUM] << 32) >> (((ex_a_row#[0..=3] - ((ex_a_row#[0..=3] / vpu_defs_pkg.VPU_LANE_NUM) * vpu_defs_pkg.VPU_LANE_NUM)) * 32)#[0..=9] + 32))#[0..=31]
+  } else {
+    ex_rdata#[224..=255] = scp_data[ex_b_col]#[224..=255]
+  }
+  if reset != 0 {
+    enabled = 0
+    scoreboard_pend_sticky = 0
+    tensorquant_last = 0
+    tfma_pend_sticky = 0
+    tstore_pend_sticky = 0
+  } elif clock_en != 0 {
+    enabled = enabled_next
+    scoreboard_pend_sticky = scoreboard_pend_sticky_next
+    tensorquant_last = tensorquant_last_next
+    tfma_pend_sticky = tfma_pend_sticky_next
+    tstore_pend_sticky = tstore_pend_sticky_next
+  }
+  if reset != 0 {
+    tensorquant_ctrl = 0
+  } elif tensorquant_ctrl_en != 0 {
+    tensorquant_ctrl = (`tensorquant_ctrl_next.padding2` << 62) | (`tensorquant_ctrl_next.start_reg` << 57) | (`tensorquant_ctrl_next.cols` << 55) | (`tensorquant_ctrl_next.rows` << 51) | (`tensorquant_ctrl_next.scp_src` << 45) | (`tensorquant_ctrl_next.padding` << 40) | `tensorquant_ctrl_next.trans`
+  }
+  clock_en__wtmp = unsigned((enabled != 0) or (((f0_core_ctrl >> 65) & 1) != 0) or (tensorquant_last != 0) or (scp_read_pending != 0))
+  enabled_next__wtmp = enabled
+  const new_req__w1 = unsigned((((f0_core_ctrl >> 65) & 1) != 0) and (f0_core_ctrl#[1..=64]#[0..=39]#[0..=3] != 0))
+  `tensorquant_ctrl_next.cols` = tensorquant_ctrl#[55..=56]
+  `tensorquant_ctrl_next.padding` = tensorquant_ctrl#[40..=44]
+  `tensorquant_ctrl_next.padding2` = tensorquant_ctrl#[62..=63]
+  `tensorquant_ctrl_next.rows` = tensorquant_ctrl#[51..=54]
+  `tensorquant_ctrl_next.scp_src` = tensorquant_ctrl#[45..=50]
+  `tensorquant_ctrl_next.start_reg` = tensorquant_ctrl#[57..=61]
+  `tensorquant_ctrl_next.trans` = tensorquant_ctrl#[0..=39]
+  tensorquant_last_next__wtmp = unsigned((tensorquant_ctrl#[0..=3] == vpu_defs_pkg.TQUANT_LAST) and (exec_hazard_wait_next == 0) and (enabled != 0))
+  tensorquant_ctrl_en__wtmp = unsigned((((f0_core_ctrl >> 65) & 1) != 0) or (exec_last_op_trans != 0))
+  if ((f0_core_ctrl >> 65) & 1) != 0 {
+    `tensorquant_ctrl_next.cols` = f0_core_ctrl#[1..=64]#[55..=56]
+    `tensorquant_ctrl_next.padding` = f0_core_ctrl#[1..=64]#[40..=44]
+    `tensorquant_ctrl_next.padding2` = f0_core_ctrl#[1..=64]#[62..=63]
+    `tensorquant_ctrl_next.rows` = f0_core_ctrl#[1..=64]#[51..=54]
+    `tensorquant_ctrl_next.scp_src` = f0_core_ctrl#[1..=64]#[45..=50]
+    `tensorquant_ctrl_next.start_reg` = f0_core_ctrl#[1..=64]#[57..=61]
+    `tensorquant_ctrl_next.trans` = f0_core_ctrl#[1..=64]#[0..=39]
+  } else {
+    `tensorquant_ctrl_next.trans`#[0..=3] = tensorquant_ctrl#[0..=39]#[4..=7]
+    `tensorquant_ctrl_next.trans`#[4..=7] = tensorquant_ctrl#[0..=39]#[8..=11]
+    `tensorquant_ctrl_next.trans`#[8..=11] = tensorquant_ctrl#[0..=39]#[12..=15]
+    `tensorquant_ctrl_next.trans`#[12..=15] = tensorquant_ctrl#[0..=39]#[16..=19]
+    `tensorquant_ctrl_next.trans`#[16..=19] = tensorquant_ctrl#[0..=39]#[20..=23]
+    `tensorquant_ctrl_next.trans`#[20..=23] = tensorquant_ctrl#[0..=39]#[24..=27]
+    `tensorquant_ctrl_next.trans`#[24..=27] = tensorquant_ctrl#[0..=39]#[28..=31]
+    `tensorquant_ctrl_next.trans`#[28..=31] = tensorquant_ctrl#[0..=39]#[32..=35]
+    `tensorquant_ctrl_next.trans`#[32..=35] = tensorquant_ctrl#[0..=39]#[36..=39]
+    `tensorquant_ctrl_next.trans`#[36..=39] = vpu_defs_pkg.TQUANT_LAST
+    if quant_tena_scp_en_next != 0 {
+      `tensorquant_ctrl_next.scp_src` = (tensorquant_ctrl#[45..=50] + 1)#[0..=5]#[0..=5]
+    }
+  }
+  if `tensorquant_ctrl_next.scp_src` >= vpu_defs_pkg.DCACHE_TL_SCP_MAX_IDX_SCP_ADDR {
+    `tensorquant_ctrl_next.scp_src` = (`tensorquant_ctrl_next.scp_src` - vpu_defs_pkg.DCACHE_TL_SCP_MAX_IDX_SCP_ADDR)#[0..=5]#[0..=5]
+  }
+  if (tensorquant_ctrl#[0..=3] == vpu_defs_pkg.TQUANT_LAST) and (exec_hazard_wait_next == 0) {
+    enabled_next__wtmp = 0
+  }
+  if new_req__w1 != 0 {
+    enabled_next__wtmp = 1
+  }
+  scoreboard_pend_sticky_next__wtmp = scoreboard_pend_sticky
+  tfma_pend_sticky_next__wtmp = tfma_pend_sticky
+  tstore_pend_sticky_next__wtmp = tstore_pend_sticky
+  if new_req__w1 != 0 {
+    scoreboard_pend_sticky_next__wtmp = f0_core_ctrl & 1
+    tfma_pend_sticky_next__wtmp = tensorfma_pend
+    tstore_pend_sticky_next__wtmp = tensorstore_pend
+  } else {
+    if (enabled != 0) and (scoreboard_pend_sticky != 0) and ((f0_core_ctrl & 1) == 0) {
+      scoreboard_pend_sticky_next__wtmp = 0
+    }
+    if ((enabled != 0) and (tfma_pend_sticky != 0) and (tensorfma_pend == 0)) or (((f0_core_ctrl >> 213) & 1) != 0) {
+      tfma_pend_sticky_next__wtmp = 0
+    }
+    if ((enabled != 0) and (tstore_pend_sticky != 0) and (tensorstore_pend == 0)) or (((f0_core_ctrl >> 130) & 1) != 0) {
+      tstore_pend_sticky_next__wtmp = 0
+    }
+  }
+  if reset != 0 {
+    scp_data_en_s1 = 0
+    scp_data_en_s2 = 0
+    scp_read_pending = 0
+    scp_read_set_pending = 0
+  } elif clock_en != 0 {
+    scp_data_en_s1 = scp_data_en_s0
+    scp_data_en_s2 = scp_data_en_s1
+    scp_read_pending = scp_read_pending_next
+    scp_read_set_pending = scp_read_set_pending_next
+  }
+  if clock_en != 0 {
+    id_b_col = exec_b_col
+    id_a_row = exec_a_row
+    ex_a_row = id_a_row
+    ex_b_col = id_b_col
+    scp_read_buf = scp_read_buf_next
+  }
+  const dcache_scp_dest__w1 = tensorquant_ctrl#[45..=50]
+  const dest__w1 = dcache_scp_dest__w1
+  mut dest_wrap = 0ub??????
+  if dest__w1 < 12 {
+    dest_wrap = dest__w1
+  } elif dest__w1 < 24 {
+    dest_wrap = (dest__w1 - 12)#[0..=5]
+  } elif dest__w1 < 36 {
+    dest_wrap = (dest__w1 - 24)#[0..=5]
+  } elif dest__w1 < 48 {
+    dest_wrap = (dest__w1 - 36)#[0..=5]
+  } else {
+    dest_wrap = if dest__w1 < 60 { (dest__w1 - 48)#[0..=5] } else { (dest__w1 - 60)#[0..=5] }
+  }
+  const dest_s1__w1 = dcache_scp_dest__w1
+  if dest_s1__w1 < 12 {
+  } elif dest_s1__w1 < 24 {
+  } elif dest_s1__w1 < 36 {
+  } elif dest_s1__w1 < 48 {
+  } elif dest_s1__w1 < 60 {
+  }
+  const dcache_scp_raddr__w1 = (scp_read_buf << 5) | (dest_wrap#[0..=3] << 6) | 0x400
+  `dcache_scp_req__bpo.addr` = dcache_scp_raddr__w1#[0..=9]
+  `dcache_scp_req__bpo.bid` = 0
+  `dcache_scp_req__bpo.read_en` = scp_read_pending
+  `dcache_scp_req__bpo.size256` = 1
+  `dcache_scp_req__bpo.size64` = 0
+  `dcache_scp_req__bpo.way` = (dcache_scp_raddr__w1 >> vpu_defs_pkg.DCACHE_LRAM_ADDR_SIZE)#[0..=1]
+  scp_data_en_s0__wtmp = 0
+  scp_read_buf_next__wtmp = scp_read_buf
+  scp_read_pending_next__wtmp = scp_read_pending
+  if new_req__w1 != 0 {
+    scp_read_buf_next__wtmp = 0
+    scp_read_pending_next__wtmp = 1
+  } elif (`dcache_scp_req__bpo.read_en` != 0) and (dcache_scp_available != 0) {
+    
+    scp_read_buf_next__wtmp = (~scp_read_buf) & 1
+    scp_read_pending_next__wtmp = (~scp_read_buf) & 1
+    
+    scp_data_en_s0__wtmp#[0..=0] = unsigned((`dcache_scp_req__bpo.read_en` != 0) and ((scp_read_buf & 1) == 0))
+    scp_data_en_s0__wtmp#[1..=1] = unsigned((`dcache_scp_req__bpo.read_en` != 0) and ((scp_read_buf & 1) == 1))
+  }
+  if ((exec_last_op_trans != 0) and (quant_tena_scp_en_next != 0) and (exec_hazard_wait_next == 0)) or (scp_read_set_pending == 1) {
+    scp_read_pending_next__wtmp = 1
+  }
+  scp_read_set_pending_next__wtmp = if scp_read_set_pending == 0 { 0 } else { (scp_read_set_pending - 1)#[0..=1] }
+  if (exec_last_op_trans != 0) and (quant_tena_scp_en_next != 0) and (exec_hazard_wait_next != 0) {
+    scp_read_set_pending_next__wtmp = 2
+  }
+  if reset != 0 {
+    ex_rdata_col = 0
+    ex_rdata_zero = 0
+    exec_hazard_wait = 0
+    prev_is_shsw = 0
+    prev_is_txfma = 0
+    quant_rdata_col = 0
+    quant_tena_scp_en = 0
+    quant_tena_zero_en = 0
+  } elif clock_en != 0 {
+    quant_tena_zero_en = quant_tena_zero_en_next
+    quant_rdata_col = quant_rdata_col_next
+    ex_rdata_col = quant_rdata_col
+    ex_rdata_zero = quant_tena_zero_en
+    exec_hazard_wait = exec_hazard_wait_next
+    prev_is_shsw = exec_is_shsw
+    prev_is_txfma = exec_is_txfma
+    quant_tena_scp_en = quant_tena_scp_en_next
+  }
+  if exec_adv != 0 {
+    exec_a_row = exec_a_row_next
+    exec_b_col = exec_b_col_next
+  }
+  ex_ren = if reset != 0 { 0 } else { quant_tena_en }
+  const exec_curr_transform__w1 = tensorquant_ctrl#[0..=39]#[0..=3]
+  quant_tena_en__wtmp = unsigned(((quant_tena_scp_en != 0) or (quant_tena_zero_en != 0)) and (enabled != 0))
+  quant_rdata_col_next__wtmp = exec_curr_transform__w1 & 1
+  quant_tena_scp_en_next__wtmp = 0
+  quant_tena_zero_en_next__wtmp = 0
+  const t393 = (~(unsigned(tensorquant_ctrl#[55..=56] < 2) & exec_b_col)) & 1
+  mut quant_mask_next__w2 = 0xff
+  quant_mask_next__w2#[0..=3] = (15 & (t393 | (t393 << 1) | (t393 << 2) | (t393 << 3)))
+  const t413 = (~unsigned(((unsigned(tensorquant_ctrl#[55..=56] == 0) & unsigned(exec_b_col == 0)) != 0) or ((unsigned(tensorquant_ctrl#[55..=56] < 3) & exec_b_col) != 0))) & 1
+  mut quant_mask_next__w3 = quant_mask_next__w2
+  quant_mask_next__w3#[4..=7] = (quant_mask_next__w2#[4..=7] & (t413 | (t413 << 1) | (t413 << 2) | (t413 << 3)))
+  const exec_dest_reg__w1 = ((exec_b_col | (exec_a_row << 1)) + tensorquant_ctrl#[57..=61])#[0..=4]
+  exec_is_txfma__wtmp = unsigned((exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_INT32_TO_FP32_CVT) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_FP32_TO_INT32_CVT) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_FP32_MUL_ROW) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_FP32_MUL_COL))
+  exec_is_shsw__wtmp = unsigned((exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_RELU) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_INT32_ADD_ROW) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_INT32_ADD_COL) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_SAT_INT8) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_SAT_UINT8) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_PACK_128B))
+  const exec_hazard_txfma_to_short__w1 = unsigned(exec_hazard_wait == 1)
+  const exec_hazard_txfma_to_txfma__w1 = unsigned(exec_hazard_wait != 0)
+  quant_en_next = unsigned((enabled != 0) and (scoreboard_pend_sticky == 0) and (tfma_pend_sticky == 0) and (tstore_pend_sticky == 0) and (exec_hazard_wait == 0) and (exec_curr_transform__w1 != vpu_defs_pkg.TQUANT_LAST))
+  quant_mask_next = quant_mask_next__w3
+  if exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_INT32_TO_FP32_CVT {
+    quant_inst_next = 0ub110100000000?????????????1111011
+    quant_inst_next#[12..=14] = 7
+    quant_inst_next#[7..=11] = exec_dest_reg__w1
+    
+    quant_inst_next#[15..=19] = exec_dest_reg__w1
+    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_txfma__w1 == 0))
+  } elif exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_FP32_TO_INT32_CVT {
+    quant_inst_next = 0ub110000000000?????????????1111011
+    quant_inst_next#[12..=14] = 7
+    quant_inst_next#[7..=11] = exec_dest_reg__w1
+    
+    quant_inst_next#[15..=19] = exec_dest_reg__w1
+    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_txfma__w1 == 0))
+  } elif exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_RELU {
+    quant_inst_next = 0ub10111??????????001?????1111011
+    quant_inst_next#[7..=11] = exec_dest_reg__w1
+    quant_inst_next#[15..=19] = exec_dest_reg__w1
+    
+    quant_inst_next#[20..=24] = exec_dest_reg__w1
+    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_short__w1 == 0))
+    quant_tena_zero_en_next__wtmp = quant_en_next
+  } elif (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_INT32_ADD_ROW) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_INT32_ADD_COL) {
+    quant_inst_next = 0ub11??????????000?????1111011
+    quant_inst_next#[7..=11] = exec_dest_reg__w1
+    quant_inst_next#[15..=19] = exec_dest_reg__w1
+    
+    quant_inst_next#[20..=24] = exec_dest_reg__w1
+    quant_en_next = unsigned((quant_en_next != 0) and (scp_read_pending == 0) and (exec_hazard_txfma_to_txfma__w1 == 0))
+    quant_tena_scp_en_next__wtmp = quant_en_next
+  } elif (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_FP32_MUL_ROW) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_FP32_MUL_COL) {
+    quant_inst_next = 0ub1000??????????????????1111011
+    quant_inst_next#[12..=14] = 7
+    quant_inst_next#[7..=11] = exec_dest_reg__w1
+    quant_inst_next#[15..=19] = exec_dest_reg__w1
+    
+    quant_inst_next#[20..=24] = exec_dest_reg__w1
+    quant_en_next = unsigned((quant_en_next != 0) and (scp_read_pending == 0) and (exec_hazard_txfma_to_txfma__w1 == 0))
+    quant_tena_scp_en_next__wtmp = quant_en_next
+  } elif exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_SAT_INT8 {
+    quant_inst_next = 0ub1100000?????011?????1111011
+    quant_inst_next#[7..=11] = exec_dest_reg__w1
+    
+    quant_inst_next#[15..=19] = exec_dest_reg__w1
+    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_short__w1 == 0))
+  } elif exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_SAT_UINT8 {
+    quant_inst_next = 0ub1100001?????011?????1111011
+    quant_inst_next#[7..=11] = exec_dest_reg__w1
+    
+    quant_inst_next#[15..=19] = exec_dest_reg__w1
+    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_short__w1 == 0))
+  } else {
+    quant_inst_next = 0ub1001100000?????000?????1111011
+    quant_inst_next#[7..=11] = (((tensorquant_ctrl#[57..=61] & 1 & (~exec_b_col) & 1) | (exec_dest_reg__w1#[1..=4] << 1)) - (tensorquant_ctrl#[57..=61] & 1 & exec_b_col))#[0..=4]
+    
+    quant_inst_next#[15..=19] = exec_dest_reg__w1
+    
+    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_short__w1 == 0))
+    
+    
+    
+    quant_mask_next = if exec_b_col != 0 { ((unsigned(tensorquant_ctrl#[55..=56] >= 2) << 2) | (unsigned(tensorquant_ctrl#[55..=56] == 3) << 3))#[0..=7] } else { (1 | (unsigned(tensorquant_ctrl#[55..=56] >= 1) << 1))#[0..=7] }
+  }
+  if exec_hazard_wait != 0 {
+    quant_tena_scp_en_next__wtmp = quant_tena_scp_en
+    quant_tena_zero_en_next__wtmp = quant_tena_zero_en
+  }
+  exec_a_row_next__wtmp = (exec_a_row + 1)#[0..=3]
+  exec_b_col_next__wtmp = exec_b_col
+  exec_last_op_trans__wtmp = unsigned((exec_a_row == tensorquant_ctrl#[51..=54]) and (enabled != 0) and (quant_en_next != 0))
+  if tensorquant_ctrl#[55..=56] >= 2 {
+    if exec_a_row == tensorquant_ctrl#[51..=54] {
+      exec_a_row_next__wtmp = 0
+      exec_b_col_next__wtmp = 1
+    }
+    
+    exec_last_op_trans__wtmp = unsigned((exec_a_row == tensorquant_ctrl#[51..=54]) and (exec_b_col != 0) and (enabled != 0) and (quant_en_next != 0))
+  }
+  if (exec_last_op_trans__wtmp != 0) or (((f0_core_ctrl >> 65) & 1) != 0) {
+    exec_a_row_next__wtmp = 0
+    exec_b_col_next__wtmp = 0
+  }
+  exec_hazard_wait_next__wtmp = exec_hazard_wait
+  if exec_hazard_wait != 0 {
+    exec_hazard_wait_next__wtmp = (exec_hazard_wait_next__wtmp - 1)#[0..=2]
+  } elif ((quant_en_next != 0) and (prev_is_txfma != 0) and (exec_last_op_trans__wtmp != 0) and ((`tensorquant_ctrl_next.rows` < 7) or (new_req__w1 != 0))) or (((prev_is_txfma != 0) or (prev_is_shsw != 0)) and (tensorquant_ctrl#[0..=3] == vpu_defs_pkg.TQUANT_LAST)) {
+    exec_hazard_wait_next__wtmp = 7
+  } elif (((quant_en_next != 0) and (exec_last_op_trans__wtmp != 0)) or (new_req__w1 != 0)) and (`tensorquant_ctrl_next.rows` < 2) {
+    exec_hazard_wait_next__wtmp = 4
+  }
+  exec_adv__wtmp = unsigned((quant_en_next != 0) or (new_req__w1 != 0))
+  dcache_scp_req.size64 = 0
+  dcache_scp_req.size256 = 1
+  dcache_scp_req.bid = 0
+  clock_en = clock_en__wtmp
+  dcache_scp_req.addr = `dcache_scp_req__bpo.addr`
+  dcache_scp_req.read_en = `dcache_scp_req__bpo.read_en`
+  dcache_scp_req.way = `dcache_scp_req__bpo.way`
+  enabled_next = enabled_next__wtmp
+  exec_a_row_next = exec_a_row_next__wtmp
+  exec_adv = exec_adv__wtmp
+  exec_b_col_next = exec_b_col_next__wtmp
+  exec_hazard_wait_next = exec_hazard_wait_next__wtmp
+  exec_is_shsw = exec_is_shsw__wtmp
+  exec_is_txfma = exec_is_txfma__wtmp
+  exec_last_op_trans = exec_last_op_trans__wtmp
+  quant_rdata_col_next = quant_rdata_col_next__wtmp
+  quant_tena_en = quant_tena_en__wtmp
+  quant_tena_scp_en_next = quant_tena_scp_en_next__wtmp
+  quant_tena_zero_en_next = quant_tena_zero_en_next__wtmp
+  scoreboard_pend_sticky_next = scoreboard_pend_sticky_next__wtmp
+  scp_data_en_s0 = scp_data_en_s0__wtmp
+  scp_read_buf_next = scp_read_buf_next__wtmp
+  scp_read_pending_next = scp_read_pending_next__wtmp
+  scp_read_set_pending_next = scp_read_set_pending_next__wtmp
+  tensorquant_ctrl_en = tensorquant_ctrl_en__wtmp
+  tensorquant_last_next = tensorquant_last_next__wtmp
+  tfma_pend_sticky_next = tfma_pend_sticky_next__wtmp
+  tstore_pend_sticky_next = tstore_pend_sticky_next__wtmp
+  vpu_tensorquant_debug = dcache_scp_available | (exec_curr_transform__w1 << 1) | (exec_hazard_wait#[0..=1] << 5) | (tstore_pend_sticky << 7) | (tfma_pend_sticky << 8) | (scoreboard_pend_sticky << 9) | (enabled << 10)
+}
