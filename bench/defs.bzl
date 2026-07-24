@@ -27,6 +27,14 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             loses its `synth_lec_flat` target.
 #   sim_tb    asserted sim smoke; sim_top_tb / sim_prog_tb are informational
 #             drivers ("" = none).
+#   sim_tb_v  MODE=verilog override for sim_tb (optional; "" or absent = drive
+#             both modes with the one sim_tb). The two trees are the same
+#             design but not the same Pyrope: a `struct packed` port is
+#             re-emitted from Verilog as a tuple port
+#             (`io_in:(instruction:u32, …)`) while the checked-in Pyrope tree
+#             may declare it flat (`io_in:u97`), and a driver written for one
+#             shape names no field of the other. dino needs this for StageReg;
+#             minion's sim unit has no struct port.
 #   sim_expect  fixed string the asserted sim's output must contain besides
 #             the "hello world" line — the testbench's known-good data
 #             readback. Guards against a sim that runs but computes wrong
@@ -54,6 +62,9 @@ CORES = {
         "v_flags": "",
         "color_algs": ["flat", "synth"],
         "sim_tb": "stagereg_tb.prp",
+        # The Verilog StageReg's `struct packed` io_in/io_data re-emit as tuple
+        # ports; this twin drives the leaves and prints the same packed value.
+        "sim_tb_v": "stagereg_v_tb.prp",
         "sim_expect": "data=4660",
         "sim_top_tb": "dino_tb.prp",
         "sim_prog_tb": "dino_prog_tb.prp",
@@ -74,6 +85,9 @@ CORES = {
         # partitioned `color synth` is meaningful at this size.
         "color_algs": ["synth"],
         "sim_tb": "tensora_rf_tb.prp",
+        # vpu_tensora_rf's ports are all flat in both trees — one driver serves
+        # MODE=pyrope and MODE=verilog.
+        "sim_tb_v": "",
         "sim_expect": "data=4660",
         "sim_top_tb": "vpu_top_tb.prp",
         "sim_prog_tb": "",
@@ -168,6 +182,7 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_UNIT": cfg["unit"],
             "CORE_COLOR_ALGS": " ".join(cfg["color_algs"]),
             "CORE_SIM_TB": cfg["sim_tb"],
+            "CORE_SIM_TB_V": cfg.get("sim_tb_v", ""),
             "CORE_SIM_EXPECT": cfg["sim_expect"],
             "CORE_SIM_TOP_TB": cfg["sim_top_tb"],
             "CORE_SIM_PROG_TB": cfg["sim_prog_tb"],

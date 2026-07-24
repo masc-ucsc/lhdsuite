@@ -13,6 +13,9 @@
 #                     (e.g. "flat synth", or just "synth" when the design is
 #                     too big to fuse into one region)
 #   CORE_SIM_TB       asserted sim testbench basename
+#   CORE_SIM_TB_V     MODE=verilog override for CORE_SIM_TB ("" = same driver
+#                     for both modes); needed when the two trees declare a port
+#                     differently (struct-packed → tuple vs flat). See defs.bzl
 #   CORE_SIM_EXPECT   string the asserted sim's output must also contain — the
 #                     testbench's known-good data readback ("" = skip)
 #   CORE_SIM_TOP_TB   informational whole-top testbench ("" = none)
@@ -49,7 +52,7 @@ CORE_SIM_DIR=$CORE_DIR/sim
 CORE_VERIF_DIR=$CORE_DIR/verif
 CORE_TESTS_DIR=$CORE_DIR/tests
 : "${CORE_TOP:?}" "${CORE_UNIT:?}" "${CORE_COLOR_ALGS:?}"
-: "${CORE_V_FLAGS=}" "${CORE_SIM_EXPECT=}" "${CORE_LEC_TRUST=}"
+: "${CORE_V_FLAGS=}" "${CORE_SIM_EXPECT=}" "${CORE_LEC_TRUST=}" "${CORE_SIM_TB_V=}"
 WORK=${TEST_TMPDIR:?}
 cd "$WORK"
 

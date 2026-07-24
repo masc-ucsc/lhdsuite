@@ -93,7 +93,7 @@ Every row below exists once per core — write `//bench:dino_compile_verilog` or
 | `synth` | each of the core's colorings (`color_algs`) + `pass abc` on the same design (sky130), timing + QoR (regions/gates/area/max_delay) for each. All run hier=true; the difference is the partitions: flat = one color across the hierarchy (one fused region, best cross-module optimization), synth = per-(module,color) regions. dino runs both; minion runs only `synth` (flat does not fit in memory at 534k nodes) |
 | `synth_incremental` | `color synth` + abc over 3 passes; incremental reuse needs the distinct colors/partitions that `color synth` creates (and `color flat` intentionally does not): asserts cache hits on the comment-only pass and a single-region re-synth after a one-line edit |
 | `synth_lec_flat` / `synth_lec_synth` | netlist integrity: synthesize twice (2nd run after a comment touch — under `color synth` that netlist is largely cache-CLONED), then `lhd lec --impl lg:netlist --ref lg:design --lib lg:models` proves it against the compiled design (`pass liberty gensim` provides the sky130 cell models; strict, so UNKNOWN fails). Only generated for colorings the core actually runs, so minion has no `synth_lec_flat` |
-| `sim_verilog` / `sim_pyrope` | hello-world `lhd sim` of one small clocked module (dino: a `StageReg`; minion: the VPU tensor-A register file). The Verilog side first re-emits through slang as Pyrope; cycles/s, VCD. A whole-top driver also runs, but informational only |
+| `sim_verilog` / `sim_pyrope` | hello-world `lhd sim` of one small clocked module (dino: a `StageReg`; minion: the VPU tensor-A register file). The Verilog side first re-emits through slang as Pyrope; cycles/s, VCD. One driver serves both modes unless the core sets `sim_tb_v` — dino does, because the Verilog `StageReg`'s `struct packed` port re-emits as a tuple while the checked-in Pyrope declares it flat. A whole-top driver also runs, but informational only |
 | `lec` | Pyrope impl ≡ Verilog ref (both pre-compiled to `lg:`; the Verilog side needs its slang options — `-F`/`-DSYNTHESIS` plus the core’s `v_flags`), PROVEN |
 | `lec_bug` | the core's `tests/bug1` variant must be REFUTED (dino: the ALU's 32-bit add flipped to subtract; minion: the same flip in `txfma_adder`) |
 | `lec_incremental` | cold / identical warm (verdict-cache hits) / comment-touch re-runs |
@@ -130,11 +130,12 @@ refused. That is a per-core `color_algs` knob, not a global change.
 ## Known-failing scenarios
 
 The suite's job is to surface LiveHD gaps, so some targets fail by design
-rather than being disabled. Against the pinned lhd, on minion in particular:
+rather than being disabled. Against the pinned lhd, this is now minion-only —
+`dino_sim_verilog` used to sit here too, but its `io_in` mismatch turned out to
+be suite-side and is fixed (`sim_tb_v`, below):
 
 | target | blocked by |
 | --- | --- |
-| `dino_sim_verilog` | the two dino trees declare the same port differently — the Verilog `StageReg` uses a `struct packed`, re-emitted as `io_in:(instruction:u32, pc:u64, isValid:u1)`, while `dino/pyrope/StageReg.prp` declares `io_in:u97` flat — and one testbench drives both. Addressing tuple leaves from a `test` block now works; this is a suite-side mismatch, see the fixme's suite-side follow-up |
 | `minion_lec`, `minion_lec_incremental`, `minion_synth_lec_synth` | the LEC encoder is Flop-only, but latch cones no longer refuse the run — the `lec_trust` knob (`bench/defs.bzl`) lists minion's 32 latch defs, and `formal.lec.trust` assumes them equal (disclosed, never proven) so the latch-free majority proves bottom-up. `minion_lec` now proves 110/140 non-trusted defs, trusts 32, with **zero latch refusals and zero refutations**, ending UNKNOWN (exit 7 under strict) only on a handful of NON-latch cones the solver cannot discharge (`intpipe_csr_file`, `txfma_top`, dcache cones, `prim_mul_div`'s Moore-box limit, the `intpipe_csr_msgs` `_sN` relabel). Those non-latch residuals are the remaining blocker — see fixme issue 1 |
 
 These are LiveHD-side issues, not suite configuration — the natural follow-up
@@ -184,6 +185,20 @@ each scenario targets:
 | `unit` — module carrying the verify sidecar + `bug1`/`comment1` (must be in the top's cone) | `ALU` | `txfma_adder` |
 | `v_flags` — extra slang options for this core's Verilog | *(none)* | `--relax-enum-conversions --allow-use-before-declare` |
 | `sim_tb` — asserted sim testbench | `stagereg_tb.prp` | `tensora_rf_tb.prp` |
+| `sim_tb_v` — MODE=verilog override for `sim_tb` (`""` = one driver for both) | `stagereg_v_tb.prp` | *(none)* |
+
+**Why a core may need two sim drivers.** The two trees are the same design but
+not the same Pyrope. A `struct packed` port re-emits from Verilog as a tuple
+port (`io_in:(instruction:u32, pc:u64, isValid:u1)`) while the checked-in
+Pyrope tree may declare it flat (`io_in:u97`), and a driver written for one
+shape names no field of the other — dino's `StageReg` is exactly that case, so
+`sim_tb_v` points MODE=verilog at a twin that drives the tuple leaves and
+prints the same packed value (one `sim_expect` gates both). minion's sim unit
+has no struct port, so it leaves the knob empty. Fixing this by flattening the
+emission (`compile.slang.struct_port_bundles=false`) is deliberately NOT done:
+bench scripts do not carry lhd flags that exist only to make a bench pass, and
+graph flows keep ports flat anyway, so `sim_verilog` is the suite's only
+coverage of tuple ports.
 
 **minion's slang options.** Its RTL assigns enums from plain bits and refers
 to identifiers above their declaration, so the Verilog front-end needs

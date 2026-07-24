@@ -11,18 +11,25 @@
 # Informational: the whole-top testbench ($CORE_SIM_TOP_TB) and, where the
 # core has one, a program-driving testbench ($CORE_SIM_PROG_TB). Both are
 # reported as METRIC sim_cpu_top_ok / sim_cpu_prog_ok rather than asserted, so
-# the flip to 1 is visible the day the underlying lhd support lands. For dino
-# the whole-CPU drivers currently fail with comb-loop-through-instance on the
-# register file; an empty $CORE_SIM_*_TB skips that driver entirely.
+# the flip to 1 is visible the day the underlying lhd support lands. dino's
+# whole-CPU drivers score 1 on the checked-in Pyrope tree but 0 on the
+# re-emitted Verilog one, where cgen spells a child instance's tuple port two
+# different ways and the driver fails to build (fixme.md issue 6); promote
+# them to asserted once that is fixed. An empty $CORE_SIM_*_TB skips that
+# driver entirely.
 #
 #   MODE=pyrope   sim the <core>/pyrope tree directly, at $CORE_TOP.
 #   MODE=verilog  first re-emit the Verilog through slang as Pyrope
 #                 (--emit-dir pyrope:) — the sim front-end is .prp-only —
-#                 then sim that tree with the same testbenches.
+#                 then sim that tree with the same testbenches, except that a
+#                 core setting $CORE_SIM_TB_V swaps the asserted driver for its
+#                 verilog-tree twin (a `struct packed` port re-emits as a tuple
+#                 port, which a flat-port driver cannot address; see defs.bzl).
 RF="${TEST_SRCDIR:-${RUNFILES_DIR:-$0.runfiles}}"
 . "$RF/_main/bench/common.sh"
 
 CYCLES=1000  # testbench `cycles` test-parameter default
+SIM_TB=$CORE_SIM_TB
 
 case "${MODE:?}" in
 pyrope)
@@ -31,6 +38,7 @@ pyrope)
 verilog)
   run_timed transpile lhd compile verilog --top "$CORE_TOP" \
     --emit-dir pyrope:tree --workdir tw -- -F "$CORE_V_DIR/filelist.f" -DSYNTHESIS $CORE_V_FLAGS
+  [ -z "$CORE_SIM_TB_V" ] || SIM_TB=$CORE_SIM_TB_V
   ;;
 *)
   echo "FAIL: unknown MODE=$MODE" >&2
@@ -41,9 +49,9 @@ cp -L "$CORE_SIM_DIR"/*.prp tree/
 
 # sim.vcd is set ONCE, at setup: it is a driver-affecting setting, so the run
 # phase reads back what was baked and links hlop's VCD writer accordingly.
-run_timed sim_setup lhd sim "tree/$CORE_SIM_TB" --setup-only \
+run_timed sim_setup lhd sim "tree/$SIM_TB" --setup-only \
   --set sim.vcd=true --workdir SW
-run_timed sim_run lhd sim "tree/$CORE_SIM_TB" --run-only \
+run_timed sim_run lhd sim "tree/$SIM_TB" --run-only \
   --diag-fmt pretty --workdir SW
 grep -qa "hello world" step_sim_run.log \
   || { echo "FAIL: sim ran but printed no hello world" >&2; tail -20 step_sim_run.log >&2; exit 1; }
@@ -80,4 +88,4 @@ case "$cpu_ok$prog_ok" in
 11 | 1-) ;;
 *) echo "NOTE: whole-top sim still unsupported (informational; not a failure)" ;;
 esac
-echo "PASS: $MODE $CORE_SIM_TB hello world ($CYCLES cycles in ${LAST_MS} ms)"
+echo "PASS: $MODE $SIM_TB hello world ($CYCLES cycles in ${LAST_MS} ms)"

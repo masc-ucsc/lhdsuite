@@ -69,15 +69,23 @@ Both cores share one shape (`<core>/` = `dino/` or `minion/`):
 
 Some targets fail because of LiveHD gaps, not suite misconfiguration. See the
 "Known-failing scenarios" table in `README.md` for the current list
-(`dino_sim_verilog`, `minion_compile_pyrope_parallel`, both `minion_lec*`).
+(`minion_compile_pyrope_parallel`, both `minion_lec*`).
 Before changing a testbench, a gate, or a `CORES` entry to make one of these
 pass, check that table — fixing them belongs in livehd.
 
 The converse also happens: `minion_synth*` used to fail because the suite
 asked for `pass color flat` on a 534k-node design, which no machine can map
-flat. That was fixed here, via the per-core `color_algs` knob. So check which
-side the fault is on before assuming either.
+flat. That was fixed here, via the per-core `color_algs` knob. `dino_sim_verilog`
+was the same shape: a testbench that named a port the re-emitted tree does not
+have, fixed with the per-core `sim_tb_v` knob. So check which side the fault is
+on before assuming either.
 
 Sim targets are gated on a *data* value (`CORE_SIM_EXPECT`), not just on the
 "hello world" line, because a sim that runs but computes the wrong value would
 otherwise pass. Never loosen that gate to make a target green.
+
+Never add an `lhd` option to a bench script to make that bench pass. Flattening
+the Verilog re-emission (`--set compile.slang.struct_port_bundles=false`) would
+have made `dino_sim_verilog` green without touching anything, and that is
+exactly the wrong fix: if a testbench names a signal the design does not have,
+fix the testbench; if the signal connection itself is wrong, fix livehd.
