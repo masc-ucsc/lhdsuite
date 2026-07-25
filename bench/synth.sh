@@ -54,8 +54,7 @@ synth_pass() {  # LABEL LG_DIR COLOR_ALG WORKDIR — color in place, abc into ne
   if [ "$3" = flat ]; then
     run_timed "${1}_color" lhd pass color flat --top "$TOP" "lg:$2" --workdir "$4"
   else
-    run_timed "${1}_color" lhd pass color synth --top "$TOP" \
-      --set color.absorb=false "lg:$2" --workdir "$4"
+    run_timed "${1}_color" lhd pass color synth --top "$TOP" "lg:$2" --workdir "$4"
   fi
   run_timed "${1}_abc" lhd pass abc --top "$TOP" "lg:$2" \
     --emit-dir "lg:net_$1" --workdir "$4" --result-json "r_$1.json"
