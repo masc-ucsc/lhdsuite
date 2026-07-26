@@ -18,8 +18,11 @@
 #                     differently (struct-packed → tuple vs flat). See defs.bzl
 #   CORE_SIM_EXPECT   string the asserted sim's output must also contain — the
 #                     testbench's known-good data readback ("" = skip)
-#   CORE_SIM_TOP_TB   informational whole-top testbench ("" = none)
-#   CORE_SIM_PROG_TB  informational program testbench ("" = none)
+#   CORE_SIM_TOP_TB   whole-top testbench ("" = none)
+#   CORE_SIM_PROG_TB  program testbench ("" = none)
+#   CORE_SIM_TOP_ASSERT  "1" = the two above GATE the target (a driver that
+#                     fails fails the test); "" = report them as metrics only.
+#                     Always metrics either way. See defs.bzl.
 #   CORE_LEC_TRUST    comma-separated module-def names the LEC scenarios ASSUME
 #                     equivalent without proving them (latch escape hatch; ""
 #                     = trust nothing). When set, lec.sh also runs strict so a
@@ -56,8 +59,24 @@ CORE_TESTS_DIR=$CORE_DIR/tests
 WORK=${TEST_TMPDIR:?}
 cd "$WORK"
 
-METRICS=${TEST_UNDECLARED_OUTPUTS_DIR:-$WORK}/metrics.jsonl
+# Where per-test artifacts land: bazel archives this directory into the
+# target's outputs.zip. Under plain `bazel run` there is none, so artifacts
+# just stay in the work dir.
+OUT_DIR=${TEST_UNDECLARED_OUTPUTS_DIR:-$WORK}
+METRICS=$OUT_DIR/metrics.jsonl
 : >"$METRICS"
+
+# ---- output discipline -------------------------------------------------------
+# The test log is meant to stay SHORT: bazel echoes it in full on failure, and
+# //bench:show parses it. Only three kinds of line belong there — the `CMD`
+# line per lhd invocation, the `METRIC` lines, and one verdict line per
+# scenario. A failing step's output is NOT dumped wholesale; `step_failed`
+# prints a short excerpt and files the FULL log under OUT_DIR, which lands in
+# `bazel-testlogs/bench/<target>/test.outputs/`.
+#   bazel test --test_env=BENCH_VERBOSE=1 //bench:<target>   # dump it inline
+#   BENCH_FAIL_TAIL=N                                        # resize the excerpt
+: "${BENCH_VERBOSE:=0}"
+: "${BENCH_FAIL_TAIL:=12}"
 
 now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 
@@ -96,8 +115,41 @@ metric() {
   printf '{"name":"%s","value":%s,"unit":"%s"}\n' "$1" "$2" "$3" >>"$METRICS"
 }
 
+# step_failed LABEL MESSAGE — the ONE way a bench reports a failing step: a
+# single-line diagnosis, then a short tail of that step's log. The whole log is
+# filed under OUT_DIR, so it survives as a test output and can be read without
+# re-running the bench.
+#
+# Dumping the raw log inline instead (what this used to do, `tail -60`) was the
+# worst of both: it buried the diagnosis under screenfuls of per-def solver
+# chatter AND still truncated it. Measured on minion_lec — the step log is 364
+# lines, of which a 60-line tail showed 14 of the 30 UNKNOWN defs and none of
+# the 32 TRUSTED ones, which is how fixme.md came to record "11 UNKNOWN".
+step_failed() {
+  local label=$1 log="step_${1}.log" where
+  echo "FAIL: $2" >&2
+  [ -f "$log" ] || return 0
+  if [ "$BENCH_VERBOSE" != 0 ]; then
+    cat "$log" >&2
+    return 0
+  fi
+  # Where the reader can actually find the whole thing. Under `bazel test` the
+  # copy shows up in the target's test.outputs/; under `bazel run` there is no
+  # such dir, so the log stays in the (printed) work dir — never point at a
+  # bazel-testlogs path that does not exist, and never claim a copy that the
+  # cp did not make.
+  if [ "$OUT_DIR" != "$WORK" ] && cp -f "$log" "$OUT_DIR/" 2>/dev/null; then
+    where="bazel-testlogs/bench/<target>/test.outputs/$log"
+  else
+    where="$WORK/$log"
+  fi
+  tail -n "$BENCH_FAIL_TAIL" "$log" >&2
+  echo "  [$log: $(wc -l <"$log" | tr -d ' ') lines; full log at $where;" \
+    "--test_env=BENCH_VERBOSE=1 prints it all here]" >&2
+}
+
 # run_timed LABEL cmd args... — run a step, record wall ms as METRIC LABEL_ms.
-# The step's stdout/stderr goes to step_LABEL.log (dumped on failure).
+# The step's stdout/stderr goes to step_LABEL.log (excerpted on failure).
 run_timed() {
   local label=$1
   shift
@@ -107,8 +159,7 @@ run_timed() {
   "$@" >"step_${label}.log" 2>&1 || rc=$?
   t1=$(now_ms)
   if [ "$rc" -ne 0 ]; then
-    echo "FAIL: step '$label' exited $rc: $*" >&2
-    tail -60 "step_${label}.log" >&2
+    step_failed "$label" "step '$label' exited $rc: $*"
     return "$rc"
   fi
   metric "${label}_ms" $((t1 - t0)) ms
@@ -126,8 +177,7 @@ run_expect_fail() {
   "$@" >"step_${label}.log" 2>&1 || rc=$?
   t1=$(now_ms)
   if [ "$rc" -eq 0 ]; then
-    echo "FAIL: step '$label' was expected to detect a problem (non-zero exit) but passed: $*" >&2
-    tail -60 "step_${label}.log" >&2
+    step_failed "$label" "step '$label' was expected to detect a problem (non-zero exit) but passed: $*"
     return 1
   fi
   metric "${label}_ms" $((t1 - t0)) ms

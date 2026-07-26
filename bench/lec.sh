@@ -56,7 +56,7 @@ pass)
   run_timed compile_impl compile_impl impl1
   run_timed lec_pass lec_run impl1
   if grep -qia "refut" step_lec_pass.log; then
-    echo "FAIL: identical designs reported a refutation" >&2
+    step_failed lec_pass "identical designs reported a refutation"
     exit 1
   fi
   # A clean exit is necessary but not sufficient: with a trust list under strict,
@@ -65,8 +65,7 @@ pass)
   # non-proof slip through. `PROVEN equivalent` is the CLI's whole-design verdict
   # string, printed once for the top (per-def lines say `PROVEN (`/`MATCHED`).
   if ! grep -qa "PROVEN equivalent" step_lec_pass.log; then
-    echo "FAIL: lec exited 0 but did not report the top '$CORE_TOP' PROVEN equivalent" >&2
-    tail -20 step_lec_pass.log >&2
+    step_failed lec_pass "lec exited 0 but did not report the top '$CORE_TOP' PROVEN equivalent"
     exit 1
   fi
   if [ -n "$CORE_LEC_TRUST" ]; then
@@ -81,8 +80,7 @@ bug)
   run_timed compile_bug compile_impl implb
   run_expect_fail lec_bug lec_run implb
   if ! grep -qiaE "refut|equiv_fail" step_lec_bug.log; then
-    echo "FAIL: lec failed on bug1 but not as a refutation:" >&2
-    tail -30 step_lec_bug.log >&2
+    step_failed lec_bug "lec failed on bug1 but not as a refutation"
     exit 1
   fi
   echo "PASS: injected $CORE_UNIT bug refuted (lec ${LAST_MS} ms)"
@@ -92,7 +90,7 @@ incr)
   run_timed lec_cold lec_run impl1
   run_timed lec_warm lec_run impl1
   grep -qa "lec\[cache\]" step_lec_warm.log \
-    || { echo "FAIL: warm identical re-run reported no verdict-cache use" >&2; exit 1; }
+    || { step_failed lec_warm "warm identical re-run reported no verdict-cache use"; exit 1; }
 
   apply_variant comment1 src/pyrope
   run_timed compile_p3 compile_impl impl3

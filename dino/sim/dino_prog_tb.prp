@@ -1,7 +1,9 @@
 // A real RISC-V program on the dino dual-issue CPU: a loop that INCREMENTS
 // x2 and DECREMENTS x3, then stores both to dmem — the testbench taps the
 // store bus (io_dmem_*) to check the architectural relationship
-//   x2 == iters   and   (x2 + x3) mod 2^64 == 0
+//   x2 == iters   and   x3 == -(iters + 2)
+// (the +2: the branch-shadow addi pair at 0x1c/0x20 is flushed on every taken
+// bne but architecturally EXECUTES once, on the final fall-through)
 // and computes/prints the IPC (committed instructions / cycles to the final
 // store). Reading the registers through the program's own stores keeps the
 // testbench architectural — no internal register-file taps needed.
@@ -56,23 +58,22 @@ test cpu.prog(cycles:u20 = 2000) {
         got8 = 1
       }
     }
-    if done_cycle==0 {
-      puts("{clock} x2 reg is {acc.registers.regs[2]}")
-      // puts("{clock} is {acc.pc:x}")
-    }
     if done_cycle == 0 and got0 == 1 and got8 == 1 {
       done_cycle = clock
     }
   }
   assert(got0 == 1 and got8 == 1, "program stored both counters")
   assert(st0 == 100, "x2 counted up to the iteration bound")
-  assert(st8 == -102 , "x3 counted down in lockstep: x3 == -100 mod 2^64")
+  assert(st8 == -102, "x3 counted down in lockstep: x3 == -(100 + 2)")
   // Committed instructions: 3 setup + 100*(addi,addi,bne) + 2 stores = 305
   // (nops excluded). IPC in milli-units to stay integer-friendly.
   mut ipc_milli = 0
   if done_cycle > 0 {
     ipc_milli = (305 * 1000) / done_cycle
   }
-  mut neg_x3 = 0xFFFFFFFFFFFFFFFF - st8 + 1
+  // st8 is s64, so negating it directly is exact; the old two's-complement
+  // fold (0xFF..F - st8 + 1) was written for an unsigned readback and printed
+  // 2^64+102 once st8 became signed.
+  mut neg_x3 = -st8
   puts("dino program: x2={st0} -x3={neg_x3}, done at cycle {done_cycle}, IPC={ipc_milli} milli-instr/cycle")
 }

@@ -25,7 +25,7 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             `flat` fuses the whole hierarchy into ONE abc region, so it does
 #             not scale past a certain design size; a core that omits it also
 #             loses its `synth_lec_flat` target.
-#   sim_tb    asserted sim smoke; sim_top_tb / sim_prog_tb are informational
+#   sim_tb    asserted sim smoke; sim_top_tb / sim_prog_tb are the whole-top
 #             drivers ("" = none).
 #   sim_tb_v  MODE=verilog override for sim_tb (optional; "" or absent = drive
 #             both modes with the one sim_tb). The two trees are the same
@@ -35,6 +35,13 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             may declare it flat (`io_in:u97`), and a driver written for one
 #             shape names no field of the other. dino needs this for StageReg;
 #             minion's sim unit has no struct port.
+#   sim_top_assert  whether this core's whole-top drivers (sim_top_tb and
+#             sim_prog_tb) are a GATE rather than a metric. They are always
+#             reported as METRIC sim_cpu_top_ok / sim_cpu_prog_ok; with this
+#             set, a driver that scores 0 also FAILS the target. Set it once a
+#             core's drivers pass in BOTH modes — leaving it off on a core whose
+#             top still hits an lhd gap keeps the metric visible without
+#             painting the target red. "" = metric only.
 #   sim_expect  fixed string the asserted sim's output must contain besides
 #             the "hello world" line — the testbench's known-good data
 #             readback. Guards against a sim that runs but computes wrong
@@ -70,6 +77,14 @@ CORES = {
         "sim_expect": "data=4660",
         "sim_top_tb": "dino_tb.prp",
         "sim_prog_tb": "dino_prog_tb.prp",
+        # Both whole-CPU drivers are GATES, in both modes: they score 1 on the
+        # checked-in Pyrope tree and on the re-emitted Verilog one (which needed
+        # the sim cgen to stop spelling a child instance's tuple port
+        # `io_data_instruction` in the parent and `io_data.instruction` in the
+        # child). Each also asserts in-source: dino_tb that the PC
+        # advanced past reset, dino_prog_tb that the program stored both
+        # counters and that x2/x3 hold the architected values.
+        "sim_top_assert": True,
         # dino is latch-free — the encoder proves every def, no trust needed.
         "lec_trust": "",
     },
@@ -93,6 +108,12 @@ CORES = {
         "sim_expect": "data=4660",
         "sim_top_tb": "vpu_top_tb.prp",
         "sim_prog_tb": "",
+        # Informational: `lhd sim` still refuses vpu_top — "module
+        # `vpu_trans.vpu_trans`: flop `flop_76:id_insert_en_o` has a derived
+        # clock inou.cgen.sim cannot fold into a commit guard", the same
+        # gated-clock cone as fixme issue 1, on the sim-cgen side. Flip this to
+        # True once that lands.
+        "sim_top_assert": False,
         # Latch-bearing modules the LEC encoder cannot model yet (fixme issue
         # 1): the 15 minion latch modules plus every parameterized `_pN` twin
         # (a variant is a distinct def, so each must be named). Trusting these
@@ -192,6 +213,8 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_SIM_EXPECT": cfg["sim_expect"],
             "CORE_SIM_TOP_TB": cfg["sim_top_tb"],
             "CORE_SIM_PROG_TB": cfg["sim_prog_tb"],
+            # "1" = the whole-top drivers gate the target; "" = metric only.
+            "CORE_SIM_TOP_ASSERT": "1" if cfg.get("sim_top_assert", False) else "",
             "CORE_LEC_TRUST": cfg.get("lec_trust", ""),
             "MODE": mode,
         },

@@ -8,15 +8,13 @@
 # printed-value gate is kept as belt-and-braces, since it also catches a driver
 # that runs but never reaches its assert. Anything else fails the target.
 #
-# Informational: the whole-top testbench ($CORE_SIM_TOP_TB) and, where the
-# core has one, a program-driving testbench ($CORE_SIM_PROG_TB). Both are
-# reported as METRIC sim_cpu_top_ok / sim_cpu_prog_ok rather than asserted, so
-# the flip to 1 is visible the day the underlying lhd support lands. dino's
-# whole-CPU drivers score 1 on the checked-in Pyrope tree but 0 on the
-# re-emitted Verilog one, where cgen spells a child instance's tuple port two
-# different ways and the driver fails to build (fixme.md issue 6); promote
-# them to asserted once that is fixed. An empty $CORE_SIM_*_TB skips that
-# driver entirely.
+# Whole-top drivers: $CORE_SIM_TOP_TB and, where the core has one, a
+# program-driving testbench ($CORE_SIM_PROG_TB). Both are always reported as
+# METRIC sim_cpu_top_ok / sim_cpu_prog_ok; with $CORE_SIM_TOP_ASSERT set they
+# ALSO gate the target, so a regression fails it instead of silently flipping a
+# metric to 0. dino asserts both — they score 1 in both modes; minion reports
+# only, its vpu_top still hitting a derived clock inou.cgen.sim cannot fold
+# (fixme issue 12). An empty $CORE_SIM_*_TB skips that driver entirely.
 #
 #   MODE=pyrope   sim the <core>/pyrope tree directly, at $CORE_TOP.
 #   MODE=verilog  first re-emit the Verilog through slang as Pyrope
@@ -54,16 +52,19 @@ run_timed sim_setup lhd sim "tree/$SIM_TB" --setup-only \
 run_timed sim_run lhd sim "tree/$SIM_TB" --run-only \
   --diag-fmt pretty --workdir SW
 grep -qa "hello world" step_sim_run.log \
-  || { echo "FAIL: sim ran but printed no hello world" >&2; tail -20 step_sim_run.log >&2; exit 1; }
+  || { step_failed sim_run "sim ran but printed no hello world"; exit 1; }
 if [ -n "$CORE_SIM_EXPECT" ]; then
+  # The data gate. No extra grep: the sim's readback is the last thing it
+  # prints, so it is already inside the excerpt step_failed shows.
   grep -qa -- "$CORE_SIM_EXPECT" step_sim_run.log \
-    || { echo "FAIL: sim ran but data is wrong (expected '$CORE_SIM_EXPECT'):" >&2
-      grep -a "hello world" step_sim_run.log >&2; exit 1; }
+    || { step_failed sim_run "sim ran but data is wrong (expected '$CORE_SIM_EXPECT')"; exit 1; }
 fi
 rate sim_cycles_per_s "$CYCLES" "$LAST_MS" "cycles/s"
 
-# run_informational LABEL TB_BASENAME -> echoes 1/0 (never fails the test).
-run_informational() {
+# run_top_driver LABEL TB_BASENAME -> echoes 1 (ran), 0 (failed), or - (no such
+# driver for this core). Never fails the test itself: the caller decides,
+# per $CORE_SIM_TOP_ASSERT, whether a 0 is a metric or a gate.
+run_top_driver() {
   local label=$1 tb=$2
   [ -n "$tb" ] || { echo "-"; return 0; }
   if CURRENT_STEP=$label lhd sim "tree/$tb" --diag-fmt pretty \
@@ -75,17 +76,30 @@ run_informational() {
 }
 
 # Whole-top driver, then (if the core defines one) the program driver.
-cpu_ok=$(run_informational sim_cpu "$CORE_SIM_TOP_TB")
+cpu_ok=$(run_top_driver sim_cpu "$CORE_SIM_TOP_TB")
 [ "$cpu_ok" = - ] || metric sim_cpu_top_ok "$cpu_ok" bool
 
-prog_ok=$(run_informational sim_cpu_prog "$CORE_SIM_PROG_TB")
+prog_ok=$(run_top_driver sim_cpu_prog "$CORE_SIM_PROG_TB")
 if [ "$prog_ok" != - ]; then
   metric sim_cpu_prog_ok "$prog_ok" bool
   [ "$prog_ok" != 1 ] || grep -a "IPC=" step_sim_cpu_prog.log || true
 fi
 
-case "$cpu_ok$prog_ok" in
-11 | 1-) ;;
-*) echo "NOTE: whole-top sim still unsupported (informational; not a failure)" ;;
-esac
+# CORE_SIM_TOP_ASSERT (defs.bzl): does this core's whole-top driver GATE the
+# target, or only report a metric? dino's does — both its drivers score 1 in
+# both modes — so a regression there fails the target instead of silently
+# flipping a metric to 0. A core still blocked by an lhd gap (minion: a derived
+# clock inou.cgen.sim cannot fold, fixme issue 12) leaves it empty and keeps the
+# metric, so the flip to 1 stays visible without painting the target red.
+if [ -n "$CORE_SIM_TOP_ASSERT" ]; then
+  [ "$cpu_ok" != 0 ] \
+    || { step_failed sim_cpu "whole-top driver '$CORE_SIM_TOP_TB' failed (MODE=$MODE)"; exit 1; }
+  [ "$prog_ok" != 0 ] \
+    || { step_failed sim_cpu_prog "program driver '$CORE_SIM_PROG_TB' failed (MODE=$MODE)"; exit 1; }
+else
+  case "$cpu_ok$prog_ok" in
+  11 | 1-) ;;
+  *) echo "NOTE: whole-top sim still unsupported (informational; not a failure)" ;;
+  esac
+fi
 echo "PASS: $MODE $SIM_TB hello world ($CYCLES cycles in ${LAST_MS} ms)"

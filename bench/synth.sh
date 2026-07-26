@@ -72,8 +72,15 @@ EOF
     # A region the cache could not snapshot pays for ABC on every future run:
     # a permanent tax, and a livehd bug rather than a property of the design.
     [ "${ic_failed:-0}" = 0 ] || {
-      echo "FAIL: $1: $ic_failed region(s) could not be stored in the abc cache — they re-synthesize forever" >&2
-      grep -h 'cache-store' "step_${1}_abc.log" | head -10 >&2
+      step_failed "${1}_abc" \
+        "$1: $ic_failed region(s) could not be stored in the abc cache — they re-synthesize forever"
+      # The offending regions are named by `cache-store` lines; surface a couple
+      # so the first one is diagnosable without opening the saved step log.
+      # `|| true`, and AFTER step_failed: `ic_failed` comes from the result JSON
+      # while these lines come from the log, so a no-match grep is possible —
+      # and under `set -e` + `pipefail` it would abort the script right here,
+      # swallowing the whole diagnosis.
+      grep -h 'cache-store' "step_${1}_abc.log" | head -3 >&2 || true
       exit 1
     }
   fi

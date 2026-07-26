@@ -93,7 +93,7 @@ Every row below exists once per core — write `//bench:dino_compile_verilog` or
 | `synth` | each of the core's colorings (`color_algs`) + `pass abc` on the same design (sky130), timing + QoR (regions/gates/area/max_delay) for each. All run hier=true; the difference is the partitions: flat = one color across the hierarchy (one fused region, best cross-module optimization), synth = per-(module,color) regions. dino runs both; minion runs only `synth` (flat does not fit in memory at 534k nodes) |
 | `synth_incremental` | `color synth` + abc over 3 passes; incremental reuse needs the distinct colors/partitions that `color synth` creates (and `color flat` intentionally does not): asserts cache hits on the comment-only pass and a single-region re-synth after a one-line edit |
 | `synth_lec_flat` / `synth_lec_synth` | netlist integrity: synthesize twice (2nd run after a comment touch — under `color synth` that netlist is largely cache-CLONED), then `lhd lec --impl lg:netlist --ref lg:design --lib lg:models` proves it against the compiled design (`pass liberty gensim` provides the sky130 cell models; strict, so UNKNOWN fails). Only generated for colorings the core actually runs, so minion has no `synth_lec_flat` |
-| `sim_verilog` / `sim_pyrope` | hello-world `lhd sim` of one small clocked module (dino: a `StageReg`; minion: the VPU tensor-A register file). The Verilog side first re-emits through slang as Pyrope; cycles/s, VCD. One driver serves both modes unless the core sets `sim_tb_v` — dino does, because the Verilog `StageReg`'s `struct packed` port re-emits as a tuple while the checked-in Pyrope declares it flat. A whole-top driver also runs, but informational only |
+| `sim_verilog` / `sim_pyrope` | hello-world `lhd sim` of one small clocked module (dino: a `StageReg`; minion: the VPU tensor-A register file). The Verilog side first re-emits through slang as Pyrope; cycles/s, VCD. One driver serves both modes unless the core sets `sim_tb_v` — dino does, because the Verilog `StageReg`'s `struct packed` port re-emits as a tuple while the checked-in Pyrope declares it flat. Whole-top drivers also run, reported as `METRIC sim_cpu_top_ok` / `sim_cpu_prog_ok`; a core setting `sim_top_assert` (dino) also GATES on them, one that does not (minion, still blocked by a derived clock the sim cgen cannot fold) reports the metric only |
 | `lec` | Pyrope impl ≡ Verilog ref (both pre-compiled to `lg:`; the Verilog side needs its slang options — `-F`/`-DSYNTHESIS` plus the core’s `v_flags`), PROVEN |
 | `lec_bug` | the core's `tests/bug1` variant must be REFUTED (dino: the ALU's 32-bit add flipped to subtract; minion: the same flip in `txfma_adder`) |
 | `lec_incremental` | cold / identical warm (verdict-cache hits) / comment-touch re-runs |
@@ -101,8 +101,18 @@ Every row below exists once per core — write `//bench:dino_compile_verilog` or
 | `verify_incremental` | cold / warm (obligation-cache hits) / comment-touch |
 
 Each test prints `METRIC <name> <value> <unit>` lines (also collected as
-`metrics.jsonl` in the test's `outputs.zip` under `bazel-testlogs/`). Targets
+`metrics.jsonl` under `bazel-testlogs/bench/<target>/test.outputs/`). Targets
 are tagged `exclusive` so timings are never polluted by parallel tests.
+
+The test log itself is deliberately terse — the `CMD` and `METRIC` lines, plus
+a short excerpt when a step fails. Each step's FULL stdout/stderr is saved
+beside `metrics.jsonl` as `step_<label>.log`, so `--test_output=all` on a
+failing target gives you the diagnosis and the file to open next. Two knobs:
+
+```bash
+bazel test //bench:minion_lec --test_env=BENCH_VERBOSE=1   # dump step logs inline
+bazel test //bench:minion_lec --test_env=BENCH_FAIL_TAIL=40 # longer excerpt
+```
 
 Scenario cost scales with the design: everything on dino finishes in seconds,
 while minion's proof- and synthesis-heavy scenarios (`lec*`, `synth*`) are
