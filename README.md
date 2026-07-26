@@ -89,7 +89,7 @@ Every row below exists once per core — write `//bench:dino_compile_verilog` or
 | --- | --- |
 | `compile_verilog` | Verilog → `lg:` via slang; LoC/s, words/s |
 | `compile_pyrope` | Pyrope → `lg:` (sibling import discovery); LoC/s, words/s |
-| `compile_pyrope_parallel` | per-file separate compilation: `lhd scan` builds the dependency picture, import-free files compile in parallel (own `ln:`+`lg:` emissions), dependents reuse them by naming each as a positional `ln:DIR` input; the final `lg:` is a complete design library. No big win on a small design — it demonstrates the flow |
+| `compile_pyrope_parallel` | per-file separate compilation driven by a **real build system**: `lhd scan` reports every file's imports, `bench/gen_build.py` turns that into a Makefile (one rule per file, prerequisites = its direct imports, pruned to `--top`'s cone), and `make -j` derives the schedule. Dependencies ride in pre-lowered as positional `lg:DIR` inputs, falling back to `ln:DIR` only for packages that emit no lgraph — an `ln:` input is re-elaborated from the AST on every load, so for a `comb` unit that costs as much as recompiling it. `--emit-dir lg:` is transitively closed, so `lg_<top>` is already the complete design library (no link step). The generator also emits a syntax-checked `BUILD.bazel` into the test outputs to show gazelle-style generation; it is never executed. Also demonstrates incrementality: touching one leaf rebuilds only its subtree. Recipes deliberately do NOT clean their emission dirs first, so a rebuild re-emits over the previous run's `ln_`/`lg_`: re-emission has to stay idempotent, and this target must FAIL rather than hide a regression behind an `rm -rf` |
 | `synth` | each of the core's colorings (`color_algs`) + `pass abc` on the same design (sky130), timing + QoR (regions/gates/area/max_delay) for each. All run hier=true; the difference is the partitions: flat = one color across the hierarchy (one fused region, best cross-module optimization), synth = per-(module,color) regions. dino runs both; minion runs only `synth` (flat does not fit in memory at 534k nodes) |
 | `synth_incremental` | `color synth` + abc over 3 passes; incremental reuse needs the distinct colors/partitions that `color synth` creates (and `color flat` intentionally does not): asserts cache hits on the comment-only pass and a single-region re-synth after a one-line edit |
 | `synth_lec_flat` / `synth_lec_synth` | netlist integrity: synthesize twice (2nd run after a comment touch — under `color synth` that netlist is largely cache-CLONED), then `lhd lec --impl lg:netlist --ref lg:design --lib lg:models` proves it against the compiled design (`pass liberty gensim` provides the sky130 cell models; strict, so UNKNOWN fails). Only generated for colorings the core actually runs, so minion has no `synth_lec_flat` |
@@ -136,12 +136,26 @@ be suite-side and is fixed (`sim_tb_v`, below):
 
 | target | blocked by |
 | --- | --- |
-| `minion_lec`, `minion_lec_incremental`, `minion_synth_lec_synth` | the LEC encoder is Flop-only, but latch cones no longer refuse the run — the `lec_trust` knob (`bench/defs.bzl`) lists minion's 32 latch defs, and `formal.lec.trust` assumes them equal (disclosed, never proven) so the latch-free majority proves bottom-up. `minion_lec` now proves 110/140 non-trusted defs, trusts 32, with **zero latch refusals and zero refutations**, ending UNKNOWN (exit 7 under strict) only on a handful of NON-latch cones the solver cannot discharge (`intpipe_csr_file`, `txfma_top`, dcache cones, `prim_mul_div`'s Moore-box limit, the `intpipe_csr_msgs` `_sN` relabel). Those non-latch residuals are the remaining blocker — see fixme issue 1 |
+| `minion_lec`, `minion_lec_incremental`, `minion_synth_lec_synth` | the LEC encoder now MODELS latches and negedge flops (`pass.single_edge` normalizes them to posedge, and folds a clock gate into a flop enable), so minion runs with **zero latch refusals and zero refutations**. Four independent residuals remain: a memory on a *gated* clock is still refused (`core_top`, in ~1 s — the immediate blocker), four latch-free leaf cones the solver cannot discharge (`vpu_mask` et al.), `intpipe_csr_msgs` needing inductive strengthening, and the 32 defs on the `lec_trust` knob (`bench/defs.bzl`) whose latches live ONE MODULE LEVEL DOWN — normalizing inside a def is not supported yet. `formal.lec.trust` assumes those 32 equal (disclosed, never proven), so 110/140 of the rest prove bottom-up and the top ends UNKNOWN (exit 7 under strict). `minion_lec_incremental` has no separate cause — it dies on its first `lec_cold` step. See fixme issue 1 |
 
 These are LiveHD-side issues, not suite configuration — the natural follow-up
 task now that the bench exists. Everything that *is* a suite concern (choosing
 tops and units that live in the right cone, tolerating package-only leaves
 that emit no lgraph) is already handled.
+
+`compile_pyrope_parallel` passes but is still ~4x SLOWER than the monolithic
+`compile_pyrope`, and that gap is LiveHD-side too. `pass.formal` (`mode:fast`,
+on by default at O1) re-proves every graph in the library on every invocation,
+imports included — so separate compilation pays it once per file over that
+file's whole closure, where the monolithic compile pays it once over the whole
+design. Measured on minion: `intpipe_csr_file` 32.9s -> 0.67s with
+`compile.formal.mode=none`, `core_top` 36.0s -> 1.0s, the whole monolithic
+design 43.4s -> 5.1s. LiveHD already has a formal verdict cache
+(`lhd/formal_cache.cpp`), but it is wired only into `lhd lec` / `lhd formal`;
+`pass/formal/pass_formal.cpp` never consults it. Caching or skipping
+already-proven imported graphs is what would make the parallel flow win. Do NOT
+"fix" this by turning formal off in the bench — that would make the two rows
+measure different work.
 
 ## The three-pass pattern
 

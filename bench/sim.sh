@@ -4,9 +4,9 @@
 # Asserted: the small clocked-unit testbench ($CORE_SIM_TB) — setup (compile +
 # host C++ build) and run phases timed separately, cycles/s reported. It must
 # print "hello world" AND, when the core sets $CORE_SIM_EXPECT, the known-good
-# data readback (the testbenches print the value instead of asserting it while
-# comptime folding mis-evaluates latch/negedge state — fixme.md issue 2);
-# anything else fails the target.
+# data readback. The testbenches now ALSO assert that value in-source; the
+# printed-value gate is kept as belt-and-braces, since it also catches a driver
+# that runs but never reaches its assert. Anything else fails the target.
 #
 # Informational: the whole-top testbench ($CORE_SIM_TOP_TB) and, where the
 # core has one, a program-driving testbench ($CORE_SIM_PROG_TB). Both are

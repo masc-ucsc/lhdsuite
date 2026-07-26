@@ -5,16 +5,27 @@
 #                 since slang parses every file in it.
 #   MODE=pyrope   top .prp; sibling import discovery pulls the whole tree
 #   MODE=pyrope_parallel
-#                 per-file separate compilation: `lhd scan` (lexer-only import
-#                 discovery) builds the dependency picture, every import-free
-#                 file compiles in PARALLEL into its own ln:+lg: emission, and
-#                 dependents reuse them by naming each one as a POSITIONAL
-#                 `ln:DIR` input — never a flag (pre-compiled units ride in;
-#                 stateful mod/pipe interfaces are not re-elaborated). The
-#                 dependent's lg: emission is a COMPLETE
-#                 design library — same shape as the monolithic compile. On a
-#                 design this small, process overhead eats the speedup; the
-#                 value is demonstrating the flow (and scaling on big trees).
+#                 per-file separate compilation driven by a REAL BUILD SYSTEM.
+#                 `lhd scan` (lexer-only import discovery) reports every file's
+#                 imports; bench/gen_build.py turns that into a Makefile with
+#                 one rule per file, prerequisites = that file's DIRECT imports,
+#                 pruned to the cone of --top. `make -j` then derives the
+#                 parallel schedule itself — the bench does not hand-roll
+#                 topological waves, and an edit rebuilds only the affected
+#                 subtree. The same generator also emits a BUILD.bazel to show
+#                 what gazelle-style generation off `lhd scan` looks like; it is
+#                 syntax-checked and archived, never executed (a nested bazel
+#                 inside a bazel test would need repo fetching and would put a
+#                 server start + analysis phase inside the measured window).
+#                 Dependencies ride in PRE-LOWERED as positional `lg:DIR`
+#                 inputs, falling back to `ln:DIR` for type/constant-only
+#                 packages that emit no lgraph. That choice is the whole
+#                 ballgame: an `ln:` input is re-elaborated from the AST on
+#                 every load, so passing a `comb` unit that way costs the same
+#                 as recompiling it from source. `--emit-dir lg:` is
+#                 transitively closed, so lg_<top> is already the COMPLETE
+#                 design library — same shape as the monolithic compile, with
+#                 no final link step.
 # Reports LoC/s and words/s over the language's sources.
 RF="${TEST_SRCDIR:-${RUNFILES_DIR:-$0.runfiles}}"
 . "$RF/_main/bench/common.sh"
@@ -36,76 +47,36 @@ pyrope_parallel)
   n_loc=$(loc "$CORE_P_DIR"/*.prp)
   n_words=$(words "$CORE_P_DIR"/*.prp)
   NPROC=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8)
+  GEN="$RF/_main/bench/gen_build.py"
+  command -v make >/dev/null || { echo "FAIL: make not on PATH" >&2; exit 1; }
 
   run_timed scan lhd scan "$CORE_P_DIR"/*.prp -q --result-json scan.json --workdir sw
-  # Split the scan into import-free files (parallel wave) and dependents in
-  # topological order (each sees every previously built unit as an ln: input).
-  python3 - scan.json <<'PY'
-import json, sys
-sc = json.load(open(sys.argv[1]))["scan"]
-imp = {e["file"]: set(e["imports"]) for e in sc}
-stem = lambda f: f.rsplit("/", 1)[-1].split(".")[0]
-stems = {f: stem(f) for f in imp}
-open("leaves.txt", "w").write("\n".join(f for f, i in imp.items() if not i) + "\n")
-done = {s for f, s in stems.items() if not imp[f]}
-order = []
-pending = {f for f, i in imp.items() if i}
-while pending:
-    ready = [f for f in pending if {i.split(".")[0] for i in imp[f]} <= done]
-    if not ready:  # imports outside this tree: compile them last, discovery resolves
-        ready = sorted(pending)
-    for f in sorted(ready):
-        order.append(f)
-        done.add(stems[f])
-        pending.discard(f)
-open("deps.txt", "w").write("\n".join(order) + "\n")
-PY
+  scan_ms=$LAST_MS
 
-  pkg_only=0  # type/constant-only leaves, counted by compile_leaves below
-  compile_leaves() {  # all import-free files, NPROC at a time
-    local n=0 f b
-    while IFS= read -r f; do
-      b=$(basename "$f" .prp)
-      lhd compile "$f" --emit-dir "ln:ln_$b" --emit-dir "lg:lg_$b" --workdir "cw_$b" \
-        >"leaf_$b.log" 2>&1 &
-      n=$((n + 1))
-      [ $((n % NPROC)) -ne 0 ] || wait
-    done <leaves.txt
-    wait
-    # A type/constant-only leaf (a `_pkg` file) legitimately produces no
-    # lgraph: lhd emits an EMPTY lg: library and warns, so it is an ordinary
-    # pass. Count those warnings for the metric; any non-pass is a real failure.
-    for f in leaf_*.log; do
-      grep -q '"status":"pass"' "$f" \
-        || { echo "FAIL: leaf compile ${f%.log}:" >&2; tail -5 "$f" >&2; return 1; }
-      if grep -q 'produced no graphs' "$f"; then
-        pkg_only=$((pkg_only + 1))
-      fi
-    done
-  }
-  run_timed leaves_parallel compile_leaves
-  wave1_ms=$LAST_MS
-  metric leaves_pkg_only "$pkg_only" files
+  # scan.json -> build.mk (+ an illustrative BUILD.bazel). --top prunes to the
+  # cone actually reachable from the whole-design top; both cores currently
+  # ship a tree where that is every file, so `pruned` reads 0 — the pruning is
+  # there so a core with dead .prp files does not pay to compile them.
+  printf 'CMD %s: %s\n' generate \
+    "python3 bench/gen_build.py scan.json --top $CORE_TOP --mk build.mk --bazel BUILD.bazel" >&3
+  run_timed generate python3 "$GEN" scan.json --top "$CORE_TOP" \
+    --mk build.mk --bazel BUILD.bazel
+  gen_ms=$LAST_MS
+  for k in units pruned depth widest; do
+    metric "parallel_$k" "$(awk -v k="$k" '$1==k{print $2}' step_generate.log)" files
+  done
 
-  compile_deps() {  # dependents in topo order, reusing every built ln: unit
-    local f b ins d
-    while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      b=$(basename "$f" .prp)
-      ins=""
-      # IR inputs are POSITIONAL — `lhd compile <src> ln:DIR …` (`lhd compile
-      # --help`: files = path[] and/or ln:DIR|lg:DIR). There is no flag form:
-      # passing a pre-compiled unit as an option is an error, so keep these
-      # bare in $ins.
-      for d in ln_*; do ins="$ins ln:$d"; done
-      # shellcheck disable=SC2086
-      lhd compile "$f" $ins --emit-dir "ln:ln_$b" --emit-dir lg:out_lg --workdir "cw_$b" \
-        >"dep_$b.log" 2>&1 || { tail -10 "dep_$b.log" >&2; return 1; }
-    done <deps.txt
-  }
-  run_timed deps_reuse compile_deps
-  LAST_MS=$((LAST_MS + wave1_ms))
+  # make -j owns the scheduling from here: the dependency graph is the build
+  # graph. Recipes log per-unit to u_<unit>.log; build.mk records every command
+  # it runs, and both generated files are archived into the test outputs.
+  printf 'CMD %s: %s\n' build "make -f build.mk -j$NPROC" >&3
+  run_timed build make -f build.mk -j"$NPROC" LHD="$LHD_BIN"
+  LAST_MS=$((LAST_MS + scan_ms + gen_ms))
+  if [ -n "${TEST_UNDECLARED_OUTPUTS_DIR:-}" ]; then
+    cp build.mk BUILD.bazel "$TEST_UNDECLARED_OUTPUTS_DIR"/ 2>/dev/null || true
+  fi
   ;;
+
 *)
   echo "FAIL: unknown MODE=$MODE" >&2
   exit 2

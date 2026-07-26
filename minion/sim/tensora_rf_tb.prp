@@ -12,25 +12,24 @@
 // returns.
 //
 // STATUS: the minion sim scenarios PASS — this is a real elaborate + cgen +
-// host-compile + run smoke, and the RF reads back 0x1234 (bench/sim.sh gates
-// on the "hello world" line AND the printed value, via CORE_SIM_EXPECT
-// data=4660). Minion is pervasively latch-based (preview/commit RFs) and NO
-// module in the vpu_top cone has a latch-free sub-cone, so this module is
-// also the only shape available — do not "fix" this file by picking another
-// module or by loosening the gate.
+// host-compile + run smoke, and the RF reads back 0x1234. It is both ASSERTED
+// in-testbench and gated by bench/sim.sh on the "hello world" line plus the
+// printed value (CORE_SIM_EXPECT data=4660). Minion is pervasively latch-based
+// (preview/commit RFs) and NO module in the vpu_top cone has a latch-free
+// sub-cone, so this module is also the only shape available — do not "fix"
+// this file by picking another module or by loosening the gate.
 //
-// One limitation remains (fixme.md issue 2): the comptime evaluator that
-// folds the testbench does not model this RF's transparent latch + negedge
-// (posclk=false) flop, so an `assert` on the read-back value folds to a
-// comptime-false failure before cgen is reached. That is why the value is
-// printed rather than asserted. The runtime is now trustworthy on this shape
-// — it computes 4660 while the fold still claims false — so restoring the
-// assert is blocked only on the fold learning to decline.
-//
-// (The other half of this note used to describe a silent miscompile: the
-// latch -> negedge-flop enable got an /*UNRESOLVED-CYCLE*/ constant-false
-// commit guard and the RF read back 0. Fixed in cgen_sim.cpp; regression is
-// livehd's inou/prp/tests/sim/latch_sim_negedge_enable.prp.)
+// (Two historical notes, both now fixed upstream. First, a silent miscompile:
+// the latch -> negedge-flop enable got an /*UNRESOLVED-CYCLE*/ constant-false
+// commit guard and the RF read back 0; fixed in cgen_sim.cpp, regression is
+// livehd's inou/prp/tests/sim/latch_sim_negedge_enable.prp. Second, the assert
+// below could not be written at all — it folded to a comptime-false failure
+// before cgen was reached. That was fixme.md issue 2, and the cause was NOT
+// latch/negedge modelling as long assumed: `tick_statement` had no LNAST
+// lowering, so the whole tick body was silently dropped and `got` kept the
+// comptime value of its `mut got = 0` initializer. Fixed by lowering
+// tick/step into LNAST and walking a tick body as an uncertain scope; spec
+// gates are livehd's inou/prp/tests/sim/tick_comptime_{survives,opaque}.prp.)
 //
 // Usage: copy next to a Pyrope tree of the design (minion/pyrope, or a slang
 // re-emission of minion/verilog), then:  lhd sim <dir>/tensora_rf_tb.prp
@@ -49,4 +48,5 @@ test rf.hello(cycles:u20 = 1000) {
     got = acc.rd_data_o
   }
   puts("hello world: minion vpu_tensora_rf ran {cycles} cycles, data={got}")
+  assert(got == 0x1234, "vpu_tensora_rf read-back")
 }

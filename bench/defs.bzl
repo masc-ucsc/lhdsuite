@@ -42,9 +42,11 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             would otherwise go green). "" = hello-world gate only.
 #   lec_trust  comma-separated module-def names the LEC scenarios ASSUME
 #             equivalent WITHOUT proving them (`--set formal.lec.trust=…`) —
-#             the escape hatch for modules whose cone holds a cell the LEC
-#             encoder cannot model yet (a latch: "sequential op 'latch' not
-#             supported yet"). The driver skips proving each listed def and
+#             the escape hatch for defs holding a latch or negedge flop the LEC
+#             encoder cannot normalize across a module boundary yet ("def `X`
+#             holds N latch cell(s) … not supported yet"). A latch in the
+#             design's OWN body encodes fine; it is the hierarchy that refuses.
+#             The driver skips proving each listed def and
 #             black-boxes its instances, so the latch-free majority is still
 #             proven bottom-up instead of the whole design refusing. lec.sh
 #             also sets formal.strict=true whenever this is non-empty, so a
@@ -129,9 +131,11 @@ _SCENARIOS = [
     # --- Lgraph creation throughput (LoC/s, words/s) ---
     ("compile_verilog", "compile.sh", "verilog", "long", ""),
     ("compile_pyrope", "compile.sh", "pyrope", "long", ""),
-    # Per-file separate compilation: `lhd scan` dependency discovery, parallel
-    # leaf compiles, dependents reuse the pre-compiled units by naming each as
-    # a positional `ln:DIR` input (IR inputs are positional, never a flag).
+    # Per-file separate compilation driven by a real build system: `lhd scan`
+    # dependency discovery -> generated Makefile (one rule per file, deps = its
+    # direct imports, pruned to --top's cone) -> `make -j`. Dependencies ride in
+    # pre-lowered as positional `lg:DIR` inputs (IR inputs are positional, never
+    # a flag), falling back to `ln:DIR` only for packages that emit no lgraph.
     ("compile_pyrope_parallel", "compile.sh", "pyrope_parallel", "eternal", ""),
     # --- coloring + abc synthesis; cold vs --workdir incremental ---
     ("synth", "synth.sh", "cold", "eternal", ""),
@@ -161,6 +165,8 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
         srcs = [script],
         data = [
             "common.sh",
+            # scan.json -> build.mk + BUILD.bazel for MODE=pyrope_parallel.
+            "gen_build.py",
             # lhd's own runfiles carry the `lhd sim` runtime headers (slop.hpp
             # & friends) — no extra staging needed here.
             "@livehd//lhd:lhd",

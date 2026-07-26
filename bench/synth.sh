@@ -158,8 +158,9 @@ lec_flat | lec_synth)
 
   # strict: an UNKNOWN is a failure here, not a shrugged-off pass — the whole
   # point is trusting (or not) the generated netlist. CORE_LEC_TRUST (defs.bzl)
-  # assumes the design's latch modules equal so the encoder does not refuse the
-  # latch cones on the ref (design) side — the same escape hatch as bench/lec.sh
+  # assumes the design's latch-holding DEFS equal, so the ref (design) side is
+  # not refused for holding state the encoder cannot normalize across a module
+  # boundary — the same escape hatch as bench/lec.sh
   # (fixme issue 1). Names absent from the netlist are silently ignored.
   if [ -n "$CORE_LEC_TRUST" ]; then
     run_timed netlist_lec lhd lec --impl lg:net_pass2 --ref lg:lg_p2 \

@@ -14,8 +14,10 @@
 #              cold, identical warm re-run (cache hits asserted), then a
 #              comment1 recompile (still equivalent, still warm).
 #
-# A core with a CORE_LEC_TRUST list (minion — latch modules the encoder cannot
-# model yet, fixme issue 1) runs every lec_run with `--set formal.lec.trust=…`
+# A core with a CORE_LEC_TRUST list (minion — defs holding a latch or negedge
+# flop ONE MODULE LEVEL DOWN, which edge normalization cannot rewrite across a
+# module boundary yet; fixme issue 1) runs every lec_run with
+# `--set formal.lec.trust=…`
 # and `--set formal.strict=true`: the listed defs are assumed equal (disclosed,
 # never proven), the latch-free majority is proven bottom-up, and a witness-free
 # UNKNOWN top is a hard fail (a trust list must not turn an inconclusive green).

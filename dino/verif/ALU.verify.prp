@@ -2,11 +2,11 @@
 // are never touched. io_operation = {word:1, aluop:4}; aluop row 7 is the
 // adder, so 0x17 = ADDW and 0x07 = ADD.
 //
-// NOTE: assumes are GLOBAL environment constraints — every in-force assume
-// from every block constrains the same model, so blocks must not carry
-// mutually-exclusive assumes (the run degrades to "assume set contradictory",
-// all proofs vacuous). That is why the full-width ADD claim below is an
-// implication-style assert rather than a second assume.
+// NOTE: each `formal` block is an INDEPENDENT test — its assumes constrain only
+// its own obligations, so the two blocks below may carry mutually-exclusive
+// assumes (0x17 vs 0x07) and both prove. (Before the upstream per-block scoping
+// fix they poisoned each other into "assume set contradictory", which is why
+// this sidecar used to carry only the ADDW block.)
 //
 // Usage:
 //   lhd formal verify dino/pyrope/ALU.prp dino/verif/ALU.verify.prp \
@@ -23,4 +23,14 @@ formal alu.addw {
          "ADDW low 32 bits are the 32-bit sum")
   assert(acc.io_result#[31..=63] == 0 or acc.io_result#[31..=63] == 0x1ffffffff,
          "ADDW result is sign-extended")
+}
+
+// The full-width ADD (aluop row 7, word bit clear). Restored as its own block
+// now that blocks no longer share an assume set: this claim needs io_operation
+// == 0x07, the exact opposite of the block above.
+formal alu.add {
+  mut acc = alu
+  assume(acc.io_operation == 0x07)
+  assert(acc.io_result == (acc.io_inputx + acc.io_inputy)#[0..=63],
+         "ADD is the full 64-bit sum")
 }

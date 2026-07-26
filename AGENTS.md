@@ -40,7 +40,9 @@ Both cores share one shape (`<core>/` = `dino/` or `minion/`):
   `pyrope_top`, `sim`, `verif`, `tests`.
 - `bench/` — one script per flow (`compile.sh`, `synth.sh`, `sim.sh`,
   `lec.sh`, `verify.sh`), shared helpers in `common.sh`, the `CORES` table and
-  target generator in `defs.bzl`, targets in `BUILD`.
+  target generator in `defs.bzl`, targets in `BUILD`. `gen_build.py` turns an
+  `lhd scan` result into the Makefile (and an illustrative `BUILD.bazel`) that
+  drives `compile_pyrope_parallel`.
 
 ## Conventions
 
@@ -64,12 +66,32 @@ Both cores share one shape (`<core>/` = `dino/` or `minion/`):
   compiled directly: they are absent from `filelist.f` but globbed into
   `//minion:verilog` so they reach the test sandbox. They resolve relative to
   the including file, so no `-I` is needed.
+- **`filelist.f` lists only what `--top`'s cone reaches.** It is the slang `-F`
+  list, so an entry that nothing instantiates is compiled and then discarded —
+  pure front-end cost with no effect on any emitted graph. Before adding one,
+  check it is reachable; before removing one, confirm the emitted library keeps
+  the SAME graph set (compare `--emit-dir lg:` file lists — content bytes differ
+  run to run, so diff the names, not the bodies).
+- **The checked-in `<core>/pyrope/` tree is regenerated MANUALLY, never by a
+  bench target.** No target rewrites it: `bench/sim.sh` emits Pyrope only into a
+  per-run scratch `tree/`. Regenerating is a deliberate, reviewed act — the
+  emitter's line order and slang's nondeterministic `_sN` replica naming make
+  the diff churn even when nothing changed semantically. Recipe:
+
+  ```bash
+  lhd compile verilog --top <CORE_TOP> --emit-dir pyrope:<core>/pyrope --workdir w \
+      -- -F <core>/verilog/filelist.f -DSYNTHESIS <v_flags>
+  ```
+
+  Then LEC the result against the Verilog side before committing. `manifest.json`
+  is NOT required in `minion/pyrope/` — `//minion:BUILD` globs it with
+  `allow_empty`, so its absence is intended, not a pending chore.
 
 ## Known-failing targets — do not "fix" the suite
 
 Some targets fail because of LiveHD gaps, not suite misconfiguration. See the
-"Known-failing scenarios" table in `README.md` for the current list
-(`minion_compile_pyrope_parallel`, both `minion_lec*`).
+"Known-failing scenarios" table in `README.md` for the current list (both
+`minion_lec*`).
 Before changing a testbench, a gate, or a `CORES` entry to make one of these
 pass, check that table — fixing them belongs in livehd.
 

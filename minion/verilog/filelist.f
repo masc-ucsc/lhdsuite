@@ -29,8 +29,6 @@ intpipe_mul_div_top.sv
 intpipe_rf.sv
 intpipe_top.sv
 minion_dcache_128x64_1r1w_lram.sv
-minion_dcache_128x72_1r1w_lram.sv
-minion_dcache_atomic_alu_unit.sv
 minion_dcache_buffer_array.sv
 minion_dcache_cache_op_unit.sv
 minion_dcache_cache_op_unit_l2.sv
@@ -59,8 +57,6 @@ minion_top.sv
 null_vpu.sv
 prim_arb_lru.sv
 prim_clk_gate.sv
-prim_clk_gate_n.sv
-prim_clk_mux.sv
 prim_cmp_32.sv
 prim_cmp_42.sv
 prim_eco_ports.sv
@@ -68,7 +64,6 @@ prim_fifo_sync.sv
 prim_mul_div.sv
 prim_phase_pair_hi_lo.sv
 prim_phase_pair_lo_hi.sv
-prim_ram_2p.sv
 prim_rf_1r1w_diff_preview.sv
 prim_rf_1r1w_par_preview.sv
 prim_rf_1r1w_preview.sv
@@ -114,7 +109,6 @@ txfma_e4.sv
 txfma_e5.sv
 txfma_e6.sv
 txfma_ediff_opdorder_logic.sv
-txfma_exp_special_detect.sv
 txfma_f0.sv
 txfma_f1.sv
 txfma_f2.sv

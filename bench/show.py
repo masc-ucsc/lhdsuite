@@ -140,15 +140,19 @@ def report_core(root: Path, core: str) -> list:
         if cpp:
             m = cpp[3]
             k = "pyrope_parallel"
-            total = (m.get("leaves_parallel_ms") or 0) + (m.get("deps_reuse_ms") or 0)
+            total = sum(m.get(s) or 0 for s in ("scan_ms", "generate_ms", "build_ms"))
             print(f"   {'pyrope-par':11} {fmt(m.get(f'{k}_loc')):>8} {fmt(m.get(f'{k}_words')):>9}"
                   f" {fmt(total, 'ms'):>8}"
                   f" {fmt(m.get(f'{k}_loc_per_s')):>9} {fmt(m.get(f'{k}_words_per_s')):>9}")
             seq = cp[3].get("compile_pyrope_ms") if cp else None
             print(f"     per-file: scan {fmt(m.get('scan_ms'), 'ms')},"
-                  f" leaves parallel {fmt(m.get('leaves_parallel_ms'), 'ms')},"
-                  f" dependents (ln: reuse) {fmt(m.get('deps_reuse_ms'), 'ms')}"
+                  f" gen build.mk {fmt(m.get('generate_ms'), 'ms')},"
+                  f" make -j {fmt(m.get('build_ms'), 'ms')}"
                   f"  [vs monolithic: {speedup(seq, total)}]")
+            print(f"     graph: {fmt(m.get('parallel_units'))} units"
+                  f" ({fmt(m.get('parallel_pruned'))} pruned by --top),"
+                  f" {fmt(m.get('parallel_depth'))} levels deep,"
+                  f" widest {fmt(m.get('parallel_widest'))}")
         rep.cmds(("compile_verilog", cv), ("compile_pyrope", cp),
                  ("compile_pyrope_parallel", cpp))
 
