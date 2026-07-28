@@ -1,6 +1,6 @@
 const minion_tlb = import("minion_tlb.minion_tlb")
 
-pub mod minion_dcache_tlb_array::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, scan_reset_n:u1, sram_clk_override:u1, ram_rei:u1, ram_wei:u1), esr_vmspagesize_i:u2, req_data_i:u47, req_valid_i:u1, satp_info_i:(mode:u4, ppn:u28), matp_info_i:(mode:u4, ppn:u28), satp_info_en_i:u1, matp_info_en_i:u1, tlb_invalidate_i:u1, ptw_req_ready_i:u1, ptw_resp_data_i:(canceled_req:u1, access_fault:u1, rsvd_for_hw:u8, ppn:u44, rsvd_for_sw:u2, d:u1, a:u1, g:u1, u:u1, x:u1, w:u1, r:u1, v:u1), ptw_resp_valid_i:u1) -> (resp_data_o:(fill_pending:u1, miss:u1, ppn:u28, xcpt_ld:u1, xcpt_st:u1, access_fault:u1)@[], ptw_req_data_o:(satp_mode:u4, satp_ppn:u28, prv:u2, addr:u36)@[], ptw_req_valid_o:u1@[], vm_enabled_o:u1@[]) {
+pub mod minion_dcache_tlb_array::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, scan_reset_n:u1, sram_clk_override:u1, ram_rei:u1, ram_wei:u1), esr_vmspagesize_i:u2, req_data_i:(status:(prv:u2, mprv:u1, mpp:u2, sum:u1, mxr:u1, debug:u1), vpn:u36, passthrough:u1, store:u1, msb_err:u1), req_valid_i:u1, satp_info_i:(mode:u4, ppn:u28), matp_info_i:(mode:u4, ppn:u28), satp_info_en_i:u1, matp_info_en_i:u1, tlb_invalidate_i:u1, ptw_req_ready_i:u1, ptw_resp_data_i:(canceled_req:u1, access_fault:u1, rsvd_for_hw:u8, ppn:u44, rsvd_for_sw:u2, d:u1, a:u1, g:u1, u:u1, x:u1, w:u1, r:u1, v:u1), ptw_resp_valid_i:u1) -> (resp_data_o:(fill_pending:u1, miss:u1, ppn:u28, xcpt_ld:u1, xcpt_st:u1, access_fault:u1)@[], ptw_req_data_o:(satp_mode:u4, satp_ppn:u28, prv:u2, addr:u36)@[], ptw_req_valid_o:u1@[], vm_enabled_o:u1@[]) {
   reg satp_info_en_del_q:u1:[clock_pin=ref clk_i]
   reg matp_info_en_del_q:u1:[clock_pin=ref clk_i]
   reg satp_info_reg_q:u32:[clock_pin=ref clk_i]
@@ -49,11 +49,12 @@ pub mod minion_dcache_tlb_array::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(s
   } elif matp_info_en_del_q != 0 {
     matp_info_reg_q = (matp_info_i.mode << 28) | matp_info_i.ppn
   }
-  const `tlb_req_data.status__w1` = req_data_i#[39..=46]#[0..=7]
-  const `tlb_req_data.vpn__w1` = req_data_i#[3..=38]#[0..=35]
-  const `tlb_req_data.passthrough__w1` = (req_data_i >> 2) & 1 & 1
-  const `tlb_req_data.store__w1` = (req_data_i >> 1) & 1 & 1
-  const `tlb_req_data.msb_err__w1` = req_data_i & 1 & 1
+  const `tlb_req_data.status__w1` = ((req_data_i.status.prv << 45) | (req_data_i.status.mprv << 44) | (req_data_i.status.mpp << 42) | (req_data_i.status.sum << 41) | (req_data_i.status.mxr << 40) | (req_data_i.status.debug << 39) | (req_data_i.vpn << 3) | (req_data_i.passthrough << 2) | (req_data_i.store << 1) | req_data_i.msb_err)#[39..=46]#[0..=7]
+  const `tlb_req_data.vpn__w1` = req_data_i.vpn#[0..=35]
+  const `tlb_req_data.passthrough__w1` = req_data_i.passthrough & 1
+  const `tlb_req_data.store__w1` = req_data_i.store & 1
+  const `tlb_req_data.msb_err__w1` = req_data_i.msb_err & 1
+  const t119 = (`tlb_req_data.status__w1` << 40) | (`tlb_req_data.vpn__w1` << 4) | (`tlb_req_data.passthrough__w1` << 3) | 0 | (`tlb_req_data.store__w1` << 1) | `tlb_req_data.msb_err__w1`
   matp_info#[0..=31] = matp_info_reg_q
   `resp_data_o__bpo.access_fault` = `tlb_resp_data.access_fault`
   `resp_data_o__bpo.fill_pending` = `tlb_resp_data.fill_pending`
@@ -68,20 +69,20 @@ pub mod minion_dcache_tlb_array::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(s
   `tlb_req_data.status` = 0
   `tlb_req_data.store` = 0
   `tlb_req_data.vpn` = 0
-  mut u_tlb = minion_tlb::[name=u_tlb](clk_i = clk_i, rst_ni = rst_ni, dft_i.scanmode = dft_i.scanmode, dft_i.scan_reset_n = dft_i.scan_reset_n, dft_i.sram_clk_override = dft_i.sram_clk_override, dft_i.ram_rei = dft_i.ram_rei, dft_i.ram_wei = dft_i.ram_wei, vmspagesize_i = esr_vmspagesize_i, coop_mode_i = 0, req_min_id_i = 0, req_data_i = (`tlb_req_data.status__w1` << 40) | (`tlb_req_data.vpn__w1` << 4) | (`tlb_req_data.passthrough__w1` << 3) | 0 | (`tlb_req_data.store__w1` << 1) | `tlb_req_data.msb_err__w1`, req_valid_i = req_valid_i, satp_info_i = satp_info, matp_info_i = matp_info, tlb_invalidate_i = tlb_invalidate_i, ptw_req_ready_i = ptw_req_ready_i, ptw_resp_data_i.canceled_req = ptw_resp_data_i.canceled_req, ptw_resp_data_i.access_fault = ptw_resp_data_i.access_fault, ptw_resp_data_i.rsvd_for_hw = ptw_resp_data_i.rsvd_for_hw, ptw_resp_data_i.ppn = ptw_resp_data_i.ppn, ptw_resp_data_i.rsvd_for_sw = ptw_resp_data_i.rsvd_for_sw, ptw_resp_data_i.d = ptw_resp_data_i.d, ptw_resp_data_i.a = ptw_resp_data_i.a, ptw_resp_data_i.g = ptw_resp_data_i.g, ptw_resp_data_i.u = ptw_resp_data_i.u, ptw_resp_data_i.x = ptw_resp_data_i.x, ptw_resp_data_i.w = ptw_resp_data_i.w, ptw_resp_data_i.r = ptw_resp_data_i.r, ptw_resp_data_i.v = ptw_resp_data_i.v, ptw_resp_valid_i = ptw_resp_valid_i)
-  const t127 = (u_tlb["resp_data_o.fill_pending"] << 33) | (u_tlb["resp_data_o.miss"] << 32) | (u_tlb["resp_data_o.ppn"] << 4) | (u_tlb["resp_data_o.xcpt_ld"] << 3) | (u_tlb["resp_data_o.xcpt_st"] << 2) | (u_tlb["resp_data_o.xcpt_if"] << 1) | u_tlb["resp_data_o.access_fault"]
-  `tlb_resp_data.access_fault` = t127 & 1
-  `tlb_resp_data.fill_pending` = (t127 >> 33) & 1
-  `tlb_resp_data.miss` = (t127 >> 32) & 1
-  `tlb_resp_data.ppn` = t127#[4..=31]
-  `tlb_resp_data.xcpt_if` = (t127 >> 1) & 1
-  `tlb_resp_data.xcpt_ld` = (t127 >> 3) & 1
-  `tlb_resp_data.xcpt_st` = (t127 >> 2) & 1
-  const t149 = (u_tlb["ptw_req_data_o.satp_mode"] << 66) | (u_tlb["ptw_req_data_o.satp_ppn"] << 38) | (u_tlb["ptw_req_data_o.prv"] << 36) | u_tlb["ptw_req_data_o.addr"]
-  `ptw_req_data_o__bpo.addr` = t149#[0..=35]
-  `ptw_req_data_o__bpo.prv` = t149#[36..=37]
-  `ptw_req_data_o__bpo.satp_mode` = t149#[66..=69]
-  `ptw_req_data_o__bpo.satp_ppn` = t149#[38..=65]
+  mut u_tlb = minion_tlb::[name=u_tlb](clk_i = clk_i, rst_ni = rst_ni, dft_i.scanmode = dft_i.scanmode, dft_i.scan_reset_n = dft_i.scan_reset_n, dft_i.sram_clk_override = dft_i.sram_clk_override, dft_i.ram_rei = dft_i.ram_rei, dft_i.ram_wei = dft_i.ram_wei, vmspagesize_i = esr_vmspagesize_i, coop_mode_i = 0, req_min_id_i = 0, req_data_i.status.prv = t119#[46..=47], req_data_i.status.mprv = (t119 >> 45) & 1, req_data_i.status.mpp = t119#[43..=44], req_data_i.status.sum = (t119 >> 42) & 1, req_data_i.status.mxr = (t119 >> 41) & 1, req_data_i.status.debug = (t119 >> 40) & 1, req_data_i.vpn = t119#[4..=39], req_data_i.passthrough = (t119 >> 3) & 1, `req_data_i.instruction` = (t119 >> 2) & 1, req_data_i.store = (t119 >> 1) & 1, req_data_i.msb_err = t119 & 1, req_valid_i = req_valid_i, satp_info_i = satp_info, matp_info_i = matp_info, tlb_invalidate_i = tlb_invalidate_i, ptw_req_ready_i = ptw_req_ready_i, ptw_resp_data_i.canceled_req = ptw_resp_data_i.canceled_req, ptw_resp_data_i.access_fault = ptw_resp_data_i.access_fault, ptw_resp_data_i.rsvd_for_hw = ptw_resp_data_i.rsvd_for_hw, ptw_resp_data_i.ppn = ptw_resp_data_i.ppn, ptw_resp_data_i.rsvd_for_sw = ptw_resp_data_i.rsvd_for_sw, ptw_resp_data_i.d = ptw_resp_data_i.d, ptw_resp_data_i.a = ptw_resp_data_i.a, ptw_resp_data_i.g = ptw_resp_data_i.g, ptw_resp_data_i.u = ptw_resp_data_i.u, ptw_resp_data_i.x = ptw_resp_data_i.x, ptw_resp_data_i.w = ptw_resp_data_i.w, ptw_resp_data_i.r = ptw_resp_data_i.r, ptw_resp_data_i.v = ptw_resp_data_i.v, ptw_resp_valid_i = ptw_resp_valid_i)
+  const t169 = (u_tlb["resp_data_o.fill_pending"] << 33) | (u_tlb["resp_data_o.miss"] << 32) | (u_tlb["resp_data_o.ppn"] << 4) | (u_tlb["resp_data_o.xcpt_ld"] << 3) | (u_tlb["resp_data_o.xcpt_st"] << 2) | (u_tlb["resp_data_o.xcpt_if"] << 1) | u_tlb["resp_data_o.access_fault"]
+  `tlb_resp_data.access_fault` = t169 & 1
+  `tlb_resp_data.fill_pending` = (t169 >> 33) & 1
+  `tlb_resp_data.miss` = (t169 >> 32) & 1
+  `tlb_resp_data.ppn` = t169#[4..=31]
+  `tlb_resp_data.xcpt_if` = (t169 >> 1) & 1
+  `tlb_resp_data.xcpt_ld` = (t169 >> 3) & 1
+  `tlb_resp_data.xcpt_st` = (t169 >> 2) & 1
+  const t191 = (u_tlb["ptw_req_data_o.satp_mode"] << 66) | (u_tlb["ptw_req_data_o.satp_ppn"] << 38) | (u_tlb["ptw_req_data_o.prv"] << 36) | u_tlb["ptw_req_data_o.addr"]
+  `ptw_req_data_o__bpo.addr` = t191#[0..=35]
+  `ptw_req_data_o__bpo.prv` = t191#[36..=37]
+  `ptw_req_data_o__bpo.satp_mode` = t191#[66..=69]
+  `ptw_req_data_o__bpo.satp_ppn` = t191#[38..=65]
   ptw_req_data_o.addr = `ptw_req_data_o__bpo.addr`
   ptw_req_data_o.prv = `ptw_req_data_o__bpo.prv`
   ptw_req_data_o.satp_mode = `ptw_req_data_o__bpo.satp_mode`

@@ -68,10 +68,6 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
   reg s3_ba_written_entry_q:u3:[clock_pin=ref clkgt]
   reg write_around_cnt_q:u4:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clkgt]
   reg vm_status_ts_q:u8:[clock_pin=ref clkgt]
-  mut reduce_ready_o__w1 = unsigned(fsm_state_q == 0)
-  mut new_req__w1 = unsigned(((reduce_start_i != 0) or (tensorstore_start_i != 0)) and (reduce_ready_o__w1 != 0))
-  mut clk_en__w1 = unsigned((reduce_ready_o__w1 == 0) or (new_req__w1 != 0))
-  mut u_clk_gate = prim_clk_gate::[name=u_clk_gate](clk_i = clk_i, en_i = clk_en__w1 | chicken_bit_dcache_i, `dft_i.scanmode` = 0, `dft_i.scan_reset_n` = 0, `dft_i.sram_clk_override` = 0, `dft_i.ram_rei` = 0, `dft_i.ram_wei` = 0)
   mut req_info_d = 0
   mut `l2_req.id` = 0
   mut `l2_req.source` = 0
@@ -122,20 +118,20 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
   mut `vm_status_ts_o__bpo.debug` = 0
   mut write_around_cnt_d__wtmp = 0ub????
   wire write_around_cnt_d:u4
-  mut reduce_wait_done__wtmp = 0ub?
-  wire reduce_wait_done:u1
-  mut any_packet__wtmp = 0ub?
-  wire any_packet:u1
-  mut scp_read_reg__wtmp = 0ub?
-  wire scp_read_reg:u1
-  mut re_l2_req_valid_o__wtmp = 0ub?
-  wire re_l2_req_valid_o:u1
-  mut ts_l2_req_valid_o__wtmp = 0ub?
-  wire ts_l2_req_valid_o:u1
   mut vpu_send_reg_tensor__wtmp = 0ub?
   wire vpu_send_reg_tensor:u1
+  mut scp_read_reg__wtmp = 0ub?
+  wire scp_read_reg:u1
+  mut any_packet__wtmp = 0ub?
+  wire any_packet:u1
+  mut re_l2_req_valid_o__wtmp = 0ub?
+  wire re_l2_req_valid_o:u1
   mut ba_alloc_o__wtmp = 0ub?
   wire ba_alloc_o:u1
+  mut reduce_wait_done__wtmp = 0ub?
+  wire reduce_wait_done:u1
+  mut ts_l2_req_valid_o__wtmp = 0ub?
+  wire ts_l2_req_valid_o:u1
   wire clkgt:u1
   mut rate_d = 0
   mut reg_count_d = 0
@@ -225,6 +221,10 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
   const address_save__w1 = unsigned(atrans_state_q == 7)
   const address_available__w1 = unsigned(address_count_q != 0)
   const atrans_en__w1 = unsigned((fsm_state_q == 2) or (atrans_state_q != 0))
+  const reduce_ready_o__w1 = unsigned(fsm_state_q == 0)
+  const new_req__w1 = unsigned(((reduce_start_i != 0) or (tensorstore_start_i != 0)) and (reduce_ready_o__w1 != 0))
+  const clk_en__w1 = unsigned((reduce_ready_o__w1 == 0) or (new_req__w1 != 0))
+  mut u_clk_gate = prim_clk_gate::[name=u_clk_gate](clk_i = clk_i, en_i = clk_en__w1 | chicken_bit_dcache_i, `dft_i.scanmode` = 0, `dft_i.scan_reset_n` = 0, `dft_i.sram_clk_override` = 0, `dft_i.ram_rei` = 0, `dft_i.ram_wei` = 0)
   clkgt = u_clk_gate
   mut _mux_8:u8 = if thread_id_i != 0 { vm_status_i#[8..=15]#[0..=7] } else { vm_status_i#[0..=7]#[0..=7] }
   const addr_d__w1 = (addr_q + stride_addr_q)#[0..=43]
@@ -616,26 +616,26 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
   }
   any_packet__wtmp = unsigned((s0_inst_send_val_q != 0) or (s1_inst_send_val_o != 0) or (s2_inst_send_val_o != 0) or (s3_inst_send_val_o != 0) or (s4_send_pending_pre != 0) or (s4_send_pending_q != 0))
   reduce_wait_done__wtmp = unsigned((reg_count_q == 0) and (ba_alloc_fifo_val == 0) and (ba_op_fifo_valid == 0) and (s1_inst_op_val_o == 0) and (s2_inst_op_val_o == 0) and (s3_inst_op_val_o == 0))
-  const t1141 = (`l2_req.id` << 317) | (`l2_req.source` << 316) | (`l2_req.wdata` << 315) | (`l2_req.opcode` << 310) | (`l2_req.address` << 270) | (`l2_req.data` << 14) | (`l2_req.size` << 11) | (`l2_req.qwen` << 7) | `l2_req.subopcode`
-  const t1177 = (`l2_req.id` << 317) | (`l2_req.source` << 316) | (`l2_req.wdata` << 315) | (`l2_req.opcode` << 310) | (`l2_req.address` << 270) | (`l2_req.data` << 14) | (`l2_req.size` << 11) | (`l2_req.qwen` << 7) | `l2_req.subopcode`
-  `re_l2_req_o__bpo.address` = t1141#[270..=309]
-  `re_l2_req_o__bpo.data` = t1141#[14..=269]
-  `re_l2_req_o__bpo.id` = t1141#[317..=321]
-  `re_l2_req_o__bpo.opcode` = t1141#[310..=314]
-  `re_l2_req_o__bpo.qwen` = t1141#[7..=10]
-  `re_l2_req_o__bpo.size` = t1141#[11..=13]
-  `re_l2_req_o__bpo.source` = (t1141 >> 316) & 1
-  `re_l2_req_o__bpo.subopcode` = t1141#[0..=6]
-  `re_l2_req_o__bpo.wdata` = (t1141 >> 315) & 1
-  `ts_l2_req_o__bpo.address` = t1177#[270..=309]
-  `ts_l2_req_o__bpo.data` = t1177#[14..=269]
-  `ts_l2_req_o__bpo.id` = t1177#[317..=321]
-  `ts_l2_req_o__bpo.opcode` = t1177#[310..=314]
-  `ts_l2_req_o__bpo.qwen` = t1177#[7..=10]
-  `ts_l2_req_o__bpo.size` = t1177#[11..=13]
-  `ts_l2_req_o__bpo.source` = (t1177 >> 316) & 1
-  `ts_l2_req_o__bpo.subopcode` = t1177#[0..=6]
-  `ts_l2_req_o__bpo.wdata` = (t1177 >> 315) & 1
+  const t1140 = (`l2_req.id` << 317) | (`l2_req.source` << 316) | (`l2_req.wdata` << 315) | (`l2_req.opcode` << 310) | (`l2_req.address` << 270) | (`l2_req.data` << 14) | (`l2_req.size` << 11) | (`l2_req.qwen` << 7) | `l2_req.subopcode`
+  const t1176 = (`l2_req.id` << 317) | (`l2_req.source` << 316) | (`l2_req.wdata` << 315) | (`l2_req.opcode` << 310) | (`l2_req.address` << 270) | (`l2_req.data` << 14) | (`l2_req.size` << 11) | (`l2_req.qwen` << 7) | `l2_req.subopcode`
+  `re_l2_req_o__bpo.address` = t1140#[270..=309]
+  `re_l2_req_o__bpo.data` = t1140#[14..=269]
+  `re_l2_req_o__bpo.id` = t1140#[317..=321]
+  `re_l2_req_o__bpo.opcode` = t1140#[310..=314]
+  `re_l2_req_o__bpo.qwen` = t1140#[7..=10]
+  `re_l2_req_o__bpo.size` = t1140#[11..=13]
+  `re_l2_req_o__bpo.source` = (t1140 >> 316) & 1
+  `re_l2_req_o__bpo.subopcode` = t1140#[0..=6]
+  `re_l2_req_o__bpo.wdata` = (t1140 >> 315) & 1
+  `ts_l2_req_o__bpo.address` = t1176#[270..=309]
+  `ts_l2_req_o__bpo.data` = t1176#[14..=269]
+  `ts_l2_req_o__bpo.id` = t1176#[317..=321]
+  `ts_l2_req_o__bpo.opcode` = t1176#[310..=314]
+  `ts_l2_req_o__bpo.qwen` = t1176#[7..=10]
+  `ts_l2_req_o__bpo.size` = t1176#[11..=13]
+  `ts_l2_req_o__bpo.source` = (t1176 >> 316) & 1
+  `ts_l2_req_o__bpo.subopcode` = t1176#[0..=6]
+  `ts_l2_req_o__bpo.wdata` = (t1176 >> 315) & 1
   const pipe_used_pre__w1 = unsigned((vpu_send_reg__w1 != 0) or (scp_read_reg != 0))
   const load_send_fifo_data__w1 = unsigned((s4_send__w1 != 0) or ((s4_send_pending_pre != 0) and (s4_send_pending_q == 0)))
   rate_counter_d = rate_counter_q
