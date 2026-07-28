@@ -22,10 +22,6 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
   mut _mux_59 = 0
   mut _mux_60 = 0
   mut l2_req_msg_data = 0
-  wire addr_phys:u40
-  wire address_fifo_full:u1
-  wire ba_alloc_fifo_val:u1
-  wire ba_op_fifo_data:u3
   reg pipe_used_o:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clkgt]
   reg s1_inst_send_val_o:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clkgt]
   reg s2_inst_send_val_o:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clkgt]
@@ -89,6 +85,17 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
   mut `dft_zero.sram_clk_override` = 0
   mut `dft_zero.ram_rei` = 0
   mut `dft_zero.ram_wei` = 0
+  wire addr_phys:u40
+  wire address_for_l2_ready:u1
+  wire address_fifo_full:u1
+  wire clkgt:u1
+  wire ba_op_fifo_data:u3
+  wire s4_send_pending_pre:u1
+  wire ba_op_fifo_valid:u1
+  wire ba_alloc_fifo_val:u1
+  wire ba_op_fifo_full:u1
+  wire ba_alloc_fifo_rdata:u3
+  wire ba_data_send_fifo_valid:u1
   mut `re_l2_req_o__bpo.id` = 0
   mut `re_l2_req_o__bpo.source` = 0
   mut `re_l2_req_o__bpo.wdata` = 0
@@ -116,23 +123,22 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
   mut `vm_status_ts_o__bpo.sum` = 0
   mut `vm_status_ts_o__bpo.mxr` = 0
   mut `vm_status_ts_o__bpo.debug` = 0
-  mut write_around_cnt_d__wtmp = 0ub????
-  wire write_around_cnt_d:u4
+  mut reduce_wait_done__wtmp = 0ub?
+  wire reduce_wait_done:u1
   mut vpu_send_reg_tensor__wtmp = 0ub?
   wire vpu_send_reg_tensor:u1
-  mut scp_read_reg__wtmp = 0ub?
-  wire scp_read_reg:u1
+  mut write_around_cnt_d__wtmp = 0ub????
+  wire write_around_cnt_d:u4
+  mut ba_alloc_o__wtmp = 0ub?
+  wire ba_alloc_o:u1
   mut any_packet__wtmp = 0ub?
   wire any_packet:u1
   mut re_l2_req_valid_o__wtmp = 0ub?
   wire re_l2_req_valid_o:u1
-  mut ba_alloc_o__wtmp = 0ub?
-  wire ba_alloc_o:u1
-  mut reduce_wait_done__wtmp = 0ub?
-  wire reduce_wait_done:u1
   mut ts_l2_req_valid_o__wtmp = 0ub?
   wire ts_l2_req_valid_o:u1
-  wire clkgt:u1
+  mut scp_read_reg__wtmp = 0ub?
+  wire scp_read_reg:u1
   mut rate_d = 0
   mut reg_count_d = 0
   mut addr_msb_err_d = 0
@@ -149,17 +155,11 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
   mut address_use_idx_d = 0
   mut err_mem_d = 0
   mut ba_available_d = 0
-  wire s4_send_pending_pre:u1
-  wire address_for_l2_ready:u1
-  wire ba_op_fifo_valid:u1
   mut last_packet_row = 0
   mut rate_counter_d = 0
   mut l2_backoff_d = 0
   mut l2_backoff_count_d = 0
   mut write_around_cnt_up = 0
-  wire ba_op_fifo_full:u1
-  wire ba_data_send_fifo_valid:u1
-  wire ba_alloc_fifo_rdata:u3
   req_info_d = 0ub????????????????????
   ba_entries_required_o = 0ub?
   ba_read_addr_o = 0ub???
@@ -424,7 +424,6 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
       atrans_state_d = if atrans_num_req_q != 0 { 2 } else { 0 }
     }
     == 2 {
-      
       if (s0_available_i != 0) and (address_fifo_full == 0) {
         atrans_state_d = 3
       }
@@ -502,7 +501,6 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
     ba_available_d = 0
   } elif fsm_state_q == 3 {
     
-    
     ba_available_d = unsigned((ba_full_i == 0) or (ba_alloc_fifo_val != 0))
   }
   vpu_send_reg_tensor__wtmp = unsigned((fsm_state_q == 8) and (ts_is_from_scp_q == 0) and (address_available__w1 != 0) and (ba_full_i == 0) and (reg_count_q != 0))
@@ -561,7 +559,6 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
     
     _mux_51 = if ((req_info_q >> 3) & 1) != 0 { 0 } else { _mux_50#[0..=6] }
     
-    
     `l2_req.subopcode` = _mux_51#[0..=6]
     _mux_52 = if req_info_q#[4..=6]#[0..=2] == 2 { (addr_phys#[5..=39] << 5)#[0..=39] } else { (addr_phys#[6..=39] << 6)#[0..=39] }
     
@@ -589,7 +586,6 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
   ba_read_addr_o = ba_data_send_fifo_data_q
   if (ba_op_fifo_valid != 0) and (s1_valid_i == 0) and (ba_read_used_i == 0) {
     ba_read_en_o = 1
-    
     s1_inst_op_val_o = 1
     ba_read_addr_o = ba_op_fifo_data
     `vpu_ctrl_o__bpo.exec_op` = 1
