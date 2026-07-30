@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Formal assert/assume: the <core>/verif/$CORE_UNIT.verify.prp sidecar proves
 # arithmetic facts about one real module of the design (dino: the ALU's ADDW
-# sum + sign-extension; minion: the TxFMA 64-bit adder). Strict mode: an
-# UNKNOWN fails the run, so PASS == all PROVEN.
+# sum + sign-extension; minion: the TxFMA 64-bit adder). lhd is strict by
+# default: an UNKNOWN fails the run, so PASS == all PROVEN.
 #
 #   MODE=cold  one proving run.
 #   MODE=incr  three runs sharing one --workdir (formal_cache.json under it):
@@ -15,7 +15,7 @@ copy_core_pyrope src/pyrope
 
 vrun() {
   lhd formal verify "src/pyrope/$CORE_UNIT.prp" "$CORE_VERIF_DIR/$CORE_UNIT.verify.prp" \
-    --top "$CORE_UNIT" --set formal.bound=2 --set formal.strict=true --workdir FW
+    --top "$CORE_UNIT" --set formal.bound=2 --workdir FW
 }
 
 check_proven() {  # LOG — both sidecar asserts must be PROVEN

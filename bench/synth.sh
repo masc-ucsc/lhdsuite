@@ -163,19 +163,20 @@ lec_flat | lec_synth)
   run_timed gensim lhd pass liberty gensim \
     "$HAGENT_TECH_DIR/sky130_fd_sc_hd__tt_025C_1v80.lib" --emit-dir lg:models --workdir Wm
 
-  # strict: an UNKNOWN is a failure here, not a shrugged-off pass — the whole
-  # point is trusting (or not) the generated netlist. CORE_LEC_TRUST (defs.bzl)
-  # assumes the design's latch-holding DEFS equal, so the ref (design) side is
-  # not refused for holding state the encoder cannot normalize across a module
-  # boundary — the same escape hatch as bench/lec.sh
-  # (fixme issue 1). Names absent from the netlist are silently ignored.
+  # lhd is strict by default, so an UNKNOWN is a failure here, not a
+  # shrugged-off pass — the whole point is trusting (or not) the generated
+  # netlist. CORE_LEC_TRUST (defs.bzl) assumes the design's latch-holding DEFS
+  # equal, so the ref (design) side is not refused for holding state the
+  # encoder cannot normalize across a module boundary — the same escape hatch
+  # as bench/lec.sh (fixme issue 1). Names absent from the netlist are silently
+  # ignored.
   if [ -n "$CORE_LEC_TRUST" ]; then
     run_timed netlist_lec lhd lec --impl lg:net_pass2 --ref lg:lg_p2 \
-      --lib lg:models --top "$TOP" --set formal.strict=true \
+      --lib lg:models --top "$TOP" \
       --set "formal.lec.trust=$CORE_LEC_TRUST" --workdir LW
   else
     run_timed netlist_lec lhd lec --impl lg:net_pass2 --ref lg:lg_p2 \
-      --lib lg:models --top "$TOP" --set formal.strict=true --workdir LW
+      --lib lg:models --top "$TOP" --workdir LW
   fi
   if grep -qia "refut" step_netlist_lec.log; then
     echo "FAIL: pass-2 $alg netlist NOT equivalent to the design" >&2

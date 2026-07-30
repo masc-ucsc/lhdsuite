@@ -55,10 +55,10 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             design's OWN body encodes fine; it is the hierarchy that refuses.
 #             The driver skips proving each listed def and
 #             black-boxes its instances, so the latch-free majority is still
-#             proven bottom-up instead of the whole design refusing. lec.sh
-#             also sets formal.strict=true whenever this is non-empty, so a
-#             witness-free UNKNOWN top is a hard fail (a trust list must not
-#             turn an inconclusive run green). Every trusted def is disclosed
+#             proven bottom-up instead of the whole design refusing. lhd is
+#             strict by default, so a witness-free UNKNOWN top is a hard fail
+#             (a trust list must not turn an inconclusive run green). Every
+#             trusted def is disclosed
 #             ("PROVEN under N trusted def(s)"); include each parameterized
 #             `_pN` twin, since a variant is a distinct def. "" = trust
 #             nothing (the encoder proves or refuses every def). See the

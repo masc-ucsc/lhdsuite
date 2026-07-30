@@ -17,10 +17,10 @@
 # A core with a CORE_LEC_TRUST list (minion — defs holding a latch or negedge
 # flop ONE MODULE LEVEL DOWN, which edge normalization cannot rewrite across a
 # module boundary yet; fixme issue 1) runs every lec_run with
-# `--set formal.lec.trust=…`
-# and `--set formal.strict=true`: the listed defs are assumed equal (disclosed,
-# never proven), the latch-free majority is proven bottom-up, and a witness-free
-# UNKNOWN top is a hard fail (a trust list must not turn an inconclusive green).
+# `--set formal.lec.trust=…`: the listed defs are assumed equal (disclosed,
+# never proven) and the latch-free majority is proven bottom-up. Strict is the
+# lhd default, so a witness-free UNKNOWN top is a hard fail either way (a trust
+# list must not turn an inconclusive green).
 RF="${TEST_SRCDIR:-${RUNFILES_DIR:-$0.runfiles}}"
 . "$RF/_main/bench/common.sh"
 
@@ -38,14 +38,14 @@ compile_impl() {  # OUT_LG — compile the (possibly variant-overlaid) copy
 lec_run() {  # IMPL_LG
   # CORE_LEC_TRUST (defs.bzl): modules ASSUMED equivalent without proof — the
   # escape hatch for cones holding a cell the LEC encoder cannot model yet (a
-  # latch). With a trust list we also run strict, so a witness-free UNKNOWN top
-  # is a hard fail: a trust list must let the latch-free majority PROVE, never
-  # turn an inconclusive run green (AGENTS.md: never loosen the gate). Two
-  # explicit forms rather than one array — an empty "${arr[@]}" is an unbound
-  # error under `set -u` in the sandbox's bash.
+  # latch). lhd is strict by default, so a witness-free UNKNOWN top is a hard
+  # fail: a trust list must let the latch-free majority PROVE, never turn an
+  # inconclusive run green (AGENTS.md: never loosen the gate). Two explicit
+  # forms rather than one array — an empty "${arr[@]}" is an unbound error
+  # under `set -u` in the sandbox's bash.
   if [ -n "$CORE_LEC_TRUST" ]; then
     lhd lec --impl "lg:$1" --ref lg:ref.lg --top "$CORE_TOP" --workdir LW \
-      --set "formal.lec.trust=$CORE_LEC_TRUST" --set formal.strict=true
+      --set "formal.lec.trust=$CORE_LEC_TRUST"
   else
     lhd lec --impl "lg:$1" --ref lg:ref.lg --top "$CORE_TOP" --workdir LW
   fi
