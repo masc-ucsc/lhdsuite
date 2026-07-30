@@ -1,0 +1,82 @@
+# Pyrope Synthesis Frequency Results — dino (PipelinedDualIssueCPU)
+# Date: 2026-07-24
+# Flow: lhd compile (inou.prp) -> pass color acyclic -> pass abc (5x) -> pass opentimer (5x, hier=true)
+# Tech library: /mada/users/mtmosher/chisel-poseidon2/synth_test/sky130_fd_sc_hd__tt_025C_1v80.lib
+# ABC adder: pass.abc.adder=rca (matches Chisel run — required for a fair comparison)
+# Top module: PipelinedDualIssueCPU.PipelinedDualIssueCPU  (Pyrope uses dotted module names;
+#     `--top PipelinedDualIssueCPU` works at compile time but pass.* commands need the dotted form.)
+# Pyrope sources: /mada/users/frabieik/livehd/dino_prp/  (17 .prp files, 1830 lines)
+#
+# Format: Run | Critical Path Delay (ns) | Frequency (MHz) = 1000/delay_ns
+Run 1: 34.5042 ns = 28.98 MHz  (= 0.02898 GHz)
+Run 2: 34.5042 ns = 28.98 MHz
+Run 3: 34.5042 ns = 28.98 MHz
+Run 4: 34.5042 ns = 28.98 MHz
+Run 5: 34.5042 ns = 28.98 MHz
+
+Mean: 28.98 MHz
+Min:  28.98 MHz
+Max:  28.98 MHz
+
+# Same "no variance across 5 runs" observation as the Chisel run: lhd pass.abc is DETERMINISTIC
+# on this design + this Liberty lib. One run would suffice; five confirm no variance.
+
+# ---------- Direct comparison ----------
+# Chisel: 36.271 ns / 27.57 MHz   (67,445 gates, 318,048 area units)
+# Pyrope: 34.5042 ns / 28.98 MHz  (124,186 gates, 520,582 area units)
+# Pyrope is ~5% FASTER (shorter critical path), but ~1.85x LARGER in gate/area count.
+# The two implementations put the critical path in DIFFERENT places (see below).
+
+# ---------- Critical path ----------
+#   module      : PipelinedDualIssueCPU.PipelinedDualIssueCPU
+#   endpoint pin: sub_1028.pipeB_ex_mem.sub_16.g527_sky130_fd_sc_hd__nor3b_1:Y
+#   endpoint src: ./dino_prp/StageReg_6.prp:6
+#   start       : sub_160.pipeB_id_ex.sub_20.reg_instruction.21  (StageReg_2.prp:8)
+#   path length : 183 timing steps
+#
+# Interpretation — Pyrope's critical path is:
+#   pipeB_id_ex.reg_instruction (flop Q)
+#     -> DualIssueForwardingUnit combo (~1.7 ns)
+#     -> ALUControl.prp:8 nor4 gate with heavy fan-out (~4.27 ns single-cell delay)
+#     -> PipelinedDualIssueCPU.prp:272,308 mux selecting ALU input operand
+#     -> pipeB_alu (ALU.prp:26) — the 64-bit ripple-carry ADDER (maj3_1 chain,
+#        ~85+ maj3 cells × ~0.20-0.26 ns each)
+#     -> pipeB_ex_mem endpoint flop (StageReg_6.prp:6)
+#
+# The Pyrope critical path is a DIFFERENT ripple-carry adder from the Chisel one:
+#   Chisel:  PC adder in DualIssueNextPC (~100 maj3, ~24 ns spent in the adder)
+#   Pyrope:  ALU  adder in ALU.prp:26   (~85+ maj3, ~19 ns spent in the adder)
+# In Pyrope the PC adder is presumably faster (or the forwarding-to-ALU path just
+# happens to be slower), so the ALU adder is what's on the critical path here.
+# Both flows still use pass.abc.adder=rca so it's the same underlying rca structure;
+# what differs is which adder each design's control flow drives longest.
+
+# ---------- Top 10 worst endpoints (Run 1) ----------
+#     34.5042 ns  sub_1028.pipeB_ex_mem.sub_16.g527_sky130_fd_sc_hd__nor3b_1:Y   (./dino_prp/StageReg_6.prp:6)
+#     34.4625 ns  sub_984.pipeA_ex_mem.sub_16.g527_sky130_fd_sc_hd__nor3b_1:Y    (./dino_prp/StageReg_6.prp:6)
+#     34.4039 ns  sub_1028.pipeB_ex_mem.sub_16.g464_sky130_fd_sc_hd__nor3b_1:Y   (./dino_prp/StageReg_6.prp:6)
+#     34.3670 ns  sub_1028.pipeB_ex_mem.sub_16.g526_sky130_fd_sc_hd__nor3b_1:Y   (./dino_prp/StageReg_6.prp:6)
+#     34.3622 ns  sub_984.pipeA_ex_mem.sub_16.g464_sky130_fd_sc_hd__nor3b_1:Y    (./dino_prp/StageReg_6.prp:6)
+#     34.3267 ns  sub_1028.pipeB_ex_mem.sub_56.g264_sky130_fd_sc_hd__nor3b_1:Y   (./dino_prp/StageReg_2.prp:22)
+#     34.3253 ns  sub_984.pipeA_ex_mem.sub_16.g526_sky130_fd_sc_hd__nor3b_1:Y    (./dino_prp/StageReg_6.prp:6)
+#     34.2850 ns  sub_984.pipeA_ex_mem.sub_56.g264_sky130_fd_sc_hd__nor3b_1:Y    (./dino_prp/StageReg_2.prp:22)
+#     34.2667 ns  sub_1028.pipeB_ex_mem.sub_56.g201_sky130_fd_sc_hd__nor3b_1:Y   (./dino_prp/StageReg_2.prp:22)
+#     34.2250 ns  sub_984.pipeA_ex_mem.sub_56.g201_sky130_fd_sc_hd__nor3b_1:Y    (./dino_prp/StageReg_6.prp:6)
+# (All 10 endpoints are in pipeA/pipeB ex_mem stage registers; the source-map lines point at
+#  StageReg_6.prp:6 / StageReg_2.prp:22 because those are the register-declaration lines the
+#  flop cells inherit — the *combinational* work upstream is where the delay actually is.)
+
+# ---------- Notes on the source that was synthesized ----------
+# One line in ./dino_prp/DualIssueIssueUnit.prp:16 was rewritten in-place:
+#     BEFORE: _oddPC_T__w1 = io_pc - ((io_pc / 8) * 8)   # arithmetic form of pc%8
+#     AFTER:  _oddPC_T__w1 = io_pc & 7                    # semantically identical bit-AND
+# Reason: abc leaves the `/8` as a native `div` blackbox (`div_7420`) which opentimer refuses
+# to time. The bit-AND version tech-maps cleanly. The Chisel run applied the *same* rewrite
+# (`io_pc % 64'h8` -> `{61'h0, io_pc[2:0]}`) to its auto-generated DualIssueIssueUnit.sv, so
+# both sides of the comparison saw the equivalent const-mod optimization performed.
+#
+# Nothing else in dino_prp/ was modified.
+
+# ---------- Non-fatal caveats ----------
+# opentimer emitted no OT connect errors on the Pyrope netlist (contrast: 2 per run on Chisel).
+# All 5 runs cleanly pass with status:"pass", errors=0, warnings=0.

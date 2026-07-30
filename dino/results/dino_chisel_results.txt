@@ -1,0 +1,57 @@
+# Chisel Synthesis Frequency Results — dino (PipelinedDualIssueCPU)
+# Date: 2026-07-24
+# Flow: lhd compile (slang) -> pass color acyclic -> pass abc (5x) -> pass opentimer (5x, hier=true)
+# Tech library: /mada/users/mtmosher/chisel-poseidon2/synth_test/sky130_fd_sc_hd__tt_025C_1v80.lib
+#   (tt corner, 25 C, 1.80 V — the file $HAGENT_TECH_DIR/sky130_fd_sc_hd__tt_025C_1v80.lib
+#    referenced in the task instructions does not exist; only ff_100C_1v95 lives under
+#    $HAGENT_TECH_DIR=/mada/software/techfiles/sky130_fd_sc/. The tt lib was located in
+#    mtmosher's home. Passed to abc/opentimer explicitly.)
+# Filelist: /mada/users/frabieik/hagent/dino/build/build_dualissue_d/filelist.f
+#   (task instructions said ../simplechisel/build_dualissue_d/filelist.f — that path does
+#    not exist; the actual filelist lives under hagent/dino/build/)
+# Top module: PipelinedDualIssueCPU  (task instructions said PipelinedDualIssueCPU.PipelinedDualIssueCPU;
+#    the lgraph produced by `lhd compile` uses a single-name top.)
+# Coloring: `pass color flat` is NOT a subcommand in this lhd (algorithms available:
+#    acyclic|synth|path|mincut|clear). Used `pass color acyclic` (the default & the CLI's own example).
+#
+# Format: Run | Critical Path Delay (ns) | Frequency (MHz) = 1000/delay_ns
+Run 1: 36.271 ns = 27.57 MHz  (= 0.02757 GHz)
+Run 2: 36.271 ns = 27.57 MHz
+Run 3: 36.271 ns = 27.57 MHz
+Run 4: 36.271 ns = 27.57 MHz
+Run 5: 36.271 ns = 27.57 MHz
+
+Mean: 27.57 MHz
+Min:  27.57 MHz
+Max:  27.57 MHz
+
+# Note on the "5 stochastic runs": lhd's pass.abc is DETERMINISTIC for this design and lib
+# (same run_id, same output netlist, same critical path pin, same delay on every invocation).
+# One run would have sufficed; five confirm no variance.
+
+# Critical path (from timing.json):
+#   module      : PipelinedDualIssueCPU
+#   endpoint pin: sub_176.pipeA_ex_mem.sub_24.g527_sky130_fd_sc_hd__nor3b_1:Y
+#   source line : ../hagent/dino/build/build_dualissue_d/StageReg_6.sv:22
+#   start       : sub_100.pipeB_id_ex.sub_36.reg_isValid  (StageReg_2.sv:25)
+#
+# Interpretation: the critical path traverses ~100 chained sky130_fd_sc_hd__maj3_1 cells
+# (~0.39 ns each) inside sub_492.nextPCmod.sub_16 — this is the ripple-carry adder that
+# `pass.abc.adder=rca` (the DEFAULT) generates for the 64-bit PC add in DualIssueNextPC.sv:20.
+# The rca chain dominates: ~24 ns of the 36.27 ns is that adder alone.
+# Switching to `pass.abc.adder=cska` or `=cla` would substantially raise the frequency, but
+# for a Chisel-vs-Pyrope apples-to-apples comparison the Pyrope pipeline must use the same
+# adder setting.
+
+# Notes about the source .v that was synthesized:
+# The Chisel-generated DualIssueIssueUnit.sv contains `wire [63:0] _oddPC_T = io_pc % 64'h8;`
+# which abc leaves as a native `div` blackbox (opentimer refuses to time non-Liberty cells).
+# For this run, that line was rewritten in-place to the mathematically identical bit-slice
+#   `wire [63:0] _oddPC_T = {61'h0, io_pc[2:0]};`
+# so the whole design tech-maps cleanly. If Pyrope's flow produces an equivalent const-mod,
+# the same substitution applies on both sides.
+
+# Non-fatal caveat: opentimer reports 2 "can't connect pin" errors per run against
+# `sub_100.pipeB_immGen.sub_20.g257/g258` (get_mask nets). All 5 runs still succeed and
+# report the same max_delay; the affected cells are 2 buffers in the immGen decoder,
+# nowhere near the reported critical path. Flagged for follow-up.

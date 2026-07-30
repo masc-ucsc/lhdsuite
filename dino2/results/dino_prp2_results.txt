@@ -1,0 +1,53 @@
+# Pyrope Synthesis Frequency Results — dino (PipelinedDualIssueCPU) — cleaned Pyrope (dino_prp2/)
+# Date: 2026-07-24
+# Flow: lhd compile (inou.prp) -> pass color acyclic -> pass abc (5x) -> pass opentimer (5x, hier=true)
+# Tech library: /mada/users/mtmosher/chisel-poseidon2/synth_test/sky130_fd_sc_hd__tt_025C_1v80.lib
+#   (task instructions reference $HAGENT_TECH_DIR/sky130_fd_sc_hd__tt_025C_1v80.lib, but only
+#    ff_100C_1v95 lives under $HAGENT_TECH_DIR — the tt lib was passed explicitly via
+#    --set pass.abc.library and as a positional arg to opentimer.)
+# ABC adder: pass.abc.adder=rca (matches Chisel & pre-clean Pyrope runs)
+# Top module: PipelinedDualIssueCPU.PipelinedDualIssueCPU
+# Pyrope sources: /mada/users/frabieik/livehd/dino_prp2/  (17 .prp files, 1822 lines — 8 fewer than dino_prp/)
+# Only cleanup applied vs dino_prp/: ImmediateGenerator.prp deduped 9 identical
+#   `const tN = (io_instruction >> 31) & 1` to 1 (t_sign). Logically equivalent (LEC-verified).
+#
+# Format: Run | Critical Path Delay (ns) | Frequency (MHz) = 1000 / delay_ns
+Run 1: 34.5042 ns = 28.98 MHz  (= 0.02898 GHz)
+Run 2: 34.5042 ns = 28.98 MHz
+Run 3: 34.5042 ns = 28.98 MHz
+Run 4: 34.5042 ns = 28.98 MHz
+Run 5: 34.5042 ns = 28.98 MHz
+
+Mean: 28.98 MHz
+Min:  28.98 MHz
+Max:  28.98 MHz
+
+# Same DETERMINISTIC behavior as the Chisel & pre-clean Pyrope runs. Zero variance.
+
+# ---------- Direct comparison ----------
+# Chisel        : 36.271  ns / 27.57 MHz
+# Pyrope prp    : 34.5042 ns / 28.98 MHz
+# Pyrope prp2   : 34.5042 ns / 28.98 MHz  (this run)
+#
+# Cleanup impact: NONE on synthesized timing — the dedup replaces 9 identical
+# expressions with 1, but abc CSE'd those to the same net anyway. Post-abc
+# netlist is identical (same run_id 999bf3425e9b75f4 across all 5 abc runs).
+#
+# Chisel -> Pyrope (both prp and prp2):
+#   delay reduction: (36.271 - 34.5042) / 36.271 = 4.87% shorter critical path
+#   frequency gain : 28.98 / 27.57 = +5.12%
+#   >>> 5% improvement threshold is MET (barely).
+
+# ---------- Critical path (Run 1, unchanged from dino_prp) ----------
+#   module      : PipelinedDualIssueCPU.PipelinedDualIssueCPU
+#   endpoint pin: sub_552.pipeB_ex_mem.sub_16.g527_sky130_fd_sc_hd__nor3b_1:Y
+#   endpoint src: ./dino_prp2/StageReg_6.prp:6
+#   start       : sub_92.pipeB_id_ex.sub_20.reg_instruction.21  (StageReg_2.prp:8)
+# Interpretation matches dino_prp: pipeB_id_ex flop -> forwarding combo -> ALUControl nor4 ->
+# mux to ALU input -> pipeB_alu 64-bit RCA adder -> pipeB_ex_mem endpoint flop.
+
+# ---------- LEC verification ----------
+# lhd lec --ref lg:dino_v1 --impl dino_prp2/PipelinedDualIssueCPU.prp
+#   -> PROVEN equivalent  (17/17 modules; 14 by cvc5 solver, 3 by structural semdiff)
+#   -> 4.281 s total
+# Prior sanity check on dino_prp/ (pre-clean): also PROVEN equivalent (4.397 s).
