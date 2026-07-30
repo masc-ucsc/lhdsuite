@@ -71,9 +71,11 @@ CORES = {
         "v_flags": "",
         "color_algs": ["flat", "synth"],
         "sim_tb": "stagereg_tb.prp",
-        # The Verilog StageReg's `struct packed` io_in/io_data re-emit as tuple
-        # ports; this twin drives the leaves and prints the same packed value.
-        "sim_tb_v": "stagereg_v_tb.prp",
+        # StageReg's io_in/io_data are TUPLE ports in both trees now — the
+        # checked-in Pyrope is regenerated from the same `struct packed` Verilog
+        # that MODE=verilog re-emits — so the one leaf-driving testbench serves
+        # both modes and the twin this knob used to point at is gone.
+        "sim_tb_v": "",
         "sim_expect": "data=4660",
         "sim_top_tb": "dino_tb.prp",
         "sim_prog_tb": "dino_prog_tb.prp",

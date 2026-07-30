@@ -1,7 +1,29 @@
 // Hello-world simulation driver for a real dino module: a pipeline stage
 // register (clocked, with reset/flush/valid). This is the asserted sim smoke
-// of the suite; the whole-CPU driver (dino_tb.prp) is tracked separately
-// until lhd sim supports the register-file comb-feedback instance pattern.
+// of the suite; the whole-CPU drivers (dino_tb.prp, dino_prog_tb.prp) are
+// separate targets.
+//
+// The port is a TUPLE in BOTH trees, so this one driver serves MODE=pyrope and
+// MODE=verilog alike (dino's `sim_tb_v` knob in bench/defs.bzl is therefore
+// ""). dino/verilog/StageReg.sv declares
+//   input struct packed {logic [31:0] instruction; logic [63:0] pc;
+//                        logic isValid;} io_in
+// which `lhd compile verilog --emit-dir pyrope:` emits as
+//   io_in:(instruction:u32, pc:u64, isValid:u1)
+// and the checked-in dino/pyrope/StageReg.prp — regenerated from that same
+// Verilog — now declares it the same way. (It used to be one flat io_in:u97,
+// which is why a separate verilog-side twin existed.) A whole-tuple scalar
+// write (`acc.io_in = 0x1234`) names no field of the tuple, so the leaves are
+// driven individually.
+//
+// Stimulus is 0x1234 in the struct's field layout
+// {instruction[96:65], pc[64:1], isValid[0]}: pc = 0x91a, rest 0. Each leaf is
+// checked on its own and the printed `data=` is the packed value, so one
+// CORE_SIM_EXPECT gates both modes.
+//
+// Do NOT compare a reconstructed 97-bit value here: testbench scalars silently
+// truncate past 64 bits (`x << 65` folds to 0 — fixme.md issue 6), so a packed
+// compare would be checking zeros.
 //
 // Usage: copy next to a Pyrope tree of the design (dino/pyrope, or a slang
 // re-emission of dino/verilog), then:  lhd sim <dir>/stagereg_tb.prp
@@ -9,15 +31,23 @@ const stage = import("StageReg.StageReg")
 
 test stage.hello(cycles:u20 = 1000) {
   mut acc = stage
-  mut got = 0
+  mut got_instruction = 0
+  mut got_pc = 0
+  mut got_isvalid = 0
   tick cycles clocks=(clock=1) {
     acc.reset = clock < 2
     acc.io_flush = 0
     acc.io_valid = 1
-    acc.io_in = 0x1234
+    acc.io_in.instruction = 0
+    acc.io_in.pc = 0x91a
+    acc.io_in.isValid = 0
     step
-    got = acc.io_data
+    got_instruction = acc.io_data.instruction
+    got_pc = acc.io_data.pc
+    got_isvalid = acc.io_data.isValid
   }
-  assert(got == 0x1234, "StageReg latched the driven value after reset")
+  assert(got_instruction == 0 and got_pc == 0x91a and got_isvalid == 0,
+         "StageReg latched the driven value after reset")
+  const got = (got_pc << 1) | got_isvalid
   puts("hello world: dino StageReg ran {cycles} cycles, data={got}")
 }

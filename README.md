@@ -209,16 +209,21 @@ each scenario targets:
 | `unit` — module carrying the verify sidecar + `bug1`/`comment1` (must be in the top's cone) | `ALU` | `txfma_adder` |
 | `v_flags` — extra slang options for this core's Verilog | *(none)* | `--relax-enum-conversions --allow-use-before-declare` |
 | `sim_tb` — asserted sim testbench | `stagereg_tb.prp` | `tensora_rf_tb.prp` |
-| `sim_tb_v` — MODE=verilog override for `sim_tb` (`""` = one driver for both) | `stagereg_v_tb.prp` | *(none)* |
+| `sim_tb_v` — MODE=verilog override for `sim_tb` (`""` = one driver for both) | *(none)* | *(none)* |
 
 **Why a core may need two sim drivers.** The two trees are the same design but
-not the same Pyrope. A `struct packed` port re-emits from Verilog as a tuple
-port (`io_in:(instruction:u32, pc:u64, isValid:u1)`) while the checked-in
-Pyrope tree may declare it flat (`io_in:u97`), and a driver written for one
-shape names no field of the other — dino's `StageReg` is exactly that case, so
-`sim_tb_v` points MODE=verilog at a twin that drives the tuple leaves and
-prints the same packed value (one `sim_expect` gates both). minion's sim unit
-has no struct port, so it leaves the knob empty. Fixing this by flattening the
+need not be the same Pyrope. A `struct packed` port re-emits from Verilog as a
+tuple port (`io_in:(instruction:u32, pc:u64, isValid:u1)`); if the checked-in
+Pyrope tree declares that same port flat (`io_in:u97`), a driver written for
+one shape names no field of the other, and `sim_tb_v` points MODE=verilog at a
+twin that drives the tuple leaves and prints the same packed value (one
+`sim_expect` gates both). dino's `StageReg` used to be exactly that case. It no
+longer is: `dino/pyrope/` is regenerated from `dino/verilog/`, so the tuple port
+is now the shape on BOTH sides and the single `stagereg_tb.prp` drives the
+leaves for both modes — the knob stays for the next core that needs it. Note
+that a tree regeneration can therefore RETIRE this knob (as here) or newly
+require it; a `sim_pyrope` failing with "unknown field ... on instance" is the
+symptom. Fixing this by flattening the
 emission (`compile.slang.struct_port_bundles=false`) is deliberately NOT done:
 bench scripts do not carry lhd flags that exist only to make a bench pass, and
 graph flows keep ports flat anyway, so `sim_verilog` is the suite's only
