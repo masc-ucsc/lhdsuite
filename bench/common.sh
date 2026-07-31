@@ -108,6 +108,13 @@ lhd() {
   "$LHD_BIN" "$@"
 }
 
+# log_cmd STEP CMD... — record a NON-lhd command on the main output in the same
+# `CMD <step>: …` shape the wrapper above uses, so //bench:show lists it as part
+# of the flow. The only such command today is the sim driver binary that
+# `lhd sim` itself built (bench/sim.sh re-runs it to time the simulation apart
+# from the host C++ compile).
+log_cmd() { local step=$1; shift; printf 'CMD %s: %s\n' "$step" "$*" >&3; }
+
 # metric NAME VALUE UNIT — one greppable human line + one JSONL record that
 # bazel collects into the test's outputs.zip.
 metric() {

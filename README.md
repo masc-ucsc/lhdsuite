@@ -93,7 +93,7 @@ Every row below exists once per core — write `//bench:dino_compile_verilog` or
 | `synth` | each of the core's colorings (`color_algs`) + `pass abc` on the same design (sky130), timing + QoR (regions/gates/area/max_delay) for each. All run hier=true; the difference is the partitions: flat = one color across the hierarchy (one fused region, best cross-module optimization), synth = per-(module,color) regions. dino runs both; minion runs only `synth` (flat does not fit in memory at 534k nodes) |
 | `synth_incremental` | `color synth` + abc over 3 passes; incremental reuse needs the distinct colors/partitions that `color synth` creates (and `color flat` intentionally does not): asserts cache hits on the comment-only pass and a single-region re-synth after a one-line edit |
 | `synth_lec_flat` / `synth_lec_synth` | netlist integrity: synthesize twice (2nd run after a comment touch — under `color synth` that netlist is largely cache-CLONED), then `lhd lec --impl lg:netlist --ref lg:design --lib lg:models` proves it against the compiled design (`pass liberty gensim` provides the sky130 cell models; strict, so UNKNOWN fails). Only generated for colorings the core actually runs, so minion has no `synth_lec_flat` |
-| `sim_verilog` / `sim_pyrope` | hello-world `lhd sim` of one small clocked module (dino: a `StageReg`; minion: the VPU tensor-A register file). The Verilog side first re-emits through slang as Pyrope; cycles/s, VCD. One driver serves both modes unless the core sets `sim_tb_v` — dino does, because the Verilog `StageReg`'s `struct packed` port re-emits as a tuple while the checked-in Pyrope declares it flat. Whole-top drivers also run, reported as `METRIC sim_cpu_top_ok` / `sim_cpu_prog_ok`; a core setting `sim_top_assert` (dino) also GATES on them, one that does not (minion, still blocked by a derived clock the sim cgen cannot fold) reports the metric only |
+| `sim_verilog` / `sim_pyrope` | hello-world `lhd sim` of one small clocked module (dino: a `StageReg`; minion: the VPU tensor-A register file), 200k cycles with VCD on. The Verilog side first re-emits through slang as Pyrope. **The host C++ compile is reported apart from the simulation**: `lhd sim --setup-only` only writes the driver sources, and `--run-only` rebuilds `drv.bin` on every invocation, so `sim_run_ms` is mostly clang. The bench re-runs that binary itself (best of 3, since a loaded box stalls a 1 s measurement by 3-14x) for `sim_exec_ms`, leaving `sim_cc_ms` as the remainder; `//bench:show` prints both and gives cycles/s with and without the compile. The bench pins `--set sim.ninja=false` so `sim_cc_ms` always measures lhd's built-in parallel compile: `lhd sim` otherwise prefers a generated `build.ninja` when ninja is on PATH, which is the right default for a developer's warm edit-sim loop but would make this number depend on the machine (and buys the bench nothing — every target starts from a fresh workdir, so nothing is ever incremental). Both modes emit byte-identical driver C++ on both cores, so their cycles/s must agree — a real gap there is a codegen regression, not a slow tree. One driver serves both modes unless the core sets `sim_tb_v` (neither does today: dino's `StageReg` port is a tuple in both trees since the Pyrope was regenerated from that same `struct packed` Verilog). Whole-top drivers also run, reported as `METRIC sim_cpu_top_ok` / `sim_cpu_prog_ok`; a core setting `sim_top_assert` (dino) also GATES on them, one that does not (minion, still blocked by a derived clock the sim cgen cannot fold) reports the metric only |
 | `lec` | Pyrope impl ≡ Verilog ref (both pre-compiled to `lg:`; the Verilog side needs its slang options — `-F`/`-DSYNTHESIS` plus the core’s `v_flags`), PROVEN |
 | `lec_bug` | the core's `tests/bug1` variant must be REFUTED (dino: the ALU's 32-bit add flipped to subtract; minion: the same flip in `txfma_adder`) |
 | `lec_incremental` | cold / identical warm (verdict-cache hits) / comment-touch re-runs |
@@ -136,6 +136,46 @@ around 25 GB RSS) — budget accordingly, but no special timeout is needed.
 Note that minion runs only `pass color synth`: `color flat` fuses the whole
 hierarchy into one ABC region, which at 534k nodes projects ~801 GiB and is
 refused. That is a per-core `color_algs` knob, not a global change.
+
+### Driving the sim flow by hand
+
+`lhd sim --setup-only` stops after writing the driver: `<workdir>/sim/` is a
+self-contained bazel workspace (`MODULE.bazel`, `BUILD`, one `.cpp`/`.hpp` per
+module, `drv.cpp`), so the host C++ build is yours to drive — useful when you
+want to iterate on the generated code, keep an incremental build across edits,
+or just run the simulation more than once:
+
+```bash
+./bazel-bin/external/livehd+/lhd/lhd sim --setup-only \
+  ./dino/pyrope/PipelinedDualIssueCPU.prp dino/sim/dino_prog_tb.prp --workdir tmp_sim
+cd tmp_sim/sim/
+bazel build -c opt //...
+bazel run   -c opt //:drv
+./bazel-bin/drv --help
+```
+
+(`./bazel-bin/external/livehd+/lhd/lhd` is the binary this repo's bazel build
+produces — `bazel build @livehd//lhd:lhd` if it is not there yet. Any `lhd` on
+your PATH works the same way.)
+
+The design comes first, the testbench second; `--workdir` is the only state
+(everything below it is regenerable). `//:drv` is the driver binary, and it
+takes the arguments `lhd sim` would have forwarded:
+
+```bash
+./bazel-bin/drv --list-tests                  # tests + their parameters, as JSON
+./bazel-bin/drv --test cpu.prog --cycles 200000
+./bazel-bin/drv --result-json out.json        # {test,status,cycle,failing_assert,…}
+```
+
+A test parameter is bound by name — `lhd sim --arg cycles=200000` reaches the
+binary as `--cycles 200000`, so `--list-tests` is the authoritative list of
+what a driver accepts (`dino_prog_tb.prp` exposes `cycles`, default 2000).
+Adding `--set sim.vcd=true` to the `--setup-only` line makes the run dump a VCD.
+
+`lhd sim` without `--setup-only` does this compile itself and then simulates;
+`bench/sim.sh` splits the two (`--setup-only`, then `--run-only`) precisely so
+the reported time separates the host C++ compile from the simulation.
 
 ## Known-failing scenarios
 

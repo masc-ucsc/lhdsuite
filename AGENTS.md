@@ -56,7 +56,15 @@ Both cores share one shape (`<core>/` = `dino/` or `minion/`):
   `bug1` edit. Per-core slang options go in `v_flags`.
 - Every bench prints `METRIC <name> <value> <unit>` lines and logs each lhd
   invocation as a `CMD` line; `//bench:show` aggregates both from
-  `bazel-testlogs/`.
+  `bazel-testlogs/`. A non-lhd command that is part of the flow gets the same
+  line via `log_cmd` (only `sim.sh`'s re-run of the driver binary today).
+- **A timed step must time ONE thing.** `lhd sim --run-only` host-compiles the
+  generated driver before simulating, and on these designs that clang++ is 5-10s
+  against a simulation of ~1s — so `sim_run_ms` read as "simulation" was really
+  a clang stopwatch, and the two sim MODEs differed 2.5x while emitting
+  byte-identical C++. `sim.sh` now re-runs the built `drv.bin` to separate
+  `sim_cc_ms` from `sim_exec_ms`. Before believing a bench gap between two
+  modes, check whether the thing that differs is even in the measured interval.
 - Bench targets are tagged `exclusive` so timings stay clean — keep that for
   new targets.
 - If you change a design under `<core>/pyrope/`, check whether that core's

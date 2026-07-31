@@ -204,8 +204,12 @@ def report_core(root: Path, core: str) -> list:
     sp, sv = G("sim_pyrope"), G("sim_verilog")
     rep.head("sim (unit hello world)", sp, sv)
     if sp or sv:
-        # the run phase includes the generated driver's host C++ compile
-        print(f"   {'':10} {'transpile':>9} {'setup':>8} {'run(+cc)':>8} {'cycles/s':>9} {'top':>8}")
+        # `lhd sim --setup-only` only writes the driver sources; the host C++
+        # compile lives inside --run-only and is rebuilt every time, so it used
+        # to swamp the simulation it was being reported as. Keep the two apart:
+        # `c++` is the compile+link, `sim` the simulation of `cycles` cycles.
+        print(f"   {'':10} {'transpile':>9} {'setup':>7} {'c++':>8} {'sim':>8}"
+              f" {'cycles/s':>10} {'+c++':>10} {'top':>8}")
 
         def top_state(m):
             v = [m[k] for k in ("sim_cpu_top_ok", "sim_cpu_prog_ok") if k in m]
@@ -215,13 +219,18 @@ def report_core(root: Path, core: str) -> list:
                 return "blocked"
             return "ok" if all(x == 1 for x in v) else "-"
 
+        cyc = None
         for name, r in (("pyrope", sp), ("verilog", sv)):
             if not r:
                 continue
             m = r[3]
-            print(f"   {name:10} {fmt(m.get('transpile_ms'), 'ms'):>9} {fmt(m.get('sim_setup_ms'), 'ms'):>8}"
-                  f" {fmt(m.get('sim_run_ms'), 'ms'):>8} {fmt(m.get('sim_cycles_per_s')):>9}"
-                  f" {top_state(m):>8}")
+            cyc = m.get("sim_cycles", cyc)
+            print(f"   {name:10} {fmt(m.get('transpile_ms'), 'ms'):>9} {fmt(m.get('sim_setup_ms'), 'ms'):>7}"
+                  f" {fmt(m.get('sim_cc_ms'), 'ms'):>8} {fmt(m.get('sim_exec_ms'), 'ms'):>8}"
+                  f" {fmt(m.get('sim_cycles_per_s')):>10}"
+                  f" {fmt(m.get('sim_cycles_per_s_with_cc')):>10} {top_state(m):>8}")
+        print(f"   cycles/s: simulation alone (VCD on){' over ' + fmt(cyc) + ' cycles' if cyc else ''};"
+              f" +c++ folds in the driver's host compile")
         print("   top: whole-top drivers are informational, not asserted")
         rep.cmds(("sim_pyrope", sp), ("sim_verilog", sv))
 
