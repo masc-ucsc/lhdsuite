@@ -177,6 +177,41 @@ Adding `--set sim.vcd=true` to the `--setup-only` line makes the run dump a VCD.
 `bench/sim.sh` splits the two (`--setup-only`, then `--run-only`) precisely so
 the reported time separates the host C++ compile from the simulation.
 
+### Simulating the Verilog side
+
+`lhd sim` accepts `lg:DIR`/`ln:DIR` IR inputs exactly like `lhd compile`, so the
+Verilog tree needs no Pyrope round-trip: compile it into a library once, then
+hand that library to the testbench.
+
+```bash
+./bazel-bin/external/livehd+/lhd/lhd compile verilog --top PipelinedDualIssueCPU \
+  --emit-dir lg:lgdb -- -F ./dino/verilog/filelist.f -DSYNTHESIS
+./bazel-bin/external/livehd+/lhd/lhd sim lg:lgdb dino/sim/dino_prog_tb.prp --workdir tmp2
+```
+
+The design is the positional `lg:lgdb`, the testbench the `.prp` after it — the
+same order as the all-Pyrope form above, and `--setup-only` / `--run-only` /
+`--arg` / `--set sim.vcd=true` all behave identically. On minion, add that
+core's `v_flags` to the slang side (`--relax-enum-conversions
+--allow-use-before-declare`); see [Cores](#cores).
+
+What binds the two commands is the testbench's import:
+
+```prp
+const cpu = import("lg:PipelinedDualIssueCPU")   // dino/sim/dino_prog_tb.prp
+```
+
+`lg:NAME` is a **module name in the library** (the names in `lgdb/library.txt`),
+not a path — the `lg:DIR`/`ln:DIR` positionals say where to look. The same
+import also resolves against a design compiled from `.prp` sources in the same
+run, so ONE testbench drives both trees: `lhd sim ./dino/pyrope/…prp
+dino/sim/dino_prog_tb.prp` keeps working unchanged.
+
+`bench/sim.sh`'s `MODE=verilog` still goes the long way round (`lhd compile
+verilog --emit-dir pyrope:tree`, then sim that tree) on purpose — re-emitting
+Pyrope from Verilog and simulating the result is exactly the coverage
+`sim_verilog` exists to give. By hand, `lg:` is the short path.
+
 ## Known-failing scenarios
 
 The suite's job is to surface LiveHD gaps, so some targets fail by design
