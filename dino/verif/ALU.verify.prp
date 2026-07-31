@@ -4,9 +4,15 @@
 //
 // NOTE: each `formal` block is an INDEPENDENT test — its assumes constrain only
 // its own obligations, so the two blocks below may carry mutually-exclusive
-// assumes (0x17 vs 0x07) and both prove. (Before the upstream per-block scoping
-// fix they poisoned each other into "assume set contradictory", which is why
-// this sidecar used to carry only the ADDW block.)
+// constraints (0x17 vs 0x07) and both prove. (Before the upstream per-block
+// scoping fix they poisoned each other into "assume set contradictory", which
+// is why this sidecar used to carry only the ADDW block.)
+//
+// The op pins are spelled `assume_nocheck`: a plain `assume` is a PROOF
+// OBLIGATION (checked as an assert before it is used), and over a free input
+// `io_operation == 0x17` can never be proven — it REFUTES. `assume_nocheck`
+// is the explicit free environment constraint: assumed without check,
+// disclosed in the verdict table.
 //
 // Usage:
 //   lhd formal verify dino/pyrope/ALU.prp dino/verif/ALU.verify.prp \
@@ -18,7 +24,7 @@ const alu = import("ALU.ALU")
 
 formal alu.addw {
   mut acc = alu
-  assume(acc.io_operation == 0x17)
+  assume_nocheck(acc.io_operation == 0x17)
   assert(acc.io_result#[0..=31] == (acc.io_inputx#[0..=31] + acc.io_inputy#[0..=31])#[0..=31],
          "ADDW low 32 bits are the 32-bit sum")
   assert(acc.io_result#[31..=63] == 0 or acc.io_result#[31..=63] == 0x1ffffffff,
@@ -30,7 +36,7 @@ formal alu.addw {
 // == 0x07, the exact opposite of the block above.
 formal alu.add {
   mut acc = alu
-  assume(acc.io_operation == 0x07)
+  assume_nocheck(acc.io_operation == 0x07)
   assert(acc.io_result == (acc.io_inputx + acc.io_inputy)#[0..=63],
          "ADD is the full 64-bit sum")
 }
