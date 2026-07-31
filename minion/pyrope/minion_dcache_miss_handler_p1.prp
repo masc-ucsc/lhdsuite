@@ -111,6 +111,7 @@ pub mod minion_dcache_miss_handler_p1::[timecheck=false](clk_i:u1, rst_ni:u1, ne
   const l2_resp_is_my_id__w1 = unsigned(l2_resp_data_i.id#[0..=4] == my_l2_miss_id__w1)
   const l2_resp_is_my_id_uc__w1 = unsigned((unsigned(l2_resp_data_i.id#[0..=4] == my_l2_miss_id_uc_st__w1) != 0) or (unsigned(l2_resp_data_i.id#[0..=4] == my_l2_miss_id_uc_ld__w1) != 0))
   const l2_resp_opcode__w1 = l2_resp_data_i.opcode
+  const meta_write_clear_slock_o__w1 = clear_soft_lock_q
   const tag__w1 = req_q#[62..=101]#[7..=39]
   const set_o__w1 = req_q#[58..=61]
   const set_match__w1 = unsigned((set_o__w1 == req_info_i.set) and ((state_q != minion_dcache_pkg.MhInvalid) or (state_was_fill_resp_q != 0)))
@@ -161,10 +162,12 @@ pub mod minion_dcache_miss_handler_p1::[timecheck=false](clk_i:u1, rst_ni:u1, ne
   const response_err_uc__w1 = unsigned((l2_resp_valid_i != 0) and (l2_resp_is_my_id_uc__w1 != 0) and (l2_resp_opcode__w1 == minion_pkg.EtLinkRspErr))
   const response_err__w1 = unsigned((response_err_fill__w1 != 0) or (response_err_uc__w1 != 0))
   const bus_err_o__w1 = unsigned((response_err__w1 != 0) and (((req_q >> 4) & 1) == 0)) | (unsigned((response_err__w1 != 0) and (((req_q >> 4) & 1) != 0)) << 1)
+  const bus_err_addr_o__w1 = req_q#[62..=101]
   mut fence_rdy_o__w1 = fence_rdy_o
   fence_rdy_o__w1#[0..=0] = unsigned((state_q == minion_dcache_pkg.MhInvalid) or (((req_q >> 4) & 1) != 0))
   mut fence_rdy_o__w2 = fence_rdy_o__w1
   fence_rdy_o__w2#[1..=1] = unsigned((state_q == minion_dcache_pkg.MhInvalid) or (((req_q >> 4) & 1) != 1))
+  const csr_debug_signals_o__w1 = state_q
   mut sm_data_debug_signals_o__w1 = sm_data_debug_signals_o
   sm_data_debug_signals_o__w1#[384..=511] = 0
   mut sm_data_debug_signals_o__w2 = sm_data_debug_signals_o__w1
@@ -471,6 +474,8 @@ pub mod minion_dcache_miss_handler_p1::[timecheck=false](clk_i:u1, rst_ni:u1, ne
   `meta_write_req_o__bpo.set_idx` = set_o__w1
   `meta_write_req_o__bpo.way_en` = req_q#[42..=45]
   meta_write_valid_o__wtmp = unsigned((metawrite_pending_q != 0) and (writeback_pending_q == 0))
+  const ba_rptr_o__w1 = req_q#[46..=48]
+  const ba_is_amo_o__w1 = (req_q >> 2) & 1
   const going_to_uc_store_o__w1 = unsigned((state_q == minion_dcache_pkg.MhUcStoreWait) or (state_q == minion_dcache_pkg.MhUcStoreReq))
   mut sm_data_debug_signals_o__w4 = sm_data_debug_signals_o__w3
   sm_data_debug_signals_o__w4#[128..=255] = ((`writeback_req_o__bpo.tag` << 17) | (`writeback_req_o__bpo.set` << 13) | (`writeback_req_o__bpo.way_en` << 9) | 0 | 0 | 0 | (((`meta_write_req_o__bpo.set_idx` << 39) | (`meta_write_req_o__bpo.way_en` << 35) | (`meta_write_req_o__bpo.data.coh_state` << 33) | `meta_write_req_o__bpo.data.tag`) << 50) | (going_to_uc_store_o__w1 << 93) | (inflight_reduce_i << 94) | (inflight_misses_i#[0..=8] << 95) | (inflight_misses_i#[9..=17] << 104) | (evict_match_o__w1 << 113) | (tag_match_o__w1 << 114) | (can_accept_uc_o__w1 << 115) | (req_sec_rdy_o << 116) | (req_sec_val_i << 117) | (req_pri_rdy_o << 118) | (req_pri_val_i << 119))
@@ -497,12 +502,12 @@ pub mod minion_dcache_miss_handler_p1::[timecheck=false](clk_i:u1, rst_ni:u1, ne
   writeback_req_o.mem_idx = 0
   writeback_req_o.addr_low = 0
   sm_match_debug_signals_o = 0
-  ba_is_amo_o = (req_q >> 2) & 1
-  ba_rptr_o = req_q#[46..=48]
-  bus_err_addr_o = req_q#[62..=101]
+  ba_is_amo_o = ba_is_amo_o__w1
+  ba_rptr_o = ba_rptr_o__w1
+  bus_err_addr_o = bus_err_addr_o__w1
   bus_err_o = bus_err_o__w1
   can_accept_uc_o = can_accept_uc_o__w1
-  csr_debug_signals_o = state_q
+  csr_debug_signals_o = csr_debug_signals_o__w1
   evict_match_o = evict_match_o__w1
   fence_rdy_o = fence_rdy_o__w2
   fill_bus_error_o = unsigned((response_err_fill__w1 != 0) and (state_q == minion_dcache_pkg.MhFillResp))
@@ -529,7 +534,7 @@ pub mod minion_dcache_miss_handler_p1::[timecheck=false](clk_i:u1, rst_ni:u1, ne
   l2_miss_req_o.subopcode = `l2_miss_req_o__bpo.subopcode`
   l2_miss_req_o.wdata = `l2_miss_req_o__bpo.wdata`
   l2_resp_stall_o = unsigned((metawrite_pending_q != 0) or ((writeback_pending_q != 0) and (writeback_done_i == 0)))
-  meta_write_clear_slock_o = clear_soft_lock_q
+  meta_write_clear_slock_o = meta_write_clear_slock_o__w1
   meta_write_req_o.data.coh_state = `meta_write_req_o__bpo.data.coh_state`
   meta_write_req_o.data.tag = `meta_write_req_o__bpo.data.tag`
   meta_write_req_o.set_idx = `meta_write_req_o__bpo.set_idx`

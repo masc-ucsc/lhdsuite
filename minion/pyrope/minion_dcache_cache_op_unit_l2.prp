@@ -85,8 +85,10 @@ pub mod minion_dcache_cache_op_unit_l2::[timecheck=false](clk_i:u1, rst_ni:u1, s
   th_id_complete_o = 0ub????
   const err_flags_o__w1 = unsigned((err_mem_q != 0) and (((req_q >> 57) & 1) == 0)) | (unsigned((err_mem_q != 0) and (((req_q >> 57) & 1) != 0)) << 1)
   const s0_addr_load_o__w1 = unsigned((s0_available_i != 0) and (state_q == minion_dcache_pkg.L2CacheOpTranslate) and (s1_addr_load_pre_q == 0))
+  const s0_thread_id_o__w1 = (req_q >> 57) & 1
   const s1_addr_load_o__w1 = unsigned((s1_addr_load_pre_q != 0) and (s1_available_i != 0))
   const virtual_addr__w1 = req_addr_q#[6..=47] << 6
+  const s0_addr_msb_err_o__w1 = req_addr_msb_err_q
   const translated_addr__w1 = virtual_addr__w1#[0..=11] | (reg_tlb_addr_q << 12)
   const l2_resp_is_prefetch__w1 = unsigned((l2_resp_i.id#[0..=4] >= minion_dcache_pkg.EtLinkCoreMissIdL2Prefetch0) and (l2_resp_i.id#[0..=4] <= minion_dcache_pkg.EtLinkCoreMissIdL2Prefetch3))
   l2_cache_op_cnt_d = l2_cache_op_cnt_q
@@ -142,7 +144,8 @@ pub mod minion_dcache_cache_op_unit_l2::[timecheck=false](clk_i:u1, rst_ni:u1, s
   increment_ready_counters = 0
   if l2_req_ready_i != 0 {
     const t227 = (((req_q >> 57) & 1) * 2) + id_running_q
-    increment_ready_counters = (0 & (~(1 << t227))) | (1 << t227)
+    const t232 = (0 & (~(1 << t227))) | (1 << t227)
+    increment_ready_counters = t232
   }
   decrement_ready_counters = 0
   if (l2_resp_valid_i != 0) and (l2_resp_is_prefetch__w1 != 0) {
@@ -165,7 +168,8 @@ pub mod minion_dcache_cache_op_unit_l2::[timecheck=false](clk_i:u1, rst_ni:u1, s
       }
     }
     const t254 = (resp_th * 2) + resp_id
-    decrement_ready_counters = (0 & (~(1 << t254))) | (1 << t254)
+    const t259 = (0 & (~(1 << t254))) | (1 << t254)
+    decrement_ready_counters = t259
   } else {
     resp_id = 0
     resp_th = 0
@@ -212,6 +216,7 @@ pub mod minion_dcache_cache_op_unit_l2::[timecheck=false](clk_i:u1, rst_ni:u1, s
   } else {
     th_id_complete_o#[3..=3] = unsigned(ready_counters_q#[10..=19]#[5..=9] == 0)
   }
+  const csr_debug_signals_o__w1 = state_q
   cache_op_req_is_l2_q = unsigned(((cache_op_req_next_i.cmd == minion_pkg.cache_op_Pref) and (cache_op_req_next_i.dest_level >= minion_pkg.cache_op_L2) and (cache_op_req_next_i.dest_level < minion_pkg.cache_op_MEM)) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Flush_VA) and (cache_op_req_next_i.start_level >= minion_pkg.cache_op_L2) and (cache_op_req_next_i.dest_level > cache_op_req_next_i.start_level)) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Evict_VA) and (cache_op_req_next_i.start_level >= minion_pkg.cache_op_L2) and (cache_op_req_next_i.dest_level > cache_op_req_next_i.start_level)))
   cache_op_req_is_nop_q = unsigned(((cache_op_req_next_i.cmd == minion_pkg.cache_op_Pref) and (cache_op_req_next_i.dest_level == minion_pkg.cache_op_MEM)) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Flush_VA) and (cache_op_req_next_i.start_level >= minion_pkg.cache_op_L2) and (cache_op_req_next_i.dest_level <= cache_op_req_next_i.start_level)) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Evict_VA) and (cache_op_req_next_i.start_level >= minion_pkg.cache_op_L2) and (cache_op_req_next_i.dest_level <= cache_op_req_next_i.start_level)))
   err_mem_d = 0
@@ -389,7 +394,7 @@ pub mod minion_dcache_cache_op_unit_l2::[timecheck=false](clk_i:u1, rst_ni:u1, s
   busy_o = busy_o__w1
   cache_op_ready_byp_o = cache_op_ready_byp_o__w1
   cache_op_ready_o = cache_op_ready_o__w1
-  csr_debug_signals_o = state_q
+  csr_debug_signals_o = csr_debug_signals_o__w1
   err_flags_o = err_flags_o__w1
   l2_req_data_o.address = `l2_req_data_o__bpo.address`
   l2_req_data_o.data = `l2_req_data_o__bpo.data`
@@ -401,9 +406,9 @@ pub mod minion_dcache_cache_op_unit_l2::[timecheck=false](clk_i:u1, rst_ni:u1, s
   l2_req_data_o.wdata = `l2_req_data_o__bpo.wdata`
   l2_req_valid_o = l2_req_valid_o__w1
   s0_addr_load_o = s0_addr_load_o__w1
-  s0_addr_msb_err_o = req_addr_msb_err_q
+  s0_addr_msb_err_o = s0_addr_msb_err_o__w1
   s0_addr_o = virtual_addr__w1
-  s0_thread_id_o = (req_q >> 57) & 1
+  s0_thread_id_o = s0_thread_id_o__w1
   s1_addr_load_o = s1_addr_load_o__w1
   sm_data_debug_signals_o = sm_data_debug_signals_o__w3
   sm_filter_debug_signals_o = (state_q | (req_q << 3) | (req_addr_q << 61) | (new_req__w1 << 109) | (err_mem_q << 110) | (l2_cache_op_cnt_q << 111) | (ready_counters_up__w1 << 116) | (cache_op_valid_i << 117) | (cache_op_valid_byp_i << 118)) | 0

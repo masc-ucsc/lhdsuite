@@ -107,6 +107,8 @@ pub mod minion_tlb::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, s
   mut tlb_invalidated_d = if (state_q == tlb_pkg.TlbStateReady) or ((state_q == tlb_pkg.TlbStateWait) and (ptw_resp_valid_q != 0)) { 0 } else { tlb_invalidated_q }
   const tlb_invalidated_d__w2 = tlb_invalidated_d | tlb_invalidate_i
   const ptw_req_invalidated__w1 = (coop_mode_q & unsigned(tlb_invalidated_q != 0)) | ((~coop_mode_q) & 1 & unsigned((((0 & (~(1 << req_min_id_q))) | (1 << req_min_id_q)) & tlb_invalidated_q) != 0))
+  const ptw_req_valid_o__w1 = ptw_req_valid_q
+  const ptw_invalidate_o__w1 = tlb_invalidate_q
   `ptw_req_data_o__bpo.addr` = ptw_req_data_q#[0..=35]
   `ptw_req_data_o__bpo.prv` = ptw_req_data_q#[36..=37]
   `ptw_req_data_o__bpo.satp_mode` = ptw_req_data_q#[66..=69]
@@ -154,11 +156,12 @@ pub mod minion_tlb::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, s
     index = if typ_i_s1__w2 == minion_pkg.tlb_entry_type_2M { ((vpn_i_s1__w2 >> ((minion_pkg.VaUntransSize + minion_pkg.PtwPgIdxSz) - 12))#[0..=2] | (min_id_i__w2 << 3))#[0..=2] } elif typ_i_s1__w2 == minion_pkg.tlb_entry_type_1G { ((vpn_i_s1__w2 >> ((minion_pkg.VaUntransSize + (2 * minion_pkg.PtwPgIdxSz)) - 12))#[0..=2] | (min_id_i__w2 << 3))#[0..=2] } else { ((vpn_i_s1__w2 >> (minion_pkg.VaUntransSize - 12))#[0..=2] | (min_id_i__w2 << 3))#[0..=2] }
   }
   const tlb_cache_raddr__w1 = index
+  const ff_en__w1 = (coop_mode_q ^ coop_mode_i) | (tlb_invalidate_q ^ unsigned(tlb_invalidate_i != 0)) | unsigned((tlb_invalidated_q ^ tlb_invalidated_d__w2) != 0)
   if rst_ni == 0 {
     coop_mode_q = 0
     tlb_invalidate_q = 0
     tlb_invalidated_q = 0
-  } elif ((coop_mode_q ^ coop_mode_i) | (tlb_invalidate_q ^ unsigned(tlb_invalidate_i != 0)) | unsigned((tlb_invalidated_q ^ tlb_invalidated_d__w2) != 0)) != 0 {
+  } elif ff_en__w1 != 0 {
     coop_mode_q = coop_mode_i
     tlb_invalidate_q = unsigned(tlb_invalidate_i != 0)
     tlb_invalidated_q = tlb_invalidated_d__w2
@@ -250,12 +253,12 @@ pub mod minion_tlb::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, s
     req_vpn_q = req_vpn_d
     state_q = state_d
   }
-  ptw_invalidate_o = tlb_invalidate_q
+  ptw_invalidate_o = ptw_invalidate_o__w1
   ptw_req_data_o.addr = `ptw_req_data_o__bpo.addr`
   ptw_req_data_o.prv = `ptw_req_data_o__bpo.prv`
   ptw_req_data_o.satp_mode = `ptw_req_data_o__bpo.satp_mode`
   ptw_req_data_o.satp_ppn = `ptw_req_data_o__bpo.satp_ppn`
-  ptw_req_valid_o = ptw_req_valid_q
+  ptw_req_valid_o = ptw_req_valid_o__w1
   resp_data_o.access_fault = `resp_data_o__bpo.access_fault__w1`
   resp_data_o.fill_pending = `resp_data_o__bpo.fill_pending__w1`
   resp_data_o.miss = `resp_data_o__bpo.miss__w1`

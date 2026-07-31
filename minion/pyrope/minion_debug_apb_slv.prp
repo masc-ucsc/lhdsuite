@@ -31,52 +31,53 @@ pub mod minion_debug_apb_slv::[timecheck=false](clk_i:u1, rst_ni:u1, apb_paddr_i
   s0_rdata = 0
   s0_reg_en = 0
   if s0_en__w1 != 0 {
+    const t22 = (reg_sel__w1#[0..=3] == minion_pkg.minion_debug_abscmd) or (reg_sel__w1#[0..=3] == minion_pkg.minion_debug_axprogbuf0)
+    const t24 = t22 or (reg_sel__w1#[0..=3] == minion_pkg.minion_debug_axprogbuf1)
+    const t27 = (reg_sel__w1#[0..=3] == minion_pkg.minion_debug_nxprogbuf0) or (reg_sel__w1#[0..=3] == minion_pkg.minion_debug_nxprogbuf1)
     s0_pp_valid = unsigned((apb_paddr_i >> 10)#[0..=1] == minion_pkg.AdEsrProtBitsMsg)
-    match reg_sel__w1#[0..=3] {
-      == minion_pkg.minion_debug_nxdata0 {
-        s0_reg_en#[0..=0] = apb_pwrite_i
-        s0_rdata = reg_ddata0_q[thread_sel__w1]#[0..=31]
-      }
-      == minion_pkg.minion_debug_nxdata1 {
-        s0_reg_en#[1..=1] = apb_pwrite_i
-        s0_rdata = reg_ddata0_q[thread_sel__w1]#[32..=63]
-      }
-      == minion_pkg.minion_debug_axdata0 {
-        s0_reg_en#[2..=2] = apb_pwrite_i
-        s0_execute = apb_pwrite_i
-        s0_rdata = reg_ddata0_q[thread_sel__w1]#[0..=31]
-      }
-      == minion_pkg.minion_debug_axdata1 {
-        s0_reg_en#[3..=3] = apb_pwrite_i
-        s0_execute = apb_pwrite_i
-        s0_rdata = reg_ddata0_q[thread_sel__w1]#[32..=63]
-      }
-      in (minion_pkg.minion_debug_abscmd, minion_pkg.minion_debug_axprogbuf0, minion_pkg.minion_debug_axprogbuf1) {
-        s0_execute = apb_pwrite_i
-        s0_reg_en = (s0_reg_en & (~(1 << reg_sel__w1#[0..=3]))) | (apb_pwrite_i << reg_sel__w1#[0..=3])
-      }
-      in (minion_pkg.minion_debug_nxprogbuf0, minion_pkg.minion_debug_nxprogbuf1) {
-        s0_reg_en = (s0_reg_en & (~(1 << reg_sel__w1#[0..=3]))) | (apb_pwrite_i << reg_sel__w1#[0..=3])
-      }
-      else {
-        s0_addr_valid = 0
-        s0_reg_en#[9..=9] = 1
-      }
+    unique if reg_sel__w1#[0..=3] == minion_pkg.minion_debug_nxdata0 {
+      s0_reg_en#[0..=0] = apb_pwrite_i
+      s0_rdata = reg_ddata0_q[thread_sel__w1]#[0..=31]
+    } elif reg_sel__w1#[0..=3] == minion_pkg.minion_debug_nxdata1 {
+      s0_reg_en#[1..=1] = apb_pwrite_i
+      s0_rdata = reg_ddata0_q[thread_sel__w1]#[32..=63]
+    } elif reg_sel__w1#[0..=3] == minion_pkg.minion_debug_axdata0 {
+      s0_reg_en#[2..=2] = apb_pwrite_i
+      s0_execute = apb_pwrite_i
+      s0_rdata = reg_ddata0_q[thread_sel__w1]#[0..=31]
+    } elif reg_sel__w1#[0..=3] == minion_pkg.minion_debug_axdata1 {
+      s0_reg_en#[3..=3] = apb_pwrite_i
+      s0_execute = apb_pwrite_i
+      s0_rdata = reg_ddata0_q[thread_sel__w1]#[32..=63]
+    } elif t24 {
+      const t41 = (s0_reg_en & (~(1 << reg_sel__w1#[0..=3]))) | (apb_pwrite_i << reg_sel__w1#[0..=3])
+      s0_execute = apb_pwrite_i
+      s0_reg_en = t41
+    } elif t27 {
+      const t47 = (s0_reg_en & (~(1 << reg_sel__w1#[0..=3]))) | (apb_pwrite_i << reg_sel__w1#[0..=3])
+      s0_reg_en = t47
+    } else {
+      s0_addr_valid = 0
+      s0_reg_en#[9..=9] = 1
     }
   }
+  const apb_prdata_o__w1 = s1_rdata_q | 0
   const apb_pslverr_o__w1 = unsigned((s1_addr_valid_q == 0) or (s1_pp_valid_q == 0) or ((((in_debug_mode_i << 1) >> (thread_sel__w1 + 1)) & 1) == 0))
   const apb_pready_o__w1 = unsigned((apb_psel_i != 0) and (apb_penable_i != 0) and ((((s1_reg_en_q >> minion_pkg.minion_debug_invalid) & 1) != 0) or ((s1_addr_valid_q != 0) and (apb_pwrite_i == 0)) or ((s1_addr_valid_q != 0) and (apb_pwrite_i != 0) and (s1_execute_q == 0)) or (s2_execute_q != 0)))
   const ffb_en_lo__w1 = (s1_reg_en_q >> minion_pkg.minion_debug_abscmd) & 1
   mut _b2i_7 = if apb_pslverr_o__w1 == 0 { 1 } else { 0 }
+  const read_ddata0_o__w1 = reg_ddata0_q
   reg_ddata0_d = reg_ddata0_q
   if apb_pslverr_o__w1 == 0 {
     if (((s1_reg_en_q >> minion_pkg.minion_debug_nxdata0) & 1) != 0) or (((s1_reg_en_q >> minion_pkg.minion_debug_axdata0) & 1) != 0) {
       const t192 = thread_sel__w1 * 64
-      reg_ddata0_d = (reg_ddata0_d & (~(0xffffffff << t192))) | (apb_pwdata_i#[0..=31] << t192)
+      const t197 = (reg_ddata0_d & (~(0xffffffff << t192))) | (apb_pwdata_i#[0..=31] << t192)
+      reg_ddata0_d = t197
     }
     if (((s1_reg_en_q >> minion_pkg.minion_debug_nxdata1) & 1) != 0) or (((s1_reg_en_q >> minion_pkg.minion_debug_axdata1) & 1) != 0) {
       const t207 = (thread_sel__w1 * 64) + 32
-      reg_ddata0_d = (reg_ddata0_d & (~(0xffffffff << t207))) | (apb_pwdata_i#[0..=31] << t207)
+      const t212 = (reg_ddata0_d & (~(0xffffffff << t207))) | (apb_pwdata_i#[0..=31] << t207)
+      reg_ddata0_d = t212
     }
   }
   if (update_ddata0_i & 1) != 0 {
@@ -98,12 +99,12 @@ pub mod minion_debug_apb_slv::[timecheck=false](clk_i:u1, rst_ni:u1, apb_paddr_i
   s1_execute_q = s0_execute
   reg_ddata0_q = reg_ddata0_d
   s2_execute_q = s1_execute_q
-  apb_prdata_o = s1_rdata_q | 0
+  apb_prdata_o = apb_prdata_o__w1
   apb_pready_o = apb_pready_o__w1
   apb_pslverr_o = apb_pslverr_o__w1
   ex_program_buffer_o = (0 & (~(1 << thread_sel__w1))) | (unsigned((s1_execute_q != 0) and (apb_pslverr_o__w1 == 0)) << thread_sel__w1)
   ffb_en_o = (ffb_en_lo__w1 | (ffb_en_lo__w1 << 1) | ((unsigned((((s1_reg_en_q >> minion_pkg.minion_debug_axprogbuf0) & 1) != 0) or (((s1_reg_en_q >> minion_pkg.minion_debug_nxprogbuf0) & 1) != 0)) | (unsigned((((s1_reg_en_q >> minion_pkg.minion_debug_axprogbuf1) & 1) != 0) or (((s1_reg_en_q >> minion_pkg.minion_debug_nxprogbuf1) & 1) != 0)) << 1)) << 2)) & (_b2i_7 | (_b2i_7 << 1) | (_b2i_7 << 2) | (_b2i_7 << 3))
   ffb_thread_sel_o = thread_sel__w1
   ffb_wdata_o = apb_pwdata_i
-  read_ddata0_o = reg_ddata0_q
+  read_ddata0_o = read_ddata0_o__w1
 }

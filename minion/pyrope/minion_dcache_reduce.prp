@@ -123,20 +123,20 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
   mut `vm_status_ts_o__bpo.sum` = 0
   mut `vm_status_ts_o__bpo.mxr` = 0
   mut `vm_status_ts_o__bpo.debug` = 0
+  mut re_l2_req_valid_o__wtmp = 0ub?
+  wire re_l2_req_valid_o:u1
   mut ts_l2_req_valid_o__wtmp = 0ub?
   wire ts_l2_req_valid_o:u1
+  mut ba_alloc_o__wtmp = 0ub?
+  wire ba_alloc_o:u1
+  mut vpu_send_reg_tensor__wtmp = 0ub?
+  wire vpu_send_reg_tensor:u1
   mut scp_read_reg__wtmp = 0ub?
   wire scp_read_reg:u1
   mut any_packet__wtmp = 0ub?
   wire any_packet:u1
   mut reduce_wait_done__wtmp = 0ub?
   wire reduce_wait_done:u1
-  mut vpu_send_reg_tensor__wtmp = 0ub?
-  wire vpu_send_reg_tensor:u1
-  mut ba_alloc_o__wtmp = 0ub?
-  wire ba_alloc_o:u1
-  mut re_l2_req_valid_o__wtmp = 0ub?
-  wire re_l2_req_valid_o:u1
   mut write_around_cnt_d__wtmp = 0ub????
   wire write_around_cnt_d:u4
   mut rate_d = 0
@@ -325,6 +325,8 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
       scp_entry_d = (scp_entry_d - 48)#[0..=5]
     }
   }
+  const s0_addr_o__w1 = addr_q << 4
+  const s0_addr_msb_err_o__w1 = addr_msb_err_q
   const action__w1 = req_info_q#[4..=6]#[0..=2]#[0..=1]
   const level__w1 = req_info_q#[7..=19]#[0..=12]#[0..=3]
   const distance__w1 = (1 << level__w1)#[0..=12]
@@ -357,7 +359,8 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
   partner_ready_peer_d = partner_ready_peer_q
   if new_partner_ready_z1_q != 0 {
     if ((partner_ready_idx_q >> minion_pkg.DcacheReduceMsgDataMsb) & 1) == 0 {
-      partner_ready_mask_d = (partner_ready_mask_d & (~(1 << partner_ready_idx_q#[0..=3]))) | (1 << partner_ready_idx_q#[0..=3])
+      const t528 = (partner_ready_mask_d & (~(1 << partner_ready_idx_q#[0..=3]))) | (1 << partner_ready_idx_q#[0..=3])
+      partner_ready_mask_d = t528
     } else {
       partner_ready_peer_d = 1
     }
@@ -375,6 +378,7 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
   if new_partner_ready__w1 != 0 {
     partner_ready_idx_q = l2_resp_i.data#[0..=4]
   }
+  const s0_thread_id_o__w1 = req_info_q & 1
   mut err_flags_o__w1 = err_flags_o
   err_flags_o__w1#[0..=1] = 0
   `vm_status_ts_o__bpo.debug` = vm_status_ts_q & 1
@@ -385,8 +389,10 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
   `vm_status_ts_o__bpo.sum` = (vm_status_ts_q >> 2) & 1
   mut err_flags_o__w2 = err_flags_o__w1
   err_flags_o__w2#[2..=3] = (unsigned((err_mem_q != 0) and ((req_info_q & 1) == 0)) | (unsigned((err_mem_q != 0) and ((req_info_q & 1) != 0)) << 1))
+  const re_ts_l2_req_inflight_o__w1 = l2_req_inflight_q
   const tensorstore_busy_o__w1 = unsigned((write_around_cnt_q != 0) or ((reduce_ready_o__w1 == 0) and (((req_info_q >> 3) & 1) == 0)))
   const resp_is_error__w1 = unsigned((l2_resp_valid_i != 0) and (opcode_is_mine__w1 != 0) and (l2_resp_i.opcode == minion_pkg.EtLinkRspErr))
+  const csr_debug_signals_o__w1 = fsm_state_q#[0..=3]
   const l2_req_valid_block__w1 = unsigned((write_around_throttle_q != 0) or (unsigned(rate_counter_q == 0) == 0) or (l2_backoff_q != 0))
   const address_use__w1 = unsigned(((scp_read_reg != 0) or (vpu_send_reg_tensor != 0)) and (address_available__w1 != 0))
   const address_consume__w1 = unsigned((address_use__w1 != 0) and (address_use_idx_q != 0))
@@ -652,6 +658,7 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
     }
   }
   const wait_l2_to_ba_resp_o__w1 = ba_alloc_fifo_val
+  const s3_ba_write_addr_o__w1 = ba_alloc_fifo_rdata
   s4_send_pending_pre = ba_data_send_fifo_valid
   mut u_ba_alloc_fifo = prim_fifo_sync::[name=u_ba_alloc_fifo](clk_i = clkgt, rst_ni = rst_ni, clr_i = 0, wvalid_i = ba_write_needed_rec__w1, wdata_i = s2_ba_written_entry_i, rready_i = ba_alloc_fifo_pop__w1)
   ba_alloc_fifo_val = u_ba_alloc_fifo.rvalid_o
@@ -743,8 +750,9 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
   }
   mut sm_match_debug_signals_o__w2 = 0
   sm_match_debug_signals_o__w2#[0..=24] = (ts_scp_read_o__w1 | (ba_read_en_o << 1) | (s3_inst_send_val_o << 2) | (s2_inst_send_val_o << 3) | (s1_inst_send_val_o << 4) | (s0_inst_send_val_q << 5) | (pipe_used_o << 6) | (pipe_used_pre__w1 << 7) | (s1_inst_op_val_o << 8) | (s2_inst_op_val_o << 9) | (s3_inst_op_val_o << 10) | (l2_resp_valid_i << 11) | (unsigned((ts_l2_req_valid_o != 0) and (ts_l2_req_ready_i != 0)) << 12) | (unsigned((re_l2_req_valid_o != 0) and (re_l2_req_ready_i != 0)) << 13) | (tensorstore_start_i << 14) | (tensorstore_busy_o__w1 << 15) | (reduce_start_i << 16) | (reduce_ready_o__w1 << 17) | (write_around_cnt_up << 18) | (load_send_fifo_data__w1 << 19) | (s4_send__w1 << 20) | (new_req__w1 << 21) | (new_partner_ready__w1 << 22) | (atrans_en__w1 << 23) | (vpu_reduce_wait_i << 24))
+  const t1442 = ts_scp_read_o__w1 | (req_info_q << 1) | (fsm_state_q << 21) | (ba_read_en_o << 25) | (s3_inst_send_val_o << 26) | (s2_inst_send_val_o << 27) | (s1_inst_send_val_o << 28) | (s0_inst_send_val_q << 29) | (pipe_used_o << 30) | (pipe_used_pre__w1 << 31) | (s1_inst_op_val_o << 32) | (s2_inst_op_val_o << 33) | (s3_inst_op_val_o << 34) | (tensorstore_start_i << 35) | (tensorstore_busy_o__w1 << 36) | (reduce_start_i << 37) | (reduce_ready_o__w1 << 38) | (`l2_req.qwen` << 39) | (`l2_req.size` << 43) | (`l2_req.data`#[0..=3] << 46) | (`l2_req.address` << 50) | (`l2_req.subopcode` << 90) | (`l2_req.opcode` << 97) | (l2_resp_valid_i << 102) | (ts_l2_req_ready_i << 103) | (re_l2_req_ready_i << 104) | (ts_l2_req_valid_o << 105) | (re_l2_req_valid_o << 106) | (s4_send__w1 << 107) | (new_req__w1 << 108) | (new_partner_ready__w1 << 109) | (atrans_en__w1 << 110) | (((`vpu_ctrl_o__bpo.send_reg` << 2) | (`vpu_ctrl_o__bpo.exec_op` << 1) | `vpu_ctrl_o__bpo.nothing`) << 111) | (vpu_reduce_wait_i << 114)
   mut sm_filter_debug_signals_o__w2 = 0
-  sm_filter_debug_signals_o__w2#[0..=114] = (ts_scp_read_o__w1 | (req_info_q << 1) | (fsm_state_q << 21) | (ba_read_en_o << 25) | (s3_inst_send_val_o << 26) | (s2_inst_send_val_o << 27) | (s1_inst_send_val_o << 28) | (s0_inst_send_val_q << 29) | (pipe_used_o << 30) | (pipe_used_pre__w1 << 31) | (s1_inst_op_val_o << 32) | (s2_inst_op_val_o << 33) | (s3_inst_op_val_o << 34) | (tensorstore_start_i << 35) | (tensorstore_busy_o__w1 << 36) | (reduce_start_i << 37) | (reduce_ready_o__w1 << 38) | (`l2_req.qwen` << 39) | (`l2_req.size` << 43) | (`l2_req.data`#[0..=3] << 46) | (`l2_req.address` << 50) | (`l2_req.subopcode` << 90) | (`l2_req.opcode` << 97) | (l2_resp_valid_i << 102) | (ts_l2_req_ready_i << 103) | (re_l2_req_ready_i << 104) | (ts_l2_req_valid_o << 105) | (re_l2_req_valid_o << 106) | (s4_send__w1 << 107) | (new_req__w1 << 108) | (new_partner_ready__w1 << 109) | (atrans_en__w1 << 110) | (((`vpu_ctrl_o__bpo.send_reg` << 2) | (`vpu_ctrl_o__bpo.exec_op` << 1) | `vpu_ctrl_o__bpo.nothing`) << 111) | (vpu_reduce_wait_i << 114))
+  sm_filter_debug_signals_o__w2#[0..=114] = t1442
   mut sm_data_group1__w2 = 0
   sm_data_group1__w2#[0..=125] = (fsm_state_q | (reg_count_q << 4) | (req_info_q << 12) | (addr_q << 32) | (address_use_idx_q << 76) | (address_count_q << 77) | (atrans_num_req_q << 79) | (atrans_state_q << 84) | (l2_req_inflight_q << 87) | (got_ready_msg_q << 88) | (partner_ready_mask_q << 89) | (ts_col_size_is_128b_o__w1 << 102) | (ts_scp_read_addr_o__w1 << 103) | 0x000020000000000000000000000000000 | (ts_is_from_scp_q << 115) | (tensorstore_count_q << 116) | (s4_send_pending_q << 117) | (write_around_throttle_q << 118) | (address_for_l2_ready << 119) | (address_fifo_full << 120) | (address_fifo_full << 121) | (u_ba_alloc_fifo.full_o << 122) | (ba_alloc_fifo_val << 123) | (ba_op_fifo_full << 124) | (ba_op_fifo_valid << 125))
   mut sm_data_group0__w2 = 0
@@ -756,7 +764,7 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
   ba_write_needed_o = unsigned((s2_inst_send_val_o != 0) or (ba_write_needed_rec__w1 != 0))
   buffer_avail_o = unsigned((ba_alloc_fifo_val != 0) and (wait_l2_to_ba_resp_z1_q != 0) and (ba_op_fifo_full == 0))
   bus_err_o = unsigned((resp_is_error__w1 != 0) and ((req_info_q & 1) == 0)) | (unsigned((resp_is_error__w1 != 0) and ((req_info_q & 1) != 0)) << 1)
-  csr_debug_signals_o = fsm_state_q#[0..=3]
+  csr_debug_signals_o = csr_debug_signals_o__w1
   err_flags_o = err_flags_o__w2
   re_l2_req_o.address = `re_l2_req_o__bpo.address`
   re_l2_req_o.data = `re_l2_req_o__bpo.data`
@@ -768,15 +776,15 @@ pub mod minion_dcache_reduce::[timecheck=false](clk_i:u1, rst_ni:u1, global_min_
   re_l2_req_o.subopcode = `re_l2_req_o__bpo.subopcode`
   re_l2_req_o.wdata = `re_l2_req_o__bpo.wdata`
   re_l2_req_valid_o = re_l2_req_valid_o__wtmp
-  re_ts_l2_req_inflight_o = l2_req_inflight_q
+  re_ts_l2_req_inflight_o = re_ts_l2_req_inflight_o__w1
   reduce_ready_o = reduce_ready_o__w1
   reduce_wait_done = reduce_wait_done__wtmp
   s0_addr_load_o = unsigned((atrans_state_q == 2) and (s0_available_i != 0) and (address_fifo_full == 0))
-  s0_addr_msb_err_o = addr_msb_err_q
-  s0_addr_o = addr_q << 4
-  s0_thread_id_o = req_info_q & 1
+  s0_addr_msb_err_o = s0_addr_msb_err_o__w1
+  s0_addr_o = s0_addr_o__w1
+  s0_thread_id_o = s0_thread_id_o__w1
   s1_addr_load_o = unsigned(atrans_state_q == 3)
-  s3_ba_write_addr_o = ba_alloc_fifo_rdata
+  s3_ba_write_addr_o = s3_ba_write_addr_o__w1
   scp_read_reg = scp_read_reg__wtmp
   sm_data_debug_signals_o = sm_data_group0__w2 | (sm_data_group1__w2 << 128) | 0 | 0
   sm_filter_debug_signals_o = sm_filter_debug_signals_o__w2
