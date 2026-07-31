@@ -138,12 +138,14 @@ rate sim_cycles_per_s "$CYCLES" "$EXEC_MS" "cycles/s"
 rate sim_cycles_per_s_with_cc "$CYCLES" "$RUN_MS" "cycles/s"
 
 # run_top_driver LABEL TB_BASENAME -> echoes 1 (ran), 0 (failed), or - (no such
-# driver for this core). Never fails the test itself: the caller decides,
+# driver for this core). Supply the design before the testbench: an `lg:NAME`
+# import names a module already compiled in this invocation, rather than a
+# source path to discover. Never fails the test itself: the caller decides,
 # per $CORE_SIM_TOP_ASSERT, whether a 0 is a metric or a gate.
 run_top_driver() {
   local label=$1 tb=$2
   [ -n "$tb" ] || { echo "-"; return 0; }
-  if CURRENT_STEP=$label lhd sim "tree/$tb" --diag-fmt pretty \
+  if CURRENT_STEP=$label lhd sim "tree/$CORE_TOP.prp" "tree/$tb" --diag-fmt pretty \
     --workdir "SW_$label" >"step_$label.log" 2>&1; then
     echo 1
   else
