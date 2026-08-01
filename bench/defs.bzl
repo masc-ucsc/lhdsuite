@@ -25,17 +25,22 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             `flat` fuses the whole hierarchy into ONE abc region, so it does
 #             not scale past a certain design size; a core that omits it also
 #             loses its `synth_lec_flat` target.
-#   sim_tb    asserted sim smoke; sim_top_tb / sim_prog_tb are the whole-top
-#             drivers ("" = none).
+#   sim_tb    asserted, timed sim benchmark. sim_cycles is its explicit cycle
+#             count; sim_tb_top says it needs the whole-design source supplied
+#             before the testbench (e.g. a program driver importing `lg:top`).
+#             sim_top_tb / sim_prog_tb are additional whole-top correctness
+#             drivers ("" = none). sim_top_cycles / sim_prog_cycles make their
+#             otherwise in-source test defaults explicit in the bench log and
+#             report ("" when the corresponding driver is absent).
 #   sim_tb_v  MODE=verilog override for sim_tb (optional; "" or absent = drive
 #             both modes with the one sim_tb). The two trees are the same
 #             design but not the same Pyrope: a `struct packed` port is
 #             re-emitted from Verilog as a tuple port
 #             (`io_in:(instruction:u32, …)`) while the checked-in Pyrope tree
 #             may declare it flat (`io_in:u97`), and a driver written for one
-#             shape names no field of the other. dino needs this for StageReg;
-#             minion's sim unit has no struct port.
-#   sim_top_assert  whether this core's whole-top drivers (sim_top_tb and
+#             shape names no field of the other. The former dino StageReg
+#             microbenchmark needed this; no current core does.
+#   sim_top_assert  whether this core's additional drivers (sim_top_tb and
 #             sim_prog_tb) are a GATE rather than a metric. They are always
 #             reported as METRIC sim_cpu_top_ok / sim_cpu_prog_ok; with this
 #             set, a driver that scores 0 also FAILS the target. Set it once a
@@ -43,10 +48,10 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             top still hits an lhd gap keeps the metric visible without
 #             painting the target red. "" = metric only.
 #   sim_expect  fixed string the asserted sim's output must contain besides
-#             the "hello world" line — the testbench's known-good data
+#             sim_marker — the testbench's known-good data
 #             readback. Guards against a sim that runs but computes wrong
 #             values (a silently-miscompiled schedule prints data=0 and
-#             would otherwise go green). "" = hello-world gate only.
+#             would otherwise go green). "" = marker gate only.
 #   lec_trust  comma-separated module-def names the LEC scenarios ASSUME
 #             equivalent WITHOUT proving them (`--set formal.lec.trust=…`) —
 #             the escape hatch for defs holding a latch or negedge flop the LEC
@@ -70,22 +75,29 @@ CORES = {
         "unit": "ALU",
         "v_flags": "",
         "color_algs": ["flat", "synth"],
-        "sim_tb": "stagereg_tb.prp",
-        # StageReg's io_in/io_data are TUPLE ports in both trees now — the
-        # checked-in Pyrope is regenerated from the same `struct packed` Verilog
-        # that MODE=verilog re-emits — so the one leaf-driving testbench serves
-        # both modes and the twin this knob used to point at is gone.
+        # Time the real program on the whole CPU. This is long enough to be a
+        # useful throughput measurement and checks architectural state through
+        # the program's stores, unlike the old 200k-cycle StageReg microbench.
+        "sim_tb": "dino_prog_tb.prp",
+        "sim_cycles": 2000,
+        "sim_tb_top": True,
         "sim_tb_v": "",
-        "sim_expect": "data=4660",
+        "sim_marker": "dino program:",
+        "sim_expect": "x2=100 -x3=102",
         "sim_top_tb": "dino_tb.prp",
-        "sim_prog_tb": "dino_prog_tb.prp",
-        # Both whole-CPU drivers are GATES, in both modes: they score 1 on the
-        # checked-in Pyrope tree and on the re-emitted Verilog one (which needed
-        # the sim cgen to stop spelling a child instance's tuple port
+        "sim_top_cycles": 1000,
+        # The program driver above is already asserted and timed, so do not run
+        # it a second time as an auxiliary correctness driver.
+        "sim_prog_tb": "",
+        "sim_prog_cycles": "",
+        # Both whole-CPU drivers are GATES, in both modes: the timed program
+        # driver asserts in-source, while dino_tb scores 1 on the checked-in
+        # Pyrope tree and on the re-emitted Verilog one (which needed the sim
+        # cgen to stop spelling a child instance's tuple port
         # `io_data_instruction` in the parent and `io_data.instruction` in the
-        # child). Each also asserts in-source: dino_tb that the PC
-        # advanced past reset, dino_prog_tb that the program stored both
-        # counters and that x2/x3 hold the architected values.
+        # child). dino_tb asserts that the PC advanced past reset;
+        # dino_prog_tb asserts that the program stored both counters and that
+        # x2/x3 hold the architected values.
         "sim_top_assert": True,
         # dino is latch-free — the encoder proves every def, no trust needed.
         "lec_trust": "",
@@ -104,12 +116,17 @@ CORES = {
         # partitioned `color synth` is meaningful at this size.
         "color_algs": ["synth"],
         "sim_tb": "tensora_rf_tb.prp",
+        "sim_cycles": 200000,
+        "sim_tb_top": False,
         # vpu_tensora_rf's ports are all flat in both trees — one driver serves
         # MODE=pyrope and MODE=verilog.
         "sim_tb_v": "",
+        "sim_marker": "hello world",
         "sim_expect": "data=4660",
         "sim_top_tb": "vpu_top_tb.prp",
+        "sim_top_cycles": 64,
         "sim_prog_tb": "",
+        "sim_prog_cycles": "",
         # Informational: `lhd sim` still refuses vpu_top — "module
         # `vpu_trans.vpu_trans`: flop `flop_76:id_insert_en_o` has a derived
         # clock inou.cgen.sim cannot fold into a commit guard", the same
@@ -167,7 +184,7 @@ _SCENARIOS = [
     # against the design, via the partition twin + Liberty gensim models.
     ("synth_lec_flat", "synth.sh", "lec_flat", "eternal", "flat"),
     ("synth_lec_synth", "synth.sh", "lec_synth", "eternal", "synth"),
-    # --- hello-world simulation smoke, both language tops ---
+    # --- asserted simulation benchmark, both language sources ---
     ("sim_verilog", "sim.sh", "verilog", "long", ""),
     ("sim_pyrope", "sim.sh", "pyrope", "long", ""),
     # --- LEC: proven / injected bug caught / warm re-run ---
@@ -211,10 +228,15 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_UNIT": cfg["unit"],
             "CORE_COLOR_ALGS": " ".join(cfg["color_algs"]),
             "CORE_SIM_TB": cfg["sim_tb"],
+            "CORE_SIM_CYCLES": str(cfg["sim_cycles"]),
+            "CORE_SIM_TB_TOP": "1" if cfg.get("sim_tb_top", False) else "",
             "CORE_SIM_TB_V": cfg.get("sim_tb_v", ""),
+            "CORE_SIM_MARKER": cfg["sim_marker"],
             "CORE_SIM_EXPECT": cfg["sim_expect"],
             "CORE_SIM_TOP_TB": cfg["sim_top_tb"],
+            "CORE_SIM_TOP_CYCLES": str(cfg.get("sim_top_cycles", "")),
             "CORE_SIM_PROG_TB": cfg["sim_prog_tb"],
+            "CORE_SIM_PROG_CYCLES": str(cfg.get("sim_prog_cycles", "")),
             # "1" = the whole-top drivers gate the target; "" = metric only.
             "CORE_SIM_TOP_ASSERT": "1" if cfg.get("sim_top_assert", False) else "",
             "CORE_LEC_TRUST": cfg.get("lec_trust", ""),

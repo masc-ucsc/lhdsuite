@@ -93,7 +93,7 @@ Every row below exists once per core — write `//bench:dino_compile_verilog` or
 | `synth` | each of the core's colorings (`color_algs`) + `pass abc` on the same design (sky130), timing + QoR (regions/gates/area/max_delay) for each. All run hier=true; the difference is the partitions: flat = one color across the hierarchy (one fused region, best cross-module optimization), synth = per-(module,color) regions. dino runs both; minion runs only `synth` (flat does not fit in memory at 534k nodes) |
 | `synth_incremental` | `color synth` + abc over 3 passes; incremental reuse needs the distinct colors/partitions that `color synth` creates (and `color flat` intentionally does not): asserts cache hits on the comment-only pass and a single-region re-synth after a one-line edit |
 | `synth_lec_flat` / `synth_lec_synth` | netlist integrity: synthesize twice (2nd run after a comment touch — under `color synth` that netlist is largely cache-CLONED), then `lhd lec --impl lg:netlist --ref lg:design --lib lg:models` proves it against the compiled design (`pass liberty gensim` provides the sky130 cell models; strict, so UNKNOWN fails). Only generated for colorings the core actually runs, so minion has no `synth_lec_flat` |
-| `sim_verilog` / `sim_pyrope` | hello-world `lhd sim` of one small clocked module (dino: a `StageReg`; minion: the VPU tensor-A register file), 200k cycles with VCD on. The Verilog side first re-emits through slang as Pyrope. **The host C++ compile is reported apart from the simulation**: `lhd sim --setup-only` only writes the driver sources, and `--run-only` rebuilds `drv.bin` on every invocation, so `sim_run_ms` is mostly clang. The bench re-runs that binary itself (best of 3, since a loaded box stalls a 1 s measurement by 3-14x) for `sim_exec_ms`, leaving `sim_cc_ms` as the remainder; `//bench:show` prints both and gives cycles/s with and without the compile. The bench pins `--set sim.ninja=false` so `sim_cc_ms` always measures lhd's built-in parallel compile: `lhd sim` otherwise prefers a generated `build.ninja` when ninja is on PATH, which is the right default for a developer's warm edit-sim loop but would make this number depend on the machine (and buys the bench nothing — every target starts from a fresh workdir, so nothing is ever incremental). Both modes emit byte-identical driver C++ on both cores, so their cycles/s must agree — a real gap there is a codegen regression, not a slow tree. One driver serves both modes unless the core sets `sim_tb_v` (neither does today: dino's `StageReg` port is a tuple in both trees since the Pyrope was regenerated from that same `struct packed` Verilog). Whole-top drivers also run, reported as `METRIC sim_cpu_top_ok` / `sim_cpu_prog_ok`; a core setting `sim_top_assert` (dino) also GATES on them, one that does not (minion, still blocked by a derived clock the sim cgen cannot fold) reports the metric only |
+| `sim_verilog` / `sim_pyrope` | asserted `lhd sim` benchmark with VCD on: dino runs the real `dino_prog_tb` whole-CPU program for 2k cycles; minion, which has no working program driver yet, runs its VPU tensor-A register file for 200k. The Verilog side first re-emits through slang as Pyrope. **The host C++ compile is reported apart from the simulation**: `lhd sim --setup-only` only writes the driver sources, and `--run-only` rebuilds `drv.bin` on every invocation, so `sim_run_ms` is mostly clang. The bench re-runs that binary itself (best of 3, since a loaded box can stall a short measurement) for `sim_exec_ms`, leaving `sim_cc_ms` as the remainder; `//bench:show` prints both and gives cycles/s with and without the compile. The bench pins `--set sim.ninja=false` so `sim_cc_ms` always measures lhd's built-in parallel compile: `lhd sim` otherwise prefers a generated `build.ninja` when ninja is on PATH, which is the right default for a developer's warm edit-sim loop but would make this number depend on the machine (and buys the bench nothing — every target starts from a fresh workdir, so nothing is ever incremental). Both modes should have comparable cycles/s; a real gap is a codegen regression, not a slow tree. Additional whole-top correctness drivers are reported as `METRIC sim_cpu_top_ok` / `sim_cpu_prog_ok`; a core setting `sim_top_assert` (dino) also GATES on them, one that does not (minion, still blocked by a derived clock the sim cgen cannot fold) reports the metric only |
 | `lec` | Pyrope impl ≡ Verilog ref (both pre-compiled to `lg:`; the Verilog side needs its slang options — `-F`/`-DSYNTHESIS` plus the core’s `v_flags`), PROVEN |
 | `lec_bug` | the core's `tests/bug1` variant must be REFUTED (dino: the ALU's 32-bit add flipped to subtract; minion: the same flip in `txfma_adder`) |
 | `lec_incremental` | cold / identical warm (verdict-cache hits) / comment-touch re-runs |
@@ -283,8 +283,11 @@ each scenario targets:
 | `top` — whole-design top, in both languages | `PipelinedDualIssueCPU` | `minion_top` |
 | `unit` — module carrying the verify sidecar + `bug1`/`comment1` (must be in the top's cone) | `ALU` | `txfma_adder` |
 | `v_flags` — extra slang options for this core's Verilog | *(none)* | `--relax-enum-conversions --allow-use-before-declare` |
-| `sim_tb` — asserted sim testbench | `stagereg_tb.prp` | `tensora_rf_tb.prp` |
+| `sim_tb` / `sim_cycles` — asserted, timed sim benchmark | `dino_prog_tb.prp` / 2,000 | `tensora_rf_tb.prp` / 200,000 |
+| `sim_tb_top` — benchmark needs the whole design supplied before its driver | yes | no |
 | `sim_tb_v` — MODE=verilog override for `sim_tb` (`""` = one driver for both) | *(none)* | *(none)* |
+| `sim_top_tb` / `sim_top_cycles` — separate whole-top correctness run | `dino_tb.prp` / 1,000 | `vpu_top_tb.prp` / 64 |
+| `sim_prog_tb` / `sim_prog_cycles` — optional additional program correctness run | *(none; already benchmarked)* | *(none)* |
 
 **Why a core may need two sim drivers.** The two trees are the same design but
 need not be the same Pyrope. A `struct packed` port re-emits from Verilog as a
@@ -292,10 +295,10 @@ tuple port (`io_in:(instruction:u32, pc:u64, isValid:u1)`); if the checked-in
 Pyrope tree declares that same port flat (`io_in:u97`), a driver written for
 one shape names no field of the other, and `sim_tb_v` points MODE=verilog at a
 twin that drives the tuple leaves and prints the same packed value (one
-`sim_expect` gates both). dino's `StageReg` used to be exactly that case. It no
-longer is: `dino/pyrope/` is regenerated from `dino/verilog/`, so the tuple port
-is now the shape on BOTH sides and the single `stagereg_tb.prp` drives the
-leaves for both modes — the knob stays for the next core that needs it. Note
+`sim_expect` gates both). dino's former `StageReg` microbenchmark used to be
+exactly that case. It no longer is: `dino/pyrope/` is regenerated from
+`dino/verilog/`, so the tuple port is now the shape on BOTH sides; the knob
+stays for the next core that needs it. Note
 that a tree regeneration can therefore RETIRE this knob (as here) or newly
 require it; a `sim_pyrope` failing with "unknown field ... on instance" is the
 symptom. Fixing this by flattening the

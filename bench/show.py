@@ -202,14 +202,14 @@ def report_core(root: Path, core: str) -> list:
 
     # ---- sim --------------------------------------------------------------
     sp, sv = G("sim_pyrope"), G("sim_verilog")
-    rep.head("sim (unit hello world)", sp, sv)
+    rep.head("sim benchmark throughput", sp, sv)
     if sp or sv:
         # `lhd sim --setup-only` only writes the driver sources; the host C++
         # compile lives inside --run-only and is rebuilt every time, so it used
         # to swamp the simulation it was being reported as. Keep the two apart:
         # `c++` is the compile+link, `sim` the simulation of `cycles` cycles.
         print(f"   {'':10} {'transpile':>9} {'setup':>7} {'c++':>8} {'sim':>8}"
-              f" {'cycles/s':>10} {'+c++':>10} {'top':>8}")
+              f" {'cycles':>9} {'sim cyc/s':>10} {'+c++':>10} {'extra':>8}")
 
         def top_state(m):
             v = [m[k] for k in ("sim_cpu_top_ok", "sim_cpu_prog_ok") if k in m]
@@ -219,19 +219,44 @@ def report_core(root: Path, core: str) -> list:
                 return "blocked"
             return "ok" if all(x == 1 for x in v) else "-"
 
-        cyc = None
         for name, r in (("pyrope", sp), ("verilog", sv)):
             if not r:
                 continue
             m = r[3]
-            cyc = m.get("sim_cycles", cyc)
             print(f"   {name:10} {fmt(m.get('transpile_ms'), 'ms'):>9} {fmt(m.get('sim_setup_ms'), 'ms'):>7}"
                   f" {fmt(m.get('sim_cc_ms'), 'ms'):>8} {fmt(m.get('sim_exec_ms'), 'ms'):>8}"
+                  f" {fmt(m.get('sim_cycles')):>9}"
                   f" {fmt(m.get('sim_cycles_per_s')):>10}"
                   f" {fmt(m.get('sim_cycles_per_s_with_cc')):>10} {top_state(m):>8}")
-        print(f"   cycles/s: simulation alone (VCD on){' over ' + fmt(cyc) + ' cycles' if cyc else ''};"
-              f" +c++ folds in the driver's host compile")
-        print("   top: whole-top drivers are informational, not asserted")
+
+        # The CMD lines are the authoritative record of which driver each
+        # number came from. A throughput row times sim_setup/sim_run only; the
+        # additional whole-top correctness drivers run later and must not
+        # inherit the benchmark's cycle count.
+        def tb_for_step(r, step):
+            for got_step, cmd in r[4]:
+                if got_step == step:
+                    tbs = re.findall(r"(?:^|/)([^ /]+\.prp)(?= |$)", cmd)
+                    return tbs[-1] if tbs else None
+            return None
+
+        sample = sp or sv
+        bench_tbs = {tb_for_step(r, "sim_setup") for r in (sp, sv) if r}
+        bench_tbs.discard(None)
+        bench = "/".join(sorted(bench_tbs)) or "simulation driver"
+        print(f"   sim cyc/s: {bench}, VCD on; +c++ includes that driver's host compile")
+
+        m = sample[3]
+        whole = []
+        for step, key in (("sim_cpu", "sim_cpu_top_cycles"),
+                          ("sim_cpu_prog", "sim_cpu_prog_cycles")):
+            tb = tb_for_step(sample, step)
+            if tb:
+                cycles = m.get(key)
+                whole.append(f"{tb} ({fmt(cycles) + ' cycles' if cycles is not None else 'test default'})")
+        if whole:
+            policy = "gates this target" if m.get("sim_cpu_top_gated") == 1 else "informational only"
+            print(f"   extra: {', '.join(whole)} run separately for correctness ({policy}); not timed above")
         rep.cmds(("sim_pyrope", sp), ("sim_verilog", sv))
 
     # ---- lec --------------------------------------------------------------
