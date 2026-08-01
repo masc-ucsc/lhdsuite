@@ -133,34 +133,23 @@ CORES = {
         # gated-clock cone as fixme issue 1, on the sim-cgen side. Flip this to
         # True once that lands.
         "sim_top_assert": False,
-        # Latch-bearing modules the LEC encoder cannot model yet (fixme issue
-        # 1): the 15 minion latch modules plus every parameterized `_pN` twin
-        # (a variant is a distinct def, so each must be named). Trusting these
-        # lets the ~90 latch-free modules prove bottom-up instead of the whole
-        # design refusing on the first latch cone. `trans_top` is deliberately
-        # NOT here: it carries an always_latch that lowers to comb and PROVES.
-        "lec_trust": ",".join([
-            "prim_clk_gate",
-            "prim_phase_pair_hi_lo", "prim_phase_pair_hi_lo_p1",
-            "prim_phase_pair_lo_hi", "prim_phase_pair_lo_hi_p1",
-            "prim_rf_1r1w_preview",
-            "prim_rf_1r1w_preview_p1", "prim_rf_1r1w_preview_p2",
-            "prim_rf_1r1w_preview_p3", "prim_rf_1r1w_preview_p4",
-            "prim_rf_1r1w_preview_p5", "prim_rf_1r1w_preview_p6",
-            "prim_rf_1r1w_par_preview", "prim_rf_1r1w_par_preview_p1",
-            "prim_rf_1r1w_diff_preview",
-            "prim_rf_1r1w_reg_preview",
-            "prim_rf_2r1w_preview",
-            "prim_rf_3r2w_preview",
-            "prim_rf_single_1r1w_par_preview",
-            "prim_write_commit_en", "prim_write_commit_en_p1", "prim_write_commit_en_p2",
-            "prim_write_commit_rst_en",
-            "prim_write_commit_rst_en_p1", "prim_write_commit_rst_en_p2",
-            "prim_write_commit_rst_en_p3", "prim_write_commit_rst_en_p4",
-            "prim_write_commit_rst_en_p5",
-            "prim_write_preview_en", "prim_write_preview_en_p1",
-            "intpipe_mul_div_ctl", "intpipe_mul_div_dp",
-        ]),
+        # MEASURED trust list (2026-08-01). It used to hold 32 entries — every
+        # latch-bearing module — because the LEC encoder refused a `Latch` cell
+        # outright. With the formal phase schedule (livehd todo/livehd/2f-lec
+        # "phase-schedule" / 2f-latch M10) the encoder models latches, negedge
+        # endpoints and clock gates directly, and 31 of those 32 defs now PROVE
+        # standalone; each was re-measured one at a time with
+        #   lhd lec --impl lg:impl --ref lg:ref --top <def>
+        # ONE entry survives, and it is a real scope limit rather than a missing
+        # feature: `prim_rf_1r1w_diff_preview` is the DIFFERENT-preview-clock
+        # variant, so `preview_clk_i` and `rf_clk_i` are genuinely unrelated nets
+        # (its siblings tie them together at every instantiation site, which is
+        # what the design-wide clock-port propagation now proves). It also holds a
+        # clock-role latch on `preview_clk_i` and a negedge flop plus a memory on
+        # `rf_clk_i`, so scheduling it needs a total order between two unrelated
+        # roots — which v1 refuses BY NAME rather than invent. Retire this entry
+        # when multi-root scheduling lands.
+        "lec_trust": "prim_rf_1r1w_diff_preview",
     },
 }
 
