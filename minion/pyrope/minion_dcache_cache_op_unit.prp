@@ -182,16 +182,9 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
   const cache_op_prefetch__w1 = unsigned((cache_op_req_i.cmd == minion_pkg.cache_op_Pref) and (cache_op_req_i.dest_level == minion_pkg.cache_op_L1))
   const t109 = cache_op_req_i.l2_scp_dest
   const t111 = t109 ^ (t109 >> 16)
-  const t112 = t111 >> 8
-  const t113 = t111 ^ t112
-  const t114 = t113 >> 4
-  const t115 = t113 ^ t114
-  const t116 = t115 >> 2
-  const t117 = t115 ^ t116
-  const t118 = t117 >> 1
-  const t119 = t117 ^ t118
-  const t120 = t119 & 1
-  const t121 = chicken_bit_dcache_i ^ cache_op_req_i.l2_scp_fill ^ t120
+  const t113 = t111 ^ (t111 >> 8)
+  const t115 = t113 ^ (t113 >> 4)
+  const t117 = t115 ^ (t115 >> 2)
   const cache_op_accepted__w1 = unsigned((cache_op_valid_i != 0) and (send_op_to_l2_q == 0) and (cache_op_is_l1_q != 0))
   const state_up__w1 = unsigned((state_q != minion_dcache_pkg.CacheOpInvalid) or (cache_op_valid_i != 0))
   const `req_d.cmd__w1` = cache_op_req_i.cmd#[0..=3]
@@ -261,6 +254,7 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
   mut `s0_co_pf_req_o__bpo.vm_sel__w1` = minion_dcache_pkg.DcacheVmSelCo
   const csr_debug_signals_o__w1 = state_q#[0..=3]
   const sm_match_debug_signals_o__w1 = cache_op_accepted__w1 | (abort_operation_q << 1) | (state_up__w1 << 2) | (term_loop_q << 3) | (err_mem_q << 4) | (err_lock_q << 5) | (meta_read_valid_o << 6) | 0
+  const sm_filter_debug_signals_o__w1 = (state_q | (req_q << 4) | (req_addr_q << 22) | (cache_op_accepted__w1 << 70) | (abort_operation_q << 71) | (state_up__w1 << 72) | (term_loop_q << 73) | (err_mem_q << 74) | (err_lock_q << 75)) | 0
   mut sm_data_debug_signals_o__w1 = sm_data_debug_signals_o
   sm_data_debug_signals_o__w1#[384..=511] = 0
   mut sm_data_debug_signals_o__w2 = sm_data_debug_signals_o__w1
@@ -630,7 +624,7 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
   }
   way = meta_read_mux_way
   dcache_way_decode = 0
-  const meta_data_way_en_d__w1 = if is_set_way_op != 0 { meta_force_way_en#[0..=3] } else { ((0 & (~(1 << way))) | (1 << way))#[0..=3] }
+  mut _mux_34:u4 = if is_set_way_op != 0 { meta_force_way_en#[0..=3] } else { ((0 & (~(1 << way))) | (1 << way))#[0..=3] }
   abort_operation_d__wtmp = abort_operation_q
   mut count_hlock_zero = 0ub???
   err_lock_d = 0ub?
@@ -720,7 +714,7 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
   }
   if state_meta_resp_qual__w1 != 0 {
     meta_data_req_addr_q = meta_data_req_addr_d
-    meta_data_way_en_q = meta_data_way_en_d__w1
+    meta_data_way_en_q = _mux_34
     new_coh_q = new_coh_d
   }
   if unsigned(state_q == minion_dcache_pkg.CacheOpMetaRespWait) != 0 {
@@ -750,9 +744,11 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
   } else {
     dcache_set_correct = set__w1
   }
-  meta_read_set__wtmp = if is_set_way_op__wtmp != 0 { req_set__w1#[0..=3] } else { dcache_set_correct#[0..=3] }
-  const meta_read_addr_o__w1 = if is_set_way_op__wtmp != 0 { ((req_set__w1 << 6) | (req_addr_q#[10..=47] << 10))#[0..=47] } else { req_addr_q#[0..=47] }
-  const meta_read_addr_msb_err_o__w1 = if is_set_way_op__wtmp != 0 { 0 } else { req_addr_msb_err_q & 1 }
+  mut _mux_42:u4 = if is_set_way_op__wtmp != 0 { req_set__w1#[0..=3] } else { dcache_set_correct#[0..=3] }
+  meta_read_set__wtmp = _mux_42
+  mut _mux_43:u48 = if is_set_way_op__wtmp != 0 { ((req_set__w1 << 6) | (req_addr_q#[10..=47] << 10))#[0..=47] } else { req_addr_q#[0..=47] }
+  const meta_read_addr_o__w1 = _mux_43
+  mut _mux_44:u1 = if is_set_way_op__wtmp != 0 { 0 } else { req_addr_msb_err_q & 1 }
   const `writeback_req_o__bpo.tag__w1` = (meta_data_req_addr_q >> ((minion_dcache_pkg.PaSize - 1)#[0..=31] - 32))#[0..=32]
   const set__w2 = meta_data_req_addr_q#[6..=9]
   const dcache_mode__w2 = cfg_cache_mode_i
@@ -770,7 +766,8 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
   } else {
     dcache_set_correct = set__w2
   }
-  const `writeback_req_o__bpo.set__w1` = if is_set_way_op__wtmp != 0 { req_set__w1#[0..=3] } else { dcache_set_correct#[0..=3] }
+  mut _mux_48:u4 = if is_set_way_op__wtmp != 0 { req_set__w1#[0..=3] } else { dcache_set_correct#[0..=3] }
+  const `writeback_req_o__bpo.set__w1` = _mux_48
   const `writeback_req_o__bpo.way_en__w1` = meta_data_way_en_q
   const meta_write_valid_o__w1 = unsigned((state_q == minion_dcache_pkg.CacheOpMetaWrite) and (abort_operation_q == 0))
   const meta_write_valid_lock__w1 = unsigned((state_q == minion_dcache_pkg.CacheOpMetaWriteLock) and (abort_operation_q == 0))
@@ -784,10 +781,13 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
   } else {
     dcache_set_correct = set__w3
   }
-  `meta_write_req_o__bpo.set_idx` = if is_set_way_op__wtmp != 0 { req_set__w1#[0..=3] } else { dcache_set_correct#[0..=3] }
+  mut _mux_52:u4 = if is_set_way_op__wtmp != 0 { req_set__w1#[0..=3] } else { dcache_set_correct#[0..=3] }
+  `meta_write_req_o__bpo.set_idx` = _mux_52
   `meta_write_req_o__bpo.way_en` = meta_data_way_en_q
-  `meta_write_req_o__bpo.data.tag` = if is_lock_xx_op__w1 != 0 { phys_addr_tag_q#[0..=32] } else { (meta_data_req_addr_q >> ((minion_dcache_pkg.PaSize - 1)#[0..=31] - 32))#[0..=32]#[0..=32] }
-  `meta_write_req_o__bpo.data.coh_state` = if is_lock_xx_op__w1 != 0 { minion_dcache_pkg.StateModified#[0..=1] } else { new_coh_q#[0..=1] }
+  mut _mux_53:u33 = if is_lock_xx_op__w1 != 0 { phys_addr_tag_q#[0..=32] } else { (meta_data_req_addr_q >> ((minion_dcache_pkg.PaSize - 1)#[0..=31] - 32))#[0..=32]#[0..=32] }
+  `meta_write_req_o__bpo.data.tag` = _mux_53
+  mut _mux_54:u2 = if is_lock_xx_op__w1 != 0 { minion_dcache_pkg.StateModified#[0..=1] } else { new_coh_q#[0..=1] }
+  `meta_write_req_o__bpo.data.coh_state` = _mux_54
   busy_o__wtmp = unsigned(state_q != minion_dcache_pkg.CacheOpInvalid)
   if (id_running_q == 0) and (((req_q >> 11) & 1) == 0) {
     th_id_complete_o__wtmp#[0..=0] = unsigned(busy_o__wtmp == 0)
@@ -882,36 +882,28 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
       slock_state_d = 0
     } elif req_q#[14..=17] == minion_pkg.cache_op_Lock_SW {
       const t2034 = (lock_set * 4) + lock_way
-      const t2039 = (hlock_state_d & (~(1 << t2034))) | (1 << t2034)
       const t2041 = (lock_set * 4) + lock_way
-      const t2046 = (slock_state_d & (~(1 << t2041))) | (0 << t2041)
-      hlock_state_d = t2039
-      slock_state_d = t2046
+      hlock_state_d = (hlock_state_d & (~(1 << t2034))) | (1 << t2034)
+      slock_state_d = (slock_state_d & (~(1 << t2041))) | (0 << t2041)
     } elif req_q#[14..=17] == minion_pkg.cache_op_Unlock_SW {
       const t2050 = (lock_set * 4) + lock_way
-      const t2055 = (hlock_state_d & (~(1 << t2050))) | (0 << t2050)
       const t2057 = (lock_set * 4) + lock_way
-      const t2062 = (slock_state_d & (~(1 << t2057))) | (0 << t2057)
-      hlock_state_d = t2055
-      slock_state_d = t2062
+      hlock_state_d = (hlock_state_d & (~(1 << t2050))) | (0 << t2050)
+      slock_state_d = (slock_state_d & (~(1 << t2057))) | (0 << t2057)
     } elif req_q#[14..=17] == minion_pkg.cache_op_Evict_SW {
       const t2066 = (lock_set * 4) + lock_way
-      const t2071 = (slock_state_d & (~(1 << t2066))) | (0 << t2066)
-      slock_state_d = t2071
+      slock_state_d = (slock_state_d & (~(1 << t2066))) | (0 << t2066)
     } elif req_q#[14..=17] == minion_pkg.cache_op_Lock_VA {
       const t2085 = (lock_set * 4) + lock_way
-      const t2090 = (slock_state_d & (~(1 << t2085))) | (unsigned((((((hlock_state_o << 4) >> ((lock_set * 4) + 4))#[0..=3] << 1) >> (lock_way + 1)) & 1) == 0) << t2085)
-      slock_state_d = t2090
+      slock_state_d = (slock_state_d & (~(1 << t2085))) | (unsigned((((((hlock_state_o << 4) >> ((lock_set * 4) + 4))#[0..=3] << 1) >> (lock_way + 1)) & 1) == 0) << t2085)
     } elif (req_q#[14..=17] == minion_pkg.cache_op_Unlock_VA) or (req_q#[14..=17] == minion_pkg.cache_op_Evict_VA) {
       const t2097 = (lock_set * 4) + lock_way
-      const t2102 = (slock_state_d & (~(1 << t2097))) | (0 << t2097)
-      slock_state_d = t2102
+      slock_state_d = (slock_state_d & (~(1 << t2097))) | (0 << t2097)
     }
   }
   if mh_clear_slock_valid_i != 0 {
     const t2105 = (mh_clear_slock_set_i * 4) + mh_clear_slock_way_i
-    const t2110 = (slock_state_d & (~(1 << t2105))) | (0 << t2105)
-    slock_state_d = t2110
+    slock_state_d = (slock_state_d & (~(1 << t2105))) | (0 << t2105)
   }
   ways = meta_data_way_en_q
   dcache_way_encode = if (ways & 1) != 0 { 0 } else { 0 }
@@ -928,7 +920,8 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
   lock_way__wtmp = dcache_way_encode
   const da_clear_en_o__w1 = unsigned((lock_zero__w1 != 0) or (clear_line_on_q != 0))
   const da_clear_val_o__w1 = clear_line_on_q
-  da_clear_idx_d__wtmp = if (da_clear_val_o__w1 != 0) and (da_clear_rdy_i != 0) { (~da_clear_idx_o) & 1 & 1 } else { da_clear_idx_o & 1 }
+  mut _mux_65:u1 = if (da_clear_val_o__w1 != 0) and (da_clear_rdy_i != 0) { (~da_clear_idx_o) & 1 & 1 } else { da_clear_idx_o & 1 }
+  da_clear_idx_d__wtmp = _mux_65
   clear_line = da_clear_en_o__w1
   clear_line_on_d__wtmp = unsigned((lock_zero__w1 != 0) or ((clear_line_on_q != 0) and (not ((da_clear_val_o__w1 != 0) and (da_clear_rdy_i != 0) and (da_clear_idx_o != 0)))))
   if lock_en__w2 != 0 {
@@ -994,7 +987,7 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
   is_set_way_op = is_set_way_op__wtmp
   lock_set = lock_set__wtmp
   lock_way = lock_way__wtmp
-  meta_read_addr_msb_err_o = meta_read_addr_msb_err_o__w1
+  meta_read_addr_msb_err_o = _mux_44
   meta_read_addr_o = meta_read_addr_o__w1
   meta_read_bid_o = unsigned((state_q == minion_dcache_pkg.CacheOpMetaRead) and (meta_read_valid_o == 0))
   meta_read_force_set_o = is_set_way_op__wtmp
@@ -1020,7 +1013,7 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
   s0_co_pf_req_o.typ = `s0_co_pf_req_o__bpo.typ__w1`
   s0_co_pf_req_o.vm_sel = `s0_co_pf_req_o__bpo.vm_sel__w1`
   sm_data_debug_signals_o = sm_data_debug_signals_o__w4
-  sm_filter_debug_signals_o = (state_q | (req_q << 4) | (req_addr_q << 22) | (cache_op_accepted__w1 << 70) | (abort_operation_q << 71) | (state_up__w1 << 72) | (term_loop_q << 73) | (err_mem_q << 74) | (err_lock_q << 75)) | 0
+  sm_filter_debug_signals_o = sm_filter_debug_signals_o__w1
   sm_match_debug_signals_o = sm_match_debug_signals_o__w1
   th_id_complete_o = th_id_complete_o__wtmp
   writeback_req_o.set = `writeback_req_o__bpo.set__w1`

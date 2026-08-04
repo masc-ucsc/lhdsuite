@@ -5,6 +5,9 @@ const prim_rf_1r1w_diff_preview = import("prim_rf_1r1w_diff_preview.prim_rf_1r1w
 const minion_pkg = import("minion_pkg")
 
 pub mod minion_frontend_thread_buffer::[timecheck=false](clk_i:u1, rst_ni:u1, reset_debug_i:u1, chicken_bit_i:u1, dft_i:(scanmode:u1, scan_reset_n:u1, sram_clk_override:u1, ram_rei:u1, ram_wei:u1), f0_thread_enabled_i:u1, f0_reset_vector_i:minion_pkg.VaSizeExt_T, f0_disable_thread_i:u1, f0_enable_thread_i:u1, in_debug_mode_i:u1, vm_status_i:(prv:u2, mprv:u1, mpp:u2, sum:u1, mxr:u1, debug:u1), f0_icache_req_ready_i:u1, f1_icache_req_ready_i:u1, f5_icache_resp_miss_i:u1, f6_icache_resp_valid_i:u1, f6_icache_resp_miss_i:u1, f6_icache_resp_i:(data:u256, page_fault:u1, access_fault:u1, cacheable:u1, bus_err:u1, ecc_err:u1), f7_icache_fill_done_i:u1, f0_core_req_valid_i:u1, f0_core_req_i:(pc:u49, speculative:u1, debug_info:(halt:u1, resume:u1)), f7_inst_ready_i:u1, debug_ffb_wdata_i:u64, debug_ffb_en_i:u4, debug_ffb_exec_i:u1, io_halt_i:u1) -> (f0_icache_req_valid_o:u1@[], f0_icache_req_o:(thread_id:u1, vm_status:(prv:u2, mprv:u1, mpp:u2, sum:u1, mxr:u1, debug:u1), addr:u49)@[], f7_inst_rvc_o:u1@[], f7_inst_valid_o:u1@[], f7_inst_data_o:(pc:u49, inst_bits:u32, page_fault0:u1, access_fault0:u1, page_fault1:u1, access_fault1:u1, replay:u1, bus_err:u1, ecc_err:u1)@[], debug_o:(core_req_valid:u1, core_req_pc:u49, f0_pc:u49, f0_pc_next:u49, f0_pc_update:u1, clock_enable:u1, gated_clk_ticks:u4, buffer_empty:u2, buffer_pc0:u49, buffer_pc1:u49, req_buffer:u1, f6_req_buffer:u1, f6_buffer_id:u1, f7_buffer_id:u1, f6_buffer_ptr:u5, f6_buffer_ptr_next:u5, f7_buffer_ptr:u5, icache_inflight:u1, miss_pending:u1, f1_req_valid:u1, f5_req_valid:u1, f6_req_valid:u1, f6_buffer_wr:u1, f6_valid:u1, f6_stall:u1, f7_valid:u1, f7_stall:u1)@[]) {
+  mut _mux_21:u8 = 0
+  mut _mux_22:u8 = 0
+  mut _mux_41:u5 = 0
   mut _mux_42:u5 = 0
   mut f6_buffer_wren = 0
   mut f6_write_ad = 0
@@ -157,17 +160,19 @@ pub mod minion_frontend_thread_buffer::[timecheck=false](clk_i:u1, rst_ni:u1, re
   const reset_prog_buffer__w1 = unsigned(((in_debug_mode_i != 0) and (reset_debug_ff != 0)) or (debug_mode_start_ff != 0))
   buffer_word_en[0] = (0xff << buffer_pc[0]#[2..=4])#[0..=7]
   buffer_word_en[1] = (0xff << buffer_pc[1]#[2..=4])#[0..=7]
-  const f6_buffer_wr_1p_next__w1 = if (f5_req_valid_to_f6__w1 != 0) and (f5_icache_resp_miss_i == 0) { buffer_word_en[f5_req_buffer]#[0..=7] } else { 0 }
-  f6_buffer_wr_1p_next = f6_buffer_wr_1p_next__w1
+  mut _mux_20:u8 = if (f5_req_valid_to_f6__w1 != 0) and (f5_icache_resp_miss_i == 0) { buffer_word_en[f5_req_buffer]#[0..=7] } else { 0 }
+  f6_buffer_wr_1p_next = _mux_20
   if using_pfb__w1 != 0 {
-    f6_buffer_wr_1p_next = if (debug_mode_start__w1 != 0) or (reset_debug_i != 0) { 0xff } else { debug_ffb_en_i#[0..=3]#[0..=7] }
+    _mux_21 = if (debug_mode_start__w1 != 0) or (reset_debug_i != 0) { 0xff } else { debug_ffb_en_i#[0..=3]#[0..=7] }
+    f6_buffer_wr_1p_next = _mux_21
     f6_buffer_wren = debug_ffb_en_2#[0..=3]
     f6_write_ad = if (in_debug_mode_i != 0) or (reset_prog_buffer__w1 != 0) { 0 } else { f6_req_buffer }
     if reset_prog_buffer__w1 != 0 {
       f6_buffer_wren = 15
     }
   } else {
-    f6_buffer_wren = if f6_buffer_wr__w1 != 0 { buffer_word_en[f6_req_buffer]#[0..=7] } else { 0 }
+    _mux_22 = if f6_buffer_wr__w1 != 0 { buffer_word_en[f6_req_buffer]#[0..=7] } else { 0 }
+    f6_buffer_wren = _mux_22
     f6_write_ad = f6_req_buffer
   }
   f6_wr_data = f6_icache_resp_i.data
@@ -250,7 +255,8 @@ pub mod minion_frontend_thread_buffer::[timecheck=false](clk_i:u1, rst_ni:u1, re
   if f1_icache_req_ready_i != 0 {
     f1_req_buffer = f0_req_buffer
   }
-  f1_icache_req_kill_f1 = if f1_icache_req_ready_i != 0 { 0 } else { f0_icache_req_kill_f1__w1 & 1 }
+  mut _mux_30:u1 = if f1_icache_req_ready_i != 0 { 0 } else { f0_icache_req_kill_f1__w1 & 1 }
+  f1_icache_req_kill_f1 = _mux_30
   f2_req_valid = unsigned((f1_req_valid != 0) and (f1_icache_req_ready_i != 0) and (f0_icache_req_kill_f1__w1 == 0))
   f2_req_buffer = f1_req_buffer
   f3_req_valid = unsigned((f2_req_valid != 0) and (f0_core_req_valid_i == 0))
@@ -331,7 +337,8 @@ pub mod minion_frontend_thread_buffer::[timecheck=false](clk_i:u1, rst_ni:u1, re
     buffer_empty_next__wtmp = 1
   }
   if ((f6_valid != 0) and (f6_stall == 0)) or ((buffer_empty == 3) and (f5_req_valid != 0)) or (ffb_update_read_pointer__w1 != 0) {
-    f6_buffer_ptr = if ffb_update_read_pointer__w1 != 0 { 0 } else { f6_buffer_ptr_next#[0..=4] }
+    _mux_41 = if ffb_update_read_pointer__w1 != 0 { 0 } else { f6_buffer_ptr_next#[0..=4] }
+    f6_buffer_ptr = _mux_41
   }
   const f6_buffer_pos__w1 = f6_buffer_ptr#[0..=3]
   f6_buffer_id__wtmp = (f6_buffer_ptr >> 4) & 1
@@ -365,7 +372,8 @@ pub mod minion_frontend_thread_buffer::[timecheck=false](clk_i:u1, rst_ni:u1, re
   mut u_rvc_exp = minion_frontend_rvc_expander::[name=u_rvc_exp](in_bits = f6_inst_bits)
   mut _mux_50:u1 = if f7_inst_ready_i != 0 { 0 } else { f7_valid & 1 }
   mut _mux_51:u1 = if f6_valid != 0 { 1 } else { _mux_50 & 1 }
-  f7_valid = if (f0_core_req_valid_i != 0) or (dbg_clear_f7 != 0) { 0 } else { _mux_51 & 1 }
+  mut _mux_52:u1 = if (f0_core_req_valid_i != 0) or (dbg_clear_f7 != 0) { 0 } else { _mux_51 & 1 }
+  f7_valid = _mux_52
   if (f6_valid != 0) and (f6_stall == 0) {
     f7_inst_bits = u_rvc_exp
   }

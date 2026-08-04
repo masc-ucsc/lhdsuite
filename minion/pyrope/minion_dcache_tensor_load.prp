@@ -5,7 +5,10 @@ const minion_pkg = import("minion_pkg")
 const minion_dcache_pkg = import("minion_dcache_pkg")
 
 pub mod minion_dcache_tensor_load::[timecheck=false](clk_i:u1, rst_ni:u1, shire_min_id_i:minion_pkg.MinPerSBits_T, chicken_bit_dcache_i:u1, tensor_ctrl_i:u456, s0_available_i:u1, s1_available_i:u1, s1_tlb_wait_i:u1, s1_tlb_fail_i:u1, s2_addr_i:u40, l2_req_ready_coop_i:u1, l2_req_ready_no_coop_i:u1, l2_resp_valid_i:u1, l2_resp_i:(id:u8, dest:u1, wdata:u1, opcode:u2, data:u256, size:u3, qwen:u4), load_ready_i:u1, tfma_enabled_i:u1, tenb_tstore_busy_i:u1, tenb_credit_i:u1, tenb_credit_entry_i:minion_pkg.DcacheTenbBits_T, tenb_written_i:u1, vm_status_i:u16) -> (busy_o:u1@[], id_complete_o:u2@[], s0_addr_load_o:u1@[], s0_addr_o:u48@[], s0_addr_msb_err_o:u1@[], s0_thread_id_o:u1@[], s1_addr_load_o:u1@[], l2_req_valid_coop_o:u1@[], l2_req_valid_no_coop_o:u1@[], l2_req_o:(id:u5, source:u1, wdata:u1, opcode:u5, address:u40, data:u20, size:u3, qwen:u4, subopcode:u7)@[], load_way_o:minion_dcache_pkg.DcacheWayIdxWidth_T@[], load_addr_o:minion_dcache_pkg.DcacheLramAddrWidth_T@[], load_data_o:u256@[], load_valid_o:minion_dcache_pkg.DcacheLramNumBanks_T@[], load_valid_pre_o:u1@[], load_capture_o:u1@[], tenb_ready_o:u1@[], tenb_flush_o:u1@[], vm_status_tl_o:(prv:u2, mprv:u1, mpp:u2, sum:u1, mxr:u1, debug:u1)@[], err_flags_o:minion_pkg.DcacheTlErrorBits_T@[], tl_start_o:u1@[], tl_op_o:u1@[], bus_err_o:minion_pkg.NrThreads_T@[], csr_debug_signals_o:minion_pkg.DcacheDbgCsrTlSize_T@[], sm_match_debug_signals_o:minion_dcache_pkg.DcacheDbgSmMatchBits_T@[], sm_filter_debug_signals_o:minion_dcache_pkg.DcacheDbgSmFilterBits_T@[], sm_data_debug_signals_o:minion_dcache_pkg.DcacheDbgSmDataBits_T@[]) {
+  mut _mux_14:u4 = 0
   mut _mux_15:u4 = 0
+  mut _mux_16:u4 = 0
+  mut _mux_191:u8 = 0
   mut request_control_num_lines = 0
   mut request_control_stride = 0
   mut request_control_tmask_bits = 0
@@ -236,6 +239,7 @@ pub mod minion_dcache_tensor_load::[timecheck=false](clk_i:u1, rst_ni:u1, shire_
     thread_id_d = tensor_ctrl_i & 1
   }
   const start_pulse__w1 = start_pulse_pre_q & (~tensor_ctrl_restart__w1) & 1
+  const tl_start_o__w1 = start_pulse__w1
   const ctrl_en__w1 = unsigned(ctrl_state_q != 0) | start_pulse__w1 | tensor_ctrl_restart__w1
   const trans_none__w1 = unsigned(tensor_ctrl_transform_q == minion_pkg.TensorTransNone)
   const trans_int8__w1 = unsigned(tensor_ctrl_transform_q == minion_pkg.TensorTransInt8)
@@ -244,7 +248,8 @@ pub mod minion_dcache_tensor_load::[timecheck=false](clk_i:u1, rst_ni:u1, shire_
   const trans_trp16__w1 = unsigned(tensor_ctrl_transform_q == minion_pkg.TensorTransTrp16)
   const trans_trp32__w1 = unsigned(tensor_ctrl_transform_q == minion_pkg.TensorTransTrp32)
   mut _mux_11:u2 = if (trans_int16__w1 | trans_trp16__w1) != 0 { (tensor_ctrl_offset_q & 2)#[0..=1] } else { minion_pkg.tensorload_offset_0#[0..=1] }
-  const trans_offset__w1 = if (trans_int8__w1 | trans_trp8__w1) != 0 { tensor_ctrl_offset_q#[0..=1] } else { _mux_11#[0..=1] }
+  mut _mux_12:u2 = if (trans_int8__w1 | trans_trp8__w1) != 0 { tensor_ctrl_offset_q#[0..=1] } else { _mux_11#[0..=1] }
+  const trans_offset__w1 = _mux_12
   const trans_size8__w1 = trans_int8__w1 | trans_trp8__w1
   const trans_nlines__w1 = tensor_ctrl_num_lines_q
   const trans_stride__w1 = tensor_load_stride_q << 6
@@ -255,30 +260,17 @@ pub mod minion_dcache_tensor_load::[timecheck=false](clk_i:u1, rst_ni:u1, shire_
   const trans_size_valid__w1 = trans_none__w1 | trans_int8__w1 | trans_int16__w1 | trans_trp8__w1 | trans_trp16__w1 | trans_trp32__w1
   const request_control_start__w1 = unsigned((ctrl_state_changed_q != 0) and ((ctrl_state_q == 2) or (ctrl_state_q == 4) or (ctrl_state_q == 6)))
   if ctrl_state_q == 4 {
+    _mux_14 = if trans_size8__w1 != 0 { 3 } else { 1 }
     const t151 = ((trans_tmask_bits_q << 1) >> (shared_tmask_idx__w1 + 1)) & 1
-    const t167 = t151 | (t151 << 1)
-    const t168 = t167 | (t151 << 2)
-    const t169 = t168 | (t151 << 3)
-    const t170 = t169 | (t151 << 4)
-    const t171 = t170 | (t151 << 5)
-    const t172 = t171 | (t151 << 6)
-    const t173 = t172 | (t151 << 7)
-    const t174 = t173 | (t151 << 8)
-    const t175 = t174 | (t151 << 9)
-    const t176 = t175 | (t151 << 10)
-    const t177 = t176 | (t151 << 11)
-    const t178 = t177 | (t151 << 12)
-    const t179 = t178 | (t151 << 13)
-    const t180 = t179 | (t151 << 14)
-    const t181 = t180 | (t151 << 15)
-    request_control_num_lines = if trans_size8__w1 != 0 { 3 } else { 1 }
+    request_control_num_lines = _mux_14
     request_control_stride = trans_stride__w1
-    request_control_tmask_bits = t181
+    request_control_tmask_bits = t151 | (t151 << 1) | (t151 << 2) | (t151 << 3) | (t151 << 4) | (t151 << 5) | (t151 << 6) | (t151 << 7) | (t151 << 8) | (t151 << 9) | (t151 << 10) | (t151 << 11) | (t151 << 12) | (t151 << 13) | (t151 << 14) | (t151 << 15)
     request_control_use_coop = trans_use_coop__w1
     request_control_use_tmask = trans_use_tmask__w1
   } elif ctrl_state_q == 6 {
     _mux_15 = if (trans_int16__w1 | trans_trp16__w1) != 0 { 3 } else { 1 }
-    request_control_num_lines = if trans_size8__w1 != 0 { 7 } else { _mux_15#[0..=3] }
+    _mux_16 = if trans_size8__w1 != 0 { 7 } else { _mux_15#[0..=3] }
+    request_control_num_lines = _mux_16
     request_control_stride = trans_stride__w1
     request_control_tmask_bits = 0
     request_control_use_coop = trans_use_coop__w1
@@ -869,6 +861,7 @@ pub mod minion_dcache_tensor_load::[timecheck=false](clk_i:u1, rst_ni:u1, shire_
   if (3 > tenb_idx_last_q#[0..=1]) and (tenb_idx_last_q >= tenb_idx__w1) {
     tenb_rcv_ok = tenb_rcv_ok & (tenb_rcv_entry_q >> 3) & 1
   }
+  const s0_thread_id_o__w1 = thread_id_q
   {
   }
   const s1_addr_load_o__w1 = s1_addr_load_x_q & 1
@@ -966,12 +959,14 @@ pub mod minion_dcache_tensor_load::[timecheck=false](clk_i:u1, rst_ni:u1, shire_
   const l2_seq_wait__w1 = unsigned(gen_l2i_0_sequencing_to_l2__w4 != 0)
   `l2_req_o__bpo.source` = 0
   `l2_req_o__bpo.wdata` = request_control_use_coop
+  mut _mux_67:u5 = if request_control_use_coop != 0 { minion_dcache_pkg.EtLinkReqReadCoop#[0..=4] } else { minion_dcache_pkg.EtLinkReqRead#[0..=4] }
   `l2_req_o__bpo.address` = req_addr_cline_q << 6
-  `l2_req_o__bpo.opcode` = if request_control_use_coop != 0 { minion_dcache_pkg.EtLinkReqReadCoop#[0..=4] } else { minion_dcache_pkg.EtLinkReqRead#[0..=4] }
+  `l2_req_o__bpo.opcode` = _mux_67
   `l2_req_o__bpo.size` = minion_dcache_pkg.EtLinkLine
   `l2_req_o__bpo.subopcode` = 0
+  mut _mux_68:u4 = if request_control_use_coop != 0 { 1 } else { 0 }
   const sel_t__w1 = l2_resp_i.id#[0..=1]
-  `l2_req_o__bpo.qwen` = if request_control_use_coop != 0 { 1 } else { 0 }
+  `l2_req_o__bpo.qwen` = _mux_68
   const request_control_load_way__w1 = tl_load_way_q[sel_t__w1]
   const request_control_load_addr__w1 = 0 | ((((tl_load_idx_q << 1) >> (sel_t__w1 + 1)) & 1) << 5) | (tl_load_set_q[sel_t__w1] << 6)
   const tenb_written_entry__w1 = request_control_load_way__w1#[0..=1]
@@ -1012,7 +1007,8 @@ pub mod minion_dcache_tensor_load::[timecheck=false](clk_i:u1, rst_ni:u1, shire_
     id_complete_o#[1..=1] = 1
   }
   const csr_debug_signals_o__w1 = ctrl_state_q
-  const l2_req_ready__w1 = if request_control_use_coop != 0 { l2_req_ready_coop_i & 1 } else { l2_req_ready_no_coop_i & 1 }
+  mut _mux_83:u1 = if request_control_use_coop != 0 { l2_req_ready_coop_i & 1 } else { l2_req_ready_no_coop_i & 1 }
+  const l2_req_ready__w1 = _mux_83
   const ctrl_start__w1 = start_pulse__w1 & trans_size_valid__w1 & 1
   const ctrl_start_tmask_wait__w1 = ctrl_start__w1 & unsigned(((tensor_ctrl_i >> 325) & 1) == 0) & tensor_ctrl_use_tmask_q
   mut _mux_86:u2 = if ctrl_state_q >= 3 { 1 } else { request_control_load_way__w1#[0..=1] }
@@ -1532,28 +1528,24 @@ pub mod minion_dcache_tensor_load::[timecheck=false](clk_i:u1, rst_ni:u1, shire_
   sequence_data_d = sequence_data_q
   if (l2_req_valid__w1 & l2_req_ready__w1 & request_control_use_coop) != 0 {
     const t3812 = sequence_count_q | (l2i_seq_idx_q << 3)
-    const t3817 = (sequence_data_d & (~(1 << t3812))) | (1 << t3812)
-    sequence_data_d = t3817
+    sequence_data_d = (sequence_data_d & (~(1 << t3812))) | (1 << t3812)
   }
   if (gen_l2i_3_received_answer__w4 & 1 & l2i_op_is_coop_q & 1) != 0 {
-    const t3827 = (sequence_data_d & (~(1 << l2i_seq_saved_q#[0..=3]))) | (0 << l2i_seq_saved_q#[0..=3])
-    sequence_data_d = t3827
+    sequence_data_d = (sequence_data_d & (~(1 << l2i_seq_saved_q#[0..=3]))) | (0 << l2i_seq_saved_q#[0..=3])
   }
   if ((gen_l2i_3_received_answer__w4 >> 1) & 1 & (l2i_op_is_coop_q >> 1) & 1) != 0 {
-    const t3839 = (sequence_data_d & (~(1 << l2i_seq_saved_q#[4..=7]))) | (0 << l2i_seq_saved_q#[4..=7])
-    sequence_data_d = t3839
+    sequence_data_d = (sequence_data_d & (~(1 << l2i_seq_saved_q#[4..=7]))) | (0 << l2i_seq_saved_q#[4..=7])
   }
   if ((gen_l2i_3_received_answer__w4 >> 2) & 1 & (l2i_op_is_coop_q >> 2) & 1) != 0 {
-    const t3851 = (sequence_data_d & (~(1 << l2i_seq_saved_q#[8..=11]))) | (0 << l2i_seq_saved_q#[8..=11])
-    sequence_data_d = t3851
+    sequence_data_d = (sequence_data_d & (~(1 << l2i_seq_saved_q#[8..=11]))) | (0 << l2i_seq_saved_q#[8..=11])
   }
   if ((gen_l2i_3_received_answer__w4 >> 3) & 1 & (l2i_op_is_coop_q >> 3) & 1) != 0 {
-    const t3863 = (sequence_data_d & (~(1 << l2i_seq_saved_q#[12..=15]))) | (0 << l2i_seq_saved_q#[12..=15])
-    sequence_data_d = t3863
+    sequence_data_d = (sequence_data_d & (~(1 << l2i_seq_saved_q#[12..=15]))) | (0 << l2i_seq_saved_q#[12..=15])
   }
   req_addr_cline_d = if unsigned(gen_l2i_0_gen_first_req_new_l2_req__w4 != 0) != 0 { _mux_32#[6..=39] } else { req_addr_cline_q }
   `l2_req_o__bpo.id` = gen_l2i_0_gen_miss_id_0_my_miss_id[l2_req_idx]
-  `l2_req_o__bpo.data` = if request_control_use_coop != 0 { (tensor_coop_data_q | 0 | (sequence_count_q << 8) | 0)#[0..=19] } else { (self_minion_mask__w2 | 0)#[0..=19] }
+  mut _mux_174:u20 = if request_control_use_coop != 0 { (tensor_coop_data_q | 0 | (sequence_count_q << 8) | 0)#[0..=19] } else { (self_minion_mask__w2 | 0)#[0..=19] }
+  `l2_req_o__bpo.data` = _mux_174
   tenb_avail_entry_d = 0ub????
   tenb_avail_entry_d = tenb_avail_entry_q
   if tenb_written_i != 0 {
@@ -1696,10 +1688,12 @@ pub mod minion_dcache_tensor_load::[timecheck=false](clk_i:u1, rst_ni:u1, shire_
   if shared_dest_d >= 48 {
     shared_dest_d = (shared_dest_d - 48)#[0..=5]
   }
+  const err_transf_set__w1 = start_pulse__w1 & unsigned(trans_size_valid__w1 == 0)
   {
   }
+  const err_offset_set__w1 = start_pulse__w1 & 0
   mut _mux_183:u1 = if err_mem_d != 0 { 1 } else { err_mem_sticky_q & 1 }
-  const err_mem_sticky_d__w1 = if ctrl_state_q == 0 { 0 } else { _mux_183 & 1 }
+  mut _mux_184:u1 = if ctrl_state_q == 0 { 0 } else { _mux_183 & 1 }
   mut err_flags_o__w3 = 0
   err_flags_o__w3#[1..=1] = err_transf_flag_q
   mut err_flags_o__w4 = err_flags_o__w3
@@ -1767,6 +1761,9 @@ pub mod minion_dcache_tensor_load::[timecheck=false](clk_i:u1, rst_ni:u1, shire_
   u_tmp_data = prim_rf_single_1r1w_par_preview::[name=u_tmp_data](preview_clk_i = clkgt, rf_clk_i = clkgt, wr_data_en_1p_next_i = rf_write_en_prev__w1, wr_data_i = tmp_data_d#[960..=1023], wr_en_i = (shared_l2_store >> 15) & 1)
   mut tmp_data_q__wtmp__w15 = tmp_data_q__wtmp__w14
   tmp_data_q__wtmp__w15#[960..=1023] = u_tmp_data
+  const sm_match_debug_signals_o__w1 = tensor_ctrl_start__w1 | (request_control_start__w1 << 1) | (start_pulse__w1 << 2) | (ctrl_en__w1 << 3) | (addr_up << 4) | (save_tmask_bits__w1 << 5) | (load_valid_o__w1 << 6) | (err_offset_flag_q << 10) | (err_transf_flag_q << 11) | 0 | (shared_l2_count__w1 << 13) | ((l2_req_valid__w1 & l2_req_ready__w1) << 14) | (interleave_clear_valid_q << 15) | (ctrl_state_changed_q << 16) | ((s2_req_valid_q & s2_req_ready__w1) << 17) | ((s0_addr_load_o__w1 & s0_available_i) << 18) | (tfma_active_start_q << 19) | (gen_l2i_0_gen_first_req_new_l2_req__w4 << 20) | (gen_l2i_0_l2i_state_up__w4 << 24)
+  const sm_filter_debug_signals_o__w1 = sm_filter_debug_signals_d__w2
+  const sm_data_debug_signals_o__w1 = sm_data_debug_signals_d__w4
   if rst_ni == 0 {
     ctrl_state_changed_q = 0
     ctrl_state_q = 0
@@ -1849,10 +1846,11 @@ pub mod minion_dcache_tensor_load::[timecheck=false](clk_i:u1, rst_ni:u1, shire_
     l2i_seq_saved_q#[12..=15] = 0
     tl_load_idx_q#[3..=3] = 0
   } else {
+    const t4351 = ctrl_en__w1 != 0
     ctrl_state_q = ctrl_state_d
     save_tmask_pending_q = save_tmask_pending_d
     start_pulse_pre_q = tensor_ctrl_start__w1
-    if ctrl_en__w1 != 0 {
+    if t4351 {
       ctrl_state_changed_q = unsigned(ctrl_state_d != ctrl_state_q)
     }
     shared_count_q = shared_count_d
@@ -1864,9 +1862,9 @@ pub mod minion_dcache_tensor_load::[timecheck=false](clk_i:u1, rst_ni:u1, shire_
     }
     drain_load_capture_q = drain_load_capture_d
     err_mem_q = err_mem_d
-    err_mem_sticky_q = err_mem_sticky_d__w1
-    err_offset_flag_q = start_pulse__w1 & 0
-    err_transf_flag_q = start_pulse__w1 & unsigned(trans_size_valid__w1 == 0)
+    err_mem_sticky_q = _mux_184
+    err_offset_flag_q = err_offset_set__w1
+    err_transf_flag_q = err_transf_set__w1
     id_running_q = id_running_d
     l2_interface_busy_prev_q = l2_interface_busy__w1
     req_addr_cline_q = req_addr_cline_d
@@ -1900,7 +1898,8 @@ pub mod minion_dcache_tensor_load::[timecheck=false](clk_i:u1, rst_ni:u1, shire_
       trans_tmask_bits_q = tensor_ctrl_i#[309..=324]
     }
     if start_pulse__w1 != 0 {
-      vm_status_tl_q = if thread_id_q != 0 { vm_status_i#[8..=15]#[0..=7] } else { vm_status_i#[0..=7]#[0..=7] }
+      _mux_191 = if thread_id_q != 0 { vm_status_i#[8..=15]#[0..=7] } else { vm_status_i#[0..=7]#[0..=7] }
+      vm_status_tl_q = _mux_191
     }
     if shared_l2_count__w1 != 0 {
       shared_l2_counter_q = if (ctrl_state_q == 3) or ((ctrl_state_q == 6) and (ctrl_state_changed_q != 0)) { 0 } else { (shared_l2_counter_q + 2)#[0..=3] }
@@ -1911,11 +1910,12 @@ pub mod minion_dcache_tensor_load::[timecheck=false](clk_i:u1, rst_ni:u1, shire_
       s0_addr_o = s0_addr_next
       tmask_idx_q = tmask_idx_d
     }
+    const t4378 = (gen_l2i_0_l2i_state_up__w4 & 1) != 0
     enabled_q = enabled_d
     s1_addr_load_x_q = unsigned((s0_addr_load_x__w1 != 0) and true)
     s2_req_valid_q = unsigned(((s1_addr_load_x_q != 0) and (s1_tlb_wait_x__w1 == 0) and (s1_tlb_fail_x__w1 == 0) and true) or ((s2_req_valid_q != 0) and (s2_req_ready__w1 == 0) and ((s1_available_i | 0) != 0) and true))
     waiting_tlb_q = unsigned(((s1_addr_load_x_q != 0) or (waiting_tlb_q != 0)) and (s1_tlb_wait_x__w1 != 0))
-    if (gen_l2i_0_l2i_state_up__w4 & 1) != 0 {
+    if t4378 {
       l2i_state_q#[0..=1] = l2i_state_d#[0..=1]
     }
     if (gen_l2i_0_gen_first_req_new_l2_req__w4 & 1) != 0 {
@@ -2009,15 +2009,15 @@ pub mod minion_dcache_tensor_load::[timecheck=false](clk_i:u1, rst_ni:u1, shire_
   load_valid_pre_o = unsigned((ctrl_state_d == 5) or (ctrl_state_d == 7))
   load_way_o = load_way_o__w1
   s0_addr_load_o = s0_addr_load_o__w1
-  s0_thread_id_o = thread_id_q
+  s0_thread_id_o = s0_thread_id_o__w1
   s1_addr_load_o = s1_addr_load_o__w1
-  sm_data_debug_signals_o = sm_data_debug_signals_d__w4
-  sm_filter_debug_signals_o = sm_filter_debug_signals_d__w2
-  sm_match_debug_signals_o = tensor_ctrl_start__w1 | (request_control_start__w1 << 1) | (start_pulse__w1 << 2) | (ctrl_en__w1 << 3) | (addr_up << 4) | (save_tmask_bits__w1 << 5) | (load_valid_o__w1 << 6) | (err_offset_flag_q << 10) | (err_transf_flag_q << 11) | 0 | (shared_l2_count__w1 << 13) | ((l2_req_valid__w1 & l2_req_ready__w1) << 14) | (interleave_clear_valid_q << 15) | (ctrl_state_changed_q << 16) | ((s2_req_valid_q & s2_req_ready__w1) << 17) | ((s0_addr_load_o__w1 & s0_available_i) << 18) | (tfma_active_start_q << 19) | (gen_l2i_0_gen_first_req_new_l2_req__w4 << 20) | (gen_l2i_0_l2i_state_up__w4 << 24)
+  sm_data_debug_signals_o = sm_data_debug_signals_o__w1
+  sm_filter_debug_signals_o = sm_filter_debug_signals_o__w1
+  sm_match_debug_signals_o = sm_match_debug_signals_o__w1
   tenb_flush_o = tenb_flush_int__w1
   tenb_ready_o = tenb_ready_o__w1
   tl_op_o = l2_req_valid__w1 & l2_req_ready__w1
-  tl_start_o = start_pulse__w1
+  tl_start_o = tl_start_o__w1
   tmp_data_q = tmp_data_q__wtmp__w15
   vm_status_tl_o.debug = `vm_status_tl_o__bpo.debug`
   vm_status_tl_o.mpp = `vm_status_tl_o__bpo.mpp`

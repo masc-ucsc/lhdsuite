@@ -64,7 +64,8 @@ pub mod minion_tlb::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, s
     ptw_resp_data_q = (ptw_resp_data_i.canceled_req << 63) | (ptw_resp_data_i.access_fault << 62) | (ptw_resp_data_i.rsvd_for_hw << 54) | (ptw_resp_data_i.ppn << 10) | (ptw_resp_data_i.rsvd_for_sw << 8) | (ptw_resp_data_i.d << 7) | (ptw_resp_data_i.a << 6) | (ptw_resp_data_i.g << 5) | (ptw_resp_data_i.u << 4) | (ptw_resp_data_i.x << 3) | (ptw_resp_data_i.w << 2) | (ptw_resp_data_i.r << 1) | ptw_resp_data_i.v
   }
   ptw_resp_valid_q = if rst_ni == 0 { 0 } else { ptw_resp_valid_i }
-  const privilege_mode__w1 = if (req_data_i.status.mprv != 0) and (req_data_i.instruction == 0) { req_data_i.status.mpp#[0..=1] } else { req_data_i.status.prv#[0..=1] }
+  mut _mux_2:u2 = if (req_data_i.status.mprv != 0) and (req_data_i.instruction == 0) { req_data_i.status.mpp#[0..=1] } else { req_data_i.status.prv#[0..=1] }
+  const privilege_mode__w1 = _mux_2
   const vpn_i__w1 = req_data_i.vpn
   const typ_i__w1 = vmspagesize_i
   tag = 0
@@ -94,8 +95,9 @@ pub mod minion_tlb::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, s
     }
   }
   const req_tag__w1 = tag
-  const vm_mode__w1 = if privilege_mode__w1 == minion_pkg.PrvM { ((matp_info_i << 32) >> ((req_min_id_i * 32)#[0..=7] + 32))#[0..=31]#[28..=31]#[0..=3] } else { ((satp_info_i << 32) >> ((req_min_id_i * 32)#[0..=7] + 32))#[0..=31]#[28..=31]#[0..=3] }
-  const vm_ppn__w1 = if privilege_mode__w1 == minion_pkg.PrvM { ((matp_info_i << 32) >> ((req_min_id_i * 32)#[0..=7] + 32))#[0..=31]#[0..=27]#[0..=27] } else { ((satp_info_i << 32) >> ((req_min_id_i * 32)#[0..=7] + 32))#[0..=31]#[0..=27]#[0..=27] }
+  mut _mux_4:u4 = if privilege_mode__w1 == minion_pkg.PrvM { ((matp_info_i << 32) >> ((req_min_id_i * 32)#[0..=7] + 32))#[0..=31]#[28..=31]#[0..=3] } else { ((satp_info_i << 32) >> ((req_min_id_i * 32)#[0..=7] + 32))#[0..=31]#[28..=31]#[0..=3] }
+  const vm_mode__w1 = _mux_4
+  mut _mux_5:u28 = if privilege_mode__w1 == minion_pkg.PrvM { ((matp_info_i << 32) >> ((req_min_id_i * 32)#[0..=7] + 32))#[0..=31]#[0..=27]#[0..=27] } else { ((satp_info_i << 32) >> ((req_min_id_i * 32)#[0..=7] + 32))#[0..=31]#[0..=27]#[0..=27] }
   const vm_enabled_o__w1 = unsigned((vm_mode__w1 != minion_pkg.CsrSatpModeBare) and (unsigned(((req_data_i.status.mprv != 0) and (req_data_i.instruction == 0)) or (req_data_i.status.debug == 0)) != 0) and (req_data_i.passthrough == 0))
   if vm_mode__w1 == minion_pkg.CsrSatpModeSv48 {
     invalid_address = req_data_i.msb_err
@@ -119,9 +121,9 @@ pub mod minion_tlb::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, s
   const typ_i_s1__w1 = vmspagesize_i
   mut index = 0ub???
   if coop_mode_q != 0 {
-    index = if typ_i_s1__w1 == minion_pkg.tlb_entry_type_2M { (vpn_i_s1__w1 >> ((minion_pkg.VaUntransSize + minion_pkg.PtwPgIdxSz) - 12))#[0..=2] } elif typ_i_s1__w1 == minion_pkg.tlb_entry_type_1G { (vpn_i_s1__w1 >> ((minion_pkg.VaUntransSize + (2 * minion_pkg.PtwPgIdxSz)) - 12))#[0..=2] } else { (vpn_i_s1__w1 >> (minion_pkg.VaUntransSize - 12))#[0..=2] }
+    index = unique if typ_i_s1__w1 == minion_pkg.tlb_entry_type_2M { (vpn_i_s1__w1 >> ((minion_pkg.VaUntransSize + minion_pkg.PtwPgIdxSz) - 12))#[0..=2] } elif typ_i_s1__w1 == minion_pkg.tlb_entry_type_1G { (vpn_i_s1__w1 >> ((minion_pkg.VaUntransSize + (2 * minion_pkg.PtwPgIdxSz)) - 12))#[0..=2] } else { (vpn_i_s1__w1 >> (minion_pkg.VaUntransSize - 12))#[0..=2] }
   } else {
-    index = if typ_i_s1__w1 == minion_pkg.tlb_entry_type_2M { ((vpn_i_s1__w1 >> ((minion_pkg.VaUntransSize + minion_pkg.PtwPgIdxSz) - 12))#[0..=2] | (min_id_i__w1 << 3))#[0..=2] } elif typ_i_s1__w1 == minion_pkg.tlb_entry_type_1G { ((vpn_i_s1__w1 >> ((minion_pkg.VaUntransSize + (2 * minion_pkg.PtwPgIdxSz)) - 12))#[0..=2] | (min_id_i__w1 << 3))#[0..=2] } else { ((vpn_i_s1__w1 >> (minion_pkg.VaUntransSize - 12))#[0..=2] | (min_id_i__w1 << 3))#[0..=2] }
+    index = unique if typ_i_s1__w1 == minion_pkg.tlb_entry_type_2M { ((vpn_i_s1__w1 >> ((minion_pkg.VaUntransSize + minion_pkg.PtwPgIdxSz) - 12))#[0..=2] | (min_id_i__w1 << 3))#[0..=2] } elif typ_i_s1__w1 == minion_pkg.tlb_entry_type_1G { ((vpn_i_s1__w1 >> ((minion_pkg.VaUntransSize + (2 * minion_pkg.PtwPgIdxSz)) - 12))#[0..=2] | (min_id_i__w1 << 3))#[0..=2] } else { ((vpn_i_s1__w1 >> (minion_pkg.VaUntransSize - 12))#[0..=2] | (min_id_i__w1 << 3))#[0..=2] }
   }
   const tlb_cache_waddr__w1 = index
   `tlb_cache_wdata.ptw_access_fault` = (ptw_resp_data_q >> 62) & 1 & 1
@@ -151,9 +153,9 @@ pub mod minion_tlb::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, s
   const vpn_i_s1__w2 = req_data_i.vpn
   const typ_i_s1__w2 = vmspagesize_i
   if coop_mode_q != 0 {
-    index = if typ_i_s1__w2 == minion_pkg.tlb_entry_type_2M { (vpn_i_s1__w2 >> ((minion_pkg.VaUntransSize + minion_pkg.PtwPgIdxSz) - 12))#[0..=2] } elif typ_i_s1__w2 == minion_pkg.tlb_entry_type_1G { (vpn_i_s1__w2 >> ((minion_pkg.VaUntransSize + (2 * minion_pkg.PtwPgIdxSz)) - 12))#[0..=2] } else { (vpn_i_s1__w2 >> (minion_pkg.VaUntransSize - 12))#[0..=2] }
+    index = unique if typ_i_s1__w2 == minion_pkg.tlb_entry_type_2M { (vpn_i_s1__w2 >> ((minion_pkg.VaUntransSize + minion_pkg.PtwPgIdxSz) - 12))#[0..=2] } elif typ_i_s1__w2 == minion_pkg.tlb_entry_type_1G { (vpn_i_s1__w2 >> ((minion_pkg.VaUntransSize + (2 * minion_pkg.PtwPgIdxSz)) - 12))#[0..=2] } else { (vpn_i_s1__w2 >> (minion_pkg.VaUntransSize - 12))#[0..=2] }
   } else {
-    index = if typ_i_s1__w2 == minion_pkg.tlb_entry_type_2M { ((vpn_i_s1__w2 >> ((minion_pkg.VaUntransSize + minion_pkg.PtwPgIdxSz) - 12))#[0..=2] | (min_id_i__w2 << 3))#[0..=2] } elif typ_i_s1__w2 == minion_pkg.tlb_entry_type_1G { ((vpn_i_s1__w2 >> ((minion_pkg.VaUntransSize + (2 * minion_pkg.PtwPgIdxSz)) - 12))#[0..=2] | (min_id_i__w2 << 3))#[0..=2] } else { ((vpn_i_s1__w2 >> (minion_pkg.VaUntransSize - 12))#[0..=2] | (min_id_i__w2 << 3))#[0..=2] }
+    index = unique if typ_i_s1__w2 == minion_pkg.tlb_entry_type_2M { ((vpn_i_s1__w2 >> ((minion_pkg.VaUntransSize + minion_pkg.PtwPgIdxSz) - 12))#[0..=2] | (min_id_i__w2 << 3))#[0..=2] } elif typ_i_s1__w2 == minion_pkg.tlb_entry_type_1G { ((vpn_i_s1__w2 >> ((minion_pkg.VaUntransSize + (2 * minion_pkg.PtwPgIdxSz)) - 12))#[0..=2] | (min_id_i__w2 << 3))#[0..=2] } else { ((vpn_i_s1__w2 >> (minion_pkg.VaUntransSize - 12))#[0..=2] | (min_id_i__w2 << 3))#[0..=2] }
   }
   const tlb_cache_raddr__w1 = index
   const ff_en__w1 = (coop_mode_q ^ coop_mode_i) | (tlb_invalidate_q ^ unsigned(tlb_invalidate_i != 0)) | unsigned((tlb_invalidated_q ^ tlb_invalidated_d__w2) != 0)
@@ -180,7 +182,8 @@ pub mod minion_tlb::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, s
   const tlb_cache_hit__w1 = unsigned(((((tlb_cache_valid_q << 1) >> (tlb_cache_raddr__w1 + 1)) & 1) != 0) and (vm_enabled_o__w1 != 0) and ((tlb_cache_rdata_flat__w1 >> 36)#[0..=32] == req_tag__w1) and ((`tlb_cache_rdata.expected_ex_mode` ^ unsigned(privilege_mode__w1 != minion_pkg.PrvM)) != 0))
   const tlb_miss__w1 = unsigned((vm_enabled_o__w1 != 0) and (tlb_cache_hit__w1 == 0))
   mut _mux_23:u1 = if req_data_i.status.sum != 0 { 1 } else { unsigned(`tlb_cache_rdata.u` == 0) & 1 }
-  const priv_ok__w1 = if privilege_mode__w1 == minion_pkg.PrvU { `tlb_cache_rdata.u` & 1 } else { _mux_23 & 1 }
+  mut _mux_24:u1 = if privilege_mode__w1 == minion_pkg.PrvU { `tlb_cache_rdata.u` & 1 } else { _mux_23 & 1 }
+  const priv_ok__w1 = _mux_24
   const tlb_xcpt_accessed__w1 = unsigned(`tlb_cache_rdata.access` == 0)
   `resp_data_o__bpo.access_fault` = 0
   `resp_data_o__bpo.fill_pending` = 0
@@ -215,7 +218,7 @@ pub mod minion_tlb::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, s
         `ptw_req_data_d.addr` = req_data_i.vpn#[0..=35]
         `ptw_req_data_d.prv` = req_data_i.status.prv#[0..=1]
         `ptw_req_data_d.satp_mode` = vm_mode__w1#[0..=3]
-        `ptw_req_data_d.satp_ppn` = vm_ppn__w1#[0..=27]
+        `ptw_req_data_d.satp_ppn` = _mux_5#[0..=27]
         ptw_req_valid_d = 1
         req_min_id_d = req_min_id_i
         req_tag_d = req_tag__w1

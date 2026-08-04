@@ -149,7 +149,7 @@ CORES = {
         # `rf_clk_i`, so scheduling it needs a total order between two unrelated
         # roots — which v1 refuses BY NAME rather than invent. Retire this entry
         # when multi-root scheduling lands.
-        "lec_trust": "prim_rf_1r1w_diff_preview",
+        "lec_trust": "",  # emptied 2026-08-02: prim_rf_1r1w_diff_preview PROVES now (it was blocked by the comb-memory phase-gating bug, not by clocks)
     },
 }
 
