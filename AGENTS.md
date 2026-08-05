@@ -86,9 +86,19 @@ Both cores share one shape (`<core>/` = `dino/` or `minion/`):
   `sim_marker`/`sim_expect` gates, which makes it a cross-simulator oracle:
   when the two disagree, one of them has a codegen bug. Keep the pair in
   lockstep — the stimulus schedule especially (three `eval()`s per cycle
-  reproduce peek / poke / `step` / peek; "simplifying" it to the usual two-eval
+  reproduce drive / read / `step` / read; "simplifying" it to the usual two-eval
   clock toggle shifts `done at cycle N` by one and silently decouples the two
   benchmarks).
+- **A testbench read is a reference, not a recompute.** `lhd sim` used to lower
+  every output read to `peek()` — a whole `cycle()` plus a snapshot/restore of
+  all design state, ~33% of dino's runtime. Reads are now references into the
+  outputs that `step` settles (`sigref` read-only, `regref` writable; bare
+  dotted access is sugar for the same thing, with the binding hoisted out of the
+  tick loop). One consequence for testbenches here: a read placed ABOVE the
+  `step` observes what the previous `step` settled, so an output driven
+  combinationally by an input the same iteration writes reads one cycle stale.
+  dino is unaffected — `io_imem_address` is `pc[63:0]`, a pure register read —
+  but put new reads below the `step`.
 - Bench targets are tagged `exclusive` so timings stay clean — keep that for
   new targets.
 - If you change a design under `<core>/pyrope/`, check whether that core's

@@ -245,8 +245,8 @@ verilator --cc --exe --build -j 0 --top-module PipelinedDualIssueCPU \
 `dino/sim/dino_prog_tb_verilator.cpp` is a line-by-line twin of
 `dino/sim/dino_prog_tb.prp` — same ROM, same asserts, same printed line, and
 the same stimulus schedule (the three `eval()`s per cycle reproduce Pyrope's
-peek / poke / `step` / peek order, which is why both print `done at cycle
-506`). Keep them in lockstep: an edit to the program or the poke order belongs
+drive / read / `step` / read order, which is why both print `done at cycle
+506`). Keep them in lockstep: an edit to the program or the drive order belongs
 in both, and the bench gates both on the same strings so a divergence fails a
 target.
 
