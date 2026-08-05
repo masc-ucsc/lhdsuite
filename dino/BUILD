@@ -27,11 +27,15 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# Simulation driver (hello-world testbench) — plain suite code, usable outside
-# bazel too: sim/dino_tb.prp next to any Pyrope tree of the design.
+# Simulation drivers — plain suite code, usable outside bazel too. The .prp
+# testbenches drive `lhd sim`; the .cpp is the Verilator twin of
+# sim/dino_prog_tb.prp that //bench:dino_sim_verilator compares against.
 filegroup(
     name = "sim",
-    srcs = glob(["sim/*.prp"]),
+    srcs = glob([
+        "sim/*.prp",
+        "sim/*.cpp",
+    ]),
     visibility = ["//visibility:public"],
 )
 

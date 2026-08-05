@@ -39,10 +39,12 @@ Both cores share one shape (`<core>/` = `dino/` or `minion/`):
 - `<core>/BUILD` — seven filegroups: `verilog`, `verilog_filelist`, `pyrope`,
   `pyrope_top`, `sim`, `verif`, `tests`.
 - `bench/` — one script per flow (`compile.sh`, `synth.sh`, `sim.sh`,
-  `lec.sh`, `verify.sh`), shared helpers in `common.sh`, the `CORES` table and
-  target generator in `defs.bzl`, targets in `BUILD`. `gen_build.py` turns an
-  `lhd scan` result into the Makefile (and an illustrative `BUILD.bazel`) that
-  drives `compile_pyrope_parallel`.
+  `sim_verilator.sh`, `lec.sh`, `verify.sh`), shared helpers in `common.sh`,
+  the `CORES` table and target generator in `defs.bzl`, targets in `BUILD`.
+  `gen_build.py` turns an `lhd scan` result into the Makefile (and an
+  illustrative `BUILD.bazel`) that drives `compile_pyrope_parallel`.
+  A new script must be `chmod +x` — bazel refuses to stage a non-executable
+  `sh_test` src ("file ... is not executable").
 
 ## Conventions
 
@@ -58,13 +60,35 @@ Both cores share one shape (`<core>/` = `dino/` or `minion/`):
   invocation as a `CMD` line; `//bench:show` aggregates both from
   `bazel-testlogs/`. A non-lhd command that is part of the flow gets the same
   line via `log_cmd` (only `sim.sh`'s re-run of the driver binary today).
-- **A timed step must time ONE thing.** `lhd sim --run-only` host-compiles the
-  generated driver before simulating, and on these designs that clang++ is 5-10s
-  against a simulation of ~1s — so `sim_run_ms` read as "simulation" was really
-  a clang stopwatch, and the two sim MODEs differed 2.5x while emitting
-  byte-identical C++. `sim.sh` now re-runs the built `drv.bin` to separate
-  `sim_cc_ms` from `sim_exec_ms`. Before believing a bench gap between two
-  modes, check whether the thing that differs is even in the measured interval.
+- **A timed step must time ONE thing.** Twice now: (1) `lhd sim --run-only`
+  host-compiles the generated driver before simulating, and on these designs
+  that clang++ is 5-10s against a simulation of ~1s — so `sim_run_ms` read as
+  "simulation" was really a clang stopwatch, and the two sim MODEs differed
+  2.5x while emitting byte-identical C++; `sim.sh` re-runs the built `drv.bin`
+  to separate `sim_cc_ms` from `sim_exec_ms`. (2) The timed leg used to bake a
+  VCD in, and the writer cost 40-75% of `sim_exec_ms` on dino with a 0.36s /
+  0.91s spread on ONE unchanged binary — so `sim.sh` now runs
+  `--set sim.vcd=false` and the untimed whole-top drivers carry the VCD
+  coverage. Before believing a bench gap between two modes, check whether the
+  thing that differs is even in the measured interval.
+- **`lhd sim` cgen's EVERY graph in the library it is given.** So an `lg:` sim
+  input must be rooted at the module the testbench drives, not at the core top:
+  handing it the whole minion_top library makes it refuse over `vpu_ctrl` and
+  `intpipe_csr_file`, neither of them in the tensor RF's cone. That is what
+  `sim_tb_unit` / `sim_top_tb_unit` in `defs.bzl` pin down, and why every sim
+  driver names its DUT as `import("lg:NAME")` with the design supplied as the
+  positional before it (one driver then serves a `.prp` tree and an `lg:`
+  library unchanged).
+- **Verilator is a comparison, not a scenario the suite owns.** `sim_verilator`
+  SKIPS (exit 0, `METRIC verilator_present 0`) when verilator is absent — do
+  not turn it into a hard failure the way `require_tech_dir` is. Its C++ driver
+  is a twin of the core's Pyrope one and is held to the same
+  `sim_marker`/`sim_expect` gates, which makes it a cross-simulator oracle:
+  when the two disagree, one of them has a codegen bug. Keep the pair in
+  lockstep — the stimulus schedule especially (three `eval()`s per cycle
+  reproduce peek / poke / `step` / peek; "simplifying" it to the usual two-eval
+  clock toggle shifts `done at cycle N` by one and silently decouples the two
+  benchmarks).
 - Bench targets are tagged `exclusive` so timings stay clean — keep that for
   new targets.
 - If you change a design under `<core>/pyrope/`, check whether that core's

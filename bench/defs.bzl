@@ -26,19 +26,26 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             not scale past a certain design size; a core that omits it also
 #             loses its `synth_lec_flat` target.
 #   sim_tb    asserted, timed sim benchmark. sim_cycles is its explicit cycle
-#             count; sim_tb_top says it needs the whole-design source supplied
-#             before the testbench (e.g. a program driver importing `lg:top`).
-#             sim_top_tb / sim_prog_tb are additional whole-top correctness
-#             drivers ("" = none). sim_top_cycles / sim_prog_cycles make their
-#             otherwise in-source test defaults explicit in the bench log and
-#             report ("" when the corresponding driver is absent).
+#             count. sim_top_tb / sim_prog_tb are additional whole-top
+#             correctness drivers ("" = none). sim_top_cycles /
+#             sim_prog_cycles make their otherwise in-source test defaults
+#             explicit in the bench log and report ("" when the corresponding
+#             driver is absent).
+#   sim_tb_unit / sim_top_tb_unit / sim_prog_tb_unit
+#             the module each of those three drivers DRIVES, i.e. the name it
+#             spells in its `import("lg:NAME")`. bench/sim.sh supplies that
+#             module ahead of the testbench: the unit's own source under
+#             MODE=pyrope, an `lg:` library rooted at it under MODE=verilog.
+#             It must be a per-driver name rather than just `top`, because
+#             `lhd sim` cgen's EVERY graph in the library it is handed — point
+#             it at the whole-core library and it refuses over modules the
+#             testbench never instantiates (minion's tensor RF benchmark dies
+#             on `vpu_ctrl` and `intpipe_csr_file`). Drivers sharing a unit
+#             share the one compile. "" where the driver is "".
 #   sim_tb_v  MODE=verilog override for sim_tb (optional; "" or absent = drive
-#             both modes with the one sim_tb). The two trees are the same
-#             design but not the same Pyrope: a `struct packed` port is
-#             re-emitted from Verilog as a tuple port
-#             (`io_in:(instruction:u32, …)`) while the checked-in Pyrope tree
-#             may declare it flat (`io_in:u97`), and a driver written for one
-#             shape names no field of the other. The former dino StageReg
+#             both modes with the one sim_tb). Needed when the two sides
+#             declare a port differently and a driver written for one shape
+#             names no field of the other. The former dino StageReg
 #             microbenchmark needed this; no current core does.
 #   sim_top_assert  whether this core's additional drivers (sim_top_tb and
 #             sim_prog_tb) are a GATE rather than a metric. They are always
@@ -68,6 +75,20 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             `_pN` twin, since a variant is a distinct def. "" = trust
 #             nothing (the encoder proves or refuses every def). See the
 #             fixme issue 1 roadmap; shrink to "" once latch encoding lands.
+#   verilator_tb  C++ testbench under <core>/sim/ that mirrors sim_tb for the
+#             Verilator comparison target ("" or absent = this core has no
+#             verilator scenario, and no `<core>_sim_verilator` is generated).
+#             It is held to the SAME sim_marker / sim_expect gates as `lhd
+#             sim`, so it doubles as a cross-simulator oracle: two independent
+#             simulators disagreeing about the design fails a target.
+#   verilator_flags  extra verilator options for this core, the counterpart of
+#             v_flags on the slang side (they are NOT interchangeable —
+#             v_flags are slang spellings).
+#   verilator_cycles  cycle count for the LONG verilator throughput run.
+#             sim_cycles is also run, so the matched-count columns line up with
+#             the lhd targets, but at verilator speeds it is over in single-
+#             digit milliseconds — mostly process startup — so the cycles/s
+#             number comes from this longer run instead.
 CORES = {
     "dino": {
         "pkg": "//dino",
@@ -75,20 +96,34 @@ CORES = {
         "unit": "ALU",
         "v_flags": "",
         "color_algs": ["flat", "synth"],
-        # Time the real program on the whole CPU. This is long enough to be a
-        # useful throughput measurement and checks architectural state through
-        # the program's stores, unlike the old 200k-cycle StageReg microbench.
+        # Time the real program on the whole CPU. This checks architectural
+        # state through the program's stores, unlike the old StageReg
+        # microbench. The program's two stores land at cycle 506 and it then
+        # spins, so every cycle past that is pure throughput and the gates hold
+        # at any count.
+        #
+        # The count has been raised TWICE, both times for the same reason: it
+        # must keep the measured interval above this box's noise floor (see
+        # best_run in common.sh). 2k was 0.22 s. 20k was ~2.2 s — until
+        # livehd's sim cgen stopped calling Slop::get_mask_op for constant bit
+        # slices (439 call sites -> 3) and dino went from ~9k to ~383k
+        # cycles/s, which put 20k back down to 52 ms, i.e. mostly process
+        # startup. 1M is ~2.6 s again. Re-check this number after any large
+        # sim speedup — a benchmark that has outrun its own cycle count
+        # reports the startup cost, not the simulator.
         "sim_tb": "dino_prog_tb.prp",
-        "sim_cycles": 2000,
-        "sim_tb_top": True,
+        "sim_cycles": 1000000,
+        "sim_tb_unit": "PipelinedDualIssueCPU",
         "sim_tb_v": "",
         "sim_marker": "dino program:",
         "sim_expect": "x2=100 -x3=102",
         "sim_top_tb": "dino_tb.prp",
+        "sim_top_tb_unit": "PipelinedDualIssueCPU",
         "sim_top_cycles": 1000,
         # The program driver above is already asserted and timed, so do not run
         # it a second time as an auxiliary correctness driver.
         "sim_prog_tb": "",
+        "sim_prog_tb_unit": "",
         "sim_prog_cycles": "",
         # Both whole-CPU drivers are GATES, in both modes: the timed program
         # driver asserts in-source, while dino_tb scores 1 on the checked-in
@@ -101,6 +136,14 @@ CORES = {
         "sim_top_assert": True,
         # dino is latch-free — the encoder proves every def, no trust needed.
         "lec_trust": "",
+        # The Verilator comparison. dino/sim/dino_prog_tb_verilator.cpp is a
+        # line-by-line twin of dino_prog_tb.prp (same ROM, same poke/peek
+        # order), and today both simulators print the same `done at cycle 506`.
+        # 2M cycles for the throughput run: verilator does dino at ~2.8M
+        # cycles/s, so anything shorter measures process startup.
+        "verilator_tb": "dino_prog_tb_verilator.cpp",
+        "verilator_flags": "",
+        "verilator_cycles": 2000000,
     },
     "minion": {
         "pkg": "//minion",
@@ -117,15 +160,22 @@ CORES = {
         "color_algs": ["synth"],
         "sim_tb": "tensora_rf_tb.prp",
         "sim_cycles": 200000,
-        "sim_tb_top": False,
-        # vpu_tensora_rf's ports are all flat in both trees — one driver serves
+        # NOT minion_top: the sim library is rooted at the module the driver
+        # drives. `lhd sim` cgen's every graph it is given, and the whole-core
+        # library refuses over `vpu_ctrl` (a combinational loop the single-pass
+        # schedule cannot order) and `intpipe_csr_file` (a derived clock) —
+        # neither of them anywhere near the tensor RF.
+        "sim_tb_unit": "vpu_tensora_rf",
+        # vpu_tensora_rf's ports are all flat on both sides — one driver serves
         # MODE=pyrope and MODE=verilog.
         "sim_tb_v": "",
         "sim_marker": "hello world",
         "sim_expect": "data=4660",
         "sim_top_tb": "vpu_top_tb.prp",
+        "sim_top_tb_unit": "vpu_top",
         "sim_top_cycles": 64,
         "sim_prog_tb": "",
+        "sim_prog_tb_unit": "",
         "sim_prog_cycles": "",
         # Informational: `lhd sim` still refuses vpu_top — "module
         # `vpu_trans.vpu_trans`: flop `flop_76:id_insert_en_o` has a derived
@@ -150,39 +200,56 @@ CORES = {
         # roots — which v1 refuses BY NAME rather than invent. Retire this entry
         # when multi-root scheduling lands.
         "lec_trust": "",  # emptied 2026-08-02: prim_rf_1r1w_diff_preview PROVES now (it was blocked by the comb-memory phase-gating bug, not by clocks)
+        # No Verilator comparison yet: it needs a C++ twin of
+        # tensora_rf_tb.prp, and that driver leans on the preview/commit latch
+        # protocol rather than on a self-checking program, so mirroring it is
+        # not the mechanical transcription dino's was. Add `verilator_tb` here
+        # (plus the .cpp under minion/sim/) and the target appears.
+        "verilator_tb": "",
+        "verilator_flags": "",
+        "verilator_cycles": 0,
     },
 }
 
 # Scenario table shared by every core:
-# (suffix, script, MODE, timeout, needs_color). A scenario with needs_color set
-# is generated only for cores whose `color_algs` include it.
+# (suffix, script, MODE, timeout, needs_color, needs_cfg). A scenario with
+# needs_color set is generated only for cores whose `color_algs` include it; one
+# with needs_cfg set only for cores whose CORES entry has that key non-empty.
+# Both exist so a core that cannot run a scenario has no target for it at all,
+# rather than a target that fails or silently no-ops.
 _SCENARIOS = [
     # --- Lgraph creation throughput (LoC/s, words/s) ---
-    ("compile_verilog", "compile.sh", "verilog", "long", ""),
-    ("compile_pyrope", "compile.sh", "pyrope", "long", ""),
+    ("compile_verilog", "compile.sh", "verilog", "long", "", ""),
+    ("compile_pyrope", "compile.sh", "pyrope", "long", "", ""),
     # Per-file separate compilation driven by a real build system: `lhd scan`
     # dependency discovery -> generated Makefile (one rule per file, deps = its
     # direct imports, pruned to --top's cone) -> `make -j`. Dependencies ride in
     # pre-lowered as positional `lg:DIR` inputs (IR inputs are positional, never
     # a flag), falling back to `ln:DIR` only for packages that emit no lgraph.
-    ("compile_pyrope_parallel", "compile.sh", "pyrope_parallel", "eternal", ""),
+    ("compile_pyrope_parallel", "compile.sh", "pyrope_parallel", "eternal", "", ""),
     # --- coloring + abc synthesis; cold vs --workdir incremental ---
-    ("synth", "synth.sh", "cold", "eternal", ""),
-    ("synth_incremental", "synth.sh", "incr", "eternal", ""),
+    ("synth", "synth.sh", "cold", "eternal", "", ""),
+    ("synth_incremental", "synth.sh", "incr", "eternal", "", ""),
     # Netlist integrity: LEC the 2nd (incremental) synthesis run's netlist
     # against the design, via the partition twin + Liberty gensim models.
-    ("synth_lec_flat", "synth.sh", "lec_flat", "eternal", "flat"),
-    ("synth_lec_synth", "synth.sh", "lec_synth", "eternal", "synth"),
+    ("synth_lec_flat", "synth.sh", "lec_flat", "eternal", "flat", ""),
+    ("synth_lec_synth", "synth.sh", "lec_synth", "eternal", "synth", ""),
     # --- asserted simulation benchmark, both language sources ---
-    ("sim_verilog", "sim.sh", "verilog", "long", ""),
-    ("sim_pyrope", "sim.sh", "pyrope", "long", ""),
+    ("sim_verilog", "sim.sh", "verilog", "long", "", ""),
+    ("sim_pyrope", "sim.sh", "pyrope", "long", "", ""),
+    # The same benchmark under Verilator, for cores carrying a C++ twin of
+    # their sim_tb: how `lhd sim` compares against the reference simulator on
+    # compile time AND on cycles/s. Held to the same output gates, so it is
+    # also a cross-simulator oracle. Skips (does not fail) where verilator is
+    # not installed.
+    ("sim_verilator", "sim_verilator.sh", "verilator", "long", "", "verilator_tb"),
     # --- LEC: proven / injected bug caught / warm re-run ---
-    ("lec", "lec.sh", "pass", "eternal", ""),
-    ("lec_bug", "lec.sh", "bug", "eternal", ""),
-    ("lec_incremental", "lec.sh", "incr", "eternal", ""),
+    ("lec", "lec.sh", "pass", "eternal", "", ""),
+    ("lec_bug", "lec.sh", "bug", "eternal", "", ""),
+    ("lec_incremental", "lec.sh", "incr", "eternal", "", ""),
     # --- formal assert/assume on one unit; cold vs warm ---
-    ("verify", "verify.sh", "cold", "eternal", ""),
-    ("verify_incremental", "verify.sh", "incr", "eternal", ""),
+    ("verify", "verify.sh", "cold", "eternal", "", ""),
+    ("verify_incremental", "verify.sh", "incr", "eternal", "", ""),
 ]
 
 def _lhd_bench(name, core, cfg, script, mode, timeout):
@@ -218,7 +285,9 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_COLOR_ALGS": " ".join(cfg["color_algs"]),
             "CORE_SIM_TB": cfg["sim_tb"],
             "CORE_SIM_CYCLES": str(cfg["sim_cycles"]),
-            "CORE_SIM_TB_TOP": "1" if cfg.get("sim_tb_top", False) else "",
+            "CORE_SIM_TB_UNIT": cfg["sim_tb_unit"],
+            "CORE_SIM_TOP_UNIT": cfg.get("sim_top_tb_unit", ""),
+            "CORE_SIM_PROG_UNIT": cfg.get("sim_prog_tb_unit", ""),
             "CORE_SIM_TB_V": cfg.get("sim_tb_v", ""),
             "CORE_SIM_MARKER": cfg["sim_marker"],
             "CORE_SIM_EXPECT": cfg["sim_expect"],
@@ -229,6 +298,9 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             # "1" = the whole-top drivers gate the target; "" = metric only.
             "CORE_SIM_TOP_ASSERT": "1" if cfg.get("sim_top_assert", False) else "",
             "CORE_LEC_TRUST": cfg.get("lec_trust", ""),
+            "CORE_VERILATOR_TB": cfg.get("verilator_tb", ""),
+            "CORE_VERILATOR_FLAGS": cfg.get("verilator_flags", ""),
+            "CORE_VERILATOR_CYCLES": str(cfg.get("verilator_cycles", "")),
             "MODE": mode,
         },
         # Timing benchmarks: never share the machine with other tests.
@@ -239,9 +311,11 @@ def core_benches(core):
     """Generate every scenario for one core plus a `//bench:<core>` suite."""
     cfg = CORES[core]
     names = []
-    for suffix, script, mode, timeout, needs_color in _SCENARIOS:
+    for suffix, script, mode, timeout, needs_color, needs_cfg in _SCENARIOS:
         if needs_color and needs_color not in cfg["color_algs"]:
             continue  # e.g. no synth_lec_flat on a core too big to color flat
+        if needs_cfg and not cfg.get(needs_cfg, ""):
+            continue  # e.g. no sim_verilator on a core with no verilator_tb
         name = "%s_%s" % (core, suffix)
         _lhd_bench(name, core, cfg, script, mode, timeout)
         names.append(":" + name)

@@ -58,6 +58,7 @@ test_suite(
     name = "sim",
     tests = [
         ":dino_sim_pyrope",
+        ":dino_sim_verilator",
         ":dino_sim_verilog",
         ":minion_sim_pyrope",
         ":minion_sim_verilog",

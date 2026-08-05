@@ -42,6 +42,15 @@ suite against that binary.
    `.bazelrc` passes `HAGENT_TECH_DIR` through the test sandbox; tests that
    need it fail with these instructions when it is missing.
 
+3. **Verilator** (optional) — the `sim_verilator` scenario compares `lhd sim`
+   against Verilator on the same RTL. `brew install verilator` /
+   `apt install verilator`; `bench/common.sh` finds it on `PATH` or in the
+   usual install prefixes, and `$VERILATOR` overrides that (`.bazelrc` passes
+   it through the sandbox). Unlike the tech library this is a *comparison*, not
+   a scenario the suite owns, so **a machine without verilator SKIPS the target
+   instead of failing it** — the log says so and `//bench:show` prints
+   `verilator: SKIPPED`.
+
 ## Running
 
 One bazel target per **(core, scenario)**, named `<core>_<scenario>`, so a
@@ -93,7 +102,9 @@ Every row below exists once per core — write `//bench:dino_compile_verilog` or
 | `synth` | each of the core's colorings (`color_algs`) + `pass abc` on the same design (sky130), timing + QoR (regions/gates/area/max_delay) for each. All run hier=true; the difference is the partitions: flat = one color across the hierarchy (one fused region, best cross-module optimization), synth = per-(module,color) regions. dino runs both; minion runs only `synth` (flat does not fit in memory at 534k nodes) |
 | `synth_incremental` | `color synth` + abc over 3 passes; incremental reuse needs the distinct colors/partitions that `color synth` creates (and `color flat` intentionally does not): asserts cache hits on the comment-only pass and a single-region re-synth after a one-line edit |
 | `synth_lec_flat` / `synth_lec_synth` | netlist integrity: synthesize twice (2nd run after a comment touch — under `color synth` that netlist is largely cache-CLONED), then `lhd lec --impl lg:netlist --ref lg:design --lib lg:models` proves it against the compiled design (`pass liberty gensim` provides the sky130 cell models; strict, so UNKNOWN fails). Only generated for colorings the core actually runs, so minion has no `synth_lec_flat` |
-| `sim_verilog` / `sim_pyrope` | asserted `lhd sim` benchmark with VCD on: dino runs the real `dino_prog_tb` whole-CPU program for 2k cycles; minion, which has no working program driver yet, runs its VPU tensor-A register file for 200k. The Verilog side first re-emits through slang as Pyrope. **The host C++ compile is reported apart from the simulation**: `lhd sim --setup-only` only writes the driver sources, and `--run-only` rebuilds `drv.bin` on every invocation, so `sim_run_ms` is mostly clang. The bench re-runs that binary itself (best of 3, since a loaded box can stall a short measurement) for `sim_exec_ms`, leaving `sim_cc_ms` as the remainder; `//bench:show` prints both and gives cycles/s with and without the compile. The bench pins `--set sim.ninja=false` so `sim_cc_ms` always measures lhd's built-in parallel compile: `lhd sim` otherwise prefers a generated `build.ninja` when ninja is on PATH, which is the right default for a developer's warm edit-sim loop but would make this number depend on the machine (and buys the bench nothing — every target starts from a fresh workdir, so nothing is ever incremental). Both modes should have comparable cycles/s; a real gap is a codegen regression, not a slow tree. Additional whole-top correctness drivers are reported as `METRIC sim_cpu_top_ok` / `sim_cpu_prog_ok`; a core setting `sim_top_assert` (dino) also GATES on them, one that does not (minion, still blocked by a derived clock the sim cgen cannot fold) reports the metric only |
+| `sim_verilog` / `sim_pyrope` | asserted `lhd sim` benchmark: dino runs the real `dino_prog_tb` whole-CPU program for 1M cycles (raised from 20k once livehd's sim cgen stopped routing constant bit slices through `Slop::get_mask_op` and dino went ~9k -> ~383k cycles/s, which put 20k back inside this box's noise floor); minion, which has no working program driver yet, runs its VPU tensor-A register file for 200k. The Verilog side compiles straight to an lgraph library (`--emit-dir lg:`) and sims THAT — `lhd sim` takes `lg:DIR` positionally, so the old detour through `--emit-dir pyrope:` measured the Pyrope front end a second time and put an emitter round trip between the Verilog and the thing being simulated. The library is rooted at the module the driver drives (`sim_tb_unit`), not at the core top: `lhd sim` cgen's *every* graph in the library it is handed, so the whole-core library makes it refuse over modules the testbench never instantiates. **The host C++ compile is reported apart from the simulation**: `lhd sim --setup-only` only writes the driver sources, and `--run-only` rebuilds `drv.bin` on every invocation, so `sim_run_ms` is mostly clang. The bench re-runs that binary itself (best of 3, since a loaded box can stall a short measurement) for `sim_exec_ms`, leaving `sim_cc_ms` as the remainder; `//bench:show` prints both and gives cycles/s with and without the compile. **No VCD in the timed path** (`--set sim.vcd=false`): the tracer used to cost 40-75% of `sim_exec_ms` on dino and vary 2.5x run to run on one unchanged binary, so the number was a tracer stopwatch as much as a simulation one — the writer is still covered, by the untimed whole-top drivers below, which run `--set sim.vcd=true`. The bench pins `--set sim.ninja=false` so `sim_cc_ms` always measures lhd's built-in parallel compile: `lhd sim` otherwise prefers a generated `build.ninja` when ninja is on PATH, which is the right default for a developer's warm edit-sim loop but would make this number depend on the machine (and buys the bench nothing — every target starts from a fresh workdir, so nothing is ever incremental). The two modes are no longer the same C++ (one graph comes from slang, the other from the checked-in Pyrope), so a cycles/s gap between them is now a meaningful comparison of the two front ends rather than a codegen regression. Additional whole-top correctness drivers are reported as `METRIC sim_cpu_top_ok` / `sim_cpu_prog_ok`; a core setting `sim_top_assert` (dino) also GATES on them, one that does not (minion, still blocked by a derived clock the sim cgen cannot fold) reports the metric only |
+| `sim_verilator` | the same benchmark under **Verilator**, for cores carrying a C++ twin of their `sim_tb` (today: dino, `dino/sim/dino_prog_tb_verilator.cpp`). Same RTL (`-F filelist.f -DSYNTHESIS`), same three-way time split under the same metric names — `sim_setup_ms` is `verilator --cc --exe`, `sim_cc_ms` is `make -j`, `sim_exec_ms` is the built binary re-run — and neither side traces, so the columns are comparable. Two runs: one at `sim_cycles` so the matched-count columns line up with the rows above, and a longer one (`verilator_cycles`) for the throughput number, because at verilator speeds 20k cycles is over in milliseconds and would mostly measure process startup. It is also a **cross-simulator oracle**: the C++ driver mirrors the Pyrope one's stimulus schedule exactly and is held to the same `sim_marker`/`sim_expect` gates, so the two simulators disagreeing about the design fails a target rather than quietly reporting two numbers (they agree on `done at cycle 506` today). Verilator is optional host state: a machine without it SKIPS, it does not fail |
+
 | `lec` | Pyrope impl ≡ Verilog ref (both pre-compiled to `lg:`; the Verilog side needs its slang options — `-F`/`-DSYNTHESIS` plus the core’s `v_flags`), PROVEN |
 | `lec_bug` | the core's `tests/bug1` variant must be REFUTED (dino: the ALU's 32-bit add flipped to subtract; minion: the same flip in `txfma_adder`) |
 | `lec_incremental` | cold / identical warm (verdict-cache hits) / comment-touch re-runs |
@@ -207,10 +218,37 @@ import also resolves against a design compiled from `.prp` sources in the same
 run, so ONE testbench drives both trees: `lhd sim ./dino/pyrope/…prp
 dino/sim/dino_prog_tb.prp` keeps working unchanged.
 
-`bench/sim.sh`'s `MODE=verilog` still goes the long way round (`lhd compile
-verilog --emit-dir pyrope:tree`, then sim that tree) on purpose — re-emitting
-Pyrope from Verilog and simulating the result is exactly the coverage
-`sim_verilog` exists to give. By hand, `lg:` is the short path.
+`bench/sim.sh`'s `MODE=verilog` does exactly this. It used to go the long way
+round (`--emit-dir pyrope:tree`, then sim that tree), which measured the Pyrope
+front end a second time and put an emitter round trip between the Verilog and
+the thing being simulated.
+
+One caveat the bench encodes: **root the library at the module the testbench
+drives, not at the core top.** `lhd sim` cgen's every graph in the library it
+is handed, so `lhd sim lg:<whole minion_top library> tensora_rf_tb.prp` refuses
+over `vpu_ctrl` and `intpipe_csr_file` — neither anywhere near the tensor RF —
+while `--top vpu_tensora_rf` compiles in 63 ms and simulates. That is what the
+`sim_tb_unit` / `sim_top_tb_unit` knobs in `bench/defs.bzl` are for.
+
+### Comparing against Verilator
+
+`//bench:<core>_sim_verilator` runs the same program on the same Verilog under
+Verilator, split into the same three timed steps. By hand:
+
+```bash
+verilator --cc --exe --build -j 0 --top-module PipelinedDualIssueCPU \
+  -Wno-fatal -DSYNTHESIS -F dino/verilog/filelist.f \
+  dino/sim/dino_prog_tb_verilator.cpp
+./obj_dir/VPipelinedDualIssueCPU --cycles 20000
+```
+
+`dino/sim/dino_prog_tb_verilator.cpp` is a line-by-line twin of
+`dino/sim/dino_prog_tb.prp` — same ROM, same asserts, same printed line, and
+the same stimulus schedule (the three `eval()`s per cycle reproduce Pyrope's
+peek / poke / `step` / peek order, which is why both print `done at cycle
+506`). Keep them in lockstep: an edit to the program or the poke order belongs
+in both, and the bench gates both on the same strings so a divergence fails a
+target.
 
 ## Known-failing scenarios
 
@@ -283,11 +321,12 @@ each scenario targets:
 | `top` — whole-design top, in both languages | `PipelinedDualIssueCPU` | `minion_top` |
 | `unit` — module carrying the verify sidecar + `bug1`/`comment1` (must be in the top's cone) | `ALU` | `txfma_adder` |
 | `v_flags` — extra slang options for this core's Verilog | *(none)* | `--relax-enum-conversions --allow-use-before-declare` |
-| `sim_tb` / `sim_cycles` — asserted, timed sim benchmark | `dino_prog_tb.prp` / 2,000 | `tensora_rf_tb.prp` / 200,000 |
-| `sim_tb_top` — benchmark needs the whole design supplied before its driver | yes | no |
+| `sim_tb` / `sim_cycles` — asserted, timed sim benchmark | `dino_prog_tb.prp` / 1,000,000 | `tensora_rf_tb.prp` / 200,000 |
+| `sim_tb_unit` — the module `sim_tb` drives, i.e. what it spells in `import("lg:NAME")`; the design supplied before it is rooted HERE, not at `top` | `PipelinedDualIssueCPU` | `vpu_tensora_rf` |
 | `sim_tb_v` — MODE=verilog override for `sim_tb` (`""` = one driver for both) | *(none)* | *(none)* |
-| `sim_top_tb` / `sim_top_cycles` — separate whole-top correctness run | `dino_tb.prp` / 1,000 | `vpu_top_tb.prp` / 64 |
-| `sim_prog_tb` / `sim_prog_cycles` — optional additional program correctness run | *(none; already benchmarked)* | *(none)* |
+| `sim_top_tb` / `sim_top_tb_unit` / `sim_top_cycles` — separate whole-top correctness run | `dino_tb.prp` / `PipelinedDualIssueCPU` / 1,000 | `vpu_top_tb.prp` / `vpu_top` / 64 |
+| `sim_prog_tb` / `sim_prog_tb_unit` / `sim_prog_cycles` — optional additional program correctness run | *(none; already benchmarked)* | *(none)* |
+| `verilator_tb` / `verilator_flags` / `verilator_cycles` — the Verilator comparison (`""` = no `sim_verilator` target for this core) | `dino_prog_tb_verilator.cpp` / *(none)* / 2,000,000 | *(none)* |
 
 **Why a core may need two sim drivers.** The two trees are the same design but
 need not be the same Pyrope. A `struct packed` port re-emits from Verilog as a
@@ -305,7 +344,9 @@ symptom. Fixing this by flattening the
 emission (`compile.slang.struct_port_bundles=false`) is deliberately NOT done:
 bench scripts do not carry lhd flags that exist only to make a bench pass, and
 graph flows keep ports flat anyway, so `sim_verilog` is the suite's only
-coverage of tuple ports.
+coverage of tuple ports. (`MODE=verilog` no longer re-emits Pyrope, but it
+still sims the *slang* lgraph, whose struct ports are bundles — so that
+coverage is unchanged; only the round trip through `.prp` is gone.)
 
 **minion's slang options.** Its RTL assigns enums from plain bits and refers
 to identifiers above their declaration, so the Verilog front-end needs

@@ -16,6 +16,10 @@ from pathlib import Path
 
 # Keep in sync with the CORES table in bench/defs.bzl.
 CORES = ("dino", "minion")
+# ...and with which of those entries carry a `verilator_tb` (only those get a
+# <core>_sim_verilator target, so only those may be looked up — asking for a
+# target that is not generated would report it as "not run yet" forever).
+VERILATOR_CORES = ("dino",)
 
 
 def load(root: Path, target: str):
@@ -202,13 +206,20 @@ def report_core(root: Path, core: str) -> list:
 
     # ---- sim --------------------------------------------------------------
     sp, sv = G("sim_pyrope"), G("sim_verilog")
-    rep.head("sim benchmark throughput", sp, sv)
-    if sp or sv:
+    # A core with no verilator_tb has no such target at all, so it must not
+    # reach head() either — a None there means "generated but never run", and
+    # would mark the whole section [not run] on every minion report.
+    has_vl = core in VERILATOR_CORES
+    svl = G("sim_verilator") if has_vl else None
+    rep.head("sim benchmark throughput", *([sp, sv, svl] if has_vl else [sp, sv]))
+    if sp or sv or svl:
         # `lhd sim --setup-only` only writes the driver sources; the host C++
         # compile lives inside --run-only and is rebuilt every time, so it used
         # to swamp the simulation it was being reported as. Keep the two apart:
         # `c++` is the compile+link, `sim` the simulation of `cycles` cycles.
-        print(f"   {'':10} {'transpile':>9} {'setup':>7} {'c++':>8} {'sim':>8}"
+        # The verilator row is split the same way (verilate / make / run), so
+        # the columns mean the same thing on both simulators.
+        print(f"   {'':10} {'v->lg':>9} {'setup':>7} {'c++':>8} {'sim':>8}"
               f" {'cycles':>9} {'sim cyc/s':>10} {'+c++':>10} {'extra':>8}")
 
         def top_state(m):
@@ -219,11 +230,15 @@ def report_core(root: Path, core: str) -> list:
                 return "blocked"
             return "ok" if all(x == 1 for x in v) else "-"
 
-        for name, r in (("pyrope", sp), ("verilog", sv)):
+        skipped = svl and svl[3].get("verilator_present") == 0
+        rows = [("pyrope", sp), ("verilog", sv)]
+        if svl and not skipped:
+            rows.append(("verilator", svl))
+        for name, r in rows:
             if not r:
                 continue
             m = r[3]
-            print(f"   {name:10} {fmt(m.get('transpile_ms'), 'ms'):>9} {fmt(m.get('sim_setup_ms'), 'ms'):>7}"
+            print(f"   {name:10} {fmt(m.get('compile_lg_bench_ms'), 'ms'):>9} {fmt(m.get('sim_setup_ms'), 'ms'):>7}"
                   f" {fmt(m.get('sim_cc_ms'), 'ms'):>8} {fmt(m.get('sim_exec_ms'), 'ms'):>8}"
                   f" {fmt(m.get('sim_cycles')):>9}"
                   f" {fmt(m.get('sim_cycles_per_s')):>10}"
@@ -244,7 +259,24 @@ def report_core(root: Path, core: str) -> list:
         bench_tbs = {tb_for_step(r, "sim_setup") for r in (sp, sv) if r}
         bench_tbs.discard(None)
         bench = "/".join(sorted(bench_tbs)) or "simulation driver"
-        print(f"   sim cyc/s: {bench}, VCD on; +c++ includes that driver's host compile")
+        print(f"   sim cyc/s: {bench}, no VCD on either simulator;"
+              f" +c++ includes that driver's host compile")
+
+        # The verilator row's matched-count run is over in milliseconds, so its
+        # cycles/s column is mostly process startup; the honest throughput
+        # number is the long run, printed here with the count it used.
+        if svl:
+            m = svl[3]
+            if skipped:
+                print("   verilator: SKIPPED — not installed"
+                      " (brew/apt install verilator, or export VERILATOR=<path>)")
+            else:
+                long_s = m.get("sim_long_cycles_per_s")
+                ref = sv or sp
+                print(f"   verilator: {fmt(m.get('sim_long_cycles'))} cycles in"
+                      f" {fmt(m.get('sim_long_exec_ms'), 'ms')} = {fmt(long_s)} cycles/s"
+                      f"  [vs lhd sim: {speedup(long_s, ref[3].get('sim_cycles_per_s') if ref else None)}]"
+                      f"; same RTL, same gates")
 
         m = sample[3]
         whole = []
@@ -256,8 +288,9 @@ def report_core(root: Path, core: str) -> list:
                 whole.append(f"{tb} ({fmt(cycles) + ' cycles' if cycles is not None else 'test default'})")
         if whole:
             policy = "gates this target" if m.get("sim_cpu_top_gated") == 1 else "informational only"
-            print(f"   extra: {', '.join(whole)} run separately for correctness ({policy}); not timed above")
-        rep.cmds(("sim_pyrope", sp), ("sim_verilog", sv))
+            print(f"   extra: {', '.join(whole)} run separately for correctness ({policy},"
+                  f" VCD on); not timed above")
+        rep.cmds(("sim_pyrope", sp), ("sim_verilog", sv), ("sim_verilator", svl))
 
     # ---- lec --------------------------------------------------------------
     lc, lb, li = G("lec"), G("lec_bug"), G("lec_incremental")

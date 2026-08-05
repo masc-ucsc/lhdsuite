@@ -14,12 +14,14 @@
 #                     too big to fuse into one region)
 #   CORE_SIM_TB       asserted, timed sim benchmark testbench basename
 #   CORE_SIM_CYCLES   explicit cycle count for CORE_SIM_TB
-#   CORE_SIM_TB_TOP   "1" = supply CORE_TOP before CORE_SIM_TB (for a driver
-#                     importing the already-compiled whole design); "" = the
-#                     testbench discovers its source-level unit itself
+#   CORE_SIM_TB_UNIT  module CORE_SIM_TB drives, i.e. the name it spells in its
+#                     `import("lg:NAME")`. MODE=pyrope compiles that unit's
+#                     source ahead of the testbench; MODE=verilog hands over an
+#                     `lg:` library rooted at it (NOT at CORE_TOP — `lhd sim`
+#                     cgen's every graph it is given). See defs.bzl
 #   CORE_SIM_TB_V     MODE=verilog override for CORE_SIM_TB ("" = same driver
-#                     for both modes); needed when the two trees declare a port
-#                     differently (struct-packed → tuple vs flat). See defs.bzl
+#                     for both modes); needed when the two sides declare a port
+#                     differently. See defs.bzl
 #   CORE_SIM_MARKER   string proving the benchmark reached its final report
 #   CORE_SIM_EXPECT   string the asserted sim's output must also contain — the
 #                     testbench's known-good data readback ("" = skip)
@@ -33,7 +35,13 @@
 #   CORE_LEC_TRUST    comma-separated module-def names the LEC scenarios ASSUME
 #                     equivalent without proving them (latch escape hatch; ""
 #                     = trust nothing). When set, lec.sh also runs strict so a
-#                     witness-free UNKNOWN top is a hard fail. See defs.bzl.
+#                     witness-free UNKNOWN top is a hard fail. See defs.bzl
+#   CORE_VERILATOR_TB      C++ testbench for the Verilator comparison ("" = the
+#                     core has none, and no sim_verilator target is generated)
+#   CORE_VERILATOR_FLAGS   extra verilator options for this core (may be empty)
+#   CORE_VERILATOR_CYCLES  cycle count for the LONG verilator throughput run
+#                     (see bench/sim_verilator.sh for why the matched-count run
+#                     alone cannot measure it).
 # Paths are runfiles-relative; resolve them with rloc before use. Scripts run
 # inside $TEST_TMPDIR so every pass/workdir is hermetic per test. Scripts set
 # RF (runfiles root) before sourcing this file, which also makes plain
@@ -63,8 +71,10 @@ CORE_VERIF_DIR=$CORE_DIR/verif
 CORE_TESTS_DIR=$CORE_DIR/tests
 : "${CORE_TOP:?}" "${CORE_UNIT:?}" "${CORE_COLOR_ALGS:?}"
 : "${CORE_V_FLAGS=}" "${CORE_SIM_MARKER:?}" "${CORE_SIM_EXPECT=}" "${CORE_LEC_TRUST=}" "${CORE_SIM_TB_V=}"
-: "${CORE_SIM_CYCLES:?}" "${CORE_SIM_TB_TOP=}"
+: "${CORE_SIM_CYCLES:?}" "${CORE_SIM_TB_UNIT:?}"
+: "${CORE_SIM_TOP_UNIT=}" "${CORE_SIM_PROG_UNIT=}"
 : "${CORE_SIM_TOP_CYCLES=}" "${CORE_SIM_PROG_CYCLES=}"
+: "${CORE_VERILATOR_TB=}" "${CORE_VERILATOR_FLAGS=}" "${CORE_VERILATOR_CYCLES=}"
 WORK=${TEST_TMPDIR:?}
 cd "$WORK"
 
@@ -96,8 +106,11 @@ now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 # bench actually executed. This doubles as living flow documentation.
 exec 3>&1
 CURRENT_STEP=""
-lhd() {
-  local out="lhd" a
+# sanitize_args ARGS... — echo the arguments with the runfiles paths folded
+# back to repo-relative form, so a logged command line is one a reader can
+# retype in a checkout.
+sanitize_args() {
+  local out="" a
   for a in "$@"; do
     case "$a" in
     "$CORE_P_DIR"*) a="$CORE/pyrope${a#"$CORE_P_DIR"}" ;;
@@ -113,8 +126,18 @@ lhd() {
     fi
     out="$out $a"
   done
-  printf 'CMD %s: %s\n' "${CURRENT_STEP:--}" "$out" >&3
+  printf '%s' "${out# }"
+}
+lhd() {
+  printf 'CMD %s: lhd %s\n' "${CURRENT_STEP:--}" "$(sanitize_args "$@")" >&3
   "$LHD_BIN" "$@"
+}
+# vlt — the same wrapper for verilator (bench/sim_verilator.sh). Named `vlt`,
+# not `verilator`, so that find_verilator's PATH lookup cannot resolve to this
+# function instead of the tool.
+vlt() {
+  printf 'CMD %s: verilator %s\n' "${CURRENT_STEP:--}" "$(sanitize_args "$@")" >&3
+  "${VERILATOR_BIN:?call find_verilator first}" "$@"
 }
 
 # log_cmd STEP CMD... — record a NON-lhd command on the main output in the same
@@ -198,6 +221,82 @@ run_expect_fail() {
   fi
   metric "${label}_ms" $((t1 - t0)) ms
   LAST_MS=$((t1 - t0))
+}
+
+# ---- simulation benchmarks (bench/sim.sh, bench/sim_verilator.sh) -----------
+
+# sim_gate LABEL — the two output gates every simulation bench applies to a
+# step's log. $CORE_SIM_MARKER proves the driver reached its final report;
+# $CORE_SIM_EXPECT is the testbench's known-good data readback, and guards
+# against a sim that runs but computes wrong values (a silently-miscompiled
+# schedule prints data=0 and would otherwise go green). Both simulators are
+# held to the SAME two strings, so `lhd sim` and verilator disagreeing about
+# the design fails a target instead of quietly reporting two numbers.
+sim_gate() {
+  grep -qa -- "$CORE_SIM_MARKER" "step_$1.log" \
+    || { step_failed "$1" "sim ran but printed no '$CORE_SIM_MARKER' marker"; exit 1; }
+  [ -n "$CORE_SIM_EXPECT" ] || return 0
+  # No extra grep: the sim's readback is the last thing it prints, so it is
+  # already inside the excerpt step_failed shows.
+  grep -qa -- "$CORE_SIM_EXPECT" "step_$1.log" \
+    || { step_failed "$1" "sim ran but data is wrong (expected '$CORE_SIM_EXPECT')"; exit 1; }
+}
+
+# best_run LABEL REPS CMD... — run CMD REPS times, apply sim_gate to every run,
+# and leave the FASTEST wall time in $BEST_MS.
+#
+# BEST, not mean, and not one sample. A simulation is the shortest thing this
+# suite times and the one it most wants to be honest about, and a dev box
+# stalls: measured on ONE unchanged binary, repeated back-to-back runs gave
+# 8 x ~1.25 s, one 3.0 s and one 17.4 s. A mean carries the stall and a single
+# sample IS the stall one run in ten, so take the minimum — the standard
+# estimator for "how fast does this go" under one-sided noise.
+best_run() {
+  local label=$1 reps=$2
+  shift 2
+  local rep t0 t1 ms
+  BEST_MS=
+  for rep in $(seq "$reps"); do
+    t0=$(now_ms)
+    CURRENT_STEP=$label "$@" >"step_${label}.log" 2>&1 \
+      || { step_failed "$label" "'$label' exited non-zero on its own (rep $rep): $*"; exit 1; }
+    t1=$(now_ms)
+    ms=$((t1 - t0))
+    { [ -n "$BEST_MS" ] && [ "$BEST_MS" -le "$ms" ]; } || BEST_MS=$ms
+    sim_gate "$label"
+  done
+}
+
+# cpu_count — cores to hand a parallel host compile. `lhd sim`'s own build uses
+# every core, so the verilator side must too or sim_cc_ms compares a parallel
+# compile against a serial one.
+cpu_count() { getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4; }
+
+# find_verilator — set $VERILATOR_BIN, or return non-zero if there is no
+# verilator on this machine. Verilator is host state, not a bazel input (same
+# shape as HAGENT_TECH_DIR): $VERILATOR wins, then PATH, then the usual install
+# prefixes, because bazel's test PATH does not carry /opt/homebrew/bin.
+#
+# Unlike require_tech_dir this does NOT fail the target. A missing tech library
+# breaks a scenario the suite is responsible for; a missing verilator only
+# removes an outside point of comparison, so bench/sim_verilator.sh SKIPS
+# (reporting METRIC verilator_present 0) rather than painting //bench:<core>
+# red on every machine that has not installed it.
+find_verilator() {
+  VERILATOR_BIN=${VERILATOR:-}
+  if [ -z "$VERILATOR_BIN" ]; then
+    VERILATOR_BIN=$(type -P verilator || true)
+  fi
+  if [ -z "$VERILATOR_BIN" ]; then
+    local c
+    for c in /opt/homebrew/bin/verilator /usr/local/bin/verilator /usr/bin/verilator; do
+      if [ -x "$c" ]; then
+        VERILATOR_BIN=$c
+        break
+      fi
+    done
+  fi
+  [ -n "$VERILATOR_BIN" ] && "$VERILATOR_BIN" --version >/dev/null 2>&1
 }
 
 # abc_incr_counts RESULT_JSON — echo "hits misses hit_ms miss_ms store_failed"
