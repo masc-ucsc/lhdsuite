@@ -1,0 +1,163 @@
+// A real RISC-V program on the minion core — the analogue of
+// dino/sim/dino_prog_tb.prp, but against minion's cached memory interface.
+//
+// ============================================================================
+// STATUS: THIS DOES NOT RUN YET, BY DESIGN. It is the target artifact for the
+// minion sim bring-up, written against the REAL minion_top port list so the
+// remaining work is measured against something concrete instead of a sketch.
+//
+// `lhd sim minion/pyrope/minion_top.prp` refuses with 19 errors today
+// (envelope-verified, 2026-08-05):
+//     9  gated-clock-unsupported      <- the clock_cell enable propagation
+//     5  combinational-loop           <- word-level packed-bus (set_mask) loops
+//     4  negedge-operand-unresolved   <- prim_clk_gate's own active-low latch
+//     1  comb-loop-through-instance
+// See livehd/todo_sim_pipeline.md for the staged plan that clears them.
+//
+// UNVERIFIED IN HERE, and it must stay flagged until the day this runs:
+//   * the expected RETIRED count (305) is derived by hand from the program
+//     below, not measured. dino's twin needed a `+2` nobody predicted (its
+//     branch-shadow pair architecturally executes once), so treat 305 as a
+//     hypothesis. Confirm against Verilator or iverilog on the same RTL BEFORE
+//     wiring this into //bench — the suite's rule is that a sim target gates on
+//     a DATA value, and a value nobody has observed is not one.
+//   * the icache line/response handshake below is written from the port
+//     declarations, not from a passing run. The shape (one line per request,
+//     accepted the next cycle) is the simplest protocol consistent with them.
+// ============================================================================
+//
+// WHY THE INTERFACE IS DIFFERENT FROM dino. dino exposes a combinational
+// `io_imem_*` / `io_dmem_*` pair, so its testbench answers a fetch in the same
+// cycle it is asked. minion is a cached core:
+//
+//   fetch   icache_req_valid_o + icache_req_o.addr  ->  the tb serves a whole
+//           256-bit LINE (8 RV32 instructions) on icache_resp_valid_i, so the
+//           ROM here is indexed by line, not by instruction.
+//   data    a dcache miss leaves on l2_dcache_miss_req_*; a dirty line leaves
+//           on l2_dcache_evict_req_* carrying 256 bits of data. A store is
+//           therefore NOT visible at the boundary when it retires — only when
+//           its line is evicted, which may be much later or never.
+//
+// That last point is why this checks the TRACE instead of tapping stores the
+// way dino does: `trace_encoder_o` reports retirement directly
+// (instr_valid / instr_addr / exception), which is both simpler and stronger
+// than inferring architectural state from writeback traffic.
+const minion = import("lg:minion_top")
+
+test minion.prog(cycles:u20 = 20000) {
+  mut acc = minion
+
+  // 16 RV64I words = two 256-bit fetch lines. Same shape as dino's program:
+  // count x2 up to 100 while counting x3 down, then store both and spin.
+  //   [0] 0x00 addi x1, x0, 100    ; iteration bound
+  //   [1] 0x04 addi x2, x0, 0      ; counts up
+  //   [2] 0x08 addi x3, x0, 0      ; counts down
+  //   [3] 0x0c addi x2, x2, 1      ; loop:
+  //   [4] 0x10 addi x3, x3, -1
+  //   [5] 0x14 bne  x2, x1, -8     ; -> 0x0c until x2 == 100
+  //   [6] 0x18 sd   x2, 0(x0)      ; architectural result, observable on evict
+  //   [7] 0x1c sd   x3, 8(x0)
+  //   [8] 0x20 beq  x0, x0, 0      ; spin forever
+  mut rom = [0x06400093, 0x00000113, 0x00000193, 0x00110113,
+             0xFFF18193, 0xFE111CE3, 0x00203023, 0x00303423,
+             0x00000063, 0x00000013, 0x00000013, 0x00000013,
+             0x00000013, 0x00000013, 0x00000013, 0x00000013]
+
+  mut retired    = 0
+  mut took_exc   = 0
+  mut last_pc    = 0
+  mut fetch_line = 0   // line index latched from the request, served next cycle
+  mut fetch_pend = 0
+  mut done_cycle = 0
+
+  tick cycles clocks=(clock=1) {
+    // ---- reset + static configuration -------------------------------------
+    // Three active-low resets (core / dcache / warm). Released together after
+    // a short window, as the RTL's own reset sequencing expects.
+    acc.rst_c_ni = u1(clock >= 4)
+    acc.rst_d_ni = u1(clock >= 4)
+    acc.rst_w_ni = u1(clock >= 4)
+    acc.nsleepin_i = 1
+    acc.enabled_i  = 1          // thread 0 only; minion is multi-threaded
+    acc.reset_vector_i = 0      // boot at ROM word [0]
+
+    // These hold the frontend / dcache / vputrans clock gates OPEN. To be clear
+    // about what that does and does not buy: it does NOT avoid a single
+    // `gated-clock-unsupported` refusal — those fire at CODEGEN, on the shape of
+    // the clock cone, and a chicken bit only changes the enable's runtime value.
+    // Its use is after codegen works: the gates-open run is the simpler first
+    // bring-up, and re-running with them at 0 is the differential that actually
+    // proves the enable fold, because the two must agree instruction for
+    // instruction.
+    acc.chicken_bits_i.min_frontend_clock_gate_disable = 1
+    acc.chicken_bits_i.min_dcache_clock_gate_disable   = 1
+    acc.chicken_bits_i.min_vputrans_clock_gate_disable = 1
+
+    // ---- instruction fetch: serve one 256-bit line per request -------------
+    acc.icache_req_ready_i  = 1        // never backpressure the fetch
+    acc.icache_resp_miss_i  = 0
+    acc.icache_fill_done_i  = 1
+
+    // Serve the line latched on the PREVIOUS cycle's request. Reading
+    // icache_req_valid_o below the `step` is deliberate: a read placed above it
+    // observes what the previous step settled, so a request would be answered a
+    // cycle late (see AGENTS.md on the settle/commit model).
+    acc.icache_resp_valid_i = u1(fetch_pend == 1)
+    mut b = fetch_line * 8
+    acc.icache_resp_i.data = rom[b] | (rom[b + 1] << 32) | (rom[b + 2] << 64) | (rom[b + 3] << 96)
+                           | (rom[b + 4] << 128) | (rom[b + 5] << 160) | (rom[b + 6] << 192)
+                           | (rom[b + 7] << 224)
+    acc.icache_resp_i.page_fault   = 0
+    acc.icache_resp_i.access_fault = 0
+    acc.icache_resp_i.cacheable    = 1
+    acc.icache_resp_i.bus_err      = 0
+    acc.icache_resp_i.ecc_err      = 0
+
+    // ---- data side: accept everything, return zero lines -------------------
+    // The program's loads are none; its two stores land in the dcache and only
+    // reach the boundary as an eviction. Accepting both channels keeps the core
+    // from stalling on a full queue.
+    acc.l2_dcache_miss_req_ready_i  = 1
+    acc.l2_dcache_evict_req_ready_i = 1
+    acc.l2_dcache_resp_valid_i      = 0
+    acc.dc_ptw_req_ready_i          = 1
+    acc.ptw_dc_resp_valid_i         = 0
+
+    step
+
+    // ---- observe (all reads BELOW the step) --------------------------------
+    // Latch this cycle's fetch request for next cycle's response. addr is a
+    // byte address; a line is 256 bits == 32 bytes, so the line index is
+    // addr >> 5 and the low 4 bits of the word index pick the instruction.
+    if acc.icache_req_valid_o != 0 {
+      fetch_line = (acc.icache_req_o.addr >> 5) & 1   // 2 lines in this ROM
+      fetch_pend = 1
+    } else {
+      fetch_pend = 0
+    }
+
+    // Retirement, straight from the trace encoder — no need to infer
+    // architectural state from writeback traffic the way dino must.
+    if acc.trace_encoder_o.instr_valid != 0 {
+      retired = retired + 1
+      last_pc = acc.trace_encoder_o.instr_addr
+    }
+    if acc.trace_encoder_o.exception != 0 or acc.trace_encoder_o.interrupt != 0 {
+      took_exc = took_exc + 1
+    }
+    // The program reaches its spin at 0x20 and stays there; the first time we
+    // see it retire, the interesting work is done.
+    if done_cycle == 0 and last_pc == 0x20 {
+      done_cycle = clock
+    }
+  }
+
+  // Retired instructions, by hand from the program above:
+  //   3 setup + 100 * (addi, addi, bne) + 2 stores = 305, then the spin.
+  // UNVERIFIED — see the header. dino's equivalent needed a correction nobody
+  // predicted, so confirm this against a reference simulator before trusting it.
+  assert(took_exc == 0, "the program must retire without any exception or interrupt")
+  assert(retired >= 305, "the core retired the whole program (3 setup + 300 loop + 2 stores)")
+  assert(done_cycle > 0, "the core reached the spin at 0x20")
+  puts("minion program: retired={retired} last_pc={last_pc}, done at cycle {done_cycle}")
+}
