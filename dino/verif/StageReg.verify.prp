@@ -1,0 +1,65 @@
+// Sequential assert/assume collateral for the dino pipeline stage register — a
+// sidecar, so the design files are never touched.
+//
+// This is the suite's TEMPORAL coverage: every claim below is about the
+// relationship between one cycle and the next, written with `past(x, n)` (the
+// value x held n cycles ago). The combinational sidecars (ALU, txfma_adder)
+// cannot exercise that machinery at all.
+//
+// StageReg packs {instruction[96:65], pc[64:1], isValid[0]} into one 97-bit
+// register and updates it as:
+//     reset -> 0
+//     else  -> valid ? io_in : hold,  then flush forces it to 0
+// so its whole contract is "what does io_data hold ONE CYCLE after a given
+// input", i.e. exactly a `past` property. Each claim is guarded on the previous
+// cycle's reset: during reset the register is forced to 0 regardless of the
+// inputs, so an unguarded claim is simply false there (and refutes — that is
+// the point of the guard, not a workaround).
+//
+// Usage:
+//   lhd formal verify dino/pyrope/StageReg.prp dino/verif/StageReg.verify.prp \
+//       --top StageReg --set formal.bound=8 --workdir W
+const stage = import("StageReg.StageReg")
+
+// LOAD: not resetting, not flushing, and valid -> the stage holds exactly what
+// was presented last cycle.
+formal stagereg.load {
+  mut acc = stage
+  assert(((past(acc.reset, 1) == 0) and (past(acc.io_flush, 1) == 0) and (past(acc.io_valid, 1) != 0))
+           implies ((acc.io_data.instruction == past(acc.io_in.instruction, 1))
+                    and (acc.io_data.pc == past(acc.io_in.pc, 1))
+                    and (acc.io_data.isValid == past(acc.io_in.isValid, 1))),
+         "valid and not flushed: the stage latches last cycle's input")
+}
+
+// HOLD: not resetting, not flushing, not valid -> the stage keeps its value.
+// Written with `stable`, which is `x == past(x,1)`.
+formal stagereg.hold {
+  mut acc = stage
+  assert(((past(acc.reset, 1) == 0) and (past(acc.io_flush, 1) == 0) and (past(acc.io_valid, 1) == 0))
+           implies (stable(acc.io_data.instruction)
+                    and stable(acc.io_data.pc)
+                    and stable(acc.io_data.isValid)),
+         "not valid and not flushed: the stage holds")
+}
+
+// FLUSH: a flush wins over valid — the bubble it inserts must not look valid to
+// the next stage, which is the property the pipeline's correctness rests on.
+formal stagereg.flush {
+  mut acc = stage
+  assert(((past(acc.reset, 1) == 0) and (past(acc.io_flush, 1) != 0))
+           implies ((acc.io_data.isValid == 0)
+                    and (acc.io_data.instruction == 0)
+                    and (acc.io_data.pc == 0)),
+         "flush inserts a bubble: the stage reads back empty and not valid")
+}
+
+// RESET: the cycle after reset the stage is empty, whatever the inputs were.
+formal stagereg.reset_clears {
+  mut acc = stage
+  assert((past(acc.reset, 1) != 0)
+           implies ((acc.io_data.instruction == 0)
+                    and (acc.io_data.pc == 0)
+                    and (acc.io_data.isValid == 0)),
+         "the cycle after reset the stage is empty")
+}

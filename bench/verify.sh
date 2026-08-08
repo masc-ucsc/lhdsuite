@@ -8,6 +8,9 @@
 #   MODE=bug   the bug1 variant ($CORE_UNIT's add flipped to subtract) must be
 #              CAUGHT: non-zero exit AND a refutation with a counterexample
 #              trace, not a crash and not an inconclusive UNKNOWN.
+#   MODE=temporal  the SEQUENTIAL sidecar ($CORE_SEQ_UNIT): properties relating
+#              one cycle to the next (`past`/`stable`), at a deeper bound. Only
+#              generated for a core that declares seq_unit.
 #   MODE=incr  three runs sharing one --workdir (formal_cache.json over it):
 #              cold, identical warm re-run (obligation cache hits asserted),
 #              then a comment1 recompile (obligations unchanged — still warm).
@@ -21,13 +24,24 @@ vrun() {
     --top "$CORE_UNIT" --set formal.bound=2 --workdir FW
 }
 
+# The SEQUENTIAL sidecar ($CORE_SEQ_UNIT), whose properties relate one cycle to
+# the next (`past`, `stable`, ...). Deeper bound than the arithmetic units: a
+# temporal claim proven only two cycles out is not worth much, and the extra
+# depth costs little on one module.
+: "${SEQ_BOUND:=8}"
+vrun_seq() {
+  lhd formal verify "src/pyrope/$CORE_SEQ_UNIT.prp" "$CORE_VERIF_DIR/$CORE_SEQ_UNIT.verify.prp" \
+    --top "$CORE_SEQ_UNIT" --set "formal.bound=$SEQ_BOUND" --workdir FW
+}
+
 # How many assert obligations the sidecar DECLARES. `--list-tests` is a pure
 # parse of the formal blocks (no design load, no solver, ~10 ms), so this is the
 # sidecar's own count rather than a number hardcoded here that drifts the moment
 # someone adds a property.
-expected_asserts() {
-  lhd formal verify "src/pyrope/$CORE_UNIT.prp" "$CORE_VERIF_DIR/$CORE_UNIT.verify.prp" \
-    --top "$CORE_UNIT" --list-tests 2>/dev/null | head -1 | python3 -c '
+expected_asserts() {  # UNIT — defaults to $CORE_UNIT
+  local u=${1:-$CORE_UNIT}
+  lhd formal verify "src/pyrope/$u.prp" "$CORE_VERIF_DIR/$u.verify.prp" \
+    --top "$u" --list-tests 2>/dev/null | head -1 | python3 -c '
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -98,6 +112,22 @@ bug)
   fi
   metric verify_bug_refuted 1 bool
   echo "PASS: injected $CORE_UNIT bug REFUTED with a counterexample (${LAST_MS} ms)"
+  ;;
+temporal)
+  # Sequential properties over $CORE_SEQ_UNIT: `past`/`stable` relate a cycle to
+  # the next, which the arithmetic `unit` sidecars cannot exercise at all. The
+  # same pinned gate applies — every declared assert PROVEN, and as many as the
+  # sidecar declares.
+  : "${CORE_SEQ_UNIT:?this core has no seq_unit; the target should not have been generated}"
+  want=$(expected_asserts "$CORE_SEQ_UNIT")
+  run_timed verify_temporal vrun_seq
+  check_proven verify_temporal "$want"
+  # A temporal claim must actually reach past cycle 0: if every obligation were
+  # skipped for want of history the run would be vacuously green, so require the
+  # engine to disclose a history window (it prints one line per monitor).
+  grep -qa "cycle(s) of history" step_verify_temporal.log \
+    || { step_failed verify_temporal "no history window disclosed — are these properties temporal at all?"; exit 1; }
+  echo "PASS: $CORE_SEQ_UNIT — $want/$want sequential obligations PROVEN (bound=$SEQ_BOUND, ${LAST_MS} ms)"
   ;;
 incr)
   want=$(expected_asserts)

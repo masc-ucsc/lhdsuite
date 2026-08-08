@@ -18,6 +18,12 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #   top       whole-design top, in BOTH languages (compile, synthesis, LEC).
 #   unit      module carrying the verify sidecar and the bug1/comment1
 #             variants; must be inside the top's cone.
+#   seq_unit  module carrying a SEQUENTIAL verify sidecar
+#             (<core>/verif/<seq_unit>.verify.prp), i.e. one whose properties
+#             relate a cycle to the next with `past`/`stable`/`rose`/... The
+#             `unit` sidecars are pure arithmetic and cannot exercise that at
+#             all. "" = the core has none and no `<core>_verify_temporal` is
+#             generated.
 #   v_flags   extra slang options for this core's Verilog, appended after the
 #             `--` of `lhd compile verilog` (on top of the shared
 #             -F filelist.f -DSYNTHESIS).
@@ -94,6 +100,9 @@ CORES = {
         "pkg": "//dino",
         "top": "PipelinedDualIssueCPU",
         "unit": "ALU",
+        # The pipeline stage register: load / hold / flush / reset are all
+        # "one cycle after", so its whole contract is a `past` property.
+        "seq_unit": "StageReg",
         "v_flags": "",
         "color_algs": ["flat", "synth"],
         # Time the real program on the whole CPU. This checks architectural
@@ -149,6 +158,9 @@ CORES = {
         "pkg": "//minion",
         "top": "minion_top",
         "unit": "txfma_adder",
+        # No sequential sidecar yet. vpu_trans or a dcache handshake would be
+        # the natural target — both are stateful and already in the top's cone.
+        "seq_unit": "",
         # minion's RTL needs both: enums assigned from plain bits, and
         # identifiers referenced above their declaration. The generated
         # intpipe_csr_file_auto_*.svh includes resolve relative to the file
@@ -253,6 +265,11 @@ _SCENARIOS = [
     # the other half is that a real bug is CAUGHT. Without this the verify flow
     # could regress to proving nothing and stay green.
     ("verify_bug", "verify.sh", "bug", "eternal", "", ""),
+    # The suite's TEMPORAL coverage: properties that relate one cycle to the
+    # next (`past`, `stable`), which the combinational `unit` sidecars cannot
+    # reach. Deeper bound than the arithmetic scenarios — a sequential claim
+    # that only holds for two cycles is not worth much.
+    ("verify_temporal", "verify.sh", "temporal", "eternal", "", "seq_unit"),
     ("verify_incremental", "verify.sh", "incr", "eternal", "", ""),
 ]
 
@@ -286,6 +303,7 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_TOP": cfg["top"],
             "CORE_V_FLAGS": cfg["v_flags"],
             "CORE_UNIT": cfg["unit"],
+            "CORE_SEQ_UNIT": cfg.get("seq_unit", ""),
             "CORE_COLOR_ALGS": " ".join(cfg["color_algs"]),
             "CORE_SIM_TB": cfg["sim_tb"],
             "CORE_SIM_CYCLES": str(cfg["sim_cycles"]),
