@@ -108,7 +108,8 @@ Every row below exists once per core — write `//bench:dino_compile_verilog` or
 | `lec` | Pyrope impl ≡ Verilog ref (both pre-compiled to `lg:`; the Verilog side needs its slang options — `-F`/`-DSYNTHESIS` plus the core’s `v_flags`), PROVEN |
 | `lec_bug` | the core's `tests/bug1` variant must be REFUTED (dino: the ALU's 32-bit add flipped to subtract; minion: the same flip in `txfma_adder`) |
 | `lec_incremental` | cold / identical warm (verdict-cache hits) / comment-touch re-runs |
-| `verify` | the core's `verif/<unit>.verify.prp` assert/assume all PROVEN (strict) |
+| `verify` | the core's `verif/<unit>.verify.prp` assert/assume all PROVEN (strict). The gate is the per-obligation verdicts in `formal_report.json`, pinned to the assert COUNT the sidecar declares (`--list-tests`): every assert PROVEN *and* as many of them as there should be, so an obligation that stops being generated fails the target instead of shrinking the check |
+| `verify_bug` | the formal twin of `lec_bug`: against the core's `tests/bug1` variant the sidecar must REFUTE, with a counterexample trace — proving the sidecar is only half the contract, the other half is that a real bug is caught |
 | `verify_incremental` | cold / warm (obligation-cache hits) / comment-touch |
 
 Each test prints `METRIC <name> <value> <unit>` lines (also collected as

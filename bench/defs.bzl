@@ -247,8 +247,12 @@ _SCENARIOS = [
     ("lec", "lec.sh", "pass", "eternal", "", ""),
     ("lec_bug", "lec.sh", "bug", "eternal", "", ""),
     ("lec_incremental", "lec.sh", "incr", "eternal", "", ""),
-    # --- formal assert/assume on one unit; cold vs warm ---
+    # --- formal assert/assume on one unit; cold vs bug-caught vs warm ---
     ("verify", "verify.sh", "cold", "eternal", "", ""),
+    # The formal twin of lec_bug: proving the sidecar is only half the contract,
+    # the other half is that a real bug is CAUGHT. Without this the verify flow
+    # could regress to proving nothing and stay green.
+    ("verify_bug", "verify.sh", "bug", "eternal", "", ""),
     ("verify_incremental", "verify.sh", "incr", "eternal", "", ""),
 ]
 
