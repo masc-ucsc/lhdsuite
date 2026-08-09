@@ -1,0 +1,74 @@
+// Assert/assume collateral for CVA6's cache tag comparator — a sidecar, so the
+// design files are never touched.
+//
+// A TRANSLATION of the module's OWN SystemVerilog assertion (upstream
+// core/cache_subsystem/tag_cmp.sv:91):
+//
+//   onehot: assert property (@(posedge clk_i) disable iff (!rst_ni)
+//                            &req_i |=> $onehot0(hit_way_o))
+//
+// onto Pyrope's temporal operators:
+//   &req_i        -> every request bit set (NR_PORTS x DCACHE_SET_ASSOC = 24)
+//   |=>           -> past(..., 1) implies <this cycle>. tag_cmp registers the
+//                    winning port id, so the tag arrives a cycle after the
+//                    request — which is exactly why the SVA is |=> not |->.
+//   disable iff   -> the past(rst_ni,1) != 0 guard
+//   $onehot0(x)   -> popcount(x) <= 1
+//
+// So the suite proves a third-party CPU's own property, in the form its authors
+// wrote it. Three things this sidecar makes explicit that the SVA leaves
+// implicit or that the flow would otherwise get wrong:
+//
+// 1. The design is reached through tag_cmp_wrap. tag_cmp takes its cache-line
+//    types as MODULE PARAMETERS; standalone they default to `logic`, which
+//    collapses the tag compare and leaves hit_way_o UNDRIVEN — every property
+//    over it then passes vacuously. The wrapper binds them exactly as
+//    std_nbdcache.sv does.
+// 2. The assertion is NOT true of tag_cmp alone. It rests on an invariant the
+//    cache FILL logic maintains elsewhere: no two VALID ways hold the same tag.
+//    Without it two ways legitimately hit at once and the property refutes
+//    (checked: it does). Stating it here keeps the verdict conditional on
+//    something written down instead of something forgotten.
+// 3. The 28 pair constraints are SEPARATE `assume_nocheck` statements on
+//    purpose. Folding them into one `assume_nocheck(a and b and ...)` is
+//    logically identical but currently proves WEAKER — `assume(X); assume(Y)`
+//    and `assume(X and Y)` disagree (livehd bug, found here: the merged form
+//    refutes while the split form proves). Keep them split until that is fixed.
+const dut = import("tag_cmp_wrap.tag_cmp_wrap")
+
+formal tag_cmp.onehot {
+  mut acc = dut
+  // cache invariant: no two VALID ways share a tag (all 28 way pairs)
+  assume_nocheck(not ((acc.rdata_i#[1..=1] != 0) and (acc.rdata_i#[175..=175] != 0) and (acc.rdata_i#[130..=173] == acc.rdata_i#[304..=347])))
+  assume_nocheck(not ((acc.rdata_i#[1..=1] != 0) and (acc.rdata_i#[349..=349] != 0) and (acc.rdata_i#[130..=173] == acc.rdata_i#[478..=521])))
+  assume_nocheck(not ((acc.rdata_i#[1..=1] != 0) and (acc.rdata_i#[523..=523] != 0) and (acc.rdata_i#[130..=173] == acc.rdata_i#[652..=695])))
+  assume_nocheck(not ((acc.rdata_i#[1..=1] != 0) and (acc.rdata_i#[697..=697] != 0) and (acc.rdata_i#[130..=173] == acc.rdata_i#[826..=869])))
+  assume_nocheck(not ((acc.rdata_i#[1..=1] != 0) and (acc.rdata_i#[871..=871] != 0) and (acc.rdata_i#[130..=173] == acc.rdata_i#[1000..=1043])))
+  assume_nocheck(not ((acc.rdata_i#[1..=1] != 0) and (acc.rdata_i#[1045..=1045] != 0) and (acc.rdata_i#[130..=173] == acc.rdata_i#[1174..=1217])))
+  assume_nocheck(not ((acc.rdata_i#[1..=1] != 0) and (acc.rdata_i#[1219..=1219] != 0) and (acc.rdata_i#[130..=173] == acc.rdata_i#[1348..=1391])))
+  assume_nocheck(not ((acc.rdata_i#[175..=175] != 0) and (acc.rdata_i#[349..=349] != 0) and (acc.rdata_i#[304..=347] == acc.rdata_i#[478..=521])))
+  assume_nocheck(not ((acc.rdata_i#[175..=175] != 0) and (acc.rdata_i#[523..=523] != 0) and (acc.rdata_i#[304..=347] == acc.rdata_i#[652..=695])))
+  assume_nocheck(not ((acc.rdata_i#[175..=175] != 0) and (acc.rdata_i#[697..=697] != 0) and (acc.rdata_i#[304..=347] == acc.rdata_i#[826..=869])))
+  assume_nocheck(not ((acc.rdata_i#[175..=175] != 0) and (acc.rdata_i#[871..=871] != 0) and (acc.rdata_i#[304..=347] == acc.rdata_i#[1000..=1043])))
+  assume_nocheck(not ((acc.rdata_i#[175..=175] != 0) and (acc.rdata_i#[1045..=1045] != 0) and (acc.rdata_i#[304..=347] == acc.rdata_i#[1174..=1217])))
+  assume_nocheck(not ((acc.rdata_i#[175..=175] != 0) and (acc.rdata_i#[1219..=1219] != 0) and (acc.rdata_i#[304..=347] == acc.rdata_i#[1348..=1391])))
+  assume_nocheck(not ((acc.rdata_i#[349..=349] != 0) and (acc.rdata_i#[523..=523] != 0) and (acc.rdata_i#[478..=521] == acc.rdata_i#[652..=695])))
+  assume_nocheck(not ((acc.rdata_i#[349..=349] != 0) and (acc.rdata_i#[697..=697] != 0) and (acc.rdata_i#[478..=521] == acc.rdata_i#[826..=869])))
+  assume_nocheck(not ((acc.rdata_i#[349..=349] != 0) and (acc.rdata_i#[871..=871] != 0) and (acc.rdata_i#[478..=521] == acc.rdata_i#[1000..=1043])))
+  assume_nocheck(not ((acc.rdata_i#[349..=349] != 0) and (acc.rdata_i#[1045..=1045] != 0) and (acc.rdata_i#[478..=521] == acc.rdata_i#[1174..=1217])))
+  assume_nocheck(not ((acc.rdata_i#[349..=349] != 0) and (acc.rdata_i#[1219..=1219] != 0) and (acc.rdata_i#[478..=521] == acc.rdata_i#[1348..=1391])))
+  assume_nocheck(not ((acc.rdata_i#[523..=523] != 0) and (acc.rdata_i#[697..=697] != 0) and (acc.rdata_i#[652..=695] == acc.rdata_i#[826..=869])))
+  assume_nocheck(not ((acc.rdata_i#[523..=523] != 0) and (acc.rdata_i#[871..=871] != 0) and (acc.rdata_i#[652..=695] == acc.rdata_i#[1000..=1043])))
+  assume_nocheck(not ((acc.rdata_i#[523..=523] != 0) and (acc.rdata_i#[1045..=1045] != 0) and (acc.rdata_i#[652..=695] == acc.rdata_i#[1174..=1217])))
+  assume_nocheck(not ((acc.rdata_i#[523..=523] != 0) and (acc.rdata_i#[1219..=1219] != 0) and (acc.rdata_i#[652..=695] == acc.rdata_i#[1348..=1391])))
+  assume_nocheck(not ((acc.rdata_i#[697..=697] != 0) and (acc.rdata_i#[871..=871] != 0) and (acc.rdata_i#[826..=869] == acc.rdata_i#[1000..=1043])))
+  assume_nocheck(not ((acc.rdata_i#[697..=697] != 0) and (acc.rdata_i#[1045..=1045] != 0) and (acc.rdata_i#[826..=869] == acc.rdata_i#[1174..=1217])))
+  assume_nocheck(not ((acc.rdata_i#[697..=697] != 0) and (acc.rdata_i#[1219..=1219] != 0) and (acc.rdata_i#[826..=869] == acc.rdata_i#[1348..=1391])))
+  assume_nocheck(not ((acc.rdata_i#[871..=871] != 0) and (acc.rdata_i#[1045..=1045] != 0) and (acc.rdata_i#[1000..=1043] == acc.rdata_i#[1174..=1217])))
+  assume_nocheck(not ((acc.rdata_i#[871..=871] != 0) and (acc.rdata_i#[1219..=1219] != 0) and (acc.rdata_i#[1000..=1043] == acc.rdata_i#[1348..=1391])))
+  assume_nocheck(not ((acc.rdata_i#[1045..=1045] != 0) and (acc.rdata_i#[1219..=1219] != 0) and (acc.rdata_i#[1174..=1217] == acc.rdata_i#[1348..=1391])))
+
+  assert(((past(acc.rst_ni, 1) != 0) and (past(acc.req_i, 1) == 0xffffff))
+           implies (acc.hit_way_o#+[..] <= 1),
+         "&req_i |=> $onehot0(hit_way_o)")
+}

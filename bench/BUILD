@@ -35,6 +35,11 @@ sh_binary(
 # The dino dual-issue RISC-V CPU: one top, complete in both languages.
 core_benches("dino")
 
+# CVA6 (OpenHW Group): the cache tag comparator cone — the largest CVA6 subset
+# that reads, round-trips and LECs today. See //cva6:BUILD for why the top is
+# the type-binding wrapper and not tag_cmp itself.
+core_benches("cva6")
+
 # Minion: an industrial multi-threaded RISC-V core with a vector/tensor unit.
 # Whole-design (Pyrope) top is minion_top; Verilog-side and cross-language
 # scenarios use vpu_top, the largest subtree complete in both languages

@@ -1,17 +1,19 @@
 # Agent notes for lhdsuite
 
 Larger LiveHD tests and benchmarks over real designs, each in Verilog and
-Pyrope: **dino** (dual-issue RISC-V CPU) and **minion** (industrial
-multi-threaded RISC-V core with a vector/tensor unit). See `README.md` for the
-full picture — setup, target table, the `CORES` knobs, and the three-pass
+Pyrope: **dino** (dual-issue RISC-V CPU), **minion** (industrial
+multi-threaded RISC-V core with a vector/tensor unit) and **cva6** (the
+OpenHW CVA6 cache tag-comparator cone, vendored, carrying CVA6's own SVA).
+See `README.md` for the full picture — setup, target table, the `CORES` knobs, and the three-pass
 incremental pattern.
 
 ## Commands
 
 ```bash
-bazel test //...                                       # run everything, both cores
+bazel test //...                                       # run everything, every core
 bazel test //bench:dino                                # ALL scenarios, one core
 bazel test //bench:minion
+bazel test //bench:cva6
 bazel test //bench:<core>_<scenario> --test_output=all # one scenario
 bazel run //bench:show                                 # summary of last results
 bazel run //bench:show -- --core minion                # ...one core only
@@ -29,7 +31,7 @@ bazel run //bench:show -- --core minion                # ...one core only
 
 ## Layout
 
-Both cores share one shape (`<core>/` = `dino/` or `minion/`):
+Every core shares one shape (`<core>/` = `dino/`, `minion/` or `cva6/`):
 
 - `<core>/verilog/`, `<core>/pyrope/` — the design in both languages;
   `verilog/filelist.f` is the slang `-F` source list.
@@ -133,7 +135,10 @@ Both cores share one shape (`<core>/` = `dino/` or `minion/`):
 
 Some targets fail because of LiveHD gaps, not suite misconfiguration. See the
 "Known-failing scenarios" table in `README.md` for the current list (both
-`minion_lec*`).
+`minion_lec*`, plus `cva6_lec_bug` — `lhd lec` returns a FALSE PROVEN there,
+and via the SOLVER ("0 via semdiff, 2 via solver", cvc5/abc discharging 14/14
+cones), while `cva6_verify_bug` refutes the very same variant with a
+counterexample. Do not weaken the bug1 variant to make it green).
 Before changing a testbench, a gate, or a `CORES` entry to make one of these
 pass, check that table — fixing them belongs in livehd.
 

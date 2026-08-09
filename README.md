@@ -6,10 +6,11 @@ Verilog and Pyrope:
 | core | what it is | scale |
 | --- | --- | --- |
 | `dino/` | dual-issue RISC-V CPU (top `PipelinedDualIssueCPU`) | 17 modules |
+| `cva6/` | OpenHW Group CVA6 — the cache tag comparator cone (top `tag_cmp_wrap`), the largest CVA6 subset that reads, round-trips and LECs today | 2 modules |
 | `minion/` | industrial multi-threaded RISC-V core with a vector/tensor unit — VPU, TxFMA, transcendental ROMs, D-cache, TLB (top `minion_top`) | 179 Pyrope files / 146 Verilog modules |
 
-Every scenario runs against **both** cores; see [Cores](#cores) for how a core
-is wired in and how to add a third. The suite has two jobs:
+Every scenario runs against **every** core; see [Cores](#cores) for how a core
+is wired in and how to add one. The suite has two jobs:
 
 1. **Check + benchmark LiveHD** (or your own setup): every scenario asserts
    correctness and reports speed metrics, including incremental re-run speed.
@@ -57,21 +58,22 @@ One bazel target per **(core, scenario)**, named `<core>_<scenario>`, so a
 single thing can be benchmarked or debugged in isolation:
 
 ```bash
-bazel test //...                                    # everything, both cores
+bazel test //...                                    # everything, every core
 bazel run //bench:show                              # summary of the last results
 
 bazel test //bench:dino                             # ALL scenarios, dino only
 bazel test //bench:minion                           # ALL scenarios, minion only
+bazel test //bench:cva6                             # ALL scenarios, cva6 only
 
 bazel test //bench:minion_synth_incremental --test_output=all
 bazel test //bench:dino_lec_bug --test_output=all
 ```
 
-`//bench:dino` and `//bench:minion` are the per-core suites — that is the way
-to run everything for one design. (Each target also carries a `core_<name>`
+`//bench:dino`, `//bench:minion` and `//bench:cva6` are the per-core suites —
+that is the way to run everything for one design. (Each target also carries a `core_<name>`
 tag, so `bazel test //... --test_tag_filters=core_minion` selects one core
 across a wider pattern.) The cross-core suites `//bench:compile` and
-`//bench:sim` run one flow over both designs.
+`//bench:sim` run one flow over every design.
 
 `//bench:show` aggregates the `METRIC` lines from `bazel-testlogs/` — the
 last run of each target (bazel cannot make a `run` target execute tests, so
@@ -91,8 +93,8 @@ form — living documentation of the flow).
 lhd are unrealistic. Use `-c dbg`/`--config=debug` only when debugging lhd
 itself.
 
-Every row below exists once per core — write `//bench:dino_compile_verilog` or
-`//bench:minion_compile_verilog`; the `<core>_` prefix is elided in the table.
+Every row below exists once per core — write `//bench:dino_compile_verilog`,
+`//bench:minion_compile_verilog` or `//bench:cva6_compile_verilog`; the `<core>_` prefix is elided in the table.
 
 | target | what it checks / measures |
 | --- | --- |
@@ -106,7 +108,7 @@ Every row below exists once per core — write `//bench:dino_compile_verilog` or
 | `sim_verilator` | the same benchmark under **Verilator**, for cores carrying a C++ twin of their `sim_tb` (today: dino, `dino/sim/dino_prog_tb_verilator.cpp`). Same RTL (`-F filelist.f -DSYNTHESIS`), same three-way time split under the same metric names — `sim_setup_ms` is `verilator --cc --exe`, `sim_cc_ms` is `make -j`, `sim_exec_ms` is the built binary re-run — and neither side traces, so the columns are comparable. Two runs: one at `sim_cycles` so the matched-count columns line up with the rows above, and a longer one (`verilator_cycles`) for the throughput number, because at verilator speeds 20k cycles is over in milliseconds and would mostly measure process startup. It is also a **cross-simulator oracle**: the C++ driver mirrors the Pyrope one's stimulus schedule exactly and is held to the same `sim_marker`/`sim_expect` gates, so the two simulators disagreeing about the design fails a target rather than quietly reporting two numbers (they agree on `done at cycle 506` today). Verilator is optional host state: a machine without it SKIPS, it does not fail |
 
 | `lec` | Pyrope impl ≡ Verilog ref (both pre-compiled to `lg:`; the Verilog side needs its slang options — `-F`/`-DSYNTHESIS` plus the core’s `v_flags`), PROVEN |
-| `lec_bug` | the core's `tests/bug1` variant must be REFUTED (dino: the ALU's 32-bit add flipped to subtract; minion: the same flip in `txfma_adder`) |
+| `lec_bug` | the core's `tests/bug1` variant must be REFUTED (dino: the ALU's 32-bit add flipped to subtract; minion: the same flip in `txfma_adder`; cva6: way 0's hit ignores the line's valid bit). **`cva6_lec_bug` FAILS** — see [Known-failing scenarios](#known-failing-scenarios) |
 | `lec_incremental` | cold / identical warm (verdict-cache hits) / comment-touch re-runs |
 | `verify` | the core's `verif/<unit>.verify.prp` assert/assume all PROVEN (strict). The gate is the per-obligation verdicts in `formal_report.json`, pinned to the assert COUNT the sidecar declares (`--list-tests`): every assert PROVEN *and* as many of them as there should be, so an obligation that stops being generated fails the target instead of shrinking the check |
 | `verify_bug` | the formal twin of `lec_bug`: against the core's `tests/bug1` variant the sidecar must REFUTE, with a counterexample trace — proving the sidecar is only half the contract, the other half is that a real bug is caught |
@@ -255,12 +257,13 @@ target.
 ## Known-failing scenarios
 
 The suite's job is to surface LiveHD gaps, so some targets fail by design
-rather than being disabled. Against the pinned lhd, this is now minion-only —
-`dino_sim_verilog` used to sit here too, but its `io_in` mismatch turned out to
-be suite-side and is fixed (`sim_tb_v`, below):
+rather than being disabled. Against the pinned lhd that is the two `minion_lec`
+rows plus `cva6_lec_bug`; `dino_sim_verilog` used to sit here too, but its
+`io_in` mismatch turned out to be suite-side and is fixed (`sim_tb_v`, below):
 
 | target | blocked by |
 | --- | --- |
+| `cva6_lec_bug` | **`lhd lec` reports a FALSE PROVEN, and the solver is the one saying it.** The `tests/bug1` variant drops the way's valid bit from way 0's hit term (`if sel_tag == ... { 1 }` where the design has `{ (rdata_i >> 1) & 1 }`), so an INVALID way hits. `lhd lec --impl lg:implb --ref lg:ref.lg --top tag_cmp_wrap` exits 0 with *"2/2 def(s) proven top-down (0 via cache, 0 via semdiff, 2 via solver)"* — cvc5 discharging every cone (`tag_cmp`: 14/14 PROVEN, 14 by abc in ~36 ms). This is not the vacuity/shortcut class: no cone is skipped and no def is trusted, the solver is handed the miter and answers PROVEN on two designs that differ. (LEC'ing the bugged Pyrope against the CLEAN Pyrope — the Verilog side out of the picture entirely — is also PROVEN, there with the top dismissed as *"structurally identical (structural: 8 matched node(s), no solver call)"*.) The bug is real and the suite catches it twice over on the same binary: `cva6_verify_bug` REFUTES this exact variant with a counterexample in 3.5 s, and `cva6_verify`'s 28 CVA6-authored assumptions still prove on the clean design. Reproduce with the three commands in this target's log (`CMD compile_ref`, `CMD compile_bug`, `CMD lec_bug`). Do NOT "fix" this by weakening the bug1 variant or dropping the target — a LEC that proves two different designs equal is exactly what this suite exists to surface |
 | `minion_lec`, `minion_lec_incremental`, `minion_synth_lec_synth` | **UPDATED 2026-07-31: `minion_lec` is 133/140 proven, 31 trusted, 0 REFUTED, 7 UNKNOWN, exit 7** (was 127/13 UNKNOWN). Five LiveHD bugs were fixed to get there and three of them were SILENT MISCOMPILES, which is what this bench exists to surface: (1) `upass/tolg` probed `pin_map_` with the raw, still-backtick-escaped name in `set_mask_base`, so a conditional partial write to any struct leaf substituted a `0sb?` base and dropped the value the variable was carrying; (2) `pass.prp_writer` folded an expression across a reassignment of a name it reads, so a `function automatic` called once per unrolled loop iteration came out reading the LAST iteration N times (`vpu_trans`: `id_trans_busy_o = ((0 | is_used) | is_used) | …`); (3) `upass/constprop` let a CONST-index read of a comb array fold to the array's declared init, deleting the write — which is how every whole-array copy round-trips, since the Pyrope writer expands one into N const-indexed per-entry stores. Plus the Verilog→Pyrope emission was NONDETERMINISTIC (two regenerations differed in 22 files, and `_sN` uniquing RENAMED generate-loop replicas, so a checked-in Pyrope tree could not be paired against a fresh reference compile), and `pass/lec` gained a whole-array memory decomposition plus box congruence (`vpu_mask`: 1200 s UNKNOWN → PROVEN in 84 ms). The remaining 7 UNKNOWN are three leaves and the four ancestors they block: `vpu_lane` (its `prim_rf_3r2w_preview` holds 2 latch cells + 2 negedge flops, so it must stay a trusted UF box — the fixme-1e latch class, not a translation bug), `intpipe_csr_file` (a single-step CEX on `nxt:reg_scause_pre`), and `minion_dcache_top` (size: 18 collapsed children, all proven). `minion_lec_bug` still catches the injected bug, and dino stays green. See fixme issue 1 "STATUS 2026-07-31 (e)" and §§17-21.<br><br>the LEC encoder now MODELS latches and negedge flops (`pass.single_edge` normalizes them to posedge, and folds a clock gate into a flop enable), so minion runs with **zero latch refusals and zero refutations**. Four independent residuals remain: a memory on a *gated* clock is still refused (`core_top`, in ~1 s — the immediate blocker), four latch-free leaf cones the solver cannot discharge (`vpu_mask` et al.), `intpipe_csr_msgs` needing inductive strengthening, and the 32 defs on the `lec_trust` knob (`bench/defs.bzl`) whose latches live ONE MODULE LEVEL DOWN — normalizing inside a def is not supported yet. `formal.lec.trust` assumes those 32 equal (disclosed, never proven), so 113/140 of the rest prove bottom-up. `minion_lec_incremental` has no separate cause — it dies on its first `lec_cold` step. See fixme issue 1.<br><br>**UPDATED 2026-07-27 (c) — ZERO refutations. `minion_lec` is now 119/140 proven, 31 trusted, 0 REFUTED, 21 UNKNOWN, exit 7** (was 116/31/5-refuted/exit 10). The five refuting blocks were TWO LiveHD bugs, each a single line of misclassification, both in the Verilog->Pyrope direction that this bench exists to police. (1) `upass/prp_writer`: the clock/reset-pin cone walk was seeded from the RAW `*_pin` net set instead of the position-independent-filtered cone, so when the pin ref was ITSELF a `wire` — `wire clkgt:u1` + `clock_pin=ref clkgt`, i.e. every emitted ICG module — the walk STARTED on it and dove through, hoisting a clock gate's whole enable cone above the `always_comb` it reads; Verilog `always_comb` is order-independent but Pyrope is sequential, so the enable folded to a tautological constant. A `reg` clock ref (a divided clock) is the same class and needed the same filter. Fixed `minion_dcache_cache_op_unit_l2` and `minion_frontend_thread_buffer{,_p1}`. (2) `upass/ssa`: a >=3-child (tuple_set) store `arr[i] = v` fell through to a VERBATIM copy, so its index/value operands never followed `rename_map` — a reassigned `mut` reached the store on its stale base name, constprop folded that to the declaration value, DCE deleted the real write. Fixed `minion_dcache_tensor_load{,_p1}`. **Note this corrects fixme 1h, which attributed it to a tolg array-store: the RHS is already wrong in the LNAST that reaches tolg.** Exit 10 -> 7 means the run went from finding a real inequivalence back to the pre-existing UNKNOWN class (6 word-level-cycle refusals, 2 derived-clock, 2 budget), which is what still fails the target. Gated by `//lhd/tests:prp_writer_clock_cone_order_test` (verified to fail without the fix) and three array equiv pairs promoted out of `fixme`.<br><br>**UPDATED 2026-07-27 (b) — after making a struct a BUNDLE everywhere inside LiveHD (both front ends agree; `flat_top_io` packs only the top interface for generated-vs-original Verilog equivalence): `prim_mul_div` now PROVES and the tally improves to **116/140 proven** (was 113), but the walk no longer short-circuits on it, so blocks it used to mask are now reached. Failing blocks went 4 -> 5: `prim_mul_div` FIXED; `minion_dcache_cache_op_unit_l2` unchanged (refutes with BOTH port representations — an independent, real issue); `minion_dcache_tensor_load`(+`_p1`) and `minion_frontend_thread_buffer`(+`_p1`) refute ONLY when bundled and PROVE when both sides are flat, witness `debug_o.gated_clk_ticks(ref=2 impl=1)`. **RESOLVED by falsification: the FLAT comparison was VACUOUS on struct-output fields.** Injecting a deliberate `+2`-instead-of-`+1` bug into that counter and re-running: flat says **PROVEN** (blind), bundled says **REFUTED** (catches it). So flat struct ports were producing FALSE PROVEN on those fields, and bundles-everywhere is *finding* pre-existing bugs rather than causing them — the earlier 113/140 was partly vacuous. The remaining difference is a counter on a GATED clock (`clock_pin=ref clock_gated`, minion_frontend_thread_buffer.prp:45), i.e. the gated-clock modelling residual this table already names, now actually observable. Regenerating the checked-in Pyrope does NOT change any of these. Exit stays 10.<br><br>**UPDATED 2026-07-27 (a) — the top no longer ends UNKNOWN/exit 7; it REFUTES with exit 10, and the cause is NOT a memory.** Root-caused by divide-and-conquer down to a 2-second reproducer (`//lhd/tests:lec_trusted_box_struct_port_test`, fixme-tagged): a **TRUSTED def whose struct ports are a flat bus on the reference side and per-leaf on the implementation side cannot be paired**. `lhd/lhd_kernel_compile.cpp` deliberately gives the graphs flow FLAT struct ports ("that flat lgraph is the LEC reference") and the pyrope flow TUPLE ports, which compile to `base.field` leaves. `pass/lec` bridges that for top-level IO (`query.cpp` "Tuple-leaf <-> flat-bus port bundles" ~:1725), but an internal trusted instance is a BOX whose ports pair purely BY NAME (`encode.hpp` `Comb_box`: `in_ports` is a name-sorted concat layout, `out_fn`/`out_w` are keyed by port name). `din` vs `din.fp`/`din.addr`/`din.thread_id` are disjoint names, so `build_in_ports` (`query.cpp:2266`) unions them into one oversized layout, each side drives only its half, and the box outputs become unrelated free symbols — Unknown at small scale, a false REFUTED at `prim_mul_div` scale (`resp_dest` ref=126 impl=127, differing only in bit 0 = `thread_id`). Proven NOT a front-end bug: `intpipe_mul_div_ctl` LECs PROVEN standalone, and lgcheck proves a netlist regenerated through the emitted Pyrope against the original. FIX: apply the same leaf<->bus normalisation to box instance ports |
 
 These are LiveHD-side issues, not suite configuration — the natural follow-up
@@ -318,17 +321,17 @@ A core is a directory with a `BUILD` exposing seven filegroups (`verilog`,
 entry in the `CORES` table in `bench/defs.bzl`. That entry names the module
 each scenario targets:
 
-| knob | dino | minion |
-| --- | --- | --- |
-| `top` — whole-design top, in both languages | `PipelinedDualIssueCPU` | `minion_top` |
-| `unit` — module carrying the verify sidecar + `bug1`/`comment1` (must be in the top's cone) | `ALU` | `txfma_adder` |
-| `v_flags` — extra slang options for this core's Verilog | *(none)* | `--relax-enum-conversions --allow-use-before-declare` |
-| `sim_tb` / `sim_cycles` — asserted, timed sim benchmark | `dino_prog_tb.prp` / 1,000,000 | `tensora_rf_tb.prp` / 200,000 |
-| `sim_tb_unit` — the module `sim_tb` drives, i.e. what it spells in `import("lg:NAME")`; the design supplied before it is rooted HERE, not at `top` | `PipelinedDualIssueCPU` | `vpu_tensora_rf` |
-| `sim_tb_v` — MODE=verilog override for `sim_tb` (`""` = one driver for both) | *(none)* | *(none)* |
-| `sim_top_tb` / `sim_top_tb_unit` / `sim_top_cycles` — separate whole-top correctness run | `dino_tb.prp` / `PipelinedDualIssueCPU` / 1,000 | `vpu_top_tb.prp` / `vpu_top` / 64 |
-| `sim_prog_tb` / `sim_prog_tb_unit` / `sim_prog_cycles` — optional additional program correctness run | *(none; already benchmarked)* | *(none)* |
-| `verilator_tb` / `verilator_flags` / `verilator_cycles` — the Verilator comparison (`""` = no `sim_verilator` target for this core) | `dino_prog_tb_verilator.cpp` / *(none)* / 2,000,000 | *(none)* |
+| knob | dino | minion | cva6 |
+| --- | --- | --- | --- |
+| `top` — whole-design top, in both languages | `PipelinedDualIssueCPU` | `minion_top` | `tag_cmp_wrap` |
+| `unit` — module carrying the verify sidecar + `bug1`/`comment1` (must be in the top's cone) | `ALU` | `txfma_adder` | `tag_cmp_wrap` |
+| `v_flags` — extra slang options for this core's Verilog | *(none)* | `--relax-enum-conversions --allow-use-before-declare` | `--single-unit` |
+| `sim_tb` / `sim_cycles` — asserted, timed sim benchmark | `dino_prog_tb.prp` / 1,000,000 | `tensora_rf_tb.prp` / 200,000 | `tag_cmp_tb.prp` / 200 |
+| `sim_tb_unit` — the module `sim_tb` drives, i.e. what it spells in `import("lg:NAME")`; the design supplied before it is rooted HERE, not at `top` | `PipelinedDualIssueCPU` | `vpu_tensora_rf` | `tag_cmp_wrap` |
+| `sim_tb_v` — MODE=verilog override for `sim_tb` (`""` = one driver for both) | *(none)* | *(none)* | *(none)* |
+| `sim_top_tb` / `sim_top_tb_unit` / `sim_top_cycles` — separate whole-top correctness run | `dino_tb.prp` / `PipelinedDualIssueCPU` / 1,000 | `vpu_top_tb.prp` / `vpu_top` / 64 | *(none)* |
+| `sim_prog_tb` / `sim_prog_tb_unit` / `sim_prog_cycles` — optional additional program correctness run | *(none; already benchmarked)* | *(none)* | *(none)* |
+| `verilator_tb` / `verilator_flags` / `verilator_cycles` — the Verilator comparison (`""` = no `sim_verilator` target for this core) | `dino_prog_tb_verilator.cpp` / *(none)* / 2,000,000 | *(none)* | *(none)* |
 
 **Why a core may need two sim drivers.** The two trees are the same design but
 need not be the same Pyrope. A `struct packed` port re-emits from Verilog as a
@@ -367,6 +370,25 @@ lhd compile verilog --top minion_top --emit-dir lg:out -- \
   --relax-enum-conversions --allow-use-before-declare
 ```
 
+**cva6's scope.** The `cva6/` core is *not* the whole CVA6 — it is the
+`tag_cmp` cache-tag-comparator cone, vendored from
+[openhwgroup/cva6](https://github.com/openhwgroup/cva6) (Solderpad 0.51, see
+`cva6/verilog/LICENSE`) together with the five packages it elaborates against
+(`config_pkg`, `cv64a6_imafdc_sv39_config_pkg`, `build_config_pkg`,
+`riscv_pkg`, `ariane_pkg`). That is the largest CVA6 subset that reads,
+round-trips through Pyrope and LECs against its Verilog on the pinned lhd, and
+it was picked because it carries CVA6's *own* SystemVerilog assertions —
+`cva6/verif/tag_cmp_wrap.verify.prp` is those translated, so the verify
+scenarios prove a property the design's authors wrote rather than one invented
+for the bench. The packages are compiled `--single-unit`: CVA6 refers to
+identifiers across files and `filelist.f` carries the elaboration order.
+`tag_cmp_wrap.sv` is the one file the suite wrote, not vendored — `tag_cmp`
+takes its cache-line types as module parameters, which standalone default to
+`logic`, collapsing the compare and leaving `hit_way_o` undriven so every
+property over it would pass VACUOUSLY. The wrapper binds `cache_line_t` /
+`cl_be_t` exactly as `std_nbdcache.sv:51-62` does. Growing the core means
+adding the next module's cone to `filelist.f` and re-running `cva6_lec`.
+
 ## Benchmarking a LiveHD checkout (or your own changes)
 
 The default `MODULE.bazel` pins a top-of-tree LiveHD commit — and that is the
@@ -386,7 +408,7 @@ once those commits are pushed. Bumping a pin is a one-line commit edit.
 
 ## Layout
 
-Both cores use the same shape (`<core>/` = `dino/` or `minion/`):
+Every core uses the same shape (`<core>/` = `dino/`, `minion/` or `cva6/`):
 
 - `<core>/verilog/`, `<core>/pyrope/` — the design in both languages (the
   Pyrope is the LiveHD translation of the same RTL). `verilog/filelist.f` is

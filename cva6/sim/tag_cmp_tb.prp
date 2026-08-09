@@ -1,0 +1,27 @@
+// Simulation smoke for CVA6's cache tag comparator, through the type-binding
+// wrapper (tag_cmp alone has unbound type parameters — see verif/).
+//
+// DELIBERATELY an all-miss test. The real cache line array is 8 ways x 174 bits
+// = 1392 bits wide, and a testbench scalar silently truncates past 64 bits
+// (the same limit dino/sim/stagereg_tb.prp works around), so a driver cannot
+// present a populated line array at all: the generated C++ fails to build on a
+// >64-bit literal. What IS checkable without wide literals is the miss path —
+// every port requesting every way against an EMPTY (all-invalid) array must
+// report no hit. A comparator that reported a hit on an invalid line would fail
+// here, which is the same class of bug verif/ proves absent in general.
+const dut = import("lg:tag_cmp_wrap")
+
+test tag_cmp.hello(cycles:u20 = 1000) {
+  mut acc = dut
+  mut got = 0
+  tick cycles clocks=(clk_i=1) {
+    acc.rst_ni  = clk_i >= 2   // active LOW reset: asserted for the first cycles
+    acc.req_i   = 0xffffff     // &req_i: every port requests every way
+    acc.tag_i   = 0
+    acc.rdata_i = 0            // no way is valid
+    step
+    got = acc.hit_way_o
+  }
+  assert(got == 0, "no way is valid, so nothing may hit")
+  puts("cva6 tag_cmp: ran {cycles} cycles, hit_way={got}")
+}

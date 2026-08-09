@@ -154,6 +154,33 @@ CORES = {
         "verilator_flags": "",
         "verilator_cycles": 2000000,
     },
+    "cva6": {
+        "pkg": "//cva6",
+        # tag_cmp_wrap, not tag_cmp: tag_cmp takes its cache-line types as
+        # module PARAMETERS, and standalone they default to `logic` — the tag
+        # compare collapses and hit_way_o is undriven, so every property over it
+        # passes vacuously. The wrapper binds them as std_nbdcache.sv does.
+        "top": "tag_cmp_wrap",
+        "unit": "tag_cmp_wrap",
+        # No sequential sidecar yet; the onehot property already uses `past`.
+        "seq_unit": "",
+        # CVA6 packages reference identifiers across files, so one compilation
+        # unit; the filelist carries the elaboration order.
+        "v_flags": "--single-unit",
+        "color_algs": ["flat", "synth"],
+        "sim_tb": "tag_cmp_tb.prp",
+        "sim_tb_unit": "tag_cmp_wrap",
+        "sim_cycles": "200",
+        "sim_marker": "cva6 tag_cmp:",
+        # An empty cache must report NO hit. The line array is 1392 bits and a
+        # testbench scalar truncates past 64, so a populated array cannot be
+        # driven at all — the miss path is what is checkable here.
+        "sim_expect": "hit_way=0",
+        "sim_top_tb": "",
+        "sim_prog_tb": "",
+        "lec_trust": "",
+        "verilator_tb": "",
+    },
     "minion": {
         "pkg": "//minion",
         "top": "minion_top",
