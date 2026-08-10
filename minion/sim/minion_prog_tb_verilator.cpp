@@ -1,8 +1,6 @@
 // Line-by-line Verilator twin of minion_prog_tb.prp — same ROM, same poke and
-// observe order, so the two simulators must agree instruction for instruction.
-// This is the cross-simulator oracle the bench's `verilator_tb` slot wants
-// (bench/defs.bzl minion entry), and the reference that turns the .prp's
-// hand-derived `retired >= 305` into a measured number.
+// observe order. Both sides must sustain retirement inside the active loop;
+// exact retire-count equality remains a separate phase-alignment oracle.
 //
 // THE STIMULUS SCHEDULE, and why it is not the usual two-eval toggle. `lhd sim`
 // lowers the Pyrope `tick` body to  drive(all inputs); step(); read(outputs),
@@ -89,13 +87,11 @@ int main(int argc, char** argv) {
   Verilated::commandArgs(argc, argv);
   auto* dut = new Vminion_top;
 
-  // Same 16-word RV32 ROM as minion_prog_tb.prp:
-  //   li x1,100; li x2,0; li x3,0; loop: addi x2,x2,1; addi x3,x3,-1;
-  //   bne x2,x1,loop; sw x2,0(x0); sw x3,8(x0); spin: beq x0,x0,spin; nops.
-  const uint32_t rom[16] = {0x06400093u, 0x00000113u, 0x00000193u, 0x00110113u,
-                            0xFFF18193u, 0xFE111CE3u, 0x00203023u, 0x00303423u,
-                            0x00000063u, 0x00000013u, 0x00000013u, 0x00000013u,
-                            0x00000013u, 0x00000013u, 0x00000013u, 0x00000013u};
+  // Same always-active loop as minion_prog_tb.prp, duplicated in both lines.
+  const uint32_t rom[16] = {0x00110113u, 0x00318193u, 0x00314233u, 0x002202B3u,
+                            0x40328333u, 0x002303B3u, 0xFE0114E3u, 0x00000013u,
+                            0x00110113u, 0x00318193u, 0x00314233u, 0x002202B3u,
+                            0x40328333u, 0x002303B3u, 0xFE0114E3u, 0x00000013u};
 
   // Argument shape of the driver `lhd sim` generates (`--arg cycles=N` reaches
   // drv.bin as `--cycles N`), so bench/sim_verilator.sh can hand both binaries
@@ -116,7 +112,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  long retired = 0, took_exc = 0, done_cycle = 0;
+  long retired = 0, took_exc = 0;
   uint64_t last_pc = 0;
   // The icache contract is FIXED LATENCY, not a next-cycle handshake: the
   // request leaves the frontend at F1 (minion_frontend.sv:44) and the response
@@ -225,23 +221,17 @@ int main(int argc, char** argv) {
                     static_cast<unsigned long long>(get_bits(te, 5, 49)));
       }
     }
-    if (done_cycle == 0 && last_pc == 0x20) {
-      done_cycle = clock;
-    }
   }
 
   // Byte-for-byte the .prp's `puts`, INCLUDING last_pc in decimal — Pyrope's
   // `{}` formats an integer in base 10, and a hex spelling here would make the
   // two simulators disagree on a line that is supposed to be diffable (and
   // would break a `sim_expect` gate written against either one).
-  std::printf("minion program: retired=%ld last_pc=%llu, done at cycle %ld\n", retired,
-              static_cast<unsigned long long>(last_pc), done_cycle);
-  // The .prp's two asserts, verbatim. It does NOT assert took_exc == 0 or
-  // retired >= 305: the hand-derived 305 and the exception-free trajectory are
-  // still open (see the .prp header), so pinning them here would make the twin
-  // fail on runs the Pyrope side calls a pass. took_exc stays reported under
-  // MINION_TB_DEBUG.
-  const bool ok = retired >= 100 && done_cycle > 0;
+  std::printf("minion program: retired=%ld last_pc=%llu, active through cycle %ld\n", retired,
+              static_cast<unsigned long long>(last_pc), cycles);
+  // The .prp's two activity assertions, verbatim. took_exc stays reported only
+  // under MINION_TB_DEBUG because it is not part of the throughput validity gate.
+  const bool ok = retired >= 100 && last_pc < 32;
   if (std::getenv("MINION_TB_DEBUG") != nullptr) {
     std::printf("  (debug) exc=%ld\n", took_exc);
   }
