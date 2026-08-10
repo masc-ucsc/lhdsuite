@@ -67,11 +67,24 @@ Every core shares one shape (`<core>/` = `dino/`, `minion/` or `cva6/`):
   that clang++ is 5-10s against a simulation of ~1s — so `sim_run_ms` read as
   "simulation" was really a clang stopwatch, and the two sim MODEs differed
   2.5x while emitting byte-identical C++; `sim.sh` re-runs the built `drv.bin`
-  to separate `sim_cc_ms` from `sim_exec_ms`. (2) The timed leg used to bake a
+  to separate `sim_cc_ms` from `sim_exec_ms`. (That "byte-identical" is HISTORY,
+  not an invariant: re-checked 2026-08-09 the two modes now emit genuinely
+  different C++ for dino's top — 1107 lines from `lg:` vs 1270 through the
+  Pyrope round trip, differing in CSE and in redundant `zext` chains, not just
+  in the `Mod` vs `Lib_Mod` struct naming — and run ~3% apart. A cycles/s gap
+  between the modes is now a front-end comparison, not a harness artifact.) (2) The timed leg used to bake a
   VCD in, and the writer cost 40-75% of `sim_exec_ms` on dino with a 0.36s /
   0.91s spread on ONE unchanged binary — so `sim.sh` now runs
   `--set sim.vcd=false` and the untimed whole-top drivers carry the VCD
-  coverage. Before believing a bench gap between two modes, check whether the
+  coverage. (3) `sim_exec_ms` still times ONE `execve` plus the simulation, and
+  process startup on this box is ~16-19 ms for every one of the three
+  simulators (binary load, model ctor, reset). That is ~12% of dino's 500k run
+  and ~96% of minion's 100k one, so a single-count `cycles/s` under-reports
+  every simulator and under-reports the fast ones most. The honest number is a
+  two-point fit — `t(N) = startup + N/rate` over two counts, best-of-5 each;
+  measured 2026-08-09 it moves dino from 2.94M/2.96M/3.73M (pyrope/verilog/
+  verilator, as the bench prints them) to 3.30M/3.40M/4.32M cycles/s.
+  Before believing a bench gap between two modes, check whether the
   thing that differs is even in the measured interval.
 - **`lhd sim` cgen's EVERY graph in the library it is given.** So an `lg:` sim
   input must be rooted at the module the testbench drives, not at the core top:

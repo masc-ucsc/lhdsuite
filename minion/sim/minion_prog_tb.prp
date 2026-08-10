@@ -2,42 +2,60 @@
 // dino/sim/dino_prog_tb.prp, but against minion's cached memory interface.
 //
 // ============================================================================
-// STATUS: THIS DOES NOT RUN YET, BY DESIGN. It is the target artifact for the
-// minion sim bring-up, written against the REAL minion_top port list so the
-// remaining work is measured against something concrete instead of a sketch.
+// STATUS 2026-08-09: IT RUNS. `lhd sim` accepts minion_top with 0 errors (18
+// warnings) and builds a 173-TU driver, in BOTH modes — the checked-in
+// minion/pyrope tree and an `lg:` library compiled straight from the Verilog.
+// The 19 refusals this header used to enumerate (9 gated-clock, 5
+// combinational-loop, 4 negedge-operand, 1 comb-loop-through-instance) are all
+// gone. What has NOT been established is that it runs CORRECTLY — see the
+// divergence below. Measured numbers, 20,000 cycles, best of 5 on an 18-core
+// M-series box:
 //
-// `lhd sim minion/pyrope/minion_top.prp` refuses with 19 errors today
-// (re-measured 2026-08-05, after livehd's Phase 1 + step 1b/1d landed — still
-// 19, and three of the four attributions below were WRONG the first time):
-//     9  gated-clock-unsupported      <- gate chains crossing MODULE BOUNDARIES.
-//                                        A 3-deep INLINE chain simulates fine
-//                                        now; these need hierarchical clock
-//                                        endpoints (plan step 1c).
-//     5  combinational-loop           <- NOT the packed set_mask class (zero
-//                                        are). 3 are MEMORY read/forward->write
-//                                        cycles (prim_rf_1r1w_diff_preview,
-//                                        vpu_tensorfma, vpu_ctrl), 1 a Sub
-//                                        (prim_mul_div), 1 a Get_mask
-//                                        (intpipe_mul_div_ctl). The memory
-//                                        class is unplanned work.
-//     4  negedge-operand-unresolved   <- NOT four copies of prim_clk_gate's
-//                                        latch. Only one is in prim_clk_gate;
-//                                        the rest name memory_388 (x2) and
-//                                        mux_13808 — comb-cycle back-edges.
-//     1  comb-loop-through-instance   <- plan step 5.
-// The diagnostic NAMES the on-cycle node; read it before believing a mapping.
-// See livehd/todo_sim_pipeline.md for the staged plan that clears them.
+//   simulator          setup      host c++    cycles/s   startup
+//   lhd sim pyrope     6.9 s      53.9 s        9,847     31 ms
+//   lhd sim verilog   29.9 s+2.7s 57.5 s       10,441     29 ms   (+ v->lg)
+//   verilator 5.050    4.3 s       2.1 s      147,541     16 ms
 //
-// UNVERIFIED IN HERE, and it must stay flagged until the day this runs:
+// so verilator is ~14-15x faster per cycle and ~10x faster to a running
+// binary. (cycles/s is a two-point fit, t(N) = startup + N/rate over N = 2000
+// and 20000; a single count would fold that startup into the rate.)
+//
+// THE TWO lhd MODES AGREE EXACTLY — `retired=1428 last_pc=0, done at cycle 0`
+// from both — so the Verilog-vs-Pyrope difference in vpu_lane does not reach
+// this test, as expected: nothing here exercises the txfma.
+//
+// VERILATOR DOES NOT AGREE, and this is the open bug. Same RTL, same stimulus,
+// and the two are IDENTICAL for 33 cycles:
+//     ret#1 @c19 pc=0 instr=0x06400093     both
+//     ret#2 @c33 pc=0 instr=0x06400093     both
+// then at cycle 34 verilator streams out of the fetch buffer
+// (ret#3 @c34 pc=0x4, ret#4 @c35 pc=0x8, ... 12,240 retires in 20k cycles)
+// while `lhd sim` replays pc=0 forever, one retire every 14 cycles, 1,428 in
+// 20k. The divergence is therefore in the frontend fetch/buffer path and it
+// starts at ONE cycle. Falsified as causes, by direct measurement rather than
+// argument: the chicken bits (both values, both simulators, byte-identical
+// retire traces), icache_fill_done_i, and the twin's clock-edge order (all 8
+// combinations of the three give verilator's same answer).
+//
+// That the two chicken-bit settings produce identical traces is a RESULT, not
+// a non-event: it is the gates-open-vs-closed differential, and it says
+// `lhd sim`'s fold of a clock-gate enable into a flop enable is functionally
+// correct on this design.
+//
+// STILL UNVERIFIED, and it must stay flagged:
 //   * the expected RETIRED count (305) is derived by hand from the program
-//     below, not measured. dino's twin needed a `+2` nobody predicted (its
-//     branch-shadow pair architecturally executes once), so treat 305 as a
-//     hypothesis. Confirm against Verilator or iverilog on the same RTL BEFORE
-//     wiring this into //bench — the suite's rule is that a sim target gates on
-//     a DATA value, and a value nobody has observed is not one.
+//     below, not measured, and NEITHER simulator produces it — the icache
+//     protocol below is still wrong (both replay pc=0 twice before doing
+//     anything, and verilator's subsequent pc stream runs away past the 0x20
+//     spin instead of stopping there). dino's twin needed a `+2` nobody
+//     predicted, so treat 305 as a hypothesis.
 //   * the icache line/response handshake below is written from the port
-//     declarations, not from a passing run. The shape (one line per request,
-//     accepted the next cycle) is the simplest protocol consistent with them.
+//     declarations, not from a passing run.
+// NOT READY FOR //bench. Wiring `verilator_tb` into the minion CORES entry
+// needs three things this does not have yet: a sim_marker/sim_expect pair for
+// THIS driver (the current ones belong to tensora_rf_tb), a DATA value both
+// simulators agree on, and the cycle-34 divergence resolved — a target added
+// now would be a known-failing one.
 // ============================================================================
 //
 // WHY THE INTERFACE IS DIFFERENT FROM dino. dino exposes a combinational
@@ -95,6 +113,17 @@ test minion.prog(cycles:u20 = 20000) {
   mut d4 = 0
   mut d5 = 0
 
+  // Retirement tracking is GATED: core_top.sv:545 latches the trace rows
+  // only under `TraceEn && te_enable_i`. Without this poke `retired` stays 0
+  // in EVERY simulator — measured under Verilator before it was driven.
+  acc.te_enable_i     = 1
+  acc.te_thread_sel_i = 0
+
+  // Enable clock gate
+  acc.chicken_bits_i.min_frontend_clock_gate_disable = 0
+  acc.chicken_bits_i.min_dcache_clock_gate_disable   = 0
+  acc.chicken_bits_i.min_vputrans_clock_gate_disable = 0
+
   tick cycles clocks=(clock=1) {
     // ---- reset + static configuration -------------------------------------
     // Three active-low resets (core / dcache / warm). Released together after
@@ -105,23 +134,6 @@ test minion.prog(cycles:u20 = 20000) {
     acc.nsleepin_i = 1
     acc.enabled_i  = 1          // thread 0 only; minion is multi-threaded
     acc.reset_vector_i = 0      // boot at ROM word [0]
-    // Retirement tracking is GATED: core_top.sv:545 latches the trace rows
-    // only under `TraceEn && te_enable_i`. Without this poke `retired` stays 0
-    // in EVERY simulator — measured under Verilator before it was driven.
-    acc.te_enable_i     = 1
-    acc.te_thread_sel_i = 0
-
-    // These hold the frontend / dcache / vputrans clock gates OPEN. To be clear
-    // about what that does and does not buy: it does NOT avoid a single
-    // `gated-clock-unsupported` refusal — those fire at CODEGEN, on the shape of
-    // the clock cone, and a chicken bit only changes the enable's runtime value.
-    // Its use is after codegen works: the gates-open run is the simpler first
-    // bring-up, and re-running with them at 0 is the differential that actually
-    // proves the enable fold, because the two must agree instruction for
-    // instruction.
-    acc.chicken_bits_i.min_frontend_clock_gate_disable = 1
-    acc.chicken_bits_i.min_dcache_clock_gate_disable   = 1
-    acc.chicken_bits_i.min_vputrans_clock_gate_disable = 1
 
     // ---- instruction fetch: serve one 256-bit line per request -------------
     acc.icache_req_ready_i  = 1        // never backpressure the fetch

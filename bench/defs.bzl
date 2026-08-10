@@ -111,17 +111,19 @@ CORES = {
         # spins, so every cycle past that is pure throughput and the gates hold
         # at any count.
         #
-        # The count has been raised TWICE, both times for the same reason: it
-        # must keep the measured interval above this box's noise floor (see
+        # The count has been re-tuned THREE times, always for the same reason:
+        # it must keep the measured interval above this box's noise floor (see
         # best_run in common.sh). 2k was 0.22 s. 20k was ~2.2 s — until
         # livehd's sim cgen stopped calling Slop::get_mask_op for constant bit
         # slices (439 call sites -> 3) and dino went from ~9k to ~383k
         # cycles/s, which put 20k back down to 52 ms, i.e. mostly process
-        # startup. 1M is ~2.6 s again. Re-check this number after any large
-        # sim speedup — a benchmark that has outrun its own cycle count
-        # reports the startup cost, not the simulator.
+        # startup. 1M put it back to ~2.6 s; 500k is ~1.3 s of `lhd sim` and
+        # ~0.2 s of verilator, both still far above the noise floor while
+        # halving the wall time of the three-way comparison. Re-check this
+        # number after any large sim speedup — a benchmark that has outrun its
+        # own cycle count reports the startup cost, not the simulator.
         "sim_tb": "dino_prog_tb.prp",
-        "sim_cycles": 1000000,
+        "sim_cycles": 500000,
         "sim_tb_unit": "PipelinedDualIssueCPU",
         "sim_tb_v": "",
         "sim_marker": "dino program:",
@@ -147,9 +149,17 @@ CORES = {
         "lec_trust": "",
         # The Verilator comparison. dino/sim/dino_prog_tb_verilator.cpp is a
         # line-by-line twin of dino_prog_tb.prp (same ROM, same poke/peek
-        # order), and today both simulators print the same `done at cycle 506`.
-        # 2M cycles for the throughput run: verilator does dino at ~2.8M
-        # cycles/s, so anything shorter measures process startup.
+        # order), and all three simulators print the same
+        # `x2=100 -x3=102, done at cycle 506, IPC=602`.
+        # 2M cycles for the throughput run: verilator does dino at ~4.3M
+        # cycles/s (re-measured 2026-08-09; it was ~2.8M when this knob was
+        # added), so anything shorter measures process startup. Startup is NOT
+        # negligible at these speeds — ~19 ms for the Verilated model and
+        # ~17 ms for `lhd sim`'s drv.bin on this box, i.e. ~12% of the matched
+        # 500k run — so a single-count cycles/s under-reports both. A
+        # two-point fit (t(N) = startup + N/rate over N = 100k and 2M, best of
+        # 5) puts the honest numbers at lhd-pyrope 3.30M, lhd-verilog 3.40M,
+        # verilator 4.32M cycles/s: `lhd sim` within 1.3x of verilator.
         "verilator_tb": "dino_prog_tb_verilator.cpp",
         "verilator_flags": "",
         "verilator_cycles": 2000000,
@@ -198,7 +208,10 @@ CORES = {
         # partitioned `color synth` is meaningful at this size.
         "color_algs": ["synth"],
         "sim_tb": "tensora_rf_tb.prp",
-        "sim_cycles": 200000,
+        # 100k: same noise-floor argument as dino's count above — the tensor RF
+        # is a much smaller cone than the whole CPU, so 100k still leaves the
+        # measured interval comfortably above best_run's noise floor.
+        "sim_cycles": 100000,
         # NOT minion_top: the sim library is rooted at the module the driver
         # drives. `lhd sim` cgen's every graph it is given, and the whole-core
         # library refuses over `vpu_ctrl` (a combinational loop the single-pass

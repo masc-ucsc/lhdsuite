@@ -4,6 +4,38 @@
 // (bench/defs.bzl minion entry), and the reference that turns the .prp's
 // hand-derived `retired >= 305` into a measured number.
 //
+// THE STIMULUS SCHEDULE, and why it is not the usual two-eval toggle. `lhd sim`
+// lowers the Pyrope `tick` body to  drive(all inputs); step(); read(outputs),
+// where `step` is settle -> commit -> settle. Every poke in minion_prog_tb.prp
+// sits ABOVE the `step` and every read BELOW it, so the twin is:
+//     clk_i = 0; eval()   settle the design on the inputs just driven (this is
+//                         also where the previous iteration's clk 1->0 edge
+//                         lands, for the design's negedge flops)
+//     clk_i = 1; eval()   the posedge == step(); afterwards the outputs hold
+//                         the post-edge value, which is the post-step read
+// This file used to do the reverse (clk=1 eval, clk=0 eval, then observe), so
+// it observed AFTER a negedge that the Pyrope side had not taken yet — a
+// one-edge skew that makes `retired` and `done at cycle N` incomparable. See
+// AGENTS.md: keep the pair in lockstep, the stimulus schedule especially.
+//
+// MATCHED TO THE .prp, not to what merely runs. Three pokes here are the .prp's
+// values and are NOT knobs to twiddle when a run misbehaves — a divergence in
+// any of them silently turns the oracle into two unrelated experiments:
+//   * chicken_bits_i = 0 — all three clock-gate *disables* are 0, i.e. the
+//     frontend/dcache/vputrans clock gates are ENABLED (the .prp used to set
+//     them to 1; it no longer does). MEASURED 2026-08-09, both values, both
+//     simulators: the retire trace is IDENTICAL cycle for cycle. That is the
+//     differential the .prp's old comment asked for and it comes out clean —
+//     with the gates open and with them closed the core retires the same
+//     instructions at the same cycles, so `lhd sim`'s fold of a clock-gate
+//     enable into a flop enable is functionally correct on this design. (It
+//     also means this bit cannot be the knob that explains an lhd-vs-verilator
+//     divergence; do not reach for it when one appears.)
+//   * icache_fill_done_i = 1 — unconditional, as in the .prp.
+//   * te_enable_i / te_thread_sel_i are hoisted out of the tick loop in the
+//     .prp because they are constant; driving them every cycle here is the
+//     same stimulus.
+//
 // Packed-struct ports arrive in Verilator as wide bit vectors; the field
 // offsets below are derived from the SV struct declarations (first field =
 // MSBs) and the pkg parameters:
@@ -19,6 +51,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 #include "Vminion_top.h"
 #ifdef MINION_TB_INTERNALS
@@ -64,11 +97,22 @@ int main(int argc, char** argv) {
                             0x00000063u, 0x00000013u, 0x00000013u, 0x00000013u,
                             0x00000013u, 0x00000013u, 0x00000013u, 0x00000013u};
 
+  // Argument shape of the driver `lhd sim` generates (`--arg cycles=N` reaches
+  // drv.bin as `--cycles N`), so bench/sim_verilator.sh can hand both binaries
+  // the same flags. Unknown flags are an ERROR rather than a silent default:
+  // this used to sscanf every argv and take the first number, so `--cycles
+  // 500000` worked only by accident and a typo'd flag would have benchmarked
+  // the 20000-cycle default while reporting the count that was asked for.
   long cycles = 20000;
   for (int i = 1; i < argc; ++i) {
-    long v = 0;
-    if (std::sscanf(argv[i], "%ld", &v) == 1 && v > 0) {
-      cycles = v;
+    if (!std::strcmp(argv[i], "--cycles") && i + 1 < argc) {
+      cycles = std::strtol(argv[++i], nullptr, 0);
+    } else if (!std::strcmp(argv[i], "--help") || !std::strcmp(argv[i], "-h")) {
+      std::printf("usage: %s [--cycles N]\n", argv[0]);
+      return 0;
+    } else {
+      std::fprintf(stderr, "minion_prog_tb_verilator: unknown argument '%s'\n", argv[i]);
+      return 2;
     }
   }
 
@@ -99,11 +143,13 @@ int main(int argc, char** argv) {
     dut->te_enable_i     = 1;  // trace-encoder retirement tracking is GATED on this (core_top.sv:545)
     dut->te_thread_sel_i = 0;
     // reset_vector_i (49b wide) stays 0: boot at ROM word [0]
-    dut->chicken_bits_i = (1u << 5) | (1u << 4) | (1u << 3);  // frontend, dcache, vputrans
+    // All three clock-gate DISABLE bits at 0 == the gates are enabled, matching
+    // the .prp. (It used to set them, and this file used to mirror that.)
+    dut->chicken_bits_i = 0;  // frontend=bit5, dcache=bit4, vputrans=bit3
 
     dut->icache_req_ready_i = 1;
     dut->icache_resp_miss_i = 0;
-    dut->icache_fill_done_i = (std::getenv("MINION_TB_FD") != nullptr) ? 1 : 0;
+    dut->icache_fill_done_i = 1;
 
     const int resp_line = resp_line_at[clock % kMaxLat];
     resp_line_at[clock % kMaxLat] = -1;
@@ -124,9 +170,13 @@ int main(int argc, char** argv) {
     dut->ptw_dc_resp_valid_i         = 0;
 
     // ---- step: one full clock -------------------------------------------
-    dut->clk_i = 1;
-    dut->eval();
+    // settle on the inputs just driven (and take the 1->0 edge left by the
+    // previous iteration), then the posedge. See the schedule note at the top:
+    // observing AFTER a trailing clk=0 eval, as this used to, reads one negedge
+    // ahead of what the Pyrope `step` has settled.
     dut->clk_i = 0;
+    dut->eval();
+    dut->clk_i = 1;
     dut->eval();
 
     // ---- observe, all below the step (same as the .prp) ------------------
@@ -164,20 +214,37 @@ int main(int argc, char** argv) {
     }
     if (get_bits(te, 60, 1) != 0 || get_bits(te, 54, 1) != 0) {  // exception | interrupt
       ++took_exc;
-      std::printf("  exc @c%ld: exception=%d interrupt=%d cause=0x%llx trap_pc=0x%llx tval=0x%llx\n", clock,
-                  static_cast<int>(get_bits(te, 60, 1)), static_cast<int>(get_bits(te, 54, 1)),
-                  static_cast<unsigned long long>(get_bits(te, 55, 5)),
-                  static_cast<unsigned long long>(get_bits(te, 62, 49)),
-                  static_cast<unsigned long long>(get_bits(te, 5, 49)));
+      // Behind the debug env, not unconditional: the .prp counts exceptions
+      // silently, and a per-exception line here would put thousands of lines
+      // between the two simulators' otherwise identical output.
+      if (std::getenv("MINION_TB_DEBUG") != nullptr) {
+        std::printf("  exc @c%ld: exception=%d interrupt=%d cause=0x%llx trap_pc=0x%llx tval=0x%llx\n", clock,
+                    static_cast<int>(get_bits(te, 60, 1)), static_cast<int>(get_bits(te, 54, 1)),
+                    static_cast<unsigned long long>(get_bits(te, 55, 5)),
+                    static_cast<unsigned long long>(get_bits(te, 62, 49)),
+                    static_cast<unsigned long long>(get_bits(te, 5, 49)));
+      }
     }
     if (done_cycle == 0 && last_pc == 0x20) {
       done_cycle = clock;
     }
   }
 
-  std::printf("minion program: retired=%ld last_pc=0x%llx, done at cycle %ld, exc=%ld\n", retired,
-              static_cast<unsigned long long>(last_pc), done_cycle, took_exc);
-  const bool ok = took_exc == 0 && retired >= 305 && done_cycle > 0;
+  // Byte-for-byte the .prp's `puts`, INCLUDING last_pc in decimal — Pyrope's
+  // `{}` formats an integer in base 10, and a hex spelling here would make the
+  // two simulators disagree on a line that is supposed to be diffable (and
+  // would break a `sim_expect` gate written against either one).
+  std::printf("minion program: retired=%ld last_pc=%llu, done at cycle %ld\n", retired,
+              static_cast<unsigned long long>(last_pc), done_cycle);
+  // The .prp's two asserts, verbatim. It does NOT assert took_exc == 0 or
+  // retired >= 305: the hand-derived 305 and the exception-free trajectory are
+  // still open (see the .prp header), so pinning them here would make the twin
+  // fail on runs the Pyrope side calls a pass. took_exc stays reported under
+  // MINION_TB_DEBUG.
+  const bool ok = retired >= 100 && done_cycle > 0;
+  if (std::getenv("MINION_TB_DEBUG") != nullptr) {
+    std::printf("  (debug) exc=%ld\n", took_exc);
+  }
   std::printf("%s minion.prog (verilator)\n", ok ? "PASS" : "FAIL");
   dut->final();
   delete dut;
