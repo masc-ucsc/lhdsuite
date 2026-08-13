@@ -22,6 +22,8 @@
 #   CORE_SIM_TB_V     MODE=verilog override for CORE_SIM_TB ("" = same driver
 #                     for both modes); needed when the two sides declare a port
 #                     differently. See defs.bzl
+#   CORE_SIM_SETS     extra `--set k=v` flags for this core's `lhd sim` runs
+#                     ("" = none); NOT passed to the verilator scenario
 #   CORE_SIM_MARKER   string proving the benchmark reached its final report
 #   CORE_SIM_EXPECT   string the asserted sim's output must also contain — the
 #                     testbench's known-good data readback ("" = skip)
@@ -71,6 +73,7 @@ CORE_VERIF_DIR=$CORE_DIR/verif
 CORE_TESTS_DIR=$CORE_DIR/tests
 : "${CORE_TOP:?}" "${CORE_UNIT:?}" "${CORE_COLOR_ALGS:?}"
 : "${CORE_V_FLAGS=}" "${CORE_SIM_MARKER:?}" "${CORE_SIM_EXPECT=}" "${CORE_LEC_TRUST=}" "${CORE_SIM_TB_V=}"
+: "${CORE_SIM_SETS=}"
 : "${CORE_SIM_CYCLES:?}" "${CORE_SIM_TB_UNIT:?}"
 : "${CORE_SIM_TOP_UNIT=}" "${CORE_SIM_PROG_UNIT=}"
 : "${CORE_SIM_TOP_CYCLES=}" "${CORE_SIM_PROG_CYCLES=}"

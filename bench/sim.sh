@@ -140,8 +140,9 @@ SIM_INPUTS=("$BENCH_INPUT" "tree/$SIM_TB")
 # The setup phase WRITES the driver sources; sim.vcd is read back from what was
 # baked, so it is fixed here and not at --run-only. See the header for why the
 # timed leg keeps the tracer out.
+# shellcheck disable=SC2086  # CORE_SIM_SETS is a token LIST, split on purpose
 run_timed sim_setup lhd sim "${SIM_INPUTS[@]}" --setup-only \
-  --set sim.vcd=false --workdir SW
+  --set sim.vcd=false $CORE_SIM_SETS --workdir SW
 # sim.ninja=false PINS the build path. `lhd sim` uses ninja when it finds one on
 # PATH and its own parallel compile otherwise — great for a developer's warm
 # edit-sim loop, useless here (every target starts from a fresh workdir, so
@@ -150,8 +151,9 @@ run_timed sim_setup lhd sim "${SIM_INPUTS[@]}" --setup-only \
 # not currently carry it, so this only makes today's behaviour explicit and
 # immune to that changing. Not a workaround for a failure — the ninja path is
 # covered by livehd's own lhd_sim_incremental_test.
+# shellcheck disable=SC2086
 run_timed sim_run lhd sim "${SIM_INPUTS[@]}" --run-only --arg "cycles=$CYCLES" \
-  --set sim.ninja=false --diag-fmt pretty --workdir SW
+  --set sim.ninja=false $CORE_SIM_SETS --diag-fmt pretty --workdir SW
 RUN_MS=$LAST_MS  # compile + simulate; sim_exec below splits it
 
 sim_gate sim_run
@@ -193,8 +195,9 @@ rate sim_cycles_per_s_with_cc "$CYCLES" "$RUN_MS" "cycles/s"
 run_top_driver() {
   local label=$1 design=$2 tb=$3 cycles=$4
   [ -n "$tb" ] || { echo "-"; return 0; }
+  # shellcheck disable=SC2086
   if CURRENT_STEP=$label lhd sim "$design" "tree/$tb" \
-    --arg "cycles=$cycles" --set sim.vcd=true --diag-fmt pretty \
+    --arg "cycles=$cycles" --set sim.vcd=true $CORE_SIM_SETS --diag-fmt pretty \
     --workdir "SW_$label" >"step_$label.log" 2>&1; then
     echo 1
   else

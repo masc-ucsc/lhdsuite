@@ -65,6 +65,16 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             readback. Guards against a sim that runs but computes wrong
 #             values (a silently-miscompiled schedule prints data=0 and
 #             would otherwise go green). "" = marker gate only.
+#   sim_sets  extra `--set k=v` flags for THIS core's `lhd sim` invocations
+#             (both the timed benchmark and the correctness drivers), space
+#             separated, each already spelled `--set k=v`. "" = none. It exists
+#             for a driver whose contract needs a knob the shared script cannot
+#             infer: minion_prog needs `sim.init_zero=true`, because the lhd
+#             model's power-on X differs from Verilator's 2-state zero and the
+#             comparison is only apples-to-apples once both start from zero.
+#             NOT applied to the verilator scenario — verilator has no such
+#             knob, being 2-state by construction, which is the whole reason
+#             the lhd side needs one.
 #   lec_trust  comma-separated module-def names the LEC scenarios ASSUME
 #             equivalent WITHOUT proving them (`--set formal.lec.trust=…`) —
 #             the escape hatch for defs holding a latch or negedge flop the LEC
@@ -207,28 +217,47 @@ CORES = {
         # ABC mapping peak, so `pass abc` refuses it outright. Only the
         # partitioned `color synth` is meaningful at this size.
         "color_algs": ["synth"],
-        "sim_tb": "tensora_rf_tb.prp",
-        # 100k: same noise-floor argument as dino's count above — the tensor RF
-        # is a much smaller cone than the whole CPU, so 100k still leaves the
-        # measured interval comfortably above best_run's noise floor.
-        "sim_cycles": 100000,
-        # NOT minion_top: the sim library is rooted at the module the driver
-        # drives. `lhd sim` cgen's every graph it is given, and the whole-core
-        # library refuses over `vpu_ctrl` (a combinational loop the single-pass
-        # schedule cannot order) and `intpipe_csr_file` (a derived clock) —
-        # neither of them anywhere near the tensor RF.
-        "sim_tb_unit": "vpu_tensora_rf",
-        # vpu_tensora_rf's ports are all flat on both sides — one driver serves
+        # THE benchmark is the whole-core program workload, the counterpart of
+        # dino_prog — a real RISC-V instruction stream on minion_top, with a C++
+        # twin (minion_prog_tb_verilator.cpp) so the Verilator comparison is the
+        # same design and the same stimulus. The tensor-RF and vpu_top drivers
+        # below are kept as secondary correctness/debug runs.
+        "sim_tb": "minion_prog_tb.prp",
+        # 20k: the driver's own default, and its instruction stream loops
+        # forever so the workload stays ACTIVE for the whole count (it never
+        # falls into an idle spin the way a completed program would). Measures
+        # ~0.9 s of lhd sim, comfortably above best_run's noise floor.
+        "sim_cycles": 20000,
+        # minion_top, the whole core. This USED to be impossible — the comment
+        # here recorded that `lhd sim` refused the whole-core library over
+        # `vpu_ctrl` (a false combinational loop) and `intpipe_csr_file` (a
+        # derived clock). Both are gone: the loop was a false positive the
+        # colour planner now orders, and the clock gates fold into flop enables
+        # ("`intpipe_csr_file`: inlined 2 clock-gate cell(s)").
+        "sim_tb_unit": "minion_top",
+        # minion_top's ports are flat on both sides — one driver serves
         # MODE=pyrope and MODE=verilog.
         "sim_tb_v": "",
-        "sim_marker": "hello world",
-        "sim_expect": "data=4660",
+        # The lhd model's power-on X vs Verilator's 2-state zero: the two are
+        # only comparable once both start from zero. See the sim_sets doc.
+        "sim_sets": "--set sim.init_zero=true",
+        "sim_marker": "minion program:",
+        # Marker only, deliberately. The driver's own asserts are the real gate
+        # (`retired >= 100`, `last_pc < 32`), and they are the RIGHT gate: the
+        # two simulators sit at a small phase offset, so an exact retire count
+        # is not a valid cross-simulator oracle — and sim_expect is applied to
+        # the verilator scenario too.
+        "sim_expect": "",
         "sim_top_tb": "vpu_top_tb.prp",
         "sim_top_tb_unit": "vpu_top",
         "sim_top_cycles": 64,
-        "sim_prog_tb": "",
-        "sim_prog_tb_unit": "",
-        "sim_prog_cycles": "",
+        # Secondary: the tensor-RF microbenchmark that used to be the timed
+        # benchmark. Kept as an untimed correctness driver — it is a much
+        # smaller cone than the core and exercises the preview/commit latch
+        # protocol, which the program workload does not reach.
+        "sim_prog_tb": "tensora_rf_tb.prp",
+        "sim_prog_tb_unit": "vpu_tensora_rf",
+        "sim_prog_cycles": 100000,
         # Informational: `lhd sim` still refuses vpu_top — "module
         # `vpu_trans.vpu_trans`: flop `flop_76:id_insert_en_o` has a derived
         # clock inou.cgen.sim cannot fold into a commit guard", the same
@@ -252,14 +281,16 @@ CORES = {
         # roots — which v1 refuses BY NAME rather than invent. Retire this entry
         # when multi-root scheduling lands.
         "lec_trust": "",  # emptied 2026-08-02: prim_rf_1r1w_diff_preview PROVES now (it was blocked by the comb-memory phase-gating bug, not by clocks)
-        # No Verilator comparison yet: it needs a C++ twin of
-        # tensora_rf_tb.prp, and that driver leans on the preview/commit latch
-        # protocol rather than on a self-checking program, so mirroring it is
-        # not the mechanical transcription dino's was. Add `verilator_tb` here
-        # (plus the .cpp under minion/sim/) and the target appears.
-        "verilator_tb": "",
+        # The Verilator comparison, now that the timed benchmark is the program
+        # workload: minion_prog_tb_verilator.cpp is a line-by-line twin of
+        # minion_prog_tb.prp (same ROM, same poke/observe order, same stimulus
+        # schedule). It was written before this entry existed — the previous
+        # comment here asked for exactly this file.
+        "verilator_tb": "minion_prog_tb_verilator.cpp",
         "verilator_flags": "",
-        "verilator_cycles": 0,
+        # 200k for the throughput run: 10x the matched count, so the measured
+        # interval is dominated by simulation rather than process startup.
+        "verilator_cycles": 200000,
     },
 }
 
@@ -351,6 +382,7 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_SIM_TOP_UNIT": cfg.get("sim_top_tb_unit", ""),
             "CORE_SIM_PROG_UNIT": cfg.get("sim_prog_tb_unit", ""),
             "CORE_SIM_TB_V": cfg.get("sim_tb_v", ""),
+            "CORE_SIM_SETS": cfg.get("sim_sets", ""),
             "CORE_SIM_MARKER": cfg["sim_marker"],
             "CORE_SIM_EXPECT": cfg["sim_expect"],
             "CORE_SIM_TOP_TB": cfg["sim_top_tb"],

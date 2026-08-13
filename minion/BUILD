@@ -44,7 +44,14 @@ filegroup(
 # outside bazel too: sim/thread_sched_tb.prp next to any Pyrope tree.
 filegroup(
     name = "sim",
-    srcs = glob(["sim/*.prp"]),
+    # *.cpp too: the Verilator twin of the benchmark driver
+    # (minion_prog_tb_verilator.cpp) is staged from here, exactly as dino does.
+    # Without it `//bench:minion_sim_verilator` verilates fine and then dies in
+    # make with "No rule to make target .../minion_prog_tb_verilator.cpp".
+    srcs = glob([
+        "sim/*.prp",
+        "sim/*.cpp",
+    ]),
     visibility = ["//visibility:public"],
 )
 

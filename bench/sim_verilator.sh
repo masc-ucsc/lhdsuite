@@ -76,8 +76,15 @@ VERSION=$("$VERILATOR_BIN" --version)
 # under test — dino trips UNOPTFLAT on the whole-`io` struct wires the Chisel
 # emitter produces, which verilator handles by iterating (a throughput cost it
 # pays honestly, not an error).
+# -I$CORE_V_DIR: a core whose RTL `\`include`s a generated header next to it
+# (minion's intpipe_csr_file_auto_*.svh) resolves under slang WITHOUT a flag —
+# slang looks relative to the INCLUDING file — but verilator only searches its
+# -I list, so the same sources fail to verilate. Adding the core's own Verilog
+# directory makes the two front ends see the same files, which is the whole
+# premise of this comparison. Core-agnostic: it is always the right include
+# root, and a core with no such includes is unaffected.
 run_timed sim_setup vlt --cc --exe --Mdir "$VOBJ" --top-module "$CORE_TOP" \
-  -Wno-fatal $CORE_VERILATOR_FLAGS -DSYNTHESIS \
+  -Wno-fatal $CORE_VERILATOR_FLAGS -DSYNTHESIS -I"$CORE_V_DIR" \
   -F "$CORE_V_DIR/filelist.f" "$VTB"
 
 # --- 2. host C++ compile + link ----------------------------------------------
