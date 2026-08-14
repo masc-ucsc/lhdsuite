@@ -98,8 +98,8 @@ int main(int argc, char** argv) {
   // the same flags. Unknown flags are an ERROR rather than a silent default:
   // this used to sscanf every argv and take the first number, so `--cycles
   // 500000` worked only by accident and a typo'd flag would have benchmarked
-  // the 20000-cycle default while reporting the count that was asked for.
-  long cycles = 20000;
+  // the 100000-cycle default while reporting the count that was asked for.
+  long cycles = 100000;
   for (int i = 1; i < argc; ++i) {
     if (!std::strcmp(argv[i], "--cycles") && i + 1 < argc) {
       cycles = std::strtol(argv[++i], nullptr, 0);

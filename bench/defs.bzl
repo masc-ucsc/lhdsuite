@@ -121,19 +121,19 @@ CORES = {
         # spins, so every cycle past that is pure throughput and the gates hold
         # at any count.
         #
-        # The count has been re-tuned THREE times, always for the same reason:
+        # The count has been re-tuned as the simulator improved, always for the
+        # same reason:
         # it must keep the measured interval above this box's noise floor (see
         # best_run in common.sh). 2k was 0.22 s. 20k was ~2.2 s — until
         # livehd's sim cgen stopped calling Slop::get_mask_op for constant bit
         # slices (439 call sites -> 3) and dino went from ~9k to ~383k
         # cycles/s, which put 20k back down to 52 ms, i.e. mostly process
-        # startup. 1M put it back to ~2.6 s; 500k is ~1.3 s of `lhd sim` and
-        # ~0.2 s of verilator, both still far above the noise floor while
-        # halving the wall time of the three-way comparison. Re-check this
-        # number after any large sim speedup — a benchmark that has outrun its
-        # own cycle count reports the startup cost, not the simulator.
+        # startup. Use 1M so both `lhd sim` and Verilator spend enough time in
+        # the active workload to keep startup and scheduling noise secondary.
+        # Re-check this number after any large sim speedup — a benchmark that
+        # has outrun its own cycle count reports startup, not the simulator.
         "sim_tb": "dino_prog_tb.prp",
-        "sim_cycles": 500000,
+        "sim_cycles": 1000000,
         "sim_tb_unit": "PipelinedDualIssueCPU",
         "sim_tb_v": "",
         "sim_marker": "dino program:",
@@ -166,7 +166,7 @@ CORES = {
         # added), so anything shorter measures process startup. Startup is NOT
         # negligible at these speeds — ~19 ms for the Verilated model and
         # ~17 ms for `lhd sim`'s drv.bin on this box, i.e. ~12% of the matched
-        # 500k run — so a single-count cycles/s under-reports both. A
+        # 1M run — so a single-count cycles/s still under-reports both. A
         # two-point fit (t(N) = startup + N/rate over N = 100k and 2M, best of
         # 5) puts the honest numbers at lhd-pyrope 3.30M, lhd-verilog 3.40M,
         # verilator 4.32M cycles/s: `lhd sim` within 1.3x of verilator.
@@ -223,11 +223,11 @@ CORES = {
         # same design and the same stimulus. The tensor-RF and vpu_top drivers
         # below are kept as secondary correctness/debug runs.
         "sim_tb": "minion_prog_tb.prp",
-        # 20k: the driver's own default, and its instruction stream loops
+        # 100k: the driver's own default, and its instruction stream loops
         # forever so the workload stays ACTIVE for the whole count (it never
-        # falls into an idle spin the way a completed program would). Measures
-        # ~0.9 s of lhd sim, comfortably above best_run's noise floor.
-        "sim_cycles": 20000,
+        # falls into an idle spin the way a completed program would). This
+        # keeps the measured interval comfortably above the noise floor.
+        "sim_cycles": 100000,
         # minion_top, the whole core. This USED to be impossible — the comment
         # here recorded that `lhd sim` refused the whole-core library over
         # `vpu_ctrl` (a false combinational loop) and `intpipe_csr_file` (a

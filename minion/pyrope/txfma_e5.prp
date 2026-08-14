@@ -1,6 +1,5 @@
 const txfma_adder_p3 = import("txfma_adder_p3.txfma_adder_p3")
 const txfma_csa_p2 = import("txfma_csa_p2.txfma_csa_p2")
-
 const vpu_defs_pkg = import("vpu_defs_pkg")
 
 pub mod txfma_e5::[timecheck=false](cmd_f5a_h:vpu_defs_pkg.VPU_FCMD_SZ_T, rm_f5a_h:vpu_defs_pkg.FP_RM_BITS_T, op_dtype_f5a_h:vpu_defs_pkg.VPU_DTYPE_SZ_T, sigs_f5a_h:vpu_defs_pkg.TXFMA_SIGS_SZ_T, exp_res_in_f5a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T, ea_hi_f5a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T, ec_f5a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T, s_res_f5a_h:u1, comp_op_f5a_h:u1, comp_op_true_f5a_h:u1, nshc_f5a_h:u1, int_minmax_mux_sel_a_f5a_h:u1, int_minmax_mux_sel_c_f5a_h:u1, e_force_to_zero_f5a_h:u1, ediff1_zap_f5a_h:u1, e_sticky1_f5a_h:u1, e_sticky2_f5a_h:u1, elxd_f5a_h:vpu_defs_pkg.TXFMA_LXD_PS_SZ_T, etrz50_f5a_h:vpu_defs_pkg.TXFMA_WSPS_ETRZ_SZ_T, use_elxd_f5a_h:u1, elxd_add_in2_mux_sel_f5a_h:u1, fb_hi_zero_f5a_h:u1, eb_hi_lsb_f5a_h:u1) -> (stky2g_f5a_h:u1@[], rmode_f5a_h:u1@[], exp_res_f5a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T@[]) {
@@ -8,9 +7,6 @@ pub mod txfma_e5::[timecheck=false](cmd_f5a_h:vpu_defs_pkg.VPU_FCMD_SZ_T, rm_f5a
   mut e_sticky1_in1_mux_f5a_h = 0
   mut e_sticky1_in2_mux_f5a_h = 0
   e_sticky1_in1_mux_f5a_h = 0
-  exp_res_f5a_h = 0ub??????????
-  rmode_f5a_h = 0ub?
-  stky2g_f5a_h = 0ub?
   match op_dtype_f5a_h {
     == vpu_defs_pkg.VPU_DTYPE_F32 {
       if (((sigs_f5a_h >> vpu_defs_pkg.TXFMA_CVT) & 1) | ((sigs_f5a_h >> vpu_defs_pkg.TXFMA_NORM_F32) & 1)) != 0 {
@@ -30,21 +26,28 @@ pub mod txfma_e5::[timecheck=false](cmd_f5a_h:vpu_defs_pkg.VPU_FCMD_SZ_T, rm_f5a
   }
   e_sticky1_in2_mux_f5a_h = 0
   if use_elxd_f5a_h != 0 {
-    const t17 = (elxd_f5a_h >> 6) & 1
-    e_sticky1_in2_mux_f5a_h = elxd_f5a_h | ((t17 | (t17 << 1) | (t17 << 2)) << 7)
+    const t18 = (((elxd_f5a_h >> 6) & 1) & 1)
+    const t23 = (((t18 | (t18 << 1) | (t18 << 2)) & 7) << 7) | (elxd_f5a_h & 127)
+    e_sticky1_in2_mux_f5a_h = t23
   }
-  mut exp_sticky1_csa = txfma_csa_p2::[name=exp_sticky1_csa](a_i = e_sticky1_in1_mux_f5a_h, b_i = e_sticky1_in2_mux_f5a_h, cin_i = etrz50_f5a_h)
+  const t24 = ((0 & 15) << 6) | (etrz50_f5a_h & 63)
+  mut exp_sticky1_csa = txfma_csa_p2::[name=exp_sticky1_csa](a_i = e_sticky1_in1_mux_f5a_h, b_i = e_sticky1_in2_mux_f5a_h, cin_i = t24)
   mut sticky1_cin2_f5a_h = if use_elxd_f5a_h != 0 { 1 } else { 0 }
-  mut exp_sticky1_adder = txfma_adder_p3::[name=exp_sticky1_adder](a_i = exp_sticky1_csa.sum_o, b_i = exp_sticky1_csa.cout_o#[0..=8] << 1, cin_i = sticky1_cin2_f5a_h)
-  mut _b2i_2 = if exp_res_in_f5a_h#[0..=6] == 0 { 1 } else { 0 }
-  mut _mux_3:u10 = if cmd_f5a_h == vpu_defs_pkg.VPU_TRANS_LOG_MUL { (0x85 - (7 & (_b2i_2 | (_b2i_2 << 1) | (_b2i_2 << 2) | (_b2i_2 << 3) | (_b2i_2 << 4) | (_b2i_2 << 5) | (_b2i_2 << 6) | (_b2i_2 << 7) | (_b2i_2 << 8) | (_b2i_2 << 9))))#[0..=9]#[0..=9] } else { exp_res_in_f5a_h#[0..=9] }
-  mut _mux_4:u10 = if cmd_f5a_h == vpu_defs_pkg.VPU_TRANS_RSQRT_FMA2 { (~(exp_res_in_f5a_h#[1..=6] | (((~((exp_res_in_f5a_h >> 7) & 1)) & 1) << 6) | (((exp_res_in_f5a_h >> 7) & 1) << 7)))#[0..=9]#[0..=9] } else { _mux_3#[0..=9] }
+  const t29 = ((exp_sticky1_csa.cout_o#[0..=8] & 511) << 1) | (0 & 1)
+  mut exp_sticky1_adder = txfma_adder_p3::[name=exp_sticky1_adder](a_i = exp_sticky1_csa.sum_o, b_i = t29, cin_i = sticky1_cin2_f5a_h)
+  const t48 = ((0 & 3) << 8) | ((((exp_res_in_f5a_h >> 7) & 1) & 1) << 7) | ((((~((exp_res_in_f5a_h >> 7) & 1)) & 1) & 1) << 6) | (exp_res_in_f5a_h#[1..=6] & 63)
+  const t55 = (unsigned(exp_res_in_f5a_h#[0..=6] == 0) & 1)
+  mut _mux_3:u10 = if cmd_f5a_h == vpu_defs_pkg.VPU_TRANS_LOG_MUL { (0x85 - (7 & (t55 | (t55 << 1) | (t55 << 2) | (t55 << 3) | (t55 << 4) | (t55 << 5) | (t55 << 6) | (t55 << 7) | (t55 << 8) | (t55 << 9))))#[0..=9]#[0..=9] } else { exp_res_in_f5a_h#[0..=9] }
+  mut _mux_4:u10 = if cmd_f5a_h == vpu_defs_pkg.VPU_TRANS_RSQRT_FMA2 { (~t48)#[0..=9]#[0..=9] } else { _mux_3#[0..=9] }
   const elxd_add_in1_mux_f5a_h__w1 = _mux_4
-  mut _b2i_5 = if (fb_hi_zero_f5a_h == 0) or (eb_hi_lsb_f5a_h == 0) { 1 } else { 0 }
-  const t135 = (elxd_f5a_h >> 6) & 1
-  mut _mux_6:u10 = if cmd_f5a_h == vpu_defs_pkg.VPU_TRANS_EXP_FRAC { (~ec_f5a_h)#[0..=9]#[0..=9] } else { (~(elxd_f5a_h | ((t135 | (t135 << 1) | (t135 << 2)) << 7)))#[0..=9]#[0..=9] }
-  mut _mux_7:u10 = if cmd_f5a_h == vpu_defs_pkg.VPU_TRANS_RSQRT_FMA2 { (_b2i_5 | (_b2i_5 << 1) | (_b2i_5 << 2) | (_b2i_5 << 3) | (_b2i_5 << 4) | (_b2i_5 << 5) | (_b2i_5 << 6) | (_b2i_5 << 7) | (_b2i_5 << 8) | (_b2i_5 << 9))#[0..=9] } else { _mux_6#[0..=9] }
-  mut _mux_8:u10 = if cmd_f5a_h == vpu_defs_pkg.VPU_TRANS_RCP_FMA2 { (fb_hi_zero_f5a_h | 0)#[0..=9] } else { _mux_7#[0..=9] }
+  const t103 = ((0 & 255) << 1) | (fb_hi_zero_f5a_h & 1)
+  const t109 = (unsigned((fb_hi_zero_f5a_h == 0) or (eb_hi_lsb_f5a_h == 0)) & 1)
+  const t130 = ((0 & 3) << 8) | (ec_f5a_h & 255)
+  const t136 = (((elxd_f5a_h >> 6) & 1) & 1)
+  const t141 = (((t136 | (t136 << 1) | (t136 << 2)) & 7) << 7) | (elxd_f5a_h & 127)
+  mut _mux_6:u10 = if cmd_f5a_h == vpu_defs_pkg.VPU_TRANS_EXP_FRAC { (~t130)#[0..=9]#[0..=9] } else { (~t141)#[0..=9]#[0..=9] }
+  mut _mux_7:u10 = if cmd_f5a_h == vpu_defs_pkg.VPU_TRANS_RSQRT_FMA2 { (t109 | (t109 << 1) | (t109 << 2) | (t109 << 3) | (t109 << 4) | (t109 << 5) | (t109 << 6) | (t109 << 7) | (t109 << 8) | (t109 << 9))#[0..=9] } else { _mux_6#[0..=9] }
+  mut _mux_8:u10 = if cmd_f5a_h == vpu_defs_pkg.VPU_TRANS_RCP_FMA2 { t103#[0..=9] } else { _mux_7#[0..=9] }
   mut _mux_9:u10 = if (elxd_add_in2_mux_sel_f5a_h | ((sigs_f5a_h >> vpu_defs_pkg.TXFMA_F32_FX) & 1) | ((sigs_f5a_h >> vpu_defs_pkg.TXFMA_FX_F32) & 1)) != 0 { 0 } else { _mux_8#[0..=9] }
   const elxd_add_in2_mux_f5a_h__w1 = _mux_9
   mut exp_lxd_adder = txfma_adder_p3::[name=exp_lxd_adder](a_i = elxd_add_in1_mux_f5a_h__w1, b_i = elxd_add_in2_mux_f5a_h__w1, cin_i = (~(((sigs_f5a_h >> vpu_defs_pkg.TXFMA_TRANS2) & 1) | unsigned(cmd_f5a_h == vpu_defs_pkg.VPU_TRANS_EXP_FRAC) | ((sigs_f5a_h >> vpu_defs_pkg.TXFMA_F32_FX) & 1))) & 1)
@@ -57,12 +60,15 @@ pub mod txfma_e5::[timecheck=false](cmd_f5a_h:vpu_defs_pkg.VPU_FCMD_SZ_T, rm_f5a
       elxd_res_f5a_h = exp_lxd_m1_adder
     }
     else {
+      elxd_res_f5a_h = 0ub??????????
     }
   }
+  const t191 = ((0 & 3) << 8) | (ea_hi_f5a_h & 255)
+  const t194 = ((0 & 3) << 8) | (ec_f5a_h & 255)
   mut _mux_14:u10 = if (((sigs_f5a_h >> vpu_defs_pkg.TXFMA_FX_F32) & 1) | ((sigs_f5a_h >> vpu_defs_pkg.TXFMA_F32_FX) & 1) | unsigned(cmd_f5a_h == vpu_defs_pkg.VPU_TRANS_EXP_FMA2)) != 0 { exp_res_in_f5a_h#[0..=9] } else { elxd_res_f5a_h#[0..=9] }
   mut _mux_15:u10 = if (comp_op_f5a_h & comp_op_true_f5a_h) != 0 { 0x3ff } else { _mux_14#[0..=9] }
-  mut _mux_16:u10 = if ((int_minmax_mux_sel_c_f5a_h & (~((sigs_f5a_h >> vpu_defs_pkg.TXFMA_F32_FX) & 1)) & 1) | ediff1_zap_f5a_h) != 0 { ec_f5a_h#[0..=9] } else { _mux_15#[0..=9] }
-  mut _mux_17:u10 = if (int_minmax_mux_sel_a_f5a_h & (~((sigs_f5a_h >> vpu_defs_pkg.TXFMA_FX_F32) & 1)) & 1) != 0 { ea_hi_f5a_h#[0..=9] } else { _mux_16#[0..=9] }
+  mut _mux_16:u10 = if ((int_minmax_mux_sel_c_f5a_h & (~((sigs_f5a_h >> vpu_defs_pkg.TXFMA_F32_FX) & 1)) & 1) | ediff1_zap_f5a_h) != 0 { t194#[0..=9] } else { _mux_15#[0..=9] }
+  mut _mux_17:u10 = if (int_minmax_mux_sel_a_f5a_h & (~((sigs_f5a_h >> vpu_defs_pkg.TXFMA_FX_F32) & 1)) & 1) != 0 { t191#[0..=9] } else { _mux_16#[0..=9] }
   mut _mux_18:u10 = if unsigned(((e_force_to_zero_f5a_h & unsigned(((sigs_f5a_h >> vpu_defs_pkg.TXFMA_TRANS2) & 1) == 0)) != 0) or ((comp_op_f5a_h & (~comp_op_true_f5a_h) & 1) != 0)) != 0 { 0 } else { _mux_17#[0..=9] }
   exp_res_f5a_h = _mux_18
   rmode_f5a_h = unsigned(rm_f5a_h == vpu_defs_pkg.RNE) | unsigned(rm_f5a_h == vpu_defs_pkg.RMM) | (unsigned(rm_f5a_h == vpu_defs_pkg.RUP) & (~s_res_f5a_h) & 1) | (unsigned(rm_f5a_h == vpu_defs_pkg.RDN) & s_res_f5a_h)

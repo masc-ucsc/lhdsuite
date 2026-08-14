@@ -55,7 +55,11 @@ case "${MODE:?}" in
 pass)
   run_timed compile_impl compile_impl impl1
   run_timed lec_pass lec_run impl1
-  if grep -qia "refut" step_lec_pass.log; then
+  # A collapsed-box attempt may refute speculatively and then be flat-confirmed
+  # PROVEN. Only the final whole-design verdict is authoritative here; matching
+  # any occurrence of "refut" turns that successful fallback into a false test
+  # failure (Minion's dcache metadata array exercises this path).
+  if grep -qaE "^lec: .* REFUTED" step_lec_pass.log; then
     step_failed lec_pass "identical designs reported a refutation"
     exit 1
   fi

@@ -104,8 +104,8 @@ Every row below exists once per core — write `//bench:dino_compile_verilog`,
 | `synth` | each of the core's colorings (`color_algs`) + `pass abc` on the same design (sky130), timing + QoR (regions/gates/area/max_delay) for each. All run hier=true; the difference is the partitions: flat = one color across the hierarchy (one fused region, best cross-module optimization), synth = per-(module,color) regions. dino runs both; minion runs only `synth` (flat does not fit in memory at 534k nodes) |
 | `synth_incremental` | `color synth` + abc over 3 passes; incremental reuse needs the distinct colors/partitions that `color synth` creates (and `color flat` intentionally does not): asserts cache hits on the comment-only pass and a single-region re-synth after a one-line edit |
 | `synth_lec_flat` / `synth_lec_synth` | netlist integrity: synthesize twice (2nd run after a comment touch — under `color synth` that netlist is largely cache-CLONED), then `lhd lec --impl lg:netlist --ref lg:design --lib lg:models` proves it against the compiled design (`pass liberty gensim` provides the sky130 cell models; strict, so UNKNOWN fails). Only generated for colorings the core actually runs, so minion has no `synth_lec_flat` |
-| `sim_verilog` / `sim_pyrope` | asserted `lhd sim` benchmark: dino runs the real `dino_prog_tb` whole-CPU program for 500k cycles (raised from 20k once livehd's sim cgen stopped routing constant bit slices through `Slop::get_mask_op` and dino went ~9k -> ~383k cycles/s, which put 20k back inside this box's noise floor; 500k is ~150 ms of simulation against a ~17 ms process startup); minion, which has no working program driver yet, runs its VPU tensor-A register file for 100k. **Read minion's `sim cyc/s` with care**: measured 2026-08-09 that design simulates at ~165M cycles/s, so 100k cycles is ~0.6 ms of simulation inside a ~16 ms `sim_exec_ms` — the column is ~96% `execve`, and no count the testbench's `cycles:u20` parameter can name fixes it (even the 1,048,575 ceiling is only ~6 ms). Take minion throughput from a two-point fit, or widen the parameter and raise the count. The Verilog side compiles straight to an lgraph library (`--emit-dir lg:`) and sims THAT — `lhd sim` takes `lg:DIR` positionally, so the old detour through `--emit-dir pyrope:` measured the Pyrope front end a second time and put an emitter round trip between the Verilog and the thing being simulated. The library is rooted at the module the driver drives (`sim_tb_unit`), not at the core top: `lhd sim` cgen's *every* graph in the library it is handed, so the whole-core library makes it refuse over modules the testbench never instantiates. **The host C++ compile is reported apart from the simulation**: `lhd sim --setup-only` only writes the driver sources, and `--run-only` rebuilds `drv.bin` on every invocation, so `sim_run_ms` is mostly clang. The bench re-runs that binary itself (best of 3, since a loaded box can stall a short measurement) for `sim_exec_ms`, leaving `sim_cc_ms` as the remainder; `//bench:show` prints both and gives cycles/s with and without the compile. **No VCD in the timed path** (`--set sim.vcd=false`): the tracer used to cost 40-75% of `sim_exec_ms` on dino and vary 2.5x run to run on one unchanged binary, so the number was a tracer stopwatch as much as a simulation one — the writer is still covered, by the untimed whole-top drivers below, which run `--set sim.vcd=true`. The bench pins `--set sim.ninja=false` so `sim_cc_ms` always measures lhd's built-in parallel compile: `lhd sim` otherwise prefers a generated `build.ninja` when ninja is on PATH, which is the right default for a developer's warm edit-sim loop but would make this number depend on the machine (and buys the bench nothing — every target starts from a fresh workdir, so nothing is ever incremental). The two modes are no longer the same C++ (one graph comes from slang, the other from the checked-in Pyrope), so a cycles/s gap between them is now a meaningful comparison of the two front ends rather than a codegen regression. Additional whole-top correctness drivers are reported as `METRIC sim_cpu_top_ok` / `sim_cpu_prog_ok`; a core setting `sim_top_assert` (dino) also GATES on them, one that does not (minion, still blocked by a derived clock the sim cgen cannot fold) reports the metric only |
-| `sim_verilator` | the same benchmark under **Verilator**, for cores carrying a C++ twin of their `sim_tb` (today: dino, `dino/sim/dino_prog_tb_verilator.cpp`). Same RTL (`-F filelist.f -DSYNTHESIS`), same three-way time split under the same metric names — `sim_setup_ms` is `verilator --cc --exe`, `sim_cc_ms` is `make -j`, `sim_exec_ms` is the built binary re-run — and neither side traces, so the columns are comparable. Two runs: one at `sim_cycles` so the matched-count columns line up with the rows above, and a longer one (`verilator_cycles`) for the throughput number, because at verilator speeds 20k cycles is over in milliseconds and would mostly measure process startup. It is also a **cross-simulator oracle**: the C++ driver mirrors the Pyrope one's stimulus schedule exactly and is held to the same `sim_marker`/`sim_expect` gates, so the two simulators disagreeing about the design fails a target rather than quietly reporting two numbers (they agree on `done at cycle 506` today). Verilator is optional host state: a machine without it SKIPS, it does not fail |
+| `sim_verilog` / `sim_pyrope` | asserted `lhd sim` benchmark: dino runs `dino_prog_tb` on the whole CPU for 1M cycles; minion runs `minion_prog_tb` on the whole core for 100k cycles. The Verilog side compiles straight to an `lg:` library rooted at the module each driver drives. Host C++ compilation and simulation are timed separately, and the timed path disables VCD. Additional whole-top correctness drivers are reported separately; dino gates on them, while minion's remain informational because one is still blocked by a derived clock that sim cgen cannot fold |
+| `sim_verilator` | the same benchmark under **Verilator**, for cores carrying a C++ twin of their `sim_tb` (currently dino and minion). Same RTL, same timing split, and the same marker/data gates make it both a throughput comparison and a cross-simulator oracle. Verilator is optional host state: a machine without it SKIPS rather than failing |
 
 | `lec` | Pyrope impl ≡ Verilog ref (both pre-compiled to `lg:`; the Verilog side needs its slang options — `-F`/`-DSYNTHESIS` plus the core’s `v_flags`), PROVEN |
 | `lec_bug` | the core's `tests/bug1` variant must be REFUTED (dino: the ALU's 32-bit add flipped to subtract; minion: the same flip in `txfma_adder`; cva6: way 0's hit ignores the line's valid bit). **`cva6_lec_bug` FAILS** — see [Known-failing scenarios](#known-failing-scenarios) |
@@ -185,7 +185,7 @@ takes the arguments `lhd sim` would have forwarded:
 
 A test parameter is bound by name — `lhd sim --arg cycles=200000` reaches the
 binary as `--cycles 200000`, so `--list-tests` is the authoritative list of
-what a driver accepts (`dino_prog_tb.prp` exposes `cycles`, default 2000).
+what a driver accepts (`dino_prog_tb.prp` exposes `cycles`, default 1000000).
 Adding `--set sim.vcd=true` to the `--setup-only` line makes the run dump a VCD.
 
 `lhd sim` without `--setup-only` does this compile itself and then simulates;
@@ -243,7 +243,7 @@ Verilator, split into the same three timed steps. By hand:
 verilator --cc --exe --build -j 0 --top-module PipelinedDualIssueCPU \
   -Wno-fatal -DSYNTHESIS -F dino/verilog/filelist.f \
   dino/sim/dino_prog_tb_verilator.cpp
-./obj_dir/VPipelinedDualIssueCPU --cycles 20000
+./obj_dir/VPipelinedDualIssueCPU --cycles 1000000
 ```
 
 `dino/sim/dino_prog_tb_verilator.cpp` is a line-by-line twin of
@@ -253,6 +253,9 @@ drive / read / `step` / read order, which is why both print `done at cycle
 506`). Keep them in lockstep: an edit to the program or the drive order belongs
 in both, and the bench gates both on the same strings so a divergence fails a
 target.
+
+Minion follows the same pairing with `minion_prog_tb_verilator.cpp` and
+`minion_prog_tb.prp`, driving `minion_top` for the whole-core program workload.
 
 ## Known-failing scenarios
 
@@ -326,12 +329,12 @@ each scenario targets:
 | `top` — whole-design top, in both languages | `PipelinedDualIssueCPU` | `minion_top` | `tag_cmp_wrap` |
 | `unit` — module carrying the verify sidecar + `bug1`/`comment1` (must be in the top's cone) | `ALU` | `txfma_adder` | `tag_cmp_wrap` |
 | `v_flags` — extra slang options for this core's Verilog | *(none)* | `--relax-enum-conversions --allow-use-before-declare` | `--single-unit` |
-| `sim_tb` / `sim_cycles` — asserted, timed sim benchmark | `dino_prog_tb.prp` / 500,000 | `tensora_rf_tb.prp` / 100,000 | `tag_cmp_tb.prp` / 200 |
-| `sim_tb_unit` — the module `sim_tb` drives, i.e. what it spells in `import("lg:NAME")`; the design supplied before it is rooted HERE, not at `top` | `PipelinedDualIssueCPU` | `vpu_tensora_rf` | `tag_cmp_wrap` |
+| `sim_tb` / `sim_cycles` — asserted, timed sim benchmark | `dino_prog_tb.prp` / 1,000,000 | `minion_prog_tb.prp` / 100,000 | `tag_cmp_tb.prp` / 200 |
+| `sim_tb_unit` — the module `sim_tb` drives, i.e. what it spells in `import("lg:NAME")`; the design supplied before it is rooted HERE, not at `top` | `PipelinedDualIssueCPU` | `minion_top` | `tag_cmp_wrap` |
 | `sim_tb_v` — MODE=verilog override for `sim_tb` (`""` = one driver for both) | *(none)* | *(none)* | *(none)* |
 | `sim_top_tb` / `sim_top_tb_unit` / `sim_top_cycles` — separate whole-top correctness run | `dino_tb.prp` / `PipelinedDualIssueCPU` / 1,000 | `vpu_top_tb.prp` / `vpu_top` / 64 | *(none)* |
-| `sim_prog_tb` / `sim_prog_tb_unit` / `sim_prog_cycles` — optional additional program correctness run | *(none; already benchmarked)* | *(none)* | *(none)* |
-| `verilator_tb` / `verilator_flags` / `verilator_cycles` — the Verilator comparison (`""` = no `sim_verilator` target for this core) | `dino_prog_tb_verilator.cpp` / *(none)* / 2,000,000 | *(none)* | *(none)* |
+| `sim_prog_tb` / `sim_prog_tb_unit` / `sim_prog_cycles` — optional additional correctness run | *(none; program already benchmarked)* | `tensora_rf_tb.prp` / `vpu_tensora_rf` / 100,000 | *(none)* |
+| `verilator_tb` / `verilator_flags` / `verilator_cycles` — the Verilator comparison (`""` = no `sim_verilator` target for this core) | `dino_prog_tb_verilator.cpp` / *(none)* / 2,000,000 | `minion_prog_tb_verilator.cpp` / *(none)* / 200,000 | *(none)* |
 
 **Why a core may need two sim drivers.** The two trees are the same design but
 need not be the same Pyrope. A `struct packed` port re-emits from Verilog as a

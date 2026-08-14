@@ -19,7 +19,7 @@ CORES = ("dino", "minion")
 # ...and with which of those entries carry a `verilator_tb` (only those get a
 # <core>_sim_verilator target, so only those may be looked up — asking for a
 # target that is not generated would report it as "not run yet" forever).
-VERILATOR_CORES = ("dino",)
+VERILATOR_CORES = ("dino", "minion")
 
 
 def load(root: Path, target: str):

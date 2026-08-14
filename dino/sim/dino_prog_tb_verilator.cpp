@@ -38,7 +38,7 @@
 // Usage (see bench/sim_verilator.sh for the benched form):
 //   verilator --cc --exe --build --top-module PipelinedDualIssueCPU \
 //       -DSYNTHESIS -F dino/verilog/filelist.f dino/sim/dino_prog_tb_verilator.cpp
-//   ./obj_dir/VPipelinedDualIssueCPU --cycles 20000
+//   ./obj_dir/VPipelinedDualIssueCPU --cycles 1000000
 //
 // `--cycles N` is spelled the way `lhd sim` spells a test parameter on the
 // driver it builds (`--arg cycles=N` reaches drv.bin as `--cycles N`), so the
@@ -87,7 +87,7 @@ static void check(bool cond, const char* msg) {
 }
 
 int main(int argc, char** argv) {
-  uint64_t cycles = 20000;
+  uint64_t cycles = 1000000;
 
   // Argument shape of the driver `lhd sim` generates, so bench/sim_verilator.sh
   // can hand both binaries the same flags. Unknown flags are an error rather
