@@ -2,9 +2,9 @@ const minion_pkg = import("minion_pkg")
 
 pub mod intpipe_csr_replay::[timecheck=false](clk_i:u1, rst_ni:u1, wb_wdata:minion_pkg.XregSize_T, wb_thread_id:u1, io_interrupt:minion_pkg.NrThreads_T, io_redirect:minion_pkg.NrThreads_T, reg_co_evict_va_en:u1, reg_co_flush_va_en:u1, reg_co_lock_va_en_qual:u1, reg_co_unlock_va_en_qual:u1, reg_co_lock_sw_en:u1, reg_co_unlock_sw_en:u1, reg_co_prefetch_va_en:u1, reg_co_evict_sw_en:u1, reg_co_flush_sw_en:u1, reg_tensor_load_l2scp_en:u1, reg_flb_en:u1, reg_tensor_load_en:u1, reg_tensor_fma_en:u1, reg_tensor_quant_en:u1, reg_tensor_reduce_en:u1, reg_tensor_store_en:u1, reg_tensor_conv_ctrl_en:minion_pkg.NrThreads_T, reg_tensor_conv_size_en:minion_pkg.NrThreads_T, reg_fcc_en:minion_pkg.NrThreads_T, reg_tensor_wait_en:minion_pkg.NrThreads_T, reg_tex_send_en:u1, reg_tensor_mask_read_invalid:u1, pmu_read_en_wb:u1, pmu_read_mem_ready:minion_pkg.NrThreads_T, dcache_ctrl_resp:(cache_op_ready:u1, cache_op_busy_changed:u2, cache_op_complete_l1:u4, cache_op_complete_l2:u4, tl_ready_0:u1, tl_ready_1:u1, ts_ready:u1, tl_complete_0:u2, reduce_ready:u1, tex_send_ready:u1, gsc_progress_save:u2, gsc_progress:u3), fl_barrier_ready:u1, tensor_fma_replay_condition:u1, tensor_quant_replay_condition:u1, vpu_treduce_enabled:u1, tenb_tl_pend_tfma_en:u1, tenb_restart_process:u1, tload_is_for_tenb:u1, conv_can_accept_new_write:minion_pkg.NrThreads_T, fcc_ready:u4, wb_fcc_addr:u2, msg_port_pget_block:u1, msg_port_stall:u8, reg_tensor_mask_ready:minion_pkg.NrThreads_T) -> (io_replay:u1@[], io_replay_stall:minion_pkg.NrThreads_T@[]) {
   reg csr_replay_stall:u48:[clock_pin=ref clk_i, clock_pin=ref clk_i, clock_pin=ref clk_i, clock_pin=ref clk_i, clock_pin=ref clk_i, clock_pin=ref clk_i]
-  mut wb_csr_replay = 0
-  mut clear_stall = 0
-  io_replay_stall = 0ub??
+  mut wb_csr_replay:u24 = 0
+  mut clear_stall:u48 = 0
+  io_replay_stall = 0sb?
   wb_csr_replay = 0
   if (reg_co_evict_va_en != 0) and (dcache_ctrl_resp.cache_op_ready == 0) {
     wb_csr_replay = 1
@@ -80,7 +80,7 @@ pub mod intpipe_csr_replay::[timecheck=false](clk_i:u1, rst_ni:u1, wb_wdata:mini
     wb_csr_replay#[14] = 1
   }
   mut wb_csr_replay__w2 = wb_csr_replay
-  wb_csr_replay__w2#[9] = msg_port_pget_block
+  wb_csr_replay__w2#[9] = msg_port_pget_block & 1
   const wb_replay_tensor_wait_cond__w1 = wb_wdata#[0..=3]
   wb_csr_replay = wb_csr_replay__w2
   if true and (reg_tensor_wait_en != 0) and ((dcache_ctrl_resp.tl_complete_0 & 1) == 0) and (wb_thread_id == 0) and (wb_replay_tensor_wait_cond__w1 == 0) {
@@ -191,7 +191,7 @@ pub mod intpipe_csr_replay::[timecheck=false](clk_i:u1, rst_ni:u1, wb_wdata:mini
     clear_stall#[23] = 1
   }
   if ((io_interrupt & 1) != 0) or ((io_redirect & 1) != 0) {
-    clear_stall#[0..=23] = 16777215
+    clear_stall#[0..=23] = 0xffffff
   }
   if ((dcache_ctrl_resp.cache_op_busy_changed >> 1) & 1) != 0 {
     clear_stall#[24] = 1
@@ -266,15 +266,15 @@ pub mod intpipe_csr_replay::[timecheck=false](clk_i:u1, rst_ni:u1, wb_wdata:mini
     clear_stall#[47] = 1
   }
   if (((io_interrupt >> 1) & 1) != 0) or (((io_redirect >> 1) & 1) != 0) {
-    clear_stall#[24..=47] = 16777215
+    clear_stall#[24..=47] = 0xffffff
   }
   const csr_replay_stall_next__w1 = csr_replay_stall & (~clear_stall)#[0..=47]
-  const t499 = wb_thread_id * 24
-  const csr_replay_stall_next__w2 = ((csr_replay_stall_next__w1 & (~(0xffffff << t499))) | ((((csr_replay_stall_next__w1 << 24) >> ((wb_thread_id * 24) + 24))#[0..=23] | wb_csr_replay) << t499))#[0..=47]
+  const t502 = wb_thread_id * 24
+  const csr_replay_stall_next__w2 = ((csr_replay_stall_next__w1 & (~(0xffffff << t502))) | ((((csr_replay_stall_next__w1 << 24) >> ((wb_thread_id * 24) + 24))#[0..=23] | wb_csr_replay) << t502))#[0..=47]
   mut io_replay_stall__w1 = io_replay_stall
-  io_replay_stall__w1#[0] = unsigned(csr_replay_stall#[0..=23] != 0)
+  io_replay_stall__w1#[0] = unsigned(csr_replay_stall#[0..=23] != 0) & 1
   mut io_replay_stall__w2 = io_replay_stall__w1
-  io_replay_stall__w2#[1] = unsigned(csr_replay_stall#[24..=47] != 0)
+  io_replay_stall__w2#[1] = unsigned(csr_replay_stall#[24..=47] != 0) & 1
   if rst_ni == 0 {
     csr_replay_stall#[0..=7] = 0
   } elif unsigned((csr_replay_stall#[0..=23]#[0..=7] ^ csr_replay_stall_next__w2#[0..=23]#[0..=7]) != 0) != 0 {

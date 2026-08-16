@@ -13,9 +13,9 @@ pub mod minion_top::[timecheck=false](clk_i:u1, rst_c_ni:u1, rst_d_ni:u1, rst_w_
   wire f3_vpu_core_ctrl:(fma:u1, tointm:u1) = nil
   wire wb_vpu_core_ctrl:(fma:u1, toint_data:u64, mova_mx:u1, fcsr_flags_valid:u1, fcsr_flags:u6, thread_id:u1, tointm:u1) = nil
   wire intpipe_debug_monitor_out:(id_thread_id:u1, id_pc:u49, id_valid:u1, id_valid_qual:u1, id_inst_replay:u1, id_take_pc:u1, id_csr_interrupt:u1, excl_mode_stall:u1, ex_valid_qual:u1, tag_valid_qual:u1, mem_valid_qual:u1, wb_valid:u1, gsc_reg_gsc_cnt:u3, tag_take_pc:u1, ipi_with_pc:u2, wb_take_pc:u1, id_xcpt:u1, wb_xcpt:u1, id_stall_fp2int:u1, ex_gsc_busy:u1, csr_fe_stall:u1, id_ctrl_stall_csr:u1, id_ctrl_stall_dcache:u1, id_do_fence:u1, id_ctrl_stall_trans:u1, id_ctrl_stall_div:u1, id_int_sboard_hazard:u1, id_ctrl_stall_hazard_vpu:u1, id_ctrl_stall_hazard:u1) = nil
-  mut gen_debug_monitor_data_i = 0
-  mut gen_debug_monitor_dcache_dbg_data_group = 0
-  mut gen_debug_monitor_sel_i = 0
+  mut gen_debug_monitor_data_i:u512 = 0
+  mut gen_debug_monitor_dcache_dbg_data_group:u128 = 0
+  mut gen_debug_monitor_sel_i:u2 = 0
   reg minion_dbg_signals_o_q:u395:[clock_pin=ref clk_i]
   reg enabled_reg_q:u2:[init=0, reset_pin=ref rst_c_ni, async=true, negreset=true, clock_pin=ref clk_i]
   reg debug_in_reg_q:u8:[init=0, reset_pin=ref rst_c_ni, async=true, negreset=true, clock_pin=ref clk_i]
@@ -102,19 +102,18 @@ pub mod minion_top::[timecheck=false](clk_i:u1, rst_c_ni:u1, rst_d_ni:u1, rst_w_
   wire sm_match_debug_signals_dc:u64
   wire sm_filter_debug_signals_dc:u200
   wire sm_data_debug_signals_dc:u512
-  mut mem_ctrl_override = 0
+  mut mem_ctrl_override:u2 = 0
   minion_dbg_signals_o.data_signals = minion_dbg_signals_o_q#[1..=128]
   minion_dbg_signals_o.data_valid = minion_dbg_signals_o_q & 1
   minion_dbg_signals_o.filter_signals = minion_dbg_signals_o_q#[195..=394]
-  minion_dbg_signals_o.filter_valid = (minion_dbg_signals_o_q >> 194) & 1
+  minion_dbg_signals_o.filter_valid = (minion_dbg_signals_o_q >> 0xc2) & 1
   minion_dbg_signals_o.match_signals = minion_dbg_signals_o_q#[130..=193]
-  minion_dbg_signals_o.match_valid = (minion_dbg_signals_o_q >> 129) & 1
+  minion_dbg_signals_o.match_valid = (minion_dbg_signals_o_q >> 0x81) & 1
   mut u_rst_sync_c = prim_rst_sync::[name=u_rst_sync_c](clk_i = clk_i, rst_ni = rst_c_ni, dft_i.scanmode = dft_i.scanmode, dft_i.scan_reset_n = dft_i.scan_reset_n, dft_i.sram_clk_override = dft_i.sram_clk_override, dft_i.ram_rei = dft_i.ram_rei, dft_i.ram_wei = dft_i.ram_wei)
   const rst_c_sync_ni__w1 = u_rst_sync_c
   mut u_rst_sync_d = prim_rst_sync::[name=u_rst_sync_d](clk_i = clk_i, rst_ni = rst_d_ni, dft_i.scanmode = dft_i.scanmode, dft_i.scan_reset_n = dft_i.scan_reset_n, dft_i.sram_clk_override = dft_i.sram_clk_override, dft_i.ram_rei = dft_i.ram_rei, dft_i.ram_wei = dft_i.ram_wei)
   mut u_rst_sync_w = prim_rst_sync::[name=u_rst_sync_w](clk_i = clk_i, rst_ni = rst_w_ni, dft_i.scanmode = dft_i.scanmode, dft_i.scan_reset_n = dft_i.scan_reset_n, dft_i.sram_clk_override = dft_i.sram_clk_override, dft_i.ram_rei = dft_i.ram_rei, dft_i.ram_wei = dft_i.ram_wei)
   mut u_eco_ports = prim_eco_ports::[name=u_eco_ports](eco_i = eco_i)
-  const t169 = ((0 & 1) << 1) | (iso_enable_i & 1)
   chicken_bits_clock_gate_disable_q = (chicken_bits_i.rsv_1 << 7) | (chicken_bits_i.rsv_0 << 6) | (chicken_bits_i.min_frontend_clock_gate_disable << 5) | (chicken_bits_i.min_dcache_clock_gate_disable << 4) | (chicken_bits_i.min_vputrans_clock_gate_disable << 3) | (chicken_bits_i.min_vputima_clock_gate_disable << 2) | (chicken_bits_i.min_vpulane_clock_gate_disable << 1) | chicken_bits_i.min_intpipe_clock_gate_disable
   debug_in_reg_q = (debug_in_i.halt << 6) | (debug_in_i.resume << 4) | (debug_in_i.resethalt << 2) | debug_in_i.ackhavereset
   enabled_reg_q = enabled_i
@@ -122,25 +121,25 @@ pub mod minion_top::[timecheck=false](clk_i:u1, rst_c_ni:u1, rst_d_ni:u1, rst_w_
     `minion_dbg_signals_next.data_signals` = minion_dbg_signals_1_q#[1..=128]
     `minion_dbg_signals_next.data_valid` = minion_dbg_signals_1_q & 1
     `minion_dbg_signals_next.filter_signals` = minion_dbg_signals_1_q#[195..=394]
-    `minion_dbg_signals_next.filter_valid` = (minion_dbg_signals_1_q >> 194) & 1
+    `minion_dbg_signals_next.filter_valid` = (minion_dbg_signals_1_q >> 0xc2) & 1
     `minion_dbg_signals_next.match_signals` = minion_dbg_signals_1_q#[130..=193]
-    `minion_dbg_signals_next.match_valid` = (minion_dbg_signals_1_q >> 129) & 1
+    `minion_dbg_signals_next.match_valid` = (minion_dbg_signals_1_q >> 0x81) & 1
   } else {
     `minion_dbg_signals_next.data_signals` = minion_dbg_signals_0_q#[1..=128]
     `minion_dbg_signals_next.data_valid` = minion_dbg_signals_0_q & 1
     `minion_dbg_signals_next.filter_signals` = minion_dbg_signals_0_q#[195..=394]
-    `minion_dbg_signals_next.filter_valid` = (minion_dbg_signals_0_q >> 194) & 1
+    `minion_dbg_signals_next.filter_valid` = (minion_dbg_signals_0_q >> 0xc2) & 1
     `minion_dbg_signals_next.match_signals` = minion_dbg_signals_0_q#[130..=193]
-    `minion_dbg_signals_next.match_valid` = (minion_dbg_signals_0_q >> 129) & 1
+    `minion_dbg_signals_next.match_valid` = (minion_dbg_signals_0_q >> 0x81) & 1
   }
   mut mem_ctrl_override__w2 = 0
-  mem_ctrl_override__w2#[1] = dft_i.ram_wei
+  mem_ctrl_override__w2#[1] = dft_i.ram_wei & 1
   mut mem_ctrl_override__w3 = mem_ctrl_override__w2
-  mem_ctrl_override__w3#[0] = dft_i.ram_rei
+  mem_ctrl_override__w3#[0] = dft_i.ram_rei & 1
   mem_ctrl_override = mem_ctrl_override__w3
   if ((esr_minion_mem_override_i >> minion_pkg.ShireMinionMemOverrideSel) & 1) != 0 {
-    mem_ctrl_override#[1] = (((mem_ctrl_override >> minion_pkg.MinionMemCtrlWe) & 1) | ((esr_minion_mem_override_i >> minion_pkg.ShireMinionMemOverrideWe) & 1))
-    mem_ctrl_override#[0] = (((mem_ctrl_override >> minion_pkg.MinionMemCtrlRe) & 1) | ((esr_minion_mem_override_i >> minion_pkg.ShireMinionMemOverrideRe) & 1))
+    mem_ctrl_override#[1] = (((mem_ctrl_override >> minion_pkg.MinionMemCtrlWe) & 1) | ((esr_minion_mem_override_i >> minion_pkg.ShireMinionMemOverrideWe) & 1)) & 1
+    mem_ctrl_override#[0] = (((mem_ctrl_override >> minion_pkg.MinionMemCtrlRe) & 1) | ((esr_minion_mem_override_i >> minion_pkg.ShireMinionMemOverrideRe) & 1)) & 1
   }
   const `intpipe_dbg_match.id_csr_interrupt__w1` = intpipe_debug_monitor_out.id_csr_interrupt & 1
   const `intpipe_dbg_match.excl_mode_stall__w1` = intpipe_debug_monitor_out.excl_mode_stall & 1
@@ -164,63 +163,63 @@ pub mod minion_top::[timecheck=false](clk_i:u1, rst_c_ni:u1, rst_d_ni:u1, rst_w_
   `minion_dbg_signals_next_0.match_valid` = 0
   match minion_dbg_signals_mux_ff#[2..=6] {
     == 0 {
-      `minion_dbg_signals_next_0.data_signals` = ((vpu_dbg_data << 128) >> ((minion_dbg_signals_mux_ff#[0..=1] * 128) + 128))#[0..=127]#[0..=127]
+      `minion_dbg_signals_next_0.data_signals` = ((vpu_dbg_data << 0x80) >> ((minion_dbg_signals_mux_ff#[0..=1] * 0x80) + 0x80))#[0..=127]
       `minion_dbg_signals_next_0.data_valid` = 1
-      `minion_dbg_signals_next_0.filter_signals` = vpu_dbg_filter#[0..=199]
+      `minion_dbg_signals_next_0.filter_signals` = vpu_dbg_filter
       `minion_dbg_signals_next_0.filter_valid` = 1
-      `minion_dbg_signals_next_0.match_signals` = vpu_dbg_match#[0..=63]
+      `minion_dbg_signals_next_0.match_signals` = vpu_dbg_match
       `minion_dbg_signals_next_0.match_valid` = 1
     }
     == 1 {
-      `minion_dbg_signals_next_0.data_signals` = vpu_dbg_data#[512..=639]#[0..=127]
+      `minion_dbg_signals_next_0.data_signals` = vpu_dbg_data#[512..=639]
       `minion_dbg_signals_next_0.data_valid` = 1
-      `minion_dbg_signals_next_0.filter_signals` = vpu_dbg_filter#[0..=199]
+      `minion_dbg_signals_next_0.filter_signals` = vpu_dbg_filter
       `minion_dbg_signals_next_0.filter_valid` = 1
-      `minion_dbg_signals_next_0.match_signals` = vpu_dbg_match#[0..=63]
+      `minion_dbg_signals_next_0.match_signals` = vpu_dbg_match
       `minion_dbg_signals_next_0.match_valid` = 1
     }
     == 2 {
       gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
       gen_debug_monitor_data_i = sm_data_debug_signals_tl0
-      gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 128) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 128))#[0..=127]
-      `minion_dbg_signals_next_0.data_signals` = gen_debug_monitor_dcache_dbg_data_group#[0..=127]
+      gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 0x80) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 0x80))#[0..=127]
+      `minion_dbg_signals_next_0.data_signals` = gen_debug_monitor_dcache_dbg_data_group
       `minion_dbg_signals_next_0.data_valid` = 1
-      `minion_dbg_signals_next_0.filter_signals` = sm_filter_debug_signals_tl0#[0..=199]
+      `minion_dbg_signals_next_0.filter_signals` = sm_filter_debug_signals_tl0
       `minion_dbg_signals_next_0.filter_valid` = 1
-      `minion_dbg_signals_next_0.match_signals` = sm_match_debug_signals_tl0#[0..=63]
+      `minion_dbg_signals_next_0.match_signals` = sm_match_debug_signals_tl0
       `minion_dbg_signals_next_0.match_valid` = 1
     }
     == 3 {
       gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
       gen_debug_monitor_data_i = sm_data_debug_signals_tl1
-      gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 128) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 128))#[0..=127]
-      `minion_dbg_signals_next_0.data_signals` = gen_debug_monitor_dcache_dbg_data_group#[0..=127]
+      gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 0x80) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 0x80))#[0..=127]
+      `minion_dbg_signals_next_0.data_signals` = gen_debug_monitor_dcache_dbg_data_group
       `minion_dbg_signals_next_0.data_valid` = 1
-      `minion_dbg_signals_next_0.filter_signals` = sm_filter_debug_signals_tl1#[0..=199]
+      `minion_dbg_signals_next_0.filter_signals` = sm_filter_debug_signals_tl1
       `minion_dbg_signals_next_0.filter_valid` = 1
-      `minion_dbg_signals_next_0.match_signals` = sm_match_debug_signals_tl1#[0..=63]
+      `minion_dbg_signals_next_0.match_signals` = sm_match_debug_signals_tl1
       `minion_dbg_signals_next_0.match_valid` = 1
     }
     == 4 {
       gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
       gen_debug_monitor_data_i = sm_data_debug_signals_ts
-      gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 128) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 128))#[0..=127]
-      `minion_dbg_signals_next_0.data_signals` = gen_debug_monitor_dcache_dbg_data_group#[0..=127]
+      gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 0x80) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 0x80))#[0..=127]
+      `minion_dbg_signals_next_0.data_signals` = gen_debug_monitor_dcache_dbg_data_group
       `minion_dbg_signals_next_0.data_valid` = 1
-      `minion_dbg_signals_next_0.filter_signals` = sm_filter_debug_signals_ts#[0..=199]
+      `minion_dbg_signals_next_0.filter_signals` = sm_filter_debug_signals_ts
       `minion_dbg_signals_next_0.filter_valid` = 1
-      `minion_dbg_signals_next_0.match_signals` = sm_match_debug_signals_ts#[0..=63]
+      `minion_dbg_signals_next_0.match_signals` = sm_match_debug_signals_ts
       `minion_dbg_signals_next_0.match_valid` = 1
     }
     == 5 {
       gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
       gen_debug_monitor_data_i = sm_data_debug_signals_co
-      gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 128) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 128))#[0..=127]
-      `minion_dbg_signals_next_0.data_signals` = gen_debug_monitor_dcache_dbg_data_group#[0..=127]
+      gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 0x80) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 0x80))#[0..=127]
+      `minion_dbg_signals_next_0.data_signals` = gen_debug_monitor_dcache_dbg_data_group
       `minion_dbg_signals_next_0.data_valid` = 1
-      `minion_dbg_signals_next_0.filter_signals` = sm_filter_debug_signals_co#[0..=199]
+      `minion_dbg_signals_next_0.filter_signals` = sm_filter_debug_signals_co
       `minion_dbg_signals_next_0.filter_valid` = 1
-      `minion_dbg_signals_next_0.match_signals` = sm_match_debug_signals_co#[0..=63]
+      `minion_dbg_signals_next_0.match_signals` = sm_match_debug_signals_co
       `minion_dbg_signals_next_0.match_valid` = 1
     }
     else {
@@ -236,68 +235,68 @@ pub mod minion_top::[timecheck=false](clk_i:u1, rst_c_ni:u1, rst_d_ni:u1, rst_w_
     == 6 {
       gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
       gen_debug_monitor_data_i = sm_data_debug_signals_col2
-      gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 128) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 128))#[0..=127]
-      `minion_dbg_signals_next_1.data_signals` = gen_debug_monitor_dcache_dbg_data_group#[0..=127]
+      gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 0x80) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 0x80))#[0..=127]
+      `minion_dbg_signals_next_1.data_signals` = gen_debug_monitor_dcache_dbg_data_group
       `minion_dbg_signals_next_1.data_valid` = 1
-      `minion_dbg_signals_next_1.filter_signals` = sm_filter_debug_signals_col2#[0..=199]
+      `minion_dbg_signals_next_1.filter_signals` = sm_filter_debug_signals_col2
       `minion_dbg_signals_next_1.filter_valid` = 1
-      `minion_dbg_signals_next_1.match_signals` = sm_match_debug_signals_col2#[0..=63]
+      `minion_dbg_signals_next_1.match_signals` = sm_match_debug_signals_col2
       `minion_dbg_signals_next_1.match_valid` = 1
     }
     == 7 {
       gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
       gen_debug_monitor_data_i = sm_data_debug_signals_mh#[0..=511]
-      gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 128) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 128))#[0..=127]
-      `minion_dbg_signals_next_1.data_signals` = gen_debug_monitor_dcache_dbg_data_group#[0..=127]
+      gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 0x80) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 0x80))#[0..=127]
+      `minion_dbg_signals_next_1.data_signals` = gen_debug_monitor_dcache_dbg_data_group
       `minion_dbg_signals_next_1.data_valid` = 1
-      `minion_dbg_signals_next_1.filter_signals` = sm_filter_debug_signals_mh#[0..=199]#[0..=199]
+      `minion_dbg_signals_next_1.filter_signals` = sm_filter_debug_signals_mh#[0..=199]
       `minion_dbg_signals_next_1.filter_valid` = 1
-      `minion_dbg_signals_next_1.match_signals` = sm_match_debug_signals_mh#[0..=63]#[0..=63]
+      `minion_dbg_signals_next_1.match_signals` = sm_match_debug_signals_mh#[0..=63]
       `minion_dbg_signals_next_1.match_valid` = 1
     }
     == 8 {
       gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
       gen_debug_monitor_data_i = sm_data_debug_signals_mh#[512..=1023]
-      gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 128) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 128))#[0..=127]
-      `minion_dbg_signals_next_1.data_signals` = gen_debug_monitor_dcache_dbg_data_group#[0..=127]
+      gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 0x80) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 0x80))#[0..=127]
+      `minion_dbg_signals_next_1.data_signals` = gen_debug_monitor_dcache_dbg_data_group
       `minion_dbg_signals_next_1.data_valid` = 1
-      `minion_dbg_signals_next_1.filter_signals` = sm_filter_debug_signals_mh#[200..=399]#[0..=199]
+      `minion_dbg_signals_next_1.filter_signals` = sm_filter_debug_signals_mh#[200..=399]
       `minion_dbg_signals_next_1.filter_valid` = 1
-      `minion_dbg_signals_next_1.match_signals` = sm_match_debug_signals_mh#[64..=127]#[0..=63]
+      `minion_dbg_signals_next_1.match_signals` = sm_match_debug_signals_mh#[64..=127]
       `minion_dbg_signals_next_1.match_valid` = 1
     }
     == 9 {
       gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
       gen_debug_monitor_data_i = sm_data_debug_signals_dc
-      gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 128) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 128))#[0..=127]
-      `minion_dbg_signals_next_1.data_signals` = gen_debug_monitor_dcache_dbg_data_group#[0..=127]
+      gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 0x80) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 0x80))#[0..=127]
+      `minion_dbg_signals_next_1.data_signals` = gen_debug_monitor_dcache_dbg_data_group
       `minion_dbg_signals_next_1.data_valid` = 1
-      `minion_dbg_signals_next_1.filter_signals` = sm_filter_debug_signals_dc#[0..=199]
+      `minion_dbg_signals_next_1.filter_signals` = sm_filter_debug_signals_dc
       `minion_dbg_signals_next_1.filter_valid` = 1
-      `minion_dbg_signals_next_1.match_signals` = sm_match_debug_signals_dc#[0..=63]
+      `minion_dbg_signals_next_1.match_signals` = sm_match_debug_signals_dc
       `minion_dbg_signals_next_1.match_valid` = 1
     }
     == 10 {
       `minion_dbg_signals_next_1.filter_signals` = 0
       `minion_dbg_signals_next_1.match_signals` = 0
       `minion_dbg_signals_next_1.data_signals` = 0
-      `minion_dbg_signals_next_1.data_signals`#[0..=79] = ((intpipe_debug_monitor_out.id_thread_id << 79) | (intpipe_debug_monitor_out.id_pc << 30) | (intpipe_debug_monitor_out.id_valid << 29) | (intpipe_debug_monitor_out.id_valid_qual << 28) | (intpipe_debug_monitor_out.id_inst_replay << 27) | (intpipe_debug_monitor_out.id_take_pc << 26) | (intpipe_debug_monitor_out.id_csr_interrupt << 25) | (intpipe_debug_monitor_out.excl_mode_stall << 24) | (intpipe_debug_monitor_out.ex_valid_qual << 23) | (intpipe_debug_monitor_out.tag_valid_qual << 22) | (intpipe_debug_monitor_out.mem_valid_qual << 21) | (intpipe_debug_monitor_out.wb_valid << 20) | (intpipe_debug_monitor_out.gsc_reg_gsc_cnt << 17) | (intpipe_debug_monitor_out.tag_take_pc << 16) | (intpipe_debug_monitor_out.ipi_with_pc << 14) | (intpipe_debug_monitor_out.wb_take_pc << 13) | (intpipe_debug_monitor_out.id_xcpt << 12) | (intpipe_debug_monitor_out.wb_xcpt << 11) | (intpipe_debug_monitor_out.id_stall_fp2int << 10) | (intpipe_debug_monitor_out.ex_gsc_busy << 9) | (intpipe_debug_monitor_out.csr_fe_stall << 8) | (intpipe_debug_monitor_out.id_ctrl_stall_csr << 7) | (intpipe_debug_monitor_out.id_ctrl_stall_dcache << 6) | (intpipe_debug_monitor_out.id_do_fence << 5) | (intpipe_debug_monitor_out.id_ctrl_stall_trans << 4) | (intpipe_debug_monitor_out.id_ctrl_stall_div << 3) | (intpipe_debug_monitor_out.id_int_sboard_hazard << 2) | (intpipe_debug_monitor_out.id_ctrl_stall_hazard_vpu << 1) | intpipe_debug_monitor_out.id_ctrl_stall_hazard)
+      `minion_dbg_signals_next_1.data_signals`#[0..=79] = (intpipe_debug_monitor_out.id_thread_id << 0x4f) | (intpipe_debug_monitor_out.id_pc << 30) | (intpipe_debug_monitor_out.id_valid << 29) | (intpipe_debug_monitor_out.id_valid_qual << 28) | (intpipe_debug_monitor_out.id_inst_replay << 27) | (intpipe_debug_monitor_out.id_take_pc << 26) | (intpipe_debug_monitor_out.id_csr_interrupt << 25) | (intpipe_debug_monitor_out.excl_mode_stall << 24) | (intpipe_debug_monitor_out.ex_valid_qual << 23) | (intpipe_debug_monitor_out.tag_valid_qual << 22) | (intpipe_debug_monitor_out.mem_valid_qual << 21) | (intpipe_debug_monitor_out.wb_valid << 20) | (intpipe_debug_monitor_out.gsc_reg_gsc_cnt << 17) | (intpipe_debug_monitor_out.tag_take_pc << 16) | (intpipe_debug_monitor_out.ipi_with_pc << 14) | (intpipe_debug_monitor_out.wb_take_pc << 13) | (intpipe_debug_monitor_out.id_xcpt << 12) | (intpipe_debug_monitor_out.wb_xcpt << 11) | (intpipe_debug_monitor_out.id_stall_fp2int << 10) | (intpipe_debug_monitor_out.ex_gsc_busy << 9) | (intpipe_debug_monitor_out.csr_fe_stall << 8) | (intpipe_debug_monitor_out.id_ctrl_stall_csr << 7) | (intpipe_debug_monitor_out.id_ctrl_stall_dcache << 6) | (intpipe_debug_monitor_out.id_do_fence << 5) | (intpipe_debug_monitor_out.id_ctrl_stall_trans << 4) | (intpipe_debug_monitor_out.id_ctrl_stall_div << 3) | (intpipe_debug_monitor_out.id_int_sboard_hazard << 2) | (intpipe_debug_monitor_out.id_ctrl_stall_hazard_vpu << 1) | intpipe_debug_monitor_out.id_ctrl_stall_hazard
       `minion_dbg_signals_next_1.data_valid` = 1
-      `minion_dbg_signals_next_1.filter_signals`#[0..=79] = ((intpipe_debug_monitor_out.id_thread_id << 79) | (intpipe_debug_monitor_out.id_pc << 30) | (intpipe_debug_monitor_out.id_valid << 29) | (intpipe_debug_monitor_out.id_valid_qual << 28) | (intpipe_debug_monitor_out.id_inst_replay << 27) | (intpipe_debug_monitor_out.id_take_pc << 26) | (intpipe_debug_monitor_out.id_csr_interrupt << 25) | (intpipe_debug_monitor_out.excl_mode_stall << 24) | (intpipe_debug_monitor_out.ex_valid_qual << 23) | (intpipe_debug_monitor_out.tag_valid_qual << 22) | (intpipe_debug_monitor_out.mem_valid_qual << 21) | (intpipe_debug_monitor_out.wb_valid << 20) | (intpipe_debug_monitor_out.gsc_reg_gsc_cnt << 17) | (intpipe_debug_monitor_out.tag_take_pc << 16) | (intpipe_debug_monitor_out.ipi_with_pc << 14) | (intpipe_debug_monitor_out.wb_take_pc << 13) | (intpipe_debug_monitor_out.id_xcpt << 12) | (intpipe_debug_monitor_out.wb_xcpt << 11) | (intpipe_debug_monitor_out.id_stall_fp2int << 10) | (intpipe_debug_monitor_out.ex_gsc_busy << 9) | (intpipe_debug_monitor_out.csr_fe_stall << 8) | (intpipe_debug_monitor_out.id_ctrl_stall_csr << 7) | (intpipe_debug_monitor_out.id_ctrl_stall_dcache << 6) | (intpipe_debug_monitor_out.id_do_fence << 5) | (intpipe_debug_monitor_out.id_ctrl_stall_trans << 4) | (intpipe_debug_monitor_out.id_ctrl_stall_div << 3) | (intpipe_debug_monitor_out.id_int_sboard_hazard << 2) | (intpipe_debug_monitor_out.id_ctrl_stall_hazard_vpu << 1) | intpipe_debug_monitor_out.id_ctrl_stall_hazard)
+      `minion_dbg_signals_next_1.filter_signals`#[0..=79] = (intpipe_debug_monitor_out.id_thread_id << 0x4f) | (intpipe_debug_monitor_out.id_pc << 30) | (intpipe_debug_monitor_out.id_valid << 29) | (intpipe_debug_monitor_out.id_valid_qual << 28) | (intpipe_debug_monitor_out.id_inst_replay << 27) | (intpipe_debug_monitor_out.id_take_pc << 26) | (intpipe_debug_monitor_out.id_csr_interrupt << 25) | (intpipe_debug_monitor_out.excl_mode_stall << 24) | (intpipe_debug_monitor_out.ex_valid_qual << 23) | (intpipe_debug_monitor_out.tag_valid_qual << 22) | (intpipe_debug_monitor_out.mem_valid_qual << 21) | (intpipe_debug_monitor_out.wb_valid << 20) | (intpipe_debug_monitor_out.gsc_reg_gsc_cnt << 17) | (intpipe_debug_monitor_out.tag_take_pc << 16) | (intpipe_debug_monitor_out.ipi_with_pc << 14) | (intpipe_debug_monitor_out.wb_take_pc << 13) | (intpipe_debug_monitor_out.id_xcpt << 12) | (intpipe_debug_monitor_out.wb_xcpt << 11) | (intpipe_debug_monitor_out.id_stall_fp2int << 10) | (intpipe_debug_monitor_out.ex_gsc_busy << 9) | (intpipe_debug_monitor_out.csr_fe_stall << 8) | (intpipe_debug_monitor_out.id_ctrl_stall_csr << 7) | (intpipe_debug_monitor_out.id_ctrl_stall_dcache << 6) | (intpipe_debug_monitor_out.id_do_fence << 5) | (intpipe_debug_monitor_out.id_ctrl_stall_trans << 4) | (intpipe_debug_monitor_out.id_ctrl_stall_div << 3) | (intpipe_debug_monitor_out.id_int_sboard_hazard << 2) | (intpipe_debug_monitor_out.id_ctrl_stall_hazard_vpu << 1) | intpipe_debug_monitor_out.id_ctrl_stall_hazard
       `minion_dbg_signals_next_1.filter_valid` = 1
-      `minion_dbg_signals_next_1.match_signals`#[0..=7] = ((`intpipe_dbg_match.id_csr_interrupt__w1` << 7) | (`intpipe_dbg_match.excl_mode_stall__w1` << 6) | (`intpipe_dbg_match.ipi_with_pc__w1` << 4) | (`intpipe_dbg_match.id_xcpt__w1` << 3) | (`intpipe_dbg_match.wb_xcpt__w1` << 2) | (`intpipe_dbg_match.csr_fe_stall__w1` << 1) | `intpipe_dbg_match.id_do_fence__w1`)
+      `minion_dbg_signals_next_1.match_signals`#[0..=7] = (`intpipe_dbg_match.id_csr_interrupt__w1` << 7) | (`intpipe_dbg_match.excl_mode_stall__w1` << 6) | (`intpipe_dbg_match.ipi_with_pc__w1` << 4) | (`intpipe_dbg_match.id_xcpt__w1` << 3) | (`intpipe_dbg_match.wb_xcpt__w1` << 2) | (`intpipe_dbg_match.csr_fe_stall__w1` << 1) | `intpipe_dbg_match.id_do_fence__w1`
       `minion_dbg_signals_next_1.match_valid` = 1
     }
     else {
     }
   }
   if minion_dbg_sig_enable_i != 0 {
-    minion_dbg_signals_0_q = (`minion_dbg_signals_next_0.filter_signals` << 195) | (`minion_dbg_signals_next_0.filter_valid` << 194) | (`minion_dbg_signals_next_0.match_signals` << 130) | (`minion_dbg_signals_next_0.match_valid` << 129) | (`minion_dbg_signals_next_0.data_signals` << 1) | `minion_dbg_signals_next_0.data_valid`
-    minion_dbg_signals_1_q = (`minion_dbg_signals_next_1.filter_signals` << 195) | (`minion_dbg_signals_next_1.filter_valid` << 194) | (`minion_dbg_signals_next_1.match_signals` << 130) | (`minion_dbg_signals_next_1.match_valid` << 129) | (`minion_dbg_signals_next_1.data_signals` << 1) | `minion_dbg_signals_next_1.data_valid`
+    minion_dbg_signals_0_q = (`minion_dbg_signals_next_0.filter_signals` << 0xc3) | (`minion_dbg_signals_next_0.filter_valid` << 0xc2) | (`minion_dbg_signals_next_0.match_signals` << 0x82) | (`minion_dbg_signals_next_0.match_valid` << 0x81) | (`minion_dbg_signals_next_0.data_signals` << 1) | `minion_dbg_signals_next_0.data_valid`
+    minion_dbg_signals_1_q = (`minion_dbg_signals_next_1.filter_signals` << 0xc3) | (`minion_dbg_signals_next_1.filter_valid` << 0xc2) | (`minion_dbg_signals_next_1.match_signals` << 0x82) | (`minion_dbg_signals_next_1.match_valid` << 0x81) | (`minion_dbg_signals_next_1.data_signals` << 1) | `minion_dbg_signals_next_1.data_valid`
     minion_dbg_signals_mux_ff = minion_dbg_signals_mux_i
-    minion_dbg_signals_o_q = (`minion_dbg_signals_next.filter_signals` << 195) | (`minion_dbg_signals_next.filter_valid` << 194) | (`minion_dbg_signals_next.match_signals` << 130) | (`minion_dbg_signals_next.match_valid` << 129) | (`minion_dbg_signals_next.data_signals` << 1) | `minion_dbg_signals_next.data_valid`
+    minion_dbg_signals_o_q = (`minion_dbg_signals_next.filter_signals` << 0xc3) | (`minion_dbg_signals_next.filter_valid` << 0xc2) | (`minion_dbg_signals_next.match_signals` << 0x82) | (`minion_dbg_signals_next.match_valid` << 0x81) | (`minion_dbg_signals_next.data_signals` << 1) | `minion_dbg_signals_next.data_valid`
   }
-  mut u_core = core_top::[name=u_core](clk_i = clk_i, rst_c_ni = rst_c_sync_ni__w1, rst_w_ni = u_rst_sync_w, rst_d_ni = u_rst_sync_d, dft_i.scanmode = dft_i.scanmode, dft_i.scan_reset_n = dft_i.scan_reset_n, dft_i.sram_clk_override = dft_i.sram_clk_override, dft_i.ram_rei = dft_i.ram_rei, dft_i.ram_wei = dft_i.ram_wei, ioshire_i = ioshire_i, chicken_bit_dcache_i = (chicken_bits_clock_gate_disable_q >> 4) & 1, chicken_bit_intpipe_i = chicken_bits_clock_gate_disable_q & 1, chicken_bit_frontend_i = (chicken_bits_clock_gate_disable_q >> 5) & 1, l2_dcache_evict_req_ready_i = l2_dcache_evict_req_ready_i, l2_dcache_miss_req_ready_i = l2_dcache_miss_req_ready_i, l2_dcache_resp_valid_i = l2_dcache_resp_valid_i, l2_dcache_resp_i.id = l2_dcache_resp_i.id, l2_dcache_resp_i.dest = l2_dcache_resp_i.dest, l2_dcache_resp_i.wdata = l2_dcache_resp_i.wdata, l2_dcache_resp_i.opcode = l2_dcache_resp_i.opcode, l2_dcache_resp_i.data = l2_dcache_resp_i.data, l2_dcache_resp_i.size = l2_dcache_resp_i.size, l2_dcache_resp_i.qwen = l2_dcache_resp_i.qwen, icache_req_ready_i = icache_req_ready_i, icache_resp_valid_i = icache_resp_valid_i, icache_resp_miss_i = icache_resp_miss_i, icache_resp_i.data = icache_resp_i.data, icache_resp_i.page_fault = icache_resp_i.page_fault, icache_resp_i.access_fault = icache_resp_i.access_fault, icache_resp_i.cacheable = icache_resp_i.cacheable, icache_resp_i.bus_err = icache_resp_i.bus_err, icache_resp_i.ecc_err = icache_resp_i.ecc_err, icache_fill_done_i = icache_fill_done_i, dc_ptw_req_ready_i = dc_ptw_req_ready_i, ptw_dc_resp_data_i.canceled_req = ptw_dc_resp_data_i.canceled_req, ptw_dc_resp_data_i.access_fault = ptw_dc_resp_data_i.access_fault, ptw_dc_resp_data_i.rsvd_for_hw = ptw_dc_resp_data_i.rsvd_for_hw, ptw_dc_resp_data_i.ppn = ptw_dc_resp_data_i.ppn, ptw_dc_resp_data_i.rsvd_for_sw = ptw_dc_resp_data_i.rsvd_for_sw, ptw_dc_resp_data_i.d = ptw_dc_resp_data_i.d, ptw_dc_resp_data_i.a = ptw_dc_resp_data_i.a, ptw_dc_resp_data_i.g = ptw_dc_resp_data_i.g, ptw_dc_resp_data_i.u = ptw_dc_resp_data_i.u, ptw_dc_resp_data_i.x = ptw_dc_resp_data_i.x, ptw_dc_resp_data_i.w = ptw_dc_resp_data_i.w, ptw_dc_resp_data_i.r = ptw_dc_resp_data_i.r, ptw_dc_resp_data_i.v = ptw_dc_resp_data_i.v, ptw_dc_resp_valid_i = ptw_dc_resp_valid_i, interrupts_i.mieco = interrupts_i.mieco, interrupts_i.mtip = interrupts_i.mtip, interrupts_i.msip = interrupts_i.msip, interrupts_i.meip = interrupts_i.meip, interrupts_i.seip = interrupts_i.seip, interrupts_i.fcc = interrupts_i.fcc, interrupts_i.ipi_with_pc = interrupts_i.ipi_with_pc, interrupts_i.ipi_pc = interrupts_i.ipi_pc, shire_id_i = shire_id_i, shire_min_id_i = shire_min_id_i, enabled_i = enabled_reg_q, reset_vector_i = reset_vector_i, mprot_i.enable_secure_memory = mprot_i.enable_secure_memory, mprot_i.dram_size = mprot_i.dram_size, mprot_i.disable_osbox_access = mprot_i.disable_osbox_access, mprot_i.disable_pcie_access = mprot_i.disable_pcie_access, mprot_i.io_access_mode = mprot_i.io_access_mode, vmspagesize_i = vmspagesize_i, `vpu_dcache_ctl_i.scp_req.read_en` = (vpu_dcache_ctl.scp_req >> 15) & 1, `vpu_dcache_ctl_i.scp_req.way` = vpu_dcache_ctl.scp_req#[13..=14], `vpu_dcache_ctl_i.scp_req.addr` = vpu_dcache_ctl.scp_req#[3..=12], `vpu_dcache_ctl_i.scp_req.size64` = (vpu_dcache_ctl.scp_req >> 2) & 1, `vpu_dcache_ctl_i.scp_req.size256` = (vpu_dcache_ctl.scp_req >> 1) & 1, `vpu_dcache_ctl_i.scp_req.bid` = vpu_dcache_ctl.scp_req & 1, `vpu_dcache_ctl_i.tenb_credit` = vpu_dcache_ctl.tenb_credit, `vpu_dcache_ctl_i.tenb_credit_entry` = vpu_dcache_ctl.tenb_credit_entry, `vpu_dcache_ctl_i.tfma_enabled` = vpu_dcache_ctl.tfma_enabled, `vpu_dcache_ctl_i.reduce_wait` = vpu_dcache_ctl.reduce_wait, `vpu_dcache_ctl_i.tfma_rf_write` = vpu_dcache_ctl.tfma_rf_write, `id_vpu_ctrl_i.m0ren` = id_vpu_core_ctrl.m0ren, `id_vpu_ctrl_i.mallren` = id_vpu_core_ctrl.mallren, `id_vpu_ctrl_i.mren1` = id_vpu_core_ctrl.mren1, `id_vpu_ctrl_i.mren2` = id_vpu_core_ctrl.mren2, `id_vpu_ctrl_i.wen` = id_vpu_core_ctrl.wen, `id_vpu_ctrl_i.ren1` = id_vpu_core_ctrl.ren1, `id_vpu_ctrl_i.ren2` = id_vpu_core_ctrl.ren2, `id_vpu_ctrl_i.ren3` = id_vpu_core_ctrl.ren3, `id_vpu_ctrl_i.rend` = id_vpu_core_ctrl.rend, `id_vpu_ctrl_i.is_trans` = id_vpu_core_ctrl.is_trans, `id_vpu_ctrl_i.trans_busy` = id_vpu_core_ctrl.trans_busy, `id_vpu_ctrl_i.id_trans_insert` = id_vpu_core_ctrl.id_trans_insert, `id_vpu_ctrl_i.scoreboard.fp_valid` = id_vpu_core_ctrl.scoreboard#[150..=163], `id_vpu_ctrl_i.scoreboard.fp_dest` = id_vpu_core_ctrl.scoreboard#[52..=149], `id_vpu_ctrl_i.scoreboard.toint_valid` = id_vpu_core_ctrl.scoreboard#[48..=51], `id_vpu_ctrl_i.scoreboard.toint_dest` = id_vpu_core_ctrl.scoreboard#[20..=47], `id_vpu_ctrl_i.scoreboard.mask_valid` = id_vpu_core_ctrl.scoreboard#[16..=19], `id_vpu_ctrl_i.scoreboard.mask_dest` = id_vpu_core_ctrl.scoreboard#[0..=15], `id_vpu_ctrl_i.tfma_enabled` = id_vpu_core_ctrl.tfma_enabled, `id_vpu_ctrl_i.tfma_wrrf_enabled` = id_vpu_core_ctrl.tfma_wrrf_enabled, `id_vpu_ctrl_i.tquant_enabled` = id_vpu_core_ctrl.tquant_enabled, `id_vpu_ctrl_i.reduce_enabled` = id_vpu_core_ctrl.reduce_enabled, `id_vpu_ctrl_i.fflags_stall` = id_vpu_core_ctrl.fflags_stall, `id_vpu_ctrl_i.fromint` = id_vpu_core_ctrl.fromint, `ex_vpu_ctrl_i.tointm` = ex_vpu_core_ctrl.tointm, `ex_vpu_ctrl_i.illegal_rm` = ex_vpu_core_ctrl.illegal_rm, `ex_vpu_ctrl_i.ps_mask` = ex_vpu_core_ctrl.ps_mask, `ex_vpu_ctrl_i.gsc_fs` = ex_vpu_core_ctrl.gsc_fs, `f2_vpu_ctrl_i.fma` = f2_vpu_core_ctrl.fma, `f2_vpu_ctrl_i.store_data` = f2_vpu_core_ctrl.store_data, `f2_vpu_ctrl_i.scatter_data` = f2_vpu_core_ctrl.scatter_data, `f2_vpu_ctrl_i.tointm` = f2_vpu_core_ctrl.tointm, `f3_vpu_ctrl_i.fma` = f3_vpu_core_ctrl.fma, `f3_vpu_ctrl_i.tointm` = f3_vpu_core_ctrl.tointm, `wb_vpu_ctrl_i.fma` = wb_vpu_core_ctrl.fma, `wb_vpu_ctrl_i.toint_data` = wb_vpu_core_ctrl.toint_data, `wb_vpu_ctrl_i.mova_mx` = wb_vpu_core_ctrl.mova_mx, `wb_vpu_ctrl_i.fcsr_flags_valid` = wb_vpu_core_ctrl.fcsr_flags_valid, `wb_vpu_ctrl_i.fcsr_flags` = wb_vpu_core_ctrl.fcsr_flags, `wb_vpu_ctrl_i.thread_id` = wb_vpu_core_ctrl.thread_id, `wb_vpu_ctrl_i.tointm` = wb_vpu_core_ctrl.tointm, flb_neigh_resp_valid_i = flb_neigh_resp_valid_i, flb_neigh_resp_data_i = flb_neigh_resp_data_i, te_thread_sel_i = te_thread_sel_i, te_enable_i = te_enable_i, apb_paddr_i = apb_paddr_i, apb_pwrite_i = apb_pwrite_i, apb_psel_i = apb_psel_i, apb_penable_i = apb_penable_i, apb_pwdata_i = apb_pwdata_i, debug_in_i.halt = debug_in_reg_q#[6..=7], debug_in_i.resume = debug_in_reg_q#[4..=5], debug_in_i.resethalt = debug_in_reg_q#[2..=3], debug_in_i.ackhavereset = debug_in_reg_q#[0..=1], esr_features_i.disable_lock_unlock = esr_features_i.disable_lock_unlock, esr_features_i.disable_multithreading = esr_features_i.disable_multithreading, esr_features_i.trap_on_u_scp = esr_features_i.trap_on_u_scp, esr_features_i.trap_on_u_cacheops = esr_features_i.trap_on_u_cacheops, esr_features_i.trap_on_ml = esr_features_i.trap_on_ml, esr_features_i.trap_on_gfx = esr_features_i.trap_on_gfx, esr_bypass_dcache_i = esr_bypass_dcache_i, esr_shire_coop_mode_i = esr_shire_coop_mode_i, mem_ctrl_override_i = mem_ctrl_override, pmu_read_data_i = pmu_read_data_i, io_events_vpu_i = io_events_vpu)
+  mut u_core = core_top::[name=u_core](clk_i = clk_i, rst_c_ni = rst_c_sync_ni__w1, rst_w_ni = u_rst_sync_w, rst_d_ni = u_rst_sync_d, dft_i.scanmode = dft_i.scanmode, dft_i.scan_reset_n = dft_i.scan_reset_n, dft_i.sram_clk_override = dft_i.sram_clk_override, dft_i.ram_rei = dft_i.ram_rei, dft_i.ram_wei = dft_i.ram_wei, ioshire_i = ioshire_i, chicken_bit_dcache_i = (chicken_bits_clock_gate_disable_q >> 4) & 1, chicken_bit_intpipe_i = chicken_bits_clock_gate_disable_q & 1, chicken_bit_frontend_i = (chicken_bits_clock_gate_disable_q >> 5) & 1, l2_dcache_evict_req_ready_i = l2_dcache_evict_req_ready_i, l2_dcache_miss_req_ready_i = l2_dcache_miss_req_ready_i, l2_dcache_resp_valid_i = l2_dcache_resp_valid_i, l2_dcache_resp_i.id = l2_dcache_resp_i.id, l2_dcache_resp_i.dest = l2_dcache_resp_i.dest, l2_dcache_resp_i.wdata = l2_dcache_resp_i.wdata, l2_dcache_resp_i.opcode = l2_dcache_resp_i.opcode, l2_dcache_resp_i.data = l2_dcache_resp_i.data, l2_dcache_resp_i.size = l2_dcache_resp_i.size, l2_dcache_resp_i.qwen = l2_dcache_resp_i.qwen, icache_req_ready_i = icache_req_ready_i, icache_resp_valid_i = icache_resp_valid_i, icache_resp_miss_i = icache_resp_miss_i, icache_resp_i.data = icache_resp_i.data, icache_resp_i.page_fault = icache_resp_i.page_fault, icache_resp_i.access_fault = icache_resp_i.access_fault, icache_resp_i.cacheable = icache_resp_i.cacheable, icache_resp_i.bus_err = icache_resp_i.bus_err, icache_resp_i.ecc_err = icache_resp_i.ecc_err, icache_fill_done_i = icache_fill_done_i, dc_ptw_req_ready_i = dc_ptw_req_ready_i, ptw_dc_resp_data_i.canceled_req = ptw_dc_resp_data_i.canceled_req, ptw_dc_resp_data_i.access_fault = ptw_dc_resp_data_i.access_fault, ptw_dc_resp_data_i.rsvd_for_hw = ptw_dc_resp_data_i.rsvd_for_hw, ptw_dc_resp_data_i.ppn = ptw_dc_resp_data_i.ppn, ptw_dc_resp_data_i.rsvd_for_sw = ptw_dc_resp_data_i.rsvd_for_sw, ptw_dc_resp_data_i.d = ptw_dc_resp_data_i.d, ptw_dc_resp_data_i.a = ptw_dc_resp_data_i.a, ptw_dc_resp_data_i.g = ptw_dc_resp_data_i.g, ptw_dc_resp_data_i.u = ptw_dc_resp_data_i.u, ptw_dc_resp_data_i.x = ptw_dc_resp_data_i.x, ptw_dc_resp_data_i.w = ptw_dc_resp_data_i.w, ptw_dc_resp_data_i.r = ptw_dc_resp_data_i.r, ptw_dc_resp_data_i.v = ptw_dc_resp_data_i.v, ptw_dc_resp_valid_i = ptw_dc_resp_valid_i, interrupts_i.mieco = interrupts_i.mieco, interrupts_i.mtip = interrupts_i.mtip, interrupts_i.msip = interrupts_i.msip, interrupts_i.meip = interrupts_i.meip, interrupts_i.seip = interrupts_i.seip, interrupts_i.fcc = interrupts_i.fcc, interrupts_i.ipi_with_pc = interrupts_i.ipi_with_pc, interrupts_i.ipi_pc = interrupts_i.ipi_pc, shire_id_i = shire_id_i, shire_min_id_i = shire_min_id_i, `enabled_i.e1` = (enabled_reg_q >> 1) & 1, `enabled_i.e0` = enabled_reg_q & 1, reset_vector_i = reset_vector_i, mprot_i.enable_secure_memory = mprot_i.enable_secure_memory, mprot_i.dram_size = mprot_i.dram_size, mprot_i.disable_osbox_access = mprot_i.disable_osbox_access, mprot_i.disable_pcie_access = mprot_i.disable_pcie_access, mprot_i.io_access_mode = mprot_i.io_access_mode, vmspagesize_i = vmspagesize_i, `vpu_dcache_ctl_i.scp_req.read_en` = (vpu_dcache_ctl.scp_req >> 15) & 1, `vpu_dcache_ctl_i.scp_req.way` = vpu_dcache_ctl.scp_req#[13..=14], `vpu_dcache_ctl_i.scp_req.addr` = vpu_dcache_ctl.scp_req#[3..=12], `vpu_dcache_ctl_i.scp_req.size64` = (vpu_dcache_ctl.scp_req >> 2) & 1, `vpu_dcache_ctl_i.scp_req.size256` = (vpu_dcache_ctl.scp_req >> 1) & 1, `vpu_dcache_ctl_i.scp_req.bid` = vpu_dcache_ctl.scp_req & 1, `vpu_dcache_ctl_i.tenb_credit` = vpu_dcache_ctl.tenb_credit, `vpu_dcache_ctl_i.tenb_credit_entry` = vpu_dcache_ctl.tenb_credit_entry, `vpu_dcache_ctl_i.tfma_enabled` = vpu_dcache_ctl.tfma_enabled, `vpu_dcache_ctl_i.reduce_wait` = vpu_dcache_ctl.reduce_wait, `vpu_dcache_ctl_i.tfma_rf_write` = vpu_dcache_ctl.tfma_rf_write, `id_vpu_ctrl_i.m0ren` = id_vpu_core_ctrl.m0ren, `id_vpu_ctrl_i.mallren` = id_vpu_core_ctrl.mallren, `id_vpu_ctrl_i.mren1` = id_vpu_core_ctrl.mren1, `id_vpu_ctrl_i.mren2` = id_vpu_core_ctrl.mren2, `id_vpu_ctrl_i.wen` = id_vpu_core_ctrl.wen, `id_vpu_ctrl_i.ren1` = id_vpu_core_ctrl.ren1, `id_vpu_ctrl_i.ren2` = id_vpu_core_ctrl.ren2, `id_vpu_ctrl_i.ren3` = id_vpu_core_ctrl.ren3, `id_vpu_ctrl_i.rend` = id_vpu_core_ctrl.rend, `id_vpu_ctrl_i.is_trans` = id_vpu_core_ctrl.is_trans, `id_vpu_ctrl_i.trans_busy` = id_vpu_core_ctrl.trans_busy, `id_vpu_ctrl_i.id_trans_insert` = id_vpu_core_ctrl.id_trans_insert, `id_vpu_ctrl_i.scoreboard.fp_valid` = id_vpu_core_ctrl.scoreboard#[150..=163], `id_vpu_ctrl_i.scoreboard.fp_dest` = id_vpu_core_ctrl.scoreboard#[52..=149], `id_vpu_ctrl_i.scoreboard.toint_valid` = id_vpu_core_ctrl.scoreboard#[48..=51], `id_vpu_ctrl_i.scoreboard.toint_dest` = id_vpu_core_ctrl.scoreboard#[20..=47], `id_vpu_ctrl_i.scoreboard.mask_valid` = id_vpu_core_ctrl.scoreboard#[16..=19], `id_vpu_ctrl_i.scoreboard.mask_dest` = id_vpu_core_ctrl.scoreboard#[0..=15], `id_vpu_ctrl_i.tfma_enabled` = id_vpu_core_ctrl.tfma_enabled, `id_vpu_ctrl_i.tfma_wrrf_enabled` = id_vpu_core_ctrl.tfma_wrrf_enabled, `id_vpu_ctrl_i.tquant_enabled` = id_vpu_core_ctrl.tquant_enabled, `id_vpu_ctrl_i.reduce_enabled` = id_vpu_core_ctrl.reduce_enabled, `id_vpu_ctrl_i.fflags_stall` = id_vpu_core_ctrl.fflags_stall, `id_vpu_ctrl_i.fromint` = id_vpu_core_ctrl.fromint, `ex_vpu_ctrl_i.tointm` = ex_vpu_core_ctrl.tointm, `ex_vpu_ctrl_i.illegal_rm` = ex_vpu_core_ctrl.illegal_rm, `ex_vpu_ctrl_i.ps_mask` = ex_vpu_core_ctrl.ps_mask, `ex_vpu_ctrl_i.gsc_fs` = ex_vpu_core_ctrl.gsc_fs, `f2_vpu_ctrl_i.fma` = f2_vpu_core_ctrl.fma, `f2_vpu_ctrl_i.store_data` = f2_vpu_core_ctrl.store_data, `f2_vpu_ctrl_i.scatter_data` = f2_vpu_core_ctrl.scatter_data, `f2_vpu_ctrl_i.tointm` = f2_vpu_core_ctrl.tointm, `f3_vpu_ctrl_i.fma` = f3_vpu_core_ctrl.fma, `f3_vpu_ctrl_i.tointm` = f3_vpu_core_ctrl.tointm, `wb_vpu_ctrl_i.fma` = wb_vpu_core_ctrl.fma, `wb_vpu_ctrl_i.toint_data` = wb_vpu_core_ctrl.toint_data, `wb_vpu_ctrl_i.mova_mx` = wb_vpu_core_ctrl.mova_mx, `wb_vpu_ctrl_i.fcsr_flags_valid` = wb_vpu_core_ctrl.fcsr_flags_valid, `wb_vpu_ctrl_i.fcsr_flags` = wb_vpu_core_ctrl.fcsr_flags, `wb_vpu_ctrl_i.thread_id` = wb_vpu_core_ctrl.thread_id, `wb_vpu_ctrl_i.tointm` = wb_vpu_core_ctrl.tointm, flb_neigh_resp_valid_i = flb_neigh_resp_valid_i, flb_neigh_resp_data_i = flb_neigh_resp_data_i, te_thread_sel_i = te_thread_sel_i, te_enable_i = te_enable_i, apb_paddr_i = apb_paddr_i, apb_pwrite_i = apb_pwrite_i, apb_psel_i = apb_psel_i, apb_penable_i = apb_penable_i, apb_pwdata_i = apb_pwdata_i, debug_in_i.halt = debug_in_reg_q#[6..=7], debug_in_i.resume = debug_in_reg_q#[4..=5], debug_in_i.resethalt = debug_in_reg_q#[2..=3], debug_in_i.ackhavereset = debug_in_reg_q#[0..=1], esr_features_i.disable_lock_unlock = esr_features_i.disable_lock_unlock, esr_features_i.disable_multithreading = esr_features_i.disable_multithreading, esr_features_i.trap_on_u_scp = esr_features_i.trap_on_u_scp, esr_features_i.trap_on_u_cacheops = esr_features_i.trap_on_u_cacheops, esr_features_i.trap_on_ml = esr_features_i.trap_on_ml, esr_features_i.trap_on_gfx = esr_features_i.trap_on_gfx, esr_bypass_dcache_i = esr_bypass_dcache_i, esr_shire_coop_mode_i = esr_shire_coop_mode_i, mem_ctrl_override_i = mem_ctrl_override, pmu_read_data_i = pmu_read_data_i, io_events_vpu_i = io_events_vpu)
   `id_vpu_decoder_sigs.cmd` = u_core["id_vpu_decoder_sigs_o.cmd"]
   `id_vpu_decoder_sigs.txfma` = u_core["id_vpu_decoder_sigs_o.txfma"]
   `id_vpu_decoder_sigs.shsw` = u_core["id_vpu_decoder_sigs_o.shsw"]
@@ -405,7 +404,7 @@ pub mod minion_top::[timecheck=false](clk_i:u1, rst_c_ni:u1, rst_d_ni:u1, rst_w_
   id_vpu_core_ctrl.is_trans = u_vpu["id_core_ctrl.is_trans"]
   id_vpu_core_ctrl.trans_busy = u_vpu["id_core_ctrl.trans_busy"]
   id_vpu_core_ctrl.id_trans_insert = u_vpu["id_core_ctrl.id_trans_insert"]
-  id_vpu_core_ctrl.scoreboard = (u_vpu["id_core_ctrl.scoreboard.fp_valid"] << 150) | (u_vpu["id_core_ctrl.scoreboard.fp_dest"] << 52) | (u_vpu["id_core_ctrl.scoreboard.toint_valid"] << 48) | (u_vpu["id_core_ctrl.scoreboard.toint_dest"] << 20) | (u_vpu["id_core_ctrl.scoreboard.mask_valid"] << 16) | u_vpu["id_core_ctrl.scoreboard.mask_dest"]
+  id_vpu_core_ctrl.scoreboard = (u_vpu["id_core_ctrl.scoreboard.fp_valid"] << 0x96) | (u_vpu["id_core_ctrl.scoreboard.fp_dest"] << 52) | (u_vpu["id_core_ctrl.scoreboard.toint_valid"] << 48) | (u_vpu["id_core_ctrl.scoreboard.toint_dest"] << 20) | (u_vpu["id_core_ctrl.scoreboard.mask_valid"] << 16) | u_vpu["id_core_ctrl.scoreboard.mask_dest"]
   id_vpu_core_ctrl.tfma_enabled = u_vpu["id_core_ctrl.tfma_enabled"]
   id_vpu_core_ctrl.tfma_wrrf_enabled = u_vpu["id_core_ctrl.tfma_wrrf_enabled"]
   id_vpu_core_ctrl.tquant_enabled = u_vpu["id_core_ctrl.tquant_enabled"]

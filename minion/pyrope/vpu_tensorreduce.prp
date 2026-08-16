@@ -1,7 +1,7 @@
 const vpu_defs_pkg = import("vpu_defs_pkg")
 
 pub mod vpu_tensorreduce::[timecheck=false](clock:u1, reset:u1, reduce_start:u1, tensorstore_start:u1, tensorfma_start:u1, tensorquant_start:u1, reduce_ctrl:u64, scoreboard_pend:u1, tensorfma_pend:u1, tensorquant_pend:u1, dcache_reduce_ctrl:(send_reg:u1, exec_op:u1, nothing:u1)) -> (enabled:u1@[], reduce_wait:u1@[], load_ctrl:(wen:u1, thread_id:u1, broadcast_sel:u3, waddr:u5)@[], reduce_inst_en_next:u1@[], reduce_inst_next:vpu_defs_pkg.INST_SIZE_T@[], vpu_tensorreduce_debug:u25@[]) {
-  mut cur_reg_next = 0
+  mut cur_reg_next:u5 = 0
   reg reg_pending:u7
   reg cur_reg:u5
   reg reduce_op:u4
@@ -14,22 +14,17 @@ pub mod vpu_tensorreduce::[timecheck=false](clock:u1, reset:u1, reduce_start:u1,
   reg tfma_pend_sticky:u1
   reg tquant_pend_sticky:u1
   reg is_reduce:u1
-  mut reg_up = 0
-  mut reduce_op_next = 0
-  mut reg_pending_next = 0
-  mut scoreboard_pend_sticky_next = 0
-  mut tfma_pend_sticky_next = 0
-  mut tquant_pend_sticky_next = 0
-  reduce_inst_next = 0ub????????????????????????????????
+  mut reg_up:u1 = 0
+  mut reg_pending_next:u7 = 0
+  mut scoreboard_pend_sticky_next:u1 = 0
+  mut tfma_pend_sticky_next:u1 = 0
+  mut tquant_pend_sticky_next:u1 = 0
+  reduce_inst_next = 0sb?
   const enabled_int__w1 = unsigned(reg_pending != 0)
   const enabled__w1 = unsigned((enabled_int__w1 != 0) or (exec_op_cd != 0))
   const new_req__w1 = unsigned((reduce_start != 0) or (tensorstore_start != 0))
   reg_up = 0ub?
-  reduce_op_next = reduce_ctrl#[24..=27]
-  if tensorstore_start != 0 {
-    const t29 = ((0 & 3) << 2) | (reduce_ctrl#[62..=63] & 3)
-    reduce_op_next = t29
-  }
+  mut reduce_op_next:u4 = if tensorstore_start != 0 { reduce_ctrl#[62..=63] } else { reduce_ctrl#[24..=27] }
   reg_pending_next = reg_pending
   if is_reduce != 0 {
     cur_reg_next = (cur_reg + 1)#[0..=4]
@@ -38,7 +33,7 @@ pub mod vpu_tensorreduce::[timecheck=false](clock:u1, reset:u1, reduce_start:u1,
     reg_pending_next#[0..=2] = (reg_pending#[0..=2] - 1)#[0..=2]
     cur_reg_next = (cur_reg + reduce_op + 1)#[0..=5]#[0..=4]
     if reg_pending_next#[0..=2] == 0 {
-      reg_pending_next#[0..=2] = (((cols_per_row >> 1) & 1) + 1)
+      reg_pending_next#[0..=2] = (((cols_per_row >> 1) & 1) + 1)#[0..=2]
       reg_pending_next#[3..=6] = (reg_pending#[3..=6] - 1)#[0..=3]
       if reg_pending#[3..=6] == 0 {
         reg_pending_next = 0
@@ -49,7 +44,7 @@ pub mod vpu_tensorreduce::[timecheck=false](clock:u1, reset:u1, reduce_start:u1,
     cur_reg_next = reduce_ctrl#[57..=61]
     reg_pending_next = reduce_ctrl#[16..=22]
   } elif (new_req__w1 != 0) and (tensorstore_start != 0) {
-    reg_pending_next#[0..=2] = (((reduce_ctrl#[55..=56] >> 1) & 1) + 1)
+    reg_pending_next#[0..=2] = (((reduce_ctrl#[55..=56] >> 1) & 1) + 1)#[0..=2]
     cur_reg_next = reduce_ctrl#[57..=61]
     reg_pending_next#[3..=6] = reduce_ctrl#[51..=54]
   }
@@ -58,7 +53,7 @@ pub mod vpu_tensorreduce::[timecheck=false](clock:u1, reset:u1, reduce_start:u1,
     reg_pending_next = 0
     reg_up = 1
   }
-  mut exec_op_cd_next = if exec_op_cd == 0 { 0 } else { (exec_op_cd - 1)#[0..=2] }
+  mut exec_op_cd_next:u3 = if exec_op_cd == 0 { 0 } else { (exec_op_cd - 1)#[0..=2] }
   if exec_op != 0 {
     exec_op_cd_next = 4
   }
@@ -80,7 +75,7 @@ pub mod vpu_tensorreduce::[timecheck=false](clock:u1, reset:u1, reduce_start:u1,
       tquant_pend_sticky_next = 0
     }
   }
-  mut _mux_9:u5 = if reg_up != 0 { cur_reg_next#[0..=4] } else { cur_reg#[0..=4] }
+  mut _mux_9:u5 = if reg_up != 0 { cur_reg_next } else { cur_reg }
   const cur_reg_next_mux__w1 = _mux_9
   mut reduce_inst_next__w2 = 0ub?????????????????110?????0001011
   reduce_inst_next__w2#[7..=11] = cur_reg_next_mux__w1
@@ -126,8 +121,7 @@ pub mod vpu_tensorreduce::[timecheck=false](clock:u1, reset:u1, reduce_start:u1,
     reduce_inst_next#[15..=19] = cur_reg_next_mux__w1
     reduce_inst_next#[20..=24] = cur_reg_next_mux__w1
   }
-  const t142 = ((reg_pending & 127) << 18) | ((exec_op_cd & 7) << 15) | ((cur_reg & 31) << 10) | ((reduce_op & 15) << 6) | ((is_reduce & 1) << 5) | ((cols_per_row & 3) << 3) | ((scoreboard_pend_sticky & 1) << 2) | ((tfma_pend_sticky & 1) << 1) | (tquant_pend_sticky & 1)
-  const vpu_tensorreduce_debug__w1 = t142
+  const vpu_tensorreduce_debug__w1 = (reg_pending << 18) | (exec_op_cd << 15) | (cur_reg << 10) | (reduce_op << 6) | ((is_reduce & 1) << 5) | (cols_per_row << 3) | ((scoreboard_pend_sticky & 1) << 2) | ((tfma_pend_sticky & 1) << 1) | (tquant_pend_sticky & 1)
   mut `load_ctrl__bpo.broadcast_sel` = 0
   mut `load_ctrl__bpo.thread_id` = 0
   mut `load_ctrl__bpo.waddr` = cur_reg

@@ -128,12 +128,12 @@ CORES = {
         # livehd's sim cgen stopped calling Slop::get_mask_op for constant bit
         # slices (439 call sites -> 3) and dino went from ~9k to ~383k
         # cycles/s, which put 20k back down to 52 ms, i.e. mostly process
-        # startup. Use 1M so both `lhd sim` and Verilator spend enough time in
+        # startup. Use 4M so both `lhd sim` and Verilator spend enough time in
         # the active workload to keep startup and scheduling noise secondary.
         # Re-check this number after any large sim speedup — a benchmark that
         # has outrun its own cycle count reports startup, not the simulator.
         "sim_tb": "dino_prog_tb.prp",
-        "sim_cycles": 1000000,
+        "sim_cycles": 4000000,
         "sim_tb_unit": "PipelinedDualIssueCPU",
         "sim_tb_v": "",
         "sim_marker": "dino program:",
@@ -161,18 +161,14 @@ CORES = {
         # line-by-line twin of dino_prog_tb.prp (same ROM, same poke/peek
         # order), and all three simulators print the same
         # `x2=100 -x3=102, done at cycle 506, IPC=602`.
-        # 2M cycles for the throughput run: verilator does dino at ~4.3M
+        # 8M cycles for the throughput run: verilator does dino at ~4.3M
         # cycles/s (re-measured 2026-08-09; it was ~2.8M when this knob was
-        # added), so anything shorter measures process startup. Startup is NOT
-        # negligible at these speeds — ~19 ms for the Verilated model and
-        # ~17 ms for `lhd sim`'s drv.bin on this box, i.e. ~12% of the matched
-        # 1M run — so a single-count cycles/s still under-reports both. A
-        # two-point fit (t(N) = startup + N/rate over N = 100k and 2M, best of
-        # 5) puts the honest numbers at lhd-pyrope 3.30M, lhd-verilog 3.40M,
-        # verilator 4.32M cycles/s: `lhd sim` within 1.3x of verilator.
+        # added), so anything shorter measures process startup. The matched 4M
+        # and long 8M runs keep the historical ~17-19 ms process startup
+        # secondary; rerun both modes before quoting a new steady-state ratio.
         "verilator_tb": "dino_prog_tb_verilator.cpp",
         "verilator_flags": "",
-        "verilator_cycles": 2000000,
+        "verilator_cycles": 8000000,
     },
     "cva6": {
         "pkg": "//cva6",

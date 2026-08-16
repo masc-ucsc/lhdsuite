@@ -2,7 +2,7 @@ const minion_pkg = import("minion_pkg")
 const vpu_pkg = import("vpu_pkg")
 
 pub mod vpu_sh_sw::[timecheck=false](lane_id_i:u3, clk_i:u1, rst_ni:u1, ex_in_valid_i:u1, ex_cmd_i:u7, ex_in1_i:minion_pkg.VpuDataSSz_T, ex_in2_i:minion_pkg.VpuDataSSz_T, ex_in3_i:minion_pkg.VpuDataSSz_T, ex_imm_i:u20, ex_dtype_i:u4, ex_mask_in1_i:u1, f2_swizz_in1_i:minion_pkg.VpuDataSSz_T, f2_swizz_in2_i:minion_pkg.VpuDataSSz_T, f2_swizz_in3_i:minion_pkg.VpuDataSSz_T) -> (f2_fswizz_rdata_o:minion_pkg.VpuDataSSz_T@[], f3_out_bits_o:(data:u32, exc:u6)@[]) {
-  mut is_mvxf = 0
+  mut is_mvxf:u1 = 0
   reg f3_data_q:u32:[clock_pin=ref clk_i]
   reg f3_flags_q:u6:[clock_pin=ref clk_i]
   reg f2_in_valid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
@@ -13,9 +13,9 @@ pub mod vpu_sh_sw::[timecheck=false](lane_id_i:u3, clk_i:u1, rst_ni:u1, ex_in_va
   reg f2_imm_q:u20:[clock_pin=ref clk_i]
   reg f2_dtype_q:u4:[clock_pin=ref clk_i]
   reg f2_mask_in1_q:u1:[clock_pin=ref clk_i]
-  mut cubeface_idx_out = 0
-  mut cubeface_idx_flag_out = 0
-  mut gfx_out = 0
+  mut cubeface_idx_out:u32 = 0
+  mut cubeface_idx_flag_out:u6 = 0
+  mut gfx_out:u32 = 0
   f2_in_valid_q = ex_in_valid_i
   if ex_in_valid_i != 0 {
     f2_cmd_q = ex_cmd_i
@@ -26,64 +26,55 @@ pub mod vpu_sh_sw::[timecheck=false](lane_id_i:u3, clk_i:u1, rst_ni:u1, ex_in_va
     f2_in3_q = ex_in3_i
     f2_mask_in1_q = ex_mask_in1_i
   }
-  const t11 = ((0 & 134217727) << 5) | (f2_imm_q#[0..=4] & 31)
-  mut _mux_2:u32 = if f2_cmd_q == minion_pkg.VpuCmdSlli { t11#[0..=31] } else { f2_in2_q#[0..=31] }
+  mut _mux_2:u32 = if f2_cmd_q == minion_pkg.VpuCmdSlli { f2_imm_q#[0..=4] } else { f2_in2_q }
   const in1_pip_srl_sra__w1 = f2_in1_q#sext[0..=31]
-  const t33 = ((0 & 134217727) << 5) | (f2_imm_q#[0..=4] & 31)
-  mut _mux_4:s32 = if (f2_cmd_q == minion_pkg.VpuCmdSrl) or (f2_cmd_q == minion_pkg.VpuCmdSra) { f2_in2_q#sext[0..=31]#[0..=31]#sext[0..=31] } else { t33#sext[0..=31]#[0..=31]#sext[0..=31] }
-  mut _mux_5:u1 = if (f2_cmd_q == minion_pkg.VpuCmdSra) or (f2_cmd_q == minion_pkg.VpuCmdSrai) { (in1_pip_srl_sra__w1#[0..=31] >> 31) & 1 & 1 } else { 0 }
-  const t46 = ((_mux_5 & 1) << 32) | (in1_pip_srl_sra__w1#[0..=31] & 4294967295)
+  mut _mux_4:s32 = if (f2_cmd_q == minion_pkg.VpuCmdSrl) or (f2_cmd_q == minion_pkg.VpuCmdSra) { f2_in2_q#sext[0..=31]#[0..=31]#sext[0..=31] } else { f2_imm_q#[0..=4]#sext[0..=31]#[0..=31]#sext[0..=31] }
+  mut _mux_5:u1 = if (f2_cmd_q == minion_pkg.VpuCmdSra) or (f2_cmd_q == minion_pkg.VpuCmdSrai) { (in1_pip_srl_sra__w1#[0..=31] >> 31) & 1 } else { 0 }
   const equal__w1 = unsigned(f2_in1_q == f2_in2_q)
   mut _mux_8:u32 = if equal__w1 != 0 { 0xffffffff } else { 0 }
   mut _mux_12:u1 = if f2_cmd_q == minion_pkg.VpuCmdFltu { unsigned(f2_in1_q < f2_in2_q) & 1 } else { unsigned(f2_in1_q#sext[0..=31] < f2_in2_q#sext[0..=31]) & 1 }
   const less__w1 = _mux_12
   mut _mux_13:u32 = if less__w1 != 0 { 0xffffffff } else { 0 }
   mut _mux_15:u32 = if (equal__w1 != 0) or (less__w1 != 0) { 0xffffffff } else { 0 }
-  const imm_pip_fbci__w1 = f2_imm_q#[0..=19]
-  const t90 = (((imm_pip_fbci__w1 >> 19) & 1) & 1)
-  const t113 = (((t90 | (t90 << 1) | (t90 << 2) | (t90 << 3) | (t90 << 4) | (t90 << 5) | (t90 << 6) | (t90 << 7) | (t90 << 8) | (t90 << 9) | (t90 << 10) | (t90 << 11)) & 4095) << 20) | (imm_pip_fbci__w1 & 1048575)
   const max_op__w1 = unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdMax) or (f2_cmd_q == minion_pkg.VpuCmdMaxu)))
   const in1_pip_min_max__w1 = f2_in1_q#sext[0..=31]
   const in2_pip_min_max__w1 = f2_in2_q#sext[0..=31]
   const unsigned_in1_pip_min_max__w1 = f2_in1_q
   const unsigned_in2_pip_min_max__w1 = f2_in2_q
-  mut _mux_21:u32 = if unsigned(unsigned_in1_pip_min_max__w1 > unsigned_in2_pip_min_max__w1) == max_op__w1 { unsigned_in1_pip_min_max__w1#[0..=31] } else { unsigned_in2_pip_min_max__w1#[0..=31] }
+  mut _mux_21:u32 = if unsigned(unsigned_in1_pip_min_max__w1 > unsigned_in2_pip_min_max__w1) == max_op__w1 { unsigned_in1_pip_min_max__w1 } else { unsigned_in2_pip_min_max__w1 }
   mut _mux_23:s32 = if unsigned(in1_pip_min_max__w1 > in2_pip_min_max__w1) == max_op__w1 { in1_pip_min_max__w1#[0..=31]#sext[0..=31] } else { in2_pip_min_max__w1#[0..=31]#sext[0..=31] }
-  mut _mux_24:u32 = if unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdMinu) or (f2_cmd_q == minion_pkg.VpuCmdMaxu))) != 0 { _mux_21#[0..=31] } else { _mux_23#[0..=31]#[0..=31] }
-  const imm_pip_andi__w1 = f2_imm_q#[0..=9]
-  const t158 = (((imm_pip_andi__w1 >> 9) & 1) & 1)
-  const t201 = (((t158 | (t158 << 1) | (t158 << 2) | (t158 << 3) | (t158 << 4) | (t158 << 5) | (t158 << 6) | (t158 << 7) | (t158 << 8) | (t158 << 9) | (t158 << 10) | (t158 << 11) | (t158 << 12) | (t158 << 13) | (t158 << 14) | (t158 << 15) | (t158 << 16) | (t158 << 17) | (t158 << 18) | (t158 << 19) | (t158 << 20) | (t158 << 21)) & 4194303) << 10) | (imm_pip_andi__w1 & 1023)
-  mut _mux_26:u32 = if f2_cmd_q == minion_pkg.VpuCmdAndi { t201#[0..=31] } else { f2_in2_q#[0..=31] }
-  mut _mux_31:u32 = if f2_in1_q == 0 { f2_in3_q#[0..=31] } else { f2_in2_q#[0..=31] }
-  mut _mux_33:u32 = if f2_mask_in1_q != 0 { f2_in3_q#[0..=31] } else { f2_in2_q#[0..=31] }
-  mut _mux_37:u2 = if (lane_id_i == 2) or (lane_id_i == 6) { f2_imm_q#[4..=5]#[0..=1] } else { f2_imm_q#[6..=7]#[0..=1] }
-  mut _mux_38:u2 = if (lane_id_i == 1) or (lane_id_i == 5) { f2_imm_q#[2..=3]#[0..=1] } else { _mux_37#[0..=1] }
-  mut _mux_39:u2 = if (lane_id_i == 0) or (lane_id_i == 4) { f2_imm_q#[0..=1]#[0..=1] } else { _mux_38#[0..=1] }
+  mut _mux_24:u32 = if unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdMinu) or (f2_cmd_q == minion_pkg.VpuCmdMaxu))) != 0 { _mux_21 } else { _mux_23#[0..=31] }
+  mut _mux_26:u32 = if f2_cmd_q == minion_pkg.VpuCmdAndi { f2_imm_q#[0..=9]#sext[0..=9]#[0..=31] } else { f2_in2_q }
+  mut _mux_31:u32 = if f2_in1_q == 0 { f2_in3_q } else { f2_in2_q }
+  mut _mux_33:u32 = if f2_mask_in1_q != 0 { f2_in3_q } else { f2_in2_q }
+  mut _mux_37:u2 = if (lane_id_i == 2) or (lane_id_i == 6) { f2_imm_q#[4..=5] } else { f2_imm_q#[6..=7] }
+  mut _mux_38:u2 = if (lane_id_i == 1) or (lane_id_i == 5) { f2_imm_q#[2..=3] } else { _mux_37 }
+  mut _mux_39:u2 = if (lane_id_i == 0) or (lane_id_i == 4) { f2_imm_q#[0..=1] } else { _mux_38 }
   const swizz_sel__w1 = _mux_39
-  mut _mux_40:u32 = if swizz_sel__w1 == 2 { f2_swizz_in2_i#[0..=31] } else { f2_swizz_in3_i#[0..=31] }
-  mut _mux_41:u32 = if swizz_sel__w1 == 1 { f2_swizz_in1_i#[0..=31] } else { _mux_40#[0..=31] }
-  mut _mux_42:u32 = if swizz_sel__w1 == 0 { f2_in1_q#[0..=31] } else { _mux_41#[0..=31] }
-  mut _mux_43:u32 = if swizz_sel__w1 == 2 { f2_swizz_in2_i#[0..=31] } else { f2_swizz_in3_i#[0..=31] }
-  mut _mux_44:u32 = if swizz_sel__w1 == 1 { f2_in1_q#[0..=31] } else { _mux_43#[0..=31] }
-  mut _mux_45:u32 = if swizz_sel__w1 == 0 { f2_swizz_in1_i#[0..=31] } else { _mux_44#[0..=31] }
-  mut _mux_46:u32 = if swizz_sel__w1 == 2 { f2_in1_q#[0..=31] } else { f2_swizz_in3_i#[0..=31] }
-  mut _mux_47:u32 = if swizz_sel__w1 == 1 { f2_swizz_in2_i#[0..=31] } else { _mux_46#[0..=31] }
-  mut _mux_48:u32 = if swizz_sel__w1 == 0 { f2_swizz_in1_i#[0..=31] } else { _mux_47#[0..=31] }
-  mut _mux_49:u32 = if swizz_sel__w1 == 2 { f2_swizz_in3_i#[0..=31] } else { f2_in1_q#[0..=31] }
-  mut _mux_50:u32 = if swizz_sel__w1 == 1 { f2_swizz_in2_i#[0..=31] } else { _mux_49#[0..=31] }
-  mut _mux_51:u32 = if swizz_sel__w1 == 0 { f2_swizz_in1_i#[0..=31] } else { _mux_50#[0..=31] }
-  mut _mux_52:u32 = if (lane_id_i == 2) or (lane_id_i == 6) { _mux_48#[0..=31] } else { _mux_51#[0..=31] }
-  mut _mux_53:u32 = if (lane_id_i == 1) or (lane_id_i == 5) { _mux_45#[0..=31] } else { _mux_52#[0..=31] }
-  mut _mux_54:u32 = if (lane_id_i == 0) or (lane_id_i == 4) { _mux_42#[0..=31] } else { _mux_53#[0..=31] }
+  mut _mux_40:u32 = if swizz_sel__w1 == 2 { f2_swizz_in2_i } else { f2_swizz_in3_i }
+  mut _mux_41:u32 = if swizz_sel__w1 == 1 { f2_swizz_in1_i } else { _mux_40 }
+  mut _mux_42:u32 = if swizz_sel__w1 == 0 { f2_in1_q } else { _mux_41 }
+  mut _mux_43:u32 = if swizz_sel__w1 == 2 { f2_swizz_in2_i } else { f2_swizz_in3_i }
+  mut _mux_44:u32 = if swizz_sel__w1 == 1 { f2_in1_q } else { _mux_43 }
+  mut _mux_45:u32 = if swizz_sel__w1 == 0 { f2_swizz_in1_i } else { _mux_44 }
+  mut _mux_46:u32 = if swizz_sel__w1 == 2 { f2_in1_q } else { f2_swizz_in3_i }
+  mut _mux_47:u32 = if swizz_sel__w1 == 1 { f2_swizz_in2_i } else { _mux_46 }
+  mut _mux_48:u32 = if swizz_sel__w1 == 0 { f2_swizz_in1_i } else { _mux_47 }
+  mut _mux_49:u32 = if swizz_sel__w1 == 2 { f2_swizz_in3_i } else { f2_in1_q }
+  mut _mux_50:u32 = if swizz_sel__w1 == 1 { f2_swizz_in2_i } else { _mux_49 }
+  mut _mux_51:u32 = if swizz_sel__w1 == 0 { f2_swizz_in1_i } else { _mux_50 }
+  mut _mux_52:u32 = if (lane_id_i == 2) or (lane_id_i == 6) { _mux_48 } else { _mux_51 }
+  mut _mux_53:u32 = if (lane_id_i == 1) or (lane_id_i == 5) { _mux_45 } else { _mux_52 }
+  mut _mux_54:u32 = if (lane_id_i == 0) or (lane_id_i == 4) { _mux_42 } else { _mux_53 }
   mut _mux_56:u32 = if f2_in1_q == 0 { 0 } else { 1 }
   mut _mux_58:u32 = if (f2_in2_q & 1) != 0 { 0 } else { 1 }
   mut _mux_59:u32 = if (f2_in1_q & 1) != 0 { 0 } else { 2 }
-  mut _mux_60:u32 = if (f2_in3_q & 1) != 0 { _mux_58#[0..=31] } else { _mux_59#[0..=31] }
+  mut _mux_60:u32 = if (f2_in3_q & 1) != 0 { _mux_58 } else { _mux_59 }
   const cubeface_idx_enable__w1 = unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdCubefaceIdx))
-  const t336 = ((((f2_in2_q >> 31) & 1) & 1) << 2) | (f2_in1_q#[0..=1] & 3)
+  const t255 = (((f2_in2_q >> 31) & 1) << 2) | f2_in1_q#[0..=1]
   cubeface_idx_flag_out = 0
   cubeface_idx_out = 0
-  match t336 {
+  match t255 {
     == 0 {
       cubeface_idx_out = 0
     }
@@ -110,16 +101,10 @@ pub mod vpu_sh_sw::[timecheck=false](lane_id_i:u3, clk_i:u1, rst_ni:u1, ex_in_va
     else {
     }
   }
-  const t356 = ((unsigned((f2_in1_q#[0..=2] == 0) or (f2_in1_q#[0..=2] == 5)) & 1) << 31) | (f2_in2_q#[0..=30] & 2147483647)
-  const t363 = ((unsigned(f2_in1_q#[0..=2] != 2) & 1) << 31) | (f2_in2_q#[0..=30] & 2147483647)
-  const t364 = ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdPackrepb)) & 1) << 20) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdCubeface)) & 1) << 19) | ((cubeface_idx_enable__w1 & 1) << 18) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdCubesgnsc)) & 1) << 17) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdCubesgntc)) & 1) << 16) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdPackreph)) & 1) << 15) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFsetm)) & 1) << 14) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFswizz)) & 1) << 13) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFcmovm)) & 1) << 12) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFcmov)) & 1) << 11) | ((unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdSll) or (f2_cmd_q == minion_pkg.VpuCmdSlli))) & 1) << 10) | ((unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdSrl) or (f2_cmd_q == minion_pkg.VpuCmdSra) or (f2_cmd_q == minion_pkg.VpuCmdSrli) or (f2_cmd_q == minion_pkg.VpuCmdSrai))) & 1) << 9) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFeq)) & 1) << 8) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFle)) & 1) << 7) | ((unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdFlt) or (f2_cmd_q == minion_pkg.VpuCmdFltu))) & 1) << 6) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFbci) and (f2_dtype_q == minion_pkg.VpuDtypeInt)) & 1) << 5) | ((unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdMin) or (f2_cmd_q == minion_pkg.VpuCmdMax) or (f2_cmd_q == minion_pkg.VpuCmdMinu) or (f2_cmd_q == minion_pkg.VpuCmdMaxu))) & 1) << 4) | ((unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdAnd) or (f2_cmd_q == minion_pkg.VpuCmdAndi))) & 1) << 3) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdOr)) & 1) << 2) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdNot)) & 1) << 1) | (unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdXor)) & 1)
-  const gfx_out_valids_packed__w1 = t364
+  const gfx_out_valids_packed__w1 = ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdPackrepb)) & 1) << 20) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdCubeface)) & 1) << 19) | ((cubeface_idx_enable__w1 & 1) << 18) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdCubesgnsc)) & 1) << 17) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdCubesgntc)) & 1) << 16) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdPackreph)) & 1) << 15) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFsetm)) & 1) << 14) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFswizz)) & 1) << 13) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFcmovm)) & 1) << 12) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFcmov)) & 1) << 11) | ((unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdSll) or (f2_cmd_q == minion_pkg.VpuCmdSlli))) & 1) << 10) | ((unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdSrl) or (f2_cmd_q == minion_pkg.VpuCmdSra) or (f2_cmd_q == minion_pkg.VpuCmdSrli) or (f2_cmd_q == minion_pkg.VpuCmdSrai))) & 1) << 9) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFeq)) & 1) << 8) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFle)) & 1) << 7) | ((unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdFlt) or (f2_cmd_q == minion_pkg.VpuCmdFltu))) & 1) << 6) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFbci) and (f2_dtype_q == minion_pkg.VpuDtypeInt)) & 1) << 5) | ((unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdMin) or (f2_cmd_q == minion_pkg.VpuCmdMax) or (f2_cmd_q == minion_pkg.VpuCmdMinu) or (f2_cmd_q == minion_pkg.VpuCmdMaxu))) & 1) << 4) | ((unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdAnd) or (f2_cmd_q == minion_pkg.VpuCmdAndi))) & 1) << 3) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdOr)) & 1) << 2) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdNot)) & 1) << 1) | (unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdXor)) & 1)
   const gfx_out_valids_ored__w1 = unsigned(gfx_out_valids_packed__w1 != 0)
   const imm_ps_low_fbci__w1 = f2_imm_q#[0..=3]
-  const t376 = ((imm_ps_low_fbci__w1 & 15) << 8) | ((imm_ps_low_fbci__w1 & 15) << 4) | (imm_ps_low_fbci__w1 & 15)
-  const t378 = ((imm_ps_low_fbci__w1 & 15) << 8) | ((imm_ps_low_fbci__w1 & 15) << 4) | ((imm_ps_low_fbci__w1 + 1)#[0..=3] & 15)
-  mut _mux_68:u12 = if imm_ps_low_fbci__w1 < 8 { t376#[0..=11] } else { t378#[0..=11] }
-  const t380 = ((f2_imm_q#[0..=19] & 1048575) << 12) | (_mux_68 & 4095)
+  mut _mux_68:u12 = if imm_ps_low_fbci__w1 < 8 { (imm_ps_low_fbci__w1 << 8) | (imm_ps_low_fbci__w1 << 4) | imm_ps_low_fbci__w1 } else { (imm_ps_low_fbci__w1 << 8) | (imm_ps_low_fbci__w1 << 4) | (imm_ps_low_fbci__w1 + 1)#[0..=3] }
   match f2_cmd_q {
     in (minion_pkg.VpuCmdMvXf, minion_pkg.VpuTransLogFma1, minion_pkg.VpuTransLogFma2, minion_pkg.VpuTransLogMul) {
       is_mvxf = 1
@@ -128,43 +113,25 @@ pub mod vpu_sh_sw::[timecheck=false](lane_id_i:u3, clk_i:u1, rst_ni:u1, ex_in_va
       is_mvxf = 0
     }
   }
-  mut _mux_71:u32 = if f2_cmd_q == minion_pkg.VpuCmdMvXf { f2_in1_q#[0..=31] } else { f2_in3_q#[0..=31] }
-  mut _mux_73:u1 = if f2_cmd_q == minion_pkg.VpuCmdFsgnjn { (~((f2_in2_q >> 31) & 1)) & 1 & 1 } else { (((f2_in1_q >> 31) & 1) ^ ((f2_in2_q >> 31) & 1)) & 1 }
-  mut _mux_74:u1 = if f2_cmd_q == minion_pkg.VpuCmdFsgnj { (f2_in2_q >> 31) & 1 & 1 } else { _mux_73 & 1 }
-  const t426 = ((_mux_74 & 1) << 31) | (f2_in1_q#[0..=30] & 2147483647)
+  mut _mux_71:u32 = if f2_cmd_q == minion_pkg.VpuCmdMvXf { f2_in1_q } else { f2_in3_q }
+  mut _mux_73:u1 = if f2_cmd_q == minion_pkg.VpuCmdFsgnjn { (~((f2_in2_q >> 31) & 1)) & 1 } else { (((f2_in1_q >> 31) & 1) ^ ((f2_in2_q >> 31) & 1)) & 1 }
+  mut _mux_74:u1 = if f2_cmd_q == minion_pkg.VpuCmdFsgnj { (f2_in2_q >> 31) & 1 } else { _mux_73 & 1 }
   const in1_fsat8__w1 = f2_in1_q#sext[0..=31]
-  const t436 = ((0 & 16777215) << 8) | (f2_in1_q#[0..=7] & 255)
-  mut _mux_76:u32 = if in1_fsat8__w1 < (-128) { 0x80 } else { t436#[0..=31] }
-  mut _mux_77:u32 = if in1_fsat8__w1 > 0x7f { 0x7f } else { _mux_76#[0..=31] }
-  const t447 = ((0 & 16777215) << 8) | (f2_in1_q#[0..=7] & 255)
-  mut _mux_79:u32 = if in1_fsat8__w1 < 0 { 0 } else { t447#[0..=31] }
-  mut _mux_80:u32 = if in1_fsat8__w1 > 0xff { 0xff } else { _mux_79#[0..=31] }
+  mut _mux_76:u32 = if in1_fsat8__w1 < (-0x80) { 0x80 } else { f2_in1_q#[0..=7] }
+  mut _mux_77:u32 = if in1_fsat8__w1 > 0x7f { 0x7f } else { _mux_76 }
+  mut _mux_79:u32 = if in1_fsat8__w1 < 0 { 0 } else { f2_in1_q#[0..=7] }
+  mut _mux_80:u32 = if in1_fsat8__w1 > 0xff { 0xff } else { _mux_79 }
   const add_enable__w1 = unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdAdd) or (f2_cmd_q == minion_pkg.VpuCmdAddi) or (f2_cmd_q == minion_pkg.VpuCmdSub)))
-  const t457 = (add_enable__w1 & 1)
-  const t520 = f2_in1_q & (t457 | (t457 << 1) | (t457 << 2) | (t457 << 3) | (t457 << 4) | (t457 << 5) | (t457 << 6) | (t457 << 7) | (t457 << 8) | (t457 << 9) | (t457 << 10) | (t457 << 11) | (t457 << 12) | (t457 << 13) | (t457 << 14) | (t457 << 15) | (t457 << 16) | (t457 << 17) | (t457 << 18) | (t457 << 19) | (t457 << 20) | (t457 << 21) | (t457 << 22) | (t457 << 23) | (t457 << 24) | (t457 << 25) | (t457 << 26) | (t457 << 27) | (t457 << 28) | (t457 << 29) | (t457 << 30) | (t457 << 31))
-  const add_in1__w1 = t520
-  const t524 = (((f2_imm_q >> 9) & 1) & 1)
-  const t568 = (((t524 | (t524 << 1) | (t524 << 2) | (t524 << 3) | (t524 << 4) | (t524 << 5) | (t524 << 6) | (t524 << 7) | (t524 << 8) | (t524 << 9) | (t524 << 10) | (t524 << 11) | (t524 << 12) | (t524 << 13) | (t524 << 14) | (t524 << 15) | (t524 << 16) | (t524 << 17) | (t524 << 18) | (t524 << 19) | (t524 << 20) | (t524 << 21)) & 4194303) << 10) | (f2_imm_q#[0..=9] & 1023)
-  const t569 = (add_enable__w1 & 1)
-  const t632 = t568 & (t569 | (t569 << 1) | (t569 << 2) | (t569 << 3) | (t569 << 4) | (t569 << 5) | (t569 << 6) | (t569 << 7) | (t569 << 8) | (t569 << 9) | (t569 << 10) | (t569 << 11) | (t569 << 12) | (t569 << 13) | (t569 << 14) | (t569 << 15) | (t569 << 16) | (t569 << 17) | (t569 << 18) | (t569 << 19) | (t569 << 20) | (t569 << 21) | (t569 << 22) | (t569 << 23) | (t569 << 24) | (t569 << 25) | (t569 << 26) | (t569 << 27) | (t569 << 28) | (t569 << 29) | (t569 << 30) | (t569 << 31))
-  const t633 = t632#[0..=31]
-  const t635 = (unsigned(f2_cmd_q == minion_pkg.VpuCmdSub) & 1)
-  const t699 = (add_enable__w1 & 1)
-  const t762 = (f2_in3_q ^ (t635 | (t635 << 1) | (t635 << 2) | (t635 << 3) | (t635 << 4) | (t635 << 5) | (t635 << 6) | (t635 << 7) | (t635 << 8) | (t635 << 9) | (t635 << 10) | (t635 << 11) | (t635 << 12) | (t635 << 13) | (t635 << 14) | (t635 << 15) | (t635 << 16) | (t635 << 17) | (t635 << 18) | (t635 << 19) | (t635 << 20) | (t635 << 21) | (t635 << 22) | (t635 << 23) | (t635 << 24) | (t635 << 25) | (t635 << 26) | (t635 << 27) | (t635 << 28) | (t635 << 29) | (t635 << 30) | (t635 << 31))) & (t699 | (t699 << 1) | (t699 << 2) | (t699 << 3) | (t699 << 4) | (t699 << 5) | (t699 << 6) | (t699 << 7) | (t699 << 8) | (t699 << 9) | (t699 << 10) | (t699 << 11) | (t699 << 12) | (t699 << 13) | (t699 << 14) | (t699 << 15) | (t699 << 16) | (t699 << 17) | (t699 << 18) | (t699 << 19) | (t699 << 20) | (t699 << 21) | (t699 << 22) | (t699 << 23) | (t699 << 24) | (t699 << 25) | (t699 << 26) | (t699 << 27) | (t699 << 28) | (t699 << 29) | (t699 << 30) | (t699 << 31))
-  const t763 = t762#[0..=31]
-  mut _mux_83:u32 = if f2_cmd_q == minion_pkg.VpuCmdAddi { t633 } else { t763 }
-  const t765 = ((0 & 2147483647) << 1) | (unsigned(f2_cmd_q == minion_pkg.VpuCmdSub) & 1)
-  const t766 = add_in1__w1 + _mux_83
-  const t767 = t766#[0..=31]
-  const t768 = t767 + t765
-  const t769 = t768#[0..=31]
-  const add_out__w1 = t769
-  const t770 = ((gfx_out_valids_ored__w1 & 1) << 7) | ((unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdMvsFx) or (f2_cmd_q == minion_pkg.VpuCmdMvzFx) or (f2_cmd_q == minion_pkg.VpuCmdFbc))) & 1) << 6) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFbci) and (f2_dtype_q == minion_pkg.VpuDtypeF32)) & 1) << 5) | ((unsigned((f2_in_valid_q != 0) and (is_mvxf != 0)) & 1) << 4) | ((unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdFsgnj) or (f2_cmd_q == minion_pkg.VpuCmdFsgnjn) or (f2_cmd_q == minion_pkg.VpuCmdFsgnjx))) & 1) << 3) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFsat8)) & 1) << 2) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFsatu8)) & 1) << 1) | (add_enable__w1 & 1)
-  const out_valids_packed__w1 = t770
+  mut _rep_82:u32 = if (add_enable__w1 & 1) != 0 { 0xffffffff } else { 0 }
+  mut _rep_83:u32 = if (add_enable__w1 & 1) != 0 { 0xffffffff } else { 0 }
+  mut _rep_85:u32 = if (unsigned(f2_cmd_q == minion_pkg.VpuCmdSub) & 1) != 0 { 0xffffffff } else { 0 }
+  mut _rep_86:u32 = if (add_enable__w1 & 1) != 0 { 0xffffffff } else { 0 }
+  mut _mux_87:u32 = if f2_cmd_q == minion_pkg.VpuCmdAddi { f2_imm_q#[0..=9]#sext[0..=9]#[0..=31] & _rep_83 } else { (f2_in3_q ^ _rep_85) & _rep_86 }
+  const out_valids_packed__w1 = ((gfx_out_valids_ored__w1 & 1) << 7) | ((unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdMvsFx) or (f2_cmd_q == minion_pkg.VpuCmdMvzFx) or (f2_cmd_q == minion_pkg.VpuCmdFbc))) & 1) << 6) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFbci) and (f2_dtype_q == minion_pkg.VpuDtypeF32)) & 1) << 5) | ((unsigned((f2_in_valid_q != 0) and (is_mvxf != 0)) & 1) << 4) | ((unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdFsgnj) or (f2_cmd_q == minion_pkg.VpuCmdFsgnjn) or (f2_cmd_q == minion_pkg.VpuCmdFsgnjx))) & 1) << 3) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFsat8)) & 1) << 2) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFsatu8)) & 1) << 1) | (add_enable__w1 & 1)
   gfx_out = 0
   if gfx_out_valids_ored__w1 != 0 {
     match gfx_out_valids_packed__w1 {
-      == 1048576 {
+      == 0x100000 {
         gfx_out = f2_swizz_in1_i
       }
       == 0x80000 {
@@ -174,10 +141,10 @@ pub mod vpu_sh_sw::[timecheck=false](lane_id_i:u3, clk_i:u1, rst_ni:u1, ex_in_va
         gfx_out = cubeface_idx_out
       }
       == 0x20000 {
-        gfx_out = t356
+        gfx_out = ((unsigned((f2_in1_q#[0..=2] == 0) or (f2_in1_q#[0..=2] == 5)) & 1) << 31) | f2_in2_q#[0..=30]
       }
       == 0x10000 {
-        gfx_out = t363
+        gfx_out = ((unsigned(f2_in1_q#[0..=2] != 2) & 1) << 31) | f2_in2_q#[0..=30]
       }
       == 0x8000 {
         gfx_out = f2_swizz_in1_i
@@ -198,7 +165,7 @@ pub mod vpu_sh_sw::[timecheck=false](lane_id_i:u3, clk_i:u1, rst_ni:u1, ex_in_va
         gfx_out = (f2_in1_q << _mux_2)#[0..=31]
       }
       == 0x200 {
-        gfx_out = (t46#sext[0..=32] >> _mux_4#[0..=31])#[0..=32]#[0..=31]
+        gfx_out = ((((_mux_5 & 1) << 32) | unsigned((in1_pip_srl_sra__w1#[0..=31]#sext[0..=31])#[0..=31]))#sext[0..=32] >> _mux_4#[0..=31])#[0..=32]#[0..=31]
       }
       == 0x100 {
         gfx_out = _mux_8
@@ -206,11 +173,11 @@ pub mod vpu_sh_sw::[timecheck=false](lane_id_i:u3, clk_i:u1, rst_ni:u1, ex_in_va
       == 0x80 {
         gfx_out = _mux_15
       }
-      == 64 {
+      == 0x40 {
         gfx_out = _mux_13
       }
       == 32 {
-        gfx_out = t113
+        gfx_out = f2_imm_q#sext[0..=19]#[0..=31]
       }
       == 16 {
         gfx_out = _mux_24
@@ -233,12 +200,12 @@ pub mod vpu_sh_sw::[timecheck=false](lane_id_i:u3, clk_i:u1, rst_ni:u1, ex_in_va
   }
   mut f2_data = 0
   if unsigned(out_valids_packed__w1 != 0) != 0 {
-    f2_data = unique if out_valids_packed__w1 == 128 { gfx_out } elif out_valids_packed__w1 == 64 { f2_in1_q } elif out_valids_packed__w1 == 32 { t380 } elif out_valids_packed__w1 == 16 { _mux_71 } elif out_valids_packed__w1 == 8 { t426 } elif out_valids_packed__w1 == 4 { _mux_77 } elif out_valids_packed__w1 == 2 { _mux_80 } elif out_valids_packed__w1 == 1 { add_out__w1 } else { 0 }
+    f2_data = unique if out_valids_packed__w1 == 0x80 { gfx_out } elif out_valids_packed__w1 == 0x40 { f2_in1_q } elif out_valids_packed__w1 == 32 { (f2_imm_q << 12) | _mux_68 } elif out_valids_packed__w1 == 16 { _mux_71 } elif out_valids_packed__w1 == 8 { ((_mux_74 & 1) << 31) | f2_in1_q#[0..=30] } elif out_valids_packed__w1 == 4 { _mux_77 } elif out_valids_packed__w1 == 2 { _mux_80 } elif out_valids_packed__w1 == 1 { (((f2_in1_q & _rep_82) + _mux_87)#[0..=31] + (unsigned(f2_cmd_q == minion_pkg.VpuCmdSub) & 1))#[0..=31] } else { 0 }
   }
-  const t803 = (cubeface_idx_enable__w1 & 1)
+  mut _rep_90:u6 = if (cubeface_idx_enable__w1 & 1) != 0 { 63 } else { 0 }
   if f2_in_valid_q != 0 {
     f3_data_q = f2_data
-    f3_flags_q = cubeface_idx_flag_out & (t803 | (t803 << 1) | (t803 << 2) | (t803 << 3) | (t803 << 4) | (t803 << 5))
+    f3_flags_q = cubeface_idx_flag_out & _rep_90
   }
   mut `f3_out_bits_o__bpo.data` = f3_data_q
   mut `f3_out_bits_o__bpo.exc` = f3_flags_q

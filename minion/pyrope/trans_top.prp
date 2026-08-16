@@ -8,7 +8,7 @@ const vpu_pkg = import("vpu_pkg")
 const minion_pkg = import("minion_pkg")
 
 pub mod trans_top::[timecheck=false](clk_i:u1, rst_ni:u1, ex_valid_i:u1, ex_in_bits_i:(use_prev_sigs:u1, sigs:(cmd:u7, txfma:u1, shsw:u1, rom:u1, scatter:u1, cvt:u1, trans:u1, gcvt:u1, fromintf:u1, tointm:u1, tointf:u1, maskop:u1, ldst:u1, m0ren:u1, mallren:u1, mren1:u1, mren2:u1, wen:u1, ren1:u1, ren2:u1, ren3:u1, rend:u1, swap12:u1, swap23:u1, swap13:u1, vector:u1, dtype:u4, fromint:u1, toint:u1, fma:u1, fms:u1, add:u1, sub:u1, mul:u1, round:u1, wflags:u1), imm:u20, rm:u3, typ:u2, in1:u32, in2:u32, in3:u32), ex_txfma_exc_i:vpu_pkg.VpuFlagsSz_T) -> (f8_rom_response_o:(exc:u1, mask:u7, taylor:u1, c2:u17, c0:u32)@[]) {
-  mut ex_exc_int_d = 0
+  mut ex_exc_int_d:u1 = 0
   reg f8_rom_response_o_q:u58:[clock_pin=ref clk_i]
   reg f2_trans_valid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
   reg f3_trans_valid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
@@ -40,14 +40,14 @@ pub mod trans_top::[timecheck=false](clk_i:u1, rst_ni:u1, ex_valid_i:u1, ex_in_b
   mut `f5_rom_response_l.taylor` = 0
   mut `f5_rom_response_l.c2` = 0
   mut `f5_rom_response_l.c0` = 0
-  mut f2_sin_addr_d = 0
-  mut f2_sin_taylor_d = 0
-  mut f5_rom_rcp1_index_d = 0
-  mut f5_rom_rcp2_index_d = 0
-  mut f5_rom_log1_index_d = 0
-  mut f5_rom_log2_index_d = 0
-  mut f5_rom_exp1_index_d = 0
-  mut f5_rom_exp2_index_d = 0
+  mut f2_sin_addr_d:u6 = 0
+  mut f2_sin_taylor_d:u1 = 0
+  mut f5_rom_rcp1_index_d:u8 = 0
+  mut f5_rom_rcp2_index_d:u8 = 0
+  mut f5_rom_log1_index_d:u8 = 0
+  mut f5_rom_log2_index_d:u8 = 0
+  mut f5_rom_exp1_index_d:u8 = 0
+  mut f5_rom_exp2_index_d:u8 = 0
   mut EnableExtraTrans = vpu_pkg.EnableExtraTransDefault
   f8_rom_response_o.c0 = f8_rom_response_o_q#[0..=31]
   f8_rom_response_o.c2 = f8_rom_response_o_q#[32..=48]
@@ -69,84 +69,72 @@ pub mod trans_top::[timecheck=false](clk_i:u1, rst_ni:u1, ex_valid_i:u1, ex_in_b
   f2_sin_taylor_d = 0
   if EnableExtraTrans != 0 {
     match f2_rom_raddr_q#[23..=30] {
-      == 124 {
-        const t80 = ((1 & 1) << 5) | (f2_rom_raddr_q#[18..=22] & 31)
-        f2_sin_addr_d = t80
+      == 0x7c {
+        f2_sin_addr_d = (1 << 5) | f2_rom_raddr_q#[18..=22]
       }
-      == 123 {
-        const t82 = ((0 & 1) << 5) | ((1 & 1) << 4) | (f2_rom_raddr_q#[19..=22] & 15)
-        f2_sin_addr_d = t82
+      == 0x7b {
+        f2_sin_addr_d = (1 << 4) | f2_rom_raddr_q#[19..=22]
       }
-      == 122 {
-        const t84 = ((0 & 3) << 4) | ((1 & 1) << 3) | (f2_rom_raddr_q#[20..=22] & 7)
-        f2_sin_addr_d = t84
+      == 0x7a {
+        f2_sin_addr_d = (1 << 3) | f2_rom_raddr_q#[20..=22]
       }
-      == 121 {
-        const t87 = ((0 & 15) << 2) | ((1 & 1) << 1) | (((f2_rom_raddr_q >> 22) & 1) & 1)
-        f2_sin_addr_d = t87
+      == 0x79 {
+        f2_sin_addr_d = (1 << 1) | ((f2_rom_raddr_q >> 22) & 1)
       }
       else {
       }
     }
-    f2_sin_taylor_d = unsigned(f2_rom_raddr_q#[23..=30] < 120)
+    f2_sin_taylor_d = unsigned(f2_rom_raddr_q#[23..=30] < 0x78)
   }
   `f2_rom_ctrl_d.cmd` = 0
   `f2_rom_ctrl_d.index` = 0
   match f2_rom_cmd_q {
     == minion_pkg.VpuTransRcpRr {
-      const t105 = ((0 & 1) << 7) | (f2_rom_raddr_q#[16..=22] & 127)
       `f2_rom_ctrl_d.cmd` = vpu_pkg.TransRomRcp1Id#[0..=3]
-      `f2_rom_ctrl_d.index` = t105#[0..=7]
+      `f2_rom_ctrl_d.index` = f2_rom_raddr_q#[16..=22]
     }
     == minion_pkg.VpuTransRcpFma1 {
-      const t109 = ((0 & 1) << 7) | (f2_rom_raddr_q#[16..=22] & 127)
       `f2_rom_ctrl_d.cmd` = vpu_pkg.TransRomRcp2Id#[0..=3]
-      `f2_rom_ctrl_d.index` = t109#[0..=7]
+      `f2_rom_ctrl_d.index` = f2_rom_raddr_q#[16..=22]
     }
     == minion_pkg.VpuTransRsqrtRr {
       if EnableExtraTrans != 0 {
         `f2_rom_ctrl_d.cmd` = vpu_pkg.TransRomRsqrt1Id#[0..=3]
-        `f2_rom_ctrl_d.index` = f2_rom_raddr_q#[16..=23]#[0..=7]
+        `f2_rom_ctrl_d.index` = f2_rom_raddr_q#[16..=23]
       }
     }
     == minion_pkg.VpuTransRsqrtFma1 {
       if EnableExtraTrans != 0 {
         `f2_rom_ctrl_d.cmd` = vpu_pkg.TransRomRsqrt2Id#[0..=3]
-        `f2_rom_ctrl_d.index` = f2_rom_raddr_q#[16..=23]#[0..=7]
+        `f2_rom_ctrl_d.index` = f2_rom_raddr_q#[16..=23]
       }
     }
     == minion_pkg.VpuTransLogRr {
-      const t121 = ((0 & 3) << 6) | (f2_rom_raddr_q#[17..=22] & 63)
       `f2_rom_ctrl_d.cmd` = vpu_pkg.TransRomLog1Id#[0..=3]
-      `f2_rom_ctrl_d.index` = t121#[0..=7]
+      `f2_rom_ctrl_d.index` = f2_rom_raddr_q#[17..=22]
     }
     == minion_pkg.VpuTransLogFma1 {
-      const t125 = ((0 & 3) << 6) | (f2_rom_raddr_q#[17..=22] & 63)
       `f2_rom_ctrl_d.cmd` = vpu_pkg.TransRomLog2Id#[0..=3]
-      `f2_rom_ctrl_d.index` = t125#[0..=7]
+      `f2_rom_ctrl_d.index` = f2_rom_raddr_q#[17..=22]
     }
     == minion_pkg.VpuTransExpRr {
-      const t129 = ((0 & 3) << 6) | (f2_rom_raddr_q#[18..=23] & 63)
       `f2_rom_ctrl_d.cmd` = vpu_pkg.TransRomExp1Id#[0..=3]
-      `f2_rom_ctrl_d.index` = t129#[0..=7]
+      `f2_rom_ctrl_d.index` = f2_rom_raddr_q#[18..=23]
     }
     == minion_pkg.VpuTransExpFma1 {
-      const t133 = ((0 & 3) << 6) | (f2_rom_raddr_q#[18..=23] & 63)
       `f2_rom_ctrl_d.cmd` = vpu_pkg.TransRomExp2Id#[0..=3]
-      `f2_rom_ctrl_d.index` = t133#[0..=7]
+      `f2_rom_ctrl_d.index` = f2_rom_raddr_q#[18..=23]
     }
     == minion_pkg.VpuTransSinRr {
       if EnableExtraTrans != 0 {
-        const t137 = ((0 & 3) << 6) | (f2_sin_addr_d & 63)
         `f2_rom_ctrl_d.cmd` = vpu_pkg.TransRomSin1Id#[0..=3]
-        `f2_rom_ctrl_d.index` = t137#[0..=7]
+        `f2_rom_ctrl_d.index` = f2_sin_addr_d
       }
     }
     == minion_pkg.VpuTransSinP1 {
       if EnableExtraTrans != 0 {
-        const t141 = ((0 & 3) << 6) | (f2_sin_addr_d & 63)
         `f2_rom_ctrl_d.cmd` = vpu_pkg.TransRomSin2Id#[0..=3]
-        `f2_rom_ctrl_d.index` = t141#[0..=7]
+        `f2_rom_ctrl_d.index` = f2_sin_addr_d
       }
     }
     == minion_pkg.VpuTransSinP2 {

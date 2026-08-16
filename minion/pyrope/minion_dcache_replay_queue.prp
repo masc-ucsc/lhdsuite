@@ -4,7 +4,7 @@ const minion_pkg = import("minion_pkg")
 const minion_dcache_pkg = import("minion_dcache_pkg")
 
 pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc_req_pre_i:u1, alloc_req_val_i:u1, alloc_gsc_i:u1, push_req_i:u1, push_req_prev_i:u1, req_data_i:(addr:u49, addr_msb_err:u1, set:u4, phys:u1, misaligned:u1, misaligned_2nd:u1, dest:(fp:u1, addr:u5, thread_id:u1), cmd:u5, typ:u4, gsc_cnt:u3, ps_mask:u8, data:u256, replay:u1, replay_entry:u3, replay_age:u5, cache_op:u1, buf_alloc:u1, buf_id:u3, cacheable:u1, chunk_read:u4, uc_load_2nd:u1, uc_load_ok:u1, miss_fill_ok:u1, gsc32_idx:u40, vm_sel:u3, mem_global:u1), cacheable_i:u1, req_buf_alloc_i:u1, req_buf_entry_i:minion_dcache_pkg.DcacheBufferIdxWidth_T, req_conf_type_i:(vpu_rf_write:u1, miss_alloc:u1, miss_accepted:u2, miss_assigned:u2), misaligned_1st_i:u1, uc_load_1st_i:u1, uc_load_ok_i:u1, miss_fill_ok_i:u1, rearm_i:u1, rearm_prev_i:u1, rearm_entry_i:minion_dcache_pkg.DcacheReplayqAddrWidth_T, dealloc_i:u1, dealloc_entry_i:minion_dcache_pkg.DcacheReplayqAddrWidth_T, miss_available_i:minion_dcache_pkg.DcacheMhFileSize_T, miss_fill_error_i:minion_dcache_pkg.DcacheMhFileSize_T, uc_load_fill_i:u1, uc_load_fill_id_i:minion_dcache_pkg.DcacheBufferIdxWidth_T, uc_load_fill_ok_i:u1, vpu_rf_in_use_i:u1, replay_grant_i:u1) -> (full_o:u1@[], half_full_o:u1@[], empty_o:minion_pkg.NrThreads_T@[], rq_conflict_o:u1@[], rq_conflict_to_co_o:u1@[], replay_bid_o:u1@[], replay_valid_o:u1@[], replay_req_o:(addr:u49, dest:(fp:u1, addr:u5, thread_id:u1), cmd:u5, typ:u4, gsc_cnt:u3, ps_mask:u8, phys:u1, buf_alloc:u1, buf_id:u3, cache_op:u1, misaligned:u1, misaligned_2nd:u1, cacheable:u1, uc_load_2nd:u1, gsc32_idx:u40, vm_sel:u3, mem_global:u1)@[], replay_entry_o:minion_dcache_pkg.DcacheReplayqAddrWidth_T@[], replay_age_o:minion_dcache_pkg.DcacheReplayqAgeWidth_T@[], replay_uc_ok_o:u1@[], replay_miss_ok_o:u1@[], scoreboard_o:(valid:u8, dest:u56)@[], fp_sb_dealloc_o:minion_pkg.NrThreads_T@[], int_sb_dealloc_o:minion_pkg.NrThreads_T@[]) {
-  mut replay_entry_d = 0
+  mut replay_entry_d:u3 = 0
   mut replayq_ready_info_q = 0
   reg empty_o:u2:[clock_pin=ref clk_i]
   reg replay_valid_o:u1:[clock_pin=ref clk_i]
@@ -36,31 +36,36 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   reg replay_valid_prev_q:u1:[clock_pin=ref clk_i]
   reg push_req_spec_q:u1:[clock_pin=ref clk_i]
   reg prio_bits_q:u64:[clock_pin=ref clk_i]
-  mut replayq_push_q = 0ub????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
-  mut replayq_rearm_q = 0ub????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
-  mut replayq = 0ub????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
-  mut replayq_ready_info_d = 0ub????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+  mut replayq_push_q:u608 = 0sb?
+  mut replayq_rearm_q:u432 = 0sb?
+  mut replayq:u1040 = 0sb?
+  mut replayq_ready_info_d:u128 = 0sb?
   mut `req_written_rearm.addr` = 0
   mut `req_written_rearm.misaligned` = 0
   mut `req_written_rearm.misaligned_2nd` = 0
   mut `req_written_rearm.uc_load_2nd` = 0
   mut `scoreboard_o__bpo.valid` = 0
   mut `scoreboard_o__bpo.dest` = 0
-  mut entry_count_available_d = 0
-  mut alloc_req_pre_applied_d = 0
-  mut entry_mask_available_d = 0
-  mut age_id_mask_available_d = 0
-  mut push_age_d = 0
-  mut uc_load_id_d = 0ub????????????????????????
-  mut prio_bits_d = 0
-  mut rq_to_s2_conflict_array = 0
-  mut s2_to_rq_conflict_array = 0
-  mut rq_conflict_matrix_d = 0
+  mut entry_count_available_d:u4 = 0
+  mut alloc_req_pre_applied_d:u1 = 0
+  mut entry_mask_available_d:u8 = 0
+  mut age_id_mask_available_d:u16 = 0
+  mut entry_ready:u8 = 0
+  mut empty_d:u2 = 0
+  mut push_age_d:u5 = 0
+  mut uc_load_id_d:u24 = 0sb?
+  mut win_per_client:u8 = 0
+  mut prio_bits_d:u64 = 0
+  mut rq_to_s2_conflict_array:u8 = 0
+  mut s2_to_rq_conflict_array:u8 = 0
+  mut rq_conflict_matrix_d:u64 = 0
+  mut fp_sb_dealloc_d:u2 = 0
+  mut int_sb_dealloc_d:u2 = 0
   rq_conflict_o = 0ub?
   rq_conflict_to_co_o = 0ub?
   const s0_alloc_req__w1 = unsigned((s0_alloc_req_pre_q != 0) and (alloc_req_val_i != 0))
   const push_age_check_available__w1 = ((((push_age_q#[0..=3] + s0_alloc_req__w1)#[0..=3] + s1_alloc_req_q)#[0..=3] + s2_alloc_req_q)#[0..=3] + s3_alloc_req_q)#[0..=3]
-  mut push_entry = if ((entry_mask_available_q >> 1) & 1) != 0 { 1 } else { 0 }
+  mut push_entry:u3 = if ((entry_mask_available_q >> 1) & 1) != 0 { 1 } else { 0 }
   if ((entry_mask_available_q >> 2) & 1) != 0 {
     push_entry = 2
   }
@@ -118,13 +123,13 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   if dealloc_i != 0 {
     age_id_mask_available_d = ((age_id_mask_available_d & (~(1 << req_data_i.replay_age#[0..=3]))) | (1 << req_data_i.replay_age#[0..=3]))#[0..=15]
   }
-  const `req_written_push.dest__w1` = ((req_data_i.addr << 357) | (req_data_i.addr_msb_err << 356) | (req_data_i.set << 352) | (req_data_i.phys << 351) | (req_data_i.misaligned << 350) | (req_data_i.misaligned_2nd << 349) | (req_data_i.dest.fp << 348) | (req_data_i.dest.addr << 343) | (req_data_i.dest.thread_id << 342) | (req_data_i.cmd << 337) | (req_data_i.typ << 333) | (req_data_i.gsc_cnt << 330) | (req_data_i.ps_mask << 322) | (req_data_i.data << 66) | (req_data_i.replay << 65) | (req_data_i.replay_entry << 62) | (req_data_i.replay_age << 57) | (req_data_i.cache_op << 56) | (req_data_i.buf_alloc << 55) | (req_data_i.buf_id << 52) | (req_data_i.cacheable << 51) | (req_data_i.chunk_read << 47) | (req_data_i.uc_load_2nd << 46) | (req_data_i.uc_load_ok << 45) | (req_data_i.miss_fill_ok << 44) | (req_data_i.gsc32_idx << 4) | (req_data_i.vm_sel << 1) | req_data_i.mem_global)#[342..=348]#[0..=6]
+  const `req_written_push.dest__w1` = ((req_data_i.addr << 0x165) | (req_data_i.addr_msb_err << 0x164) | (req_data_i.set << 0x160) | (req_data_i.phys << 0x15f) | (req_data_i.misaligned << 0x15e) | (req_data_i.misaligned_2nd << 0x15d) | (req_data_i.dest.fp << 0x15c) | (req_data_i.dest.addr << 0x157) | (req_data_i.dest.thread_id << 0x156) | (req_data_i.cmd << 0x151) | (req_data_i.typ << 0x14d) | (req_data_i.gsc_cnt << 0x14a) | (req_data_i.ps_mask << 0x142) | (req_data_i.data << 0x42) | (req_data_i.replay << 0x41) | (req_data_i.replay_entry << 62) | (req_data_i.replay_age << 57) | (req_data_i.cache_op << 56) | (req_data_i.buf_alloc << 55) | (req_data_i.buf_id << 52) | (req_data_i.cacheable << 51) | (req_data_i.chunk_read << 47) | (req_data_i.uc_load_2nd << 46) | (req_data_i.uc_load_ok << 45) | (req_data_i.miss_fill_ok << 44) | (req_data_i.gsc32_idx << 4) | (req_data_i.vm_sel << 1) | req_data_i.mem_global)#[342..=348]
   const `req_written_push.cmd__w1` = req_data_i.cmd#[0..=4]
   const `req_written_push.typ__w1` = req_data_i.typ#[0..=3]
   const `req_written_push.gsc_cnt__w1` = req_data_i.gsc_cnt#[0..=2]
   const `req_written_push.ps_mask__w1` = req_data_i.ps_mask#[0..=7]
   const `req_written_push.buf_alloc__w1` = req_buf_alloc_i & 1
-  const `req_written_push.buf_id__w1` = req_buf_entry_i#[0..=2]
+  const `req_written_push.buf_id__w1` = req_buf_entry_i
   const `req_written_push.cache_op__w1` = req_data_i.cache_op & 1
   const `req_written_push.gsc32_idx__w1` = req_data_i.gsc32_idx#[0..=39]
   const `req_written_push.vm_sel__w1` = req_data_i.vm_sel#[0..=2]
@@ -161,26 +166,25 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   if uc_load_1st_i != 0 {
     `req_written_rearm.uc_load_2nd` = 1
   }
-  const t315 = `req_written_push.dest__w1` << 69
-  const t318 = t315 | (`req_written_push.cmd__w1` << 64)
-  const t321 = t318 | (`req_written_push.typ__w1` << 60)
-  const t324 = t321 | (`req_written_push.gsc_cnt__w1` << 57)
-  const t327 = t324 | (`req_written_push.ps_mask__w1` << 49)
-  const t330 = t327 | (`req_written_push.buf_alloc__w1` << 48)
-  const t333 = t330 | (`req_written_push.buf_id__w1` << 45)
-  const t336 = t333 | (`req_written_push.cache_op__w1` << 44)
-  const t339 = t336 | (`req_written_push.gsc32_idx__w1` << 4)
-  const t342 = t339 | (`req_written_push.vm_sel__w1` << 1)
-  const t344 = t342 | `req_written_push.mem_global__w1`
-  mut u_replayq_push = prim_rf_1r1w_par_preview::[name=u_replayq_push](preview_clk_i = clk_i, rf_clk_i = clk_i, wr_data_en_1p_next_i = push_req_prev_i, wr_data_i = t344, wr_addr_i = push_entry, wr_en_i = push_req_i)
+  const t312 = (`req_written_push.dest__w1` << 0x45) | (`req_written_push.cmd__w1` << 0x40)
+  const t315 = t312 | (`req_written_push.typ__w1` << 60)
+  const t318 = t315 | (`req_written_push.gsc_cnt__w1` << 57)
+  const t321 = t318 | (`req_written_push.ps_mask__w1` << 49)
+  const t324 = t321 | (`req_written_push.buf_alloc__w1` << 48)
+  const t327 = t324 | (`req_written_push.buf_id__w1` << 45)
+  const t330 = t327 | (`req_written_push.cache_op__w1` << 44)
+  const t333 = t330 | (`req_written_push.gsc32_idx__w1` << 4)
+  const t336 = t333 | (`req_written_push.vm_sel__w1` << 1)
+  const t338 = t336 | `req_written_push.mem_global__w1`
+  mut u_replayq_push = prim_rf_1r1w_par_preview::[name=u_replayq_push](preview_clk_i = clk_i, rf_clk_i = clk_i, wr_data_en_1p_next_i = push_req_prev_i, wr_data_i = t338, wr_addr_i = push_entry, wr_en_i = push_req_i)
   const replayq_push_flat_q__w1 = u_replayq_push
   mut u_replayq_rearm = prim_rf_1r1w_par_preview_p1::[name=u_replayq_rearm](preview_clk_i = clk_i, rf_clk_i = clk_i, wr_data_en_1p_next_i = unsigned((push_req_prev_i != 0) or (rearm_prev_i != 0)), wr_data_i = (`req_written_rearm.addr` << 5) | (`req_written_rearm.phys__w1` << 4) | (`req_written_rearm.misaligned` << 3) | (`req_written_rearm.misaligned_2nd` << 2) | (`req_written_rearm.cacheable__w1` << 1) | `req_written_rearm.uc_load_2nd`, wr_addr_i = push_entry, wr_en_i = unsigned((push_req_i != 0) or (rearm_i != 0)))
   const replayq_rearm_flat_q__w1 = u_replayq_rearm
   if rst_ni == 0 {
-    age_id_mask_available_q = 65535
+    age_id_mask_available_q = 0xffff
     alloc_req_pre_applied_q = 0
     entry_count_available_q = minion_dcache_pkg.DcacheReplayqSize#[0..=3]
-    entry_mask_available_q = 255
+    entry_mask_available_q = 0xff
     s0_alloc_gsc_q = 0
     s0_alloc_req_pre_q = 0
     s1_alloc_gsc_q = 0
@@ -212,30 +216,30 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   mut replayq__w4 = replayq__w3
   replayq__w4#[54..=61] = replayq_push_q#[0..=75]#[49..=56]
   mut replayq__w5 = replayq__w4
-  replayq__w5#[52] = ((replayq_push_q#[0..=75] >> 48) & 1)
+  replayq__w5#[52] = (replayq_push_q#[0..=75] >> 48) & 1
   mut replayq__w6 = replayq__w5
   replayq__w6#[49..=51] = replayq_push_q#[0..=75]#[45..=47]
   mut replayq__w7 = replayq__w6
-  replayq__w7#[48] = ((replayq_push_q#[0..=75] >> 44) & 1)
+  replayq__w7#[48] = (replayq_push_q#[0..=75] >> 44) & 1
   mut replayq__w8 = replayq__w7
   replayq__w8#[4..=43] = replayq_push_q#[0..=75]#[4..=43]
   mut replayq__w9 = replayq__w8
   replayq__w9#[1..=3] = replayq_push_q#[0..=75]#[1..=3]
   mut replayq__w10 = replayq__w9
-  replayq__w10#[0] = (replayq_push_q#[0..=75] & 1)
+  replayq__w10#[0] = replayq_push_q#[0..=75] & 1
   replayq_rearm_q#[0..=53] = replayq_rearm_flat_q__w1#[0..=53]
   mut replayq__w11 = replayq__w10
   replayq__w11#[81..=129] = replayq_rearm_q#[0..=53]#[5..=53]
   mut replayq__w12 = replayq__w11
-  replayq__w12#[47] = ((replayq_rearm_q#[0..=53] >> 3) & 1)
+  replayq__w12#[47] = (replayq_rearm_q#[0..=53] >> 3) & 1
   mut replayq__w13 = replayq__w12
-  replayq__w13#[46] = ((replayq_rearm_q#[0..=53] >> 2) & 1)
+  replayq__w13#[46] = (replayq_rearm_q#[0..=53] >> 2) & 1
   mut replayq__w14 = replayq__w13
-  replayq__w14#[44] = (replayq_rearm_q#[0..=53] & 1)
+  replayq__w14#[44] = replayq_rearm_q#[0..=53] & 1
   mut replayq__w15 = replayq__w14
-  replayq__w15#[53] = ((replayq_rearm_q#[0..=53] >> 4) & 1)
+  replayq__w15#[53] = (replayq_rearm_q#[0..=53] >> 4) & 1
   mut replayq__w16 = replayq__w15
-  replayq__w16#[45] = ((replayq_rearm_q#[0..=53] >> 1) & 1)
+  replayq__w16#[45] = (replayq_rearm_q#[0..=53] >> 1) & 1
   mut replayq_push_q__w1 = replayq_push_q
   replayq_push_q__w1#[76..=151] = replayq_push_flat_q__w1#[76..=151]
   mut replayq_rearm_q__w1 = replayq_rearm_q
@@ -251,29 +255,29 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   mut replayq__w21 = replayq__w20
   replayq__w21#[184..=191] = replayq_push_q__w1#[76..=151]#[49..=56]
   mut replayq__w22 = replayq__w21
-  replayq__w22#[182] = ((replayq_push_q__w1#[76..=151] >> 48) & 1)
+  replayq__w22#[182] = (replayq_push_q__w1#[76..=151] >> 48) & 1
   mut replayq__w23 = replayq__w22
   replayq__w23#[179..=181] = replayq_push_q__w1#[76..=151]#[45..=47]
   mut replayq__w24 = replayq__w23
-  replayq__w24#[178] = ((replayq_push_q__w1#[76..=151] >> 44) & 1)
+  replayq__w24#[178] = (replayq_push_q__w1#[76..=151] >> 44) & 1
   mut replayq__w25 = replayq__w24
   replayq__w25#[134..=173] = replayq_push_q__w1#[76..=151]#[4..=43]
   mut replayq__w26 = replayq__w25
   replayq__w26#[131..=133] = replayq_push_q__w1#[76..=151]#[1..=3]
   mut replayq__w27 = replayq__w26
-  replayq__w27#[130] = (replayq_push_q__w1#[76..=151] & 1)
+  replayq__w27#[130] = replayq_push_q__w1#[76..=151] & 1
   mut replayq__w28 = replayq__w27
   replayq__w28#[211..=259] = replayq_rearm_q__w1#[54..=107]#[5..=53]
   mut replayq__w29 = replayq__w28
-  replayq__w29#[177] = ((replayq_rearm_q__w1#[54..=107] >> 3) & 1)
+  replayq__w29#[177] = (replayq_rearm_q__w1#[54..=107] >> 3) & 1
   mut replayq__w30 = replayq__w29
-  replayq__w30#[176] = ((replayq_rearm_q__w1#[54..=107] >> 2) & 1)
+  replayq__w30#[176] = (replayq_rearm_q__w1#[54..=107] >> 2) & 1
   mut replayq__w31 = replayq__w30
-  replayq__w31#[174] = (replayq_rearm_q__w1#[54..=107] & 1)
+  replayq__w31#[174] = replayq_rearm_q__w1#[54..=107] & 1
   mut replayq__w32 = replayq__w31
-  replayq__w32#[183] = ((replayq_rearm_q__w1#[54..=107] >> 4) & 1)
+  replayq__w32#[183] = (replayq_rearm_q__w1#[54..=107] >> 4) & 1
   mut replayq__w33 = replayq__w32
-  replayq__w33#[175] = ((replayq_rearm_q__w1#[54..=107] >> 1) & 1)
+  replayq__w33#[175] = (replayq_rearm_q__w1#[54..=107] >> 1) & 1
   mut replayq_push_q__w2 = replayq_push_q__w1
   replayq_push_q__w2#[152..=227] = replayq_push_flat_q__w1#[152..=227]
   mut replayq_rearm_q__w2 = replayq_rearm_q__w1
@@ -289,29 +293,29 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   mut replayq__w38 = replayq__w37
   replayq__w38#[314..=321] = replayq_push_q__w2#[152..=227]#[49..=56]
   mut replayq__w39 = replayq__w38
-  replayq__w39#[312] = ((replayq_push_q__w2#[152..=227] >> 48) & 1)
+  replayq__w39#[312] = (replayq_push_q__w2#[152..=227] >> 48) & 1
   mut replayq__w40 = replayq__w39
   replayq__w40#[309..=311] = replayq_push_q__w2#[152..=227]#[45..=47]
   mut replayq__w41 = replayq__w40
-  replayq__w41#[308] = ((replayq_push_q__w2#[152..=227] >> 44) & 1)
+  replayq__w41#[308] = (replayq_push_q__w2#[152..=227] >> 44) & 1
   mut replayq__w42 = replayq__w41
   replayq__w42#[264..=303] = replayq_push_q__w2#[152..=227]#[4..=43]
   mut replayq__w43 = replayq__w42
   replayq__w43#[261..=263] = replayq_push_q__w2#[152..=227]#[1..=3]
   mut replayq__w44 = replayq__w43
-  replayq__w44#[260] = (replayq_push_q__w2#[152..=227] & 1)
+  replayq__w44#[260] = replayq_push_q__w2#[152..=227] & 1
   mut replayq__w45 = replayq__w44
   replayq__w45#[341..=389] = replayq_rearm_q__w2#[108..=161]#[5..=53]
   mut replayq__w46 = replayq__w45
-  replayq__w46#[307] = ((replayq_rearm_q__w2#[108..=161] >> 3) & 1)
+  replayq__w46#[307] = (replayq_rearm_q__w2#[108..=161] >> 3) & 1
   mut replayq__w47 = replayq__w46
-  replayq__w47#[306] = ((replayq_rearm_q__w2#[108..=161] >> 2) & 1)
+  replayq__w47#[306] = (replayq_rearm_q__w2#[108..=161] >> 2) & 1
   mut replayq__w48 = replayq__w47
-  replayq__w48#[304] = (replayq_rearm_q__w2#[108..=161] & 1)
+  replayq__w48#[304] = replayq_rearm_q__w2#[108..=161] & 1
   mut replayq__w49 = replayq__w48
-  replayq__w49#[313] = ((replayq_rearm_q__w2#[108..=161] >> 4) & 1)
+  replayq__w49#[313] = (replayq_rearm_q__w2#[108..=161] >> 4) & 1
   mut replayq__w50 = replayq__w49
-  replayq__w50#[305] = ((replayq_rearm_q__w2#[108..=161] >> 1) & 1)
+  replayq__w50#[305] = (replayq_rearm_q__w2#[108..=161] >> 1) & 1
   mut replayq_push_q__w3 = replayq_push_q__w2
   replayq_push_q__w3#[228..=303] = replayq_push_flat_q__w1#[228..=303]
   mut replayq_rearm_q__w3 = replayq_rearm_q__w2
@@ -327,29 +331,29 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   mut replayq__w55 = replayq__w54
   replayq__w55#[444..=451] = replayq_push_q__w3#[228..=303]#[49..=56]
   mut replayq__w56 = replayq__w55
-  replayq__w56#[442] = ((replayq_push_q__w3#[228..=303] >> 48) & 1)
+  replayq__w56#[442] = (replayq_push_q__w3#[228..=303] >> 48) & 1
   mut replayq__w57 = replayq__w56
   replayq__w57#[439..=441] = replayq_push_q__w3#[228..=303]#[45..=47]
   mut replayq__w58 = replayq__w57
-  replayq__w58#[438] = ((replayq_push_q__w3#[228..=303] >> 44) & 1)
+  replayq__w58#[438] = (replayq_push_q__w3#[228..=303] >> 44) & 1
   mut replayq__w59 = replayq__w58
   replayq__w59#[394..=433] = replayq_push_q__w3#[228..=303]#[4..=43]
   mut replayq__w60 = replayq__w59
   replayq__w60#[391..=393] = replayq_push_q__w3#[228..=303]#[1..=3]
   mut replayq__w61 = replayq__w60
-  replayq__w61#[390] = (replayq_push_q__w3#[228..=303] & 1)
+  replayq__w61#[390] = replayq_push_q__w3#[228..=303] & 1
   mut replayq__w62 = replayq__w61
   replayq__w62#[471..=519] = replayq_rearm_q__w3#[162..=215]#[5..=53]
   mut replayq__w63 = replayq__w62
-  replayq__w63#[437] = ((replayq_rearm_q__w3#[162..=215] >> 3) & 1)
+  replayq__w63#[437] = (replayq_rearm_q__w3#[162..=215] >> 3) & 1
   mut replayq__w64 = replayq__w63
-  replayq__w64#[436] = ((replayq_rearm_q__w3#[162..=215] >> 2) & 1)
+  replayq__w64#[436] = (replayq_rearm_q__w3#[162..=215] >> 2) & 1
   mut replayq__w65 = replayq__w64
-  replayq__w65#[434] = (replayq_rearm_q__w3#[162..=215] & 1)
+  replayq__w65#[434] = replayq_rearm_q__w3#[162..=215] & 1
   mut replayq__w66 = replayq__w65
-  replayq__w66#[443] = ((replayq_rearm_q__w3#[162..=215] >> 4) & 1)
+  replayq__w66#[443] = (replayq_rearm_q__w3#[162..=215] >> 4) & 1
   mut replayq__w67 = replayq__w66
-  replayq__w67#[435] = ((replayq_rearm_q__w3#[162..=215] >> 1) & 1)
+  replayq__w67#[435] = (replayq_rearm_q__w3#[162..=215] >> 1) & 1
   mut replayq_push_q__w4 = replayq_push_q__w3
   replayq_push_q__w4#[304..=379] = replayq_push_flat_q__w1#[304..=379]
   mut replayq_rearm_q__w4 = replayq_rearm_q__w3
@@ -365,29 +369,29 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   mut replayq__w72 = replayq__w71
   replayq__w72#[574..=581] = replayq_push_q__w4#[304..=379]#[49..=56]
   mut replayq__w73 = replayq__w72
-  replayq__w73#[572] = ((replayq_push_q__w4#[304..=379] >> 48) & 1)
+  replayq__w73#[572] = (replayq_push_q__w4#[304..=379] >> 48) & 1
   mut replayq__w74 = replayq__w73
   replayq__w74#[569..=571] = replayq_push_q__w4#[304..=379]#[45..=47]
   mut replayq__w75 = replayq__w74
-  replayq__w75#[568] = ((replayq_push_q__w4#[304..=379] >> 44) & 1)
+  replayq__w75#[568] = (replayq_push_q__w4#[304..=379] >> 44) & 1
   mut replayq__w76 = replayq__w75
   replayq__w76#[524..=563] = replayq_push_q__w4#[304..=379]#[4..=43]
   mut replayq__w77 = replayq__w76
   replayq__w77#[521..=523] = replayq_push_q__w4#[304..=379]#[1..=3]
   mut replayq__w78 = replayq__w77
-  replayq__w78#[520] = (replayq_push_q__w4#[304..=379] & 1)
+  replayq__w78#[520] = replayq_push_q__w4#[304..=379] & 1
   mut replayq__w79 = replayq__w78
   replayq__w79#[601..=649] = replayq_rearm_q__w4#[216..=269]#[5..=53]
   mut replayq__w80 = replayq__w79
-  replayq__w80#[567] = ((replayq_rearm_q__w4#[216..=269] >> 3) & 1)
+  replayq__w80#[567] = (replayq_rearm_q__w4#[216..=269] >> 3) & 1
   mut replayq__w81 = replayq__w80
-  replayq__w81#[566] = ((replayq_rearm_q__w4#[216..=269] >> 2) & 1)
+  replayq__w81#[566] = (replayq_rearm_q__w4#[216..=269] >> 2) & 1
   mut replayq__w82 = replayq__w81
-  replayq__w82#[564] = (replayq_rearm_q__w4#[216..=269] & 1)
+  replayq__w82#[564] = replayq_rearm_q__w4#[216..=269] & 1
   mut replayq__w83 = replayq__w82
-  replayq__w83#[573] = ((replayq_rearm_q__w4#[216..=269] >> 4) & 1)
+  replayq__w83#[573] = (replayq_rearm_q__w4#[216..=269] >> 4) & 1
   mut replayq__w84 = replayq__w83
-  replayq__w84#[565] = ((replayq_rearm_q__w4#[216..=269] >> 1) & 1)
+  replayq__w84#[565] = (replayq_rearm_q__w4#[216..=269] >> 1) & 1
   mut replayq_push_q__w5 = replayq_push_q__w4
   replayq_push_q__w5#[380..=455] = replayq_push_flat_q__w1#[380..=455]
   mut replayq_rearm_q__w5 = replayq_rearm_q__w4
@@ -403,29 +407,29 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   mut replayq__w89 = replayq__w88
   replayq__w89#[704..=711] = replayq_push_q__w5#[380..=455]#[49..=56]
   mut replayq__w90 = replayq__w89
-  replayq__w90#[702] = ((replayq_push_q__w5#[380..=455] >> 48) & 1)
+  replayq__w90#[702] = (replayq_push_q__w5#[380..=455] >> 48) & 1
   mut replayq__w91 = replayq__w90
   replayq__w91#[699..=701] = replayq_push_q__w5#[380..=455]#[45..=47]
   mut replayq__w92 = replayq__w91
-  replayq__w92#[698] = ((replayq_push_q__w5#[380..=455] >> 44) & 1)
+  replayq__w92#[698] = (replayq_push_q__w5#[380..=455] >> 44) & 1
   mut replayq__w93 = replayq__w92
   replayq__w93#[654..=693] = replayq_push_q__w5#[380..=455]#[4..=43]
   mut replayq__w94 = replayq__w93
   replayq__w94#[651..=653] = replayq_push_q__w5#[380..=455]#[1..=3]
   mut replayq__w95 = replayq__w94
-  replayq__w95#[650] = (replayq_push_q__w5#[380..=455] & 1)
+  replayq__w95#[650] = replayq_push_q__w5#[380..=455] & 1
   mut replayq__w96 = replayq__w95
   replayq__w96#[731..=779] = replayq_rearm_q__w5#[270..=323]#[5..=53]
   mut replayq__w97 = replayq__w96
-  replayq__w97#[697] = ((replayq_rearm_q__w5#[270..=323] >> 3) & 1)
+  replayq__w97#[697] = (replayq_rearm_q__w5#[270..=323] >> 3) & 1
   mut replayq__w98 = replayq__w97
-  replayq__w98#[696] = ((replayq_rearm_q__w5#[270..=323] >> 2) & 1)
+  replayq__w98#[696] = (replayq_rearm_q__w5#[270..=323] >> 2) & 1
   mut replayq__w99 = replayq__w98
-  replayq__w99#[694] = (replayq_rearm_q__w5#[270..=323] & 1)
+  replayq__w99#[694] = replayq_rearm_q__w5#[270..=323] & 1
   mut replayq__w100 = replayq__w99
-  replayq__w100#[703] = ((replayq_rearm_q__w5#[270..=323] >> 4) & 1)
+  replayq__w100#[703] = (replayq_rearm_q__w5#[270..=323] >> 4) & 1
   mut replayq__w101 = replayq__w100
-  replayq__w101#[695] = ((replayq_rearm_q__w5#[270..=323] >> 1) & 1)
+  replayq__w101#[695] = (replayq_rearm_q__w5#[270..=323] >> 1) & 1
   mut replayq_push_q__w6 = replayq_push_q__w5
   replayq_push_q__w6#[456..=531] = replayq_push_flat_q__w1#[456..=531]
   mut replayq_rearm_q__w6 = replayq_rearm_q__w5
@@ -441,29 +445,29 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   mut replayq__w106 = replayq__w105
   replayq__w106#[834..=841] = replayq_push_q__w6#[456..=531]#[49..=56]
   mut replayq__w107 = replayq__w106
-  replayq__w107#[832] = ((replayq_push_q__w6#[456..=531] >> 48) & 1)
+  replayq__w107#[832] = (replayq_push_q__w6#[456..=531] >> 48) & 1
   mut replayq__w108 = replayq__w107
   replayq__w108#[829..=831] = replayq_push_q__w6#[456..=531]#[45..=47]
   mut replayq__w109 = replayq__w108
-  replayq__w109#[828] = ((replayq_push_q__w6#[456..=531] >> 44) & 1)
+  replayq__w109#[828] = (replayq_push_q__w6#[456..=531] >> 44) & 1
   mut replayq__w110 = replayq__w109
   replayq__w110#[784..=823] = replayq_push_q__w6#[456..=531]#[4..=43]
   mut replayq__w111 = replayq__w110
   replayq__w111#[781..=783] = replayq_push_q__w6#[456..=531]#[1..=3]
   mut replayq__w112 = replayq__w111
-  replayq__w112#[780] = (replayq_push_q__w6#[456..=531] & 1)
+  replayq__w112#[780] = replayq_push_q__w6#[456..=531] & 1
   mut replayq__w113 = replayq__w112
   replayq__w113#[861..=909] = replayq_rearm_q__w6#[324..=377]#[5..=53]
   mut replayq__w114 = replayq__w113
-  replayq__w114#[827] = ((replayq_rearm_q__w6#[324..=377] >> 3) & 1)
+  replayq__w114#[827] = (replayq_rearm_q__w6#[324..=377] >> 3) & 1
   mut replayq__w115 = replayq__w114
-  replayq__w115#[826] = ((replayq_rearm_q__w6#[324..=377] >> 2) & 1)
+  replayq__w115#[826] = (replayq_rearm_q__w6#[324..=377] >> 2) & 1
   mut replayq__w116 = replayq__w115
-  replayq__w116#[824] = (replayq_rearm_q__w6#[324..=377] & 1)
+  replayq__w116#[824] = replayq_rearm_q__w6#[324..=377] & 1
   mut replayq__w117 = replayq__w116
-  replayq__w117#[833] = ((replayq_rearm_q__w6#[324..=377] >> 4) & 1)
+  replayq__w117#[833] = (replayq_rearm_q__w6#[324..=377] >> 4) & 1
   mut replayq__w118 = replayq__w117
-  replayq__w118#[825] = ((replayq_rearm_q__w6#[324..=377] >> 1) & 1)
+  replayq__w118#[825] = (replayq_rearm_q__w6#[324..=377] >> 1) & 1
   mut replayq_push_q__w7 = replayq_push_q__w6
   replayq_push_q__w7#[532..=607] = replayq_push_flat_q__w1#[532..=607]
   mut replayq_rearm_q__w7 = replayq_rearm_q__w6
@@ -479,193 +483,193 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   mut replayq__w123 = replayq__w122
   replayq__w123#[964..=971] = replayq_push_q__w7#[532..=607]#[49..=56]
   mut replayq__w124 = replayq__w123
-  replayq__w124#[962] = ((replayq_push_q__w7#[532..=607] >> 48) & 1)
+  replayq__w124#[962] = (replayq_push_q__w7#[532..=607] >> 48) & 1
   mut replayq__w125 = replayq__w124
   replayq__w125#[959..=961] = replayq_push_q__w7#[532..=607]#[45..=47]
   mut replayq__w126 = replayq__w125
-  replayq__w126#[958] = ((replayq_push_q__w7#[532..=607] >> 44) & 1)
+  replayq__w126#[958] = (replayq_push_q__w7#[532..=607] >> 44) & 1
   mut replayq__w127 = replayq__w126
   replayq__w127#[914..=953] = replayq_push_q__w7#[532..=607]#[4..=43]
   mut replayq__w128 = replayq__w127
   replayq__w128#[911..=913] = replayq_push_q__w7#[532..=607]#[1..=3]
   mut replayq__w129 = replayq__w128
-  replayq__w129#[910] = (replayq_push_q__w7#[532..=607] & 1)
+  replayq__w129#[910] = replayq_push_q__w7#[532..=607] & 1
   mut replayq__w130 = replayq__w129
   replayq__w130#[991..=1039] = replayq_rearm_q__w7#[378..=431]#[5..=53]
   mut replayq__w131 = replayq__w130
-  replayq__w131#[957] = ((replayq_rearm_q__w7#[378..=431] >> 3) & 1)
+  replayq__w131#[957] = (replayq_rearm_q__w7#[378..=431] >> 3) & 1
   mut replayq__w132 = replayq__w131
-  replayq__w132#[956] = ((replayq_rearm_q__w7#[378..=431] >> 2) & 1)
+  replayq__w132#[956] = (replayq_rearm_q__w7#[378..=431] >> 2) & 1
   mut replayq__w133 = replayq__w132
-  replayq__w133#[954] = (replayq_rearm_q__w7#[378..=431] & 1)
+  replayq__w133#[954] = replayq_rearm_q__w7#[378..=431] & 1
   mut replayq__w134 = replayq__w133
-  replayq__w134#[963] = ((replayq_rearm_q__w7#[378..=431] >> 4) & 1)
+  replayq__w134#[963] = (replayq_rearm_q__w7#[378..=431] >> 4) & 1
   mut replayq__w135 = replayq__w134
-  replayq__w135#[955] = ((replayq_rearm_q__w7#[378..=431] >> 1) & 1)
-  mut entry_ready = 0ub????????
+  replayq__w135#[955] = (replayq_rearm_q__w7#[378..=431] >> 1) & 1
+  entry_ready = 0sb?
   mut entry_ready__w1 = entry_ready
-  entry_ready__w1#[0] = unsigned((`replayq_ready_info_q.pending`[0] != 0) and ((entry_mask_available_q & 1) == 0) and (not (rq_conflict_matrix_q#[0..=7] != 0)) and (`replayq_ready_info_q.wait_uc_load`[0] == 0) and (((`replayq_ready_info_q.reason`[0] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[0]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[0] >> 5) & 1) == 0))
+  entry_ready__w1#[0] = unsigned((`replayq_ready_info_q.pending`[0] != 0) and ((entry_mask_available_q & 1) == 0) and (not (rq_conflict_matrix_q#[0..=7] != 0)) and (`replayq_ready_info_q.wait_uc_load`[0] == 0) and (((`replayq_ready_info_q.reason`[0] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[0]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[0] >> 5) & 1) == 0)) & 1
   mut entry_ready__w2 = entry_ready__w1
-  entry_ready__w2#[1] = unsigned((`replayq_ready_info_q.pending`[1] != 0) and (((entry_mask_available_q >> 1) & 1) == 0) and (not (rq_conflict_matrix_q#[8..=15] != 0)) and (`replayq_ready_info_q.wait_uc_load`[1] == 0) and (((`replayq_ready_info_q.reason`[1] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[1]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[1] >> 5) & 1) == 0))
+  entry_ready__w2#[1] = unsigned((`replayq_ready_info_q.pending`[1] != 0) and (((entry_mask_available_q >> 1) & 1) == 0) and (not (rq_conflict_matrix_q#[8..=15] != 0)) and (`replayq_ready_info_q.wait_uc_load`[1] == 0) and (((`replayq_ready_info_q.reason`[1] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[1]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[1] >> 5) & 1) == 0)) & 1
   mut entry_ready__w3 = entry_ready__w2
-  entry_ready__w3#[2] = unsigned((`replayq_ready_info_q.pending`[2] != 0) and (((entry_mask_available_q >> 2) & 1) == 0) and (not (rq_conflict_matrix_q#[16..=23] != 0)) and (`replayq_ready_info_q.wait_uc_load`[2] == 0) and (((`replayq_ready_info_q.reason`[2] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[2]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[2] >> 5) & 1) == 0))
+  entry_ready__w3#[2] = unsigned((`replayq_ready_info_q.pending`[2] != 0) and (((entry_mask_available_q >> 2) & 1) == 0) and (not (rq_conflict_matrix_q#[16..=23] != 0)) and (`replayq_ready_info_q.wait_uc_load`[2] == 0) and (((`replayq_ready_info_q.reason`[2] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[2]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[2] >> 5) & 1) == 0)) & 1
   mut entry_ready__w4 = entry_ready__w3
-  entry_ready__w4#[3] = unsigned((`replayq_ready_info_q.pending`[3] != 0) and (((entry_mask_available_q >> 3) & 1) == 0) and (not (rq_conflict_matrix_q#[24..=31] != 0)) and (`replayq_ready_info_q.wait_uc_load`[3] == 0) and (((`replayq_ready_info_q.reason`[3] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[3]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[3] >> 5) & 1) == 0))
+  entry_ready__w4#[3] = unsigned((`replayq_ready_info_q.pending`[3] != 0) and (((entry_mask_available_q >> 3) & 1) == 0) and (not (rq_conflict_matrix_q#[24..=31] != 0)) and (`replayq_ready_info_q.wait_uc_load`[3] == 0) and (((`replayq_ready_info_q.reason`[3] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[3]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[3] >> 5) & 1) == 0)) & 1
   mut entry_ready__w5 = entry_ready__w4
-  entry_ready__w5#[4] = unsigned((`replayq_ready_info_q.pending`[4] != 0) and (((entry_mask_available_q >> 4) & 1) == 0) and (not (rq_conflict_matrix_q#[32..=39] != 0)) and (`replayq_ready_info_q.wait_uc_load`[4] == 0) and (((`replayq_ready_info_q.reason`[4] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[4]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[4] >> 5) & 1) == 0))
+  entry_ready__w5#[4] = unsigned((`replayq_ready_info_q.pending`[4] != 0) and (((entry_mask_available_q >> 4) & 1) == 0) and (not (rq_conflict_matrix_q#[32..=39] != 0)) and (`replayq_ready_info_q.wait_uc_load`[4] == 0) and (((`replayq_ready_info_q.reason`[4] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[4]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[4] >> 5) & 1) == 0)) & 1
   mut entry_ready__w6 = entry_ready__w5
-  entry_ready__w6#[5] = unsigned((`replayq_ready_info_q.pending`[5] != 0) and (((entry_mask_available_q >> 5) & 1) == 0) and (not (rq_conflict_matrix_q#[40..=47] != 0)) and (`replayq_ready_info_q.wait_uc_load`[5] == 0) and (((`replayq_ready_info_q.reason`[5] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[5]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[5] >> 5) & 1) == 0))
+  entry_ready__w6#[5] = unsigned((`replayq_ready_info_q.pending`[5] != 0) and (((entry_mask_available_q >> 5) & 1) == 0) and (not (rq_conflict_matrix_q#[40..=47] != 0)) and (`replayq_ready_info_q.wait_uc_load`[5] == 0) and (((`replayq_ready_info_q.reason`[5] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[5]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[5] >> 5) & 1) == 0)) & 1
   mut entry_ready__w7 = entry_ready__w6
-  entry_ready__w7#[6] = unsigned((`replayq_ready_info_q.pending`[6] != 0) and (((entry_mask_available_q >> 6) & 1) == 0) and (not (rq_conflict_matrix_q#[48..=55] != 0)) and (`replayq_ready_info_q.wait_uc_load`[6] == 0) and (((`replayq_ready_info_q.reason`[6] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[6]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[6] >> 5) & 1) == 0))
+  entry_ready__w7#[6] = unsigned((`replayq_ready_info_q.pending`[6] != 0) and (((entry_mask_available_q >> 6) & 1) == 0) and (not (rq_conflict_matrix_q#[48..=55] != 0)) and (`replayq_ready_info_q.wait_uc_load`[6] == 0) and (((`replayq_ready_info_q.reason`[6] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[6]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[6] >> 5) & 1) == 0)) & 1
   mut entry_ready__w8 = entry_ready__w7
-  entry_ready__w8#[7] = unsigned((`replayq_ready_info_q.pending`[7] != 0) and (((entry_mask_available_q >> 7) & 1) == 0) and (not (rq_conflict_matrix_q#[56..=63] != 0)) and (`replayq_ready_info_q.wait_uc_load`[7] == 0) and (((`replayq_ready_info_q.reason`[7] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[7]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[7] >> 5) & 1) == 0))
-  mut empty_d = 0ub??
+  entry_ready__w8#[7] = unsigned((`replayq_ready_info_q.pending`[7] != 0) and (((entry_mask_available_q >> 7) & 1) == 0) and (not (rq_conflict_matrix_q#[56..=63] != 0)) and (`replayq_ready_info_q.wait_uc_load`[7] == 0) and (((`replayq_ready_info_q.reason`[7] >> 4) & 1) == 0) and ((~`replayq_ready_info_q.reason`[7]#[0..=1])#[0..=1] == 3) and (((`replayq_ready_info_q.reason`[7] >> 5) & 1) == 0)) & 1
+  empty_d = 0sb?
   mut empty_d__w1 = empty_d
   empty_d__w1#[0] = 1
-  const t983 = replayq__w135#[0..=129]
-  const t984 = t983#[74..=80]
-  const t985 = t984 & 1
-  const t986 = t985 != 0
-  const t987 = ((entry_mask_available_q & 1) != 0) or t986
+  const t985 = replayq__w135#[0..=129]
+  const t986 = t985#[74..=80]
+  const t987 = t986 & 1
+  const t988 = t987 != 0
+  const t989 = ((entry_mask_available_q & 1) != 0) or t988
   mut empty_d__w2 = empty_d__w1
-  empty_d__w2#[0] = (1 & unsigned(t987))
-  const t993 = replayq__w135#[130..=259]
-  const t994 = t993#[74..=80]
-  const t995 = t994 & 1
-  const t996 = t995 != 0
-  const t997 = (((entry_mask_available_q >> 1) & 1) != 0) or t996
+  empty_d__w2#[0] = 1 & unsigned(t989) & 1
+  const t996 = replayq__w135#[130..=259]
+  const t997 = t996#[74..=80]
+  const t998 = t997 & 1
+  const t999 = t998 != 0
+  const t1000 = (((entry_mask_available_q >> 1) & 1) != 0) or t999
   mut empty_d__w3 = empty_d__w2
-  empty_d__w3#[0] = (empty_d__w2 & 1 & unsigned(t997))
-  const t1003 = replayq__w135#[260..=389]
-  const t1004 = t1003#[74..=80]
-  const t1005 = t1004 & 1
-  const t1006 = t1005 != 0
-  const t1007 = (((entry_mask_available_q >> 2) & 1) != 0) or t1006
+  empty_d__w3#[0] = empty_d__w2 & 1 & unsigned(t1000) & 1
+  const t1007 = replayq__w135#[260..=389]
+  const t1008 = t1007#[74..=80]
+  const t1009 = t1008 & 1
+  const t1010 = t1009 != 0
+  const t1011 = (((entry_mask_available_q >> 2) & 1) != 0) or t1010
   mut empty_d__w4 = empty_d__w3
-  empty_d__w4#[0] = (empty_d__w3 & 1 & unsigned(t1007))
-  const t1013 = replayq__w135#[390..=519]
-  const t1014 = t1013#[74..=80]
-  const t1015 = t1014 & 1
-  const t1016 = t1015 != 0
-  const t1017 = (((entry_mask_available_q >> 3) & 1) != 0) or t1016
+  empty_d__w4#[0] = empty_d__w3 & 1 & unsigned(t1011) & 1
+  const t1018 = replayq__w135#[390..=519]
+  const t1019 = t1018#[74..=80]
+  const t1020 = t1019 & 1
+  const t1021 = t1020 != 0
+  const t1022 = (((entry_mask_available_q >> 3) & 1) != 0) or t1021
   mut empty_d__w5 = empty_d__w4
-  empty_d__w5#[0] = (empty_d__w4 & 1 & unsigned(t1017))
-  const t1023 = replayq__w135#[520..=649]
-  const t1024 = t1023#[74..=80]
-  const t1025 = t1024 & 1
-  const t1026 = t1025 != 0
-  const t1027 = (((entry_mask_available_q >> 4) & 1) != 0) or t1026
+  empty_d__w5#[0] = empty_d__w4 & 1 & unsigned(t1022) & 1
+  const t1029 = replayq__w135#[520..=649]
+  const t1030 = t1029#[74..=80]
+  const t1031 = t1030 & 1
+  const t1032 = t1031 != 0
+  const t1033 = (((entry_mask_available_q >> 4) & 1) != 0) or t1032
   mut empty_d__w6 = empty_d__w5
-  empty_d__w6#[0] = (empty_d__w5 & 1 & unsigned(t1027))
-  const t1033 = replayq__w135#[650..=779]
-  const t1034 = t1033#[74..=80]
-  const t1035 = t1034 & 1
-  const t1036 = t1035 != 0
-  const t1037 = (((entry_mask_available_q >> 5) & 1) != 0) or t1036
+  empty_d__w6#[0] = empty_d__w5 & 1 & unsigned(t1033) & 1
+  const t1040 = replayq__w135#[650..=779]
+  const t1041 = t1040#[74..=80]
+  const t1042 = t1041 & 1
+  const t1043 = t1042 != 0
+  const t1044 = (((entry_mask_available_q >> 5) & 1) != 0) or t1043
   mut empty_d__w7 = empty_d__w6
-  empty_d__w7#[0] = (empty_d__w6 & 1 & unsigned(t1037))
-  const t1043 = replayq__w135#[780..=909]
-  const t1044 = t1043#[74..=80]
-  const t1045 = t1044 & 1
-  const t1046 = t1045 != 0
-  const t1047 = (((entry_mask_available_q >> 6) & 1) != 0) or t1046
+  empty_d__w7#[0] = empty_d__w6 & 1 & unsigned(t1044) & 1
+  const t1051 = replayq__w135#[780..=909]
+  const t1052 = t1051#[74..=80]
+  const t1053 = t1052 & 1
+  const t1054 = t1053 != 0
+  const t1055 = (((entry_mask_available_q >> 6) & 1) != 0) or t1054
   mut empty_d__w8 = empty_d__w7
-  empty_d__w8#[0] = (empty_d__w7 & 1 & unsigned(t1047))
-  const t1053 = replayq__w135#[910..=1039]
-  const t1054 = t1053#[74..=80]
-  const t1055 = t1054 & 1
-  const t1056 = t1055 != 0
-  const t1057 = (((entry_mask_available_q >> 7) & 1) != 0) or t1056
+  empty_d__w8#[0] = empty_d__w7 & 1 & unsigned(t1055) & 1
+  const t1062 = replayq__w135#[910..=1039]
+  const t1063 = t1062#[74..=80]
+  const t1064 = t1063 & 1
+  const t1065 = t1064 != 0
+  const t1066 = (((entry_mask_available_q >> 7) & 1) != 0) or t1065
   mut empty_d__w9 = empty_d__w8
-  empty_d__w9#[0] = (empty_d__w8 & 1 & unsigned(t1057))
+  empty_d__w9#[0] = empty_d__w8 & 1 & unsigned(t1066) & 1
   mut empty_d__w10 = empty_d__w9
-  empty_d__w10#[0] = (empty_d__w9 & 1 & unsigned(not ((push_req_i != 0) and (req_data_i.dest.thread_id == 0))))
+  empty_d__w10#[0] = empty_d__w9 & 1 & unsigned(not ((push_req_i != 0) and (req_data_i.dest.thread_id == 0))) & 1
   mut empty_d__w11 = empty_d__w10
   empty_d__w11#[1] = 1
-  const t1070 = replayq__w135#[0..=129]
-  const t1071 = t1070#[74..=80]
-  const t1072 = t1071 & 1
-  const t1073 = t1072 != 1
-  const t1074 = ((entry_mask_available_q & 1) != 0) or t1073
-  mut empty_d__w12 = empty_d__w11
-  empty_d__w12#[1] = ((empty_d__w11 >> 1) & 1 & unsigned(t1074))
-  const t1081 = replayq__w135#[130..=259]
+  const t1081 = replayq__w135#[0..=129]
   const t1082 = t1081#[74..=80]
   const t1083 = t1082 & 1
   const t1084 = t1083 != 1
-  const t1085 = (((entry_mask_available_q >> 1) & 1) != 0) or t1084
+  const t1085 = ((entry_mask_available_q & 1) != 0) or t1084
+  mut empty_d__w12 = empty_d__w11
+  empty_d__w12#[1] = (empty_d__w11 >> 1) & 1 & unsigned(t1085) & 1
+  const t1093 = replayq__w135#[130..=259]
+  const t1094 = t1093#[74..=80]
+  const t1095 = t1094 & 1
+  const t1096 = t1095 != 1
+  const t1097 = (((entry_mask_available_q >> 1) & 1) != 0) or t1096
   mut empty_d__w13 = empty_d__w12
-  empty_d__w13#[1] = ((empty_d__w12 >> 1) & 1 & unsigned(t1085))
-  const t1092 = replayq__w135#[260..=389]
-  const t1093 = t1092#[74..=80]
-  const t1094 = t1093 & 1
-  const t1095 = t1094 != 1
-  const t1096 = (((entry_mask_available_q >> 2) & 1) != 0) or t1095
+  empty_d__w13#[1] = (empty_d__w12 >> 1) & 1 & unsigned(t1097) & 1
+  const t1105 = replayq__w135#[260..=389]
+  const t1106 = t1105#[74..=80]
+  const t1107 = t1106 & 1
+  const t1108 = t1107 != 1
+  const t1109 = (((entry_mask_available_q >> 2) & 1) != 0) or t1108
   mut empty_d__w14 = empty_d__w13
-  empty_d__w14#[1] = ((empty_d__w13 >> 1) & 1 & unsigned(t1096))
-  const t1103 = replayq__w135#[390..=519]
-  const t1104 = t1103#[74..=80]
-  const t1105 = t1104 & 1
-  const t1106 = t1105 != 1
-  const t1107 = (((entry_mask_available_q >> 3) & 1) != 0) or t1106
+  empty_d__w14#[1] = (empty_d__w13 >> 1) & 1 & unsigned(t1109) & 1
+  const t1117 = replayq__w135#[390..=519]
+  const t1118 = t1117#[74..=80]
+  const t1119 = t1118 & 1
+  const t1120 = t1119 != 1
+  const t1121 = (((entry_mask_available_q >> 3) & 1) != 0) or t1120
   mut empty_d__w15 = empty_d__w14
-  empty_d__w15#[1] = ((empty_d__w14 >> 1) & 1 & unsigned(t1107))
-  const t1114 = replayq__w135#[520..=649]
-  const t1115 = t1114#[74..=80]
-  const t1116 = t1115 & 1
-  const t1117 = t1116 != 1
-  const t1118 = (((entry_mask_available_q >> 4) & 1) != 0) or t1117
+  empty_d__w15#[1] = (empty_d__w14 >> 1) & 1 & unsigned(t1121) & 1
+  const t1129 = replayq__w135#[520..=649]
+  const t1130 = t1129#[74..=80]
+  const t1131 = t1130 & 1
+  const t1132 = t1131 != 1
+  const t1133 = (((entry_mask_available_q >> 4) & 1) != 0) or t1132
   mut empty_d__w16 = empty_d__w15
-  empty_d__w16#[1] = ((empty_d__w15 >> 1) & 1 & unsigned(t1118))
-  const t1125 = replayq__w135#[650..=779]
-  const t1126 = t1125#[74..=80]
-  const t1127 = t1126 & 1
-  const t1128 = t1127 != 1
-  const t1129 = (((entry_mask_available_q >> 5) & 1) != 0) or t1128
+  empty_d__w16#[1] = (empty_d__w15 >> 1) & 1 & unsigned(t1133) & 1
+  const t1141 = replayq__w135#[650..=779]
+  const t1142 = t1141#[74..=80]
+  const t1143 = t1142 & 1
+  const t1144 = t1143 != 1
+  const t1145 = (((entry_mask_available_q >> 5) & 1) != 0) or t1144
   mut empty_d__w17 = empty_d__w16
-  empty_d__w17#[1] = ((empty_d__w16 >> 1) & 1 & unsigned(t1129))
-  const t1136 = replayq__w135#[780..=909]
-  const t1137 = t1136#[74..=80]
-  const t1138 = t1137 & 1
-  const t1139 = t1138 != 1
-  const t1140 = (((entry_mask_available_q >> 6) & 1) != 0) or t1139
+  empty_d__w17#[1] = (empty_d__w16 >> 1) & 1 & unsigned(t1145) & 1
+  const t1153 = replayq__w135#[780..=909]
+  const t1154 = t1153#[74..=80]
+  const t1155 = t1154 & 1
+  const t1156 = t1155 != 1
+  const t1157 = (((entry_mask_available_q >> 6) & 1) != 0) or t1156
   mut empty_d__w18 = empty_d__w17
-  empty_d__w18#[1] = ((empty_d__w17 >> 1) & 1 & unsigned(t1140))
-  const t1147 = replayq__w135#[910..=1039]
-  const t1148 = t1147#[74..=80]
-  const t1149 = t1148 & 1
-  const t1150 = t1149 != 1
-  const t1151 = (((entry_mask_available_q >> 7) & 1) != 0) or t1150
+  empty_d__w18#[1] = (empty_d__w17 >> 1) & 1 & unsigned(t1157) & 1
+  const t1165 = replayq__w135#[910..=1039]
+  const t1166 = t1165#[74..=80]
+  const t1167 = t1166 & 1
+  const t1168 = t1167 != 1
+  const t1169 = (((entry_mask_available_q >> 7) & 1) != 0) or t1168
   mut empty_d__w19 = empty_d__w18
-  empty_d__w19#[1] = ((empty_d__w18 >> 1) & 1 & unsigned(t1151))
+  empty_d__w19#[1] = (empty_d__w18 >> 1) & 1 & unsigned(t1169) & 1
   mut empty_d__w20 = empty_d__w19
-  empty_d__w20#[1] = ((empty_d__w19 >> 1) & 1 & unsigned(not ((push_req_i != 0) and (req_data_i.dest.thread_id == 1))))
-  const t1359 = (`replayq_ready_info_q.pending`[0] << 15) | (`replayq_ready_info_q.store`[0] << 14) | (`replayq_ready_info_q.age`[0] << 9) | (`replayq_ready_info_q.reason`[0] << 3) | (`replayq_ready_info_q.wait_uc_load`[0] << 2) | (`replayq_ready_info_q.uc_load_ok`[0] << 1) | `replayq_ready_info_q.miss_fill_ok`[0] | (`replayq_ready_info_q.pending`[1] << 31) | (`replayq_ready_info_q.store`[1] << 30) | (`replayq_ready_info_q.age`[1] << 25) | (`replayq_ready_info_q.reason`[1] << 19) | (`replayq_ready_info_q.wait_uc_load`[1] << 18) | (`replayq_ready_info_q.uc_load_ok`[1] << 17) | (`replayq_ready_info_q.miss_fill_ok`[1] << 16) | (`replayq_ready_info_q.pending`[2] << 47) | (`replayq_ready_info_q.store`[2] << 46) | (`replayq_ready_info_q.age`[2] << 41) | (`replayq_ready_info_q.reason`[2] << 35) | (`replayq_ready_info_q.wait_uc_load`[2] << 34) | (`replayq_ready_info_q.uc_load_ok`[2] << 33) | (`replayq_ready_info_q.miss_fill_ok`[2] << 32) | (`replayq_ready_info_q.pending`[3] << 63) | (`replayq_ready_info_q.store`[3] << 62) | (`replayq_ready_info_q.age`[3] << 57) | (`replayq_ready_info_q.reason`[3] << 51) | (`replayq_ready_info_q.wait_uc_load`[3] << 50) | (`replayq_ready_info_q.uc_load_ok`[3] << 49) | (`replayq_ready_info_q.miss_fill_ok`[3] << 48) | (`replayq_ready_info_q.pending`[4] << 79) | (`replayq_ready_info_q.store`[4] << 78) | (`replayq_ready_info_q.age`[4] << 73) | (`replayq_ready_info_q.reason`[4] << 67) | (`replayq_ready_info_q.wait_uc_load`[4] << 66)
-  const t1360 = t1359 | (`replayq_ready_info_q.uc_load_ok`[4] << 65)
-  const t1361 = t1360 | (`replayq_ready_info_q.miss_fill_ok`[4] << 64)
-  const t1362 = t1361 | (`replayq_ready_info_q.pending`[5] << 95)
-  const t1363 = t1362 | (`replayq_ready_info_q.store`[5] << 94)
-  const t1364 = t1363 | (`replayq_ready_info_q.age`[5] << 89)
-  const t1365 = t1364 | (`replayq_ready_info_q.reason`[5] << 83)
-  const t1366 = t1365 | (`replayq_ready_info_q.wait_uc_load`[5] << 82)
-  const t1367 = t1366 | (`replayq_ready_info_q.uc_load_ok`[5] << 81)
-  const t1368 = t1367 | (`replayq_ready_info_q.miss_fill_ok`[5] << 80)
-  const t1369 = t1368 | (`replayq_ready_info_q.pending`[6] << 111)
-  const t1370 = t1369 | (`replayq_ready_info_q.store`[6] << 110)
-  const t1371 = t1370 | (`replayq_ready_info_q.age`[6] << 105)
-  const t1372 = t1371 | (`replayq_ready_info_q.reason`[6] << 99)
-  const t1373 = t1372 | (`replayq_ready_info_q.wait_uc_load`[6] << 98)
-  const t1374 = t1373 | (`replayq_ready_info_q.uc_load_ok`[6] << 97)
-  const t1375 = t1374 | (`replayq_ready_info_q.miss_fill_ok`[6] << 96)
-  const t1376 = t1375 | (`replayq_ready_info_q.pending`[7] << 127)
-  const t1377 = t1376 | (`replayq_ready_info_q.store`[7] << 126)
-  const t1378 = t1377 | (`replayq_ready_info_q.age`[7] << 121)
-  const t1379 = t1378 | (`replayq_ready_info_q.reason`[7] << 115)
-  const t1380 = t1379 | (`replayq_ready_info_q.wait_uc_load`[7] << 114)
-  const t1381 = t1380 | (`replayq_ready_info_q.uc_load_ok`[7] << 113)
-  const t1382 = t1381 | (`replayq_ready_info_q.miss_fill_ok`[7] << 112)
-  push_age_d = 0ub?????
-  replayq_ready_info_d = t1382
+  empty_d__w20#[1] = (empty_d__w19 >> 1) & 1 & unsigned(not ((push_req_i != 0) and (req_data_i.dest.thread_id == 1))) & 1
+  const t1379 = (`replayq_ready_info_q.pending`[0] << 15) | (`replayq_ready_info_q.store`[0] << 14) | (`replayq_ready_info_q.age`[0] << 9) | (`replayq_ready_info_q.reason`[0] << 3) | (`replayq_ready_info_q.wait_uc_load`[0] << 2) | (`replayq_ready_info_q.uc_load_ok`[0] << 1) | `replayq_ready_info_q.miss_fill_ok`[0] | (`replayq_ready_info_q.pending`[1] << 31) | (`replayq_ready_info_q.store`[1] << 30) | (`replayq_ready_info_q.age`[1] << 25) | (`replayq_ready_info_q.reason`[1] << 19) | (`replayq_ready_info_q.wait_uc_load`[1] << 18) | (`replayq_ready_info_q.uc_load_ok`[1] << 17) | (`replayq_ready_info_q.miss_fill_ok`[1] << 16) | (`replayq_ready_info_q.pending`[2] << 47) | (`replayq_ready_info_q.store`[2] << 46) | (`replayq_ready_info_q.age`[2] << 41) | (`replayq_ready_info_q.reason`[2] << 35) | (`replayq_ready_info_q.wait_uc_load`[2] << 34) | (`replayq_ready_info_q.uc_load_ok`[2] << 33) | (`replayq_ready_info_q.miss_fill_ok`[2] << 32) | (`replayq_ready_info_q.pending`[3] << 63) | (`replayq_ready_info_q.store`[3] << 62) | (`replayq_ready_info_q.age`[3] << 57) | (`replayq_ready_info_q.reason`[3] << 51) | (`replayq_ready_info_q.wait_uc_load`[3] << 50) | (`replayq_ready_info_q.uc_load_ok`[3] << 49) | (`replayq_ready_info_q.miss_fill_ok`[3] << 48) | (`replayq_ready_info_q.pending`[4] << 0x4f) | (`replayq_ready_info_q.store`[4] << 0x4e) | (`replayq_ready_info_q.age`[4] << 0x49) | (`replayq_ready_info_q.reason`[4] << 0x43) | (`replayq_ready_info_q.wait_uc_load`[4] << 0x42)
+  const t1380 = t1379 | (`replayq_ready_info_q.uc_load_ok`[4] << 0x41)
+  const t1381 = t1380 | (`replayq_ready_info_q.miss_fill_ok`[4] << 0x40)
+  const t1382 = t1381 | (`replayq_ready_info_q.pending`[5] << 0x5f)
+  const t1383 = t1382 | (`replayq_ready_info_q.store`[5] << 0x5e)
+  const t1384 = t1383 | (`replayq_ready_info_q.age`[5] << 0x59)
+  const t1385 = t1384 | (`replayq_ready_info_q.reason`[5] << 0x53)
+  const t1386 = t1385 | (`replayq_ready_info_q.wait_uc_load`[5] << 0x52)
+  const t1387 = t1386 | (`replayq_ready_info_q.uc_load_ok`[5] << 0x51)
+  const t1388 = t1387 | (`replayq_ready_info_q.miss_fill_ok`[5] << 0x50)
+  const t1389 = t1388 | (`replayq_ready_info_q.pending`[6] << 0x6f)
+  const t1390 = t1389 | (`replayq_ready_info_q.store`[6] << 0x6e)
+  const t1391 = t1390 | (`replayq_ready_info_q.age`[6] << 0x69)
+  const t1392 = t1391 | (`replayq_ready_info_q.reason`[6] << 0x63)
+  const t1393 = t1392 | (`replayq_ready_info_q.wait_uc_load`[6] << 0x62)
+  const t1394 = t1393 | (`replayq_ready_info_q.uc_load_ok`[6] << 0x61)
+  const t1395 = t1394 | (`replayq_ready_info_q.miss_fill_ok`[6] << 0x60)
+  const t1396 = t1395 | (`replayq_ready_info_q.pending`[7] << 0x7f)
+  const t1397 = t1396 | (`replayq_ready_info_q.store`[7] << 0x7e)
+  const t1398 = t1397 | (`replayq_ready_info_q.age`[7] << 0x79)
+  const t1399 = t1398 | (`replayq_ready_info_q.reason`[7] << 0x73)
+  const t1400 = t1399 | (`replayq_ready_info_q.wait_uc_load`[7] << 0x72)
+  const t1401 = t1400 | (`replayq_ready_info_q.uc_load_ok`[7] << 0x71)
+  const t1402 = t1401 | (`replayq_ready_info_q.miss_fill_ok`[7] << 0x70)
+  push_age_d = 0sb?
+  replayq_ready_info_d = t1402
   if (miss_available_i & 1) != 0 {
     if ((replayq_ready_info_d#[0..=15]#[3..=8]#[0..=1] & 1) != 0) or (replayq_ready_info_d#[0..=15]#[3..=8]#[0..=1] == 0) {
       replayq_ready_info_d#[7] = 0
@@ -797,363 +801,367 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
     replayq_ready_info_d#[120] = 0
   }
   if uc_load_fill_i != 0 {
-    const t1653 = (uc_load_id_q[uc_load_fill_id_i] * 16) + 2
-    replayq_ready_info_d = ((replayq_ready_info_d & (~(1 << t1653))) | (0 << t1653)) & 1
-    const t1662 = (uc_load_id_q[uc_load_fill_id_i] * 16) + 1
-    replayq_ready_info_d = ((replayq_ready_info_d & (~(1 << t1662))) | (uc_load_fill_ok_i << t1662)) & 1
+    const t1673 = (uc_load_id_q[uc_load_fill_id_i] * 16) + 2
+    replayq_ready_info_d = ((replayq_ready_info_d & (~(1 << t1673))) | (0 << t1673)) & 1
+    const t1683 = (uc_load_id_q[uc_load_fill_id_i] * 16) + 1
+    replayq_ready_info_d = ((replayq_ready_info_d & (~(1 << t1683))) | ((uc_load_fill_ok_i & 1) << t1683)) & 1
   }
   const cmd__w1 = req_data_i.cmd
   const cmd_s1__w1 = cmd__w1
   const req_is_write__w1 = unsigned((cmd__w1 == minion_dcache_pkg.DcCmdXwr) or (cmd__w1 == minion_dcache_pkg.DcCmdXsc) or (unsigned((cmd_s1__w1 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXaMaxPs)) != 0) or (cmd__w1 == minion_dcache_pkg.DcCmdSc32) or (cmd__w1 == minion_dcache_pkg.DcCmdXwrb))
   push_age_d = push_age_q
   if push_req_i != 0 {
-    const t1704 = (push_entry * 16) + 14
-    const t1712 = (push_entry * 16) + 9
-    replayq_ready_info_d = ((replayq_ready_info_d & (~(1 << t1704))) | (req_is_write__w1 << t1704)) & 1
+    const t1726 = (push_entry * 16) + 14
+    const t1735 = (push_entry * 16) + 9
+    replayq_ready_info_d = ((replayq_ready_info_d & (~(1 << t1726))) | ((req_is_write__w1 & 1) << t1726)) & 1
     push_age_d = (push_age_q + 1)#[0..=4]
-    replayq_ready_info_d = ((replayq_ready_info_d & (~(31 << t1712))) | (push_age_q << t1712)) & 1
+    replayq_ready_info_d = ((replayq_ready_info_d & (~(31 << t1735))) | (push_age_q << t1735)) & 1
   }
   if (push_req_i != 0) or (rearm_i != 0) {
-    const t1725 = (push_entry * 16) + 15
-    const t1743 = (push_entry * 16) + 3
-    replayq_ready_info_d = ((replayq_ready_info_d & (~(1 << t1725))) | (1 << t1725)) & 1
-    const t1751 = (push_entry * 16) + 2
-    replayq_ready_info_d = ((replayq_ready_info_d & (~(63 << t1743))) | (((req_conf_type_i.vpu_rf_write << 5) | (req_conf_type_i.miss_alloc << 4) | (req_conf_type_i.miss_accepted << 2) | req_conf_type_i.miss_assigned) << t1743)) & 1
-    const t1759 = (push_entry * 16) + 1
-    replayq_ready_info_d = ((replayq_ready_info_d & (~(1 << t1751))) | (uc_load_1st_i << t1751)) & 1
-    const t1766 = push_entry * 16
-    replayq_ready_info_d = ((replayq_ready_info_d & (~(1 << t1759))) | (uc_load_ok_i << t1759)) & 1
-    replayq_ready_info_d = ((replayq_ready_info_d & (~(1 << t1766))) | (miss_fill_ok_i << t1766)) & 1
+    const t1748 = (push_entry * 16) + 15
+    const t1767 = (push_entry * 16) + 3
+    replayq_ready_info_d = ((replayq_ready_info_d & (~(1 << t1748))) | (1 << t1748)) & 1
+    const t1776 = (push_entry * 16) + 2
+    replayq_ready_info_d = ((replayq_ready_info_d & (~(63 << t1767))) | (((req_conf_type_i.vpu_rf_write << 5) | (req_conf_type_i.miss_alloc << 4) | (req_conf_type_i.miss_accepted << 2) | req_conf_type_i.miss_assigned)#[0..=5] << t1767)) & 1
+    const t1785 = (push_entry * 16) + 1
+    replayq_ready_info_d = ((replayq_ready_info_d & (~(1 << t1776))) | ((uc_load_1st_i & 1) << t1776)) & 1
+    const t1792 = push_entry * 16
+    replayq_ready_info_d = ((replayq_ready_info_d & (~(1 << t1785))) | ((uc_load_ok_i & 1) << t1785)) & 1
+    replayq_ready_info_d = ((replayq_ready_info_d & (~(1 << t1792))) | ((miss_fill_ok_i & 1) << t1792)) & 1
   }
   if replay_grant_i != 0 {
     replay_entry_d = 0ub???
-    const t1775 = (replay_entry_d * 16) + 15
-    replayq_ready_info_d = ((replayq_ready_info_d & (~(1 << t1775))) | (0 << t1775)) & 1
+    const t1802 = (replay_entry_d * 16) + 15
+    replayq_ready_info_d = ((replayq_ready_info_d & (~(1 << t1802))) | (0 << t1802)) & 1
   }
   uc_load_id_d = uc_load_id_q
   if (push_req_i != 0) and (req_buf_alloc_i != 0) {
-    const t1785 = req_buf_entry_i * 3
-    uc_load_id_d = ((uc_load_id_d & (~(7 << t1785))) | (push_entry << t1785))#[0..=23]
+    const t1812 = req_buf_entry_i * 3
+    uc_load_id_d = ((uc_load_id_d & (~(7 << t1812))) | (push_entry << t1812))#[0..=23]
   }
   const arb_clk_en__w1 = unsigned((rst_ni == 0) or (not (empty_o == 3)) or (push_req_spec_q != 0) or (replay_valid_o != 0) or (replay_valid_prev_q != 0))
-  mut win_per_client = 0ub????????
+  win_per_client = 0sb?
   mut win_per_client__w1 = win_per_client
-  win_per_client__w1#[0] = (entry_ready__w8 & 1)
+  win_per_client__w1#[0] = entry_ready__w8 & 1
   mut win_per_client__w2 = win_per_client__w1
-  win_per_client__w2#[0] = unsigned(((win_per_client__w1 & 1) != 0) and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((~(prio_bits_q#[8..=15] & 1)) & 1) != 0)))
+  win_per_client__w2#[0] = unsigned(((win_per_client__w1 & 1) != 0) and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((~(prio_bits_q#[8..=15] & 1)) & 1) != 0))) & 1
   mut win_per_client__w3 = win_per_client__w2
-  win_per_client__w3#[0] = unsigned(((win_per_client__w2 & 1) != 0) and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((~(prio_bits_q#[16..=23] & 1)) & 1) != 0)))
+  win_per_client__w3#[0] = unsigned(((win_per_client__w2 & 1) != 0) and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((~(prio_bits_q#[16..=23] & 1)) & 1) != 0))) & 1
   mut win_per_client__w4 = win_per_client__w3
-  win_per_client__w4#[0] = unsigned(((win_per_client__w3 & 1) != 0) and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((~(prio_bits_q#[24..=31] & 1)) & 1) != 0)))
+  win_per_client__w4#[0] = unsigned(((win_per_client__w3 & 1) != 0) and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((~(prio_bits_q#[24..=31] & 1)) & 1) != 0))) & 1
   mut win_per_client__w5 = win_per_client__w4
-  win_per_client__w5#[0] = unsigned(((win_per_client__w4 & 1) != 0) and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((~(prio_bits_q#[32..=39] & 1)) & 1) != 0)))
+  win_per_client__w5#[0] = unsigned(((win_per_client__w4 & 1) != 0) and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((~(prio_bits_q#[32..=39] & 1)) & 1) != 0))) & 1
   mut win_per_client__w6 = win_per_client__w5
-  win_per_client__w6#[0] = unsigned(((win_per_client__w5 & 1) != 0) and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((~(prio_bits_q#[40..=47] & 1)) & 1) != 0)))
+  win_per_client__w6#[0] = unsigned(((win_per_client__w5 & 1) != 0) and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((~(prio_bits_q#[40..=47] & 1)) & 1) != 0))) & 1
   mut win_per_client__w7 = win_per_client__w6
-  win_per_client__w7#[0] = unsigned(((win_per_client__w6 & 1) != 0) and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~(prio_bits_q#[48..=55] & 1)) & 1) != 0)))
+  win_per_client__w7#[0] = unsigned(((win_per_client__w6 & 1) != 0) and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~(prio_bits_q#[48..=55] & 1)) & 1) != 0))) & 1
   mut win_per_client__w8 = win_per_client__w7
-  win_per_client__w8#[0] = unsigned(((win_per_client__w7 & 1) != 0) and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~(prio_bits_q#[56..=63] & 1)) & 1) != 0)))
+  win_per_client__w8#[0] = unsigned(((win_per_client__w7 & 1) != 0) and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~(prio_bits_q#[56..=63] & 1)) & 1) != 0))) & 1
   mut win_per_client__w9 = win_per_client__w8
-  win_per_client__w9#[1] = ((entry_ready__w8 >> 1) & 1)
+  win_per_client__w9#[1] = (entry_ready__w8 >> 1) & 1
   mut win_per_client__w10 = win_per_client__w9
-  win_per_client__w10#[1] = unsigned((((win_per_client__w9 >> 1) & 1) != 0) and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[8..=15] & 1) != 0)))
+  win_per_client__w10#[1] = unsigned((((win_per_client__w9 >> 1) & 1) != 0) and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[8..=15] & 1) != 0))) & 1
   mut win_per_client__w11 = win_per_client__w10
-  win_per_client__w11#[1] = unsigned((((win_per_client__w10 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((~((prio_bits_q#[16..=23] >> 1) & 1)) & 1) != 0)))
+  win_per_client__w11#[1] = unsigned((((win_per_client__w10 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((~((prio_bits_q#[16..=23] >> 1) & 1)) & 1) != 0))) & 1
   mut win_per_client__w12 = win_per_client__w11
-  win_per_client__w12#[1] = unsigned((((win_per_client__w11 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((~((prio_bits_q#[24..=31] >> 1) & 1)) & 1) != 0)))
+  win_per_client__w12#[1] = unsigned((((win_per_client__w11 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((~((prio_bits_q#[24..=31] >> 1) & 1)) & 1) != 0))) & 1
   mut win_per_client__w13 = win_per_client__w12
-  win_per_client__w13#[1] = unsigned((((win_per_client__w12 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((~((prio_bits_q#[32..=39] >> 1) & 1)) & 1) != 0)))
+  win_per_client__w13#[1] = unsigned((((win_per_client__w12 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((~((prio_bits_q#[32..=39] >> 1) & 1)) & 1) != 0))) & 1
   mut win_per_client__w14 = win_per_client__w13
-  win_per_client__w14#[1] = unsigned((((win_per_client__w13 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((~((prio_bits_q#[40..=47] >> 1) & 1)) & 1) != 0)))
+  win_per_client__w14#[1] = unsigned((((win_per_client__w13 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((~((prio_bits_q#[40..=47] >> 1) & 1)) & 1) != 0))) & 1
   mut win_per_client__w15 = win_per_client__w14
-  win_per_client__w15#[1] = unsigned((((win_per_client__w14 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~((prio_bits_q#[48..=55] >> 1) & 1)) & 1) != 0)))
+  win_per_client__w15#[1] = unsigned((((win_per_client__w14 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~((prio_bits_q#[48..=55] >> 1) & 1)) & 1) != 0))) & 1
   mut win_per_client__w16 = win_per_client__w15
-  win_per_client__w16#[1] = unsigned((((win_per_client__w15 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 1) & 1)) & 1) != 0)))
+  win_per_client__w16#[1] = unsigned((((win_per_client__w15 >> 1) & 1) != 0) and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 1) & 1)) & 1) != 0))) & 1
   mut win_per_client__w17 = win_per_client__w16
-  win_per_client__w17#[2] = ((entry_ready__w8 >> 2) & 1)
+  win_per_client__w17#[2] = (entry_ready__w8 >> 2) & 1
   mut win_per_client__w18 = win_per_client__w17
-  win_per_client__w18#[2] = unsigned((((win_per_client__w17 >> 2) & 1) != 0) and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[16..=23] & 1) != 0)))
+  win_per_client__w18#[2] = unsigned((((win_per_client__w17 >> 2) & 1) != 0) and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[16..=23] & 1) != 0))) & 1
   mut win_per_client__w19 = win_per_client__w18
-  win_per_client__w19#[2] = unsigned((((win_per_client__w18 >> 2) & 1) != 0) and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[16..=23] >> 1) & 1) != 0)))
+  win_per_client__w19#[2] = unsigned((((win_per_client__w18 >> 2) & 1) != 0) and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[16..=23] >> 1) & 1) != 0))) & 1
   mut win_per_client__w20 = win_per_client__w19
-  win_per_client__w20#[2] = unsigned((((win_per_client__w19 >> 2) & 1) != 0) and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((~((prio_bits_q#[24..=31] >> 2) & 1)) & 1) != 0)))
+  win_per_client__w20#[2] = unsigned((((win_per_client__w19 >> 2) & 1) != 0) and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((~((prio_bits_q#[24..=31] >> 2) & 1)) & 1) != 0))) & 1
+  const t2114 = (((win_per_client__w20 >> 2) & 1) != 0) and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((~((prio_bits_q#[32..=39] >> 2) & 1)) & 1) != 0))
   mut win_per_client__w21 = win_per_client__w20
-  win_per_client__w21#[2] = unsigned((((win_per_client__w20 >> 2) & 1) != 0) and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((~((prio_bits_q#[32..=39] >> 2) & 1)) & 1) != 0)))
-  const t2086 = (((win_per_client__w21 >> 2) & 1) != 0) and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((~((prio_bits_q#[40..=47] >> 2) & 1)) & 1) != 0))
+  win_per_client__w21#[2] = unsigned(t2114) & 1
+  const t2118 = ((win_per_client__w21 >> 2) & 1) != 0
+  const t2131 = t2118 and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((~((prio_bits_q#[40..=47] >> 2) & 1)) & 1) != 0))
   mut win_per_client__w22 = win_per_client__w21
-  win_per_client__w22#[2] = unsigned(t2086)
-  const t2089 = ((win_per_client__w22 >> 2) & 1) != 0
-  const t2102 = t2089 and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~((prio_bits_q#[48..=55] >> 2) & 1)) & 1) != 0))
-  mut win_per_client__w23 = win_per_client__w22
-  win_per_client__w23#[2] = unsigned(t2102)
-  const t2104 = (win_per_client__w23 >> 2) & 1
-  const t2105 = t2104 != 0
-  const t2118 = t2105 and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 2) & 1)) & 1) != 0))
-  mut win_per_client__w24 = win_per_client__w23
-  win_per_client__w24#[2] = unsigned(t2118)
-  mut win_per_client__w25 = win_per_client__w24
-  win_per_client__w25#[3] = ((entry_ready__w8 >> 3) & 1)
-  const t2121 = win_per_client__w25 >> 3
-  const t2122 = t2121 & 1
-  const t2123 = t2122 != 0
-  const t2132 = t2123 and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[24..=31] & 1) != 0))
-  mut win_per_client__w26 = win_per_client__w25
-  win_per_client__w26#[3] = unsigned(t2132)
-  const t2133 = win_per_client__w26 >> 3
-  const t2134 = t2133 & 1
+  win_per_client__w22#[2] = unsigned(t2131) & 1
+  const t2134 = (win_per_client__w22 >> 2) & 1
   const t2135 = t2134 != 0
-  const t2146 = t2135 and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[24..=31] >> 1) & 1) != 0))
+  const t2148 = t2135 and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~((prio_bits_q#[48..=55] >> 2) & 1)) & 1) != 0))
+  mut win_per_client__w23 = win_per_client__w22
+  win_per_client__w23#[2] = unsigned(t2148) & 1
+  const t2150 = win_per_client__w23 >> 2
+  const t2151 = t2150 & 1
+  const t2152 = t2151 != 0
+  const t2165 = t2152 and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 2) & 1)) & 1) != 0))
+  mut win_per_client__w24 = win_per_client__w23
+  win_per_client__w24#[2] = unsigned(t2165) & 1
+  mut win_per_client__w25 = win_per_client__w24
+  win_per_client__w25#[3] = (entry_ready__w8 >> 3) & 1
+  const t2169 = win_per_client__w25 >> 3
+  const t2170 = t2169 & 1
+  const t2171 = t2170 != 0
+  const t2180 = t2171 and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[24..=31] & 1) != 0))
+  mut win_per_client__w26 = win_per_client__w25
+  win_per_client__w26#[3] = unsigned(t2180) & 1
+  const t2182 = win_per_client__w26 >> 3
+  const t2183 = t2182 & 1
+  const t2184 = t2183 != 0
+  const t2195 = t2184 and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[24..=31] >> 1) & 1) != 0))
   mut win_per_client__w27 = win_per_client__w26
-  win_per_client__w27#[3] = unsigned(t2146)
-  const t2147 = win_per_client__w27 >> 3
-  const t2148 = t2147 & 1
-  const t2149 = t2148 != 0
-  const t2160 = t2149 and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((prio_bits_q#[24..=31] >> 2) & 1) != 0))
+  win_per_client__w27#[3] = unsigned(t2195) & 1
+  const t2197 = win_per_client__w27 >> 3
+  const t2198 = t2197 & 1
+  const t2199 = t2198 != 0
+  const t2210 = t2199 and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((prio_bits_q#[24..=31] >> 2) & 1) != 0))
   mut win_per_client__w28 = win_per_client__w27
-  win_per_client__w28#[3] = unsigned(t2160)
-  const t2161 = win_per_client__w28 >> 3
-  const t2162 = t2161 & 1
-  const t2163 = t2162 != 0
-  const t2176 = t2163 and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((~((prio_bits_q#[32..=39] >> 3) & 1)) & 1) != 0))
+  win_per_client__w28#[3] = unsigned(t2210) & 1
+  const t2212 = win_per_client__w28 >> 3
+  const t2213 = t2212 & 1
+  const t2214 = t2213 != 0
+  const t2227 = t2214 and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((~((prio_bits_q#[32..=39] >> 3) & 1)) & 1) != 0))
   mut win_per_client__w29 = win_per_client__w28
-  win_per_client__w29#[3] = unsigned(t2176)
-  const t2177 = win_per_client__w29 >> 3
-  const t2178 = t2177 & 1
-  const t2179 = t2178 != 0
-  const t2192 = t2179 and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((~((prio_bits_q#[40..=47] >> 3) & 1)) & 1) != 0))
+  win_per_client__w29#[3] = unsigned(t2227) & 1
+  const t2229 = win_per_client__w29 >> 3
+  const t2230 = t2229 & 1
+  const t2231 = t2230 != 0
+  const t2244 = t2231 and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((~((prio_bits_q#[40..=47] >> 3) & 1)) & 1) != 0))
   mut win_per_client__w30 = win_per_client__w29
-  win_per_client__w30#[3] = unsigned(t2192)
-  const t2193 = win_per_client__w30 >> 3
-  const t2194 = t2193 & 1
-  const t2195 = t2194 != 0
-  const t2208 = t2195 and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~((prio_bits_q#[48..=55] >> 3) & 1)) & 1) != 0))
+  win_per_client__w30#[3] = unsigned(t2244) & 1
+  const t2246 = win_per_client__w30 >> 3
+  const t2247 = t2246 & 1
+  const t2248 = t2247 != 0
+  const t2261 = t2248 and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~((prio_bits_q#[48..=55] >> 3) & 1)) & 1) != 0))
   mut win_per_client__w31 = win_per_client__w30
-  win_per_client__w31#[3] = unsigned(t2208)
-  const t2209 = win_per_client__w31 >> 3
-  const t2210 = t2209 & 1
-  const t2211 = t2210 != 0
-  const t2224 = t2211 and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 3) & 1)) & 1) != 0))
+  win_per_client__w31#[3] = unsigned(t2261) & 1
+  const t2263 = win_per_client__w31 >> 3
+  const t2264 = t2263 & 1
+  const t2265 = t2264 != 0
+  const t2278 = t2265 and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 3) & 1)) & 1) != 0))
   mut win_per_client__w32 = win_per_client__w31
-  win_per_client__w32#[3] = unsigned(t2224)
+  win_per_client__w32#[3] = unsigned(t2278) & 1
   mut win_per_client__w33 = win_per_client__w32
-  win_per_client__w33#[4] = ((entry_ready__w8 >> 4) & 1)
-  const t2227 = win_per_client__w33 >> 4
-  const t2228 = t2227 & 1
-  const t2229 = t2228 != 0
-  const t2238 = t2229 and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[32..=39] & 1) != 0))
+  win_per_client__w33#[4] = (entry_ready__w8 >> 4) & 1
+  const t2282 = win_per_client__w33 >> 4
+  const t2283 = t2282 & 1
+  const t2284 = t2283 != 0
+  const t2293 = t2284 and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[32..=39] & 1) != 0))
   mut win_per_client__w34 = win_per_client__w33
-  win_per_client__w34#[4] = unsigned(t2238)
-  const t2239 = win_per_client__w34 >> 4
-  const t2240 = t2239 & 1
-  const t2241 = t2240 != 0
-  const t2252 = t2241 and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[32..=39] >> 1) & 1) != 0))
+  win_per_client__w34#[4] = unsigned(t2293) & 1
+  const t2295 = win_per_client__w34 >> 4
+  const t2296 = t2295 & 1
+  const t2297 = t2296 != 0
+  const t2308 = t2297 and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[32..=39] >> 1) & 1) != 0))
   mut win_per_client__w35 = win_per_client__w34
-  win_per_client__w35#[4] = unsigned(t2252)
-  const t2253 = win_per_client__w35 >> 4
-  const t2254 = t2253 & 1
-  const t2255 = t2254 != 0
-  const t2266 = t2255 and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((prio_bits_q#[32..=39] >> 2) & 1) != 0))
+  win_per_client__w35#[4] = unsigned(t2308) & 1
+  const t2310 = win_per_client__w35 >> 4
+  const t2311 = t2310 & 1
+  const t2312 = t2311 != 0
+  const t2323 = t2312 and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((prio_bits_q#[32..=39] >> 2) & 1) != 0))
   mut win_per_client__w36 = win_per_client__w35
-  win_per_client__w36#[4] = unsigned(t2266)
-  const t2267 = win_per_client__w36 >> 4
-  const t2268 = t2267 & 1
-  const t2269 = t2268 != 0
-  const t2280 = t2269 and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((prio_bits_q#[32..=39] >> 3) & 1) != 0))
+  win_per_client__w36#[4] = unsigned(t2323) & 1
+  const t2325 = win_per_client__w36 >> 4
+  const t2326 = t2325 & 1
+  const t2327 = t2326 != 0
+  const t2338 = t2327 and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((prio_bits_q#[32..=39] >> 3) & 1) != 0))
   mut win_per_client__w37 = win_per_client__w36
-  win_per_client__w37#[4] = unsigned(t2280)
-  const t2281 = win_per_client__w37 >> 4
-  const t2282 = t2281 & 1
-  const t2283 = t2282 != 0
-  const t2296 = t2283 and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((~((prio_bits_q#[40..=47] >> 4) & 1)) & 1) != 0))
+  win_per_client__w37#[4] = unsigned(t2338) & 1
+  const t2340 = win_per_client__w37 >> 4
+  const t2341 = t2340 & 1
+  const t2342 = t2341 != 0
+  const t2355 = t2342 and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((~((prio_bits_q#[40..=47] >> 4) & 1)) & 1) != 0))
   mut win_per_client__w38 = win_per_client__w37
-  win_per_client__w38#[4] = unsigned(t2296)
-  const t2297 = win_per_client__w38 >> 4
-  const t2298 = t2297 & 1
-  const t2299 = t2298 != 0
-  const t2312 = t2299 and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~((prio_bits_q#[48..=55] >> 4) & 1)) & 1) != 0))
-  mut win_per_client__w39 = win_per_client__w38
-  win_per_client__w39#[4] = unsigned(t2312)
-  const t2313 = win_per_client__w39 >> 4
-  const t2314 = t2313 & 1
-  const t2315 = t2314 != 0
-  const t2328 = t2315 and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 4) & 1)) & 1) != 0))
-  mut win_per_client__w40 = win_per_client__w39
-  win_per_client__w40#[4] = unsigned(t2328)
-  mut win_per_client__w41 = win_per_client__w40
-  win_per_client__w41#[5] = ((entry_ready__w8 >> 5) & 1)
-  const t2331 = win_per_client__w41 >> 5
-  const t2332 = t2331 & 1
-  const t2333 = t2332 != 0
-  const t2342 = t2333 and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[40..=47] & 1) != 0))
-  mut win_per_client__w42 = win_per_client__w41
-  win_per_client__w42#[5] = unsigned(t2342)
-  const t2343 = win_per_client__w42 >> 5
-  const t2344 = t2343 & 1
-  const t2345 = t2344 != 0
-  const t2356 = t2345 and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[40..=47] >> 1) & 1) != 0))
-  mut win_per_client__w43 = win_per_client__w42
-  win_per_client__w43#[5] = unsigned(t2356)
-  const t2357 = win_per_client__w43 >> 5
+  win_per_client__w38#[4] = unsigned(t2355) & 1
+  const t2357 = win_per_client__w38 >> 4
   const t2358 = t2357 & 1
   const t2359 = t2358 != 0
-  const t2370 = t2359 and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((prio_bits_q#[40..=47] >> 2) & 1) != 0))
+  const t2372 = t2359 and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~((prio_bits_q#[48..=55] >> 4) & 1)) & 1) != 0))
+  mut win_per_client__w39 = win_per_client__w38
+  win_per_client__w39#[4] = unsigned(t2372) & 1
+  const t2374 = win_per_client__w39 >> 4
+  const t2375 = t2374 & 1
+  const t2376 = t2375 != 0
+  const t2389 = t2376 and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 4) & 1)) & 1) != 0))
+  mut win_per_client__w40 = win_per_client__w39
+  win_per_client__w40#[4] = unsigned(t2389) & 1
+  mut win_per_client__w41 = win_per_client__w40
+  win_per_client__w41#[5] = (entry_ready__w8 >> 5) & 1
+  const t2393 = win_per_client__w41 >> 5
+  const t2394 = t2393 & 1
+  const t2395 = t2394 != 0
+  const t2404 = t2395 and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[40..=47] & 1) != 0))
+  mut win_per_client__w42 = win_per_client__w41
+  win_per_client__w42#[5] = unsigned(t2404) & 1
+  const t2406 = win_per_client__w42 >> 5
+  const t2407 = t2406 & 1
+  const t2408 = t2407 != 0
+  const t2419 = t2408 and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[40..=47] >> 1) & 1) != 0))
+  mut win_per_client__w43 = win_per_client__w42
+  win_per_client__w43#[5] = unsigned(t2419) & 1
+  const t2421 = win_per_client__w43 >> 5
+  const t2422 = t2421 & 1
+  const t2423 = t2422 != 0
+  const t2434 = t2423 and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((prio_bits_q#[40..=47] >> 2) & 1) != 0))
   mut win_per_client__w44 = win_per_client__w43
-  win_per_client__w44#[5] = unsigned(t2370)
-  const t2371 = win_per_client__w44 >> 5
-  const t2372 = t2371 & 1
-  const t2373 = t2372 != 0
-  const t2384 = t2373 and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((prio_bits_q#[40..=47] >> 3) & 1) != 0))
+  win_per_client__w44#[5] = unsigned(t2434) & 1
+  const t2436 = win_per_client__w44 >> 5
+  const t2437 = t2436 & 1
+  const t2438 = t2437 != 0
+  const t2449 = t2438 and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((prio_bits_q#[40..=47] >> 3) & 1) != 0))
   mut win_per_client__w45 = win_per_client__w44
-  win_per_client__w45#[5] = unsigned(t2384)
-  const t2385 = win_per_client__w45 >> 5
-  const t2386 = t2385 & 1
-  const t2387 = t2386 != 0
-  const t2398 = t2387 and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((prio_bits_q#[40..=47] >> 4) & 1) != 0))
+  win_per_client__w45#[5] = unsigned(t2449) & 1
+  const t2451 = win_per_client__w45 >> 5
+  const t2452 = t2451 & 1
+  const t2453 = t2452 != 0
+  const t2464 = t2453 and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((prio_bits_q#[40..=47] >> 4) & 1) != 0))
   mut win_per_client__w46 = win_per_client__w45
-  win_per_client__w46#[5] = unsigned(t2398)
-  const t2399 = win_per_client__w46 >> 5
-  const t2400 = t2399 & 1
-  const t2401 = t2400 != 0
-  const t2414 = t2401 and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~((prio_bits_q#[48..=55] >> 5) & 1)) & 1) != 0))
+  win_per_client__w46#[5] = unsigned(t2464) & 1
+  const t2466 = win_per_client__w46 >> 5
+  const t2467 = t2466 & 1
+  const t2468 = t2467 != 0
+  const t2481 = t2468 and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((~((prio_bits_q#[48..=55] >> 5) & 1)) & 1) != 0))
   mut win_per_client__w47 = win_per_client__w46
-  win_per_client__w47#[5] = unsigned(t2414)
-  const t2415 = win_per_client__w47 >> 5
-  const t2416 = t2415 & 1
-  const t2417 = t2416 != 0
-  const t2430 = t2417 and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 5) & 1)) & 1) != 0))
+  win_per_client__w47#[5] = unsigned(t2481) & 1
+  const t2483 = win_per_client__w47 >> 5
+  const t2484 = t2483 & 1
+  const t2485 = t2484 != 0
+  const t2498 = t2485 and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 5) & 1)) & 1) != 0))
   mut win_per_client__w48 = win_per_client__w47
-  win_per_client__w48#[5] = unsigned(t2430)
+  win_per_client__w48#[5] = unsigned(t2498) & 1
   mut win_per_client__w49 = win_per_client__w48
-  win_per_client__w49#[6] = ((entry_ready__w8 >> 6) & 1)
-  const t2433 = win_per_client__w49 >> 6
-  const t2434 = t2433 & 1
-  const t2435 = t2434 != 0
-  const t2444 = t2435 and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[48..=55] & 1) != 0))
+  win_per_client__w49#[6] = (entry_ready__w8 >> 6) & 1
+  const t2502 = win_per_client__w49 >> 6
+  const t2503 = t2502 & 1
+  const t2504 = t2503 != 0
+  const t2513 = t2504 and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[48..=55] & 1) != 0))
   mut win_per_client__w50 = win_per_client__w49
-  win_per_client__w50#[6] = unsigned(t2444)
-  const t2445 = win_per_client__w50 >> 6
-  const t2446 = t2445 & 1
-  const t2447 = t2446 != 0
-  const t2458 = t2447 and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[48..=55] >> 1) & 1) != 0))
-  mut win_per_client__w51 = win_per_client__w50
-  win_per_client__w51#[6] = unsigned(t2458)
-  const t2459 = win_per_client__w51 >> 6
-  const t2460 = t2459 & 1
-  const t2461 = t2460 != 0
-  const t2472 = t2461 and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((prio_bits_q#[48..=55] >> 2) & 1) != 0))
-  mut win_per_client__w52 = win_per_client__w51
-  win_per_client__w52#[6] = unsigned(t2472)
-  const t2473 = win_per_client__w52 >> 6
-  const t2474 = t2473 & 1
-  const t2475 = t2474 != 0
-  const t2486 = t2475 and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((prio_bits_q#[48..=55] >> 3) & 1) != 0))
-  mut win_per_client__w53 = win_per_client__w52
-  win_per_client__w53#[6] = unsigned(t2486)
-  const t2487 = win_per_client__w53 >> 6
-  const t2488 = t2487 & 1
-  const t2489 = t2488 != 0
-  const t2500 = t2489 and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((prio_bits_q#[48..=55] >> 4) & 1) != 0))
-  mut win_per_client__w54 = win_per_client__w53
-  win_per_client__w54#[6] = unsigned(t2500)
-  const t2501 = win_per_client__w54 >> 6
-  const t2502 = t2501 & 1
-  const t2503 = t2502 != 0
-  const t2514 = t2503 and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((prio_bits_q#[48..=55] >> 5) & 1) != 0))
-  mut win_per_client__w55 = win_per_client__w54
-  win_per_client__w55#[6] = unsigned(t2514)
-  const t2515 = win_per_client__w55 >> 6
+  win_per_client__w50#[6] = unsigned(t2513) & 1
+  const t2515 = win_per_client__w50 >> 6
   const t2516 = t2515 & 1
   const t2517 = t2516 != 0
-  const t2530 = t2517 and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 6) & 1)) & 1) != 0))
-  mut win_per_client__w56 = win_per_client__w55
-  win_per_client__w56#[6] = unsigned(t2530)
-  mut win_per_client__w57 = win_per_client__w56
-  win_per_client__w57#[7] = ((entry_ready__w8 >> 7) & 1)
-  const t2533 = win_per_client__w57 >> 7
-  const t2534 = t2533 & 1
-  const t2535 = t2534 != 0
-  const t2544 = t2535 and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[56..=63] & 1) != 0))
-  mut win_per_client__w58 = win_per_client__w57
-  win_per_client__w58#[7] = unsigned(t2544)
-  const t2545 = win_per_client__w58 >> 7
+  const t2528 = t2517 and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[48..=55] >> 1) & 1) != 0))
+  mut win_per_client__w51 = win_per_client__w50
+  win_per_client__w51#[6] = unsigned(t2528) & 1
+  const t2530 = win_per_client__w51 >> 6
+  const t2531 = t2530 & 1
+  const t2532 = t2531 != 0
+  const t2543 = t2532 and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((prio_bits_q#[48..=55] >> 2) & 1) != 0))
+  mut win_per_client__w52 = win_per_client__w51
+  win_per_client__w52#[6] = unsigned(t2543) & 1
+  const t2545 = win_per_client__w52 >> 6
   const t2546 = t2545 & 1
   const t2547 = t2546 != 0
-  const t2558 = t2547 and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 1) & 1) != 0))
+  const t2558 = t2547 and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((prio_bits_q#[48..=55] >> 3) & 1) != 0))
+  mut win_per_client__w53 = win_per_client__w52
+  win_per_client__w53#[6] = unsigned(t2558) & 1
+  const t2560 = win_per_client__w53 >> 6
+  const t2561 = t2560 & 1
+  const t2562 = t2561 != 0
+  const t2573 = t2562 and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((prio_bits_q#[48..=55] >> 4) & 1) != 0))
+  mut win_per_client__w54 = win_per_client__w53
+  win_per_client__w54#[6] = unsigned(t2573) & 1
+  const t2575 = win_per_client__w54 >> 6
+  const t2576 = t2575 & 1
+  const t2577 = t2576 != 0
+  const t2588 = t2577 and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((prio_bits_q#[48..=55] >> 5) & 1) != 0))
+  mut win_per_client__w55 = win_per_client__w54
+  win_per_client__w55#[6] = unsigned(t2588) & 1
+  const t2590 = win_per_client__w55 >> 6
+  const t2591 = t2590 & 1
+  const t2592 = t2591 != 0
+  const t2605 = t2592 and ((((~((entry_ready__w8 >> 7) & 1)) & 1) != 0) or (((~((prio_bits_q#[56..=63] >> 6) & 1)) & 1) != 0))
+  mut win_per_client__w56 = win_per_client__w55
+  win_per_client__w56#[6] = unsigned(t2605) & 1
+  mut win_per_client__w57 = win_per_client__w56
+  win_per_client__w57#[7] = (entry_ready__w8 >> 7) & 1
+  const t2609 = win_per_client__w57 >> 7
+  const t2610 = t2609 & 1
+  const t2611 = t2610 != 0
+  const t2620 = t2611 and ((((~(entry_ready__w8 & 1)) & 1) != 0) or ((prio_bits_q#[56..=63] & 1) != 0))
+  mut win_per_client__w58 = win_per_client__w57
+  win_per_client__w58#[7] = unsigned(t2620) & 1
+  const t2622 = win_per_client__w58 >> 7
+  const t2623 = t2622 & 1
+  const t2624 = t2623 != 0
+  const t2635 = t2624 and ((((~((entry_ready__w8 >> 1) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 1) & 1) != 0))
   mut win_per_client__w59 = win_per_client__w58
-  win_per_client__w59#[7] = unsigned(t2558)
-  const t2559 = win_per_client__w59 >> 7
-  const t2560 = t2559 & 1
-  const t2561 = t2560 != 0
-  const t2572 = t2561 and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 2) & 1) != 0))
-  mut win_per_client__w60 = win_per_client__w59
-  win_per_client__w60#[7] = unsigned(t2572)
-  const t2573 = win_per_client__w60 >> 7
-  const t2574 = t2573 & 1
-  const t2575 = t2574 != 0
-  const t2586 = t2575 and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 3) & 1) != 0))
-  mut win_per_client__w61 = win_per_client__w60
-  win_per_client__w61#[7] = unsigned(t2586)
-  const t2587 = win_per_client__w61 >> 7
-  const t2588 = t2587 & 1
-  const t2589 = t2588 != 0
-  const t2600 = t2589 and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 4) & 1) != 0))
-  mut win_per_client__w62 = win_per_client__w61
-  win_per_client__w62#[7] = unsigned(t2600)
-  const t2601 = win_per_client__w62 >> 7
-  const t2602 = t2601 & 1
-  const t2603 = t2602 != 0
-  const t2614 = t2603 and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 5) & 1) != 0))
-  mut win_per_client__w63 = win_per_client__w62
-  win_per_client__w63#[7] = unsigned(t2614)
-  const t2615 = win_per_client__w63 >> 7
-  const t2616 = t2615 & 1
-  const t2617 = t2616 != 0
-  const t2628 = t2617 and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 6) & 1) != 0))
-  mut win_per_client__w64 = win_per_client__w63
-  win_per_client__w64#[7] = unsigned(t2628)
-  const t2629 = win_per_client__w64 & 1
-  const t2630 = t2629 != 0
-  replay_entry_d = if t2630 { 0 } else { 0 }
-  const t2631 = win_per_client__w64 >> 1
-  const t2632 = t2631 & 1
-  const t2633 = t2632 != 0
-  if t2633 {
-    replay_entry_d = 1
-  }
-  const t2634 = win_per_client__w64 >> 2
-  const t2635 = t2634 & 1
-  const t2636 = t2635 != 0
-  if t2636 {
-    replay_entry_d = 2
-  }
-  const t2637 = win_per_client__w64 >> 3
+  win_per_client__w59#[7] = unsigned(t2635) & 1
+  const t2637 = win_per_client__w59 >> 7
   const t2638 = t2637 & 1
   const t2639 = t2638 != 0
-  if t2639 {
+  const t2650 = t2639 and ((((~((entry_ready__w8 >> 2) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 2) & 1) != 0))
+  mut win_per_client__w60 = win_per_client__w59
+  win_per_client__w60#[7] = unsigned(t2650) & 1
+  const t2652 = win_per_client__w60 >> 7
+  const t2653 = t2652 & 1
+  const t2654 = t2653 != 0
+  const t2665 = t2654 and ((((~((entry_ready__w8 >> 3) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 3) & 1) != 0))
+  mut win_per_client__w61 = win_per_client__w60
+  win_per_client__w61#[7] = unsigned(t2665) & 1
+  const t2667 = win_per_client__w61 >> 7
+  const t2668 = t2667 & 1
+  const t2669 = t2668 != 0
+  const t2680 = t2669 and ((((~((entry_ready__w8 >> 4) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 4) & 1) != 0))
+  mut win_per_client__w62 = win_per_client__w61
+  win_per_client__w62#[7] = unsigned(t2680) & 1
+  const t2682 = win_per_client__w62 >> 7
+  const t2683 = t2682 & 1
+  const t2684 = t2683 != 0
+  const t2695 = t2684 and ((((~((entry_ready__w8 >> 5) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 5) & 1) != 0))
+  mut win_per_client__w63 = win_per_client__w62
+  win_per_client__w63#[7] = unsigned(t2695) & 1
+  const t2697 = win_per_client__w63 >> 7
+  const t2698 = t2697 & 1
+  const t2699 = t2698 != 0
+  const t2710 = t2699 and ((((~((entry_ready__w8 >> 6) & 1)) & 1) != 0) or (((prio_bits_q#[56..=63] >> 6) & 1) != 0))
+  mut win_per_client__w64 = win_per_client__w63
+  win_per_client__w64#[7] = unsigned(t2710) & 1
+  const t2712 = win_per_client__w64 & 1
+  const t2713 = t2712 != 0
+  replay_entry_d = if t2713 { 0 } else { 0 }
+  const t2714 = win_per_client__w64 >> 1
+  const t2715 = t2714 & 1
+  const t2716 = t2715 != 0
+  if t2716 {
+    replay_entry_d = 1
+  }
+  const t2717 = win_per_client__w64 >> 2
+  const t2718 = t2717 & 1
+  const t2719 = t2718 != 0
+  if t2719 {
+    replay_entry_d = 2
+  }
+  const t2720 = win_per_client__w64 >> 3
+  const t2721 = t2720 & 1
+  const t2722 = t2721 != 0
+  if t2722 {
     replay_entry_d = 3
   }
-  const t2640 = win_per_client__w64 >> 4
-  const t2641 = t2640 & 1
-  const t2642 = t2641 != 0
-  if t2642 {
+  const t2723 = win_per_client__w64 >> 4
+  const t2724 = t2723 & 1
+  const t2725 = t2724 != 0
+  if t2725 {
     replay_entry_d = 4
   }
-  const t2643 = win_per_client__w64 >> 5
-  const t2644 = t2643 & 1
-  const t2645 = t2644 != 0
-  if t2645 {
+  const t2726 = win_per_client__w64 >> 5
+  const t2727 = t2726 & 1
+  const t2728 = t2727 != 0
+  if t2728 {
     replay_entry_d = 5
   }
-  const t2646 = win_per_client__w64 >> 6
-  const t2647 = t2646 & 1
-  const t2648 = t2647 != 0
-  if t2648 {
+  const t2729 = win_per_client__w64 >> 6
+  const t2730 = t2729 & 1
+  const t2731 = t2730 != 0
+  if t2731 {
     replay_entry_d = 6
   }
-  const t2649 = win_per_client__w64 >> 7
-  const t2650 = t2649 & 1
-  const t2651 = t2650 != 0
-  if t2651 {
+  const t2732 = win_per_client__w64 >> 7
+  const t2733 = t2732 & 1
+  const t2734 = t2733 != 0
+  if t2734 {
     replay_entry_d = 7
   }
   prio_bits_d = prio_bits_q
@@ -1229,61 +1237,61 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
     prio_bits_d#[61] = 0
     prio_bits_d#[62] = 0
   }
-  const t2680 = replayq__w135 << 130
-  const t2681 = t2680 >> ((replay_entry_o * 130)#[0..=11] + 130)
-  const t2682 = t2681#[0..=129]
-  const t2683 = t2682#[81..=129]
-  const t2684 = t2682 >> 80
-  const t2685 = t2684 & 1
-  const t2686 = t2682#[75..=79]
-  const t2687 = t2682 >> 74
-  const t2688 = t2687 & 1
-  const t2689 = t2682#[69..=73]
-  const t2690 = t2682#[65..=68]
-  const t2691 = t2682#[62..=64]
-  const t2692 = t2682#[54..=61]
-  const t2693 = t2682 >> 53
-  const t2694 = t2693 & 1
-  const t2695 = t2682 >> 52
-  const t2696 = t2695 & 1
-  const t2697 = t2682#[49..=51]
-  const t2698 = t2682 >> 48
-  const t2699 = t2698 & 1
-  const t2700 = t2682 >> 47
-  const t2701 = t2700 & 1
-  const t2702 = t2682 >> 46
-  const t2703 = t2702 & 1
-  const t2704 = t2682 >> 45
-  const t2705 = t2704 & 1
-  const t2706 = t2682 >> 44
-  const t2707 = t2706 & 1
-  const t2708 = t2682#[4..=43]
-  const t2709 = t2682#[1..=3]
-  const t2710 = t2682 & 1
-  mut `replay_req_o__bpo.addr` = t2683
-  mut `replay_req_o__bpo.buf_alloc` = t2696
-  mut `replay_req_o__bpo.buf_id` = t2697
-  mut `replay_req_o__bpo.cache_op` = t2699
-  mut `replay_req_o__bpo.cacheable` = t2705
-  mut `replay_req_o__bpo.cmd` = t2689
-  mut `replay_req_o__bpo.dest.addr` = t2686
-  mut `replay_req_o__bpo.dest.fp` = t2685
-  mut `replay_req_o__bpo.dest.thread_id` = t2688
-  mut `replay_req_o__bpo.gsc32_idx` = t2708
-  mut `replay_req_o__bpo.gsc_cnt` = t2691
-  mut `replay_req_o__bpo.mem_global` = t2710
-  mut `replay_req_o__bpo.misaligned` = t2701
-  mut `replay_req_o__bpo.misaligned_2nd` = t2703
-  mut `replay_req_o__bpo.phys` = t2694
-  mut `replay_req_o__bpo.ps_mask` = t2692
-  mut `replay_req_o__bpo.typ` = t2690
-  mut `replay_req_o__bpo.uc_load_2nd` = t2707
-  mut `replay_req_o__bpo.vm_sel` = t2709
+  const t2763 = replayq__w135 << 0x82
+  const t2764 = t2763 >> ((replay_entry_o * 0x82)#[0..=11] + 0x82)
+  const t2765 = t2764#[0..=129]
+  const t2766 = t2765#[81..=129]
+  const t2767 = t2765 >> 0x50
+  const t2768 = t2767 & 1
+  const t2769 = t2765#[75..=79]
+  const t2770 = t2765 >> 0x4a
+  const t2771 = t2770 & 1
+  const t2772 = t2765#[69..=73]
+  const t2773 = t2765#[65..=68]
+  const t2774 = t2765#[62..=64]
+  const t2775 = t2765#[54..=61]
+  const t2776 = t2765 >> 53
+  const t2777 = t2776 & 1
+  const t2778 = t2765 >> 52
+  const t2779 = t2778 & 1
+  const t2780 = t2765#[49..=51]
+  const t2781 = t2765 >> 48
+  const t2782 = t2781 & 1
+  const t2783 = t2765 >> 47
+  const t2784 = t2783 & 1
+  const t2785 = t2765 >> 46
+  const t2786 = t2785 & 1
+  const t2787 = t2765 >> 45
+  const t2788 = t2787 & 1
+  const t2789 = t2765 >> 44
+  const t2790 = t2789 & 1
+  const t2791 = t2765#[4..=43]
+  const t2792 = t2765#[1..=3]
+  const t2793 = t2765 & 1
+  mut `replay_req_o__bpo.addr` = t2766
+  mut `replay_req_o__bpo.buf_alloc` = t2779
+  mut `replay_req_o__bpo.buf_id` = t2780
+  mut `replay_req_o__bpo.cache_op` = t2782
+  mut `replay_req_o__bpo.cacheable` = t2788
+  mut `replay_req_o__bpo.cmd` = t2772
+  mut `replay_req_o__bpo.dest.addr` = t2769
+  mut `replay_req_o__bpo.dest.fp` = t2768
+  mut `replay_req_o__bpo.dest.thread_id` = t2771
+  mut `replay_req_o__bpo.gsc32_idx` = t2791
+  mut `replay_req_o__bpo.gsc_cnt` = t2774
+  mut `replay_req_o__bpo.mem_global` = t2793
+  mut `replay_req_o__bpo.misaligned` = t2784
+  mut `replay_req_o__bpo.misaligned_2nd` = t2786
+  mut `replay_req_o__bpo.phys` = t2777
+  mut `replay_req_o__bpo.ps_mask` = t2775
+  mut `replay_req_o__bpo.typ` = t2773
+  mut `replay_req_o__bpo.uc_load_2nd` = t2790
+  mut `replay_req_o__bpo.vm_sel` = t2792
   const replay_age_o__w1 = `replayq_ready_info_q.age`[replay_entry_o]
   const replay_uc_ok_o__w1 = `replayq_ready_info_q.uc_load_ok`[replay_entry_o]
   const replay_miss_ok_o__w1 = `replayq_ready_info_q.miss_fill_ok`[replay_entry_o]
-  rq_to_s2_conflict_array = 0ub????????
-  s2_to_rq_conflict_array = 0ub????????
+  rq_to_s2_conflict_array = 0sb?
+  s2_to_rq_conflict_array = 0sb?
   const entry1__w1 = `replayq_ready_info_q.age`[0]
   const entry2__w1 = req_data_i.replay_age
   const cmp__w1 = unsigned(entry1__w1#[0..=3] < entry2__w1#[0..=3])
@@ -1297,42 +1305,43 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   s2_to_rq_conflict_array = 0
   if (rq_entry_pending__w1 != 0) or ((replay_valid_o != 0) and (replay_entry_o == 0)) or ((replay_valid_prev_q != 0) and (replay_entry_prev_q == 0)) {
     if (req_is_write__w1 != 0) or (`replayq_ready_info_q.store`[0] != 0) {
-      const t2756 = replayq__w135#[0..=129]
-      const t2757 = t2756#[81..=129]
-      const t2758 = t2757 >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb
-      const t2759 = t2758#[0..=9]
-      const t2760 = (req_data_i.addr >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == t2759
-      const t2763 = t2760 or (req_data_i.misaligned != 0)
-      const t2764 = replayq__w135#[0..=129]
-      const t2765 = t2764 >> 47
-      const t2766 = t2765 & 1
-      const t2767 = t2766 != 0
-      const t2768 = t2763 or t2767
-      const t2769 = replayq__w135#[0..=129]
-      const t2770 = t2769 >> 46
-      const t2771 = t2770 & 1
-      const t2772 = t2771 != 0
-      const t2773 = t2768 or t2772
-      const t2774 = replayq__w135#[0..=129]
-      const t2775 = t2774 >> 45
-      const t2776 = t2775 & 1
-      const t2777 = t2776 == 0
-      const t2778 = t2773 or t2777
-      if t2778 {
+      const t2839 = replayq__w135#[0..=129]
+      const t2840 = t2839#[81..=129]
+      const t2841 = t2840 >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb
+      const t2842 = t2841#[0..=9]
+      const t2843 = (req_data_i.addr >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == t2842
+      const t2846 = t2843 or (req_data_i.misaligned != 0)
+      const t2847 = replayq__w135#[0..=129]
+      const t2848 = t2847 >> 47
+      const t2849 = t2848 & 1
+      const t2850 = t2849 != 0
+      const t2851 = t2846 or t2850
+      const t2852 = replayq__w135#[0..=129]
+      const t2853 = t2852 >> 46
+      const t2854 = t2853 & 1
+      const t2855 = t2854 != 0
+      const t2856 = t2851 or t2855
+      const t2857 = replayq__w135#[0..=129]
+      const t2858 = t2857 >> 45
+      const t2859 = t2858 & 1
+      const t2860 = t2859 == 0
+      const t2861 = t2856 or t2860
+      if t2861 {
         if unsigned((req_data_i.replay == 0) or (dcache_replayq_entry_is_older__w1 != 0)) != 0 {
           rq_conflict_o = 1
-          rq_to_s2_conflict_array#[0] = rq_entry_pending__w1
+          rq_to_s2_conflict_array#[0] = rq_entry_pending__w1 & 1
         } else {
           s2_to_rq_conflict_array = 1
           s2_to_rq_conflict_array#[0] = 1
         }
       }
     }
-    const t2780 = replayq__w135#[0..=129]
-    const t2781 = t2780 >> 46
-    const t2782 = t2781 & 1
-    const t2783 = 0 | t2782
-    rq_conflict_to_co_o = t2783
+    const t2864 = replayq__w135#[0..=129]
+    const t2865 = t2864 >> 46
+    const t2866 = t2865 & 1
+    const t2867 = 0 | t2866
+    const t2868 = t2867 & 1
+    rq_conflict_to_co_o = t2868
   }
   const entry1__w2 = `replayq_ready_info_q.age`[1]
   const entry2__w2 = req_data_i.replay_age
@@ -1342,41 +1351,42 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   const rq_entry_pending__w2 = unsigned((((entry_mask_available_q >> 1) & 1) == 0) and (`replayq_ready_info_q.pending`[1] != 0))
   if (rq_entry_pending__w2 != 0) or ((replay_valid_o != 0) and (replay_entry_o == 1)) or ((replay_valid_prev_q != 0) and (replay_entry_prev_q == 1)) {
     if (req_is_write__w1 != 0) or (`replayq_ready_info_q.store`[1] != 0) {
-      const t2824 = replayq__w135#[130..=259]
-      const t2825 = t2824#[81..=129]
-      const t2826 = t2825 >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb
-      const t2827 = t2826#[0..=9]
-      const t2828 = (req_data_i.addr >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == t2827
-      const t2831 = t2828 or (req_data_i.misaligned != 0)
-      const t2832 = replayq__w135#[130..=259]
-      const t2833 = t2832 >> 47
-      const t2834 = t2833 & 1
-      const t2835 = t2834 != 0
-      const t2836 = t2831 or t2835
-      const t2837 = replayq__w135#[130..=259]
-      const t2838 = t2837 >> 46
-      const t2839 = t2838 & 1
-      const t2840 = t2839 != 0
-      const t2841 = t2836 or t2840
-      const t2842 = replayq__w135#[130..=259]
-      const t2843 = t2842 >> 45
-      const t2844 = t2843 & 1
-      const t2845 = t2844 == 0
-      const t2846 = t2841 or t2845
-      if t2846 {
+      const t2909 = replayq__w135#[130..=259]
+      const t2910 = t2909#[81..=129]
+      const t2911 = t2910 >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb
+      const t2912 = t2911#[0..=9]
+      const t2913 = (req_data_i.addr >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == t2912
+      const t2916 = t2913 or (req_data_i.misaligned != 0)
+      const t2917 = replayq__w135#[130..=259]
+      const t2918 = t2917 >> 47
+      const t2919 = t2918 & 1
+      const t2920 = t2919 != 0
+      const t2921 = t2916 or t2920
+      const t2922 = replayq__w135#[130..=259]
+      const t2923 = t2922 >> 46
+      const t2924 = t2923 & 1
+      const t2925 = t2924 != 0
+      const t2926 = t2921 or t2925
+      const t2927 = replayq__w135#[130..=259]
+      const t2928 = t2927 >> 45
+      const t2929 = t2928 & 1
+      const t2930 = t2929 == 0
+      const t2931 = t2926 or t2930
+      if t2931 {
         if unsigned((req_data_i.replay == 0) or (dcache_replayq_entry_is_older__w2 != 0)) != 0 {
           rq_conflict_o = 1
-          rq_to_s2_conflict_array#[1] = rq_entry_pending__w2
+          rq_to_s2_conflict_array#[1] = rq_entry_pending__w2 & 1
         } else {
           s2_to_rq_conflict_array#[1] = 1
         }
       }
     }
-    const t2848 = replayq__w135#[130..=259]
-    const t2849 = t2848 >> 46
-    const t2850 = t2849 & 1
-    const t2851 = rq_conflict_to_co_o | t2850
-    rq_conflict_to_co_o = t2851
+    const t2934 = replayq__w135#[130..=259]
+    const t2935 = t2934 >> 46
+    const t2936 = t2935 & 1
+    const t2937 = rq_conflict_to_co_o | t2936
+    const t2938 = t2937 & 1
+    rq_conflict_to_co_o = t2938
   }
   const entry1__w3 = `replayq_ready_info_q.age`[2]
   const entry2__w3 = req_data_i.replay_age
@@ -1386,41 +1396,42 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   const rq_entry_pending__w3 = unsigned((((entry_mask_available_q >> 2) & 1) == 0) and (`replayq_ready_info_q.pending`[2] != 0))
   if (rq_entry_pending__w3 != 0) or ((replay_valid_o != 0) and (replay_entry_o == 2)) or ((replay_valid_prev_q != 0) and (replay_entry_prev_q == 2)) {
     if (req_is_write__w1 != 0) or (`replayq_ready_info_q.store`[2] != 0) {
-      const t2892 = replayq__w135#[260..=389]
-      const t2893 = t2892#[81..=129]
-      const t2894 = t2893 >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb
-      const t2895 = t2894#[0..=9]
-      const t2896 = (req_data_i.addr >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == t2895
-      const t2899 = t2896 or (req_data_i.misaligned != 0)
-      const t2900 = replayq__w135#[260..=389]
-      const t2901 = t2900 >> 47
-      const t2902 = t2901 & 1
-      const t2903 = t2902 != 0
-      const t2904 = t2899 or t2903
-      const t2905 = replayq__w135#[260..=389]
-      const t2906 = t2905 >> 46
-      const t2907 = t2906 & 1
-      const t2908 = t2907 != 0
-      const t2909 = t2904 or t2908
-      const t2910 = replayq__w135#[260..=389]
-      const t2911 = t2910 >> 45
-      const t2912 = t2911 & 1
-      const t2913 = t2912 == 0
-      const t2914 = t2909 or t2913
-      if t2914 {
+      const t2979 = replayq__w135#[260..=389]
+      const t2980 = t2979#[81..=129]
+      const t2981 = t2980 >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb
+      const t2982 = t2981#[0..=9]
+      const t2983 = (req_data_i.addr >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == t2982
+      const t2986 = t2983 or (req_data_i.misaligned != 0)
+      const t2987 = replayq__w135#[260..=389]
+      const t2988 = t2987 >> 47
+      const t2989 = t2988 & 1
+      const t2990 = t2989 != 0
+      const t2991 = t2986 or t2990
+      const t2992 = replayq__w135#[260..=389]
+      const t2993 = t2992 >> 46
+      const t2994 = t2993 & 1
+      const t2995 = t2994 != 0
+      const t2996 = t2991 or t2995
+      const t2997 = replayq__w135#[260..=389]
+      const t2998 = t2997 >> 45
+      const t2999 = t2998 & 1
+      const t3000 = t2999 == 0
+      const t3001 = t2996 or t3000
+      if t3001 {
         if unsigned((req_data_i.replay == 0) or (dcache_replayq_entry_is_older__w3 != 0)) != 0 {
           rq_conflict_o = 1
-          rq_to_s2_conflict_array#[2] = rq_entry_pending__w3
+          rq_to_s2_conflict_array#[2] = rq_entry_pending__w3 & 1
         } else {
           s2_to_rq_conflict_array#[2] = 1
         }
       }
     }
-    const t2916 = replayq__w135#[260..=389]
-    const t2917 = t2916 >> 46
-    const t2918 = t2917 & 1
-    const t2919 = rq_conflict_to_co_o | t2918
-    rq_conflict_to_co_o = t2919
+    const t3004 = replayq__w135#[260..=389]
+    const t3005 = t3004 >> 46
+    const t3006 = t3005 & 1
+    const t3007 = rq_conflict_to_co_o | t3006
+    const t3008 = t3007 & 1
+    rq_conflict_to_co_o = t3008
   }
   const entry1__w4 = `replayq_ready_info_q.age`[3]
   const entry2__w4 = req_data_i.replay_age
@@ -1430,41 +1441,42 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   const rq_entry_pending__w4 = unsigned((((entry_mask_available_q >> 3) & 1) == 0) and (`replayq_ready_info_q.pending`[3] != 0))
   if (rq_entry_pending__w4 != 0) or ((replay_valid_o != 0) and (replay_entry_o == 3)) or ((replay_valid_prev_q != 0) and (replay_entry_prev_q == 3)) {
     if (req_is_write__w1 != 0) or (`replayq_ready_info_q.store`[3] != 0) {
-      const t2960 = replayq__w135#[390..=519]
-      const t2961 = t2960#[81..=129]
-      const t2962 = t2961 >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb
-      const t2963 = t2962#[0..=9]
-      const t2964 = (req_data_i.addr >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == t2963
-      const t2967 = t2964 or (req_data_i.misaligned != 0)
-      const t2968 = replayq__w135#[390..=519]
-      const t2969 = t2968 >> 47
-      const t2970 = t2969 & 1
-      const t2971 = t2970 != 0
-      const t2972 = t2967 or t2971
-      const t2973 = replayq__w135#[390..=519]
-      const t2974 = t2973 >> 46
-      const t2975 = t2974 & 1
-      const t2976 = t2975 != 0
-      const t2977 = t2972 or t2976
-      const t2978 = replayq__w135#[390..=519]
-      const t2979 = t2978 >> 45
-      const t2980 = t2979 & 1
-      const t2981 = t2980 == 0
-      const t2982 = t2977 or t2981
-      if t2982 {
+      const t3049 = replayq__w135#[390..=519]
+      const t3050 = t3049#[81..=129]
+      const t3051 = t3050 >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb
+      const t3052 = t3051#[0..=9]
+      const t3053 = (req_data_i.addr >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == t3052
+      const t3056 = t3053 or (req_data_i.misaligned != 0)
+      const t3057 = replayq__w135#[390..=519]
+      const t3058 = t3057 >> 47
+      const t3059 = t3058 & 1
+      const t3060 = t3059 != 0
+      const t3061 = t3056 or t3060
+      const t3062 = replayq__w135#[390..=519]
+      const t3063 = t3062 >> 46
+      const t3064 = t3063 & 1
+      const t3065 = t3064 != 0
+      const t3066 = t3061 or t3065
+      const t3067 = replayq__w135#[390..=519]
+      const t3068 = t3067 >> 45
+      const t3069 = t3068 & 1
+      const t3070 = t3069 == 0
+      const t3071 = t3066 or t3070
+      if t3071 {
         if unsigned((req_data_i.replay == 0) or (dcache_replayq_entry_is_older__w4 != 0)) != 0 {
           rq_conflict_o = 1
-          rq_to_s2_conflict_array#[3] = rq_entry_pending__w4
+          rq_to_s2_conflict_array#[3] = rq_entry_pending__w4 & 1
         } else {
           s2_to_rq_conflict_array#[3] = 1
         }
       }
     }
-    const t2984 = replayq__w135#[390..=519]
-    const t2985 = t2984 >> 46
-    const t2986 = t2985 & 1
-    const t2987 = rq_conflict_to_co_o | t2986
-    rq_conflict_to_co_o = t2987
+    const t3074 = replayq__w135#[390..=519]
+    const t3075 = t3074 >> 46
+    const t3076 = t3075 & 1
+    const t3077 = rq_conflict_to_co_o | t3076
+    const t3078 = t3077 & 1
+    rq_conflict_to_co_o = t3078
   }
   const entry1__w5 = `replayq_ready_info_q.age`[4]
   const entry2__w5 = req_data_i.replay_age
@@ -1474,41 +1486,42 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   const rq_entry_pending__w5 = unsigned((((entry_mask_available_q >> 4) & 1) == 0) and (`replayq_ready_info_q.pending`[4] != 0))
   if (rq_entry_pending__w5 != 0) or ((replay_valid_o != 0) and (replay_entry_o == 4)) or ((replay_valid_prev_q != 0) and (replay_entry_prev_q == 4)) {
     if (req_is_write__w1 != 0) or (`replayq_ready_info_q.store`[4] != 0) {
-      const t3028 = replayq__w135#[520..=649]
-      const t3029 = t3028#[81..=129]
-      const t3030 = t3029 >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb
-      const t3031 = t3030#[0..=9]
-      const t3032 = (req_data_i.addr >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == t3031
-      const t3035 = t3032 or (req_data_i.misaligned != 0)
-      const t3036 = replayq__w135#[520..=649]
-      const t3037 = t3036 >> 47
-      const t3038 = t3037 & 1
-      const t3039 = t3038 != 0
-      const t3040 = t3035 or t3039
-      const t3041 = replayq__w135#[520..=649]
-      const t3042 = t3041 >> 46
-      const t3043 = t3042 & 1
-      const t3044 = t3043 != 0
-      const t3045 = t3040 or t3044
-      const t3046 = replayq__w135#[520..=649]
-      const t3047 = t3046 >> 45
-      const t3048 = t3047 & 1
-      const t3049 = t3048 == 0
-      const t3050 = t3045 or t3049
-      if t3050 {
+      const t3119 = replayq__w135#[520..=649]
+      const t3120 = t3119#[81..=129]
+      const t3121 = t3120 >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb
+      const t3122 = t3121#[0..=9]
+      const t3123 = (req_data_i.addr >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == t3122
+      const t3126 = t3123 or (req_data_i.misaligned != 0)
+      const t3127 = replayq__w135#[520..=649]
+      const t3128 = t3127 >> 47
+      const t3129 = t3128 & 1
+      const t3130 = t3129 != 0
+      const t3131 = t3126 or t3130
+      const t3132 = replayq__w135#[520..=649]
+      const t3133 = t3132 >> 46
+      const t3134 = t3133 & 1
+      const t3135 = t3134 != 0
+      const t3136 = t3131 or t3135
+      const t3137 = replayq__w135#[520..=649]
+      const t3138 = t3137 >> 45
+      const t3139 = t3138 & 1
+      const t3140 = t3139 == 0
+      const t3141 = t3136 or t3140
+      if t3141 {
         if unsigned((req_data_i.replay == 0) or (dcache_replayq_entry_is_older__w5 != 0)) != 0 {
           rq_conflict_o = 1
-          rq_to_s2_conflict_array#[4] = rq_entry_pending__w5
+          rq_to_s2_conflict_array#[4] = rq_entry_pending__w5 & 1
         } else {
           s2_to_rq_conflict_array#[4] = 1
         }
       }
     }
-    const t3052 = replayq__w135#[520..=649]
-    const t3053 = t3052 >> 46
-    const t3054 = t3053 & 1
-    const t3055 = rq_conflict_to_co_o | t3054
-    rq_conflict_to_co_o = t3055
+    const t3144 = replayq__w135#[520..=649]
+    const t3145 = t3144 >> 46
+    const t3146 = t3145 & 1
+    const t3147 = rq_conflict_to_co_o | t3146
+    const t3148 = t3147 & 1
+    rq_conflict_to_co_o = t3148
   }
   const entry1__w6 = `replayq_ready_info_q.age`[5]
   const entry2__w6 = req_data_i.replay_age
@@ -1518,41 +1531,42 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   const rq_entry_pending__w6 = unsigned((((entry_mask_available_q >> 5) & 1) == 0) and (`replayq_ready_info_q.pending`[5] != 0))
   if (rq_entry_pending__w6 != 0) or ((replay_valid_o != 0) and (replay_entry_o == 5)) or ((replay_valid_prev_q != 0) and (replay_entry_prev_q == 5)) {
     if (req_is_write__w1 != 0) or (`replayq_ready_info_q.store`[5] != 0) {
-      const t3096 = replayq__w135#[650..=779]
-      const t3097 = t3096#[81..=129]
-      const t3098 = t3097 >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb
-      const t3099 = t3098#[0..=9]
-      const t3100 = (req_data_i.addr >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == t3099
-      const t3103 = t3100 or (req_data_i.misaligned != 0)
-      const t3104 = replayq__w135#[650..=779]
-      const t3105 = t3104 >> 47
-      const t3106 = t3105 & 1
-      const t3107 = t3106 != 0
-      const t3108 = t3103 or t3107
-      const t3109 = replayq__w135#[650..=779]
-      const t3110 = t3109 >> 46
-      const t3111 = t3110 & 1
-      const t3112 = t3111 != 0
-      const t3113 = t3108 or t3112
-      const t3114 = replayq__w135#[650..=779]
-      const t3115 = t3114 >> 45
-      const t3116 = t3115 & 1
-      const t3117 = t3116 == 0
-      const t3118 = t3113 or t3117
-      if t3118 {
+      const t3189 = replayq__w135#[650..=779]
+      const t3190 = t3189#[81..=129]
+      const t3191 = t3190 >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb
+      const t3192 = t3191#[0..=9]
+      const t3193 = (req_data_i.addr >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == t3192
+      const t3196 = t3193 or (req_data_i.misaligned != 0)
+      const t3197 = replayq__w135#[650..=779]
+      const t3198 = t3197 >> 47
+      const t3199 = t3198 & 1
+      const t3200 = t3199 != 0
+      const t3201 = t3196 or t3200
+      const t3202 = replayq__w135#[650..=779]
+      const t3203 = t3202 >> 46
+      const t3204 = t3203 & 1
+      const t3205 = t3204 != 0
+      const t3206 = t3201 or t3205
+      const t3207 = replayq__w135#[650..=779]
+      const t3208 = t3207 >> 45
+      const t3209 = t3208 & 1
+      const t3210 = t3209 == 0
+      const t3211 = t3206 or t3210
+      if t3211 {
         if unsigned((req_data_i.replay == 0) or (dcache_replayq_entry_is_older__w6 != 0)) != 0 {
           rq_conflict_o = 1
-          rq_to_s2_conflict_array#[5] = rq_entry_pending__w6
+          rq_to_s2_conflict_array#[5] = rq_entry_pending__w6 & 1
         } else {
           s2_to_rq_conflict_array#[5] = 1
         }
       }
     }
-    const t3120 = replayq__w135#[650..=779]
-    const t3121 = t3120 >> 46
-    const t3122 = t3121 & 1
-    const t3123 = rq_conflict_to_co_o | t3122
-    rq_conflict_to_co_o = t3123
+    const t3214 = replayq__w135#[650..=779]
+    const t3215 = t3214 >> 46
+    const t3216 = t3215 & 1
+    const t3217 = rq_conflict_to_co_o | t3216
+    const t3218 = t3217 & 1
+    rq_conflict_to_co_o = t3218
   }
   const entry1__w7 = `replayq_ready_info_q.age`[6]
   const entry2__w7 = req_data_i.replay_age
@@ -1562,41 +1576,42 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   const rq_entry_pending__w7 = unsigned((((entry_mask_available_q >> 6) & 1) == 0) and (`replayq_ready_info_q.pending`[6] != 0))
   if (rq_entry_pending__w7 != 0) or ((replay_valid_o != 0) and (replay_entry_o == 6)) or ((replay_valid_prev_q != 0) and (replay_entry_prev_q == 6)) {
     if (req_is_write__w1 != 0) or (`replayq_ready_info_q.store`[6] != 0) {
-      const t3164 = replayq__w135#[780..=909]
-      const t3165 = t3164#[81..=129]
-      const t3166 = t3165 >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb
-      const t3167 = t3166#[0..=9]
-      const t3168 = (req_data_i.addr >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == t3167
-      const t3171 = t3168 or (req_data_i.misaligned != 0)
-      const t3172 = replayq__w135#[780..=909]
-      const t3173 = t3172 >> 47
-      const t3174 = t3173 & 1
-      const t3175 = t3174 != 0
-      const t3176 = t3171 or t3175
-      const t3177 = replayq__w135#[780..=909]
-      const t3178 = t3177 >> 46
-      const t3179 = t3178 & 1
-      const t3180 = t3179 != 0
-      const t3181 = t3176 or t3180
-      const t3182 = replayq__w135#[780..=909]
-      const t3183 = t3182 >> 45
-      const t3184 = t3183 & 1
-      const t3185 = t3184 == 0
-      const t3186 = t3181 or t3185
-      if t3186 {
+      const t3259 = replayq__w135#[780..=909]
+      const t3260 = t3259#[81..=129]
+      const t3261 = t3260 >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb
+      const t3262 = t3261#[0..=9]
+      const t3263 = (req_data_i.addr >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == t3262
+      const t3266 = t3263 or (req_data_i.misaligned != 0)
+      const t3267 = replayq__w135#[780..=909]
+      const t3268 = t3267 >> 47
+      const t3269 = t3268 & 1
+      const t3270 = t3269 != 0
+      const t3271 = t3266 or t3270
+      const t3272 = replayq__w135#[780..=909]
+      const t3273 = t3272 >> 46
+      const t3274 = t3273 & 1
+      const t3275 = t3274 != 0
+      const t3276 = t3271 or t3275
+      const t3277 = replayq__w135#[780..=909]
+      const t3278 = t3277 >> 45
+      const t3279 = t3278 & 1
+      const t3280 = t3279 == 0
+      const t3281 = t3276 or t3280
+      if t3281 {
         if unsigned((req_data_i.replay == 0) or (dcache_replayq_entry_is_older__w7 != 0)) != 0 {
           rq_conflict_o = 1
-          rq_to_s2_conflict_array#[6] = rq_entry_pending__w7
+          rq_to_s2_conflict_array#[6] = rq_entry_pending__w7 & 1
         } else {
           s2_to_rq_conflict_array#[6] = 1
         }
       }
     }
-    const t3188 = replayq__w135#[780..=909]
-    const t3189 = t3188 >> 46
-    const t3190 = t3189 & 1
-    const t3191 = rq_conflict_to_co_o | t3190
-    rq_conflict_to_co_o = t3191
+    const t3284 = replayq__w135#[780..=909]
+    const t3285 = t3284 >> 46
+    const t3286 = t3285 & 1
+    const t3287 = rq_conflict_to_co_o | t3286
+    const t3288 = t3287 & 1
+    rq_conflict_to_co_o = t3288
   }
   const entry1__w8 = `replayq_ready_info_q.age`[7]
   const entry2__w8 = req_data_i.replay_age
@@ -1605,78 +1620,79 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   const rq_entry_pending__w8 = unsigned((((entry_mask_available_q >> 7) & 1) == 0) and (`replayq_ready_info_q.pending`[7] != 0))
   if (rq_entry_pending__w8 != 0) or ((replay_valid_o != 0) and (replay_entry_o == 7)) or ((replay_valid_prev_q != 0) and (replay_entry_prev_q == 7)) {
     if (req_is_write__w1 != 0) or (`replayq_ready_info_q.store`[7] != 0) {
-      const t3232 = replayq__w135#[910..=1039]
-      const t3233 = t3232#[81..=129]
-      const t3234 = t3233 >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb
-      const t3235 = t3234#[0..=9]
-      const t3236 = (req_data_i.addr >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == t3235
-      const t3239 = t3236 or (req_data_i.misaligned != 0)
-      const t3240 = replayq__w135#[910..=1039]
-      const t3241 = t3240 >> 47
-      const t3242 = t3241 & 1
-      const t3243 = t3242 != 0
-      const t3244 = t3239 or t3243
-      const t3245 = replayq__w135#[910..=1039]
-      const t3246 = t3245 >> 46
-      const t3247 = t3246 & 1
-      const t3248 = t3247 != 0
-      const t3249 = t3244 or t3248
-      const t3250 = replayq__w135#[910..=1039]
-      const t3251 = t3250 >> 45
-      const t3252 = t3251 & 1
-      const t3253 = t3252 == 0
-      const t3254 = t3249 or t3253
-      if t3254 {
+      const t3329 = replayq__w135#[910..=1039]
+      const t3330 = t3329#[81..=129]
+      const t3331 = t3330 >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb
+      const t3332 = t3331#[0..=9]
+      const t3333 = (req_data_i.addr >> minion_dcache_pkg.DcacheReplayqAddrConflictLsb)#[0..=9] == t3332
+      const t3336 = t3333 or (req_data_i.misaligned != 0)
+      const t3337 = replayq__w135#[910..=1039]
+      const t3338 = t3337 >> 47
+      const t3339 = t3338 & 1
+      const t3340 = t3339 != 0
+      const t3341 = t3336 or t3340
+      const t3342 = replayq__w135#[910..=1039]
+      const t3343 = t3342 >> 46
+      const t3344 = t3343 & 1
+      const t3345 = t3344 != 0
+      const t3346 = t3341 or t3345
+      const t3347 = replayq__w135#[910..=1039]
+      const t3348 = t3347 >> 45
+      const t3349 = t3348 & 1
+      const t3350 = t3349 == 0
+      const t3351 = t3346 or t3350
+      if t3351 {
         if unsigned((req_data_i.replay == 0) or (unsigned(cmp__w8 == 0) != 0)) != 0 {
           rq_conflict_o = 1
-          rq_to_s2_conflict_array#[7] = rq_entry_pending__w8
+          rq_to_s2_conflict_array#[7] = rq_entry_pending__w8 & 1
         } else {
           s2_to_rq_conflict_array#[7] = 1
         }
       }
     }
-    const t3256 = replayq__w135#[910..=1039]
-    const t3257 = t3256 >> 46
-    const t3258 = t3257 & 1
-    const t3259 = rq_conflict_to_co_o | t3258
-    rq_conflict_to_co_o = t3259
+    const t3354 = replayq__w135#[910..=1039]
+    const t3355 = t3354 >> 46
+    const t3356 = t3355 & 1
+    const t3357 = rq_conflict_to_co_o | t3356
+    const t3358 = t3357 & 1
+    rq_conflict_to_co_o = t3358
   }
   rq_conflict_matrix_d = rq_conflict_matrix_q
   if (push_req_i != 0) or (rearm_i != 0) {
-    const t3263 = push_entry * 8
-    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(0xff << t3263))) | (rq_to_s2_conflict_array << t3263))#[0..=63]
-    const t3279 = push_entry + 8
+    const t3362 = push_entry * 8
+    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(0xff << t3362))) | (rq_to_s2_conflict_array << t3362))#[0..=63]
+    const t3379 = push_entry + 8
     rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << push_entry))) | ((s2_to_rq_conflict_array & 1) << push_entry))#[0..=63]
-    const t3288 = push_entry + 16
-    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3279))) | (((s2_to_rq_conflict_array >> 1) & 1) << t3279))#[0..=63]
-    const t3297 = push_entry + 24
-    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3288))) | (((s2_to_rq_conflict_array >> 2) & 1) << t3288))#[0..=63]
-    const t3306 = push_entry + 32
-    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3297))) | (((s2_to_rq_conflict_array >> 3) & 1) << t3297))#[0..=63]
-    const t3315 = push_entry + 40
-    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3306))) | (((s2_to_rq_conflict_array >> 4) & 1) << t3306))#[0..=63]
-    const t3324 = push_entry + 48
-    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3315))) | (((s2_to_rq_conflict_array >> 5) & 1) << t3315))#[0..=63]
-    const t3333 = push_entry + 56
-    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3324))) | (((s2_to_rq_conflict_array >> 6) & 1) << t3324))#[0..=63]
-    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3333))) | (((s2_to_rq_conflict_array >> 7) & 1) << t3333))#[0..=63]
+    const t3388 = push_entry + 16
+    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3379))) | (((s2_to_rq_conflict_array >> 1) & 1) << t3379))#[0..=63]
+    const t3397 = push_entry + 24
+    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3388))) | (((s2_to_rq_conflict_array >> 2) & 1) << t3388))#[0..=63]
+    const t3406 = push_entry + 32
+    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3397))) | (((s2_to_rq_conflict_array >> 3) & 1) << t3397))#[0..=63]
+    const t3415 = push_entry + 40
+    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3406))) | (((s2_to_rq_conflict_array >> 4) & 1) << t3406))#[0..=63]
+    const t3424 = push_entry + 48
+    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3415))) | (((s2_to_rq_conflict_array >> 5) & 1) << t3415))#[0..=63]
+    const t3433 = push_entry + 56
+    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3424))) | (((s2_to_rq_conflict_array >> 6) & 1) << t3424))#[0..=63]
+    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3433))) | (((s2_to_rq_conflict_array >> 7) & 1) << t3433))#[0..=63]
   }
   if replay_grant_i != 0 {
-    const t3347 = replay_entry_d + 8
+    const t3447 = replay_entry_d + 8
     rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << replay_entry_d))) | (0 << replay_entry_d))#[0..=63]
-    const t3354 = replay_entry_d + 16
-    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3347))) | (0 << t3347))#[0..=63]
-    const t3361 = replay_entry_d + 24
-    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3354))) | (0 << t3354))#[0..=63]
-    const t3368 = replay_entry_d + 32
-    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3361))) | (0 << t3361))#[0..=63]
-    const t3375 = replay_entry_d + 40
-    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3368))) | (0 << t3368))#[0..=63]
-    const t3382 = replay_entry_d + 48
-    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3375))) | (0 << t3375))#[0..=63]
-    const t3389 = replay_entry_d + 56
-    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3382))) | (0 << t3382))#[0..=63]
-    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3389))) | (0 << t3389))#[0..=63]
+    const t3454 = replay_entry_d + 16
+    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3447))) | (0 << t3447))#[0..=63]
+    const t3461 = replay_entry_d + 24
+    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3454))) | (0 << t3454))#[0..=63]
+    const t3468 = replay_entry_d + 32
+    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3461))) | (0 << t3461))#[0..=63]
+    const t3475 = replay_entry_d + 40
+    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3468))) | (0 << t3468))#[0..=63]
+    const t3482 = replay_entry_d + 48
+    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3475))) | (0 << t3475))#[0..=63]
+    const t3489 = replay_entry_d + 56
+    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3482))) | (0 << t3482))#[0..=63]
+    rq_conflict_matrix_d = ((rq_conflict_matrix_d & (~(1 << t3489))) | (0 << t3489))#[0..=63]
   }
   mut rq_conflict_matrix_d__w2 = rq_conflict_matrix_d
   rq_conflict_matrix_d__w2#[0] = 0
@@ -1694,418 +1710,418 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   rq_conflict_matrix_d__w8#[54] = 0
   mut rq_conflict_matrix_d__w9 = rq_conflict_matrix_d__w8
   rq_conflict_matrix_d__w9#[63] = 0
-  const t3398 = replayq__w135#[0..=129]
-  const t3399 = t3398#[69..=73]
-  const cmd_s2__w1 = t3399
-  const t3400 = cmd_s2__w1 == minion_dcache_pkg.DcCmdXrd
-  const t3401 = cmd_s2__w1 == minion_dcache_pkg.DcCmdXlr
-  const t3402 = t3400 or t3401
-  const t3403 = cmd_s2__w1 == minion_dcache_pkg.DcCmdXsc
-  const t3404 = t3402 or t3403
+  const t3498 = replayq__w135#[0..=129]
+  const t3499 = t3498#[69..=73]
+  const cmd_s2__w1 = t3499
+  const t3500 = cmd_s2__w1 == minion_dcache_pkg.DcCmdXrd
+  const t3501 = cmd_s2__w1 == minion_dcache_pkg.DcCmdXlr
+  const t3502 = t3500 or t3501
+  const t3503 = cmd_s2__w1 == minion_dcache_pkg.DcCmdXsc
+  const t3504 = t3502 or t3503
   const cmd_s1__w2 = cmd_s2__w1
-  const t3405 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaSwap
-  const t3406 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaAdd
-  const t3407 = t3405 or t3406
-  const t3408 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaXor
-  const t3409 = t3407 or t3408
-  const t3410 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaOr
-  const t3411 = t3409 or t3410
-  const t3412 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaAnd
-  const t3413 = t3411 or t3412
-  const t3414 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMin
-  const t3415 = t3413 or t3414
-  const t3416 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMax
-  const t3417 = t3415 or t3416
-  const t3418 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMinu
-  const t3419 = t3417 or t3418
-  const t3420 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMaxu
-  const t3421 = t3419 or t3420
-  const t3422 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaCmpswp
-  const t3423 = t3421 or t3422
-  const t3424 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMinPs
-  const t3425 = t3423 or t3424
-  const t3426 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMaxPs
-  const t3427 = t3425 or t3426
-  const t3429 = t3404 or (unsigned(t3427) != 0)
-  const t3430 = cmd_s2__w1 == minion_dcache_pkg.DcCmdG32
-  const t3431 = t3429 or t3430
-  const t3432 = cmd_s2__w1 == minion_dcache_pkg.DcCmdXrdb
-  const t3433 = t3431 or t3432
-  const t3436 = replayq__w135#[0..=129]
-  const t3437 = t3436#[74..=80]
-  const t3441 = replayq__w135#[130..=259]
-  const t3442 = t3441#[69..=73]
-  const cmd_s2__w2 = t3442
-  const t3443 = cmd_s2__w2 == minion_dcache_pkg.DcCmdXrd
-  const t3444 = cmd_s2__w2 == minion_dcache_pkg.DcCmdXlr
-  const t3445 = t3443 or t3444
-  const t3446 = cmd_s2__w2 == minion_dcache_pkg.DcCmdXsc
-  const t3447 = t3445 or t3446
-  const cmd_s1__w3 = cmd_s2__w2
-  const t3448 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaSwap
-  const t3449 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaAdd
-  const t3450 = t3448 or t3449
-  const t3451 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaXor
-  const t3452 = t3450 or t3451
-  const t3453 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaOr
-  const t3454 = t3452 or t3453
-  const t3455 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaAnd
-  const t3456 = t3454 or t3455
-  const t3457 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMin
-  const t3458 = t3456 or t3457
-  const t3459 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMax
-  const t3460 = t3458 or t3459
-  const t3461 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMinu
-  const t3462 = t3460 or t3461
-  const t3463 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMaxu
-  const t3464 = t3462 or t3463
-  const t3465 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaCmpswp
-  const t3466 = t3464 or t3465
-  const t3467 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMinPs
-  const t3468 = t3466 or t3467
-  const t3469 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMaxPs
-  const t3470 = t3468 or t3469
-  `scoreboard_o__bpo.dest`#[0..=6] = t3437
-  `scoreboard_o__bpo.valid`#[0] = unsigned(((entry_mask_available_q & 1) == 0) and (unsigned(t3433) != 0))
-  const t3472 = t3447 or (unsigned(t3470) != 0)
-  const t3473 = cmd_s2__w2 == minion_dcache_pkg.DcCmdG32
-  const t3474 = t3472 or t3473
-  const t3475 = cmd_s2__w2 == minion_dcache_pkg.DcCmdXrdb
-  const t3476 = t3474 or t3475
-  mut `scoreboard_o__bpo.valid__w1` = `scoreboard_o__bpo.valid`
-  `scoreboard_o__bpo.valid__w1`#[1] = unsigned((((entry_mask_available_q >> 1) & 1) == 0) and (unsigned(t3476) != 0))
-  const t3479 = replayq__w135#[130..=259]
-  const t3480 = t3479#[74..=80]
-  mut `scoreboard_o__bpo.dest__w1` = `scoreboard_o__bpo.dest`
-  `scoreboard_o__bpo.dest__w1`#[7..=13] = t3480
-  const t3484 = replayq__w135#[260..=389]
-  const t3485 = t3484#[69..=73]
-  const cmd_s2__w3 = t3485
-  const t3486 = cmd_s2__w3 == minion_dcache_pkg.DcCmdXrd
-  const t3487 = cmd_s2__w3 == minion_dcache_pkg.DcCmdXlr
-  const t3488 = t3486 or t3487
-  const t3489 = cmd_s2__w3 == minion_dcache_pkg.DcCmdXsc
-  const t3490 = t3488 or t3489
-  const cmd_s1__w4 = cmd_s2__w3
-  const t3491 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaSwap
-  const t3492 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaAdd
-  const t3493 = t3491 or t3492
-  const t3494 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaXor
-  const t3495 = t3493 or t3494
-  const t3496 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaOr
-  const t3497 = t3495 or t3496
-  const t3498 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaAnd
-  const t3499 = t3497 or t3498
-  const t3500 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMin
-  const t3501 = t3499 or t3500
-  const t3502 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMax
-  const t3503 = t3501 or t3502
-  const t3504 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMinu
-  const t3505 = t3503 or t3504
-  const t3506 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMaxu
+  const t3505 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaSwap
+  const t3506 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaAdd
   const t3507 = t3505 or t3506
-  const t3508 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaCmpswp
+  const t3508 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaXor
   const t3509 = t3507 or t3508
-  const t3510 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMinPs
+  const t3510 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaOr
   const t3511 = t3509 or t3510
-  const t3512 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMaxPs
+  const t3512 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaAnd
   const t3513 = t3511 or t3512
-  const t3515 = t3490 or (unsigned(t3513) != 0)
-  const t3516 = cmd_s2__w3 == minion_dcache_pkg.DcCmdG32
+  const t3514 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMin
+  const t3515 = t3513 or t3514
+  const t3516 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMax
   const t3517 = t3515 or t3516
-  const t3518 = cmd_s2__w3 == minion_dcache_pkg.DcCmdXrdb
+  const t3518 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMinu
   const t3519 = t3517 or t3518
-  mut `scoreboard_o__bpo.valid__w2` = `scoreboard_o__bpo.valid__w1`
-  `scoreboard_o__bpo.valid__w2`#[2] = unsigned((((entry_mask_available_q >> 2) & 1) == 0) and (unsigned(t3519) != 0))
-  const t3522 = replayq__w135#[260..=389]
-  const t3523 = t3522#[74..=80]
-  mut `scoreboard_o__bpo.dest__w2` = `scoreboard_o__bpo.dest__w1`
-  `scoreboard_o__bpo.dest__w2`#[14..=20] = t3523
-  const t3527 = replayq__w135#[390..=519]
-  const t3528 = t3527#[69..=73]
-  const cmd_s2__w4 = t3528
-  const t3529 = cmd_s2__w4 == minion_dcache_pkg.DcCmdXrd
-  const t3530 = cmd_s2__w4 == minion_dcache_pkg.DcCmdXlr
+  const t3520 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMaxu
+  const t3521 = t3519 or t3520
+  const t3522 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaCmpswp
+  const t3523 = t3521 or t3522
+  const t3524 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMinPs
+  const t3525 = t3523 or t3524
+  const t3526 = cmd_s1__w2 == minion_dcache_pkg.DcCmdXaMaxPs
+  const t3527 = t3525 or t3526
+  const t3529 = t3504 or (unsigned(t3527) != 0)
+  const t3530 = cmd_s2__w1 == minion_dcache_pkg.DcCmdG32
   const t3531 = t3529 or t3530
-  const t3532 = cmd_s2__w4 == minion_dcache_pkg.DcCmdXsc
+  const t3532 = cmd_s2__w1 == minion_dcache_pkg.DcCmdXrdb
   const t3533 = t3531 or t3532
-  const cmd_s1__w5 = cmd_s2__w4
-  const t3534 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaSwap
-  const t3535 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaAdd
-  const t3536 = t3534 or t3535
-  const t3537 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaXor
-  const t3538 = t3536 or t3537
-  const t3539 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaOr
-  const t3540 = t3538 or t3539
-  const t3541 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaAnd
-  const t3542 = t3540 or t3541
-  const t3543 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMin
-  const t3544 = t3542 or t3543
-  const t3545 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMax
-  const t3546 = t3544 or t3545
-  const t3547 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMinu
-  const t3548 = t3546 or t3547
-  const t3549 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMaxu
+  const t3536 = replayq__w135#[0..=129]
+  const t3537 = t3536#[74..=80]
+  const t3541 = replayq__w135#[130..=259]
+  const t3542 = t3541#[69..=73]
+  const cmd_s2__w2 = t3542
+  const t3543 = cmd_s2__w2 == minion_dcache_pkg.DcCmdXrd
+  const t3544 = cmd_s2__w2 == minion_dcache_pkg.DcCmdXlr
+  const t3545 = t3543 or t3544
+  const t3546 = cmd_s2__w2 == minion_dcache_pkg.DcCmdXsc
+  const t3547 = t3545 or t3546
+  const cmd_s1__w3 = cmd_s2__w2
+  const t3548 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaSwap
+  const t3549 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaAdd
   const t3550 = t3548 or t3549
-  const t3551 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaCmpswp
+  const t3551 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaXor
   const t3552 = t3550 or t3551
-  const t3553 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMinPs
+  const t3553 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaOr
   const t3554 = t3552 or t3553
-  const t3555 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMaxPs
+  const t3555 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaAnd
   const t3556 = t3554 or t3555
-  const t3558 = t3533 or (unsigned(t3556) != 0)
-  const t3559 = cmd_s2__w4 == minion_dcache_pkg.DcCmdG32
+  const t3557 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMin
+  const t3558 = t3556 or t3557
+  const t3559 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMax
   const t3560 = t3558 or t3559
-  const t3561 = cmd_s2__w4 == minion_dcache_pkg.DcCmdXrdb
+  const t3561 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMinu
   const t3562 = t3560 or t3561
-  mut `scoreboard_o__bpo.valid__w3` = `scoreboard_o__bpo.valid__w2`
-  `scoreboard_o__bpo.valid__w3`#[3] = unsigned((((entry_mask_available_q >> 3) & 1) == 0) and (unsigned(t3562) != 0))
-  const t3565 = replayq__w135#[390..=519]
-  const t3566 = t3565#[74..=80]
-  mut `scoreboard_o__bpo.dest__w3` = `scoreboard_o__bpo.dest__w2`
-  `scoreboard_o__bpo.dest__w3`#[21..=27] = t3566
-  const t3570 = replayq__w135#[520..=649]
-  const t3571 = t3570#[69..=73]
-  const cmd_s2__w5 = t3571
-  const t3572 = cmd_s2__w5 == minion_dcache_pkg.DcCmdXrd
-  const t3573 = cmd_s2__w5 == minion_dcache_pkg.DcCmdXlr
+  const t3563 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMaxu
+  const t3564 = t3562 or t3563
+  const t3565 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaCmpswp
+  const t3566 = t3564 or t3565
+  const t3567 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMinPs
+  const t3568 = t3566 or t3567
+  const t3569 = cmd_s1__w3 == minion_dcache_pkg.DcCmdXaMaxPs
+  const t3570 = t3568 or t3569
+  `scoreboard_o__bpo.dest`#[0..=6] = t3537
+  `scoreboard_o__bpo.valid`#[0] = unsigned(((entry_mask_available_q & 1) == 0) and (unsigned(t3533) != 0))
+  const t3572 = t3547 or (unsigned(t3570) != 0)
+  const t3573 = cmd_s2__w2 == minion_dcache_pkg.DcCmdG32
   const t3574 = t3572 or t3573
-  const t3575 = cmd_s2__w5 == minion_dcache_pkg.DcCmdXsc
+  const t3575 = cmd_s2__w2 == minion_dcache_pkg.DcCmdXrdb
   const t3576 = t3574 or t3575
-  const cmd_s1__w6 = cmd_s2__w5
-  const t3577 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaSwap
-  const t3578 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaAdd
-  const t3579 = t3577 or t3578
-  const t3580 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaXor
-  const t3581 = t3579 or t3580
-  const t3582 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaOr
-  const t3583 = t3581 or t3582
-  const t3584 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaAnd
-  const t3585 = t3583 or t3584
-  const t3586 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMin
-  const t3587 = t3585 or t3586
-  const t3588 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMax
-  const t3589 = t3587 or t3588
-  const t3590 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMinu
-  const t3591 = t3589 or t3590
-  const t3592 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMaxu
+  mut `scoreboard_o__bpo.valid__w1` = `scoreboard_o__bpo.valid`
+  `scoreboard_o__bpo.valid__w1`#[1] = unsigned((((entry_mask_available_q >> 1) & 1) == 0) and (unsigned(t3576) != 0))
+  const t3579 = replayq__w135#[130..=259]
+  const t3580 = t3579#[74..=80]
+  mut `scoreboard_o__bpo.dest__w1` = `scoreboard_o__bpo.dest`
+  `scoreboard_o__bpo.dest__w1`#[7..=13] = t3580
+  const t3584 = replayq__w135#[260..=389]
+  const t3585 = t3584#[69..=73]
+  const cmd_s2__w3 = t3585
+  const t3586 = cmd_s2__w3 == minion_dcache_pkg.DcCmdXrd
+  const t3587 = cmd_s2__w3 == minion_dcache_pkg.DcCmdXlr
+  const t3588 = t3586 or t3587
+  const t3589 = cmd_s2__w3 == minion_dcache_pkg.DcCmdXsc
+  const t3590 = t3588 or t3589
+  const cmd_s1__w4 = cmd_s2__w3
+  const t3591 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaSwap
+  const t3592 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaAdd
   const t3593 = t3591 or t3592
-  const t3594 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaCmpswp
+  const t3594 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaXor
   const t3595 = t3593 or t3594
-  const t3596 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMinPs
+  const t3596 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaOr
   const t3597 = t3595 or t3596
-  const t3598 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMaxPs
+  const t3598 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaAnd
   const t3599 = t3597 or t3598
-  const t3601 = t3576 or (unsigned(t3599) != 0)
-  const t3602 = cmd_s2__w5 == minion_dcache_pkg.DcCmdG32
+  const t3600 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMin
+  const t3601 = t3599 or t3600
+  const t3602 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMax
   const t3603 = t3601 or t3602
-  const t3604 = cmd_s2__w5 == minion_dcache_pkg.DcCmdXrdb
+  const t3604 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMinu
   const t3605 = t3603 or t3604
-  mut `scoreboard_o__bpo.valid__w4` = `scoreboard_o__bpo.valid__w3`
-  `scoreboard_o__bpo.valid__w4`#[4] = unsigned((((entry_mask_available_q >> 4) & 1) == 0) and (unsigned(t3605) != 0))
-  const t3608 = replayq__w135#[520..=649]
-  const t3609 = t3608#[74..=80]
-  mut `scoreboard_o__bpo.dest__w4` = `scoreboard_o__bpo.dest__w3`
-  `scoreboard_o__bpo.dest__w4`#[28..=34] = t3609
-  const t3613 = replayq__w135#[650..=779]
-  const t3614 = t3613#[69..=73]
-  const cmd_s2__w6 = t3614
-  const t3615 = cmd_s2__w6 == minion_dcache_pkg.DcCmdXrd
-  const t3616 = cmd_s2__w6 == minion_dcache_pkg.DcCmdXlr
+  const t3606 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMaxu
+  const t3607 = t3605 or t3606
+  const t3608 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaCmpswp
+  const t3609 = t3607 or t3608
+  const t3610 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMinPs
+  const t3611 = t3609 or t3610
+  const t3612 = cmd_s1__w4 == minion_dcache_pkg.DcCmdXaMaxPs
+  const t3613 = t3611 or t3612
+  const t3615 = t3590 or (unsigned(t3613) != 0)
+  const t3616 = cmd_s2__w3 == minion_dcache_pkg.DcCmdG32
   const t3617 = t3615 or t3616
-  const t3618 = cmd_s2__w6 == minion_dcache_pkg.DcCmdXsc
+  const t3618 = cmd_s2__w3 == minion_dcache_pkg.DcCmdXrdb
   const t3619 = t3617 or t3618
-  const cmd_s1__w7 = cmd_s2__w6
-  const t3620 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaSwap
-  const t3621 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaAdd
-  const t3622 = t3620 or t3621
-  const t3623 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaXor
-  const t3624 = t3622 or t3623
-  const t3625 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaOr
-  const t3626 = t3624 or t3625
-  const t3627 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaAnd
-  const t3628 = t3626 or t3627
-  const t3629 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMin
-  const t3630 = t3628 or t3629
-  const t3631 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMax
-  const t3632 = t3630 or t3631
-  const t3633 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMinu
-  const t3634 = t3632 or t3633
-  const t3635 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMaxu
+  mut `scoreboard_o__bpo.valid__w2` = `scoreboard_o__bpo.valid__w1`
+  `scoreboard_o__bpo.valid__w2`#[2] = unsigned((((entry_mask_available_q >> 2) & 1) == 0) and (unsigned(t3619) != 0))
+  const t3622 = replayq__w135#[260..=389]
+  const t3623 = t3622#[74..=80]
+  mut `scoreboard_o__bpo.dest__w2` = `scoreboard_o__bpo.dest__w1`
+  `scoreboard_o__bpo.dest__w2`#[14..=20] = t3623
+  const t3627 = replayq__w135#[390..=519]
+  const t3628 = t3627#[69..=73]
+  const cmd_s2__w4 = t3628
+  const t3629 = cmd_s2__w4 == minion_dcache_pkg.DcCmdXrd
+  const t3630 = cmd_s2__w4 == minion_dcache_pkg.DcCmdXlr
+  const t3631 = t3629 or t3630
+  const t3632 = cmd_s2__w4 == minion_dcache_pkg.DcCmdXsc
+  const t3633 = t3631 or t3632
+  const cmd_s1__w5 = cmd_s2__w4
+  const t3634 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaSwap
+  const t3635 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaAdd
   const t3636 = t3634 or t3635
-  const t3637 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaCmpswp
+  const t3637 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaXor
   const t3638 = t3636 or t3637
-  const t3639 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMinPs
+  const t3639 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaOr
   const t3640 = t3638 or t3639
-  const t3641 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMaxPs
+  const t3641 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaAnd
   const t3642 = t3640 or t3641
-  const t3644 = t3619 or (unsigned(t3642) != 0)
-  const t3645 = cmd_s2__w6 == minion_dcache_pkg.DcCmdG32
+  const t3643 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMin
+  const t3644 = t3642 or t3643
+  const t3645 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMax
   const t3646 = t3644 or t3645
-  const t3647 = cmd_s2__w6 == minion_dcache_pkg.DcCmdXrdb
+  const t3647 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMinu
   const t3648 = t3646 or t3647
-  mut `scoreboard_o__bpo.valid__w5` = `scoreboard_o__bpo.valid__w4`
-  `scoreboard_o__bpo.valid__w5`#[5] = unsigned((((entry_mask_available_q >> 5) & 1) == 0) and (unsigned(t3648) != 0))
-  const t3651 = replayq__w135#[650..=779]
-  const t3652 = t3651#[74..=80]
-  mut `scoreboard_o__bpo.dest__w5` = `scoreboard_o__bpo.dest__w4`
-  `scoreboard_o__bpo.dest__w5`#[35..=41] = t3652
-  const t3656 = replayq__w135#[780..=909]
-  const t3657 = t3656#[69..=73]
-  const cmd_s2__w7 = t3657
-  const t3658 = cmd_s2__w7 == minion_dcache_pkg.DcCmdXrd
-  const t3659 = cmd_s2__w7 == minion_dcache_pkg.DcCmdXlr
+  const t3649 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMaxu
+  const t3650 = t3648 or t3649
+  const t3651 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaCmpswp
+  const t3652 = t3650 or t3651
+  const t3653 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMinPs
+  const t3654 = t3652 or t3653
+  const t3655 = cmd_s1__w5 == minion_dcache_pkg.DcCmdXaMaxPs
+  const t3656 = t3654 or t3655
+  const t3658 = t3633 or (unsigned(t3656) != 0)
+  const t3659 = cmd_s2__w4 == minion_dcache_pkg.DcCmdG32
   const t3660 = t3658 or t3659
-  const t3661 = cmd_s2__w7 == minion_dcache_pkg.DcCmdXsc
+  const t3661 = cmd_s2__w4 == minion_dcache_pkg.DcCmdXrdb
   const t3662 = t3660 or t3661
-  const cmd_s1__w8 = cmd_s2__w7
-  const t3663 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaSwap
-  const t3664 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaAdd
-  const t3665 = t3663 or t3664
-  const t3666 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaXor
-  const t3667 = t3665 or t3666
-  const t3668 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaOr
-  const t3669 = t3667 or t3668
-  const t3670 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaAnd
-  const t3671 = t3669 or t3670
-  const t3672 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMin
-  const t3673 = t3671 or t3672
-  const t3674 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMax
-  const t3675 = t3673 or t3674
-  const t3676 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMinu
-  const t3677 = t3675 or t3676
-  const t3678 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMaxu
+  mut `scoreboard_o__bpo.valid__w3` = `scoreboard_o__bpo.valid__w2`
+  `scoreboard_o__bpo.valid__w3`#[3] = unsigned((((entry_mask_available_q >> 3) & 1) == 0) and (unsigned(t3662) != 0))
+  const t3665 = replayq__w135#[390..=519]
+  const t3666 = t3665#[74..=80]
+  mut `scoreboard_o__bpo.dest__w3` = `scoreboard_o__bpo.dest__w2`
+  `scoreboard_o__bpo.dest__w3`#[21..=27] = t3666
+  const t3670 = replayq__w135#[520..=649]
+  const t3671 = t3670#[69..=73]
+  const cmd_s2__w5 = t3671
+  const t3672 = cmd_s2__w5 == minion_dcache_pkg.DcCmdXrd
+  const t3673 = cmd_s2__w5 == minion_dcache_pkg.DcCmdXlr
+  const t3674 = t3672 or t3673
+  const t3675 = cmd_s2__w5 == minion_dcache_pkg.DcCmdXsc
+  const t3676 = t3674 or t3675
+  const cmd_s1__w6 = cmd_s2__w5
+  const t3677 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaSwap
+  const t3678 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaAdd
   const t3679 = t3677 or t3678
-  const t3680 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaCmpswp
+  const t3680 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaXor
   const t3681 = t3679 or t3680
-  const t3682 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMinPs
+  const t3682 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaOr
   const t3683 = t3681 or t3682
-  const t3684 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMaxPs
+  const t3684 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaAnd
   const t3685 = t3683 or t3684
-  const t3687 = t3662 or (unsigned(t3685) != 0)
-  const t3688 = cmd_s2__w7 == minion_dcache_pkg.DcCmdG32
+  const t3686 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMin
+  const t3687 = t3685 or t3686
+  const t3688 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMax
   const t3689 = t3687 or t3688
-  const t3690 = cmd_s2__w7 == minion_dcache_pkg.DcCmdXrdb
+  const t3690 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMinu
   const t3691 = t3689 or t3690
-  mut `scoreboard_o__bpo.valid__w6` = `scoreboard_o__bpo.valid__w5`
-  `scoreboard_o__bpo.valid__w6`#[6] = unsigned((((entry_mask_available_q >> 6) & 1) == 0) and (unsigned(t3691) != 0))
-  const t3694 = replayq__w135#[780..=909]
-  const t3695 = t3694#[74..=80]
-  mut `scoreboard_o__bpo.dest__w6` = `scoreboard_o__bpo.dest__w5`
-  `scoreboard_o__bpo.dest__w6`#[42..=48] = t3695
-  const t3699 = replayq__w135#[910..=1039]
-  const t3700 = t3699#[69..=73]
-  const cmd_s2__w8 = t3700
-  const t3701 = cmd_s2__w8 == minion_dcache_pkg.DcCmdXrd
-  const t3702 = cmd_s2__w8 == minion_dcache_pkg.DcCmdXlr
+  const t3692 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMaxu
+  const t3693 = t3691 or t3692
+  const t3694 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaCmpswp
+  const t3695 = t3693 or t3694
+  const t3696 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMinPs
+  const t3697 = t3695 or t3696
+  const t3698 = cmd_s1__w6 == minion_dcache_pkg.DcCmdXaMaxPs
+  const t3699 = t3697 or t3698
+  const t3701 = t3676 or (unsigned(t3699) != 0)
+  const t3702 = cmd_s2__w5 == minion_dcache_pkg.DcCmdG32
   const t3703 = t3701 or t3702
-  const t3704 = cmd_s2__w8 == minion_dcache_pkg.DcCmdXsc
+  const t3704 = cmd_s2__w5 == minion_dcache_pkg.DcCmdXrdb
   const t3705 = t3703 or t3704
-  const cmd_s1__w9 = cmd_s2__w8
-  const t3706 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaSwap
-  const t3707 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaAdd
-  const t3708 = t3706 or t3707
-  const t3709 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaXor
-  const t3710 = t3708 or t3709
-  const t3711 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaOr
-  const t3712 = t3710 or t3711
-  const t3713 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaAnd
-  const t3714 = t3712 or t3713
-  const t3715 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMin
-  const t3716 = t3714 or t3715
-  const t3717 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMax
-  const t3718 = t3716 or t3717
-  const t3719 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMinu
-  const t3720 = t3718 or t3719
-  const t3721 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMaxu
+  mut `scoreboard_o__bpo.valid__w4` = `scoreboard_o__bpo.valid__w3`
+  `scoreboard_o__bpo.valid__w4`#[4] = unsigned((((entry_mask_available_q >> 4) & 1) == 0) and (unsigned(t3705) != 0))
+  const t3708 = replayq__w135#[520..=649]
+  const t3709 = t3708#[74..=80]
+  mut `scoreboard_o__bpo.dest__w4` = `scoreboard_o__bpo.dest__w3`
+  `scoreboard_o__bpo.dest__w4`#[28..=34] = t3709
+  const t3713 = replayq__w135#[650..=779]
+  const t3714 = t3713#[69..=73]
+  const cmd_s2__w6 = t3714
+  const t3715 = cmd_s2__w6 == minion_dcache_pkg.DcCmdXrd
+  const t3716 = cmd_s2__w6 == minion_dcache_pkg.DcCmdXlr
+  const t3717 = t3715 or t3716
+  const t3718 = cmd_s2__w6 == minion_dcache_pkg.DcCmdXsc
+  const t3719 = t3717 or t3718
+  const cmd_s1__w7 = cmd_s2__w6
+  const t3720 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaSwap
+  const t3721 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaAdd
   const t3722 = t3720 or t3721
-  const t3723 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaCmpswp
+  const t3723 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaXor
   const t3724 = t3722 or t3723
-  const t3725 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMinPs
+  const t3725 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaOr
   const t3726 = t3724 or t3725
-  const t3727 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMaxPs
+  const t3727 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaAnd
   const t3728 = t3726 or t3727
-  const t3730 = t3705 or (unsigned(t3728) != 0)
-  const t3731 = cmd_s2__w8 == minion_dcache_pkg.DcCmdG32
+  const t3729 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMin
+  const t3730 = t3728 or t3729
+  const t3731 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMax
   const t3732 = t3730 or t3731
-  const t3733 = cmd_s2__w8 == minion_dcache_pkg.DcCmdXrdb
+  const t3733 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMinu
   const t3734 = t3732 or t3733
+  const t3735 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMaxu
+  const t3736 = t3734 or t3735
+  const t3737 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaCmpswp
+  const t3738 = t3736 or t3737
+  const t3739 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMinPs
+  const t3740 = t3738 or t3739
+  const t3741 = cmd_s1__w7 == minion_dcache_pkg.DcCmdXaMaxPs
+  const t3742 = t3740 or t3741
+  const t3744 = t3719 or (unsigned(t3742) != 0)
+  const t3745 = cmd_s2__w6 == minion_dcache_pkg.DcCmdG32
+  const t3746 = t3744 or t3745
+  const t3747 = cmd_s2__w6 == minion_dcache_pkg.DcCmdXrdb
+  const t3748 = t3746 or t3747
+  mut `scoreboard_o__bpo.valid__w5` = `scoreboard_o__bpo.valid__w4`
+  `scoreboard_o__bpo.valid__w5`#[5] = unsigned((((entry_mask_available_q >> 5) & 1) == 0) and (unsigned(t3748) != 0))
+  const t3751 = replayq__w135#[650..=779]
+  const t3752 = t3751#[74..=80]
+  mut `scoreboard_o__bpo.dest__w5` = `scoreboard_o__bpo.dest__w4`
+  `scoreboard_o__bpo.dest__w5`#[35..=41] = t3752
+  const t3756 = replayq__w135#[780..=909]
+  const t3757 = t3756#[69..=73]
+  const cmd_s2__w7 = t3757
+  const t3758 = cmd_s2__w7 == minion_dcache_pkg.DcCmdXrd
+  const t3759 = cmd_s2__w7 == minion_dcache_pkg.DcCmdXlr
+  const t3760 = t3758 or t3759
+  const t3761 = cmd_s2__w7 == minion_dcache_pkg.DcCmdXsc
+  const t3762 = t3760 or t3761
+  const cmd_s1__w8 = cmd_s2__w7
+  const t3763 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaSwap
+  const t3764 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaAdd
+  const t3765 = t3763 or t3764
+  const t3766 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaXor
+  const t3767 = t3765 or t3766
+  const t3768 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaOr
+  const t3769 = t3767 or t3768
+  const t3770 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaAnd
+  const t3771 = t3769 or t3770
+  const t3772 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMin
+  const t3773 = t3771 or t3772
+  const t3774 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMax
+  const t3775 = t3773 or t3774
+  const t3776 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMinu
+  const t3777 = t3775 or t3776
+  const t3778 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMaxu
+  const t3779 = t3777 or t3778
+  const t3780 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaCmpswp
+  const t3781 = t3779 or t3780
+  const t3782 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMinPs
+  const t3783 = t3781 or t3782
+  const t3784 = cmd_s1__w8 == minion_dcache_pkg.DcCmdXaMaxPs
+  const t3785 = t3783 or t3784
+  const t3787 = t3762 or (unsigned(t3785) != 0)
+  const t3788 = cmd_s2__w7 == minion_dcache_pkg.DcCmdG32
+  const t3789 = t3787 or t3788
+  const t3790 = cmd_s2__w7 == minion_dcache_pkg.DcCmdXrdb
+  const t3791 = t3789 or t3790
+  mut `scoreboard_o__bpo.valid__w6` = `scoreboard_o__bpo.valid__w5`
+  `scoreboard_o__bpo.valid__w6`#[6] = unsigned((((entry_mask_available_q >> 6) & 1) == 0) and (unsigned(t3791) != 0))
+  const t3794 = replayq__w135#[780..=909]
+  const t3795 = t3794#[74..=80]
+  mut `scoreboard_o__bpo.dest__w6` = `scoreboard_o__bpo.dest__w5`
+  `scoreboard_o__bpo.dest__w6`#[42..=48] = t3795
+  const t3799 = replayq__w135#[910..=1039]
+  const t3800 = t3799#[69..=73]
+  const cmd_s2__w8 = t3800
+  const t3801 = cmd_s2__w8 == minion_dcache_pkg.DcCmdXrd
+  const t3802 = cmd_s2__w8 == minion_dcache_pkg.DcCmdXlr
+  const t3803 = t3801 or t3802
+  const t3804 = cmd_s2__w8 == minion_dcache_pkg.DcCmdXsc
+  const t3805 = t3803 or t3804
+  const cmd_s1__w9 = cmd_s2__w8
+  const t3806 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaSwap
+  const t3807 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaAdd
+  const t3808 = t3806 or t3807
+  const t3809 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaXor
+  const t3810 = t3808 or t3809
+  const t3811 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaOr
+  const t3812 = t3810 or t3811
+  const t3813 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaAnd
+  const t3814 = t3812 or t3813
+  const t3815 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMin
+  const t3816 = t3814 or t3815
+  const t3817 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMax
+  const t3818 = t3816 or t3817
+  const t3819 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMinu
+  const t3820 = t3818 or t3819
+  const t3821 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMaxu
+  const t3822 = t3820 or t3821
+  const t3823 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaCmpswp
+  const t3824 = t3822 or t3823
+  const t3825 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMinPs
+  const t3826 = t3824 or t3825
+  const t3827 = cmd_s1__w9 == minion_dcache_pkg.DcCmdXaMaxPs
+  const t3828 = t3826 or t3827
+  const t3830 = t3805 or (unsigned(t3828) != 0)
+  const t3831 = cmd_s2__w8 == minion_dcache_pkg.DcCmdG32
+  const t3832 = t3830 or t3831
+  const t3833 = cmd_s2__w8 == minion_dcache_pkg.DcCmdXrdb
+  const t3834 = t3832 or t3833
   mut `scoreboard_o__bpo.valid__w7` = `scoreboard_o__bpo.valid__w6`
-  `scoreboard_o__bpo.valid__w7`#[7] = unsigned((((entry_mask_available_q >> 7) & 1) == 0) and (unsigned(t3734) != 0))
-  const t3737 = replayq__w135#[910..=1039]
-  const t3738 = t3737#[74..=80]
+  `scoreboard_o__bpo.valid__w7`#[7] = unsigned((((entry_mask_available_q >> 7) & 1) == 0) and (unsigned(t3834) != 0))
+  const t3837 = replayq__w135#[910..=1039]
+  const t3838 = t3837#[74..=80]
   mut `scoreboard_o__bpo.dest__w7` = `scoreboard_o__bpo.dest__w6`
-  `scoreboard_o__bpo.dest__w7`#[49..=55] = t3738
-  const t3743 = replayq__w135 << 130
-  const t3744 = t3743 >> ((dealloc_entry_i * 130)#[0..=11] + 130)
-  const t3745 = t3744#[0..=129]
-  const t3746 = t3745#[74..=80]
-  const t3747 = t3746 >> 6
-  const t3748 = t3747 & 1
-  const t3749 = t3748 != 0
-  const t3750 = (dealloc_i != 0) and t3749
-  const t3754 = replayq__w135 << 130
-  const t3755 = t3754 >> ((dealloc_entry_i * 130)#[0..=11] + 130)
-  const t3756 = t3755#[0..=129]
-  const t3757 = t3756#[74..=80]
-  const t3758 = t3757 & 1
-  const t3759 = t3758 == 0
-  const t3760 = t3750 and t3759
-  mut fp_sb_dealloc_d = 0ub??
+  `scoreboard_o__bpo.dest__w7`#[49..=55] = t3838
+  const t3843 = replayq__w135 << 0x82
+  const t3844 = t3843 >> ((dealloc_entry_i * 0x82)#[0..=11] + 0x82)
+  const t3845 = t3844#[0..=129]
+  const t3846 = t3845#[74..=80]
+  const t3847 = t3846 >> 6
+  const t3848 = t3847 & 1
+  const t3849 = t3848 != 0
+  const t3850 = (dealloc_i != 0) and t3849
+  const t3854 = replayq__w135 << 0x82
+  const t3855 = t3854 >> ((dealloc_entry_i * 0x82)#[0..=11] + 0x82)
+  const t3856 = t3855#[0..=129]
+  const t3857 = t3856#[74..=80]
+  const t3858 = t3857 & 1
+  const t3859 = t3858 == 0
+  const t3860 = t3850 and t3859
+  fp_sb_dealloc_d = 0sb?
   mut fp_sb_dealloc_d__w1 = fp_sb_dealloc_d
-  fp_sb_dealloc_d__w1#[0] = unsigned(t3760)
-  const t3765 = replayq__w135 << 130
-  const t3766 = t3765 >> ((dealloc_entry_i * 130)#[0..=11] + 130)
-  const t3767 = t3766#[0..=129]
-  const t3768 = t3767#[74..=80]
-  const t3769 = t3768 >> 6
-  const t3770 = t3769 & 1
-  const t3771 = t3770 == 0
-  const t3772 = (dealloc_i != 0) and t3771
-  const t3776 = replayq__w135 << 130
-  const t3777 = t3776 >> ((dealloc_entry_i * 130)#[0..=11] + 130)
-  const t3778 = t3777#[0..=129]
-  const t3779 = t3778#[74..=80]
-  const t3780 = t3779 & 1
-  const t3781 = t3780 == 0
-  const t3782 = t3772 and t3781
-  mut int_sb_dealloc_d = 0ub??
+  fp_sb_dealloc_d__w1#[0] = unsigned(t3860) & 1
+  const t3866 = replayq__w135 << 0x82
+  const t3867 = t3866 >> ((dealloc_entry_i * 0x82)#[0..=11] + 0x82)
+  const t3868 = t3867#[0..=129]
+  const t3869 = t3868#[74..=80]
+  const t3870 = t3869 >> 6
+  const t3871 = t3870 & 1
+  const t3872 = t3871 == 0
+  const t3873 = (dealloc_i != 0) and t3872
+  const t3877 = replayq__w135 << 0x82
+  const t3878 = t3877 >> ((dealloc_entry_i * 0x82)#[0..=11] + 0x82)
+  const t3879 = t3878#[0..=129]
+  const t3880 = t3879#[74..=80]
+  const t3881 = t3880 & 1
+  const t3882 = t3881 == 0
+  const t3883 = t3873 and t3882
+  int_sb_dealloc_d = 0sb?
   mut int_sb_dealloc_d__w1 = int_sb_dealloc_d
-  int_sb_dealloc_d__w1#[0] = unsigned(t3782)
-  const t3787 = replayq__w135 << 130
-  const t3788 = t3787 >> ((dealloc_entry_i * 130)#[0..=11] + 130)
-  const t3789 = t3788#[0..=129]
-  const t3790 = t3789#[74..=80]
-  const t3791 = t3790 >> 6
-  const t3792 = t3791 & 1
-  const t3793 = t3792 != 0
-  const t3794 = (dealloc_i != 0) and t3793
-  const t3798 = replayq__w135 << 130
-  const t3799 = t3798 >> ((dealloc_entry_i * 130)#[0..=11] + 130)
-  const t3800 = t3799#[0..=129]
-  const t3801 = t3800#[74..=80]
-  const t3802 = t3801 & 1
-  const t3803 = t3802 == 1
-  const t3804 = t3794 and t3803
+  int_sb_dealloc_d__w1#[0] = unsigned(t3883) & 1
+  const t3889 = replayq__w135 << 0x82
+  const t3890 = t3889 >> ((dealloc_entry_i * 0x82)#[0..=11] + 0x82)
+  const t3891 = t3890#[0..=129]
+  const t3892 = t3891#[74..=80]
+  const t3893 = t3892 >> 6
+  const t3894 = t3893 & 1
+  const t3895 = t3894 != 0
+  const t3896 = (dealloc_i != 0) and t3895
+  const t3900 = replayq__w135 << 0x82
+  const t3901 = t3900 >> ((dealloc_entry_i * 0x82)#[0..=11] + 0x82)
+  const t3902 = t3901#[0..=129]
+  const t3903 = t3902#[74..=80]
+  const t3904 = t3903 & 1
+  const t3905 = t3904 == 1
+  const t3906 = t3896 and t3905
   mut fp_sb_dealloc_d__w2 = fp_sb_dealloc_d__w1
-  fp_sb_dealloc_d__w2#[1] = unsigned(t3804)
-  const t3809 = replayq__w135 << 130
-  const t3810 = t3809 >> ((dealloc_entry_i * 130)#[0..=11] + 130)
-  const t3811 = t3810#[0..=129]
-  const t3812 = t3811#[74..=80]
-  const t3813 = t3812 >> 6
-  const t3814 = t3813 & 1
-  const t3815 = t3814 == 0
-  const t3816 = (dealloc_i != 0) and t3815
-  const t3820 = replayq__w135 << 130
-  const t3821 = t3820 >> ((dealloc_entry_i * 130)#[0..=11] + 130)
-  const t3822 = t3821#[0..=129]
-  const t3823 = t3822#[74..=80]
-  const t3824 = t3823 & 1
-  const t3825 = t3824 == 1
-  const t3826 = t3816 and t3825
+  fp_sb_dealloc_d__w2#[1] = unsigned(t3906) & 1
+  const t3912 = replayq__w135 << 0x82
+  const t3913 = t3912 >> ((dealloc_entry_i * 0x82)#[0..=11] + 0x82)
+  const t3914 = t3913#[0..=129]
+  const t3915 = t3914#[74..=80]
+  const t3916 = t3915 >> 6
+  const t3917 = t3916 & 1
+  const t3918 = t3917 == 0
+  const t3919 = (dealloc_i != 0) and t3918
+  const t3923 = replayq__w135 << 0x82
+  const t3924 = t3923 >> ((dealloc_entry_i * 0x82)#[0..=11] + 0x82)
+  const t3925 = t3924#[0..=129]
+  const t3926 = t3925#[74..=80]
+  const t3927 = t3926 & 1
+  const t3928 = t3927 == 1
+  const t3929 = t3919 and t3928
   mut int_sb_dealloc_d__w2 = int_sb_dealloc_d__w1
-  int_sb_dealloc_d__w2#[1] = unsigned(t3826)
+  int_sb_dealloc_d__w2#[1] = unsigned(t3929) & 1
   if rst_ni == 0 {
     empty_o = 3
     push_age_q = 0
@@ -2139,7 +2155,7 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   if (push_req_i != 0) or (rearm_i != 0) or (replay_grant_i != 0) {
     rq_conflict_matrix_q = rq_conflict_matrix_d__w9
   }
-  const t3857 = `scoreboard_o__bpo.dest__w7`
+  const t3961 = `scoreboard_o__bpo.dest__w7`
   full_o = unsigned((entry_count_available_q == 0) or ((((age_id_mask_available_q << 1) >> (push_age_check_available__w1 + 1)) & 1) == 0))
   half_full_o = unsigned((entry_count_available_q <= 4) or ((((age_id_mask_available_q << 1) >> (push_age_check_available__w1 + 1)) & 1) == 0))
   replay_age_o = replay_age_o__w1
@@ -2165,6 +2181,6 @@ pub mod minion_dcache_replay_queue::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   replay_req_o.uc_load_2nd = `replay_req_o__bpo.uc_load_2nd`
   replay_req_o.vm_sel = `replay_req_o__bpo.vm_sel`
   replay_uc_ok_o = replay_uc_ok_o__w1
-  scoreboard_o.dest = t3857
+  scoreboard_o.dest = t3961
   scoreboard_o.valid = `scoreboard_o__bpo.valid__w7`
 }
