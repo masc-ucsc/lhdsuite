@@ -1,0 +1,188 @@
+const Adder_2 = import("Adder_2.Adder_2")
+const FarPathF32WidenF16MixedAdderPipeline = import("FarPathF32WidenF16MixedAdderPipeline.FarPathF32WidenF16MixedAdderPipeline")
+const FarShiftRightWithMuxInvFirst_2 = import("FarShiftRightWithMuxInvFirst_2.FarShiftRightWithMuxInvFirst_2")
+
+pub mod FarPathF32WidenF16MixedPipeline::[timecheck=false](clock:u1, io_fire:u1, io_fp_a:u32, io_fp_b:u32, io_is_sub:u1, io_round_mode:u3, io_res_is_f32:u1) -> (io_fp_c:u32@[], io_fflags:u5@[], io_absEaSubEb:u8@[], io_isEfp_bGreater:u1@[]) {
+  wire io:(fire:u1, fp_a:u32, fp_b:u32, fp_c:u32, is_sub:u1, round_mode:u3, fflags:u5, absEaSubEb:u8, res_is_f32:u1, isEfp_bGreater:u1) = nil
+  mut _lgs_normal_reg_T_4:u2 = 0
+  mut _mux_64:u2 = 0
+  mut _mux_65:u1 = 0
+  mut _mux_66:u3 = 0
+  mut _mux_70:u1 = 0
+  reg res_is_f32_reg:u1
+  reg RNE_reg:u1
+  reg RTZ_reg:u1
+  reg RDN_reg:u1
+  reg RUP_reg:u1
+  reg RMM_reg:u1
+  reg lgs_normal_reg_r:u2
+  reg far_sign_result_reg:u1
+  reg far_case_normal_round_up_reg_r:u1
+  reg grs_overflow_reg:u3
+  reg far_case_overflow_round_up_reg_r:u1
+  reg far_exponent_result_reg_r:u1
+  reg far_exponent_result_reg_r_1:u8
+  reg far_exponent_result_reg_r_2:u8
+  reg OF_reg_r:u1
+  wire _U_FS1_io_result:u25
+  wire _U_FS0_io_result:u25
+  wire _U_far_rshift_2_io_result:u52
+  wire _U_far_rshift_1_io_result:u52
+  wire _U_Efp_bSubEfp_a_io_c:u8
+  wire _U_Efp_aSubEfp_b_io_c:u8
+  const _far_case_overflow_round_up_reg_T_13__w1 = RDN_reg & far_sign_result_reg & 1
+  mut _mux_1:u31 = if ((((RTZ_reg | (RDN_reg & (~far_sign_result_reg) & 1 & 1)) & 1) | (RUP_reg & far_sign_result_reg & 1)) & 1) != 0 { 0x7f7fffff } else { 0x7f800000 }
+  const fp_a_sign__w1 = (io.fp_a >> 31) & 1
+  const efficient_fp_b_sign__w1 = (((io.fp_b >> 31) & 1) ^ io.is_sub) & 1
+  const EOP__w1 = (fp_a_sign__w1 ^ efficient_fp_b_sign__w1) & 1
+  const fp_a_mantissa__w1 = io.fp_a#[0..=22]
+  const fp_b_mantissa__w1 = io.fp_b#[0..=22]
+  const Efp_a__w1 = io.fp_a#[23..=30]
+  const Efp_b__w1 = io.fp_b#[23..=30]
+  const Efp_a_is_not_zero__w1 = unsigned(Efp_a__w1 != 0)
+  const Efp_b_is_not_zero__w1 = unsigned(Efp_b__w1 != 0)
+  const _GEN__w1 = ((Efp_a__w1 & 1) | ((~Efp_a_is_not_zero__w1) & 1)) & 1
+  const _GEN_0__w1 = ((Efp_b__w1 & 1) | ((~Efp_b_is_not_zero__w1) & 1)) & 1
+  const isEfp_bGreater__w1 = unsigned(Efp_b__w1 > Efp_a__w1)
+  mut _mux_11:u8 = if Efp_a_is_not_zero__w1 != 0 { (Efp_a__w1 - 1)#[0..=7] } else { 0 }
+  mut _mux_12:u8 = if Efp_b_is_not_zero__w1 != 0 { (Efp_b__w1 - 1)#[0..=7] } else { 0 }
+  mut _mux_13:u8 = if isEfp_bGreater__w1 != 0 { _U_Efp_bSubEfp_a_io_c } else { _U_Efp_aSubEfp_b_io_c }
+  const absEaSubEb__w1 = _mux_13
+  const significand_fp_a__w1 = ((Efp_a_is_not_zero__w1 & 1) << 23) | fp_a_mantissa__w1
+  const significand_fp_b__w1 = ((Efp_b_is_not_zero__w1 & 1) << 23) | fp_b_mantissa__w1
+  mut _mux_14:u8 = if isEfp_bGreater__w1 != 0 { Efp_b__w1 } else { Efp_a__w1 }
+  const E_greater__w1 = _mux_14
+  mut _mux_15:u8 = if EOP__w1 != 0 { (E_greater__w1 - 1)#[0..=7] } else { E_greater__w1 }
+  const EA__w1 = _mux_15
+  const EA_add1__w1 = (EA__w1 + 1)#[0..=7]
+  mut _mux_16:u24 = if isEfp_bGreater__w1 != 0 { significand_fp_b__w1 } else { significand_fp_a__w1 }
+  const greaterSignificand__w1 = _mux_16
+  mut _mux_17:u24 = if isEfp_bGreater__w1 != 0 { significand_fp_a__w1 } else { significand_fp_b__w1 }
+  mut _mux_18:u25 = if EOP__w1 != 0 { greaterSignificand__w1 << 1 } else { greaterSignificand__w1 }
+  const A__w1 = _mux_18
+  mut _mux_19:u52 = if EOP__w1 != 0 { ((~significand_fp_b__w1)#[0..=23] << 28) | 0xfffffff } else { significand_fp_b__w1 << 27 }
+  mut _mux_20:u52 = if EOP__w1 != 0 { ((~significand_fp_a__w1)#[0..=23] << 28) | 0xfffffff } else { significand_fp_a__w1 << 27 }
+  mut _mux_21:u52 = if isEfp_bGreater__w1 != 0 { _U_far_rshift_2_io_result } else { _U_far_rshift_1_io_result }
+  const far_rshift_widen_result__w1 = _mux_21
+  mut _mux_24:u1 = if io.res_is_f32 != 0 { unsigned(absEaSubEb__w1 > 27) & 1 } else { unsigned(absEaSubEb__w1 > 14) & 1 }
+  const absEaSubEb_is_greater__w1 = _mux_24
+  mut _rep_25:u25 = if (EOP__w1 & 1) != 0 { 0x1ffffff } else { 0 }
+  mut _mux_26:u25 = if absEaSubEb_is_greater__w1 != 0 { _rep_25 } else { far_rshift_widen_result__w1#[27..=51] }
+  const B__w1 = _mux_26
+  mut _mux_27:u1 = if io.res_is_f32 != 0 { (~((far_rshift_widen_result__w1 >> 26) & 1)) & 1 } else { (~((far_rshift_widen_result__w1 >> 39) & 1)) & 1 }
+  mut _mux_28:u1 = if io.res_is_f32 != 0 { (far_rshift_widen_result__w1 >> 26) & 1 } else { (far_rshift_widen_result__w1 >> 39) & 1 }
+  mut _mux_29:u1 = if EOP__w1 != 0 { _mux_27 & 1 } else { _mux_28 & 1 }
+  const B_guard_normal__w1 = (~absEaSubEb_is_greater__w1) & 1 & _mux_29 & 1
+  mut _mux_30:u1 = if io.res_is_f32 != 0 { (~((far_rshift_widen_result__w1 >> 25) & 1)) & 1 } else { (~((far_rshift_widen_result__w1 >> 38) & 1)) & 1 }
+  mut _mux_31:u1 = if io.res_is_f32 != 0 { (far_rshift_widen_result__w1 >> 25) & 1 } else { (far_rshift_widen_result__w1 >> 38) & 1 }
+  mut _mux_32:u1 = if EOP__w1 != 0 { _mux_30 & 1 } else { _mux_31 & 1 }
+  mut _mux_35:u1 = if io.res_is_f32 != 0 { unsigned(far_rshift_widen_result__w1#[0..=24] != 0x1ffffff) & 1 } else { unsigned(far_rshift_widen_result__w1#[0..=37] != 0x3fffffffff) & 1 }
+  mut _mux_38:u1 = if io.res_is_f32 != 0 { unsigned(far_rshift_widen_result__w1#[0..=24] != 0) & 1 } else { unsigned(far_rshift_widen_result__w1#[0..=37] != 0) & 1 }
+  mut _mux_39:u1 = if EOP__w1 != 0 { _mux_35 & 1 } else { _mux_38 & 1 }
+  mut _mux_41:u1 = if absEaSubEb_is_greater__w1 != 0 { unsigned(_mux_17 != 0) & 1 } else { _mux_39 & 1 }
+  const _GEN_1__w1 = (((~absEaSubEb_is_greater__w1) & 1 & _mux_32 & 1) | _mux_41) & 1
+  const B_rsticky_normal__w1 = _GEN_1__w1
+  mut _mux_42:u1 = if io.res_is_f32 != 0 { (~((far_rshift_widen_result__w1 >> 27) & 1)) & 1 } else { (~((far_rshift_widen_result__w1 >> 40) & 1)) & 1 }
+  mut _mux_43:u1 = if io.res_is_f32 != 0 { (far_rshift_widen_result__w1 >> 27) & 1 } else { (far_rshift_widen_result__w1 >> 40) & 1 }
+  mut _mux_44:u1 = if EOP__w1 != 0 { _mux_42 & 1 } else { _mux_43 & 1 }
+  mut _mux_45:u15 = if io.res_is_f32 != 0 { 2 } else { 0x4000 }
+  mut _mux_46:u1 = if res_is_f32_reg != 0 { _U_FS0_io_result & 1 } else { (_U_FS0_io_result >> 13) & 1 }
+  const FS0_0_reg__w1 = _mux_46
+  mut _mux_47:u1 = if res_is_f32_reg != 0 { (_U_FS0_io_result >> 1) & 1 } else { (_U_FS0_io_result >> 14) & 1 }
+  const FS0_1_reg__w1 = _mux_47
+  const far_case_overflow_reg__w1 = (_U_FS0_io_result >> 24) & 1
+  const far_case_normal_reg__w1 = (~far_case_overflow_reg__w1) & 1
+  const lgs_normal_reg__w1 = ((FS0_0_reg__w1 & 1) << 2) | lgs_normal_reg_r
+  const far_case_normal_round_up_reg__w1 = ((((((((far_case_normal_round_up_reg_r & (~((lgs_normal_reg__w1 >> 1) & 1)) & 1 & 1 & (~(lgs_normal_reg__w1 & 1)) & 1 & 1) | (RNE_reg & (lgs_normal_reg__w1 >> 1) & 1 & 1 & (((lgs_normal_reg__w1 >> 2) & 1) | (lgs_normal_reg__w1 & 1)) & 1 & 1)) & 1) | (_far_case_overflow_round_up_reg_T_13__w1 & (((lgs_normal_reg__w1 >> 1) & 1) | (lgs_normal_reg__w1 & 1)) & 1 & 1)) & 1) | (RUP_reg & (~far_sign_result_reg) & 1 & 1 & (((lgs_normal_reg__w1 >> 1) & 1) | (lgs_normal_reg__w1 & 1)) & 1 & 1)) & 1) | (RMM_reg & (lgs_normal_reg__w1 >> 1) & 1 & 1)) & 1
+  mut _mux_48:u1 = if io.res_is_f32 != 0 { A__w1 & 1 } else { (A__w1 >> 13) & 1 }
+  const A_0__w1 = _mux_48
+  mut _mux_49:u1 = if io.res_is_f32 != 0 { B__w1 & 1 } else { (B__w1 >> 13) & 1 }
+  const B_0__w1 = _mux_49
+  const lgs_overflow_reg__w1 = ((FS0_1_reg__w1 & 1) << 2) | (((grs_overflow_reg >> 2) & 1) << 1) | ((((grs_overflow_reg >> 1) & 1) | (grs_overflow_reg & 1)) & 1)
+  const far_case_overflow_round_up_reg__w1 = ((((((((far_case_overflow_round_up_reg_r & (~((lgs_overflow_reg__w1 >> 1) & 1)) & 1 & 1 & (~(lgs_overflow_reg__w1 & 1)) & 1 & 1) | (RNE_reg & (lgs_overflow_reg__w1 >> 1) & 1 & 1 & (((lgs_overflow_reg__w1 >> 2) & 1) | (lgs_overflow_reg__w1 & 1)) & 1 & 1)) & 1) | (_far_case_overflow_round_up_reg_T_13__w1 & (((lgs_overflow_reg__w1 >> 1) & 1) | (lgs_overflow_reg__w1 & 1)) & 1 & 1)) & 1) | (RUP_reg & (~far_sign_result_reg) & 1 & 1 & (((lgs_overflow_reg__w1 >> 1) & 1) | (lgs_overflow_reg__w1 & 1)) & 1 & 1)) & 1) | (RMM_reg & (lgs_overflow_reg__w1 >> 1) & 1 & 1)) & 1
+  mut _mux_50:u8 = if ((((far_case_overflow_reg__w1 | ((_U_FS1_io_result >> 24) & 1 & FS0_0_reg__w1 & 1 & far_case_normal_round_up_reg__w1 & 1)) & 1) | (far_exponent_result_reg_r & (_U_FS0_io_result >> 23) & 1 & 1)) & 1) != 0 { far_exponent_result_reg_r_1 } else { far_exponent_result_reg_r_2 }
+  const OF_reg__w1 = OF_reg_r & (far_case_overflow_reg__w1 | ((_U_FS1_io_result >> 24) & 1 & FS0_0_reg__w1 & 1 & far_case_normal_round_up_reg__w1 & 1)) & 1 & 1
+  mut _mux_53:u1 = if far_case_normal_reg__w1 != 0 { unsigned(lgs_normal_reg__w1#[0..=1] != 0) & 1 } else { unsigned(lgs_overflow_reg__w1#[0..=1] != 0) & 1 }
+  mut _mux_54:u23 = if (far_case_normal_reg__w1 & ((((~FS0_0_reg__w1) & 1 & far_case_normal_round_up_reg__w1 & 1) | ((~far_case_normal_round_up_reg__w1) & 1)) & 1) & 1) != 0 { (_U_FS0_io_result#[14..=22] << 14) | (((((~res_is_f32_reg) & 1 & far_case_normal_round_up_reg__w1 & 1) ^ ((_U_FS0_io_result >> 13) & 1)) & 1) << 13) | (_U_FS0_io_result#[1..=12] << 1) | ((FS0_0_reg__w1 ^ far_case_normal_round_up_reg__w1) & 1) } else { 0 }
+  mut _mux_55:u23 = if (far_case_normal_reg__w1 & (FS0_0_reg__w1 & far_case_normal_round_up_reg__w1 & 1) & 1) != 0 { (_U_FS1_io_result#[14..=22] << 14) | ((res_is_f32_reg & (_U_FS1_io_result >> 13) & 1 & 1) << 13) | (_U_FS1_io_result#[1..=12] << 1) } else { 0 }
+  mut _mux_56:u23 = if (far_case_overflow_reg__w1 & ((((~FS0_1_reg__w1) & 1 & far_case_overflow_round_up_reg__w1 & 1) | ((~far_case_overflow_round_up_reg__w1) & 1)) & 1) & 1) != 0 { (_U_FS0_io_result#[15..=23] << 14) | (((((~res_is_f32_reg) & 1 & far_case_overflow_round_up_reg__w1 & 1) ^ ((_U_FS0_io_result >> 14) & 1)) & 1) << 13) | (_U_FS0_io_result#[2..=13] << 1) | ((FS0_1_reg__w1 ^ far_case_overflow_round_up_reg__w1) & 1) } else { 0 }
+  mut _mux_57:u23 = if (far_case_overflow_reg__w1 & (FS0_1_reg__w1 & far_case_overflow_round_up_reg__w1 & 1) & 1) != 0 { _U_FS1_io_result#[1..=23] } else { 0 }
+  mut _mux_58:u32 = if OF_reg__w1 != 0 { ((far_sign_result_reg & 1) << 31) | _mux_1 } else { ((far_sign_result_reg & 1) << 31) | (_mux_50 << 23) | (((_mux_54 | _mux_55) | _mux_56) | _mux_57) }
+  io.fire = io_fire & 1
+  io.fp_a = io_fp_a
+  io.fp_b = io_fp_b
+  io.fp_c = _mux_58
+  io.is_sub = io_is_sub & 1
+  io.round_mode = io_round_mode
+  io.fflags = ((OF_reg__w1 & 1) << 2) | (((_mux_53 | OF_reg__w1) & 1) & 1)
+  io.absEaSubEb = absEaSubEb__w1
+  io.res_is_f32 = io_res_is_f32 & 1
+  io.isEfp_bGreater = isEfp_bGreater__w1 & 1
+  if io.fire != 0 {
+    res_is_f32_reg = io.res_is_f32
+  }
+  if io.fire != 0 {
+    RNE_reg = unsigned(io.round_mode == 0)
+  }
+  if io.fire != 0 {
+    RTZ_reg = unsigned(io.round_mode == 1)
+  }
+  if io.fire != 0 {
+    RDN_reg = unsigned(io.round_mode == 2)
+  }
+  if io.fire != 0 {
+    RUP_reg = unsigned(io.round_mode == 3)
+  }
+  if io.fire != 0 {
+    RMM_reg = unsigned(io.round_mode == 4)
+  }
+  if io.fire != 0 {
+    _lgs_normal_reg_T_4 = 0ub??
+    _lgs_normal_reg_T_4 = ((B_guard_normal__w1 & 1) << 1) | (B_rsticky_normal__w1 & 1)
+    _mux_64 = if EOP__w1 != 0 { ((~_lgs_normal_reg_T_4)#[0..=1] + 1)#[0..=1] } else { _lgs_normal_reg_T_4 }
+    lgs_normal_reg_r = _mux_64
+  }
+  if io.fire != 0 {
+    _mux_65 = if isEfp_bGreater__w1 != 0 { efficient_fp_b_sign__w1 & 1 } else { fp_a_sign__w1 & 1 }
+    far_sign_result_reg = _mux_65
+  }
+  if io.fire != 0 {
+    far_case_normal_round_up_reg_r = EOP__w1
+  }
+  if io.fire != 0 {
+    _mux_66 = if EOP__w1 != 0 { (((A_0__w1 & 1) << 2) - ((((~B_0__w1) & 1) << 2) | ((B_guard_normal__w1 & 1) << 1) | (B_rsticky_normal__w1 & 1)))#[0..=2] } else { (((A_0__w1 ^ B_0__w1) & 1) << 2) | ((B_guard_normal__w1 & 1) << 1) | (B_rsticky_normal__w1 & 1) }
+    grs_overflow_reg = _mux_66
+  }
+  if io.fire != 0 {
+    far_case_overflow_round_up_reg_r = EOP__w1
+  }
+  if io.fire != 0 {
+    far_exponent_result_reg_r = unsigned(EA__w1 == 0)
+  }
+  if io.fire != 0 {
+    far_exponent_result_reg_r_1 = EA_add1__w1
+  }
+  if io.fire != 0 {
+    far_exponent_result_reg_r_2 = EA__w1
+  }
+  if io.fire != 0 {
+    _mux_70 = if io.res_is_f32 != 0 { unsigned(EA_add1__w1 == 0xff) & 1 } else { unsigned(EA_add1__w1#[0..=4] == 31) & 1 }
+    OF_reg_r = _mux_70
+  }
+  mut U_Efp_aSubEfp_b = Adder_2::[name=U_Efp_aSubEfp_b](io_a = (Efp_a__w1#[1..=7] << 1) | (_GEN__w1 & 1), io_b = (Efp_b__w1#[1..=7] << 1) | (_GEN_0__w1 & 1))
+  _U_Efp_aSubEfp_b_io_c = U_Efp_aSubEfp_b
+  mut U_Efp_bSubEfp_a = Adder_2::[name=U_Efp_bSubEfp_a](io_a = (Efp_b__w1#[1..=7] << 1) | (_GEN_0__w1 & 1), io_b = (Efp_a__w1#[1..=7] << 1) | (_GEN__w1 & 1))
+  _U_Efp_bSubEfp_a_io_c = U_Efp_bSubEfp_a
+  mut U_far_rshift_1 = FarShiftRightWithMuxInvFirst_2::[name=U_far_rshift_1](io_src = _mux_19, io_shiftValue = _U_Efp_aSubEfp_b_io_c#[0..=4], io_EOP = EOP__w1)
+  _U_far_rshift_1_io_result = U_far_rshift_1
+  mut U_far_rshift_2 = FarShiftRightWithMuxInvFirst_2::[name=U_far_rshift_2](io_src = _mux_20, io_shiftValue = _U_Efp_bSubEfp_a_io_c#[0..=4], io_EOP = EOP__w1)
+  _U_far_rshift_2_io_result = U_far_rshift_2
+  mut U_FS0 = FarPathF32WidenF16MixedAdderPipeline::[name=U_FS0](clock = clock, io_fire = io.fire, io_A = A__w1, io_B = B__w1)
+  _U_FS0_io_result = U_FS0
+  mut U_FS1 = FarPathF32WidenF16MixedAdderPipeline::[name=U_FS1](clock = clock, io_fire = io.fire, io_A = (A__w1 + _mux_45)#[0..=24], io_B = B__w1)
+  _U_FS1_io_result = U_FS1
+  io_fp_c = io.fp_c
+  io_fflags = io.fflags
+  io_absEaSubEb = io.absEaSubEb
+  io_isEfp_bGreater = io.isEfp_bGreater
+}

@@ -1,0 +1,477 @@
+const ShiftLeftPriorityWithLZDResult = import("ShiftLeftPriorityWithLZDResult.ShiftLeftPriorityWithLZDResult")
+const fpdiv_r64_block = import("fpdiv_r64_block.fpdiv_r64_block")
+
+pub mod FloatDividerR64::[timecheck=false](clock:u1, reset:u1, io_start_valid_i:u1, io_flush_i:u1, io_fp_format_i:u2, io_opa_i:u64, io_opb_i:u64, io_rm_i:u3, io_fp_aIsFpCanonicalNAN:u1, io_fp_bIsFpCanonicalNAN:u1, io_finish_ready_i:u1, io_wakeupSuccess:u1) -> (io_start_ready_o:u1@[], io_finish_valid_o:u1@[], io_fpdiv_res_o:u64@[], io_fflags_o:u5@[], io_outValidAhead3Cycle:u1@[]) {
+  wire io:(start_valid_i:u1, start_ready_o:u1, flush_i:u1, fp_format_i:u2, opa_i:u64, opb_i:u64, rm_i:u3, is_vec_i:u1, fp_aIsFpCanonicalNAN:u1, fp_bIsFpCanonicalNAN:u1, finish_valid_o:u1, finish_ready_i:u1, fpdiv_res_o:u64, fflags_o:u5, outValidAhead3Cycle:u1, wakeupSuccess:u1) = nil
+  reg fsm_q:u6:[init=1, reset_pin=ref reset, async=true]
+  reg opb_is_power_of_2_q:u1
+  reg wakeupSuccessReg:u1:[init=1, reset_pin=ref reset, async=true]
+  reg outValidBlock:u2
+  reg iter_num_q:u4
+  reg fp_format_onehot_q:u3
+  reg rm_q:u3
+  reg out_sign_q:u1
+  reg res_is_nan_q:u1
+  reg res_is_inf_q:u1
+  reg res_is_exact_zero_q:u1
+  reg op_invalid_div_q:u1
+  reg divided_by_zero_q:u1
+  reg out_exp_diff_q_f64_0:u13
+  reg quo_iter_q_f64_0:u54
+  reg quo_m1_iter_q_f64_0:u54
+  reg frac_divisor_q_60bit:u60
+  reg nr_f_r_6b_for_nxt_cycle_s0_qds_q_f64_0:u6
+  reg nr_f_r_7b_for_nxt_cycle_s1_qds_q_f64_0:u7
+  reg f_r_s_q_72bit:u72
+  reg f_r_c_q_72bit:u72
+  reg prev_quo_dig_q_f64_0:u5
+  wire _U_Left_Shift_opb_f64_0_io_lshift_result:u53
+  wire _U_Left_Shift_opb_f64_0_io_lzd_result:u6
+  wire _U_Left_Shift_opa_f64_0_io_lshift_result:u53
+  wire _U_Left_Shift_opa_f64_0_io_lzd_result:u6
+  wire init_cycles:u3
+  wire opb_is_power_of_2_f64_0:u1
+  wire early_finish:u1
+  wire opa_l_shift_num_f64_0:u6
+  wire opb_l_shift_num_f64_0:u6
+  wire sticky_without_rem_f64_0:u54
+  wire nxt_quo_iter_f64_0:u168
+  wire nxt_quo_m1_iter_f64_0:u168
+  wire correct_quo_r_shifted_f64_0:u54
+  wire out_frac_post_0_f64_0:u52
+  const fp_format_q_is_fp16__w1 = fp_format_onehot_q & 1
+  const fp_format_q_is_fp32__w1 = (fp_format_onehot_q >> 1) & 1
+  const res_is_denormal_f64_0__w1 = (unsigned(out_exp_diff_q_f64_0#[0..=11] == 0) | ((out_exp_diff_q_f64_0 >> 12) & 1)) & 1
+  const a_frac_lt_b_frac_real_f64_0__w1 = iter_num_q & 1
+  const frac_divisor_q_f64_0__w1 = frac_divisor_q_60bit#[3..=59]
+  const scaled_a_frac_f64_0__w1 = (quo_m1_iter_q_f64_0#[0..=2] << 54) | quo_iter_q_f64_0
+  mut _mux_4:u58 = if a_frac_lt_b_frac_real_f64_0__w1 != 0 { scaled_a_frac_f64_0__w1 << 1 } else { scaled_a_frac_f64_0__w1 }
+  const f_r_s_iter_init_pre_f64_0__w1 = _mux_4
+  const f_r_s_for_integer_quo_f64_0__w1 = f_r_s_iter_init_pre_f64_0__w1#[53..=57]
+  const integer_quo_is_pos_2_f64_0__w1 = (((f_r_s_for_integer_quo_f64_0__w1 >> 4) & 1) | unsigned(f_r_s_for_integer_quo_f64_0__w1#[2..=3] == 3)) & 1
+  const scaled_b_frac_ext_f64_0__w1 = frac_divisor_q_f64_0__w1 << 1
+  const f_r_s_iter_init_f64_0__w1 = (f_r_s_iter_init_pre_f64_0__w1#[0..=58] << 1) | 1
+  mut _mux_6:u60 = if integer_quo_is_pos_2_f64_0__w1 != 0 { ((~scaled_b_frac_ext_f64_0__w1#[0..=58])#[0..=58] << 1) | 1 } else { (~scaled_b_frac_ext_f64_0__w1)#[0..=59] }
+  const f_r_c_iter_init_f64_0__w1 = _mux_6
+  mut _mux_7:u57 = if ((fsm_q >> 2) & 1) != 0 { frac_divisor_q_f64_0__w1 } else { 0 }
+  mut _mux_9:u4 = if fp_format_q_is_fp32__w1 != 0 { 3 } else { 8 }
+  mut _mux_10:u4 = if fp_format_q_is_fp16__w1 != 0 { 1 } else { _mux_9 }
+  mut _mux_11:u4 = if ((fsm_q >> 2) & 1) != 0 { _mux_10 } else { (iter_num_q - 1)#[0..=3] }
+  mut _mux_12:u4 = if ((fsm_q >> 1) & 1) != 0 { (unsigned(quo_iter_q_f64_0#[0..=51] < quo_m1_iter_q_f64_0#[0..=51]) & 1) } else { _mux_11 }
+  const nr_f_r_s_f64_0__w1 = f_r_s_q_72bit#[12..=71]
+  const nr_f_r_c_f64_0__w1 = f_r_c_q_72bit#[12..=71]
+  const nr_f_r_f64_0__w1 = (nr_f_r_s_f64_0__w1 + nr_f_r_c_f64_0__w1)#[0..=59]
+  const rem_is_not_zero_f64_0__w1 = (~opb_is_power_of_2_q) & 1 & (((nr_f_r_f64_0__w1 >> 59) & 1) | unsigned((nr_f_r_s_f64_0__w1#[1..=58] ^ nr_f_r_c_f64_0__w1#[1..=58]) != (nr_f_r_s_f64_0__w1#[0..=57] | nr_f_r_c_f64_0__w1#[0..=57]))) & 1 & 1
+  const r_shift_num_pre_f64_0__w1 = (1 - out_exp_diff_q_f64_0)#[0..=12]
+  mut _mux_14:u6 = if (((r_shift_num_pre_f64_0__w1 - 54)#[0..=12] >> 12) & 1) != 0 { r_shift_num_pre_f64_0__w1#[0..=5] } else { 54 }
+  mut _mux_15:u6 = if ((r_shift_num_pre_f64_0__w1 >> 12) & 1) != 0 { 0 } else { _mux_14 }
+  const _GEN_28__w1 = _mux_15
+  const select_quo_m1_f64_0__w1 = (nr_f_r_f64_0__w1 >> 59) & 1 & (~opb_is_power_of_2_q) & 1 & 1
+  mut _mux_17:u1 = if ((((fsm_q >> 4) & 1) | ((~res_is_denormal_f64_0__w1) & 1)) & 1) != 0 { rem_is_not_zero_f64_0__w1 & 1 } else { unsigned(((((quo_m1_iter_q_f64_0 >> 53) & 1) << 57) | frac_divisor_q_f64_0__w1) != 0) & 1 }
+  const sticky_bit_quo_f64_0__w1 = _mux_17
+  const _overflow_to_inf_f64_0_T__w1 = unsigned(rm_q == 0)
+  const _overflow_to_inf_f64_0_T_7__w1 = unsigned(rm_q == 2)
+  const _overflow_to_inf_f64_0_T_3__w1 = unsigned(rm_q == 3)
+  const _overflow_to_inf_f64_0_T_1__w1 = unsigned(rm_q == 4)
+  mut _mux_22:u12 = if fp_format_q_is_fp32__w1 != 0 { 0xff } else { 0x7ff }
+  mut _mux_23:u12 = if fp_format_q_is_fp16__w1 != 0 { 31 } else { _mux_22 }
+  const overflow_f64_0__w1 = unsigned(out_exp_diff_q_f64_0#[0..=11] >= _mux_23)
+  const overflow_to_inf_f64_0__w1 = (((((_overflow_to_inf_f64_0_T__w1 | _overflow_to_inf_f64_0_T_1__w1) & 1) | (_overflow_to_inf_f64_0_T_3__w1 & (~out_sign_q) & 1 & 1)) & 1) | (_overflow_to_inf_f64_0_T_7__w1 & out_sign_q & 1)) & 1
+  const _out_frac_post_0_f64_0_T__w1 = overflow_f64_0__w1 & overflow_to_inf_f64_0__w1 & 1
+  mut _mux_25:u5 = if (overflow_f64_0__w1 & (~overflow_to_inf_f64_0__w1) & 1 & 1) != 0 { 30 } else { out_exp_diff_q_f64_0#[0..=4] }
+  mut _mux_26:u5 = if _out_frac_post_0_f64_0_T__w1 != 0 { 31 } else { _mux_25 }
+  const out_exp_post_0_f16_0__w1 = _mux_26
+  mut _mux_27:u8 = if (overflow_f64_0__w1 & (~overflow_to_inf_f64_0__w1) & 1 & 1) != 0 { 0xfe } else { out_exp_diff_q_f64_0#[0..=7] }
+  mut _mux_28:u8 = if _out_frac_post_0_f64_0_T__w1 != 0 { 0xff } else { _mux_27 }
+  const out_exp_post_0_f32_0__w1 = _mux_28
+  mut _mux_29:u11 = if (overflow_f64_0__w1 & (~overflow_to_inf_f64_0__w1) & 1 & 1) != 0 { 0x7fe } else { out_exp_diff_q_f64_0#[0..=10] }
+  mut _mux_30:u11 = if _out_frac_post_0_f64_0_T__w1 != 0 { 0x7ff } else { _mux_29 }
+  const out_exp_post_0_f64_0__w1 = _mux_30
+  const _out_frac_post_1_f64_0_T__w1 = (res_is_denormal_f64_0__w1 | res_is_nan_q) & 1
+  const _out_exp_post_1_f64_0_T_3__w1 = (res_is_nan_q | res_is_inf_q) & 1
+  const _out_frac_post_1_f64_0_T_4__w1 = (res_is_inf_q | res_is_exact_zero_q) & 1
+  const fflags_overflow__w1 = (((fsm_q >> 4) & 1 & overflow_f64_0__w1 & 1) | ((fsm_q >> 5) & 1 & (~res_is_denormal_f64_0__w1) & 1 & 1 & overflow_f64_0__w1 & 1 & (~res_is_exact_zero_q) & 1 & 1 & (~res_is_inf_q) & 1 & 1 & (~res_is_nan_q) & 1 & 1)) & 1
+  mut u_r64_block_vector = fpdiv_r64_block::[name=u_r64_block_vector](io_fp_format_onehot = ((((fp_format_onehot_q >> 2) & 1) & 1) << 2) | ((fp_format_q_is_fp32__w1 & 1) << 1) | (fp_format_q_is_fp16__w1 & 1), io_f_r_s_i = f_r_s_q_72bit, io_f_r_c_i = f_r_c_q_72bit, io_divisor_i = frac_divisor_q_60bit, io_nr_f_r_6b_for_nxt_cycle_s0_qds_i = nr_f_r_6b_for_nxt_cycle_s0_qds_q_f64_0, io_nr_f_r_7b_for_nxt_cycle_s1_qds_i = nr_f_r_7b_for_nxt_cycle_s1_qds_q_f64_0)
+  mut _mux_31:u6 = if unsigned(iter_num_q == 0) != 0 { 16 } else { 8 }
+  mut _mux_34:u1 = if res_is_denormal_f64_0__w1 != 0 { unsigned(iter_num_q == 1) & 1 } else { unsigned(iter_num_q == 2) & 1 }
+  mut _mux_35:u72 = if ((fsm_q >> 2) & 1) != 0 { f_r_s_iter_init_f64_0__w1 << 12 } else { u_r64_block_vector.io_nxt_f_r_s_o#[144..=215] }
+  mut _mux_36:u72 = if ((fsm_q >> 2) & 1) != 0 { f_r_c_iter_init_f64_0__w1 << 12 } else { u_r64_block_vector.io_nxt_f_r_c_o#[144..=215] }
+  mut _mux_37:u6 = if ((fsm_q >> 2) & 1) != 0 { (f_r_s_iter_init_f64_0__w1#[52..=57] + f_r_c_iter_init_f64_0__w1#[52..=57])#[0..=5] } else { u_r64_block_vector.io_adder_6b_res_for_nxt_cycle_s0_qds_o#[0..=5] }
+  mut _mux_38:u7 = if ((fsm_q >> 2) & 1) != 0 { (f_r_s_iter_init_f64_0__w1#[49..=55] + f_r_c_iter_init_f64_0__w1#[49..=55])#[0..=6] } else { u_r64_block_vector.io_adder_7b_res_for_nxt_cycle_s1_qds_o#[0..=6] }
+  mut _mux_39:u5 = if ((fsm_q >> 2) & 1) != 0 { (((~integer_quo_is_pos_2_f64_0__w1) & 1) << 1) | (integer_quo_is_pos_2_f64_0__w1 & 1) } else { u_r64_block_vector.io_nxt_quo_dig_o_0#[10..=14] }
+  mut _rep_40:u56 = if (u_r64_block_vector.io_nxt_quo_dig_o_0#[5..=9] & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_41:u56 = if (u_r64_block_vector.io_nxt_quo_dig_o_0#[0..=4] & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_42:u56 = if (prev_quo_dig_q_f64_0 & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_43:u56 = if ((u_r64_block_vector.io_nxt_quo_dig_o_0#[5..=9] >> 1) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_44:u56 = if ((u_r64_block_vector.io_nxt_quo_dig_o_0#[0..=4] >> 1) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_45:u56 = if ((prev_quo_dig_q_f64_0 >> 1) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_46:u56 = if ((u_r64_block_vector.io_nxt_quo_dig_o_0#[5..=9] >> 2) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_47:u56 = if ((u_r64_block_vector.io_nxt_quo_dig_o_0#[0..=4] >> 2) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_48:u56 = if ((prev_quo_dig_q_f64_0 >> 2) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_49:u56 = if ((u_r64_block_vector.io_nxt_quo_dig_o_0#[5..=9] >> 3) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_50:u56 = if ((u_r64_block_vector.io_nxt_quo_dig_o_0#[0..=4] >> 3) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_51:u56 = if ((prev_quo_dig_q_f64_0 >> 3) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_52:u56 = if ((u_r64_block_vector.io_nxt_quo_dig_o_0#[5..=9] >> 4) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_53:u56 = if ((u_r64_block_vector.io_nxt_quo_dig_o_0#[0..=4] >> 4) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_54:u56 = if ((prev_quo_dig_q_f64_0 >> 4) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_55:u56 = if (u_r64_block_vector.io_nxt_quo_dig_o_0#[5..=9] & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_56:u56 = if (u_r64_block_vector.io_nxt_quo_dig_o_0#[0..=4] & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_57:u56 = if (prev_quo_dig_q_f64_0 & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_58:u56 = if ((u_r64_block_vector.io_nxt_quo_dig_o_0#[5..=9] >> 1) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_59:u56 = if ((u_r64_block_vector.io_nxt_quo_dig_o_0#[0..=4] >> 1) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_60:u56 = if ((prev_quo_dig_q_f64_0 >> 1) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_61:u56 = if ((u_r64_block_vector.io_nxt_quo_dig_o_0#[5..=9] >> 2) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_62:u56 = if ((u_r64_block_vector.io_nxt_quo_dig_o_0#[0..=4] >> 2) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_63:u56 = if ((prev_quo_dig_q_f64_0 >> 2) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_64:u56 = if ((u_r64_block_vector.io_nxt_quo_dig_o_0#[5..=9] >> 3) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_65:u56 = if ((u_r64_block_vector.io_nxt_quo_dig_o_0#[0..=4] >> 3) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_66:u56 = if ((prev_quo_dig_q_f64_0 >> 3) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_67:u56 = if ((u_r64_block_vector.io_nxt_quo_dig_o_0#[5..=9] >> 4) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_68:u56 = if ((u_r64_block_vector.io_nxt_quo_dig_o_0#[0..=4] >> 4) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_69:u56 = if ((prev_quo_dig_q_f64_0 >> 4) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _mux_70:u60 = if ((fsm_q >> 2) & 1) != 0 { f_r_s_iter_init_f64_0__w1 } else { ((u_r64_block_vector.io_nxt_f_r_s_o#[144..=215]#[12..=71] << 120) | (u_r64_block_vector.io_nxt_f_r_s_o#[72..=143]#[12..=71] << 60) | u_r64_block_vector.io_nxt_f_r_s_o#[0..=71]#[12..=71])#[120..=179] }
+  mut _mux_71:u60 = if ((fsm_q >> 2) & 1) != 0 { f_r_c_iter_init_f64_0__w1 } else { ((u_r64_block_vector.io_nxt_f_r_c_o#[144..=215]#[12..=71] << 120) | (u_r64_block_vector.io_nxt_f_r_c_o#[72..=143]#[12..=71] << 60) | u_r64_block_vector.io_nxt_f_r_c_o#[0..=71]#[12..=71])#[120..=179] }
+  const fp_format_is_fp16__w1 = unsigned(io.fp_format_i == 1)
+  const fp_format_is_fp32__w1 = unsigned(io.fp_format_i == 2)
+  const fp_format_is_fp64__w1 = unsigned(io.fp_format_i == 3)
+  mut _mux_75:u6 = if ((init_cycles >> 1) & 1) != 0 { 4 } else { 2 }
+  mut _mux_76:u6 = if opb_is_power_of_2_f64_0 != 0 { 16 } else { _mux_75 }
+  mut _mux_77:u6 = if early_finish != 0 { 32 } else { _mux_76 }
+  mut _mux_78:u6 = if io.start_valid_i != 0 { _mux_77 } else { 1 }
+  mut _mux_79:u6 = if io.finish_ready_i != 0 { 1 } else { 16 }
+  mut _mux_80:u6 = if res_is_denormal_f64_0__w1 != 0 { 32 } else { _mux_79 }
+  mut _mux_82:u6 = if ((unsigned(fsm_q != 32) | io.finish_ready_i) & 1) != 0 { 1 } else { 32 }
+  mut _mux_83:u6 = if fsm_q == 16 { _mux_80 } else { _mux_82 }
+  mut _mux_84:u6 = if fsm_q == 8 { _mux_31 } else { _mux_83 }
+  mut _mux_85:u6 = if fsm_q == 4 { 8 } else { _mux_84 }
+  mut _mux_86:u6 = if fsm_q == 2 { 4 } else { _mux_85 }
+  mut _mux_87:u6 = if fsm_q == 1 { _mux_78 } else { _mux_86 }
+  mut _mux_88:u6 = if io.flush_i != 0 { 1 } else { _mux_87 }
+  const start_handshaked__w1 = io.start_valid_i & io.start_ready_o & 1
+  const _io_outValidAhead3Cycle_T_1__w1 = (early_finish | opb_is_power_of_2_f64_0) & 1
+  mut _mux_89:u11 = if fp_format_is_fp64__w1 != 0 { io.opa_i#[52..=62] } else { 0 }
+  mut _mux_90:u11 = if fp_format_is_fp32__w1 != 0 { io.opa_i#[23..=30] } else { 0 }
+  mut _mux_91:u11 = if fp_format_is_fp16__w1 != 0 { io.opa_i#[10..=14] } else { 0 }
+  const opa_exp_f64_0__w1 = (_mux_89 | _mux_90) | _mux_91
+  mut _mux_92:u11 = if fp_format_is_fp64__w1 != 0 { io.opb_i#[52..=62] } else { 0 }
+  mut _mux_93:u11 = if fp_format_is_fp32__w1 != 0 { io.opb_i#[23..=30] } else { 0 }
+  mut _mux_94:u11 = if fp_format_is_fp16__w1 != 0 { io.opb_i#[10..=14] } else { 0 }
+  const opb_exp_f64_0__w1 = (_mux_92 | _mux_93) | _mux_94
+  const opa_exp_is_zero_f64_0__w1 = unsigned(opa_exp_f64_0__w1 == 0)
+  const opb_exp_is_zero_f64_0__w1 = unsigned(opb_exp_f64_0__w1 == 0)
+  const _init_cycles_T_1__w1 = (opa_exp_is_zero_f64_0__w1 | opb_exp_is_zero_f64_0__w1) & 1
+  init_cycles = ((_init_cycles_T_1__w1 & 1) << 2) | (((~_init_cycles_T_1__w1) & 1) << 1)
+  mut _rep_97:u11 = if (fp_format_is_fp64__w1 & 1) != 0 { 0x7ff } else { 0 }
+  const _opb_exp_is_max_f64_0_T__w1 = _rep_97
+  mut _mux_98:u11 = if fp_format_is_fp32__w1 != 0 { 0xff } else { 0 }
+  const _opb_exp_is_max_f64_0_T_1__w1 = _mux_98
+  mut _mux_99:u11 = if fp_format_is_fp16__w1 != 0 { 31 } else { 0 }
+  const _opb_exp_is_max_f64_0_T_2__w1 = _mux_99
+  const opa_exp_is_max_f64_0__w1 = unsigned(opa_exp_f64_0__w1 == ((_opb_exp_is_max_f64_0_T__w1 | _opb_exp_is_max_f64_0_T_1__w1) | _opb_exp_is_max_f64_0_T_2__w1))
+  const opb_exp_is_max_f64_0__w1 = unsigned(opb_exp_f64_0__w1 == ((_opb_exp_is_max_f64_0_T__w1 | _opb_exp_is_max_f64_0_T_1__w1) | _opb_exp_is_max_f64_0_T_2__w1))
+  mut _mux_102:u52 = if fp_format_is_fp64__w1 != 0 { io.opa_i#[0..=51] } else { 0 }
+  mut _mux_103:u52 = if fp_format_is_fp32__w1 != 0 { io.opa_i#[0..=22] << 29 } else { 0 }
+  mut _mux_104:u52 = if fp_format_is_fp16__w1 != 0 { io.opa_i#[0..=9] << 42 } else { 0 }
+  const opa_frac_f64_0__w1 = (_mux_102 | _mux_103) | _mux_104
+  const opa_frac_is_zero_f64_0__w1 = unsigned(opa_frac_f64_0__w1 == 0)
+  mut _mux_106:u52 = if fp_format_is_fp64__w1 != 0 { io.opb_i#[0..=51] } else { 0 }
+  mut _mux_107:u52 = if fp_format_is_fp32__w1 != 0 { io.opb_i#[0..=22] << 29 } else { 0 }
+  mut _mux_108:u52 = if fp_format_is_fp16__w1 != 0 { io.opb_i#[0..=9] << 42 } else { 0 }
+  const opb_frac_f64_0__w1 = (_mux_106 | _mux_107) | _mux_108
+  const opb_frac_is_zero_f64_0__w1 = unsigned(opb_frac_f64_0__w1 == 0)
+  opb_is_power_of_2_f64_0 = opb_frac_is_zero_f64_0__w1
+  const opa_is_zero_f64_0__w1 = (~io.fp_aIsFpCanonicalNAN) & 1 & opa_exp_is_zero_f64_0__w1 & 1 & opa_frac_is_zero_f64_0__w1 & 1
+  const opb_is_zero_f64_0__w1 = (~io.fp_bIsFpCanonicalNAN) & 1 & opb_exp_is_zero_f64_0__w1 & 1 & opb_frac_is_zero_f64_0__w1 & 1
+  const opa_is_inf_f64_0__w1 = (~io.fp_aIsFpCanonicalNAN) & 1 & opa_exp_is_max_f64_0__w1 & 1 & opa_frac_is_zero_f64_0__w1 & 1
+  const opb_is_inf_f64_0__w1 = (~io.fp_bIsFpCanonicalNAN) & 1 & opb_exp_is_max_f64_0__w1 & 1 & opb_frac_is_zero_f64_0__w1 & 1
+  const opa_is_snan_f64_0__w1 = (~io.fp_aIsFpCanonicalNAN) & 1 & opa_exp_is_max_f64_0__w1 & 1 & (~((opa_frac_f64_0__w1 >> 51) & 1)) & 1 & 1 & (~opa_frac_is_zero_f64_0__w1) & 1 & 1
+  const opb_is_snan_f64_0__w1 = (~io.fp_bIsFpCanonicalNAN) & 1 & opb_exp_is_max_f64_0__w1 & 1 & (~((opb_frac_f64_0__w1 >> 51) & 1)) & 1 & 1 & (~opb_frac_is_zero_f64_0__w1) & 1 & 1
+  const op_invalid_f64_0__w1 = ((((((opa_is_inf_f64_0__w1 & opb_is_inf_f64_0__w1 & 1) | (opa_is_zero_f64_0__w1 & opb_is_zero_f64_0__w1 & 1)) & 1) | opa_is_snan_f64_0__w1) & 1) | opb_is_snan_f64_0__w1) & 1
+  const res_is_nan_f64_0__w1 = (((((((io.fp_aIsFpCanonicalNAN | (opa_exp_is_max_f64_0__w1 & (opa_frac_f64_0__w1 >> 51) & 1 & 1)) & 1) | opa_is_snan_f64_0__w1) & 1) | ((((io.fp_bIsFpCanonicalNAN | (opb_exp_is_max_f64_0__w1 & (opb_frac_f64_0__w1 >> 51) & 1 & 1)) & 1) | opb_is_snan_f64_0__w1) & 1)) & 1) | op_invalid_f64_0__w1) & 1
+  const res_is_inf_f64_0__w1 = (opa_is_inf_f64_0__w1 | opb_is_zero_f64_0__w1) & 1
+  const res_is_exact_zero_f64_0__w1 = (opa_is_zero_f64_0__w1 | opb_is_inf_f64_0__w1) & 1
+  const divided_by_zero_f64_0__w1 = (~res_is_nan_f64_0__w1) & 1 & (~opa_is_inf_f64_0__w1) & 1 & 1 & opb_is_zero_f64_0__w1 & 1
+  mut _mux_110:u12 = if fp_format_is_fp32__w1 != 0 { 0x7f } else { 0x3ff }
+  mut _mux_111:u12 = if fp_format_is_fp16__w1 != 0 { 15 } else { _mux_110 }
+  const out_sign_d__w1 = (~res_is_nan_f64_0__w1) & 1 & ((((((fp_format_is_fp64__w1 & (io.opa_i >> 63) & 1 & 1) | (fp_format_is_fp32__w1 & (io.opa_i >> 31) & 1 & 1)) & 1) | (fp_format_is_fp16__w1 & (io.opa_i >> 15) & 1 & 1)) & 1) ^ (((((fp_format_is_fp64__w1 & (io.opb_i >> 63) & 1 & 1) | (fp_format_is_fp32__w1 & (io.opb_i >> 31) & 1 & 1)) & 1) | (fp_format_is_fp16__w1 & (io.opb_i >> 15) & 1 & 1)) & 1)) & 1 & 1
+  early_finish = (((res_is_nan_f64_0__w1 | res_is_inf_f64_0__w1) & 1) | res_is_exact_zero_f64_0__w1) & 1
+  const out_exp_diff_en__w1 = (start_handshaked__w1 | ((fsm_q >> 2) & 1)) & 1
+  mut _mux_112:u13 = if (fsm_q & 1) != 0 { ((((((opa_exp_f64_0__w1#[1..=10] << 1) | (((opa_exp_f64_0__w1 & 1) | opa_exp_is_zero_f64_0__w1) & 1)) + _mux_111)#[0..=11] - opa_l_shift_num_f64_0)#[0..=12] - ((opb_exp_f64_0__w1#[1..=10] << 1) | (((opb_exp_f64_0__w1 & 1) | opb_exp_is_zero_f64_0__w1) & 1)))#[0..=12] + opb_l_shift_num_f64_0)#[0..=12] } else { (out_exp_diff_q_f64_0 - (a_frac_lt_b_frac_real_f64_0__w1 & 1))#[0..=12] }
+  const opa_frac_pre_shifted_f64_0__w1 = opa_frac_f64_0__w1
+  const opb_frac_pre_shifted_f64_0__w1 = opb_frac_f64_0__w1
+  mut _mux_113:u6 = if opa_exp_is_zero_f64_0__w1 != 0 { _U_Left_Shift_opa_f64_0_io_lzd_result } else { 0 }
+  opa_l_shift_num_f64_0 = _mux_113
+  mut _mux_114:u52 = if opa_exp_is_zero_f64_0__w1 != 0 { _U_Left_Shift_opa_f64_0_io_lshift_result#[0..=51] } else { opa_frac_f64_0__w1 }
+  const opa_frac_l_shifted_f64_0__w1 = (1 << 52) | _mux_114
+  mut _mux_115:u6 = if opb_exp_is_zero_f64_0__w1 != 0 { _U_Left_Shift_opb_f64_0_io_lzd_result } else { 0 }
+  opb_l_shift_num_f64_0 = _mux_115
+  mut _mux_116:u52 = if opb_exp_is_zero_f64_0__w1 != 0 { _U_Left_Shift_opb_f64_0_io_lshift_result#[0..=51] } else { opb_frac_f64_0__w1 }
+  mut _mux_118:u52 = if (fsm_q & 1) != 0 { opa_frac_f64_0__w1 } else { quo_iter_q_f64_0#[0..=51] }
+  const prescaled_a_frac_f64_0__w1 = (1 << 52) | _mux_118
+  mut _mux_119:u52 = if (fsm_q & 1) != 0 { opb_frac_f64_0__w1 } else { quo_m1_iter_q_f64_0#[0..=51] }
+  const prescaled_b_frac_f64_0__w1 = (1 << 52) | _mux_119
+  const scale_factor_idx_f64_0__w1 = prescaled_b_frac_f64_0__w1#[49..=51]
+  const _scale_adder_opb_in_f64_0_2_T__w1 = unsigned(scale_factor_idx_f64_0__w1 == 0)
+  const _scale_adder_opb_in_f64_0_2_T_1__w1 = unsigned(scale_factor_idx_f64_0__w1 == 1)
+  const _scale_adder_opb_in_f64_0_2_T_2__w1 = unsigned(scale_factor_idx_f64_0__w1 == 2)
+  const _scale_adder_opb_in_f64_0_2_T_3__w1 = unsigned(scale_factor_idx_f64_0__w1 == 3)
+  const _scale_adder_opb_in_f64_0_2_T_4__w1 = unsigned(scale_factor_idx_f64_0__w1 == 4)
+  const _scale_adder_opb_in_f64_0_2_T_5__w1 = unsigned(scale_factor_idx_f64_0__w1 == 5)
+  const _scale_adder_opb_in_f64_0_2_T_6__w1 = unsigned(scale_factor_idx_f64_0__w1 == 6)
+  const _scale_adder_opb_in_f64_0_2_T_7__w1 = unsigned(scale_factor_idx_f64_0__w1 == 7)
+  const _scale_adder_opa_in_f64_0_2_T_9__w1 = prescaled_a_frac_f64_0__w1 << 2
+  const _scale_adder_opa_in_f64_0_1_T_13__w1 = prescaled_a_frac_f64_0__w1 << 1
+  mut _mux_128:u57 = if _scale_adder_opb_in_f64_0_2_T__w1 != 0 { _scale_adder_opa_in_f64_0_2_T_9__w1 } else { 0 }
+  mut _mux_129:u57 = if _scale_adder_opb_in_f64_0_2_T_1__w1 != 0 { _scale_adder_opa_in_f64_0_1_T_13__w1 } else { 0 }
+  mut _mux_130:u57 = if _scale_adder_opb_in_f64_0_2_T_2__w1 != 0 { _scale_adder_opa_in_f64_0_2_T_9__w1 } else { 0 }
+  mut _mux_131:u57 = if _scale_adder_opb_in_f64_0_2_T_3__w1 != 0 { _scale_adder_opa_in_f64_0_2_T_9__w1 } else { 0 }
+  mut _mux_132:u57 = if _scale_adder_opb_in_f64_0_2_T_4__w1 != 0 { _scale_adder_opa_in_f64_0_1_T_13__w1 } else { 0 }
+  mut _mux_133:u57 = if _scale_adder_opb_in_f64_0_2_T_5__w1 != 0 { _scale_adder_opa_in_f64_0_1_T_13__w1 } else { 0 }
+  const _scale_adder_opa_in_f64_0_2_T_13__w1 = prescaled_a_frac_f64_0__w1
+  mut _mux_134:u57 = if _scale_adder_opb_in_f64_0_2_T_2__w1 != 0 { _scale_adder_opa_in_f64_0_2_T_13__w1 } else { 0 }
+  mut _mux_135:u57 = if _scale_adder_opb_in_f64_0_2_T_4__w1 != 0 { _scale_adder_opa_in_f64_0_2_T_13__w1 } else { 0 }
+  mut _mux_136:u57 = if _scale_adder_opb_in_f64_0_2_T_6__w1 != 0 { _scale_adder_opa_in_f64_0_2_T_13__w1 } else { 0 }
+  mut _mux_137:u57 = if _scale_adder_opb_in_f64_0_2_T_7__w1 != 0 { _scale_adder_opa_in_f64_0_2_T_13__w1 } else { 0 }
+  const _GEN_5__w1 = (_scale_adder_opb_in_f64_0_2_T__w1 | _scale_adder_opb_in_f64_0_2_T_1__w1) & 1
+  mut _mux_138:u57 = if _GEN_5__w1 != 0 { _scale_adder_opa_in_f64_0_2_T_9__w1 } else { 0 }
+  const scale_adder_opa_in_f64_0__w1 = (((((_mux_138 | _mux_134) | _mux_135) | _mux_136) | _mux_137) << 114) | ((((((_mux_128 | _mux_129) | _mux_130) | _mux_131) | _mux_132) | _mux_133) << 57) | (prescaled_a_frac_f64_0__w1 << 3)
+  const scale_adder_opa_f64_0__w1 = ((scale_adder_opa_in_f64_0__w1#[0..=56] + scale_adder_opa_in_f64_0__w1#[57..=113])#[0..=56] + scale_adder_opa_in_f64_0__w1#[114..=170])#[0..=56]
+  const _scale_adder_opb_in_f64_0_2_T_9__w1 = prescaled_b_frac_f64_0__w1 << 2
+  const _scale_adder_opb_in_f64_0_1_T_13__w1 = prescaled_b_frac_f64_0__w1 << 1
+  mut _mux_139:u57 = if _scale_adder_opb_in_f64_0_2_T__w1 != 0 { _scale_adder_opb_in_f64_0_2_T_9__w1 } else { 0 }
+  mut _mux_140:u57 = if _scale_adder_opb_in_f64_0_2_T_1__w1 != 0 { _scale_adder_opb_in_f64_0_1_T_13__w1 } else { 0 }
+  mut _mux_141:u57 = if _scale_adder_opb_in_f64_0_2_T_2__w1 != 0 { _scale_adder_opb_in_f64_0_2_T_9__w1 } else { 0 }
+  mut _mux_142:u57 = if _scale_adder_opb_in_f64_0_2_T_3__w1 != 0 { _scale_adder_opb_in_f64_0_2_T_9__w1 } else { 0 }
+  mut _mux_143:u57 = if _scale_adder_opb_in_f64_0_2_T_4__w1 != 0 { _scale_adder_opb_in_f64_0_1_T_13__w1 } else { 0 }
+  mut _mux_144:u57 = if _scale_adder_opb_in_f64_0_2_T_5__w1 != 0 { _scale_adder_opb_in_f64_0_1_T_13__w1 } else { 0 }
+  const _scale_adder_opb_in_f64_0_2_T_13__w1 = prescaled_b_frac_f64_0__w1
+  mut _mux_145:u57 = if _scale_adder_opb_in_f64_0_2_T_2__w1 != 0 { _scale_adder_opb_in_f64_0_2_T_13__w1 } else { 0 }
+  mut _mux_146:u57 = if _scale_adder_opb_in_f64_0_2_T_4__w1 != 0 { _scale_adder_opb_in_f64_0_2_T_13__w1 } else { 0 }
+  mut _mux_147:u57 = if _scale_adder_opb_in_f64_0_2_T_6__w1 != 0 { _scale_adder_opb_in_f64_0_2_T_13__w1 } else { 0 }
+  mut _mux_148:u57 = if _scale_adder_opb_in_f64_0_2_T_7__w1 != 0 { _scale_adder_opb_in_f64_0_2_T_13__w1 } else { 0 }
+  mut _mux_149:u57 = if _GEN_5__w1 != 0 { _scale_adder_opb_in_f64_0_2_T_9__w1 } else { 0 }
+  const scale_adder_opb_in_f64_0__w1 = (((((_mux_149 | _mux_145) | _mux_146) | _mux_147) | _mux_148) << 114) | ((((((_mux_139 | _mux_140) | _mux_141) | _mux_142) | _mux_143) | _mux_144) << 57) | (prescaled_b_frac_f64_0__w1 << 3)
+  const scale_adder_opb_f64_0__w1 = ((scale_adder_opb_in_f64_0__w1#[0..=56] + scale_adder_opb_in_f64_0__w1#[57..=113])#[0..=56] + scale_adder_opb_in_f64_0__w1#[114..=170])#[0..=56]
+  const _GEN_6__w1 = (((start_handshaked__w1 | ((fsm_q >> 2) & 1)) & 1) | ((fsm_q >> 3) & 1)) & 1
+  const f_r_s_en__w1 = _GEN_6__w1
+  const f_r_c_en__w1 = _GEN_6__w1
+  const nr_f_r_6b_for_nxt_cycle_s0_qds_en__w1 = _GEN_6__w1
+  const nr_f_r_7b_for_nxt_cycle_s1_qds_en__w1 = _GEN_6__w1
+  const prev_quo_dig_en__w1 = _GEN_6__w1
+  mut _mux_150:u57 = if ((init_cycles >> 1) & 1) != 0 { scale_adder_opb_f64_0__w1 } else { frac_divisor_q_f64_0__w1 }
+  mut _mux_151:u57 = if (fsm_q & 1) != 0 { _mux_150 } else { 0 }
+  mut _mux_152:u57 = if ((fsm_q >> 1) & 1) != 0 { scale_adder_opb_f64_0__w1 } else { 0 }
+  mut _mux_153:u57 = if ((fsm_q >> 4) & 1) != 0 { sticky_without_rem_f64_0 } else { 0 }
+  const frac_divisor_en__w1 = (((((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1) | ((fsm_q >> 4) & 1)) & 1
+  mut _mux_154:u57 = if ((fsm_q >> 4) & 1 & (~res_is_denormal_f64_0__w1) & 1 & 1) != 0 { frac_divisor_q_f64_0__w1 } else { ((_mux_151 | _mux_152) | _mux_7) | _mux_153 }
+  nxt_quo_iter_f64_0 = ((((((_rep_40 << 112) | (_rep_41 << 56) | _rep_42) & ((((nxt_quo_iter_f64_0#[56..=111]#[0..=53] << 2) | 2) << 112) | (((nxt_quo_iter_f64_0#[0..=55]#[0..=53] << 2) | 2) << 56) | ((quo_iter_q_f64_0 << 2) | 2))) | (((_rep_43 << 112) | (_rep_44 << 56) | _rep_45) & ((((nxt_quo_iter_f64_0#[56..=111]#[0..=53] << 2) | 1) << 112) | (((nxt_quo_iter_f64_0#[0..=55]#[0..=53] << 2) | 1) << 56) | ((quo_iter_q_f64_0 << 2) | 1)))) | (((_rep_46 << 112) | (_rep_47 << 56) | _rep_48) & (((nxt_quo_iter_f64_0#[56..=111]#[0..=53] << 2) << 112) | ((nxt_quo_iter_f64_0#[0..=55]#[0..=53] << 2) << 56) | (quo_iter_q_f64_0 << 2)))) | (((_rep_49 << 112) | (_rep_50 << 56) | _rep_51) & ((((nxt_quo_m1_iter_f64_0#[56..=111]#[0..=53] << 2) | 3) << 112) | (((nxt_quo_m1_iter_f64_0#[0..=55]#[0..=53] << 2) | 3) << 56) | ((quo_m1_iter_q_f64_0 << 2) | 3)))) | (((_rep_52 << 112) | (_rep_53 << 56) | _rep_54) & ((((nxt_quo_m1_iter_f64_0#[56..=111]#[0..=53] << 2) | 2) << 112) | (((nxt_quo_m1_iter_f64_0#[0..=55]#[0..=53] << 2) | 2) << 56) | ((quo_m1_iter_q_f64_0 << 2) | 2)))
+  nxt_quo_m1_iter_f64_0 = ((((((_rep_55 << 112) | (_rep_56 << 56) | _rep_57) & ((((nxt_quo_iter_f64_0#[56..=111]#[0..=53] << 2) | 1) << 112) | (((nxt_quo_iter_f64_0#[0..=55]#[0..=53] << 2) | 1) << 56) | ((quo_iter_q_f64_0 << 2) | 1))) | (((_rep_58 << 112) | (_rep_59 << 56) | _rep_60) & (((nxt_quo_iter_f64_0#[56..=111]#[0..=53] << 2) << 112) | ((nxt_quo_iter_f64_0#[0..=55]#[0..=53] << 2) << 56) | (quo_iter_q_f64_0 << 2)))) | (((_rep_61 << 112) | (_rep_62 << 56) | _rep_63) & ((((nxt_quo_m1_iter_f64_0#[56..=111]#[0..=53] << 2) | 3) << 112) | (((nxt_quo_m1_iter_f64_0#[0..=55]#[0..=53] << 2) | 3) << 56) | ((quo_m1_iter_q_f64_0 << 2) | 3)))) | (((_rep_64 << 112) | (_rep_65 << 56) | _rep_66) & ((((nxt_quo_m1_iter_f64_0#[56..=111]#[0..=53] << 2) | 2) << 112) | (((nxt_quo_m1_iter_f64_0#[0..=55]#[0..=53] << 2) | 2) << 56) | ((quo_m1_iter_q_f64_0 << 2) | 2)))) | (((_rep_67 << 112) | (_rep_68 << 56) | _rep_69) & ((((nxt_quo_m1_iter_f64_0#[56..=111]#[0..=53] << 2) | 1) << 112) | (((nxt_quo_m1_iter_f64_0#[0..=55]#[0..=53] << 2) | 1) << 56) | ((quo_m1_iter_q_f64_0 << 2) | 1)))
+  mut _mux_155:u54 = if fp_format_is_fp32__w1 != 0 { (1 << 23) | io.opa_i#[0..=22] } else { (1 << 10) | io.opa_i#[0..=9] }
+  mut _mux_156:u54 = if fp_format_is_fp64__w1 != 0 { (1 << 52) | io.opa_i#[0..=51] } else { _mux_155 }
+  const nxt_quo_iter_pre_1_f64_0__w1 = scale_adder_opa_f64_0__w1#[0..=53]
+  mut _mux_157:u54 = if opb_is_power_of_2_f64_0 != 0 { _mux_156 } else { nxt_quo_iter_pre_1_f64_0__w1 }
+  mut _mux_158:u54 = if fp_format_is_fp32__w1 != 0 { (1 << 23) | opa_frac_l_shifted_f64_0__w1#[29..=51] } else { (1 << 10) | opa_frac_l_shifted_f64_0__w1#[42..=51] }
+  mut _mux_159:u54 = if fp_format_is_fp64__w1 != 0 { (1 << 52) | opa_frac_l_shifted_f64_0__w1#[0..=51] } else { _mux_158 }
+  mut _mux_160:u54 = if opb_is_power_of_2_f64_0 != 0 { _mux_159 } else { opa_frac_l_shifted_f64_0__w1 }
+  mut _mux_161:u54 = if ((init_cycles >> 1) & 1) != 0 { _mux_157 } else { _mux_160 }
+  mut _mux_162:u54 = if ((init_cycles >> 1) & 1) != 0 { scale_adder_opa_f64_0__w1#[54..=56] } else { ((1 << 52) | _mux_116) }
+  mut _mux_163:u54 = if res_is_denormal_f64_0__w1 != 0 { ((rem_is_not_zero_f64_0__w1 & 1) << 53) | correct_quo_r_shifted_f64_0#[0..=52] } else { out_frac_post_0_f64_0 }
+  mut _mux_164:u54 = if (fsm_q & 1) != 0 { _mux_161 } else { 0 }
+  mut _mux_165:u54 = if ((fsm_q >> 1) & 1) != 0 { nxt_quo_iter_pre_1_f64_0__w1 } else { 0 }
+  mut _mux_166:u54 = if ((fsm_q >> 3) & 1) != 0 { nxt_quo_iter_f64_0#[112..=167]#[0..=53] } else { 0 }
+  mut _mux_167:u54 = if (fsm_q & 1) != 0 { _mux_162 } else { 0 }
+  mut _mux_168:u54 = if ((fsm_q >> 1) & 1) != 0 { scale_adder_opa_f64_0__w1#[54..=56] } else { 0 }
+  mut _mux_169:u54 = if ((fsm_q >> 3) & 1) != 0 { nxt_quo_m1_iter_f64_0#[112..=167]#[0..=53] } else { 0 }
+  mut _mux_170:u54 = if ((fsm_q >> 4) & 1) != 0 { _mux_163 } else { 0 }
+  const _GEN_27__w1 = (((((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1) | ((fsm_q >> 3) & 1)) & 1
+  const quo_iter_en__w1 = _GEN_27__w1
+  const iter_num_en__w1 = _GEN_27__w1
+  const quo_m1_iter_en__w1 = (((((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 3) & 1)) & 1) | ((fsm_q >> 4) & 1 & res_is_denormal_f64_0__w1 & 1)) & 1
+  mut _mux_171:u4 = if (fsm_q & 1) != 0 { (unsigned(opa_frac_f64_0__w1 < opb_frac_f64_0__w1) & 1) } else { _mux_12 }
+  mut _mux_172:u25 = if fp_format_q_is_fp32__w1 != 0 { nxt_quo_iter_f64_0#[0..=55]#[0..=24] } else { nxt_quo_iter_f64_0#[0..=55]#[1..=25] }
+  mut _mux_173:u54 = if opb_is_power_of_2_q != 0 { quo_iter_q_f64_0#[0..=52] << 1 } else { (nxt_quo_iter_f64_0#[0..=55]#[26..=54] << 25) | _mux_172 }
+  const quo_pre_shift_f64_0__w1 = _mux_173
+  mut _mux_174:u25 = if fp_format_q_is_fp32__w1 != 0 { nxt_quo_m1_iter_f64_0#[0..=55]#[0..=24] } else { nxt_quo_m1_iter_f64_0#[0..=55]#[1..=25] }
+  const quo_m1_pre_shift_f64_0__w1 = (nxt_quo_m1_iter_f64_0#[0..=55]#[26..=54] << 25) | _mux_174
+  const quo_r_shifted_f64_0__w1 = (quo_pre_shift_f64_0__w1 << 54) >> _GEN_28__w1
+  const quo_m1_r_shifted_f64_0__w1 = (quo_m1_pre_shift_f64_0__w1 << 54) >> _GEN_28__w1
+  mut _mux_175:u54 = if select_quo_m1_f64_0__w1 != 0 { quo_m1_r_shifted_f64_0__w1#[54..=107] } else { quo_r_shifted_f64_0__w1#[54..=107] }
+  correct_quo_r_shifted_f64_0 = _mux_175
+  mut _mux_176:u54 = if select_quo_m1_f64_0__w1 != 0 { quo_m1_r_shifted_f64_0__w1#[0..=53] } else { quo_r_shifted_f64_0__w1#[0..=53] }
+  sticky_without_rem_f64_0 = _mux_176
+  mut _mux_177:u52 = if ((fsm_q >> 4) & 1) != 0 { (quo_pre_shift_f64_0__w1#[25..=52] << 24) | (((~fp_format_q_is_fp32__w1) & 1 & (quo_pre_shift_f64_0__w1 >> 24) & 1 & 1) << 23) | (quo_pre_shift_f64_0__w1#[12..=23] << 11) | (((~fp_format_q_is_fp16__w1) & 1 & (quo_pre_shift_f64_0__w1 >> 11) & 1 & 1) << 10) | quo_pre_shift_f64_0__w1#[1..=10] } else { (quo_m1_iter_q_f64_0#[25..=52] << 24) | (((~fp_format_q_is_fp32__w1) & 1 & (quo_m1_iter_q_f64_0 >> 24) & 1 & 1) << 23) | (quo_m1_iter_q_f64_0#[12..=23] << 11) | (((~fp_format_q_is_fp16__w1) & 1 & (quo_m1_iter_q_f64_0 >> 11) & 1 & 1) << 10) | quo_m1_iter_q_f64_0#[1..=10] }
+  const quo_pre_inc_f64_0__w1 = _mux_177
+  const quo_m1_pre_inc_f64_0__w1 = (quo_m1_pre_shift_f64_0__w1#[25..=52] << 24) | (((~fp_format_q_is_fp32__w1) & 1 & (quo_m1_pre_shift_f64_0__w1 >> 24) & 1 & 1) << 23) | (quo_m1_pre_shift_f64_0__w1#[12..=23] << 11) | (((~fp_format_q_is_fp16__w1) & 1 & (quo_m1_pre_shift_f64_0__w1 >> 11) & 1 & 1) << 10) | quo_m1_pre_shift_f64_0__w1#[1..=10]
+  const quo_inc_res_f64_0__w1 = (quo_pre_inc_f64_0__w1 + 1)#[0..=52]
+  mut _mux_178:u52 = if (quo_pre_inc_f64_0__w1 & 1) == (quo_m1_pre_inc_f64_0__w1 & 1) { quo_inc_res_f64_0__w1#[0..=51] } else { quo_pre_inc_f64_0__w1 }
+  mut _mux_179:u1 = if ((((fsm_q >> 4) & 1) | ((~res_is_denormal_f64_0__w1) & 1)) & 1) != 0 { (quo_pre_shift_f64_0__w1 >> 1) & 1 } else { (quo_m1_iter_q_f64_0 >> 1) & 1 }
+  mut _mux_180:u1 = if ((((fsm_q >> 4) & 1) | ((~res_is_denormal_f64_0__w1) & 1)) & 1) != 0 { quo_pre_shift_f64_0__w1 & 1 } else { quo_m1_iter_q_f64_0 & 1 }
+  const round_bit_quo_f64_0__w1 = _mux_180
+  const inexact_quo_f64_0__w1 = (round_bit_quo_f64_0__w1 | sticky_bit_quo_f64_0__w1) & 1
+  const round_bit_quo_m1_f64_0__w1 = quo_m1_pre_shift_f64_0__w1 & 1
+  const guard_correct_f64_0__w1 = correct_quo_r_shifted_f64_0 & 1
+  const round_correct_f64_0__w1 = (sticky_without_rem_f64_0 >> 53) & 1
+  const sticky_correct_f64_0__w1 = (((select_quo_m1_f64_0__w1 | unsigned(sticky_without_rem_f64_0#[0..=52] != 0)) & 1) | rem_is_not_zero_f64_0__w1) & 1
+  const _test_uf_need_rup_correct_f64_0_T_11__w1 = (round_correct_f64_0__w1 | sticky_correct_f64_0__w1) & 1
+  mut _mux_182:u53 = if (((((((_overflow_to_inf_f64_0_T__w1 & ((round_bit_quo_f64_0__w1 & sticky_bit_quo_f64_0__w1 & 1) | (_mux_179 & round_bit_quo_f64_0__w1 & 1)) & 1 & 1) | (_overflow_to_inf_f64_0_T_7__w1 & inexact_quo_f64_0__w1 & 1 & out_sign_q & 1)) & 1) | (_overflow_to_inf_f64_0_T_3__w1 & inexact_quo_f64_0__w1 & 1 & (~out_sign_q) & 1 & 1)) & 1) | (_overflow_to_inf_f64_0_T_1__w1 & round_bit_quo_f64_0__w1 & 1)) & 1) != 0 { quo_inc_res_f64_0__w1 } else { quo_pre_inc_f64_0__w1 }
+  const quo_rounded_f64_0__w1 = _mux_182
+  mut _mux_183:u52 = if (((((((_overflow_to_inf_f64_0_T__w1 & (round_bit_quo_m1_f64_0__w1 | (((quo_m1_pre_shift_f64_0__w1 >> 1) & 1) & round_bit_quo_m1_f64_0__w1 & 1)) & 1 & 1) | (_overflow_to_inf_f64_0_T_7__w1 & out_sign_q & 1)) & 1) | (_overflow_to_inf_f64_0_T_3__w1 & (~out_sign_q) & 1 & 1)) & 1) | (_overflow_to_inf_f64_0_T_1__w1 & round_bit_quo_m1_f64_0__w1 & 1)) & 1) != 0 { _mux_178 } else { quo_m1_pre_inc_f64_0__w1 }
+  const inexact_f64_0__w1 = (((((fsm_q >> 4) & 1) | ((~res_is_denormal_f64_0__w1) & 1)) & 1 & select_quo_m1_f64_0__w1 & 1) | inexact_quo_f64_0__w1) & 1
+  mut _mux_184:u52 = if select_quo_m1_f64_0__w1 != 0 { _mux_183 } else { quo_rounded_f64_0__w1#[0..=51] }
+  const frac_rounded_post_0_f64_0__w1 = _mux_184
+  mut _mux_185:u1 = if fp_format_q_is_fp32__w1 != 0 { (quo_rounded_f64_0__w1 >> 23) & 1 } else { (quo_rounded_f64_0__w1 >> 52) & 1 }
+  mut _mux_186:u1 = if fp_format_q_is_fp16__w1 != 0 { (quo_rounded_f64_0__w1 >> 10) & 1 } else { _mux_185 & 1 }
+  const carry_after_round_f64_0__w1 = _mux_186
+  mut _mux_187:u10 = if (overflow_f64_0__w1 & (~overflow_to_inf_f64_0__w1) & 1 & 1) != 0 { 0x3ff } else { frac_rounded_post_0_f64_0__w1#[0..=9] }
+  mut _mux_188:u10 = if _out_frac_post_0_f64_0_T__w1 != 0 { 0 } else { _mux_187 }
+  mut _mux_189:u23 = if (overflow_f64_0__w1 & (~overflow_to_inf_f64_0__w1) & 1 & 1) != 0 { 0x7fffff } else { frac_rounded_post_0_f64_0__w1#[0..=22] }
+  mut _mux_190:u23 = if _out_frac_post_0_f64_0_T__w1 != 0 { 0 } else { _mux_189 }
+  mut _mux_191:u52 = if (overflow_f64_0__w1 & (~overflow_to_inf_f64_0__w1) & 1 & 1) != 0 { 0xfffffffffffff } else { frac_rounded_post_0_f64_0__w1 }
+  mut _mux_192:u52 = if _out_frac_post_0_f64_0_T__w1 != 0 { 0 } else { _mux_191 }
+  out_frac_post_0_f64_0 = _mux_192
+  const res_post_0_f32_0__w1 = ((out_sign_q & 1) << 31) | (out_exp_post_0_f32_0__w1 << 23) | _mux_190
+  const res_post_0_f64_0__w1 = ((out_sign_q & 1) << 63) | (out_exp_post_0_f64_0__w1 << 52) | out_frac_post_0_f64_0
+  mut _mux_193:u16 = if fp_format_q_is_fp32__w1 != 0 { res_post_0_f32_0__w1#[16..=31] } else { res_post_0_f64_0__w1#[16..=31] }
+  mut _mux_194:u16 = if fp_format_q_is_fp32__w1 != 0 { res_post_0_f32_0__w1#[0..=15] } else { res_post_0_f64_0__w1#[0..=15] }
+  mut _mux_195:u16 = if fp_format_q_is_fp16__w1 != 0 { ((out_sign_q & 1) << 15) | (out_exp_post_0_f16_0__w1 << 10) | _mux_188 } else { _mux_194 }
+  mut _mux_196:u5 = if res_is_exact_zero_q != 0 { 0 } else { (carry_after_round_f64_0__w1 & 1) }
+  mut _mux_197:u5 = if _out_exp_post_1_f64_0_T_3__w1 != 0 { 31 } else { _mux_196 }
+  mut _mux_198:u5 = if ((((_out_frac_post_1_f64_0_T__w1 | res_is_inf_q) & 1) | res_is_exact_zero_q) & 1) != 0 { _mux_197 } else { out_exp_post_0_f16_0__w1 }
+  mut _mux_199:u8 = if res_is_exact_zero_q != 0 { 0 } else { (carry_after_round_f64_0__w1 & 1) }
+  mut _mux_200:u8 = if _out_exp_post_1_f64_0_T_3__w1 != 0 { 0xff } else { _mux_199 }
+  mut _mux_201:u8 = if ((((_out_frac_post_1_f64_0_T__w1 | res_is_inf_q) & 1) | res_is_exact_zero_q) & 1) != 0 { _mux_200 } else { out_exp_post_0_f32_0__w1 }
+  mut _mux_202:u11 = if res_is_exact_zero_q != 0 { 0 } else { (carry_after_round_f64_0__w1 & 1) }
+  mut _mux_203:u11 = if _out_exp_post_1_f64_0_T_3__w1 != 0 { 0x7ff } else { _mux_202 }
+  mut _mux_204:u11 = if ((((_out_frac_post_1_f64_0_T__w1 | res_is_inf_q) & 1) | res_is_exact_zero_q) & 1) != 0 { _mux_203 } else { out_exp_post_0_f64_0__w1 }
+  mut _mux_205:u10 = if _out_frac_post_1_f64_0_T_4__w1 != 0 { 0 } else { quo_rounded_f64_0__w1#[0..=9] }
+  mut _mux_206:u10 = if res_is_nan_q != 0 { 0x200 } else { _mux_205 }
+  mut _mux_207:u10 = if ((((_out_frac_post_1_f64_0_T__w1 | res_is_inf_q) & 1) | res_is_exact_zero_q) & 1) != 0 { _mux_206 } else { quo_m1_iter_q_f64_0#[0..=9] }
+  mut _mux_208:u23 = if _out_frac_post_1_f64_0_T_4__w1 != 0 { 0 } else { quo_rounded_f64_0__w1#[0..=22] }
+  mut _mux_209:u23 = if res_is_nan_q != 0 { 0x400000 } else { _mux_208 }
+  mut _mux_210:u23 = if ((((_out_frac_post_1_f64_0_T__w1 | res_is_inf_q) & 1) | res_is_exact_zero_q) & 1) != 0 { _mux_209 } else { quo_m1_iter_q_f64_0#[0..=22] }
+  mut _mux_211:u52 = if _out_frac_post_1_f64_0_T_4__w1 != 0 { 0 } else { quo_rounded_f64_0__w1#[0..=51] }
+  mut _mux_212:u52 = if res_is_nan_q != 0 { 0x8000000000000 } else { _mux_211 }
+  mut _mux_213:u52 = if ((((_out_frac_post_1_f64_0_T__w1 | res_is_inf_q) & 1) | res_is_exact_zero_q) & 1) != 0 { _mux_212 } else { quo_m1_iter_q_f64_0#[0..=51] }
+  const res_post_1_f32_0__w1 = ((out_sign_q & 1) << 31) | (_mux_201 << 23) | _mux_210
+  const res_post_1_f64_0__w1 = ((out_sign_q & 1) << 63) | (_mux_204 << 52) | _mux_213
+  mut _mux_214:u16 = if fp_format_q_is_fp32__w1 != 0 { res_post_1_f32_0__w1#[16..=31] } else { res_post_1_f64_0__w1#[16..=31] }
+  mut _mux_215:u16 = if fp_format_q_is_fp32__w1 != 0 { res_post_1_f32_0__w1#[0..=15] } else { res_post_1_f64_0__w1#[0..=15] }
+  mut _mux_216:u16 = if fp_format_q_is_fp16__w1 != 0 { ((out_sign_q & 1) << 15) | (_mux_198 << 10) | _mux_207 } else { _mux_215 }
+  mut _mux_217:u64 = if ((fsm_q >> 4) & 1) != 0 { (res_post_0_f64_0__w1#[32..=63] << 32) | (_mux_193 << 16) | _mux_195 } else { (res_post_1_f64_0__w1#[32..=63] << 32) | (_mux_214 << 16) | _mux_216 }
+  const t1691 = ((~carry_after_round_f64_0__w1) & 1) | ((~(guard_correct_f64_0__w1 & (((((((_overflow_to_inf_f64_0_T__w1 & ((round_correct_f64_0__w1 & sticky_correct_f64_0__w1 & 1) | (guard_correct_f64_0__w1 & round_correct_f64_0__w1 & 1)) & 1 & 1) | (_overflow_to_inf_f64_0_T_7__w1 & _test_uf_need_rup_correct_f64_0_T_11__w1 & 1 & out_sign_q & 1)) & 1) | (_overflow_to_inf_f64_0_T_3__w1 & _test_uf_need_rup_correct_f64_0_T_11__w1 & 1 & (~out_sign_q) & 1 & 1)) & 1) | (_overflow_to_inf_f64_0_T_1__w1 & round_correct_f64_0__w1 & 1)) & 1) & 1)) & 1)
+  const t1692 = t1691 & 1
+  const t1693 = res_is_denormal_f64_0__w1 & (fsm_q >> 5) & 1 & 1 & t1692
+  const t1694 = t1693 & 1
+  const t1695 = t1694 & inexact_f64_0__w1
+  const t1696 = t1695 & 1
+  const t1699 = t1696 & (~res_is_exact_zero_q) & 1
+  const t1700 = t1699 & 1
+  const t1703 = t1700 & (~res_is_inf_q) & 1
+  const t1704 = t1703 & 1
+  const t1707 = t1704 & (~res_is_nan_q) & 1
+  const t1708 = t1707 & 1
+  const fflags_underflow__w1 = t1708
+  const t1726 = fflags_underflow__w1 & 1
+  const t1728 = ((op_invalid_div_q & 1) << 4) | ((divided_by_zero_q & 1) << 3) | ((fflags_overflow__w1 & 1) << 2) | (t1726 << 1) | (((fflags_overflow__w1 | inexact_f64_0__w1) & 1 & (~res_is_inf_q) & 1 & 1 & (~res_is_nan_q) & 1 & 1 & (~res_is_exact_zero_q) & 1 & 1) & 1)
+  const fflags_scalar__w1 = t1728
+  io.start_valid_i = io_start_valid_i & 1
+  io.start_ready_o = fsm_q & 1
+  io.flush_i = io_flush_i & 1
+  io.fp_format_i = io_fp_format_i
+  io.opa_i = io_opa_i
+  io.opb_i = io_opb_i
+  io.rm_i = io_rm_i
+  io.fp_aIsFpCanonicalNAN = io_fp_aIsFpCanonicalNAN & 1
+  io.fp_bIsFpCanonicalNAN = io_fp_bIsFpCanonicalNAN & 1
+  io.finish_valid_o = (~unsigned(outValidBlock != 0)) & 1 & (((fsm_q >> 5) & 1) | ((fsm_q >> 4) & 1 & (~res_is_denormal_f64_0__w1) & 1 & 1)) & 1 & 1
+  io.finish_ready_i = io_finish_ready_i & 1
+  io.fpdiv_res_o = _mux_217
+  const t1754 = fflags_scalar__w1
+  io.fflags_o = t1754
+  io.outValidAhead3Cycle = (((((((~wakeupSuccessReg) & 1) | (start_handshaked__w1 & _io_outValidAhead3Cycle_T_1__w1 & 1)) & 1) | ((fsm_q >> 3) & 1 & _mux_34 & 1)) & 1) | ((fsm_q >> 2) & 1 & fp_format_q_is_fp16__w1 & 1)) & 1
+  io.wakeupSuccess = io_wakeupSuccess & 1
+  fsm_q = _mux_88
+  if start_handshaked__w1 != 0 {
+    opb_is_power_of_2_q = opb_is_power_of_2_f64_0
+  }
+  wakeupSuccessReg = (io.flush_i | io.wakeupSuccess) & 1
+  if (((start_handshaked__w1 & _io_outValidAhead3Cycle_T_1__w1 & 1) | io.outValidAhead3Cycle) & 1) != 0 {
+    outValidBlock = 2
+  } else {
+    const t1786 = (fsm_q & 1) != 0
+    if t1786 {
+    }
+    if not t1786 {
+      outValidBlock = ((outValidBlock >> 1) & 1)
+    }
+  }
+  if iter_num_en__w1 != 0 {
+    iter_num_q = _mux_171
+  }
+  if start_handshaked__w1 != 0 {
+    fp_format_onehot_q = ((fp_format_is_fp64__w1 & 1) << 2) | ((fp_format_is_fp32__w1 & 1) << 1) | (fp_format_is_fp16__w1 & 1)
+  }
+  if start_handshaked__w1 != 0 {
+    rm_q = io.rm_i
+  }
+  if start_handshaked__w1 != 0 {
+    out_sign_q = out_sign_d__w1
+  }
+  if start_handshaked__w1 != 0 {
+    res_is_nan_q = res_is_nan_f64_0__w1
+  }
+  if start_handshaked__w1 != 0 {
+    res_is_inf_q = res_is_inf_f64_0__w1
+  }
+  if start_handshaked__w1 != 0 {
+    res_is_exact_zero_q = res_is_exact_zero_f64_0__w1
+  }
+  if start_handshaked__w1 != 0 {
+    op_invalid_div_q = op_invalid_f64_0__w1
+  }
+  if start_handshaked__w1 != 0 {
+    divided_by_zero_q = divided_by_zero_f64_0__w1
+  }
+  if out_exp_diff_en__w1 != 0 {
+    out_exp_diff_q_f64_0 = _mux_112
+  }
+  if (quo_iter_en__w1 & (start_handshaked__w1 | ((~opb_is_power_of_2_q) & 1)) & 1 & 1) != 0 {
+    quo_iter_q_f64_0 = (_mux_164 | _mux_165) | _mux_166
+  }
+  if quo_m1_iter_en__w1 != 0 {
+    quo_m1_iter_q_f64_0 = ((_mux_167 | _mux_168) | _mux_169) | _mux_170
+  }
+  if frac_divisor_en__w1 != 0 {
+    frac_divisor_q_60bit = _mux_154 << 3
+  }
+  if nr_f_r_6b_for_nxt_cycle_s0_qds_en__w1 != 0 {
+    nr_f_r_6b_for_nxt_cycle_s0_qds_q_f64_0 = _mux_37
+  }
+  if nr_f_r_7b_for_nxt_cycle_s1_qds_en__w1 != 0 {
+    nr_f_r_7b_for_nxt_cycle_s1_qds_q_f64_0 = _mux_38
+  }
+  if f_r_s_en__w1 != 0 {
+    f_r_s_q_72bit = _mux_35
+  }
+  if f_r_c_en__w1 != 0 {
+    f_r_c_q_72bit = _mux_36
+  }
+  if f_r_s_en__w1 != 0 {
+  }
+  if f_r_c_en__w1 != 0 {
+  }
+  if prev_quo_dig_en__w1 != 0 {
+    prev_quo_dig_q_f64_0 = _mux_39
+  }
+  mut U_Left_Shift_opa_f64_0 = ShiftLeftPriorityWithLZDResult::[name=U_Left_Shift_opa_f64_0](io_src = opa_frac_pre_shifted_f64_0__w1, io_priority_shiftValue = opa_frac_pre_shifted_f64_0__w1)
+  _U_Left_Shift_opa_f64_0_io_lshift_result = U_Left_Shift_opa_f64_0.io_lshift_result
+  _U_Left_Shift_opa_f64_0_io_lzd_result = U_Left_Shift_opa_f64_0.io_lzd_result
+  mut U_Left_Shift_opb_f64_0 = ShiftLeftPriorityWithLZDResult::[name=U_Left_Shift_opb_f64_0](io_src = opb_frac_pre_shifted_f64_0__w1, io_priority_shiftValue = opb_frac_pre_shifted_f64_0__w1)
+  _U_Left_Shift_opb_f64_0_io_lshift_result = U_Left_Shift_opb_f64_0.io_lshift_result
+  _U_Left_Shift_opb_f64_0_io_lzd_result = U_Left_Shift_opb_f64_0.io_lzd_result
+  io_start_ready_o = io.start_ready_o
+  io_finish_valid_o = io.finish_valid_o
+  io_fpdiv_res_o = io.fpdiv_res_o
+  io_fflags_o = io.fflags_o
+  io_outValidAhead3Cycle = io.outValidAhead3Cycle
+}

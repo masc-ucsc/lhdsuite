@@ -1,0 +1,634 @@
+const Lzc_19 = import("Lzc_19.Lzc_19")
+const Lzc_2 = import("Lzc_2.Lzc_2")
+const Lzc_20 = import("Lzc_20.Lzc_20")
+const fpsqrt_r16_block = import("fpsqrt_r16_block.fpsqrt_r16_block")
+const r4_qds_cg = import("r4_qds_cg.r4_qds_cg")
+
+pub mod fpsqrt_vector_r16::[timecheck=false](clock:u1, reset:u1, start_valid_i:u1, flush_i:u1, fp_format_i:u2, op_i:u64, rm_i:u3, finish_ready_i:u1, fp_aIsFpCanonicalNAN:u1) -> (start_ready_o:u1@[], finish_valid_o:u1@[], fpsqrt_res_o:u64@[], fflags_o:u20@[]) {
+  reg fsm_q:u4:[init=1, reset_pin=ref reset, async=true]
+  reg iter_num_q:u4
+  reg fp_fmt_q:u3
+  reg rm_q:u3
+  reg out_sign_0_q:u1
+  reg out_sign_1_q:u1
+  reg out_sign_2_q:u1
+  reg out_sign_3_q:u1
+  reg out_exp_0_q:u11
+  reg out_exp_1_q:u8
+  reg out_exp_2_q:u5
+  reg out_exp_3_q:u5
+  reg res_is_nan_0_q:u1
+  reg res_is_nan_1_q:u1
+  reg res_is_nan_2_q:u1
+  reg res_is_nan_3_q:u1
+  reg res_is_inf_0_q:u1
+  reg res_is_inf_1_q:u1
+  reg res_is_inf_2_q:u1
+  reg res_is_inf_3_q:u1
+  reg res_is_exact_zero_0_q:u1
+  reg res_is_exact_zero_1_q:u1
+  reg res_is_exact_zero_2_q:u1
+  reg res_is_exact_zero_3_q:u1
+  reg op_invalid_0_q:u1
+  reg op_invalid_1_q:u1
+  reg op_invalid_2_q:u1
+  reg op_invalid_3_q:u1
+  reg rt_q:u56
+  reg rt_m1_q:u53
+  reg mask_q:u13
+  reg f_r_s_q:u64
+  reg f_r_c_q:u64
+  reg nr_f_r_7b_for_nxt_cycle_s0_qds_0_q:u7
+  reg nr_f_r_9b_for_nxt_cycle_s1_qds_0_q:u9
+  reg nr_f_r_7b_for_nxt_cycle_s0_qds_1_q:u7
+  reg nr_f_r_9b_for_nxt_cycle_s1_qds_1_q:u9
+  reg nr_f_r_7b_for_nxt_cycle_s0_qds_2_q:u7
+  reg nr_f_r_9b_for_nxt_cycle_s1_qds_2_q:u9
+  reg nr_f_r_7b_for_nxt_cycle_s0_qds_3_q:u7
+  reg nr_f_r_9b_for_nxt_cycle_s1_qds_3_q:u9
+  reg m_neg_1_for_nxt_cycle_s0_qds_0_q:u5
+  reg m_neg_1_for_nxt_cycle_s0_qds_1_q:u5
+  reg m_neg_1_for_nxt_cycle_s0_qds_2_q:u5
+  reg m_neg_1_for_nxt_cycle_s0_qds_3_q:u5
+  reg m_neg_0_for_nxt_cycle_s0_qds_0_q:u4
+  reg m_neg_0_for_nxt_cycle_s0_qds_1_q:u4
+  reg m_neg_0_for_nxt_cycle_s0_qds_2_q:u4
+  reg m_neg_0_for_nxt_cycle_s0_qds_3_q:u4
+  reg m_pos_1_for_nxt_cycle_s0_qds_0_q:u3
+  reg m_pos_1_for_nxt_cycle_s0_qds_1_q:u3
+  reg m_pos_1_for_nxt_cycle_s0_qds_2_q:u3
+  reg m_pos_1_for_nxt_cycle_s0_qds_3_q:u3
+  reg m_pos_2_for_nxt_cycle_s0_qds_0_q:u4
+  reg m_pos_2_for_nxt_cycle_s0_qds_1_q:u4
+  reg m_pos_2_for_nxt_cycle_s0_qds_2_q:u4
+  reg m_pos_2_for_nxt_cycle_s0_qds_3_q:u4
+  const fflags_invalid_operation_0__w1 = op_invalid_0_q
+  const fflags_invalid_operation_1__w1 = op_invalid_1_q
+  const fflags_invalid_operation_2__w1 = op_invalid_2_q
+  const fflags_invalid_operation_3__w1 = op_invalid_3_q
+  const rt_for_inc__w1 = rt_q
+  const start_handshaked__w1 = start_valid_i & fsm_q & 1 & 1
+  const op_sign_0__w1 = (op_i >> 63) & 1
+  const op_sign_1__w1 = (op_i >> 31) & 1
+  const op_sign_2__w1 = (op_i >> 47) & 1
+  const op_sign_3__w1 = (op_i >> 15) & 1
+  const _iter_num_d_T_4__w1 = unsigned(fp_format_i == 0)
+  mut _mux_2:u11 = if _iter_num_d_T_4__w1 != 0 { op_i#[58..=62] } else { 0 }
+  const _iter_num_d_T_7__w1 = unsigned(fp_format_i == 1)
+  mut _mux_4:u11 = if _iter_num_d_T_7__w1 != 0 { op_i#[55..=62] } else { 0 }
+  const _iter_num_d_T_11__w1 = unsigned(fp_format_i == 2)
+  mut _mux_6:u11 = if _iter_num_d_T_11__w1 != 0 { op_i#[52..=62] } else { 0 }
+  const op_exp_0__w1 = (_mux_2 | _mux_4) | _mux_6
+  mut _mux_7:u8 = if _iter_num_d_T_4__w1 != 0 { op_i#[26..=30] } else { 0 }
+  mut _mux_8:u8 = if _iter_num_d_T_7__w1 != 0 { op_i#[23..=30] } else { 0 }
+  const op_exp_1__w1 = _mux_7 | _mux_8
+  const op_exp_2__w1 = op_i#[42..=46]
+  const op_exp_3__w1 = op_i#[10..=14]
+  const op_exp_is_zero_0__w1 = unsigned(op_exp_0__w1 == 0)
+  const op_exp_is_zero_1__w1 = unsigned(op_exp_1__w1 == 0)
+  const op_exp_is_zero_2__w1 = unsigned(op_exp_2__w1 == 0)
+  const op_exp_is_zero_3__w1 = unsigned(op_exp_3__w1 == 0)
+  mut _mux_13:u11 = if _iter_num_d_T_7__w1 != 0 { 0xff } else { 0x7ff }
+  mut _mux_14:u11 = if _iter_num_d_T_4__w1 != 0 { 31 } else { _mux_13 }
+  const op_exp_is_max_0__w1 = unsigned(op_exp_0__w1 == _mux_14)
+  mut _mux_16:u8 = if _iter_num_d_T_4__w1 != 0 { 31 } else { 0xff }
+  const op_exp_is_max_1__w1 = unsigned(op_exp_1__w1 == _mux_16)
+  const op_exp_is_max_2__w1 = unsigned(op_exp_2__w1 == 31)
+  const op_exp_is_max_3__w1 = unsigned(op_exp_3__w1 == 31)
+  mut _mux_20:u1 = if _iter_num_d_T_7__w1 != 0 { (op_i >> 54) & 1 } else { (op_i >> 51) & 1 }
+  mut _mux_21:u1 = if _iter_num_d_T_4__w1 != 0 { (op_i >> 57) & 1 } else { _mux_20 & 1 }
+  const op_is_qnan_0__w1 = (fp_aIsFpCanonicalNAN | (op_exp_is_max_0__w1 & _mux_21 & 1)) & 1
+  mut _mux_22:u1 = if _iter_num_d_T_4__w1 != 0 { (op_i >> 25) & 1 } else { (op_i >> 22) & 1 }
+  const op_is_qnan_1__w1 = (fp_aIsFpCanonicalNAN | (op_exp_is_max_1__w1 & _mux_22 & 1)) & 1
+  const op_is_qnan_2__w1 = (fp_aIsFpCanonicalNAN | (op_exp_is_max_2__w1 & (op_i >> 41) & 1 & 1)) & 1
+  const op_is_qnan_3__w1 = (fp_aIsFpCanonicalNAN | (op_exp_is_max_3__w1 & (op_i >> 9) & 1 & 1)) & 1
+  mut _mux_23:u1 = if _iter_num_d_T_7__w1 != 0 { (~((op_i >> 54) & 1)) & 1 } else { (~((op_i >> 51) & 1)) & 1 }
+  mut _mux_24:u1 = if _iter_num_d_T_4__w1 != 0 { (~((op_i >> 57) & 1)) & 1 } else { _mux_23 & 1 }
+  mut _mux_25:u1 = if _iter_num_d_T_4__w1 != 0 { (~((op_i >> 25) & 1)) & 1 } else { (~((op_i >> 22) & 1)) & 1 }
+  const need_2_cycles_init__w1 = (((~_iter_num_d_T_11__w1) & 1) | op_exp_is_zero_0__w1) & 1
+  mut _mux_26:u53 = if _iter_num_d_T_4__w1 != 0 { op_i#[48..=57] << 42 } else { 0 }
+  mut _mux_27:u53 = if _iter_num_d_T_7__w1 != 0 { op_i#[32..=54] << 29 } else { 0 }
+  mut _mux_28:u53 = if _iter_num_d_T_11__w1 != 0 { op_i#[0..=51] } else { 0 }
+  const op_frac_pre_shifted_0__w1 = (_mux_26 | _mux_27) | _mux_28
+  mut _mux_29:u24 = if _iter_num_d_T_4__w1 != 0 { op_i#[16..=25] << 13 } else { 0 }
+  mut _mux_30:u24 = if _iter_num_d_T_7__w1 != 0 { op_i#[0..=22] } else { 0 }
+  const op_frac_pre_shifted_1__w1 = _mux_29 | _mux_30
+  const op_frac_pre_shifted_2__w1 = op_i#[32..=41]
+  const op_frac_pre_shifted_3__w1 = op_i#[0..=9]
+  mut _mux_31:u52 = if (fsm_q & 1) != 0 { op_frac_pre_shifted_0__w1#[0..=51] } else { (rt_m1_q#[0..=51] << iter_num_q#[0..=1])#[0..=54]#[0..=51] }
+  const current_frac_0__w1 = _mux_31
+  mut _mux_32:u23 = if (fsm_q & 1) != 0 { op_frac_pre_shifted_1__w1#[0..=22] } else { rt_q#[0..=22] }
+  const current_frac_1__w1 = _mux_32
+  mut _mux_33:u10 = if (fsm_q & 1) != 0 { op_frac_pre_shifted_2__w1#[0..=9] } else { rt_q#[23..=32] }
+  const current_frac_2__w1 = _mux_33
+  mut _mux_34:u10 = if (fsm_q & 1) != 0 { op_frac_pre_shifted_3__w1#[0..=9] } else { rt_q#[33..=42] }
+  const current_frac_3__w1 = _mux_34
+  mut _mux_35:u1 = if (fsm_q & 1) != 0 { _iter_num_d_T_4__w1 & 1 } else { fp_fmt_q & 1 }
+  mut _mux_36:u1 = if (fsm_q & 1) != 0 { (_iter_num_d_T_4__w1 | _iter_num_d_T_7__w1) & 1 } else { ((fp_fmt_q & 1) | ((fp_fmt_q >> 1) & 1)) & 1 }
+  mut _mux_37:u1 = if (fsm_q & 1) != 0 { _iter_num_d_T_4__w1 & 1 } else { fp_fmt_q & 1 }
+  const rt_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  mut _mux_38:u1 = if (fsm_q & 1) != 0 { _iter_num_d_T_4__w1 & 1 } else { fp_fmt_q & 1 }
+  mut _mux_39:u1 = if (fsm_q & 1) != 0 { (_iter_num_d_T_4__w1 | _iter_num_d_T_7__w1) & 1 } else { ((fp_fmt_q & 1) | ((fp_fmt_q >> 1) & 1)) & 1 }
+  mut _mux_40:u1 = if (fsm_q & 1) != 0 { _iter_num_d_T_4__w1 & 1 } else { fp_fmt_q & 1 }
+  const rt_m1_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const mask_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  mut _mux_41:u13 = if ((fsm_q >> 1) & 1) != 0 { 0x1000 } else { mask_q#[1..=12] }
+  const _f_r_c_iter_init_31_16_T_11__w1 = unsigned(fp_format_i != 2)
+  const f_r_s_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const f_r_c_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  mut _mux_43:u3 = if _iter_num_d_T_7__w1 != 0 { 5 } else { 0 }
+  mut _mux_44:u3 = if ((fp_fmt_q >> 1) & 1) != 0 { 5 } else { 0 }
+  mut _rep_45:u2 = if ((fp_fmt_q >> 2) & 1) != 0 { 3 } else { 0 }
+  mut _mux_46:u4 = if ((fsm_q >> 1) & 1) != 0 { (((fp_fmt_q & 1) << 1) | _mux_44) | (_rep_45 << 2) } else { (iter_num_q - 1)#[0..=3] }
+  const final_iter__w1 = unsigned(iter_num_q == 0)
+  const nr_f_r_7b_for_nxt_cycle_s0_qds_0_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const nr_f_r_7b_for_nxt_cycle_s0_qds_1_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const nr_f_r_7b_for_nxt_cycle_s0_qds_2_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const nr_f_r_7b_for_nxt_cycle_s0_qds_3_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const nr_f_r_9b_for_nxt_cycle_s1_qds_0_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const nr_f_r_9b_for_nxt_cycle_s1_qds_1_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const nr_f_r_9b_for_nxt_cycle_s1_qds_2_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const nr_f_r_9b_for_nxt_cycle_s1_qds_3_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const m_neg_1_for_nxt_cycle_s0_qds_0_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const m_neg_1_for_nxt_cycle_s0_qds_1_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const m_neg_1_for_nxt_cycle_s0_qds_2_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const m_neg_1_for_nxt_cycle_s0_qds_3_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const m_neg_0_for_nxt_cycle_s0_qds_0_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const m_neg_0_for_nxt_cycle_s0_qds_1_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const m_neg_0_for_nxt_cycle_s0_qds_2_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const m_neg_0_for_nxt_cycle_s0_qds_3_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const m_pos_1_for_nxt_cycle_s0_qds_0_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const m_pos_1_for_nxt_cycle_s0_qds_1_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const m_pos_1_for_nxt_cycle_s0_qds_2_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const m_pos_1_for_nxt_cycle_s0_qds_3_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const m_pos_2_for_nxt_cycle_s0_qds_0_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const m_pos_2_for_nxt_cycle_s0_qds_1_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const m_pos_2_for_nxt_cycle_s0_qds_2_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const m_pos_2_for_nxt_cycle_s0_qds_3_en__w1 = (((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1)) & 1
+  const nr_f_r_adder_in__w1 = (((f_r_c_q#[48..=63] << 51) | (f_r_c_q#[32..=47] << 34) | (f_r_c_q#[16..=31] << 17) | f_r_c_q#[0..=15]) << 67) | ((f_r_s_q#[48..=63] << 51) | (((~(fp_fmt_q & 1)) & 1) << 50) | (f_r_s_q#[32..=47] << 34) | (((fp_fmt_q >> 2) & 1) << 33) | (f_r_s_q#[16..=31] << 17) | (((~(fp_fmt_q & 1)) & 1) << 16) | f_r_s_q#[0..=15])
+  const nr_f_r__w1 = (nr_f_r_adder_in__w1#[0..=66] + nr_f_r_adder_in__w1#[67..=133])#[0..=66]
+  const f_r_xor__w1 = f_r_s_q#[1..=62] ^ f_r_c_q#[1..=62]
+  const f_r_or__w1 = f_r_s_q#[0..=61] | f_r_c_q#[0..=61]
+  const select_rt_m1_0__w1 = (nr_f_r__w1 >> 0x42) & 1
+  const select_rt_m1_1__w1 = (nr_f_r__w1 >> 32) & 1
+  const select_rt_m1_2__w1 = (nr_f_r__w1 >> 49) & 1
+  const select_rt_m1_3__w1 = (nr_f_r__w1 >> 15) & 1
+  const rt_pre_inc__w1 = (rt_for_inc__w1#[42..=54] << 39) | (((~(fp_fmt_q & 1)) & 1 & (rt_for_inc__w1 >> 41) & 1 & 1) << 38) | (rt_for_inc__w1#[28..=40] << 25) | (((~(((fp_fmt_q & 1) | ((fp_fmt_q >> 1) & 1)) & 1)) & 1 & (rt_for_inc__w1 >> 27) & 1 & 1) << 24) | (rt_for_inc__w1#[14..=26] << 11) | (((~(fp_fmt_q & 1)) & 1 & (rt_for_inc__w1 >> 13) & 1 & 1) << 10) | rt_for_inc__w1#[3..=12]
+  mut _mux_55:u43 = if (fp_fmt_q & 1) != 0 { 0x40010004001 } else { 0 }
+  mut _mux_56:u29 = if ((fp_fmt_q >> 1) & 1) != 0 { 0x10000001 } else { 0 }
+  const _rt_rounded_0_T__w1 = rt_pre_inc__w1
+  const rt_inc_res__w1 = (rt_pre_inc__w1 + ((_mux_55 | (_mux_56 << 1)) | ((fp_fmt_q >> 2) & 1)))#[0..=52]
+  const guard_bit_rt_3__w1 = (rt_q >> 3) & 1
+  const guard_bit_rt_m1_2__w1 = (rt_m1_q >> 30) & 1
+  const guard_bit_rt_m1_3__w1 = (rt_m1_q >> 4) & 1
+  mut _mux_57:u53 = if (((((fp_fmt_q & 1 & (rt_q >> 45) & 1 & 1) | ((fp_fmt_q >> 1) & 1 & (rt_q >> 32) & 1 & 1)) & 1) | ((fp_fmt_q >> 2) & 1 & guard_bit_rt_3__w1 & 1)) & 1) == (((((fp_fmt_q & 1 & (rt_m1_q >> 43) & 1 & 1) | ((fp_fmt_q >> 1) & 1 & guard_bit_rt_m1_2__w1 & 1)) & 1) | ((fp_fmt_q >> 2) & 1 & (rt_m1_q >> 1) & 1 & 1)) & 1) { rt_inc_res__w1 } else { _rt_rounded_0_T__w1 }
+  mut _mux_58:u24 = if (((fp_fmt_q & 1 & (rt_q >> 17) & 1 & 1) | ((fp_fmt_q >> 1) & 1 & (rt_q >> 4) & 1 & 1)) & 1) == (((fp_fmt_q & 1 & (rt_m1_q >> 17) & 1 & 1) | ((fp_fmt_q >> 1) & 1 & guard_bit_rt_m1_3__w1 & 1)) & 1) { rt_inc_res__w1#[1..=24] } else { rt_pre_inc__w1#[1..=23] }
+  mut _mux_59:u11 = if ((rt_q >> 31) & 1) == guard_bit_rt_m1_2__w1 { rt_inc_res__w1#[28..=38] } else { rt_pre_inc__w1#[28..=37] }
+  mut _mux_60:u11 = if guard_bit_rt_3__w1 == guard_bit_rt_m1_3__w1 { rt_inc_res__w1#[0..=10] } else { rt_pre_inc__w1#[0..=9] }
+  const round_bit_rt_3__w1 = (rt_for_inc__w1 >> 2) & 1
+  const round_bit_rt_0__w1 = ((((fp_fmt_q & 1 & (rt_for_inc__w1 >> 44) & 1 & 1) | ((fp_fmt_q >> 1) & 1 & (rt_for_inc__w1 >> 31) & 1 & 1)) & 1) | ((fp_fmt_q >> 2) & 1 & round_bit_rt_3__w1 & 1)) & 1
+  const round_bit_rt_1__w1 = ((fp_fmt_q & 1 & (rt_for_inc__w1 >> 16) & 1 & 1) | ((fp_fmt_q >> 1) & 1 & (rt_for_inc__w1 >> 3) & 1 & 1)) & 1
+  const round_bit_rt_2__w1 = (rt_for_inc__w1 >> 30) & 1
+  const inexact_rt_0__w1 = (round_bit_rt_0__w1 | ((((((select_rt_m1_0__w1 | unsigned(f_r_xor__w1#[48..=61] != f_r_or__w1#[48..=61])) & 1) | ((~(fp_fmt_q & 1)) & 1 & unsigned(f_r_xor__w1#[36..=47] != f_r_or__w1#[36..=47]) & 1)) & 1) | ((fp_fmt_q >> 2) & 1 & unsigned(f_r_xor__w1#[8..=35] != f_r_or__w1#[8..=35]) & 1)) & 1)) & 1
+  const inexact_rt_1__w1 = (round_bit_rt_1__w1 | ((((select_rt_m1_1__w1 | unsigned(f_r_xor__w1#[16..=29] != f_r_or__w1#[16..=29])) & 1) | ((fp_fmt_q >> 1) & 1 & unsigned(f_r_xor__w1#[4..=15] != f_r_or__w1#[4..=15]) & 1)) & 1)) & 1
+  const inexact_rt_2__w1 = (round_bit_rt_2__w1 | ((select_rt_m1_2__w1 | unsigned(f_r_xor__w1#[32..=45] != f_r_or__w1#[32..=45])) & 1)) & 1
+  const inexact_rt_3__w1 = (round_bit_rt_3__w1 | ((select_rt_m1_3__w1 | unsigned(f_r_xor__w1#[0..=13] != f_r_or__w1#[0..=13])) & 1)) & 1
+  const _rt_m1_need_rup_3_T_1__w1 = unsigned(rm_q == 0)
+  const _rt_m1_need_rup_3_T__w1 = unsigned(rm_q == 3)
+  const _rt_m1_need_rup_3_T_2__w1 = unsigned(rm_q == 4)
+  const round_bit_rt_m1_2__w1 = (rt_m1_q >> 29) & 1
+  const round_bit_rt_m1_3__w1 = (rt_m1_q >> 3) & 1
+  mut _mux_64:u53 = if (((((_rt_m1_need_rup_3_T_1__w1 & round_bit_rt_0__w1 & 1) | (_rt_m1_need_rup_3_T__w1 & inexact_rt_0__w1 & 1)) & 1) | (_rt_m1_need_rup_3_T_2__w1 & round_bit_rt_0__w1 & 1)) & 1) != 0 { rt_inc_res__w1 } else { _rt_rounded_0_T__w1 }
+  mut _mux_65:u24 = if (((((_rt_m1_need_rup_3_T_1__w1 & round_bit_rt_1__w1 & 1) | (_rt_m1_need_rup_3_T__w1 & inexact_rt_1__w1 & 1)) & 1) | (_rt_m1_need_rup_3_T_2__w1 & round_bit_rt_1__w1 & 1)) & 1) != 0 { rt_inc_res__w1#[1..=24] } else { rt_pre_inc__w1#[1..=23] }
+  mut _mux_66:u11 = if (((((_rt_m1_need_rup_3_T_1__w1 & round_bit_rt_2__w1 & 1) | (_rt_m1_need_rup_3_T__w1 & inexact_rt_2__w1 & 1)) & 1) | (_rt_m1_need_rup_3_T_2__w1 & round_bit_rt_2__w1 & 1)) & 1) != 0 { rt_inc_res__w1#[28..=38] } else { rt_pre_inc__w1#[28..=37] }
+  mut _mux_67:u11 = if (((((_rt_m1_need_rup_3_T_1__w1 & round_bit_rt_3__w1 & 1) | (_rt_m1_need_rup_3_T__w1 & inexact_rt_3__w1 & 1)) & 1) | (_rt_m1_need_rup_3_T_2__w1 & round_bit_rt_3__w1 & 1)) & 1) != 0 { rt_inc_res__w1#[0..=10] } else { rt_pre_inc__w1#[0..=9] }
+  mut _mux_68:u53 = if ((_rt_m1_need_rup_3_T__w1 | ((_rt_m1_need_rup_3_T_1__w1 | _rt_m1_need_rup_3_T_2__w1) & 1 & (((((fp_fmt_q & 1 & (rt_m1_q >> 42) & 1 & 1) | ((fp_fmt_q >> 1) & 1 & round_bit_rt_m1_2__w1 & 1)) & 1) | ((fp_fmt_q >> 2) & 1 & rt_m1_q & 1 & 1)) & 1) & 1)) & 1) != 0 { _mux_57 } else { rt_m1_q#[1..=52] }
+  mut _mux_69:u24 = if ((_rt_m1_need_rup_3_T__w1 | ((_rt_m1_need_rup_3_T_1__w1 | _rt_m1_need_rup_3_T_2__w1) & 1 & (((fp_fmt_q & 1 & (rt_m1_q >> 16) & 1 & 1) | ((fp_fmt_q >> 1) & 1 & round_bit_rt_m1_3__w1 & 1)) & 1) & 1)) & 1) != 0 { _mux_58 } else { rt_m1_q#[4..=26] }
+  mut _mux_70:u11 = if ((_rt_m1_need_rup_3_T__w1 | ((_rt_m1_need_rup_3_T_1__w1 | _rt_m1_need_rup_3_T_2__w1) & 1 & round_bit_rt_m1_2__w1 & 1)) & 1) != 0 { _mux_59 } else { rt_m1_q#[30..=39] }
+  mut _mux_71:u11 = if ((_rt_m1_need_rup_3_T__w1 | ((_rt_m1_need_rup_3_T_1__w1 | _rt_m1_need_rup_3_T_2__w1) & 1 & round_bit_rt_m1_3__w1 & 1)) & 1) != 0 { _mux_60 } else { rt_m1_q#[4..=13] }
+  mut _mux_72:u53 = if select_rt_m1_0__w1 != 0 { _mux_68 } else { _mux_64 }
+  const frac_rounded_0__w1 = _mux_72
+  mut _mux_73:u24 = if select_rt_m1_1__w1 != 0 { _mux_69 } else { _mux_65 }
+  const frac_rounded_1__w1 = _mux_73
+  mut _mux_74:u11 = if select_rt_m1_2__w1 != 0 { _mux_70 } else { _mux_66 }
+  const frac_rounded_2__w1 = _mux_74
+  mut _mux_75:u11 = if select_rt_m1_3__w1 != 0 { _mux_71 } else { _mux_67 }
+  const frac_rounded_3__w1 = _mux_75
+  mut _mux_76:u11 = if ((frac_rounded_0__w1 >> 52) & 1) != 0 { (out_exp_0_q + 1)#[0..=10] } else { out_exp_0_q }
+  const exp_rounded_0__w1 = _mux_76
+  mut _mux_77:u8 = if ((frac_rounded_1__w1 >> 23) & 1) != 0 { (out_exp_1_q + 1)#[0..=7] } else { out_exp_1_q }
+  const exp_rounded_1__w1 = _mux_77
+  mut _mux_78:u5 = if ((frac_rounded_2__w1 >> 10) & 1) != 0 { (out_exp_2_q + 1)#[0..=4] } else { out_exp_2_q }
+  mut _mux_79:u5 = if ((frac_rounded_3__w1 >> 10) & 1) != 0 { (out_exp_3_q + 1)#[0..=4] } else { out_exp_3_q }
+  const _f64_exp_res_0_T__w1 = (res_is_nan_0_q | res_is_inf_0_q) & 1
+  mut _mux_80:u5 = if res_is_exact_zero_0_q != 0 { 0 } else { exp_rounded_0__w1#[0..=4] }
+  mut _mux_81:u5 = if _f64_exp_res_0_T__w1 != 0 { 31 } else { _mux_80 }
+  const _f32_exp_res_1_T__w1 = (res_is_nan_1_q | res_is_inf_1_q) & 1
+  mut _mux_82:u5 = if res_is_exact_zero_1_q != 0 { 0 } else { exp_rounded_1__w1#[0..=4] }
+  mut _mux_83:u5 = if _f32_exp_res_1_T__w1 != 0 { 31 } else { _mux_82 }
+  mut _mux_84:u5 = if res_is_exact_zero_2_q != 0 { 0 } else { _mux_78 }
+  mut _mux_85:u5 = if ((res_is_nan_2_q | res_is_inf_2_q) & 1) != 0 { 31 } else { _mux_84 }
+  mut _mux_86:u5 = if res_is_exact_zero_3_q != 0 { 0 } else { _mux_79 }
+  mut _mux_87:u5 = if ((res_is_nan_3_q | res_is_inf_3_q) & 1) != 0 { 31 } else { _mux_86 }
+  mut _mux_88:u8 = if res_is_exact_zero_0_q != 0 { 0 } else { exp_rounded_0__w1#[0..=7] }
+  mut _mux_89:u8 = if _f64_exp_res_0_T__w1 != 0 { 0xff } else { _mux_88 }
+  mut _mux_90:u8 = if res_is_exact_zero_1_q != 0 { 0 } else { exp_rounded_1__w1 }
+  mut _mux_91:u8 = if _f32_exp_res_1_T__w1 != 0 { 0xff } else { _mux_90 }
+  mut _mux_92:u11 = if res_is_exact_zero_0_q != 0 { 0 } else { exp_rounded_0__w1 }
+  mut _mux_93:u11 = if _f64_exp_res_0_T__w1 != 0 { 0x7ff } else { _mux_92 }
+  const _f64_frac_res_0_T_1__w1 = (res_is_inf_0_q | res_is_exact_zero_0_q) & 1
+  mut _mux_94:u10 = if _f64_frac_res_0_T_1__w1 != 0 { 0 } else { frac_rounded_0__w1#[42..=51] }
+  mut _mux_95:u10 = if res_is_nan_0_q != 0 { 0x200 } else { _mux_94 }
+  const _f32_frac_res_1_T_1__w1 = (res_is_inf_1_q | res_is_exact_zero_1_q) & 1
+  mut _mux_96:u10 = if _f32_frac_res_1_T_1__w1 != 0 { 0 } else { frac_rounded_1__w1#[13..=22] }
+  mut _mux_97:u10 = if res_is_nan_1_q != 0 { 0x200 } else { _mux_96 }
+  mut _mux_98:u10 = if ((res_is_inf_2_q | res_is_exact_zero_2_q) & 1) != 0 { 0 } else { frac_rounded_2__w1#[0..=9] }
+  mut _mux_99:u10 = if res_is_nan_2_q != 0 { 0x200 } else { _mux_98 }
+  mut _mux_100:u10 = if ((res_is_inf_3_q | res_is_exact_zero_3_q) & 1) != 0 { 0 } else { frac_rounded_3__w1#[0..=9] }
+  mut _mux_101:u10 = if res_is_nan_3_q != 0 { 0x200 } else { _mux_100 }
+  mut _mux_102:u23 = if _f64_frac_res_0_T_1__w1 != 0 { 0 } else { frac_rounded_0__w1#[29..=51] }
+  mut _mux_103:u23 = if res_is_nan_0_q != 0 { 0x400000 } else { _mux_102 }
+  mut _mux_104:u23 = if _f32_frac_res_1_T_1__w1 != 0 { 0 } else { frac_rounded_1__w1#[0..=22] }
+  mut _mux_105:u23 = if res_is_nan_1_q != 0 { 0x400000 } else { _mux_104 }
+  mut _mux_106:u52 = if _f64_frac_res_0_T_1__w1 != 0 { 0 } else { frac_rounded_0__w1#[0..=51] }
+  mut _mux_107:u52 = if res_is_nan_0_q != 0 { 0x8000000000000 } else { _mux_106 }
+  const f16_res_3__w1 = ((out_sign_3_q & 1) << 15) | (_mux_87 << 10) | _mux_101
+  const f32_res_1__w1 = ((out_sign_1_q & 1) << 31) | (_mux_91 << 23) | _mux_105
+  const f64_res_0__w1 = ((out_sign_0_q & 1) << 63) | (_mux_93 << 52) | _mux_107
+  mut _mux_108:u64 = if (fp_fmt_q & 1) != 0 { ((((out_sign_0_q & 1) << 15) | (_mux_81 << 10) | _mux_95) << 48) | ((((out_sign_2_q & 1) << 15) | (_mux_85 << 10) | _mux_99) << 32) | ((((out_sign_1_q & 1) << 15) | (_mux_83 << 10) | _mux_97) << 16) | f16_res_3__w1 } else { 0 }
+  mut _mux_109:u64 = if ((fp_fmt_q >> 1) & 1) != 0 { ((((out_sign_0_q & 1) << 31) | (_mux_89 << 23) | _mux_103) << 32) | f32_res_1__w1 } else { 0 }
+  mut _mux_110:u64 = if ((fp_fmt_q >> 2) & 1) != 0 { f64_res_0__w1 } else { 0 }
+  mut _mux_111:u64 = if (fp_fmt_q & 1) != 0 { f16_res_3__w1 } else { 0 }
+  mut _mux_112:u64 = if ((fp_fmt_q >> 1) & 1) != 0 { f32_res_1__w1 } else { 0 }
+  mut _mux_113:u64 = if ((fp_fmt_q >> 2) & 1) != 0 { f64_res_0__w1 } else { 0 }
+  const fflags_inexact_0__w1 = ((inexact_rt_0__w1 | select_rt_m1_0__w1) & 1) & (~res_is_nan_0_q) & 1 & 1 & (~res_is_exact_zero_0_q) & 1 & 1
+  const fflags_inexact_1__w1 = ((inexact_rt_1__w1 | select_rt_m1_1__w1) & 1) & (~res_is_nan_1_q) & 1 & 1 & (~res_is_exact_zero_1_q) & 1 & 1
+  const fflags_inexact_2__w1 = ((inexact_rt_2__w1 | select_rt_m1_2__w1) & 1) & (~res_is_nan_2_q) & 1 & 1 & (~res_is_exact_zero_2_q) & 1 & 1
+  const fflags_inexact_3__w1 = ((inexact_rt_3__w1 | select_rt_m1_3__w1) & 1) & (~res_is_nan_3_q) & 1 & 1 & (~res_is_exact_zero_3_q) & 1 & 1
+  const t1088 = fflags_inexact_3__w1 | fflags_inexact_0__w1
+  const t1089 = t1088 & 1
+  const t1090 = t1089 | fflags_inexact_1__w1
+  const t1091 = t1090 & 1
+  const t1092 = t1091 | fflags_inexact_2__w1
+  const t1093 = t1092 & 1
+  const t1094 = fflags_inexact_1__w1 | fflags_inexact_0__w1
+  const t1095 = t1094 & 1
+  const fflags_3__w1 = ((fflags_invalid_operation_3__w1 & 1) << 4) | (fflags_inexact_3__w1 & 1)
+  const fflags_1__w1 = ((fflags_invalid_operation_1__w1 & 1) << 4) | (fflags_inexact_1__w1 & 1)
+  const t1106 = fflags_inexact_0__w1 & 1
+  const t1107 = ((fflags_invalid_operation_0__w1 & 1) << 4) | t1106
+  const fflags_0__w1 = t1107
+  const t1108 = fflags_0__w1
+  const t1110 = fflags_1__w1
+  const t1112 = (t1108 << 15) | ((((fflags_invalid_operation_2__w1 & 1) << 4) | (fflags_inexact_2__w1 & 1)) << 10) | (t1110 << 5) | fflags_3__w1
+  const f16_fflags__w1 = t1112
+  const t1113 = fflags_0__w1
+  const t1114 = fflags_1__w1
+  const t1115 = (t1113 << 5) | t1114
+  const f32_fflags__w1 = t1115
+  const t1116 = fflags_0__w1
+  const t1117 = t1116
+  const f64_fflags__w1 = t1117
+  const t1120 = f16_fflags__w1
+  mut _mux_114:u20 = if (fp_fmt_q & 1) != 0 { t1120 } else { 0 }
+  const t1124 = f32_fflags__w1
+  mut _mux_115:u20 = if ((fp_fmt_q >> 1) & 1) != 0 { t1124 } else { 0 }
+  const t1128 = f64_fflags__w1
+  mut _mux_116:u20 = if ((fp_fmt_q >> 2) & 1) != 0 { t1128 } else { 0 }
+  mut _mux_117:u5 = if (fp_fmt_q & 1) != 0 { fflags_3__w1 } else { 0 }
+  const t1139 = fflags_1__w1
+  mut _mux_118:u5 = if ((fp_fmt_q >> 1) & 1) != 0 { t1139 } else { 0 }
+  const t1143 = fflags_0__w1
+  mut _mux_119:u5 = if ((fp_fmt_q >> 2) & 1) != 0 { t1143 } else { 0 }
+  mut _mux_120:u3 = if need_2_cycles_init__w1 != 0 { 2 } else { 4 }
+  mut _mux_121:u4 = if start_valid_i != 0 { _mux_120 } else { 1 }
+  mut _mux_122:u4 = if final_iter__w1 != 0 { 8 } else { 4 }
+  mut _mux_124:u4 = if ((unsigned(fsm_q != 8) | finish_ready_i) & 1) != 0 { 1 } else { 8 }
+  mut _mux_125:u4 = if fsm_q == 4 { _mux_122 } else { _mux_124 }
+  mut _mux_126:u4 = if fsm_q == 2 { 4 } else { _mux_125 }
+  mut _mux_127:u4 = if fsm_q == 1 { _mux_121 } else { _mux_126 }
+  mut _mux_128:u4 = if flush_i != 0 { 1 } else { _mux_127 }
+  fsm_q = _mux_128
+  if start_handshaked__w1 != 0 {
+    fp_fmt_q = ((_iter_num_d_T_11__w1 & 1) << 2) | ((_iter_num_d_T_7__w1 & 1) << 1) | (_iter_num_d_T_4__w1 & 1)
+  }
+  if start_handshaked__w1 != 0 {
+    rm_q = rm_i
+  }
+  mut u_lzc_0_lzc = Lzc_2::[name=u_lzc_0_lzc](io_in = op_frac_pre_shifted_0__w1)
+  mut u_lzc_1_lzc = Lzc_19::[name=u_lzc_1_lzc](io_in = op_frac_pre_shifted_1__w1)
+  mut u_lzc_2_lzc = Lzc_20::[name=u_lzc_2_lzc](io_in = op_frac_pre_shifted_2__w1)
+  mut u_lzc_3_lzc = Lzc_20::[name=u_lzc_3_lzc](io_in = op_frac_pre_shifted_3__w1)
+  mut u_fpsqrt_r16_block = fpsqrt_r16_block::[name=u_fpsqrt_r16_block](`fp_fmt_i.e2` = (fp_fmt_q >> 2) & 1, `fp_fmt_i.e1` = (fp_fmt_q >> 1) & 1, `fp_fmt_i.e0` = fp_fmt_q & 1, f_r_s_i = f_r_s_q, f_r_c_i = f_r_c_q, rt_i = rt_q, rt_m1_i = rt_m1_q, `mask_i.e12` = (mask_q >> 12) & 1, `mask_i.e11` = (mask_q >> 11) & 1, `mask_i.e10` = (mask_q >> 10) & 1, `mask_i.e9` = (mask_q >> 9) & 1, `mask_i.e8` = (mask_q >> 8) & 1, `mask_i.e7` = (mask_q >> 7) & 1, `mask_i.e6` = (mask_q >> 6) & 1, `mask_i.e5` = (mask_q >> 5) & 1, `mask_i.e4` = (mask_q >> 4) & 1, `mask_i.e3` = (mask_q >> 3) & 1, `mask_i.e2` = (mask_q >> 2) & 1, `mask_i.e1` = (mask_q >> 1) & 1, `mask_i.e0` = mask_q & 1, nr_f_r_7b_for_nxt_cycle_s0_qds_0_i = nr_f_r_7b_for_nxt_cycle_s0_qds_0_q, nr_f_r_7b_for_nxt_cycle_s0_qds_1_i = nr_f_r_7b_for_nxt_cycle_s0_qds_1_q, nr_f_r_7b_for_nxt_cycle_s0_qds_2_i = nr_f_r_7b_for_nxt_cycle_s0_qds_2_q, nr_f_r_7b_for_nxt_cycle_s0_qds_3_i = nr_f_r_7b_for_nxt_cycle_s0_qds_3_q, nr_f_r_9b_for_nxt_cycle_s1_qds_0_i = nr_f_r_9b_for_nxt_cycle_s1_qds_0_q, nr_f_r_9b_for_nxt_cycle_s1_qds_1_i = nr_f_r_9b_for_nxt_cycle_s1_qds_1_q, nr_f_r_9b_for_nxt_cycle_s1_qds_2_i = nr_f_r_9b_for_nxt_cycle_s1_qds_2_q, nr_f_r_9b_for_nxt_cycle_s1_qds_3_i = nr_f_r_9b_for_nxt_cycle_s1_qds_3_q, m_neg_1_for_nxt_cycle_s0_qds_0_i = m_neg_1_for_nxt_cycle_s0_qds_0_q, m_neg_1_for_nxt_cycle_s0_qds_1_i = m_neg_1_for_nxt_cycle_s0_qds_1_q, m_neg_1_for_nxt_cycle_s0_qds_2_i = m_neg_1_for_nxt_cycle_s0_qds_2_q, m_neg_1_for_nxt_cycle_s0_qds_3_i = m_neg_1_for_nxt_cycle_s0_qds_3_q, m_neg_0_for_nxt_cycle_s0_qds_0_i = m_neg_0_for_nxt_cycle_s0_qds_0_q, m_neg_0_for_nxt_cycle_s0_qds_1_i = m_neg_0_for_nxt_cycle_s0_qds_1_q, m_neg_0_for_nxt_cycle_s0_qds_2_i = m_neg_0_for_nxt_cycle_s0_qds_2_q, m_neg_0_for_nxt_cycle_s0_qds_3_i = m_neg_0_for_nxt_cycle_s0_qds_3_q, m_pos_1_for_nxt_cycle_s0_qds_0_i = m_pos_1_for_nxt_cycle_s0_qds_0_q, m_pos_1_for_nxt_cycle_s0_qds_1_i = m_pos_1_for_nxt_cycle_s0_qds_1_q, m_pos_1_for_nxt_cycle_s0_qds_2_i = m_pos_1_for_nxt_cycle_s0_qds_2_q, m_pos_1_for_nxt_cycle_s0_qds_3_i = m_pos_1_for_nxt_cycle_s0_qds_3_q, m_pos_2_for_nxt_cycle_s0_qds_0_i = m_pos_2_for_nxt_cycle_s0_qds_0_q, m_pos_2_for_nxt_cycle_s0_qds_1_i = m_pos_2_for_nxt_cycle_s0_qds_1_q, m_pos_2_for_nxt_cycle_s0_qds_2_i = m_pos_2_for_nxt_cycle_s0_qds_2_q, m_pos_2_for_nxt_cycle_s0_qds_3_i = m_pos_2_for_nxt_cycle_s0_qds_3_q)
+  const op_frac_is_zero_0__w1 = u_lzc_0_lzc["io_out.isZero"]
+  mut _mux_129:u6 = if op_frac_is_zero_0__w1 != 0 { 0 } else { u_lzc_0_lzc["io_out.data"]#[0..=5] }
+  mut _mux_130:u6 = if op_exp_is_zero_0__w1 != 0 { _mux_129 } else { 0 }
+  const op_l_shift_num_0__w1 = _mux_130
+  const op_frac_is_zero_1__w1 = u_lzc_1_lzc["io_out.isZero"]
+  mut _mux_131:u5 = if op_frac_is_zero_1__w1 != 0 { 0 } else { u_lzc_1_lzc["io_out.data"]#[0..=4] }
+  mut _mux_132:u5 = if op_exp_is_zero_1__w1 != 0 { _mux_131 } else { 0 }
+  const op_l_shift_num_1__w1 = _mux_132
+  const op_frac_is_zero_2__w1 = u_lzc_2_lzc["io_out.isZero"]
+  mut _mux_133:u4 = if op_frac_is_zero_2__w1 != 0 { 0 } else { u_lzc_2_lzc["io_out.data"]#[0..=3] }
+  mut _mux_134:u4 = if op_exp_is_zero_2__w1 != 0 { _mux_133 } else { 0 }
+  const op_l_shift_num_2__w1 = _mux_134
+  const op_frac_is_zero_3__w1 = u_lzc_3_lzc["io_out.isZero"]
+  mut _mux_135:u4 = if op_frac_is_zero_3__w1 != 0 { 0 } else { u_lzc_3_lzc["io_out.data"]#[0..=3] }
+  mut _mux_136:u4 = if op_exp_is_zero_3__w1 != 0 { _mux_135 } else { 0 }
+  const op_l_shift_num_3__w1 = _mux_136
+  mut _mux_137:u6 = if _iter_num_d_T_7__w1 != 0 { (3 << 1) | ((~((op_l_shift_num_0__w1 >> 4) & 1)) & 1) } else { 0 }
+  mut _mux_138:u6 = if _iter_num_d_T_11__w1 != 0 { (15 << 2) | (~op_l_shift_num_0__w1#[4..=5])#[0..=1] } else { 0 }
+  mut _mux_139:u3 = if _iter_num_d_T_7__w1 != 0 { (3 << 1) | ((~((op_l_shift_num_1__w1 >> 4) & 1)) & 1) } else { 0 }
+  mut _mux_140:u1 = if op_exp_is_zero_0__w1 != 0 { op_l_shift_num_0__w1 & 1 } else { (~(op_exp_0__w1 & 1)) & 1 }
+  const exp_is_odd_pre_0_0__w1 = _mux_140
+  mut _mux_141:u1 = if (fsm_q & 1) != 0 { exp_is_odd_pre_0_0__w1 & 1 } else { mask_q & 1 }
+  const current_exp_is_odd_0__w1 = _mux_141
+  const rt_1st_0__w1 = ((unsigned((((current_exp_is_odd_0__w1 & 1) << 1) | ((current_frac_0__w1 >> 51) & 1)) == 3) & 1) << 2) | (((unsigned((((current_exp_is_odd_0__w1 & 1) << 1) | ((current_frac_0__w1 >> 51) & 1)) == 1) | unsigned((((current_exp_is_odd_0__w1 & 1) << 1) | ((current_frac_0__w1 >> 51) & 1)) == 2)) & 1) << 1) | (unsigned((((current_exp_is_odd_0__w1 & 1) << 1) | ((current_frac_0__w1 >> 51) & 1)) == 0) & 1)
+  mut _rep_146:u2 = if ((rt_1st_0__w1 >> 1) & 1) != 0 { 3 } else { 0 }
+  const rt_iter_init_0__w1 = (((rt_1st_0__w1 & 1) << 53) | (_rep_146 << 52)) | (((rt_1st_0__w1 >> 2) & 1) << 54)
+  mut _rep_147:u2 = if ((rt_1st_0__w1 >> 2) & 1) != 0 { 3 } else { 0 }
+  mut _mux_148:u54 = if current_exp_is_odd_0__w1 != 0 { (1 << 53) | (current_frac_0__w1 << 1) } else { (1 << 52) | current_frac_0__w1 }
+  const f_r_s_iter_init_0__w1 = ((3 << 54) | _mux_148)#[0..=53] << 2
+  mut _rep_149:u2 = if (rt_1st_0__w1 & 1) != 0 { 3 } else { 0 }
+  mut _rep_150:u3 = if ((rt_1st_0__w1 >> 1) & 1) != 0 { 7 } else { 0 }
+  const f_r_c_iter_init_0__w1 = (_rep_149 << 54) | (_rep_150 << 52)
+  mut _mux_151:u1 = if op_exp_is_zero_1__w1 != 0 { op_l_shift_num_1__w1 & 1 } else { (~(op_exp_1__w1 & 1)) & 1 }
+  const exp_is_odd_pre_0_1__w1 = _mux_151
+  mut _mux_152:u1 = if (fsm_q & 1) != 0 { exp_is_odd_pre_0_1__w1 & 1 } else { (mask_q >> 1) & 1 }
+  const current_exp_is_odd_1__w1 = _mux_152
+  const rt_1st_1__w1 = ((unsigned((((current_exp_is_odd_1__w1 & 1) << 1) | ((current_frac_1__w1 >> 22) & 1)) == 3) & 1) << 2) | (((unsigned((((current_exp_is_odd_1__w1 & 1) << 1) | ((current_frac_1__w1 >> 22) & 1)) == 1) | unsigned((((current_exp_is_odd_1__w1 & 1) << 1) | ((current_frac_1__w1 >> 22) & 1)) == 2)) & 1) << 1) | (unsigned((((current_exp_is_odd_1__w1 & 1) << 1) | ((current_frac_1__w1 >> 22) & 1)) == 0) & 1)
+  mut _rep_157:u2 = if ((rt_1st_1__w1 >> 1) & 1) != 0 { 3 } else { 0 }
+  const rt_iter_init_1__w1 = (((rt_1st_1__w1 & 1) << 25) | (_rep_157 << 24)) | (((rt_1st_1__w1 >> 2) & 1) << 26)
+  mut _rep_158:u2 = if ((rt_1st_1__w1 >> 2) & 1) != 0 { 3 } else { 0 }
+  mut _mux_159:u26 = if current_exp_is_odd_1__w1 != 0 { (1 << 25) | (current_frac_1__w1 << 2) } else { (1 << 24) | (current_frac_1__w1 << 1) }
+  const f_r_s_iter_init_1__w1 = ((3 << 26) | _mux_159)#[0..=25] << 2
+  mut _rep_160:u2 = if (rt_1st_1__w1 & 1) != 0 { 3 } else { 0 }
+  mut _rep_161:u3 = if ((rt_1st_1__w1 >> 1) & 1) != 0 { 7 } else { 0 }
+  const f_r_c_iter_init_1__w1 = (_rep_160 << 26) | (_rep_161 << 24)
+  mut _mux_162:u1 = if op_exp_is_zero_2__w1 != 0 { op_l_shift_num_2__w1 & 1 } else { (~(op_exp_2__w1 & 1)) & 1 }
+  const exp_is_odd_pre_0_2__w1 = _mux_162
+  mut _mux_163:u1 = if (fsm_q & 1) != 0 { exp_is_odd_pre_0_2__w1 & 1 } else { (mask_q >> 2) & 1 }
+  const current_exp_is_odd_2__w1 = _mux_163
+  const rt_1st_2__w1 = ((unsigned((((current_exp_is_odd_2__w1 & 1) << 1) | ((current_frac_2__w1 >> 9) & 1)) == 3) & 1) << 2) | (((unsigned((((current_exp_is_odd_2__w1 & 1) << 1) | ((current_frac_2__w1 >> 9) & 1)) == 1) | unsigned((((current_exp_is_odd_2__w1 & 1) << 1) | ((current_frac_2__w1 >> 9) & 1)) == 2)) & 1) << 1) | (unsigned((((current_exp_is_odd_2__w1 & 1) << 1) | ((current_frac_2__w1 >> 9) & 1)) == 0) & 1)
+  mut _rep_168:u2 = if ((rt_1st_2__w1 >> 1) & 1) != 0 { 3 } else { 0 }
+  const rt_iter_init_2__w1 = (((rt_1st_2__w1 & 1) << 13) | (_rep_168 << 12)) | (((rt_1st_2__w1 >> 2) & 1) << 14)
+  mut _rep_169:u2 = if ((rt_1st_2__w1 >> 2) & 1) != 0 { 3 } else { 0 }
+  mut _mux_170:u14 = if current_exp_is_odd_2__w1 != 0 { (1 << 13) | (current_frac_2__w1 << 3) } else { (1 << 12) | (current_frac_2__w1 << 2) }
+  const f_r_s_iter_init_2__w1 = ((3 << 14) | _mux_170)#[0..=13] << 2
+  mut _rep_171:u2 = if (rt_1st_2__w1 & 1) != 0 { 3 } else { 0 }
+  mut _rep_172:u3 = if ((rt_1st_2__w1 >> 1) & 1) != 0 { 7 } else { 0 }
+  const f_r_c_iter_init_2__w1 = (_rep_171 << 14) | (_rep_172 << 12)
+  mut _mux_173:u1 = if op_exp_is_zero_3__w1 != 0 { op_l_shift_num_3__w1 & 1 } else { (~(op_exp_3__w1 & 1)) & 1 }
+  const exp_is_odd_pre_0_3__w1 = _mux_173
+  mut _mux_174:u1 = if (fsm_q & 1) != 0 { exp_is_odd_pre_0_3__w1 & 1 } else { (mask_q >> 3) & 1 }
+  const current_exp_is_odd_3__w1 = _mux_174
+  const rt_1st_3__w1 = ((unsigned((((current_exp_is_odd_3__w1 & 1) << 1) | ((current_frac_3__w1 >> 9) & 1)) == 3) & 1) << 2) | (((unsigned((((current_exp_is_odd_3__w1 & 1) << 1) | ((current_frac_3__w1 >> 9) & 1)) == 1) | unsigned((((current_exp_is_odd_3__w1 & 1) << 1) | ((current_frac_3__w1 >> 9) & 1)) == 2)) & 1) << 1) | (unsigned((((current_exp_is_odd_3__w1 & 1) << 1) | ((current_frac_3__w1 >> 9) & 1)) == 0) & 1)
+  mut _rep_179:u2 = if ((rt_1st_3__w1 >> 1) & 1) != 0 { 3 } else { 0 }
+  const rt_iter_init_3__w1 = (((rt_1st_3__w1 & 1) << 13) | (_rep_179 << 12)) | (((rt_1st_3__w1 >> 2) & 1) << 14)
+  mut _rep_180:u2 = if ((rt_1st_3__w1 >> 2) & 1) != 0 { 3 } else { 0 }
+  mut _mux_181:u14 = if current_exp_is_odd_3__w1 != 0 { (1 << 13) | (current_frac_3__w1 << 3) } else { (1 << 12) | (current_frac_3__w1 << 2) }
+  const f_r_s_iter_init_3__w1 = ((3 << 14) | _mux_181)#[0..=13] << 2
+  mut _rep_182:u2 = if (rt_1st_3__w1 & 1) != 0 { 3 } else { 0 }
+  mut _rep_183:u3 = if ((rt_1st_3__w1 >> 1) & 1) != 0 { 7 } else { 0 }
+  const f_r_c_iter_init_3__w1 = (_rep_182 << 14) | (_rep_183 << 12)
+  mut _mux_184:u2 = if _mux_35 != 0 { rt_iter_init_2__w1#[12..=13] } else { 0 }
+  mut _mux_185:u2 = if _mux_36 != 0 { rt_iter_init_1__w1#[24..=25] } else { 0 }
+  mut _mux_186:u2 = if _mux_37 != 0 { rt_iter_init_3__w1#[12..=13] } else { 0 }
+  const rt_iter_init__w1 = (rt_iter_init_0__w1#[52..=53] << 54) | (_mux_184 << 40) | (_mux_185 << 26) | (_mux_186 << 12)
+  mut _mux_187:u56 = if need_2_cycles_init__w1 != 0 { (rt_q#[43..=55] << 43) | ((op_frac_pre_shifted_3__w1#[0..=9] << op_l_shift_num_3__w1)#[0..=24]#[0..=9] << 33) | ((op_frac_pre_shifted_2__w1#[0..=9] << op_l_shift_num_2__w1)#[0..=24]#[0..=9] << 23) | (op_frac_pre_shifted_1__w1#[0..=22] << op_l_shift_num_1__w1)#[0..=53]#[0..=22] } else { rt_iter_init__w1 }
+  mut _mux_188:u56 = if ((fsm_q >> 1) & 1) != 0 { rt_iter_init__w1 } else { u_fpsqrt_r16_block.nxt_rt_o#[0..=55] }
+  mut _mux_189:u56 = if (fsm_q & 1) != 0 { _mux_187 } else { _mux_188 }
+  const rt_m1_iter_init__w1 = (((((((rt_1st_0__w1 & 1) << 52) | (((rt_1st_0__w1 >> 1) & 1) << 53)) | (_rep_147 << 52)) >> 52) & 1) << 52) | ((_mux_38 & (((((rt_1st_2__w1 & 1) << 12) | (((rt_1st_2__w1 >> 1) & 1) << 13)) | (_rep_169 << 12)) >> 12) & 1 & 1) << 39) | ((_mux_39 & (((((rt_1st_1__w1 & 1) << 24) | (((rt_1st_1__w1 >> 1) & 1) << 25)) | (_rep_158 << 24)) >> 24) & 1 & 1) << 26) | ((_mux_40 & (((((rt_1st_3__w1 & 1) << 12) | (((rt_1st_3__w1 >> 1) & 1) << 13)) | (_rep_180 << 12)) >> 12) & 1 & 1) << 13)
+  mut _mux_190:u53 = if need_2_cycles_init__w1 != 0 { (((rt_m1_q >> 52) & 1) << 52) | (op_frac_pre_shifted_0__w1#[0..=51] << (op_l_shift_num_0__w1#[2..=5] << 2))#[0..=114]#[0..=51] } else { rt_m1_iter_init__w1 }
+  mut _mux_191:u53 = if ((fsm_q >> 1) & 1) != 0 { rt_m1_iter_init__w1 } else { u_fpsqrt_r16_block.nxt_rt_m1_o#[0..=52] }
+  mut _mux_192:u53 = if (fsm_q & 1) != 0 { _mux_190 } else { _mux_191 }
+  mut _mux_193:u13 = if need_2_cycles_init__w1 != 0 { (mask_q#[4..=12] << 4) | ((exp_is_odd_pre_0_3__w1 & 1) << 3) | ((exp_is_odd_pre_0_2__w1 & 1) << 2) | ((exp_is_odd_pre_0_1__w1 & 1) << 1) | (exp_is_odd_pre_0_0__w1 & 1) } else { 0x1000 }
+  mut _mux_194:u13 = if (fsm_q & 1) != 0 { _mux_193 } else { _mux_41 }
+  mut _mux_195:u16 = if ((fsm_q >> 1) & 1 & fp_fmt_q & 1 & 1) != 0 { f_r_s_iter_init_2__w1 } else { f_r_s_iter_init_0__w1#[24..=39] }
+  mut _mux_196:u16 = if (((fsm_q & 1 & _iter_num_d_T_11__w1 & 1) | ((fsm_q >> 1) & 1 & (fp_fmt_q >> 2) & 1 & 1)) & 1) != 0 { f_r_s_iter_init_0__w1#[8..=23] } else { 0 }
+  mut _mux_197:u16 = if (((fsm_q & 1 & _f_r_c_iter_init_31_16_T_11__w1 & 1) | ((fsm_q >> 1) & 1 & (~((fp_fmt_q >> 2) & 1)) & 1 & 1)) & 1) != 0 { f_r_s_iter_init_1__w1#[12..=27] } else { 0 }
+  mut _mux_198:u16 = if (((fsm_q & 1 & _iter_num_d_T_4__w1 & 1) | ((fsm_q >> 1) & 1 & fp_fmt_q & 1 & 1)) & 1) != 0 { f_r_s_iter_init_3__w1 } else { 0 }
+  mut _mux_199:u16 = if (((fsm_q & 1 & _iter_num_d_T_7__w1 & 1) | ((fsm_q >> 1) & 1 & (fp_fmt_q >> 1) & 1 & 1)) & 1) != 0 { f_r_s_iter_init_1__w1#[0..=11] << 4 } else { 0 }
+  mut _mux_200:u16 = if (((fsm_q & 1 & _iter_num_d_T_11__w1 & 1) | ((fsm_q >> 1) & 1 & (fp_fmt_q >> 2) & 1 & 1)) & 1) != 0 { f_r_s_iter_init_0__w1#[0..=7] << 8 } else { 0 }
+  mut _mux_201:u16 = if ((fsm_q >> 1) & 1 & fp_fmt_q & 1 & 1) != 0 { f_r_c_iter_init_2__w1 } else { f_r_c_iter_init_0__w1#[24..=39] }
+  mut _mux_202:u16 = if (((fsm_q & 1 & _iter_num_d_T_11__w1 & 1) | ((fsm_q >> 1) & 1 & (fp_fmt_q >> 2) & 1 & 1)) & 1) != 0 { f_r_c_iter_init_0__w1#[8..=23] } else { 0 }
+  mut _mux_203:u16 = if (((fsm_q & 1 & _f_r_c_iter_init_31_16_T_11__w1 & 1) | ((fsm_q >> 1) & 1 & (~((fp_fmt_q >> 2) & 1)) & 1 & 1)) & 1) != 0 { f_r_c_iter_init_1__w1#[12..=27] } else { 0 }
+  mut _mux_204:u16 = if (((fsm_q & 1 & _iter_num_d_T_4__w1 & 1) | ((fsm_q >> 1) & 1 & fp_fmt_q & 1 & 1)) & 1) != 0 { f_r_c_iter_init_3__w1 } else { 0 }
+  mut _mux_205:u16 = if (((fsm_q & 1 & _iter_num_d_T_7__w1 & 1) | ((fsm_q >> 1) & 1 & (fp_fmt_q >> 1) & 1 & 1)) & 1) != 0 { f_r_c_iter_init_1__w1#[0..=11] << 4 } else { 0 }
+  mut _mux_206:u16 = if (((fsm_q & 1 & _iter_num_d_T_11__w1 & 1) | ((fsm_q >> 1) & 1 & (fp_fmt_q >> 2) & 1 & 1)) & 1) != 0 { f_r_c_iter_init_0__w1#[0..=7] << 8 } else { 0 }
+  mut _mux_207:u64 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { (f_r_s_iter_init_0__w1#[40..=55] << 48) | (_mux_195 << 32) | ((_mux_196 | _mux_197) << 16) | ((_mux_198 | _mux_199) | _mux_200) } else { u_fpsqrt_r16_block.nxt_f_r_s_o#[0..=63] }
+  mut _mux_208:u64 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { (f_r_c_iter_init_0__w1#[40..=55] << 48) | (_mux_201 << 32) | ((_mux_202 | _mux_203) << 16) | ((_mux_204 | _mux_205) | _mux_206) } else { u_fpsqrt_r16_block.nxt_f_r_c_o#[0..=63] }
+  mut _rep_209:u2 = if (_iter_num_d_T_11__w1 & 1) != 0 { 3 } else { 0 }
+  mut _mux_210:u4 = if need_2_cycles_init__w1 != 0 { (iter_num_q#[2..=3] << 2) | op_l_shift_num_0__w1#[0..=1] } else { (((_iter_num_d_T_4__w1 & 1) << 1) | _mux_43) | (_rep_209 << 2) }
+  mut _mux_211:u4 = if (fsm_q & 1) != 0 { _mux_210 } else { _mux_46 }
+  mut _mux_212:u7 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { (((f_r_s_iter_init_0__w1#[52..=55] + f_r_c_iter_init_0__w1#[52..=55])#[0..=3] << 4) | f_r_s_iter_init_0__w1#[48..=51])#[1..=7] } else { u_fpsqrt_r16_block.adder_7b_res_for_nxt_cycle_s0_qds_0_o#[0..=6] }
+  mut _mux_213:u7 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { (((f_r_s_iter_init_1__w1#[24..=27] + f_r_c_iter_init_1__w1#[24..=27])#[0..=3] << 4) | f_r_s_iter_init_1__w1#[20..=23])#[1..=7] } else { u_fpsqrt_r16_block.adder_7b_res_for_nxt_cycle_s0_qds_1_o#[0..=6] }
+  mut _mux_214:u7 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { (((f_r_s_iter_init_2__w1#[12..=15] + f_r_c_iter_init_2__w1#[12..=15])#[0..=3] << 4) | f_r_s_iter_init_2__w1#[8..=11])#[1..=7] } else { u_fpsqrt_r16_block.adder_7b_res_for_nxt_cycle_s0_qds_2_o#[0..=6] }
+  mut _mux_215:u7 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { (((f_r_s_iter_init_3__w1#[12..=15] + f_r_c_iter_init_3__w1#[12..=15])#[0..=3] << 4) | f_r_s_iter_init_3__w1#[8..=11])#[1..=7] } else { u_fpsqrt_r16_block.adder_7b_res_for_nxt_cycle_s0_qds_3_o#[0..=6] }
+  mut _mux_216:u9 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { ((f_r_s_iter_init_0__w1#[52..=53] + f_r_c_iter_init_0__w1#[52..=53])#[0..=1] << 7) | f_r_s_iter_init_0__w1#[45..=51] } else { u_fpsqrt_r16_block.adder_9b_res_for_nxt_cycle_s1_qds_0_o#[0..=8] }
+  mut _mux_217:u9 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { ((f_r_s_iter_init_1__w1#[24..=25] + f_r_c_iter_init_1__w1#[24..=25])#[0..=1] << 7) | f_r_s_iter_init_1__w1#[17..=23] } else { u_fpsqrt_r16_block.adder_9b_res_for_nxt_cycle_s1_qds_1_o#[0..=8] }
+  mut _mux_218:u9 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { ((f_r_s_iter_init_2__w1#[12..=13] + f_r_c_iter_init_2__w1#[12..=13])#[0..=1] << 7) | f_r_s_iter_init_2__w1#[5..=11] } else { u_fpsqrt_r16_block.adder_9b_res_for_nxt_cycle_s1_qds_2_o#[0..=8] }
+  mut _mux_219:u9 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { ((f_r_s_iter_init_3__w1#[12..=13] + f_r_c_iter_init_3__w1#[12..=13])#[0..=1] << 7) | f_r_s_iter_init_3__w1#[5..=11] } else { u_fpsqrt_r16_block.adder_9b_res_for_nxt_cycle_s1_qds_3_o#[0..=8] }
+  if ((((start_handshaked__w1 | ((fsm_q >> 1) & 1)) & 1) | ((fsm_q >> 2) & 1 & (~final_iter__w1) & 1 & 1)) & 1) != 0 {
+    iter_num_q = _mux_211
+  }
+  if rt_en__w1 != 0 {
+    rt_q = _mux_189
+  }
+  if rt_m1_en__w1 != 0 {
+    rt_m1_q = _mux_192
+  }
+  if mask_en__w1 != 0 {
+    mask_q = _mux_194
+  }
+  if f_r_s_en__w1 != 0 {
+    f_r_s_q = _mux_207
+  }
+  if f_r_c_en__w1 != 0 {
+    f_r_c_q = _mux_208
+  }
+  if nr_f_r_7b_for_nxt_cycle_s0_qds_0_en__w1 != 0 {
+    nr_f_r_7b_for_nxt_cycle_s0_qds_0_q = _mux_212
+  }
+  if nr_f_r_9b_for_nxt_cycle_s1_qds_0_en__w1 != 0 {
+    nr_f_r_9b_for_nxt_cycle_s1_qds_0_q = _mux_216
+  }
+  if nr_f_r_7b_for_nxt_cycle_s0_qds_1_en__w1 != 0 {
+    nr_f_r_7b_for_nxt_cycle_s0_qds_1_q = _mux_213
+  }
+  if nr_f_r_9b_for_nxt_cycle_s1_qds_1_en__w1 != 0 {
+    nr_f_r_9b_for_nxt_cycle_s1_qds_1_q = _mux_217
+  }
+  if nr_f_r_7b_for_nxt_cycle_s0_qds_2_en__w1 != 0 {
+    nr_f_r_7b_for_nxt_cycle_s0_qds_2_q = _mux_214
+  }
+  if nr_f_r_9b_for_nxt_cycle_s1_qds_2_en__w1 != 0 {
+    nr_f_r_9b_for_nxt_cycle_s1_qds_2_q = _mux_218
+  }
+  if nr_f_r_7b_for_nxt_cycle_s0_qds_3_en__w1 != 0 {
+    nr_f_r_7b_for_nxt_cycle_s0_qds_3_q = _mux_215
+  }
+  if nr_f_r_9b_for_nxt_cycle_s1_qds_3_en__w1 != 0 {
+    nr_f_r_9b_for_nxt_cycle_s1_qds_3_q = _mux_219
+  }
+  mut u_r4_qds_cg_iter_init_0 = r4_qds_cg::[name=u_r4_qds_cg_iter_init_0](a0_i = (rt_iter_init_0__w1 >> 54) & 1, a2_i = (rt_iter_init_0__w1 >> 52) & 1, a3_i = (rt_iter_init_0__w1 >> 51) & 1, a4_i = (rt_iter_init_0__w1 >> 50) & 1)
+  mut u_r4_qds_cg_iter_init_1 = r4_qds_cg::[name=u_r4_qds_cg_iter_init_1](a0_i = (rt_iter_init_1__w1 >> 26) & 1, a2_i = (rt_iter_init_1__w1 >> 24) & 1, a3_i = (rt_iter_init_1__w1 >> 23) & 1, a4_i = (rt_iter_init_1__w1 >> 22) & 1)
+  mut u_r4_qds_cg_iter_init_2 = r4_qds_cg::[name=u_r4_qds_cg_iter_init_2](a0_i = (rt_iter_init_2__w1 >> 14) & 1, a2_i = (rt_iter_init_2__w1 >> 12) & 1, a3_i = (rt_iter_init_2__w1 >> 11) & 1, a4_i = (rt_iter_init_2__w1 >> 10) & 1)
+  mut u_r4_qds_cg_iter_init_3 = r4_qds_cg::[name=u_r4_qds_cg_iter_init_3](a0_i = (rt_iter_init_3__w1 >> 14) & 1, a2_i = (rt_iter_init_3__w1 >> 12) & 1, a3_i = (rt_iter_init_3__w1 >> 11) & 1, a4_i = (rt_iter_init_3__w1 >> 10) & 1)
+  const op_is_zero_0__w1 = (~fp_aIsFpCanonicalNAN) & 1 & op_exp_is_zero_0__w1 & 1 & op_frac_is_zero_0__w1 & 1
+  const op_is_zero_1__w1 = (~fp_aIsFpCanonicalNAN) & 1 & op_exp_is_zero_1__w1 & 1 & op_frac_is_zero_1__w1 & 1
+  const op_is_zero_2__w1 = (~fp_aIsFpCanonicalNAN) & 1 & op_exp_is_zero_2__w1 & 1 & op_frac_is_zero_2__w1 & 1
+  const op_is_zero_3__w1 = (~fp_aIsFpCanonicalNAN) & 1 & op_exp_is_zero_3__w1 & 1 & op_frac_is_zero_3__w1 & 1
+  const op_is_snan_0__w1 = (~fp_aIsFpCanonicalNAN) & 1 & op_exp_is_max_0__w1 & 1 & (~op_frac_is_zero_0__w1) & 1 & 1 & _mux_24 & 1
+  const op_is_snan_1__w1 = (~fp_aIsFpCanonicalNAN) & 1 & op_exp_is_max_1__w1 & 1 & (~op_frac_is_zero_1__w1) & 1 & 1 & _mux_25 & 1
+  const op_is_snan_2__w1 = (~fp_aIsFpCanonicalNAN) & 1 & op_exp_is_max_2__w1 & 1 & (~op_frac_is_zero_2__w1) & 1 & 1 & (~((op_i >> 41) & 1)) & 1 & 1
+  const op_is_snan_3__w1 = (~fp_aIsFpCanonicalNAN) & 1 & op_exp_is_max_3__w1 & 1 & (~op_frac_is_zero_3__w1) & 1 & 1 & (~((op_i >> 9) & 1)) & 1 & 1
+  const op_invalid_0_d__w1 = ((op_sign_0__w1 & (~op_is_zero_0__w1) & 1 & 1 & (~op_is_qnan_0__w1) & 1 & 1) | op_is_snan_0__w1) & 1
+  const op_invalid_1_d__w1 = ((op_sign_1__w1 & (~op_is_zero_1__w1) & 1 & 1 & (~op_is_qnan_1__w1) & 1 & 1) | op_is_snan_1__w1) & 1
+  const op_invalid_2_d__w1 = ((op_sign_2__w1 & (~op_is_zero_2__w1) & 1 & 1 & (~op_is_qnan_2__w1) & 1 & 1) | op_is_snan_2__w1) & 1
+  const op_invalid_3_d__w1 = ((op_sign_3__w1 & (~op_is_zero_3__w1) & 1 & 1 & (~op_is_qnan_3__w1) & 1 & 1) | op_is_snan_3__w1) & 1
+  const res_is_nan_0_d__w1 = (((op_is_qnan_0__w1 | op_is_snan_0__w1) & 1) | op_invalid_0_d__w1) & 1
+  const res_is_nan_1_d__w1 = (((op_is_qnan_1__w1 | op_is_snan_1__w1) & 1) | op_invalid_1_d__w1) & 1
+  const res_is_nan_2_d__w1 = (((op_is_qnan_2__w1 | op_is_snan_2__w1) & 1) | op_invalid_2_d__w1) & 1
+  const res_is_nan_3_d__w1 = (((op_is_qnan_3__w1 | op_is_snan_3__w1) & 1) | op_invalid_3_d__w1) & 1
+  mut _mux_220:u5 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { u_r4_qds_cg_iter_init_0.m_neg_1_o#[0..=4] } else { u_fpsqrt_r16_block.m_neg_1_to_nxt_cycle_0_o#[0..=4] }
+  mut _mux_221:u5 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { u_r4_qds_cg_iter_init_1.m_neg_1_o#[0..=4] } else { u_fpsqrt_r16_block.m_neg_1_to_nxt_cycle_1_o#[0..=4] }
+  mut _mux_222:u5 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { u_r4_qds_cg_iter_init_2.m_neg_1_o#[0..=4] } else { u_fpsqrt_r16_block.m_neg_1_to_nxt_cycle_2_o#[0..=4] }
+  mut _mux_223:u5 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { u_r4_qds_cg_iter_init_3.m_neg_1_o#[0..=4] } else { u_fpsqrt_r16_block.m_neg_1_to_nxt_cycle_3_o#[0..=4] }
+  mut _mux_224:u4 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { u_r4_qds_cg_iter_init_0.m_neg_0_o#[0..=3] } else { u_fpsqrt_r16_block.m_neg_0_to_nxt_cycle_0_o#[0..=3] }
+  mut _mux_225:u4 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { u_r4_qds_cg_iter_init_1.m_neg_0_o#[0..=3] } else { u_fpsqrt_r16_block.m_neg_0_to_nxt_cycle_1_o#[0..=3] }
+  mut _mux_226:u4 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { u_r4_qds_cg_iter_init_2.m_neg_0_o#[0..=3] } else { u_fpsqrt_r16_block.m_neg_0_to_nxt_cycle_2_o#[0..=3] }
+  mut _mux_227:u4 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { u_r4_qds_cg_iter_init_3.m_neg_0_o#[0..=3] } else { u_fpsqrt_r16_block.m_neg_0_to_nxt_cycle_3_o#[0..=3] }
+  mut _mux_228:u3 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { u_r4_qds_cg_iter_init_0.m_pos_1_o#[0..=2] } else { u_fpsqrt_r16_block.m_pos_1_to_nxt_cycle_0_o#[0..=2] }
+  mut _mux_229:u3 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { u_r4_qds_cg_iter_init_1.m_pos_1_o#[0..=2] } else { u_fpsqrt_r16_block.m_pos_1_to_nxt_cycle_1_o#[0..=2] }
+  mut _mux_230:u3 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { u_r4_qds_cg_iter_init_2.m_pos_1_o#[0..=2] } else { u_fpsqrt_r16_block.m_pos_1_to_nxt_cycle_2_o#[0..=2] }
+  mut _mux_231:u3 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { u_r4_qds_cg_iter_init_3.m_pos_1_o#[0..=2] } else { u_fpsqrt_r16_block.m_pos_1_to_nxt_cycle_3_o#[0..=2] }
+  mut _mux_232:u4 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { u_r4_qds_cg_iter_init_0.m_pos_2_o#[1..=4] } else { u_fpsqrt_r16_block.m_pos_2_to_nxt_cycle_0_o#[1..=4] }
+  mut _mux_233:u4 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { u_r4_qds_cg_iter_init_1.m_pos_2_o#[1..=4] } else { u_fpsqrt_r16_block.m_pos_2_to_nxt_cycle_1_o#[1..=4] }
+  mut _mux_234:u4 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { u_r4_qds_cg_iter_init_2.m_pos_2_o#[1..=4] } else { u_fpsqrt_r16_block.m_pos_2_to_nxt_cycle_2_o#[1..=4] }
+  mut _mux_235:u4 = if (((fsm_q & 1) | ((fsm_q >> 1) & 1)) & 1) != 0 { u_r4_qds_cg_iter_init_3.m_pos_2_o#[1..=4] } else { u_fpsqrt_r16_block.m_pos_2_to_nxt_cycle_3_o#[1..=4] }
+  if start_handshaked__w1 != 0 {
+    out_sign_0_q = (~res_is_nan_0_d__w1) & 1 & op_sign_0__w1 & 1
+  }
+  if start_handshaked__w1 != 0 {
+    out_sign_1_q = (~res_is_nan_1_d__w1) & 1 & op_sign_1__w1 & 1
+  }
+  if start_handshaked__w1 != 0 {
+    out_sign_2_q = (~res_is_nan_2_d__w1) & 1 & op_sign_2__w1 & 1
+  }
+  if start_handshaked__w1 != 0 {
+    out_sign_3_q = (~res_is_nan_3_d__w1) & 1 & op_sign_3__w1 & 1
+  }
+  if start_handshaked__w1 != 0 {
+    out_exp_0_q = (((op_exp_0__w1#[1..=10] << 1) | (((op_exp_0__w1 & 1) | op_exp_is_zero_0__w1) & 1)) + (((_mux_137 | _mux_138) << 4) | (~op_l_shift_num_0__w1#[0..=3])#[0..=3]))#[0..=11]#[1..=11]
+  }
+  if start_handshaked__w1 != 0 {
+    out_exp_1_q = (((op_exp_1__w1#[1..=7] << 1) | (((op_exp_1__w1 & 1) | op_exp_is_zero_1__w1) & 1)) + ((_mux_139 << 4) | (~op_l_shift_num_1__w1#[0..=3])#[0..=3]))#[0..=8]#[1..=8]
+  }
+  if start_handshaked__w1 != 0 {
+    out_exp_2_q = (((op_exp_2__w1#[1..=4] << 1) | (((op_exp_2__w1 & 1) | op_exp_is_zero_2__w1) & 1)) + (~op_l_shift_num_2__w1)#[0..=3])#[0..=5]#[1..=5]
+  }
+  if start_handshaked__w1 != 0 {
+    out_exp_3_q = (((op_exp_3__w1#[1..=4] << 1) | (((op_exp_3__w1 & 1) | op_exp_is_zero_3__w1) & 1)) + (~op_l_shift_num_3__w1)#[0..=3])#[0..=5]#[1..=5]
+  }
+  if start_handshaked__w1 != 0 {
+    res_is_nan_0_q = res_is_nan_0_d__w1
+  }
+  if start_handshaked__w1 != 0 {
+    res_is_nan_1_q = res_is_nan_1_d__w1
+  }
+  if start_handshaked__w1 != 0 {
+    res_is_nan_2_q = res_is_nan_2_d__w1
+  }
+  if start_handshaked__w1 != 0 {
+    res_is_nan_3_q = res_is_nan_3_d__w1
+  }
+  if start_handshaked__w1 != 0 {
+    res_is_inf_0_q = (~fp_aIsFpCanonicalNAN) & 1 & op_exp_is_max_0__w1 & 1 & op_frac_is_zero_0__w1 & 1
+  }
+  if start_handshaked__w1 != 0 {
+    res_is_inf_1_q = (~fp_aIsFpCanonicalNAN) & 1 & op_exp_is_max_1__w1 & 1 & op_frac_is_zero_1__w1 & 1
+  }
+  if start_handshaked__w1 != 0 {
+    res_is_inf_2_q = (~fp_aIsFpCanonicalNAN) & 1 & op_exp_is_max_2__w1 & 1 & op_frac_is_zero_2__w1 & 1
+  }
+  if start_handshaked__w1 != 0 {
+    res_is_inf_3_q = (~fp_aIsFpCanonicalNAN) & 1 & op_exp_is_max_3__w1 & 1 & op_frac_is_zero_3__w1 & 1
+  }
+  if start_handshaked__w1 != 0 {
+    res_is_exact_zero_0_q = op_is_zero_0__w1
+  }
+  if start_handshaked__w1 != 0 {
+    res_is_exact_zero_1_q = op_is_zero_1__w1
+  }
+  if start_handshaked__w1 != 0 {
+    res_is_exact_zero_2_q = op_is_zero_2__w1
+  }
+  if start_handshaked__w1 != 0 {
+    res_is_exact_zero_3_q = op_is_zero_3__w1
+  }
+  if start_handshaked__w1 != 0 {
+    op_invalid_0_q = op_invalid_0_d__w1
+  }
+  if start_handshaked__w1 != 0 {
+    op_invalid_1_q = op_invalid_1_d__w1
+  }
+  if start_handshaked__w1 != 0 {
+    op_invalid_2_q = op_invalid_2_d__w1
+  }
+  if start_handshaked__w1 != 0 {
+    op_invalid_3_q = op_invalid_3_d__w1
+  }
+  if m_neg_1_for_nxt_cycle_s0_qds_0_en__w1 != 0 {
+    m_neg_1_for_nxt_cycle_s0_qds_0_q = _mux_220
+  }
+  if m_neg_1_for_nxt_cycle_s0_qds_1_en__w1 != 0 {
+    m_neg_1_for_nxt_cycle_s0_qds_1_q = _mux_221
+  }
+  if m_neg_1_for_nxt_cycle_s0_qds_2_en__w1 != 0 {
+    m_neg_1_for_nxt_cycle_s0_qds_2_q = _mux_222
+  }
+  if m_neg_1_for_nxt_cycle_s0_qds_3_en__w1 != 0 {
+    m_neg_1_for_nxt_cycle_s0_qds_3_q = _mux_223
+  }
+  if m_neg_0_for_nxt_cycle_s0_qds_0_en__w1 != 0 {
+    m_neg_0_for_nxt_cycle_s0_qds_0_q = _mux_224
+  }
+  if m_neg_0_for_nxt_cycle_s0_qds_1_en__w1 != 0 {
+    m_neg_0_for_nxt_cycle_s0_qds_1_q = _mux_225
+  }
+  if m_neg_0_for_nxt_cycle_s0_qds_2_en__w1 != 0 {
+    m_neg_0_for_nxt_cycle_s0_qds_2_q = _mux_226
+  }
+  if m_neg_0_for_nxt_cycle_s0_qds_3_en__w1 != 0 {
+    m_neg_0_for_nxt_cycle_s0_qds_3_q = _mux_227
+  }
+  if m_pos_1_for_nxt_cycle_s0_qds_0_en__w1 != 0 {
+    m_pos_1_for_nxt_cycle_s0_qds_0_q = _mux_228
+  }
+  if m_pos_1_for_nxt_cycle_s0_qds_1_en__w1 != 0 {
+    m_pos_1_for_nxt_cycle_s0_qds_1_q = _mux_229
+  }
+  if m_pos_1_for_nxt_cycle_s0_qds_2_en__w1 != 0 {
+    m_pos_1_for_nxt_cycle_s0_qds_2_q = _mux_230
+  }
+  if m_pos_1_for_nxt_cycle_s0_qds_3_en__w1 != 0 {
+    m_pos_1_for_nxt_cycle_s0_qds_3_q = _mux_231
+  }
+  if m_pos_2_for_nxt_cycle_s0_qds_0_en__w1 != 0 {
+    m_pos_2_for_nxt_cycle_s0_qds_0_q = _mux_232
+  }
+  if m_pos_2_for_nxt_cycle_s0_qds_1_en__w1 != 0 {
+    m_pos_2_for_nxt_cycle_s0_qds_1_q = _mux_233
+  }
+  if m_pos_2_for_nxt_cycle_s0_qds_2_en__w1 != 0 {
+    m_pos_2_for_nxt_cycle_s0_qds_2_q = _mux_234
+  }
+  if m_pos_2_for_nxt_cycle_s0_qds_3_en__w1 != 0 {
+    m_pos_2_for_nxt_cycle_s0_qds_3_q = _mux_235
+  }
+  start_ready_o = fsm_q & 1
+  finish_valid_o = (fsm_q >> 3) & 1
+  fpsqrt_res_o = (_mux_108 | _mux_109) | _mux_110
+  fflags_o = (_mux_114 | _mux_115) | _mux_116
+}

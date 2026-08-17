@@ -1,0 +1,50 @@
+pub comb FloatCompare::[timecheck=false](io_src0:u64, io_src1:u64, io_fpFormat:u2, io_opCode:u4) -> (io_result:u64, io_fflags:u5) {
+  wire io:(src0:u64, src1:u64, fpFormat:u2, opCode:u4, result:u64, fflags:u5) = nil
+  const isF16__w1 = unsigned(io.fpFormat == 1)
+  const isF32__w1 = unsigned(io.fpFormat == 2)
+  const isF64__w1 = unsigned(io.fpFormat == 3)
+  const isFeq__w1 = unsigned(io.opCode == 0)
+  const isFclass__w1 = (io.opCode >> 3) & 1
+  const src0F16Sign__w1 = (io.src0 >> 15) & 1
+  const src0F32Sign__w1 = (io.src0 >> 31) & 1
+  const src0Sign__w1 = ((((isF16__w1 & src0F16Sign__w1 & 1) | (isF32__w1 & src0F32Sign__w1 & 1)) & 1) | (isF64__w1 & ((io.src0 >> 63) & 1) & 1)) & 1
+  const src1F16Sign__w1 = (io.src1 >> 15) & 1
+  const src1F32Sign__w1 = (io.src1 >> 31) & 1
+  const src1Sign__w1 = ((((isF16__w1 & src1F16Sign__w1 & 1) | (isF32__w1 & src1F32Sign__w1 & 1)) & 1) | (isF64__w1 & ((io.src1 >> 63) & 1) & 1)) & 1
+  const src0Abs__w1 = (io.src0#[32..=62] << 32) | (((isF32__w1 | src0F32Sign__w1) & 1) << 31) | (io.src0#[16..=30] << 16) | (((isF16__w1 | src0F16Sign__w1) & 1) << 15) | io.src0#[0..=14]
+  const src1Abs__w1 = (io.src1#[32..=62] << 32) | (((isF32__w1 | src1F32Sign__w1) & 1) << 31) | (io.src1#[16..=30] << 16) | (((isF16__w1 | src1F16Sign__w1) & 1) << 15) | io.src1#[0..=14]
+  const src0AbsLt__w1 = unsigned(src0Abs__w1 < src1Abs__w1)
+  const src0AbsEq__w1 = unsigned(src0Abs__w1 == src1Abs__w1)
+  const src0AbsIsZero__w1 = ((((isF16__w1 & unsigned(src0Abs__w1#[0..=14] == 0) & 1) | (isF32__w1 & unsigned(src0Abs__w1#[0..=30] == 0) & 1)) & 1) | (isF64__w1 & unsigned(src0Abs__w1 == 0) & 1)) & 1
+  const src0src1AllZero__w1 = src0AbsIsZero__w1 & src0AbsEq__w1 & 1
+  const resultNormalEq__w1 = ((unsigned(src0Sign__w1 == src1Sign__w1) & src0AbsEq__w1 & 1) | src0src1AllZero__w1) & 1
+  const resultNormalLt__w1 = (((((~src0Sign__w1) & 1 & (~src1Sign__w1) & 1 & 1 & src0AbsLt__w1 & 1) | (src0Sign__w1 & (~src1Sign__w1) & 1 & 1 & (~src0src1AllZero__w1) & 1 & 1)) & 1) | (src0Sign__w1 & src1Sign__w1 & 1 & (~src0AbsLt__w1) & 1 & 1 & (~src0AbsEq__w1) & 1 & 1)) & 1
+  const src0IsFpCanonicalNAN__w1 = ((isF16__w1 & unsigned(io.src0#[16..=63] != 0xffffffffffff) & 1) | (isF32__w1 & unsigned(io.src0#[32..=63] != 0xffffffff) & 1)) & 1
+  const src0IsNan__w1 = ((((((isF16__w1 & (unsigned(io.src0#[10..=14] == 31) & unsigned(io.src0#[0..=9] != 0) & 1) & 1) | (isF32__w1 & (unsigned(io.src0#[23..=30] == 0xff) & unsigned(io.src0#[0..=22] != 0) & 1) & 1)) & 1) | (isF64__w1 & (unsigned(io.src0#[52..=62] == 0x7ff) & unsigned(io.src0#[0..=51] != 0) & 1) & 1)) & 1) | src0IsFpCanonicalNAN__w1) & 1
+  const src0IsSNan__w1 = src0IsNan__w1 & ((((isF16__w1 & (~((io.src0 >> 9) & 1)) & 1 & 1) | (isF32__w1 & (~((io.src0 >> 22) & 1)) & 1 & 1)) & 1) | (isF64__w1 & (~((io.src0 >> 51) & 1)) & 1 & 1)) & 1 & 1 & (~src0IsFpCanonicalNAN__w1) & 1 & 1
+  const src1IsFpCanonicalNAN__w1 = ((isF16__w1 & unsigned(io.src1#[16..=63] != 0xffffffffffff) & 1) | (isF32__w1 & unsigned(io.src1#[32..=63] != 0xffffffff) & 1)) & 1
+  const src1IsNan__w1 = ((((((isF16__w1 & (unsigned(io.src1#[10..=14] == 31) & unsigned(io.src1#[0..=9] != 0) & 1) & 1) | (isF32__w1 & (unsigned(io.src1#[23..=30] == 0xff) & unsigned(io.src1#[0..=22] != 0) & 1) & 1)) & 1) | (isF64__w1 & (unsigned(io.src1#[52..=62] == 0x7ff) & unsigned(io.src1#[0..=51] != 0) & 1) & 1)) & 1) | src1IsFpCanonicalNAN__w1) & 1
+  const _resultFcmp_T__w1 = (src0IsNan__w1 | src1IsNan__w1) & 1
+  mut _mux_27:u1 = if ((((io.opCode >> 2) & 1) | isFeq__w1) & 1) != 0 { (src0IsSNan__w1 | (src1IsNan__w1 & ((((isF16__w1 & (~((io.src1 >> 9) & 1)) & 1 & 1) | (isF32__w1 & (~((io.src1 >> 22) & 1)) & 1 & 1)) & 1) | (isF64__w1 & (~((io.src1 >> 51) & 1)) & 1 & 1)) & 1 & 1 & (~src1IsFpCanonicalNAN__w1) & 1 & 1)) & 1 } else { _resultFcmp_T__w1 & 1 }
+  const resultFcmp__w1 = ((~_resultFcmp_T__w1) & 1 & (((((isFeq__w1 & resultNormalEq__w1 & 1) | ((io.opCode & 1) & resultNormalLt__w1 & 1)) & 1) | (((io.opCode >> 1) & 1) & ((resultNormalLt__w1 | resultNormalEq__w1) & 1) & 1)) & 1) & 1)
+  const src0IsInf__w1 = ((((isF16__w1 & unsigned(io.src0#[10..=14] == 31) & 1 & unsigned(io.src0#[0..=9] == 0) & 1) | (isF32__w1 & unsigned(io.src0#[23..=30] == 0xff) & 1 & unsigned(io.src0#[0..=22] == 0) & 1)) & 1) | (isF64__w1 & unsigned(io.src0#[52..=62] == 0x7ff) & 1 & unsigned(io.src0#[0..=51] == 0) & 1)) & 1
+  const src0IsNormalNumber__w1 = ((((isF16__w1 & unsigned(io.src0#[10..=14] != 31) & 1 & unsigned(io.src0#[10..=14] != 0) & 1) | (isF32__w1 & unsigned(io.src0#[23..=30] != 0xff) & 1 & unsigned(io.src0#[23..=30] != 0) & 1)) & 1) | (isF64__w1 & unsigned(io.src0#[52..=62] != 0x7ff) & 1 & unsigned(io.src0#[52..=62] != 0) & 1)) & 1
+  const src0IsSubnormalNumber__w1 = ((((isF16__w1 & unsigned(io.src0#[10..=14] == 0) & 1 & unsigned(io.src0#[0..=9] != 0) & 1) | (isF32__w1 & unsigned(io.src0#[23..=30] == 0) & 1 & unsigned(io.src0#[0..=22] != 0) & 1)) & 1) | (isF64__w1 & unsigned(io.src0#[52..=62] == 0) & 1 & unsigned(io.src0#[0..=51] != 0) & 1)) & 1
+  const _resultFclass_T_22__w1 = (((src0Sign__w1 & src0IsSubnormalNumber__w1 & 1) << 3) | ((src0Sign__w1 & src0AbsIsZero__w1 & 1) << 2) | (((~src0Sign__w1) & 1 & src0AbsIsZero__w1 & 1) << 1) | ((~src0Sign__w1) & 1 & src0IsSubnormalNumber__w1 & 1)) | ((((~src0Sign__w1) & 1 & src0IsNormalNumber__w1 & 1) << 7) | (((~src0Sign__w1) & 1 & src0IsInf__w1 & 1) << 6) | ((src0IsSNan__w1 & 1) << 5) | (((src0IsNan__w1 & ((((isF16__w1 & (io.src0 >> 9) & 1 & 1) | (isF32__w1 & (io.src0 >> 22) & 1 & 1)) & 1) | (isF64__w1 & (io.src0 >> 51) & 1 & 1)) & 1 & 1) & 1) << 4))
+  const _resultFclass_T_32__w1 = (_resultFclass_T_22__w1#[2..=7] & 51) | ((_resultFclass_T_22__w1#[0..=5] & 51) << 2)
+  const t487 = (_resultFclass_T_32__w1#[1..=7] & 0x55) | ((_resultFclass_T_32__w1#[0..=6] & 0x55) << 1)
+  const t488 = t487
+  const t493 = (t488 << 2) | ((src0Sign__w1 & src0IsNormalNumber__w1 & 1) << 1) | (src0Sign__w1 & src0IsInf__w1 & 1)
+  mut _mux_46:u10 = if src0IsFpCanonicalNAN__w1 != 0 { 0x200 } else { t493 }
+  const t497 = resultFcmp__w1
+  mut _mux_47:u64 = if isFclass__w1 != 0 { _mux_46 } else { t497 }
+  mut _mux_48:u5 = if isFclass__w1 != 0 { 0 } else { (_mux_27 & 1) << 4 }
+  io.src0 = io_src0
+  io.src1 = io_src1
+  io.fpFormat = io_fpFormat
+  io.opCode = io_opCode
+  io.result = _mux_47
+  io.fflags = _mux_48
+  io_result = io.result
+  io_fflags = io.fflags
+}

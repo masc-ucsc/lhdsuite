@@ -1,0 +1,117 @@
+const Lzc = import("Lzc.Lzc")
+const RoundingUnit = import("RoundingUnit.RoundingUnit")
+
+pub mod INT2FP::[timecheck=false](clock:u1, reset:u1, io_fire:u1, io_src:u64, io_opType:u8, io_rm:u3, io_input1H:u4, io_output1H:u4) -> (io_result:u64@[], io_fflags:u5@[]) {
+  reg fireReg_last_r:u1:[init=0, reset_pin=ref reset, async=true]
+  reg output1HReg:u4:[init=0, reset_pin=ref reset, async=true]
+  reg signSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg rm:u3:[init=0, reset_pin=ref reset, async=true]
+  reg isZeroIntSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg expReg:u13
+  reg absIntSrc:u64
+  reg leadZeros:u6
+  reg fflags:u5:[init=0, reset_pin=ref reset, async=true]
+  reg result:u64:[init=0, reset_pin=ref reset, async=true]
+  const fireReg__w1 = fireReg_last_r
+  const float1HOut__w1 = output1HReg#[1..=3]
+  const rounderMapIn__w1 = ((absIntSrc << 1) << leadZeros)#[0..=127]#[0..=63]
+  const rounderMap_0_0__w1 = rounderMapIn__w1#[54..=63]
+  const rounderMap_0_1__w1 = rounderMapIn__w1#[41..=63]
+  const rounderMap_0_2__w1 = rounderMapIn__w1#[12..=63]
+  mut _mux_7:u10 = if (float1HOut__w1 & 1) != 0 { rounderMap_0_0__w1 } else { 0 }
+  mut _mux_8:u23 = if ((float1HOut__w1 >> 1) & 1) != 0 { rounderMap_0_1__w1 } else { 0 }
+  mut _mux_9:u52 = if ((float1HOut__w1 >> 2) & 1) != 0 { rounderMap_0_2__w1 } else { 0 }
+  const rounderInput__w1 = (_mux_7 | _mux_8) | _mux_9
+  const exp__w1 = (expReg + 1)#[0..=12]
+  const rmin__w1 = (((unsigned(rm == 1) | (signSrc & unsigned(rm == 3) & 1)) & 1) | ((~signSrc) & 1 & unsigned(rm == 2) & 1)) & 1
+  mut `io.fire` = io_fire & 1
+  mut `io.src` = io_src
+  mut `io.opType` = io_opType
+  mut `io.rm` = io_rm
+  mut `io.input1H` = io_input1H
+  mut `io.output1H` = io_output1H
+  mut `io.result` = result
+  mut `io.fflags` = fflags
+  if ((`io.fire` | fireReg__w1) & 1) != 0 {
+    fireReg_last_r = `io.fire`
+  }
+  if `io.fire` != 0 {
+    output1HReg = `io.output1H`
+  }
+  if `io.fire` != 0 {
+    rm = `io.rm`
+  }
+  mut rounder = RoundingUnit::[name=rounder](io_in = rounderInput__w1, io_roundIn = ((((float1HOut__w1 & 1 & ((rounderMapIn__w1 >> 53) & 1) & 1) | ((float1HOut__w1 >> 1) & 1 & ((rounderMapIn__w1 >> 40) & 1) & 1)) & 1) | ((float1HOut__w1 >> 2) & 1 & ((rounderMapIn__w1 >> 11) & 1) & 1)) & 1, io_stickyIn = ((((float1HOut__w1 & 1 & unsigned(rounderMapIn__w1#[0..=52] != 0) & 1) | ((float1HOut__w1 >> 1) & 1 & unsigned(rounderMapIn__w1#[0..=39] != 0) & 1)) & 1) | ((float1HOut__w1 >> 2) & 1 & unsigned(rounderMapIn__w1#[0..=10] != 0) & 1)) & 1, io_signIn = signSrc, io_rm = rm)
+  const srcMap_3__w1 = `io.src`
+  const hasSignIntNext__w1 = `io.opType` & 1
+  const float1HOutNext__w1 = `io.output1H`#[1..=3]
+  const srcMap_0__w1 = srcMap_3__w1#[0..=7]
+  const srcMap_1__w1 = srcMap_3__w1#[0..=15]
+  const srcMap_2__w1 = srcMap_3__w1#[0..=31]
+  mut _rep_13:u57 = if (hasSignIntNext__w1 & (srcMap_0__w1 >> 7) & 1 & 1) != 0 { 0x1ffffffffffffff } else { 0 }
+  mut _rep_14:u49 = if (hasSignIntNext__w1 & (srcMap_1__w1 >> 15) & 1 & 1) != 0 { 0x1ffffffffffff } else { 0 }
+  mut _rep_15:u33 = if (hasSignIntNext__w1 & (srcMap_2__w1 >> 31) & 1 & 1) != 0 { 0x1ffffffff } else { 0 }
+  mut _mux_16:u65 = if (`io.input1H` & 1) != 0 { (_rep_13 << 8) | srcMap_0__w1 } else { 0 }
+  mut _mux_17:u65 = if ((`io.input1H` >> 1) & 1) != 0 { (_rep_14 << 16) | srcMap_1__w1 } else { 0 }
+  mut _mux_18:u65 = if ((`io.input1H` >> 2) & 1) != 0 { (_rep_15 << 32) | srcMap_2__w1 } else { 0 }
+  mut _mux_19:u65 = if ((`io.input1H` >> 3) & 1) != 0 { ((hasSignIntNext__w1 & (srcMap_3__w1 >> 63) & 1 & 1) << 64) | srcMap_3__w1#[0..=63] } else { 0 }
+  const input_0__w1 = ((_mux_16 | _mux_17) | _mux_18) | _mux_19
+  const signSrcNext__w1 = (input_0__w1 >> 0x40) & 1
+  mut _mux_20:u64 = if signSrcNext__w1 != 0 { ((~input_0__w1#[0..=63])#[0..=63] + 1)#[0..=63] } else { input_0__w1#[0..=63] }
+  const absIntSrcNext__w1 = _mux_20
+  mut _mux_22:u7 = if (float1HOutNext__w1 & 1) != 0 { 0x4e } else { 0 }
+  mut _mux_23:u8 = if ((float1HOutNext__w1 >> 1) & 1) != 0 { 0xbe } else { 0 }
+  mut _mux_24:u11 = if ((float1HOutNext__w1 >> 2) & 1) != 0 { 0x43e } else { 0 }
+  const cout__w1 = rounder.io_r_up & ((((float1HOut__w1 & 1 & unsigned(rounderMap_0_0__w1 == 0x3ff) & 1) | ((float1HOut__w1 >> 1) & 1 & unsigned(rounderMap_0_1__w1 == 0x7fffff) & 1)) & 1) | ((float1HOut__w1 >> 2) & 1 & unsigned(rounderMap_0_2__w1 == 0xfffffffffffff) & 1)) & 1 & 1
+  mut _mux_25:u11 = if cout__w1 != 0 { (expReg + 2)#[0..=12]#[0..=10] } else { exp__w1#[0..=10] }
+  const expRounded__w1 = _mux_25
+  mut _mux_26:u52 = if rounder.io_r_up != 0 { (rounderInput__w1 + 1)#[0..=51] } else { rounderInput__w1 }
+  const fracRounded__w1 = _mux_26
+  mut _mux_31:u1 = if cout__w1 != 0 { unsigned((((unsigned(exp__w1#[1..=4] == 15) & 1) << 7) | exp__w1#[5..=11]) != 0) & 1 } else { unsigned((((unsigned(exp__w1#[0..=4] == 31) & 1) << 7) | exp__w1#[5..=11]) != 0) & 1 }
+  mut _mux_36:u1 = if cout__w1 != 0 { unsigned((((unsigned(exp__w1#[1..=7] == 0x7f) & 1) << 4) | exp__w1#[8..=11]) != 0) & 1 } else { unsigned((((unsigned(exp__w1#[0..=7] == 0xff) & 1) << 4) | exp__w1#[8..=11]) != 0) & 1 }
+  mut _mux_39:u1 = if cout__w1 != 0 { (unsigned(exp__w1#[1..=10] == 0x3ff) | ((exp__w1 >> 11) & 1)) & 1 } else { (unsigned(exp__w1#[0..=10] == 0x7ff) | ((exp__w1 >> 11) & 1)) & 1 }
+  const ofRounded__w1 = (~((exp__w1 >> 12) & 1)) & 1 & ((((float1HOut__w1 & 1 & _mux_31 & 1) | ((float1HOut__w1 >> 1) & 1 & _mux_36 & 1)) & 1) | ((float1HOut__w1 >> 2) & 1 & _mux_39 & 1)) & 1 & 1
+  const result1H__w1 = ((ofRounded__w1 & rmin__w1 & 1) << 3) | ((ofRounded__w1 & (~rmin__w1) & 1 & 1) << 2) | ((isZeroIntSrc & 1) << 1) | ((~ofRounded__w1) & 1 & (~isZeroIntSrc) & 1 & 1)
+  mut _mux_40:u16 = if ((result1H__w1 >> 3) & 1) != 0 { ((signSrc & 1) << 15) | 0x7bff } else { 0 }
+  mut _mux_41:u16 = if ((result1H__w1 >> 2) & 1) != 0 { ((signSrc & 1) << 15) | 0x7c00 } else { 0 }
+  mut _mux_42:u16 = if ((result1H__w1 >> 1) & 1) != 0 { (signSrc & 1) << 15 } else { 0 }
+  mut _mux_43:u16 = if (result1H__w1 & 1) != 0 { ((signSrc & 1) << 15) | (expRounded__w1#[0..=4] << 10) | fracRounded__w1#[0..=9] } else { 0 }
+  mut _mux_44:u32 = if ((result1H__w1 >> 3) & 1) != 0 { ((signSrc & 1) << 31) | 0x7f7fffff } else { 0 }
+  mut _mux_45:u32 = if ((result1H__w1 >> 2) & 1) != 0 { ((signSrc & 1) << 31) | 0x7f800000 } else { 0 }
+  mut _mux_46:u32 = if ((result1H__w1 >> 1) & 1) != 0 { (signSrc & 1) << 31 } else { 0 }
+  mut _mux_47:u32 = if (result1H__w1 & 1) != 0 { ((signSrc & 1) << 31) | (expRounded__w1#[0..=7] << 23) | fracRounded__w1#[0..=22] } else { 0 }
+  mut _mux_48:u64 = if ((result1H__w1 >> 3) & 1) != 0 { ((signSrc & 1) << 63) | 0x7fefffffffffffff } else { 0 }
+  mut _mux_49:u64 = if ((result1H__w1 >> 2) & 1) != 0 { ((signSrc & 1) << 63) | 0x7ff0000000000000 } else { 0 }
+  mut _mux_50:u64 = if ((result1H__w1 >> 1) & 1) != 0 { (signSrc & 1) << 63 } else { 0 }
+  mut _mux_51:u64 = if (result1H__w1 & 1) != 0 { ((signSrc & 1) << 63) | (expRounded__w1 << 52) | fracRounded__w1 } else { 0 }
+  mut _mux_52:u16 = if (float1HOut__w1 & 1) != 0 { ((_mux_40 | _mux_41) | _mux_42) | _mux_43 } else { 0 }
+  mut _mux_53:u32 = if ((float1HOut__w1 >> 1) & 1) != 0 { ((_mux_44 | _mux_45) | _mux_46) | _mux_47 } else { 0 }
+  mut _mux_54:u64 = if ((float1HOut__w1 >> 2) & 1) != 0 { ((_mux_48 | _mux_49) | _mux_50) | _mux_51 } else { 0 }
+  if `io.fire` != 0 {
+    signSrc = signSrcNext__w1
+  }
+  if `io.fire` != 0 {
+    isZeroIntSrc = unsigned(absIntSrcNext__w1 == 0)
+  }
+  if `io.fire` != 0 {
+    absIntSrc = absIntSrcNext__w1
+  }
+  if fireReg__w1 != 0 {
+    fflags = ((ofRounded__w1 & 1) << 2) | (((ofRounded__w1 | rounder.io_inexact) & 1) & 1)
+  }
+  if fireReg__w1 != 0 {
+    result = (_mux_52 | _mux_53) | _mux_54
+  }
+  mut leadZerosNext_lzc = Lzc::[name=leadZerosNext_lzc](io_in = absIntSrcNext__w1)
+  mut `_leadZerosNext_lzc_io_out.isZero` = leadZerosNext_lzc["io_out.isZero"]
+  {
+  }
+  if `io.fire` != 0 {
+    expReg = (((_mux_22 | _mux_23) | _mux_24) + ((63 << 7) | (1 << 6) | (~leadZerosNext_lzc["io_out.data"])#[0..=5]))#[0..=12]
+  }
+  if `io.fire` != 0 {
+    leadZeros = leadZerosNext_lzc["io_out.data"]
+  }
+  io_result = `io.result`
+  io_fflags = `io.fflags`
+}

@@ -1,0 +1,1138 @@
+const Lzc = import("Lzc.Lzc")
+const RoundingUnit = import("RoundingUnit.RoundingUnit")
+const RoundingUnit_2 = import("RoundingUnit_2.RoundingUnit_2")
+const ShiftRightJam = import("ShiftRightJam.ShiftRightJam")
+
+pub mod FP_INCVT::[timecheck=false](clock:u1, reset:u1, io_fire:u1, io_src:u64, io_opType:u8, io_rm:u3, io_input1H:u4, io_output1H:u4, io_isFpToVecInst:u1, io_isFround:u2, io_isFcvtmod:u1) -> (io_result:u64@[], io_fflags:u5@[]) {
+  reg fireReg_last_r:u1:[init=0, reset_pin=ref reset, async=true]
+  reg expNotZeroSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg expIsOnesSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg fracNotZeroSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isInfSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isZeroSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isSubnormalSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isnormalSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isSNaNSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isFpWiden:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isFpNarrow:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isFp2Int:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isFpCrossHigh:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isFpCrossLow:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isNaNSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg s1_fpCanonicalNAN:u1
+  reg isFroundnxReg:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isFroundOrFroundnxReg:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isFcvtmodReg:u1:[init=0, reset_pin=ref reset, async=true]
+  reg froundOrFroundnxIsZeroOrInf:u1:[init=0, reset_pin=ref reset, async=true]
+  reg trunSticky:u1:[init=0, reset_pin=ref reset, async=true]
+  reg signSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg rm:u3:[init=0, reset_pin=ref reset, async=true]
+  reg hasSignInt:u1:[init=0, reset_pin=ref reset, async=true]
+  reg output1HReg:u4:[init=0, reset_pin=ref reset, async=true]
+  reg fflags:u5:[init=0, reset_pin=ref reset, async=true]
+  reg result:u64:[init=0, reset_pin=ref reset, async=true]
+  reg expReg:u13
+  reg expPlus1Enable:u1
+  reg shiftLeft:u64:[init=0, reset_pin=ref reset, async=true]
+  reg fracSrcLeft:u64:[init=0, reset_pin=ref reset, async=true]
+  reg inRounder:u65:[init=0, reset_pin=ref reset, async=true]
+  reg sticky:u1:[init=0, reset_pin=ref reset, async=true]
+  reg froundExpLessThanBias:u1:[init=0, reset_pin=ref reset, async=true]
+  reg froundExpGreaterThanMaxExp:u1:[init=0, reset_pin=ref reset, async=true]
+  reg fracShiftMask:u11:[init=0, reset_pin=ref reset, async=true]
+  reg froundOldExp:u11:[init=0, reset_pin=ref reset, async=true]
+  reg froundOldFrac:u52:[init=0, reset_pin=ref reset, async=true]
+  reg fcvtmodFracReg:u64:[init=0, reset_pin=ref reset, async=true]
+  reg fcvtmodTrueExpReg:u11:[init=0, reset_pin=ref reset, async=true]
+  reg fcvtmodNxReg:u1:[init=0, reset_pin=ref reset, async=true]
+  reg fcvtmodExpLessThanBias:u1:[init=0, reset_pin=ref reset, async=true]
+  const fireReg__w1 = fireReg_last_r
+  const signNonNan__w1 = (~isNaNSrc) & 1 & signSrc & 1
+  const int1HOut__w1 = output1HReg
+  const float1HOut__w1 = output1HReg#[1..=3]
+  mut _mux_1:u64 = if isSubnormalSrc != 0 { shiftLeft } else { fracSrcLeft }
+  const fracNormaled__w1 = _mux_1
+  const _froundUpShiftMask_T__w1 = unsigned(fracShiftMask == 0)
+  const _froundUpShiftMask_T_2__w1 = unsigned(fracShiftMask == 1)
+  const _froundUpShiftMask_T_4__w1 = unsigned(fracShiftMask == 2)
+  const _froundUpShiftMask_T_6__w1 = unsigned(fracShiftMask == 3)
+  const _froundUpShiftMask_T_8__w1 = unsigned(fracShiftMask == 4)
+  const _froundUpShiftMask_T_10__w1 = unsigned(fracShiftMask == 5)
+  const _froundUpShiftMask_T_12__w1 = unsigned(fracShiftMask == 6)
+  const _froundUpShiftMask_T_14__w1 = unsigned(fracShiftMask == 7)
+  const _froundUpShiftMask_T_16__w1 = unsigned(fracShiftMask == 8)
+  const _froundUpShiftMask_T_18__w1 = unsigned(fracShiftMask == 9)
+  const _froundUpShiftMask_T_20__w1 = unsigned(fracShiftMask == 10)
+  const _froundUpShiftMask_T_22__w1 = unsigned(fracShiftMask == 11)
+  const _froundUpShiftMask_T_24__w1 = unsigned(fracShiftMask == 12)
+  const _froundUpShiftMask_T_26__w1 = unsigned(fracShiftMask == 13)
+  const _froundUpShiftMask_T_28__w1 = unsigned(fracShiftMask == 14)
+  const _froundUpShiftMask_T_30__w1 = unsigned(fracShiftMask == 15)
+  const _froundUpShiftMask_T_32__w1 = unsigned(fracShiftMask == 16)
+  const _froundUpShiftMask_T_34__w1 = unsigned(fracShiftMask == 17)
+  const _froundUpShiftMask_T_36__w1 = unsigned(fracShiftMask == 18)
+  const _froundUpShiftMask_T_38__w1 = unsigned(fracShiftMask == 19)
+  const _froundUpShiftMask_T_40__w1 = unsigned(fracShiftMask == 20)
+  const _froundUpShiftMask_T_42__w1 = unsigned(fracShiftMask == 21)
+  const _froundUpShiftMask_T_44__w1 = unsigned(fracShiftMask == 22)
+  const _froundUpShiftMask_T_46__w1 = unsigned(fracShiftMask == 23)
+  const _froundUpShiftMask_T_48__w1 = unsigned(fracShiftMask == 24)
+  const _froundUpShiftMask_T_50__w1 = unsigned(fracShiftMask == 25)
+  const _froundUpShiftMask_T_52__w1 = unsigned(fracShiftMask == 26)
+  const _froundUpShiftMask_T_54__w1 = unsigned(fracShiftMask == 27)
+  const _froundUpShiftMask_T_56__w1 = unsigned(fracShiftMask == 28)
+  const _froundUpShiftMask_T_58__w1 = unsigned(fracShiftMask == 29)
+  const _froundUpShiftMask_T_60__w1 = unsigned(fracShiftMask == 30)
+  const _froundUpShiftMask_T_62__w1 = unsigned(fracShiftMask == 31)
+  const _froundUpShiftMask_T_64__w1 = unsigned(fracShiftMask == 32)
+  const _froundUpShiftMask_T_66__w1 = unsigned(fracShiftMask == 33)
+  const _froundUpShiftMask_T_68__w1 = unsigned(fracShiftMask == 34)
+  const _froundUpShiftMask_T_70__w1 = unsigned(fracShiftMask == 35)
+  const _froundUpShiftMask_T_72__w1 = unsigned(fracShiftMask == 36)
+  const _froundUpShiftMask_T_74__w1 = unsigned(fracShiftMask == 37)
+  const _froundUpShiftMask_T_76__w1 = unsigned(fracShiftMask == 38)
+  const _froundUpShiftMask_T_78__w1 = unsigned(fracShiftMask == 39)
+  const _froundUpShiftMask_T_80__w1 = unsigned(fracShiftMask == 40)
+  const _froundUpShiftMask_T_82__w1 = unsigned(fracShiftMask == 41)
+  const _froundUpShiftMask_T_84__w1 = unsigned(fracShiftMask == 42)
+  const _froundUpShiftMask_T_86__w1 = unsigned(fracShiftMask == 43)
+  const _froundUpShiftMask_T_88__w1 = unsigned(fracShiftMask == 44)
+  const _froundUpShiftMask_T_90__w1 = unsigned(fracShiftMask == 45)
+  const _froundUpShiftMask_T_92__w1 = unsigned(fracShiftMask == 46)
+  const _froundUpShiftMask_T_94__w1 = unsigned(fracShiftMask == 47)
+  const _froundUpShiftMask_T_96__w1 = unsigned(fracShiftMask == 48)
+  const _froundUpShiftMask_T_98__w1 = unsigned(fracShiftMask == 49)
+  const _froundUpShiftMask_T_100__w1 = unsigned(fracShiftMask == 50)
+  const _froundUpShiftMask_T_102__w1 = unsigned(fracShiftMask == 51)
+  const _froundUpShiftMask_T_104__w1 = unsigned(fracShiftMask == 52)
+  const _froundUpShiftMask_T_106__w1 = unsigned(fracShiftMask == 53)
+  const _froundUpShiftMask_T_108__w1 = unsigned(fracShiftMask == 54)
+  const _froundUpShiftMask_T_110__w1 = unsigned(fracShiftMask == 55)
+  const _froundUpShiftMask_T_112__w1 = unsigned(fracShiftMask == 56)
+  const _froundUpShiftMask_T_114__w1 = unsigned(fracShiftMask == 57)
+  const _froundUpShiftMask_T_116__w1 = unsigned(fracShiftMask == 58)
+  const _froundUpShiftMask_T_118__w1 = unsigned(fracShiftMask == 59)
+  const _froundUpShiftMask_T_120__w1 = unsigned(fracShiftMask == 60)
+  const _froundUpShiftMask_T_122__w1 = unsigned(fracShiftMask == 61)
+  const _froundUpShiftMask_T_124__w1 = unsigned(fracShiftMask == 62)
+  const _froundUpShiftMask_T_126__w1 = unsigned(fracShiftMask == 63)
+  mut _mux_66:u64 = if _froundUpShiftMask_T_2__w1 != 0 { 0xfffffffffffffffe } else { 0 }
+  mut _mux_67:u64 = if _froundUpShiftMask_T_4__w1 != 0 { 0xfffffffffffffffc } else { 0 }
+  mut _mux_68:u64 = if _froundUpShiftMask_T_6__w1 != 0 { 0xfffffffffffffff8 } else { 0 }
+  mut _mux_69:u64 = if _froundUpShiftMask_T_8__w1 != 0 { 0xfffffffffffffff0 } else { 0 }
+  mut _mux_70:u64 = if _froundUpShiftMask_T_10__w1 != 0 { 0xffffffffffffffe0 } else { 0 }
+  mut _mux_71:u64 = if _froundUpShiftMask_T_12__w1 != 0 { 0xffffffffffffffc0 } else { 0 }
+  mut _mux_72:u64 = if _froundUpShiftMask_T_14__w1 != 0 { 0xffffffffffffff80 } else { 0 }
+  mut _mux_73:u64 = if _froundUpShiftMask_T_16__w1 != 0 { 0xffffffffffffff00 } else { 0 }
+  mut _mux_74:u64 = if _froundUpShiftMask_T_18__w1 != 0 { 0xfffffffffffffe00 } else { 0 }
+  mut _mux_75:u64 = if _froundUpShiftMask_T_20__w1 != 0 { 0xfffffffffffffc00 } else { 0 }
+  mut _mux_76:u64 = if _froundUpShiftMask_T_22__w1 != 0 { 0xfffffffffffff800 } else { 0 }
+  mut _mux_77:u64 = if _froundUpShiftMask_T_24__w1 != 0 { 0xfffffffffffff000 } else { 0 }
+  mut _mux_78:u64 = if _froundUpShiftMask_T_26__w1 != 0 { 0xffffffffffffe000 } else { 0 }
+  mut _mux_79:u64 = if _froundUpShiftMask_T_28__w1 != 0 { 0xffffffffffffc000 } else { 0 }
+  mut _mux_80:u64 = if _froundUpShiftMask_T_30__w1 != 0 { 0xffffffffffff8000 } else { 0 }
+  mut _mux_81:u64 = if _froundUpShiftMask_T_32__w1 != 0 { 0xffffffffffff0000 } else { 0 }
+  mut _mux_82:u64 = if _froundUpShiftMask_T_34__w1 != 0 { 0xfffffffffffe0000 } else { 0 }
+  mut _mux_83:u64 = if _froundUpShiftMask_T_36__w1 != 0 { 0xfffffffffffc0000 } else { 0 }
+  mut _mux_84:u64 = if _froundUpShiftMask_T_38__w1 != 0 { 0xfffffffffff80000 } else { 0 }
+  mut _mux_85:u64 = if _froundUpShiftMask_T_40__w1 != 0 { 0xfffffffffff00000 } else { 0 }
+  mut _mux_86:u64 = if _froundUpShiftMask_T_42__w1 != 0 { 0xffffffffffe00000 } else { 0 }
+  mut _mux_87:u64 = if _froundUpShiftMask_T_44__w1 != 0 { 0xffffffffffc00000 } else { 0 }
+  mut _mux_88:u64 = if _froundUpShiftMask_T_46__w1 != 0 { 0xffffffffff800000 } else { 0 }
+  mut _mux_89:u64 = if _froundUpShiftMask_T_48__w1 != 0 { 0xffffffffff000000 } else { 0 }
+  mut _mux_90:u64 = if _froundUpShiftMask_T_50__w1 != 0 { 0xfffffffffe000000 } else { 0 }
+  mut _mux_91:u64 = if _froundUpShiftMask_T_52__w1 != 0 { 0xfffffffffc000000 } else { 0 }
+  mut _mux_92:u64 = if _froundUpShiftMask_T_54__w1 != 0 { 0xfffffffff8000000 } else { 0 }
+  mut _mux_93:u64 = if _froundUpShiftMask_T_56__w1 != 0 { 0xfffffffff0000000 } else { 0 }
+  mut _mux_94:u64 = if _froundUpShiftMask_T_58__w1 != 0 { 0xffffffffe0000000 } else { 0 }
+  mut _mux_95:u64 = if _froundUpShiftMask_T_60__w1 != 0 { 0xffffffffc0000000 } else { 0 }
+  mut _mux_96:u64 = if _froundUpShiftMask_T_62__w1 != 0 { 0xffffffff80000000 } else { 0 }
+  mut _mux_97:u64 = if _froundUpShiftMask_T_64__w1 != 0 { 0xffffffff00000000 } else { 0 }
+  mut _mux_98:u64 = if _froundUpShiftMask_T_66__w1 != 0 { 0xfffffffe00000000 } else { 0 }
+  mut _mux_99:u64 = if _froundUpShiftMask_T_68__w1 != 0 { 0xfffffffc00000000 } else { 0 }
+  mut _mux_100:u64 = if _froundUpShiftMask_T_70__w1 != 0 { 0xfffffff800000000 } else { 0 }
+  mut _mux_101:u64 = if _froundUpShiftMask_T_72__w1 != 0 { 0xfffffff000000000 } else { 0 }
+  mut _mux_102:u64 = if _froundUpShiftMask_T_74__w1 != 0 { 0xffffffe000000000 } else { 0 }
+  mut _mux_103:u64 = if _froundUpShiftMask_T_76__w1 != 0 { 0xffffffc000000000 } else { 0 }
+  mut _mux_104:u64 = if _froundUpShiftMask_T_78__w1 != 0 { 0xffffff8000000000 } else { 0 }
+  mut _mux_105:u64 = if _froundUpShiftMask_T_80__w1 != 0 { 0xffffff0000000000 } else { 0 }
+  mut _mux_106:u64 = if _froundUpShiftMask_T_82__w1 != 0 { 0xfffffe0000000000 } else { 0 }
+  mut _mux_107:u64 = if _froundUpShiftMask_T_84__w1 != 0 { 0xfffffc0000000000 } else { 0 }
+  mut _mux_108:u64 = if _froundUpShiftMask_T_86__w1 != 0 { 0xfffff80000000000 } else { 0 }
+  mut _mux_109:u64 = if _froundUpShiftMask_T_88__w1 != 0 { 0xfffff00000000000 } else { 0 }
+  mut _mux_110:u64 = if _froundUpShiftMask_T_90__w1 != 0 { 0xffffe00000000000 } else { 0 }
+  mut _mux_111:u64 = if _froundUpShiftMask_T_92__w1 != 0 { 0xffffc00000000000 } else { 0 }
+  mut _mux_112:u64 = if _froundUpShiftMask_T_94__w1 != 0 { 0xffff800000000000 } else { 0 }
+  mut _mux_113:u64 = if _froundUpShiftMask_T_96__w1 != 0 { 0xffff000000000000 } else { 0 }
+  mut _mux_114:u64 = if _froundUpShiftMask_T_98__w1 != 0 { 0xfffe000000000000 } else { 0 }
+  mut _mux_115:u64 = if _froundUpShiftMask_T_100__w1 != 0 { 0xfffc000000000000 } else { 0 }
+  mut _mux_116:u64 = if _froundUpShiftMask_T_102__w1 != 0 { 0xfff8000000000000 } else { 0 }
+  mut _mux_117:u64 = if _froundUpShiftMask_T_104__w1 != 0 { 0xfff0000000000000 } else { 0 }
+  mut _mux_118:u64 = if _froundUpShiftMask_T_106__w1 != 0 { 0xffe0000000000000 } else { 0 }
+  mut _mux_119:u64 = if _froundUpShiftMask_T_108__w1 != 0 { 0xffc0000000000000 } else { 0 }
+  mut _mux_120:u64 = if _froundUpShiftMask_T_110__w1 != 0 { 0xff80000000000000 } else { 0 }
+  mut _mux_121:u64 = if _froundUpShiftMask_T_112__w1 != 0 { 0xff00000000000000 } else { 0 }
+  mut _mux_122:u64 = if _froundUpShiftMask_T_114__w1 != 0 { 0xfe00000000000000 } else { 0 }
+  mut _mux_123:u64 = if _froundUpShiftMask_T_116__w1 != 0 { 0xfc00000000000000 } else { 0 }
+  mut _mux_124:u64 = if _froundUpShiftMask_T_118__w1 != 0 { 0xf800000000000000 } else { 0 }
+  mut _mux_125:u64 = if _froundUpShiftMask_T_120__w1 != 0 { 0xf000000000000000 } else { 0 }
+  mut _mux_126:u64 = if _froundUpShiftMask_T_122__w1 != 0 { 0xe000000000000000 } else { 0 }
+  mut _mux_127:u64 = if _froundUpShiftMask_T_124__w1 != 0 { 0xc000000000000000 } else { 0 }
+  mut _rep_128:u64 = if (_froundUpShiftMask_T__w1 & 1) != 0 { 0xffffffffffffffff } else { 0 }
+  const t170 = ((((((((((((((((_rep_128 | _mux_66) | _mux_67) | _mux_68) | _mux_69) | _mux_70) | _mux_71) | _mux_72) | _mux_73) | _mux_74) | _mux_75) | _mux_76) | _mux_77) | _mux_78) | _mux_79) | _mux_80) | _mux_81) | _mux_82
+  const t171 = t170
+  const t172 = t171 | _mux_83
+  const t173 = t172
+  const t174 = t173 | _mux_84
+  const t175 = t174
+  const t176 = t175 | _mux_85
+  const t177 = t176
+  const t178 = t177 | _mux_86
+  const t179 = t178
+  const t180 = t179 | _mux_87
+  const t181 = t180
+  const t182 = t181 | _mux_88
+  const t183 = t182
+  const t184 = t183 | _mux_89
+  const t185 = t184
+  const t186 = t185 | _mux_90
+  const t187 = t186
+  const t188 = t187 | _mux_91
+  const t189 = t188
+  const t190 = t189 | _mux_92
+  const t191 = t190
+  const t192 = t191 | _mux_93
+  const t193 = t192
+  const t194 = t193 | _mux_94
+  const t195 = t194
+  const t196 = t195 | _mux_95
+  const t197 = t196
+  const t198 = t197 | _mux_96
+  const t199 = t198
+  const t200 = t199 | _mux_97
+  const t201 = t200
+  const t202 = t201 | _mux_98
+  const t203 = t202
+  const t204 = t203 | _mux_99
+  const t205 = t204
+  const t206 = t205 | _mux_100
+  const t207 = t206
+  const t208 = t207 | _mux_101
+  const t209 = t208
+  const t210 = t209 | _mux_102
+  const t211 = t210
+  const t212 = t211 | _mux_103
+  const t213 = t212
+  const t214 = t213 | _mux_104
+  const t215 = t214
+  const t216 = t215 | _mux_105
+  const t217 = t216
+  const t218 = t217 | _mux_106
+  const t219 = t218
+  const t220 = t219 | _mux_107
+  const t221 = t220
+  const t222 = t221 | _mux_108
+  const t223 = t222
+  const t224 = t223 | _mux_109
+  const t225 = t224
+  const t226 = t225 | _mux_110
+  const t227 = t226
+  const t228 = t227 | _mux_111
+  const t229 = t228
+  const t230 = t229 | _mux_112
+  const t231 = t230
+  const t232 = t231 | _mux_113
+  const t233 = t232
+  const t234 = t233 | _mux_114
+  const t235 = t234
+  const t236 = t235 | _mux_115
+  const t237 = t236
+  const t238 = t237 | _mux_116
+  const t239 = t238
+  const t240 = t239 | _mux_117
+  const t241 = t240
+  const t242 = t241 | _mux_118
+  const t243 = t242
+  const t244 = t243 | _mux_119
+  const t245 = t244
+  const t246 = t245 | _mux_120
+  const t247 = t246
+  const t248 = t247 | _mux_121
+  const t249 = t248
+  const t250 = t249 | _mux_122
+  const t251 = t250
+  const t252 = t251 | _mux_123
+  const t253 = t252
+  const t254 = t253 | _mux_124
+  const t255 = t254
+  const t256 = t255 | _mux_125
+  const t257 = t256
+  const t258 = t257 | _mux_126
+  const t259 = t258
+  const t260 = t259 | _mux_127
+  const t261 = t260
+  const t264 = t261 | ((_froundUpShiftMask_T_126__w1 & 1) << 63)
+  const t265 = t264
+  const froundShiftMask__w1 = t265
+  const t330 = ((((((((((((((((_froundUpShiftMask_T__w1 & 1) | ((_froundUpShiftMask_T_2__w1 & 1) << 1)) | ((_froundUpShiftMask_T_4__w1 & 1) << 2)) | ((_froundUpShiftMask_T_6__w1 & 1) << 3)) | ((_froundUpShiftMask_T_8__w1 & 1) << 4)) | ((_froundUpShiftMask_T_10__w1 & 1) << 5)) | ((_froundUpShiftMask_T_12__w1 & 1) << 6)) | ((_froundUpShiftMask_T_14__w1 & 1) << 7)) | ((_froundUpShiftMask_T_16__w1 & 1) << 8)) | ((_froundUpShiftMask_T_18__w1 & 1) << 9)) | ((_froundUpShiftMask_T_20__w1 & 1) << 10)) | ((_froundUpShiftMask_T_22__w1 & 1) << 11)) | ((_froundUpShiftMask_T_24__w1 & 1) << 12)) | ((_froundUpShiftMask_T_26__w1 & 1) << 13)) | ((_froundUpShiftMask_T_28__w1 & 1) << 14)) | ((_froundUpShiftMask_T_30__w1 & 1) << 15)) | ((_froundUpShiftMask_T_32__w1 & 1) << 16)
+  const t331 = t330
+  const t334 = t331 | ((_froundUpShiftMask_T_34__w1 & 1) << 17)
+  const t335 = t334
+  const t338 = t335 | ((_froundUpShiftMask_T_36__w1 & 1) << 18)
+  const t339 = t338
+  const t342 = t339 | ((_froundUpShiftMask_T_38__w1 & 1) << 19)
+  const t343 = t342
+  const t346 = t343 | ((_froundUpShiftMask_T_40__w1 & 1) << 20)
+  const t347 = t346
+  const t350 = t347 | ((_froundUpShiftMask_T_42__w1 & 1) << 21)
+  const t351 = t350
+  const t354 = t351 | ((_froundUpShiftMask_T_44__w1 & 1) << 22)
+  const t355 = t354
+  const t358 = t355 | ((_froundUpShiftMask_T_46__w1 & 1) << 23)
+  const t359 = t358
+  const t362 = t359 | ((_froundUpShiftMask_T_48__w1 & 1) << 24)
+  const t363 = t362
+  const t366 = t363 | ((_froundUpShiftMask_T_50__w1 & 1) << 25)
+  const t367 = t366
+  const t370 = t367 | ((_froundUpShiftMask_T_52__w1 & 1) << 26)
+  const t371 = t370
+  const t374 = t371 | ((_froundUpShiftMask_T_54__w1 & 1) << 27)
+  const t375 = t374
+  const t378 = t375 | ((_froundUpShiftMask_T_56__w1 & 1) << 28)
+  const t379 = t378
+  const t382 = t379 | ((_froundUpShiftMask_T_58__w1 & 1) << 29)
+  const t383 = t382
+  const t386 = t383 | ((_froundUpShiftMask_T_60__w1 & 1) << 30)
+  const t387 = t386
+  const t390 = t387 | ((_froundUpShiftMask_T_62__w1 & 1) << 31)
+  const t391 = t390
+  const t394 = t391 | ((_froundUpShiftMask_T_64__w1 & 1) << 32)
+  const t395 = t394
+  const t398 = t395 | ((_froundUpShiftMask_T_66__w1 & 1) << 33)
+  const t399 = t398
+  const t402 = t399 | ((_froundUpShiftMask_T_68__w1 & 1) << 34)
+  const t403 = t402
+  const t406 = t403 | ((_froundUpShiftMask_T_70__w1 & 1) << 35)
+  const t407 = t406
+  const t410 = t407 | ((_froundUpShiftMask_T_72__w1 & 1) << 36)
+  const t411 = t410
+  const t414 = t411 | ((_froundUpShiftMask_T_74__w1 & 1) << 37)
+  const t415 = t414
+  const t418 = t415 | ((_froundUpShiftMask_T_76__w1 & 1) << 38)
+  const t419 = t418
+  const t422 = t419 | ((_froundUpShiftMask_T_78__w1 & 1) << 39)
+  const t423 = t422
+  const t426 = t423 | ((_froundUpShiftMask_T_80__w1 & 1) << 40)
+  const t427 = t426
+  const t430 = t427 | ((_froundUpShiftMask_T_82__w1 & 1) << 41)
+  const t431 = t430
+  const t434 = t431 | ((_froundUpShiftMask_T_84__w1 & 1) << 42)
+  const t435 = t434
+  const t438 = t435 | ((_froundUpShiftMask_T_86__w1 & 1) << 43)
+  const t439 = t438
+  const t442 = t439 | ((_froundUpShiftMask_T_88__w1 & 1) << 44)
+  const t443 = t442
+  const t446 = t443 | ((_froundUpShiftMask_T_90__w1 & 1) << 45)
+  const t447 = t446
+  const t450 = t447 | ((_froundUpShiftMask_T_92__w1 & 1) << 46)
+  const t451 = t450
+  const t454 = t451 | ((_froundUpShiftMask_T_94__w1 & 1) << 47)
+  const t455 = t454
+  const t458 = t455 | ((_froundUpShiftMask_T_96__w1 & 1) << 48)
+  const t459 = t458
+  const t462 = t459 | ((_froundUpShiftMask_T_98__w1 & 1) << 49)
+  const t463 = t462
+  const t466 = t463 | ((_froundUpShiftMask_T_100__w1 & 1) << 50)
+  const t467 = t466
+  const t470 = t467 | ((_froundUpShiftMask_T_102__w1 & 1) << 51)
+  const t471 = t470
+  const t474 = t471 | ((_froundUpShiftMask_T_104__w1 & 1) << 52)
+  const t475 = t474
+  const t478 = t475 | ((_froundUpShiftMask_T_106__w1 & 1) << 53)
+  const t479 = t478
+  const t482 = t479 | ((_froundUpShiftMask_T_108__w1 & 1) << 54)
+  const t483 = t482
+  const t486 = t483 | ((_froundUpShiftMask_T_110__w1 & 1) << 55)
+  const t487 = t486
+  const t490 = t487 | ((_froundUpShiftMask_T_112__w1 & 1) << 56)
+  const t491 = t490
+  const t494 = t491 | ((_froundUpShiftMask_T_114__w1 & 1) << 57)
+  const t495 = t494
+  const t498 = t495 | ((_froundUpShiftMask_T_116__w1 & 1) << 58)
+  const t499 = t498
+  const t502 = t499 | ((_froundUpShiftMask_T_118__w1 & 1) << 59)
+  const t503 = t502
+  const t506 = t503 | ((_froundUpShiftMask_T_120__w1 & 1) << 60)
+  const t507 = t506
+  const t510 = t507 | ((_froundUpShiftMask_T_122__w1 & 1) << 61)
+  const t511 = t510
+  const t514 = t511 | ((_froundUpShiftMask_T_124__w1 & 1) << 62)
+  const t515 = t514
+  const t518 = t515 | ((_froundUpShiftMask_T_126__w1 & 1) << 63)
+  const t519 = t518
+  const froundUpShiftMask__w1 = t519
+  const t524 = (((signSrc & 1) << 63) | (froundOldExp << 52) | froundOldFrac) & froundShiftMask__w1
+  const t525 = t524
+  const froundOldInput__w1 = t525
+  const t526 = froundOldInput__w1 + froundUpShiftMask__w1
+  const t527 = t526#[0..=63]
+  const froundUpInput__w1 = t527
+  const _rounderMapIn_T__w1 = (isFpNarrow | isFpCrossLow) & 1
+  mut _mux_129:u64 = if _rounderMapIn_T__w1 != 0 { fracSrcLeft } else { shiftLeft }
+  const rounderMapIn__w1 = _mux_129
+  const rounderMap_0_0__w1 = rounderMapIn__w1#[54..=63]
+  const rounderMap_0_1__w1 = rounderMapIn__w1#[41..=63]
+  const rounderMap_0_2__w1 = rounderMapIn__w1#[12..=63]
+  const selectInRounder__w1 = (isFp2Int | isFroundOrFroundnxReg) & 1
+  mut _mux_136:u10 = if (float1HOut__w1 & 1) != 0 { rounderMap_0_0__w1 } else { 0 }
+  mut _mux_137:u23 = if ((float1HOut__w1 >> 1) & 1) != 0 { rounderMap_0_1__w1 } else { 0 }
+  mut _mux_138:u52 = if ((float1HOut__w1 >> 2) & 1) != 0 { rounderMap_0_2__w1 } else { 0 }
+  mut _mux_139:u64 = if selectInRounder__w1 != 0 { inRounder#[1..=64] } else { ((_mux_136 | _mux_137) | _mux_138) }
+  const rounderInput__w1 = _mux_139
+  mut _mux_140:u1 = if selectInRounder__w1 != 0 { inRounder & 1 } else { ((((float1HOut__w1 & 1 & ((rounderMapIn__w1 >> 53) & 1) & 1) | ((float1HOut__w1 >> 1) & 1 & ((rounderMapIn__w1 >> 40) & 1) & 1)) & 1) | ((float1HOut__w1 >> 2) & 1 & ((rounderMapIn__w1 >> 11) & 1) & 1)) & 1 }
+  mut _mux_141:u1 = if selectInRounder__w1 != 0 { sticky & 1 } else { ((((float1HOut__w1 & 1 & unsigned(rounderMapIn__w1#[0..=52] != 0) & 1) | ((float1HOut__w1 >> 1) & 1 & unsigned(rounderMapIn__w1#[0..=39] != 0) & 1)) & 1) | ((float1HOut__w1 >> 2) & 1 & unsigned(rounderMapIn__w1#[0..=10] != 0) & 1)) & 1 }
+  const exp__w1 = (expReg + (expPlus1Enable & 1))#[0..=12]
+  mut _mux_142:u2 = if expPlus1Enable != 0 { 2 } else { 1 }
+  mut _mux_151:u1 = if isFp2Int != 0 { (((((((((((((((int1HOut__w1 & 1 & (~hasSignInt) & 1 & 1) & unsigned(rounderInput__w1#[0..=7] == 0xff) & 1) | ((int1HOut__w1 & 1 & hasSignInt & 1) & unsigned(rounderInput__w1#[0..=6] == 0x7f) & 1)) & 1) | (((int1HOut__w1 >> 1) & 1 & (~hasSignInt) & 1 & 1) & unsigned(rounderInput__w1#[0..=15] == 0xffff) & 1)) & 1) | (((int1HOut__w1 >> 1) & 1 & hasSignInt & 1) & unsigned(rounderInput__w1#[0..=14] == 0x7fff) & 1)) & 1) | (((int1HOut__w1 >> 2) & 1 & (~hasSignInt) & 1 & 1) & unsigned(rounderInput__w1#[0..=31] == 0xffffffff) & 1)) & 1) | (((int1HOut__w1 >> 2) & 1 & hasSignInt & 1) & unsigned(rounderInput__w1#[0..=30] == 0x7fffffff) & 1)) & 1) | (((int1HOut__w1 >> 3) & 1 & (~hasSignInt) & 1 & 1) & unsigned(rounderInput__w1 == 0xffffffffffffffff) & 1)) & 1) | (((int1HOut__w1 >> 3) & 1 & hasSignInt & 1) & unsigned(rounderInput__w1#[0..=62] == 0x7fffffffffffffff) & 1)) & 1 } else { ((((float1HOut__w1 & 1 & unsigned(rounderMap_0_0__w1 == 0x3ff) & 1) | ((float1HOut__w1 >> 1) & 1 & unsigned(rounderMap_0_1__w1 == 0x7fffff) & 1)) & 1) | ((float1HOut__w1 >> 2) & 1 & unsigned(rounderMap_0_2__w1 == 0xfffffffffffff) & 1)) & 1 }
+  const rmin__w1 = (((unsigned(rm == 1) | (signSrc & unsigned(rm == 3) & 1)) & 1) | ((~signSrc) & 1 & unsigned(rm == 2) & 1)) & 1
+  const _GEN_5__w1 = (isFpWiden | isFpCrossHigh) & 1
+  const result1H__w1 = ((expIsOnesSrc & 1) << 2) | ((isZeroSrc & 1) << 1) | ((isSubnormalSrc | isnormalSrc) & 1)
+  mut _mux_155:u32 = if ((result1H__w1 >> 2) & 1) != 0 { ((signNonNan__w1 & 1) << 31) | (0xff << 23) | ((fracNotZeroSrc & 1) << 22) } else { 0 }
+  mut _mux_156:u32 = if ((result1H__w1 >> 1) & 1) != 0 { (signNonNan__w1 & 1) << 31 } else { 0 }
+  mut _mux_157:u32 = if (result1H__w1 & 1) != 0 { ((signNonNan__w1 & 1) << 31) | (exp__w1#[0..=7] << 23) | fracNormaled__w1#[41..=63] } else { 0 }
+  mut _mux_158:u64 = if ((result1H__w1 >> 2) & 1) != 0 { ((signNonNan__w1 & 1) << 63) | (0x7ff << 52) | ((fracNotZeroSrc & 1) << 51) } else { 0 }
+  mut _mux_159:u64 = if ((result1H__w1 >> 1) & 1) != 0 { (signNonNan__w1 & 1) << 63 } else { 0 }
+  mut _mux_160:u64 = if (result1H__w1 & 1) != 0 { ((signNonNan__w1 & 1) << 63) | (exp__w1#[0..=10] << 52) | fracNormaled__w1#[12..=63] } else { 0 }
+  mut _mux_161:u32 = if ((float1HOut__w1 >> 1) & 1) != 0 { (_mux_155 | _mux_156) | _mux_157 } else { 0 }
+  mut _mux_162:u64 = if ((float1HOut__w1 >> 2) & 1) != 0 { (_mux_158 | _mux_159) | _mux_160 } else { 0 }
+  const _maybeSub_T_2__w1 = unsigned(exp__w1 != 0)
+  const maybeSub__w1 = (((exp__w1 >> 12) & 1) | ((~_maybeSub_T_2__w1) & 1)) & 1
+  const _subRounderMap_T_9__w1 = (trunSticky | sticky) & 1
+  mut _mux_168:u10 = if (float1HOut__w1 & 1) != 0 { inRounder#[54..=63] } else { 0 }
+  mut _mux_169:u23 = if ((float1HOut__w1 >> 1) & 1) != 0 { inRounder#[41..=63] } else { 0 }
+  const subRounderInput__w1 = _mux_168 | _mux_169
+  const _result1H_T_12__w1 = unsigned(rm == 6)
+  mut _mux_171:u16 = if (float1HOut__w1 & 1) != 0 { ((signSrc & 1) << 15) | (froundOldExp#[0..=4] << 10) | froundOldFrac#[42..=51] } else { 0 }
+  mut _mux_172:u32 = if ((float1HOut__w1 >> 1) & 1) != 0 { ((signSrc & 1) << 31) | (froundOldExp#[0..=7] << 23) | froundOldFrac#[29..=51] } else { 0 }
+  mut _mux_173:u64 = if ((float1HOut__w1 >> 2) & 1) != 0 { ((signSrc & 1) << 63) | (froundOldExp << 52) | froundOldFrac } else { 0 }
+  const oldInputReg__w1 = (_mux_171 | _mux_172) | _mux_173
+  const result1H_2__w1 = (((froundOrFroundnxIsZeroOrInf | (froundExpGreaterThanMaxExp & (~isNaNSrc) & 1 & 1)) & 1) << 3) | ((isNaNSrc & 1) << 2) | ((froundExpLessThanBias & (~froundOrFroundnxIsZeroOrInf) & 1 & 1) << 1) | ((~froundExpLessThanBias) & 1 & (~froundExpGreaterThanMaxExp) & 1 & 1)
+  mut _mux_174:u64 = if ((result1H_2__w1 >> 3) & 1) != 0 { oldInputReg__w1 } else { 0 }
+  mut _mux_175:u64 = if ((result1H_2__w1 >> 2) & 1) != 0 { 0x7e00 } else { 0 }
+  mut _mux_176:u64 = if ((result1H_2__w1 >> 3) & 1) != 0 { oldInputReg__w1 } else { 0 }
+  mut _mux_177:u64 = if ((result1H_2__w1 >> 2) & 1) != 0 { 0x7fc00000 } else { 0 }
+  mut _mux_178:u64 = if ((result1H_2__w1 >> 3) & 1) != 0 { oldInputReg__w1 } else { 0 }
+  mut _mux_179:u64 = if ((result1H_2__w1 >> 2) & 1) != 0 { 0x7ff8000000000000 } else { 0 }
+  mut _mux_185:u1 = if signSrc != 0 { (unsigned(fcvtmodFracReg#[32..=63] != 0) | (unsigned(fcvtmodFracReg#[32..=63] == 0) & (fcvtmodFracReg >> 31) & 1 & 1 & unsigned(fcvtmodFracReg#[0..=30] != 0) & 1)) & 1 } else { unsigned(fcvtmodFracReg#[31..=63] != 0) & 1 }
+  const fcvtmodIsOf__w1 = (((~fcvtmodExpLessThanBias) & 1 & unsigned(fcvtmodTrueExpReg#[5..=10] != 0) & 1) | _mux_185) & 1
+  mut _mux_186:u64 = if signSrc != 0 { ((~fcvtmodFracReg)#[0..=63] + 1)#[0..=63] } else { fcvtmodFracReg }
+  mut _rep_187:u7 = if ((~signNonNan__w1) & 1) != 0 { 0x7f } else { 0 }
+  mut _mux_188:u8 = if (int1HOut__w1 & 1) != 0 { ((signNonNan__w1 & 1) << 7) | _rep_187 } else { 0 }
+  mut _rep_189:u15 = if ((~signNonNan__w1) & 1) != 0 { 0x7fff } else { 0 }
+  mut _mux_190:u16 = if ((int1HOut__w1 >> 1) & 1) != 0 { ((signNonNan__w1 & 1) << 15) | _rep_189 } else { 0 }
+  mut _rep_191:u31 = if ((~signNonNan__w1) & 1) != 0 { 0x7fffffff } else { 0 }
+  mut _mux_192:u32 = if ((int1HOut__w1 >> 2) & 1) != 0 { ((signNonNan__w1 & 1) << 31) | _rep_191 } else { 0 }
+  mut _rep_193:u63 = if ((~signNonNan__w1) & 1) != 0 { 0x7fffffffffffffff } else { 0 }
+  mut _mux_194:u64 = if ((int1HOut__w1 >> 3) & 1) != 0 { ((signNonNan__w1 & 1) << 63) | _rep_193 } else { 0 }
+  mut `io.fire` = io_fire & 1
+  mut `io.src` = io_src
+  mut `io.opType` = io_opType
+  mut `io.rm` = io_rm
+  mut `io.input1H` = io_input1H
+  mut `io.output1H` = io_output1H
+  mut `io.isFpToVecInst` = io_isFpToVecInst & 1
+  mut `io.isFround` = io_isFround
+  mut `io.isFcvtmod` = io_isFcvtmod & 1
+  mut `io.result` = result
+  mut `io.fflags` = fflags
+  if ((`io.fire` | fireReg__w1) & 1) != 0 {
+    fireReg_last_r = `io.fire`
+  }
+  if `io.fire` != 0 {
+    isFcvtmodReg = `io.isFcvtmod`
+  }
+  if `io.fire` != 0 {
+    rm = `io.rm`
+  }
+  if `io.fire` != 0 {
+    output1HReg = `io.output1H`
+  }
+  mut rounder = RoundingUnit::[name=rounder](io_in = rounderInput__w1, io_roundIn = _mux_140, io_stickyIn = _mux_141, io_signIn = signSrc, io_rm = rm)
+  mut subRounder = RoundingUnit_2::[name=subRounder](io_in = subRounderInput__w1, io_roundIn = ((float1HOut__w1 & 1 & ((inRounder >> 53) & 1) & 1) | ((float1HOut__w1 >> 1) & 1 & ((inRounder >> 40) & 1) & 1)) & 1, io_stickyIn = ((float1HOut__w1 & 1 & unsigned((((_subRounderMap_T_9__w1 & 1) << 53) | inRounder#[0..=52]) != 0) & 1) | ((float1HOut__w1 >> 1) & 1 & unsigned((((_subRounderMap_T_9__w1 & 1) << 40) | inRounder#[0..=39]) != 0) & 1)) & 1, io_signIn = signSrc, io_rm = rm)
+  const srcMap_3__w1 = `io.src`
+  const outIsFpNext__w1 = (`io.opType` >> 6) & 1
+  const isCrossLow__w1 = (`io.opType` >> 4) & 1 & (`io.opType` >> 3) & 1 & 1 & (outIsFpNext__w1 & (`io.output1H` >> 1) & 1 & 1) & 1
+  const float1HSrcNext__w1 = `io.input1H`#[1..=3]
+  const float1HOutNext__w1 = `io.output1H`#[1..=3]
+  const isFroundOrFroundnxNext__w1 = unsigned(`io.isFround` != 0)
+  const srcMap_1__w1 = srcMap_3__w1#[0..=15]
+  const srcMap_2__w1 = srcMap_3__w1#[0..=31]
+  mut _mux_196:u65 = if (float1HSrcNext__w1 & 1) != 0 { ((((srcMap_1__w1 >> 15) & 1) & 1) << 64) | (srcMap_1__w1#[10..=14] << 53) | (srcMap_1__w1#[0..=9] << 43) } else { 0 }
+  mut _mux_197:u65 = if ((float1HSrcNext__w1 >> 1) & 1) != 0 { ((((srcMap_2__w1 >> 31) & 1) & 1) << 64) | (srcMap_2__w1#[23..=30] << 53) | (srcMap_2__w1#[0..=22] << 30) } else { 0 }
+  mut _mux_198:u65 = if ((float1HSrcNext__w1 >> 2) & 1) != 0 { srcMap_3__w1#[0..=63] << 1 } else { 0 }
+  const input_0__w1 = (_mux_196 | _mux_197) | _mux_198
+  const expSrcNext__w1 = input_0__w1#[53..=63]
+  const fracSrc__w1 = input_0__w1#[1..=52]
+  mut _mux_202:u3 = if (float1HSrcNext__w1 & 1) != 0 { ((unsigned(fracSrc__w1#[42..=51] != 0) & 1) << 2) | ((unsigned(expSrcNext__w1#[0..=4] == 31) & 1) << 1) | (unsigned(expSrcNext__w1#[0..=4] != 0) & 1) } else { 0 }
+  mut _mux_206:u3 = if ((float1HSrcNext__w1 >> 1) & 1) != 0 { ((unsigned(fracSrc__w1#[29..=51] != 0) & 1) << 2) | ((unsigned(expSrcNext__w1#[0..=7] == 0xff) & 1) << 1) | (unsigned(expSrcNext__w1#[0..=7] != 0) & 1) } else { 0 }
+  mut _mux_210:u3 = if ((float1HSrcNext__w1 >> 2) & 1) != 0 { ((unsigned(fracSrc__w1 != 0) & 1) << 2) | ((unsigned(expSrcNext__w1 == 0x7ff) & 1) << 1) | (unsigned(expSrcNext__w1 != 0) & 1) } else { 0 }
+  const decodeFloatSrc__w1 = (_mux_202 | _mux_206) | _mux_210
+  const expNotZeroSrcNext__w1 = decodeFloatSrc__w1 & 1
+  const expIsOnesSrcNext__w1 = (decodeFloatSrc__w1 >> 1) & 1
+  const fracNotZeroSrcNext__w1 = (decodeFloatSrc__w1 >> 2) & 1
+  const isNaNSrcNext__w1 = expIsOnesSrcNext__w1 & fracNotZeroSrcNext__w1 & 1
+  const isZeroSrcNext__w1 = (~expNotZeroSrcNext__w1) & 1 & (~fracNotZeroSrcNext__w1) & 1 & 1
+  const isSubnormalSrcNext__w1 = (~expNotZeroSrcNext__w1) & 1 & fracNotZeroSrcNext__w1 & 1
+  const isInfSrcNext__w1 = expIsOnesSrcNext__w1 & (~fracNotZeroSrcNext__w1) & 1 & 1
+  const isFpWidenNext__w1 = outIsFpNext__w1 & ((~((`io.opType` >> 4) & 1)) & 1 & (`io.opType` >> 3) & 1 & 1) & 1
+  const isFpNarrowNext__w1 = outIsFpNext__w1 & ((`io.opType` >> 4) & 1 & (~((`io.opType` >> 3) & 1)) & 1 & 1) & 1
+  const isFp2IntNext__w1 = (~outIsFpNext__w1) & 1
+  const isFpCrossHighNext__w1 = outIsFpNext__w1 & ((`io.opType` >> 4) & 1 & (`io.opType` >> 3) & 1 & 1 & (outIsFpNext__w1 & (`io.output1H` >> 3) & 1 & 1) & 1) & 1
+  const isFpCrossLowNext__w1 = outIsFpNext__w1 & isCrossLow__w1 & 1
+  const fracSrcLeftNext__w1 = fracSrc__w1 << 12
+  mut _mux_213:u7 = if ((float1HOutNext__w1 >> 1) & 1) != 0 { 0x70 } else { 0 }
+  mut _mux_214:u10 = if ((float1HOutNext__w1 >> 2) & 1) != 0 { 0x380 } else { 0 }
+  const _expAdderIn0Next_T_11__w1 = expSrcNext__w1
+  mut _mux_215:u12 = if isSubnormalSrcNext__w1 != 0 { 1 } else { _expAdderIn0Next_T_11__w1 }
+  mut _mux_216:u12 = if isSubnormalSrcNext__w1 != 0 { 1 } else { _expAdderIn0Next_T_11__w1 }
+  mut _mux_217:u10 = if isFpWidenNext__w1 != 0 { _mux_213 | _mux_214 } else { 0 }
+  mut _mux_218:u10 = if isFpCrossHighNext__w1 != 0 { 0x3f0 } else { 0 }
+  mut _mux_219:u12 = if ((isFpNarrowNext__w1 | isFpCrossLowNext__w1) & 1) != 0 { _mux_215 } else { 0 }
+  mut _mux_220:u12 = if isFp2IntNext__w1 != 0 { _mux_216 } else { 0 }
+  mut _mux_221:u7 = if (float1HOutNext__w1 & 1) != 0 { 0x70 } else { 0 }
+  mut _mux_222:u10 = if ((float1HOutNext__w1 >> 1) & 1) != 0 { 0x380 } else { 0 }
+  mut _rep_223:u4 = if (float1HSrcNext__w1 & 1) != 0 { 15 } else { 0 }
+  mut _rep_224:u7 = if ((float1HSrcNext__w1 >> 1) & 1) != 0 { 0x7f } else { 0 }
+  mut _rep_225:u10 = if ((float1HSrcNext__w1 >> 2) & 1) != 0 { 0x3ff } else { 0 }
+  const _expPlus1EnableNext_T_2__w1 = (isFpWidenNext__w1 | isFpCrossHighNext__w1) & 1
+  mut _mux_226:u10 = if isFpNarrowNext__w1 != 0 { _mux_221 | _mux_222 } else { 0 }
+  mut _mux_227:u10 = if isFpCrossLowNext__w1 != 0 { 0x3f0 } else { 0 }
+  mut _mux_228:u10 = if isFp2IntNext__w1 != 0 { (_rep_223 | _rep_224) | _rep_225 } else { 0 }
+  const expPlus1EnableNext__w1 = (((((isFpNarrowNext__w1 | isFp2IntNext__w1) & 1) | isFpCrossLowNext__w1) & 1) | (_expPlus1EnableNext_T_2__w1 & isSubnormalSrcNext__w1 & 1)) & 1
+  const fracValueSrc__w1 = ((expNotZeroSrcNext__w1 & (~expIsOnesSrcNext__w1) & 1 & 1) << 52) | fracSrc__w1
+  mut _mux_229:u7 = if (float1HSrcNext__w1 & 1) != 0 { 0x4e } else { 0 }
+  mut _mux_230:u8 = if ((float1HSrcNext__w1 >> 1) & 1) != 0 { 0xbe } else { 0 }
+  mut _mux_231:u11 = if ((float1HSrcNext__w1 >> 2) & 1) != 0 { 0x43e } else { 0 }
+  mut _mux_232:u7 = if (float1HOutNext__w1 & 1) != 0 { 0x71 } else { 0 }
+  mut _mux_233:u10 = if ((float1HOutNext__w1 >> 1) & 1) != 0 { 0x381 } else { 0 }
+  mut _mux_234:u10 = if isCrossLow__w1 != 0 { 0x3f1 } else { _mux_232 | _mux_233 }
+  mut _mux_235:u11 = if ((((~outIsFpNext__w1) & 1) | isFroundOrFroundnxNext__w1) & 1) != 0 { (_mux_229 | _mux_230) | _mux_231 } else { _mux_234 }
+  const shamtWidth__w1 = (_mux_235 + (~expSrcNext__w1)#[0..=10])#[0..=10]
+  mut _mux_236:u11 = if shamtWidth__w1#[6..=10] != 0 { 0x41 } else { (shamtWidth__w1 + 1)#[0..=10] }
+  mut _mux_237:u11 = if shamtWidth__w1 == 0x7ff { 0 } else { _mux_236 }
+  mut _mux_238:u5 = if (float1HOutNext__w1 & 1) != 0 { 25 } else { 0 }
+  mut _mux_239:u8 = if ((float1HOutNext__w1 >> 1) & 1) != 0 { 0x96 } else { 0 }
+  mut _mux_240:u11 = if ((float1HOutNext__w1 >> 2) & 1) != 0 { 0x433 } else { 0 }
+  mut _mux_242:u7 = if (float1HOutNext__w1 & 1) != 0 { 0x43 } else { 0 }
+  mut _mux_243:u8 = if ((float1HOutNext__w1 >> 1) & 1) != 0 { 0xb3 } else { 0 }
+  mut _mux_244:u11 = if ((float1HOutNext__w1 >> 2) & 1) != 0 { 0x433 } else { 0 }
+  const fcvtmodExpGreatThanShiftMask__w1 = unsigned(expSrcNext__w1 > 0x432)
+  const fcvtmodFracTmp__w1 = fracValueSrc__w1
+  const fcvtmodShiftDelta__w1 = (expSrcNext__w1 + 0x3cd)#[0..=10]
+  mut _mux_250:u11 = if fcvtmodExpGreatThanShiftMask__w1 != 0 { fcvtmodShiftDelta__w1 } else { ((~fcvtmodShiftDelta__w1)#[0..=10] + 1)#[0..=10] }
+  const fcvtmodShift__w1 = _mux_250
+  const fcvtmodShiftLeftMask__w1 = (expSrcNext__w1 - 0x3f3)#[0..=10]
+  const _GEN__w1 = unsigned(fcvtmodShift__w1#[6..=10] != 0)
+  const _GEN_0__w1 = fcvtmodExpGreatThanShiftMask__w1 & _GEN__w1 & 1
+  const _GEN_1__w1 = fcvtmodExpGreatThanShiftMask__w1 & (~_GEN__w1) & 1 & 1
+  mut _mux_252:u64 = if fcvtmodShift__w1 == 0 { fcvtmodFracTmp__w1 } else { 0 }
+  mut _mux_253:u64 = if fcvtmodShift__w1 == 1 { fcvtmodFracTmp__w1#[0..=62] << 1 } else { 0 }
+  mut _mux_254:u64 = if fcvtmodShift__w1 == 2 { fcvtmodFracTmp__w1#[0..=61] << 2 } else { 0 }
+  mut _mux_255:u64 = if fcvtmodShift__w1 == 3 { fcvtmodFracTmp__w1#[0..=60] << 3 } else { 0 }
+  mut _mux_256:u64 = if fcvtmodShift__w1 == 4 { fcvtmodFracTmp__w1#[0..=59] << 4 } else { 0 }
+  mut _mux_257:u64 = if fcvtmodShift__w1 == 5 { fcvtmodFracTmp__w1#[0..=58] << 5 } else { 0 }
+  mut _mux_258:u64 = if fcvtmodShift__w1 == 6 { fcvtmodFracTmp__w1#[0..=57] << 6 } else { 0 }
+  mut _mux_259:u64 = if fcvtmodShift__w1 == 7 { fcvtmodFracTmp__w1#[0..=56] << 7 } else { 0 }
+  mut _mux_260:u64 = if fcvtmodShift__w1 == 8 { fcvtmodFracTmp__w1#[0..=55] << 8 } else { 0 }
+  mut _mux_261:u64 = if fcvtmodShift__w1 == 9 { fcvtmodFracTmp__w1#[0..=54] << 9 } else { 0 }
+  mut _mux_262:u64 = if fcvtmodShift__w1 == 10 { fcvtmodFracTmp__w1#[0..=53] << 10 } else { 0 }
+  mut _mux_263:u64 = if fcvtmodShift__w1 == 11 { fcvtmodFracTmp__w1#[0..=52] << 11 } else { 0 }
+  mut _mux_264:u64 = if fcvtmodShift__w1 == 12 { fcvtmodFracTmp__w1#[0..=51] << 12 } else { 0 }
+  mut _mux_265:u64 = if fcvtmodShift__w1 == 13 { fcvtmodFracTmp__w1#[0..=50] << 13 } else { 0 }
+  mut _mux_266:u64 = if fcvtmodShift__w1 == 14 { fcvtmodFracTmp__w1#[0..=49] << 14 } else { 0 }
+  mut _mux_267:u64 = if fcvtmodShift__w1 == 15 { fcvtmodFracTmp__w1#[0..=48] << 15 } else { 0 }
+  mut _mux_268:u64 = if fcvtmodShift__w1 == 16 { fcvtmodFracTmp__w1#[0..=47] << 16 } else { 0 }
+  mut _mux_269:u64 = if fcvtmodShift__w1 == 17 { fcvtmodFracTmp__w1#[0..=46] << 17 } else { 0 }
+  mut _mux_270:u64 = if fcvtmodShift__w1 == 18 { fcvtmodFracTmp__w1#[0..=45] << 18 } else { 0 }
+  mut _mux_271:u64 = if fcvtmodShift__w1 == 19 { fcvtmodFracTmp__w1#[0..=44] << 19 } else { 0 }
+  mut _mux_272:u64 = if fcvtmodShift__w1 == 20 { fcvtmodFracTmp__w1#[0..=43] << 20 } else { 0 }
+  mut _mux_273:u64 = if fcvtmodShift__w1 == 21 { fcvtmodFracTmp__w1#[0..=42] << 21 } else { 0 }
+  mut _mux_274:u64 = if fcvtmodShift__w1 == 22 { fcvtmodFracTmp__w1#[0..=41] << 22 } else { 0 }
+  mut _mux_275:u64 = if fcvtmodShift__w1 == 23 { fcvtmodFracTmp__w1#[0..=40] << 23 } else { 0 }
+  mut _mux_276:u64 = if fcvtmodShift__w1 == 24 { fcvtmodFracTmp__w1#[0..=39] << 24 } else { 0 }
+  mut _mux_277:u64 = if fcvtmodShift__w1 == 25 { fcvtmodFracTmp__w1#[0..=38] << 25 } else { 0 }
+  mut _mux_278:u64 = if fcvtmodShift__w1 == 26 { fcvtmodFracTmp__w1#[0..=37] << 26 } else { 0 }
+  mut _mux_279:u64 = if fcvtmodShift__w1 == 27 { fcvtmodFracTmp__w1#[0..=36] << 27 } else { 0 }
+  mut _mux_280:u64 = if fcvtmodShift__w1 == 28 { fcvtmodFracTmp__w1#[0..=35] << 28 } else { 0 }
+  mut _mux_281:u64 = if fcvtmodShift__w1 == 29 { fcvtmodFracTmp__w1#[0..=34] << 29 } else { 0 }
+  mut _mux_282:u64 = if fcvtmodShift__w1 == 30 { fcvtmodFracTmp__w1#[0..=33] << 30 } else { 0 }
+  mut _mux_283:u64 = if fcvtmodShift__w1 == 31 { fcvtmodFracTmp__w1#[0..=32] << 31 } else { 0 }
+  mut _mux_284:u64 = if fcvtmodShift__w1 == 32 { fcvtmodFracTmp__w1#[0..=31] << 32 } else { 0 }
+  mut _mux_285:u64 = if fcvtmodShift__w1 == 33 { fcvtmodFracTmp__w1#[0..=30] << 33 } else { 0 }
+  mut _mux_286:u64 = if fcvtmodShift__w1 == 34 { fcvtmodFracTmp__w1#[0..=29] << 34 } else { 0 }
+  mut _mux_287:u64 = if fcvtmodShift__w1 == 35 { fcvtmodFracTmp__w1#[0..=28] << 35 } else { 0 }
+  mut _mux_288:u64 = if fcvtmodShift__w1 == 36 { fcvtmodFracTmp__w1#[0..=27] << 36 } else { 0 }
+  mut _mux_289:u64 = if fcvtmodShift__w1 == 37 { fcvtmodFracTmp__w1#[0..=26] << 37 } else { 0 }
+  mut _mux_290:u64 = if fcvtmodShift__w1 == 38 { fcvtmodFracTmp__w1#[0..=25] << 38 } else { 0 }
+  mut _mux_291:u64 = if fcvtmodShift__w1 == 39 { fcvtmodFracTmp__w1#[0..=24] << 39 } else { 0 }
+  mut _mux_292:u64 = if fcvtmodShift__w1 == 40 { fcvtmodFracTmp__w1#[0..=23] << 40 } else { 0 }
+  mut _mux_293:u64 = if fcvtmodShift__w1 == 41 { fcvtmodFracTmp__w1#[0..=22] << 41 } else { 0 }
+  mut _mux_294:u64 = if fcvtmodShift__w1 == 42 { fcvtmodFracTmp__w1#[0..=21] << 42 } else { 0 }
+  mut _mux_295:u64 = if fcvtmodShift__w1 == 43 { fcvtmodFracTmp__w1#[0..=20] << 43 } else { 0 }
+  mut _mux_296:u64 = if fcvtmodShift__w1 == 44 { fcvtmodFracTmp__w1#[0..=19] << 44 } else { 0 }
+  mut _mux_297:u64 = if fcvtmodShift__w1 == 45 { fcvtmodFracTmp__w1#[0..=18] << 45 } else { 0 }
+  mut _mux_298:u64 = if fcvtmodShift__w1 == 46 { fcvtmodFracTmp__w1#[0..=17] << 46 } else { 0 }
+  mut _mux_299:u64 = if fcvtmodShift__w1 == 47 { fcvtmodFracTmp__w1#[0..=16] << 47 } else { 0 }
+  mut _mux_300:u64 = if fcvtmodShift__w1 == 48 { fcvtmodFracTmp__w1#[0..=15] << 48 } else { 0 }
+  mut _mux_301:u64 = if fcvtmodShift__w1 == 49 { fcvtmodFracTmp__w1#[0..=14] << 49 } else { 0 }
+  mut _mux_302:u64 = if fcvtmodShift__w1 == 50 { fcvtmodFracTmp__w1#[0..=13] << 50 } else { 0 }
+  mut _mux_303:u64 = if fcvtmodShift__w1 == 51 { fcvtmodFracTmp__w1#[0..=12] << 51 } else { 0 }
+  mut _mux_304:u64 = if fcvtmodShift__w1 == 52 { fcvtmodFracTmp__w1#[0..=11] << 52 } else { 0 }
+  mut _mux_305:u64 = if fcvtmodShift__w1 == 53 { fcvtmodFracTmp__w1#[0..=10] << 53 } else { 0 }
+  mut _mux_306:u64 = if fcvtmodShift__w1 == 54 { fcvtmodFracTmp__w1#[0..=9] << 54 } else { 0 }
+  mut _mux_307:u64 = if fcvtmodShift__w1 == 55 { fcvtmodFracTmp__w1#[0..=8] << 55 } else { 0 }
+  mut _mux_308:u64 = if fcvtmodShift__w1 == 56 { fcvtmodFracTmp__w1#[0..=7] << 56 } else { 0 }
+  mut _mux_309:u64 = if fcvtmodShift__w1 == 57 { fcvtmodFracTmp__w1#[0..=6] << 57 } else { 0 }
+  mut _mux_310:u64 = if fcvtmodShift__w1 == 58 { fcvtmodFracTmp__w1#[0..=5] << 58 } else { 0 }
+  mut _mux_311:u64 = if fcvtmodShift__w1 == 59 { fcvtmodFracTmp__w1#[0..=4] << 59 } else { 0 }
+  mut _mux_312:u64 = if fcvtmodShift__w1 == 60 { fcvtmodFracTmp__w1#[0..=3] << 60 } else { 0 }
+  mut _mux_313:u64 = if fcvtmodShift__w1 == 61 { fcvtmodFracTmp__w1#[0..=2] << 61 } else { 0 }
+  mut _mux_314:u64 = if fcvtmodShift__w1 == 62 { fcvtmodFracTmp__w1#[0..=1] << 62 } else { 0 }
+  mut _mux_315:u64 = if fcvtmodShift__w1 == 63 { (fcvtmodFracTmp__w1 & 1) << 63 } else { 0 }
+  const _GEN_2__w1 = (~fcvtmodExpGreatThanShiftMask__w1) & 1 & (~_GEN__w1) & 1 & 1
+  mut _mux_316:u64 = if fcvtmodShiftLeftMask__w1 == 0 { fcvtmodFracTmp__w1 } else { 0 }
+  mut _mux_317:u64 = if fcvtmodShiftLeftMask__w1 == 1 { fcvtmodFracTmp__w1#[0..=62] << 1 } else { 0 }
+  mut _mux_318:u64 = if fcvtmodShiftLeftMask__w1 == 2 { fcvtmodFracTmp__w1#[0..=61] << 2 } else { 0 }
+  mut _mux_319:u64 = if fcvtmodShiftLeftMask__w1 == 3 { fcvtmodFracTmp__w1#[0..=60] << 3 } else { 0 }
+  mut _mux_320:u64 = if fcvtmodShiftLeftMask__w1 == 4 { fcvtmodFracTmp__w1#[0..=59] << 4 } else { 0 }
+  mut _mux_321:u64 = if fcvtmodShiftLeftMask__w1 == 5 { fcvtmodFracTmp__w1#[0..=58] << 5 } else { 0 }
+  mut _mux_322:u64 = if fcvtmodShiftLeftMask__w1 == 6 { fcvtmodFracTmp__w1#[0..=57] << 6 } else { 0 }
+  mut _mux_323:u64 = if fcvtmodShiftLeftMask__w1 == 7 { fcvtmodFracTmp__w1#[0..=56] << 7 } else { 0 }
+  mut _mux_324:u64 = if fcvtmodShiftLeftMask__w1 == 8 { fcvtmodFracTmp__w1#[0..=55] << 8 } else { 0 }
+  mut _mux_325:u64 = if fcvtmodShiftLeftMask__w1 == 9 { fcvtmodFracTmp__w1#[0..=54] << 9 } else { 0 }
+  mut _mux_326:u64 = if fcvtmodShiftLeftMask__w1 == 10 { fcvtmodFracTmp__w1#[0..=53] << 10 } else { 0 }
+  mut _mux_327:u64 = if fcvtmodShiftLeftMask__w1 == 11 { fcvtmodFracTmp__w1#[0..=52] << 11 } else { 0 }
+  mut _mux_328:u64 = if fcvtmodShiftLeftMask__w1 == 12 { fcvtmodFracTmp__w1#[0..=51] << 12 } else { 0 }
+  mut _mux_329:u64 = if fcvtmodShiftLeftMask__w1 == 13 { fcvtmodFracTmp__w1#[0..=50] << 13 } else { 0 }
+  mut _mux_330:u64 = if fcvtmodShiftLeftMask__w1 == 14 { fcvtmodFracTmp__w1#[0..=49] << 14 } else { 0 }
+  mut _mux_331:u64 = if fcvtmodShiftLeftMask__w1 == 15 { fcvtmodFracTmp__w1#[0..=48] << 15 } else { 0 }
+  mut _mux_332:u64 = if fcvtmodShiftLeftMask__w1 == 16 { fcvtmodFracTmp__w1#[0..=47] << 16 } else { 0 }
+  mut _mux_333:u64 = if fcvtmodShiftLeftMask__w1 == 17 { fcvtmodFracTmp__w1#[0..=46] << 17 } else { 0 }
+  mut _mux_334:u64 = if fcvtmodShiftLeftMask__w1 == 18 { fcvtmodFracTmp__w1#[0..=45] << 18 } else { 0 }
+  mut _mux_335:u64 = if fcvtmodShiftLeftMask__w1 == 19 { fcvtmodFracTmp__w1#[0..=44] << 19 } else { 0 }
+  mut _mux_336:u64 = if fcvtmodShiftLeftMask__w1 == 20 { fcvtmodFracTmp__w1#[0..=43] << 20 } else { 0 }
+  mut _mux_337:u64 = if fcvtmodShiftLeftMask__w1 == 21 { fcvtmodFracTmp__w1#[0..=42] << 21 } else { 0 }
+  mut _mux_338:u64 = if fcvtmodShiftLeftMask__w1 == 22 { fcvtmodFracTmp__w1#[0..=41] << 22 } else { 0 }
+  mut _mux_339:u64 = if fcvtmodShiftLeftMask__w1 == 23 { fcvtmodFracTmp__w1#[0..=40] << 23 } else { 0 }
+  mut _mux_340:u64 = if fcvtmodShiftLeftMask__w1 == 24 { fcvtmodFracTmp__w1#[0..=39] << 24 } else { 0 }
+  mut _mux_341:u64 = if fcvtmodShiftLeftMask__w1 == 25 { fcvtmodFracTmp__w1#[0..=38] << 25 } else { 0 }
+  mut _mux_342:u64 = if fcvtmodShiftLeftMask__w1 == 26 { fcvtmodFracTmp__w1#[0..=37] << 26 } else { 0 }
+  mut _mux_343:u64 = if fcvtmodShiftLeftMask__w1 == 27 { fcvtmodFracTmp__w1#[0..=36] << 27 } else { 0 }
+  mut _mux_344:u64 = if fcvtmodShiftLeftMask__w1 == 28 { fcvtmodFracTmp__w1#[0..=35] << 28 } else { 0 }
+  mut _mux_345:u64 = if fcvtmodShiftLeftMask__w1 == 29 { fcvtmodFracTmp__w1#[0..=34] << 29 } else { 0 }
+  mut _mux_346:u64 = if fcvtmodShiftLeftMask__w1 == 30 { fcvtmodFracTmp__w1#[0..=33] << 30 } else { 0 }
+  mut _mux_347:u64 = if fcvtmodShiftLeftMask__w1 == 31 { fcvtmodFracTmp__w1#[0..=32] << 31 } else { 0 }
+  mut _mux_348:u64 = if fcvtmodShiftLeftMask__w1 == 32 { fcvtmodFracTmp__w1#[0..=31] << 32 } else { 0 }
+  mut _mux_349:u64 = if fcvtmodShiftLeftMask__w1 == 33 { fcvtmodFracTmp__w1#[0..=30] << 33 } else { 0 }
+  mut _mux_350:u64 = if fcvtmodShiftLeftMask__w1 == 34 { fcvtmodFracTmp__w1#[0..=29] << 34 } else { 0 }
+  mut _mux_351:u64 = if fcvtmodShiftLeftMask__w1 == 35 { fcvtmodFracTmp__w1#[0..=28] << 35 } else { 0 }
+  mut _mux_352:u64 = if fcvtmodShiftLeftMask__w1 == 36 { fcvtmodFracTmp__w1#[0..=27] << 36 } else { 0 }
+  mut _mux_353:u64 = if fcvtmodShiftLeftMask__w1 == 37 { fcvtmodFracTmp__w1#[0..=26] << 37 } else { 0 }
+  mut _mux_354:u64 = if fcvtmodShiftLeftMask__w1 == 38 { fcvtmodFracTmp__w1#[0..=25] << 38 } else { 0 }
+  mut _mux_355:u64 = if fcvtmodShiftLeftMask__w1 == 39 { fcvtmodFracTmp__w1#[0..=24] << 39 } else { 0 }
+  mut _mux_356:u64 = if fcvtmodShiftLeftMask__w1 == 40 { fcvtmodFracTmp__w1#[0..=23] << 40 } else { 0 }
+  mut _mux_357:u64 = if fcvtmodShiftLeftMask__w1 == 41 { fcvtmodFracTmp__w1#[0..=22] << 41 } else { 0 }
+  mut _mux_358:u64 = if fcvtmodShiftLeftMask__w1 == 42 { fcvtmodFracTmp__w1#[0..=21] << 42 } else { 0 }
+  mut _mux_359:u64 = if fcvtmodShiftLeftMask__w1 == 43 { fcvtmodFracTmp__w1#[0..=20] << 43 } else { 0 }
+  mut _mux_360:u64 = if fcvtmodShiftLeftMask__w1 == 44 { fcvtmodFracTmp__w1#[0..=19] << 44 } else { 0 }
+  mut _mux_361:u64 = if fcvtmodShiftLeftMask__w1 == 45 { fcvtmodFracTmp__w1#[0..=18] << 45 } else { 0 }
+  mut _mux_362:u64 = if fcvtmodShiftLeftMask__w1 == 46 { fcvtmodFracTmp__w1#[0..=17] << 46 } else { 0 }
+  mut _mux_363:u64 = if fcvtmodShiftLeftMask__w1 == 47 { fcvtmodFracTmp__w1#[0..=16] << 47 } else { 0 }
+  mut _mux_364:u64 = if fcvtmodShiftLeftMask__w1 == 48 { fcvtmodFracTmp__w1#[0..=15] << 48 } else { 0 }
+  mut _mux_365:u64 = if fcvtmodShiftLeftMask__w1 == 49 { fcvtmodFracTmp__w1#[0..=14] << 49 } else { 0 }
+  mut _mux_366:u64 = if fcvtmodShiftLeftMask__w1 == 50 { fcvtmodFracTmp__w1#[0..=13] << 50 } else { 0 }
+  mut _mux_367:u64 = if fcvtmodShiftLeftMask__w1 == 51 { fcvtmodFracTmp__w1#[0..=12] << 51 } else { 0 }
+  mut _mux_368:u64 = if fcvtmodShiftLeftMask__w1 == 52 { fcvtmodFracTmp__w1#[0..=11] << 52 } else { 0 }
+  mut _mux_369:u64 = if fcvtmodShiftLeftMask__w1 == 53 { fcvtmodFracTmp__w1#[0..=10] << 53 } else { 0 }
+  mut _mux_370:u64 = if fcvtmodShiftLeftMask__w1 == 54 { fcvtmodFracTmp__w1#[0..=9] << 54 } else { 0 }
+  mut _mux_371:u64 = if fcvtmodShiftLeftMask__w1 == 55 { fcvtmodFracTmp__w1#[0..=8] << 55 } else { 0 }
+  mut _mux_372:u64 = if fcvtmodShiftLeftMask__w1 == 56 { fcvtmodFracTmp__w1#[0..=7] << 56 } else { 0 }
+  mut _mux_373:u64 = if fcvtmodShiftLeftMask__w1 == 57 { fcvtmodFracTmp__w1#[0..=6] << 57 } else { 0 }
+  mut _mux_374:u64 = if fcvtmodShiftLeftMask__w1 == 58 { fcvtmodFracTmp__w1#[0..=5] << 58 } else { 0 }
+  mut _mux_375:u64 = if fcvtmodShiftLeftMask__w1 == 59 { fcvtmodFracTmp__w1#[0..=4] << 59 } else { 0 }
+  mut _mux_376:u64 = if fcvtmodShiftLeftMask__w1 == 60 { fcvtmodFracTmp__w1#[0..=3] << 60 } else { 0 }
+  mut _mux_377:u64 = if fcvtmodShiftLeftMask__w1 == 61 { fcvtmodFracTmp__w1#[0..=2] << 61 } else { 0 }
+  mut _mux_378:u64 = if fcvtmodShiftLeftMask__w1 == 62 { fcvtmodFracTmp__w1#[0..=1] << 62 } else { 0 }
+  mut _mux_379:u64 = if fcvtmodShiftLeftMask__w1 == 63 { (fcvtmodFracTmp__w1 & 1) << 63 } else { 0 }
+  mut _mux_380:u64 = if _GEN_2__w1 != 0 { (fcvtmodFracTmp__w1 >> fcvtmodShift__w1)#[0..=63] } else { 0 }
+  const t1896 = ((((((((((((((((_mux_252 | _mux_253) | _mux_254) | _mux_255) | _mux_256) | _mux_257) | _mux_258) | _mux_259) | _mux_260) | _mux_261) | _mux_262) | _mux_263) | _mux_264) | _mux_265) | _mux_266) | _mux_267) | _mux_268) | _mux_269
+  const t1897 = t1896
+  const t1898 = t1897 | _mux_270
+  const t1899 = t1898
+  const t1900 = t1899 | _mux_271
+  const t1901 = t1900
+  const t1902 = t1901 | _mux_272
+  const t1903 = t1902
+  const t1904 = t1903 | _mux_273
+  const t1905 = t1904
+  const t1906 = t1905 | _mux_274
+  const t1907 = t1906
+  const t1908 = t1907 | _mux_275
+  const t1909 = t1908
+  const t1910 = t1909 | _mux_276
+  const t1911 = t1910
+  const t1912 = t1911 | _mux_277
+  const t1913 = t1912
+  const t1914 = t1913 | _mux_278
+  const t1915 = t1914
+  const t1916 = t1915 | _mux_279
+  const t1917 = t1916
+  const t1918 = t1917 | _mux_280
+  const t1919 = t1918
+  const t1920 = t1919 | _mux_281
+  const t1921 = t1920
+  const t1922 = t1921 | _mux_282
+  const t1923 = t1922
+  const t1924 = t1923 | _mux_283
+  const t1925 = t1924
+  const t1926 = t1925 | _mux_284
+  const t1927 = t1926
+  const t1928 = t1927 | _mux_285
+  const t1929 = t1928
+  const t1930 = t1929 | _mux_286
+  const t1931 = t1930
+  const t1932 = t1931 | _mux_287
+  const t1933 = t1932
+  const t1934 = t1933 | _mux_288
+  const t1935 = t1934
+  const t1936 = t1935 | _mux_289
+  const t1937 = t1936
+  const t1938 = t1937 | _mux_290
+  const t1939 = t1938
+  const t1940 = t1939 | _mux_291
+  const t1941 = t1940
+  const t1942 = t1941 | _mux_292
+  const t1943 = t1942
+  const t1944 = t1943 | _mux_293
+  const t1945 = t1944
+  const t1946 = t1945 | _mux_294
+  const t1947 = t1946
+  const t1948 = t1947 | _mux_295
+  const t1949 = t1948
+  const t1950 = t1949 | _mux_296
+  const t1951 = t1950
+  const t1952 = t1951 | _mux_297
+  const t1953 = t1952
+  const t1954 = t1953 | _mux_298
+  const t1955 = t1954
+  const t1956 = t1955 | _mux_299
+  const t1957 = t1956
+  const t1958 = t1957 | _mux_300
+  const t1959 = t1958
+  const t1960 = t1959 | _mux_301
+  const t1961 = t1960
+  const t1962 = t1961 | _mux_302
+  const t1963 = t1962
+  const t1964 = t1963 | _mux_303
+  const t1965 = t1964
+  const t1966 = t1965 | _mux_304
+  const t1967 = t1966
+  const t1968 = t1967 | _mux_305
+  const t1969 = t1968
+  const t1970 = t1969 | _mux_306
+  const t1971 = t1970
+  const t1972 = t1971 | _mux_307
+  const t1973 = t1972
+  const t1974 = t1973 | _mux_308
+  const t1975 = t1974
+  const t1976 = t1975 | _mux_309
+  const t1977 = t1976
+  const t1978 = t1977 | _mux_310
+  const t1979 = t1978
+  const t1980 = t1979 | _mux_311
+  const t1981 = t1980
+  const t1982 = t1981 | _mux_312
+  const t1983 = t1982
+  const t1984 = t1983 | _mux_313
+  const t1985 = t1984
+  const t1986 = t1985 | _mux_314
+  const t1987 = t1986
+  const t1988 = t1987 | _mux_315
+  const t1989 = t1988
+  mut _mux_381:u64 = if _GEN_1__w1 != 0 { t1989 } else { _mux_380 }
+  mut _mux_382:u64 = if _GEN_0__w1 != 0 { 0 } else { _mux_381 }
+  const t2031 = ((((((((((((((((_mux_316 | _mux_317) | _mux_318) | _mux_319) | _mux_320) | _mux_321) | _mux_322) | _mux_323) | _mux_324) | _mux_325) | _mux_326) | _mux_327) | _mux_328) | _mux_329) | _mux_330) | _mux_331) | _mux_332) | _mux_333
+  const t2032 = t2031
+  const t2033 = t2032 | _mux_334
+  const t2034 = t2033
+  const t2035 = t2034 | _mux_335
+  const t2036 = t2035
+  const t2037 = t2036 | _mux_336
+  const t2038 = t2037
+  const t2039 = t2038 | _mux_337
+  const t2040 = t2039
+  const t2041 = t2040 | _mux_338
+  const t2042 = t2041
+  const t2043 = t2042 | _mux_339
+  const t2044 = t2043
+  const t2045 = t2044 | _mux_340
+  const t2046 = t2045
+  const t2047 = t2046 | _mux_341
+  const t2048 = t2047
+  const t2049 = t2048 | _mux_342
+  const t2050 = t2049
+  const t2051 = t2050 | _mux_343
+  const t2052 = t2051
+  const t2053 = t2052 | _mux_344
+  const t2054 = t2053
+  const t2055 = t2054 | _mux_345
+  const t2056 = t2055
+  const t2057 = t2056 | _mux_346
+  const t2058 = t2057
+  const t2059 = t2058 | _mux_347
+  const t2060 = t2059
+  const t2061 = t2060 | _mux_348
+  const t2062 = t2061
+  const t2063 = t2062 | _mux_349
+  const t2064 = t2063
+  const t2065 = t2064 | _mux_350
+  const t2066 = t2065
+  const t2067 = t2066 | _mux_351
+  const t2068 = t2067
+  const t2069 = t2068 | _mux_352
+  const t2070 = t2069
+  const t2071 = t2070 | _mux_353
+  const t2072 = t2071
+  const t2073 = t2072 | _mux_354
+  const t2074 = t2073
+  const t2075 = t2074 | _mux_355
+  const t2076 = t2075
+  const t2077 = t2076 | _mux_356
+  const t2078 = t2077
+  const t2079 = t2078 | _mux_357
+  const t2080 = t2079
+  const t2081 = t2080 | _mux_358
+  const t2082 = t2081
+  const t2083 = t2082 | _mux_359
+  const t2084 = t2083
+  const t2085 = t2084 | _mux_360
+  const t2086 = t2085
+  const t2087 = t2086 | _mux_361
+  const t2088 = t2087
+  const t2089 = t2088 | _mux_362
+  const t2090 = t2089
+  const t2091 = t2090 | _mux_363
+  const t2092 = t2091
+  const t2093 = t2092 | _mux_364
+  const t2094 = t2093
+  const t2095 = t2094 | _mux_365
+  const t2096 = t2095
+  const t2097 = t2096 | _mux_366
+  const t2098 = t2097
+  const t2099 = t2098 | _mux_367
+  const t2100 = t2099
+  const t2101 = t2100 | _mux_368
+  const t2102 = t2101
+  const t2103 = t2102 | _mux_369
+  const t2104 = t2103
+  const t2105 = t2104 | _mux_370
+  const t2106 = t2105
+  const t2107 = t2106 | _mux_371
+  const t2108 = t2107
+  const t2109 = t2108 | _mux_372
+  const t2110 = t2109
+  const t2111 = t2110 | _mux_373
+  const t2112 = t2111
+  const t2113 = t2112 | _mux_374
+  const t2114 = t2113
+  const t2115 = t2114 | _mux_375
+  const t2116 = t2115
+  const t2117 = t2116 | _mux_376
+  const t2118 = t2117
+  const t2119 = t2118 | _mux_377
+  const t2120 = t2119
+  const t2121 = t2120 | _mux_378
+  const t2122 = t2121
+  const t2123 = t2122 | _mux_379
+  const t2124 = t2123
+  const t2125 = t2124 != 0
+  const cout__w1 = rounder.io_r_up & _mux_151 & 1
+  mut _mux_384:u11 = if cout__w1 != 0 { (expReg + _mux_142)#[0..=12]#[0..=10] } else { exp__w1#[0..=10] }
+  const expRounded__w1 = _mux_384
+  mut _mux_385:u64 = if rounder.io_r_up != 0 { (rounderInput__w1 + 1)#[0..=63] } else { rounderInput__w1 }
+  const fracRounded__w1 = _mux_385
+  mut _mux_390:u1 = if cout__w1 != 0 { unsigned((((unsigned(exp__w1#[1..=4] == 15) & 1) << 7) | exp__w1#[5..=11]) != 0) & 1 } else { unsigned((((unsigned(exp__w1#[0..=4] == 31) & 1) << 7) | exp__w1#[5..=11]) != 0) & 1 }
+  mut _mux_395:u1 = if cout__w1 != 0 { unsigned((((unsigned(exp__w1#[1..=7] == 0x7f) & 1) << 4) | exp__w1#[8..=11]) != 0) & 1 } else { unsigned((((unsigned(exp__w1#[0..=7] == 0xff) & 1) << 4) | exp__w1#[8..=11]) != 0) & 1 }
+  mut _mux_398:u1 = if cout__w1 != 0 { (unsigned(exp__w1#[1..=10] == 0x3ff) | ((exp__w1 >> 11) & 1)) & 1 } else { (unsigned(exp__w1#[0..=10] == 0x7ff) | ((exp__w1 >> 11) & 1)) & 1 }
+  const ofRounded__w1 = (~((exp__w1 >> 12) & 1)) & 1 & ((((float1HOut__w1 & 1 & _mux_390 & 1) | ((float1HOut__w1 >> 1) & 1 & _mux_395 & 1)) & 1) | ((float1HOut__w1 >> 2) & 1 & _mux_398 & 1)) & 1 & 1
+  mut _mux_399:u23 = if subRounder.io_r_up != 0 { (subRounderInput__w1 + 1)#[0..=22] } else { subRounderInput__w1 }
+  const subFracRounded__w1 = _mux_399
+  const subExpRounded__w1 = ((subRounder.io_r_up & ((float1HOut__w1 & 1 & unsigned(inRounder#[54..=63] == 0x3ff) & 1) | ((float1HOut__w1 >> 1) & 1 & unsigned(inRounder#[41..=63] == 0x7fffff) & 1)) & 1 & 1) & 1)
+  const result1H_1__w1 = ((expIsOnesSrc & 1) << 4) | (((~expIsOnesSrc) & 1 & (~maybeSub__w1) & 1 & 1 & ofRounded__w1 & 1 & (rmin__w1 | _result1H_T_12__w1) & 1 & 1) << 3) | (((~expIsOnesSrc) & 1 & (~maybeSub__w1) & 1 & 1 & ofRounded__w1 & 1 & (~((rmin__w1 | _result1H_T_12__w1) & 1)) & 1 & 1) << 2) | (((~expIsOnesSrc) & 1 & (~maybeSub__w1) & 1 & 1 & (~ofRounded__w1) & 1 & 1) << 1) | ((~expIsOnesSrc) & 1 & maybeSub__w1 & 1)
+  mut _mux_400:u16 = if ((result1H_1__w1 >> 4) & 1) != 0 { ((signNonNan__w1 & 1) << 15) | (31 << 10) | ((fracNotZeroSrc & 1) << 9) } else { 0 }
+  mut _mux_401:u16 = if ((result1H_1__w1 >> 3) & 1) != 0 { ((signNonNan__w1 & 1) << 15) | 0x7bff } else { 0 }
+  mut _mux_402:u16 = if ((result1H_1__w1 >> 2) & 1) != 0 { ((signNonNan__w1 & 1) << 15) | 0x7c00 } else { 0 }
+  mut _mux_403:u16 = if ((result1H_1__w1 >> 1) & 1) != 0 { ((signNonNan__w1 & 1) << 15) | (expRounded__w1#[0..=4] << 10) | fracRounded__w1#[0..=9] } else { 0 }
+  mut _mux_404:u16 = if (result1H_1__w1 & 1) != 0 { ((signNonNan__w1 & 1) << 15) | (subExpRounded__w1#[0..=4] << 10) | subFracRounded__w1#[0..=9] } else { 0 }
+  mut _mux_405:u32 = if ((result1H_1__w1 >> 4) & 1) != 0 { ((signNonNan__w1 & 1) << 31) | (0xff << 23) | ((fracNotZeroSrc & 1) << 22) } else { 0 }
+  mut _mux_406:u32 = if ((result1H_1__w1 >> 3) & 1) != 0 { ((signNonNan__w1 & 1) << 31) | 0x7f7fffff } else { 0 }
+  mut _mux_407:u32 = if ((result1H_1__w1 >> 2) & 1) != 0 { ((signNonNan__w1 & 1) << 31) | 0x7f800000 } else { 0 }
+  mut _mux_408:u32 = if ((result1H_1__w1 >> 1) & 1) != 0 { ((signNonNan__w1 & 1) << 31) | (expRounded__w1#[0..=7] << 23) | fracRounded__w1#[0..=22] } else { 0 }
+  mut _mux_409:u32 = if (result1H_1__w1 & 1) != 0 { ((signNonNan__w1 & 1) << 31) | (subExpRounded__w1 << 23) | subFracRounded__w1 } else { 0 }
+  mut _mux_410:u16 = if (float1HOut__w1 & 1) != 0 { (((_mux_400 | _mux_401) | _mux_402) | _mux_403) | _mux_404 } else { 0 }
+  mut _mux_411:u32 = if ((float1HOut__w1 >> 1) & 1) != 0 { (((_mux_405 | _mux_406) | _mux_407) | _mux_408) | _mux_409 } else { 0 }
+  mut _mux_412:u5 = if rounder.io_r_up != 0 { 15 } else { 0 }
+  const t2356 = froundUpInput__w1 >> 63
+  const t2357 = t2356 & 1
+  const t2358 = froundUpInput__w1#[42..=56]
+  const t2359 = (t2357 << 15) | t2358
+  const t2360 = froundOldInput__w1 >> 63
+  const t2361 = t2360 & 1
+  const t2362 = froundOldInput__w1#[42..=56]
+  const t2363 = (t2361 << 15) | t2362
+  mut _mux_413:u16 = if rounder.io_r_up != 0 { t2359 } else { t2363 }
+  mut _mux_414:u64 = if ((result1H_2__w1 >> 1) & 1) != 0 { ((signSrc & 1) << 15) | (_mux_412 << 10) } else { 0 }
+  mut _mux_415:u64 = if (result1H_2__w1 & 1) != 0 { _mux_413 } else { 0 }
+  mut _mux_416:u8 = if rounder.io_r_up != 0 { 0x7f } else { 0 }
+  const t2382 = froundUpInput__w1 >> 63
+  const t2383 = t2382 & 1
+  const t2384 = froundUpInput__w1#[29..=59]
+  const t2385 = (t2383 << 31) | t2384
+  const t2386 = froundOldInput__w1 >> 63
+  const t2387 = t2386 & 1
+  const t2388 = froundOldInput__w1#[29..=59]
+  const t2389 = (t2387 << 31) | t2388
+  mut _mux_417:u32 = if rounder.io_r_up != 0 { t2385 } else { t2389 }
+  mut _mux_418:u64 = if ((result1H_2__w1 >> 1) & 1) != 0 { ((signSrc & 1) << 31) | (_mux_416 << 23) } else { 0 }
+  mut _mux_419:u64 = if (result1H_2__w1 & 1) != 0 { _mux_417 } else { 0 }
+  mut _mux_420:u11 = if rounder.io_r_up != 0 { 0x3ff } else { 0 }
+  const t2408 = froundUpInput__w1
+  const t2409 = froundOldInput__w1
+  mut _mux_421:u64 = if rounder.io_r_up != 0 { t2408 } else { t2409 }
+  mut _mux_422:u64 = if ((result1H_2__w1 >> 1) & 1) != 0 { ((signSrc & 1) << 63) | (_mux_420 << 52) } else { 0 }
+  mut _mux_423:u64 = if (result1H_2__w1 & 1) != 0 { _mux_421 } else { 0 }
+  mut _mux_424:u64 = if (float1HOut__w1 & 1) != 0 { ((_mux_174 | _mux_175) | _mux_414) | _mux_415 } else { 0 }
+  mut _mux_425:u64 = if ((float1HOut__w1 >> 1) & 1) != 0 { ((_mux_176 | _mux_177) | _mux_418) | _mux_419 } else { 0 }
+  mut _mux_426:u64 = if ((float1HOut__w1 >> 2) & 1) != 0 { ((_mux_178 | _mux_179) | _mux_422) | _mux_423 } else { 0 }
+  const _normalResult_T__w1 = unsigned(fracRounded__w1 != 0)
+  mut _mux_428:u64 = if (signSrc & _normalResult_T__w1 & 1) != 0 { ((~fracRounded__w1)#[0..=63] + 1)#[0..=63] } else { fracRounded__w1 }
+  const _GEN_6__w1 = ((hasSignInt & 1) << 1) | (cout__w1 & 1)
+  const _ofExpRounded_T_3__w1 = (1 << _GEN_6__w1)#[0..=3]
+  const _ofExpRounded_T_34__w1 = (1 << _GEN_6__w1)#[0..=3]
+  const _ofExpRounded_T_65__w1 = (1 << _GEN_6__w1)#[0..=3]
+  const _ofExpRounded_T_96__w1 = (1 << _GEN_6__w1)#[0..=3]
+  const ofExpRounded__w1 = (~((exp__w1 >> 12) & 1)) & 1 & ((((((int1HOut__w1 & 1 & ((((((_ofExpRounded_T_3__w1 & 1 & unsigned(exp__w1#[3..=11] != 0) & 1) | ((_ofExpRounded_T_3__w1 >> 1) & 1 & (unsigned(exp__w1#[3..=11] != 0) | unsigned(exp__w1#[0..=2] == 7)) & 1 & 1)) & 1) | ((_ofExpRounded_T_3__w1 >> 2) & 1 & (unsigned(exp__w1#[3..=11] != 0) | unsigned(exp__w1#[0..=2] == 7)) & 1 & 1)) & 1) | ((_ofExpRounded_T_3__w1 >> 3) & 1 & (unsigned(exp__w1#[3..=11] != 0) | unsigned(exp__w1#[1..=2] == 3)) & 1 & 1)) & 1 & 1) | ((int1HOut__w1 >> 1) & 1 & ((((((_ofExpRounded_T_34__w1 & 1 & unsigned(exp__w1#[4..=11] != 0) & 1) | ((_ofExpRounded_T_34__w1 >> 1) & 1 & (unsigned(exp__w1#[4..=11] != 0) | unsigned(exp__w1#[0..=3] == 15)) & 1 & 1)) & 1) | ((_ofExpRounded_T_34__w1 >> 2) & 1 & (unsigned(exp__w1#[4..=11] != 0) | unsigned(exp__w1#[0..=3] == 15)) & 1 & 1)) & 1) | ((_ofExpRounded_T_34__w1 >> 3) & 1 & (unsigned(exp__w1#[4..=11] != 0) | unsigned(exp__w1#[1..=3] == 7)) & 1 & 1)) & 1 & 1)) & 1) | ((int1HOut__w1 >> 2) & 1 & ((((((_ofExpRounded_T_65__w1 & 1 & unsigned(exp__w1#[5..=11] != 0) & 1) | ((_ofExpRounded_T_65__w1 >> 1) & 1 & (unsigned(exp__w1#[5..=11] != 0) | unsigned(exp__w1#[0..=4] == 31)) & 1 & 1)) & 1) | ((_ofExpRounded_T_65__w1 >> 2) & 1 & (unsigned(exp__w1#[5..=11] != 0) | unsigned(exp__w1#[0..=4] == 31)) & 1 & 1)) & 1) | ((_ofExpRounded_T_65__w1 >> 3) & 1 & (unsigned(exp__w1#[5..=11] != 0) | unsigned(exp__w1#[1..=4] == 15)) & 1 & 1)) & 1 & 1)) & 1) | ((int1HOut__w1 >> 3) & 1 & ((((((_ofExpRounded_T_96__w1 & 1 & unsigned(exp__w1#[6..=11] != 0) & 1) | ((_ofExpRounded_T_96__w1 >> 1) & 1 & (unsigned(exp__w1#[6..=11] != 0) | unsigned(exp__w1#[0..=5] == 63)) & 1 & 1)) & 1) | ((_ofExpRounded_T_96__w1 >> 2) & 1 & (unsigned(exp__w1#[6..=11] != 0) | unsigned(exp__w1#[0..=5] == 63)) & 1 & 1)) & 1) | ((_ofExpRounded_T_96__w1 >> 3) & 1 & (unsigned(exp__w1#[6..=11] != 0) | unsigned(exp__w1#[1..=5] == 31)) & 1 & 1)) & 1 & 1)) & 1 & 1
+  mut _mux_463:u1 = if cout__w1 != 0 { unsigned(exp__w1#[1..=2] == 3) & (~(exp__w1 & 1)) & 1 & 1 } else { unsigned(exp__w1#[0..=2] == 7) & 1 }
+  mut _mux_466:u1 = if cout__w1 != 0 { unsigned(exp__w1#[1..=3] == 7) & (~(exp__w1 & 1)) & 1 & 1 } else { unsigned(exp__w1#[0..=3] == 15) & 1 }
+  mut _mux_469:u1 = if cout__w1 != 0 { unsigned(exp__w1#[1..=4] == 15) & (~(exp__w1 & 1)) & 1 & 1 } else { unsigned(exp__w1#[0..=4] == 31) & 1 }
+  mut _mux_472:u1 = if cout__w1 != 0 { unsigned(exp__w1#[1..=5] == 31) & (~(exp__w1 & 1)) & 1 & 1 } else { unsigned(exp__w1#[0..=5] == 63) & 1 }
+  const t2776 = (ofExpRounded__w1 | expIsOnesSrc) & 1
+  const t2778 = (~ofExpRounded__w1) & 1
+  const t2779 = ((~_normalResult_T__w1) & 1) & t2778
+  const t2780 = t2779 & 1
+  const t2781 = isZeroSrc | t2780
+  const t2782 = t2781 & 1
+  const t2783 = ~t2782
+  const t2784 = t2783 & 1
+  const t2785 = signSrc & t2784
+  const t2786 = t2785 & 1
+  const t2787 = t2776 | t2786
+  const t2788 = t2787 & 1
+  const toUnv__w1 = t2788
+  const t2789 = ~toUnv__w1
+  const t2790 = t2789 & 1
+  const t2791 = t2790 & rounder.io_inexact
+  const t2792 = t2791 & 1
+  const toUnx__w1 = t2792
+  const t2800 = ofExpRounded__w1 & (~(signSrc & (((((((int1HOut__w1 & 1 & unsigned(exp__w1#[3..=12] == 0) & 1 & _mux_463 & 1) | ((int1HOut__w1 >> 1) & 1 & unsigned(exp__w1#[4..=12] == 0) & 1 & _mux_466 & 1)) & 1) | ((int1HOut__w1 >> 2) & 1 & unsigned(exp__w1#[5..=12] == 0) & 1 & _mux_469 & 1)) & 1) | ((int1HOut__w1 >> 3) & 1 & unsigned(exp__w1#[6..=12] == 0) & 1 & _mux_472 & 1)) & 1) & 1 & (((((((int1HOut__w1 & 1 & (fracRounded__w1 >> 7) & 1 & 1 & unsigned(fracRounded__w1#[0..=6] == 0) & 1) | ((int1HOut__w1 >> 1) & 1 & (fracRounded__w1 >> 15) & 1 & 1 & unsigned(fracRounded__w1#[0..=14] == 0) & 1)) & 1) | ((int1HOut__w1 >> 2) & 1 & (fracRounded__w1 >> 31) & 1 & 1 & unsigned(fracRounded__w1#[0..=30] == 0) & 1)) & 1) | ((int1HOut__w1 >> 3) & 1 & (fracRounded__w1 >> 63) & 1 & 1 & unsigned(fracRounded__w1#[0..=62] == 0) & 1)) & 1) & 1)) & 1 & 1
+  const t2801 = t2800 | expIsOnesSrc
+  const t2802 = t2801 & 1
+  const toInv__w1 = t2802
+  const t2803 = ~toInv__w1
+  const t2804 = t2803 & 1
+  const t2805 = t2804 & rounder.io_inexact
+  const t2806 = t2805 & 1
+  const toInx__w1 = t2806
+  const t2808 = toInv__w1 & 1
+  const t2809 = toUnv__w1 & 1
+  mut _mux_477:u1 = if hasSignInt != 0 { t2808 } else { t2809 }
+  mut _mux_478:u1 = if isFcvtmodReg != 0 { (expIsOnesSrc | fcvtmodIsOf__w1) & 1 } else { _mux_477 & 1 }
+  mut _mux_479:u1 = if isFroundOrFroundnxReg != 0 { isSNaNSrc & 1 } else { _mux_478 & 1 }
+  mut _mux_480:u1 = if _rounderMapIn_T__w1 != 0 { isSNaNSrc & (~s1_fpCanonicalNAN) & 1 & 1 } else { _mux_479 & 1 }
+  mut _mux_481:u1 = if _GEN_5__w1 != 0 { isSNaNSrc & (~s1_fpCanonicalNAN) & 1 & 1 } else { _mux_480 & 1 }
+  const t2862 = toInx__w1 & 1
+  const t2863 = toUnx__w1 & 1
+  mut _mux_482:u1 = if hasSignInt != 0 { t2862 } else { t2863 }
+  mut _mux_483:u1 = if isFcvtmodReg != 0 { ((((~expNotZeroSrc) & 1) & fracNotZeroSrc & 1) | ((expNotZeroSrc & (~expIsOnesSrc) & 1 & 1) & ((~fcvtmodIsOf__w1) & 1 & fcvtmodNxReg & 1) & 1)) & 1 } else { _mux_482 & 1 }
+  mut _mux_484:u1 = if isFroundOrFroundnxReg != 0 { isFroundnxReg & rounder.io_inexact & 1 & (~froundOrFroundnxIsZeroOrInf) & 1 & 1 & (~froundExpGreaterThanMaxExp) & 1 & 1 } else { _mux_483 & 1 }
+  mut _mux_485:u1 = if _rounderMapIn_T__w1 != 0 { (~expIsOnesSrc) & 1 & (((~maybeSub__w1) & 1 & ((rounder.io_inexact | ofRounded__w1) & 1) & 1) | (maybeSub__w1 & subRounder.io_inexact & 1)) & 1 & 1 & (~s1_fpCanonicalNAN) & 1 & 1 } else { _mux_484 & 1 }
+  const t2908 = ~toUnv__w1
+  const t2909 = t2908 & 1
+  const t2910 = (~hasSignInt) & 1 & t2909
+  const t2911 = t2910 & 1
+  const t2912 = ~toInv__w1
+  const t2913 = t2912 & 1
+  const t2914 = hasSignInt & t2913
+  const t2915 = t2914 & 1
+  const t2916 = t2911 | t2915
+  const t2917 = t2916 & 1
+  const t2920 = (~hasSignInt) & 1 & toUnv__w1
+  const t2921 = t2920 & 1
+  const t2925 = (isInfSrc | ofExpRounded__w1) & 1
+  const t2926 = (~signSrc) & 1 & t2925
+  const t2927 = t2926 & 1
+  const t2928 = isNaNSrc | t2927
+  const t2929 = t2928 & 1
+  const t2930 = t2921 & t2929
+  const t2931 = t2930 & 1
+  const t2934 = (~hasSignInt) & 1 & toUnv__w1
+  const t2935 = t2934 & 1
+  const t2936 = t2935 & signSrc
+  const t2937 = t2936 & 1
+  const t2940 = t2937 & (~isNaNSrc) & 1
+  const t2941 = t2940 & 1
+  const t2942 = hasSignInt & toInv__w1
+  const t2943 = t2942 & 1
+  const t2944 = (t2917 << 3) | (t2931 << 2) | (t2941 << 1) | t2943
+  const result1H_3__w1 = t2944
+  const t2945 = result1H_3__w1 >> 3
+  const t2946 = t2945 & 1
+  const t2947 = t2946 != 0
+  mut _mux_486:u64 = if t2947 { _mux_428 } else { 0 }
+  const t2949 = result1H_3__w1 & 1
+  const t2950 = t2949 != 0
+  mut _mux_487:u64 = if t2950 { ((_mux_188 | _mux_190) | _mux_192) | _mux_194 } else { 0 }
+  const t2965 = result1H_3__w1 >> 2
+  const t2966 = t2965 & 1
+  const t2967 = t2966
+  const t2968 = t2967 != 0
+  mut _rep_488:u64 = if t2968 { 0xffffffffffffffff } else { 0 }
+  mut _mux_489:u64 = if isFcvtmodReg != 0 { _mux_186#[0..=31]#sext[0..=31]#[0..=63] } else { (_mux_486 | _rep_488) | _mux_487 }
+  mut _mux_490:u64 = if isFroundOrFroundnxReg != 0 { (_mux_424 | _mux_425) | _mux_426 } else { _mux_489 }
+  mut _mux_491:u64 = if _rounderMapIn_T__w1 != 0 { (_mux_410 | _mux_411) } else { _mux_490 }
+  mut _mux_492:u64 = if _GEN_5__w1 != 0 { _mux_161 | _mux_162 } else { _mux_491 }
+  const fflagsNext__w1 = ((_mux_481 & 1) << 4) | ((((~_GEN_5__w1) & 1 & _rounderMapIn_T__w1 & 1 & (~expIsOnesSrc) & 1 & 1 & ofRounded__w1 & 1 & (~s1_fpCanonicalNAN) & 1 & 1) & 1) << 2) | ((((~_GEN_5__w1) & 1 & _rounderMapIn_T__w1 & 1 & (~expIsOnesSrc) & 1 & 1 & maybeSub__w1 & 1 & ((((~cout__w1) & 1 & (~_maybeSub_T_2__w1) & 1 & 1) | ((exp__w1 >> 12) & 1)) & 1) & 1 & subRounder.io_inexact & 1 & (~s1_fpCanonicalNAN) & 1 & 1) & 1) << 1) | (((~_GEN_5__w1) & 1 & _mux_485 & 1) & 1)
+  if `io.fire` != 0 {
+    expNotZeroSrc = expNotZeroSrcNext__w1
+  }
+  if `io.fire` != 0 {
+    expIsOnesSrc = expIsOnesSrcNext__w1
+  }
+  if `io.fire` != 0 {
+    fracNotZeroSrc = fracNotZeroSrcNext__w1
+  }
+  if `io.fire` != 0 {
+    isInfSrc = isInfSrcNext__w1
+  }
+  if `io.fire` != 0 {
+    isZeroSrc = isZeroSrcNext__w1
+  }
+  if `io.fire` != 0 {
+    isSubnormalSrc = isSubnormalSrcNext__w1
+  }
+  if `io.fire` != 0 {
+    isnormalSrc = (~expIsOnesSrcNext__w1) & 1 & expNotZeroSrcNext__w1 & 1
+  }
+  if `io.fire` != 0 {
+    isSNaNSrc = isNaNSrcNext__w1 & (~((fracSrc__w1 >> 51) & 1)) & 1 & 1
+  }
+  if `io.fire` != 0 {
+    isFpWiden = isFpWidenNext__w1
+  }
+  if `io.fire` != 0 {
+    isFpNarrow = isFpNarrowNext__w1
+  }
+  if `io.fire` != 0 {
+    isFp2Int = isFp2IntNext__w1
+  }
+  if `io.fire` != 0 {
+    isFpCrossHigh = isFpCrossHighNext__w1
+  }
+  if `io.fire` != 0 {
+    isFpCrossLow = isFpCrossLowNext__w1
+  }
+  if `io.fire` != 0 {
+    isNaNSrc = isNaNSrcNext__w1
+  }
+  if `io.fire` != 0 {
+    s1_fpCanonicalNAN = `io.isFpToVecInst` & (((`io.input1H` >> 1) & 1 & unsigned(srcMap_3__w1#[16..=63] != 0xffffffffffff) & 1) | ((`io.input1H` >> 2) & 1 & unsigned(srcMap_3__w1#[32..=63] != 0xffffffff) & 1)) & 1 & 1
+  }
+  if `io.fire` != 0 {
+    isFroundnxReg = (`io.isFround` >> 1) & 1
+  }
+  if `io.fire` != 0 {
+    isFroundOrFroundnxReg = isFroundOrFroundnxNext__w1
+  }
+  if `io.fire` != 0 {
+    froundOrFroundnxIsZeroOrInf = isFroundOrFroundnxNext__w1 & (isZeroSrcNext__w1 | isInfSrcNext__w1) & 1 & 1
+  }
+  if `io.fire` != 0 {
+    trunSticky = unsigned(fracSrc__w1#[0..=28] != 0)
+  }
+  if `io.fire` != 0 {
+    signSrc = (input_0__w1 >> 0x40) & 1
+  }
+  if `io.fire` != 0 {
+    hasSignInt = `io.opType` & 1
+  }
+  if fireReg__w1 != 0 {
+    fflags = fflagsNext__w1
+  }
+  if fireReg__w1 != 0 {
+    result = _mux_492
+  }
+  if `io.fire` != 0 {
+    expPlus1Enable = expPlus1EnableNext__w1
+  }
+  if `io.fire` != 0 {
+    fracSrcLeft = fracSrcLeftNext__w1
+  }
+  if `io.fire` != 0 {
+    froundExpLessThanBias = ((((float1HOutNext__w1 & 1 & (~((expSrcNext__w1 >> 4) & 1)) & 1 & 1 & unsigned(expSrcNext__w1#[0..=3] != 15) & 1) | ((float1HOutNext__w1 >> 1) & 1 & (~((expSrcNext__w1 >> 7) & 1)) & 1 & 1 & unsigned(expSrcNext__w1#[0..=6] != 0x7f) & 1)) & 1) | ((float1HOutNext__w1 >> 2) & 1 & (~((expSrcNext__w1 >> 10) & 1)) & 1 & 1 & unsigned(expSrcNext__w1#[0..=9] != 0x3ff) & 1)) & 1
+  }
+  if `io.fire` != 0 {
+    froundExpGreaterThanMaxExp = unsigned(expSrcNext__w1 >= ((_mux_238 | _mux_239) | _mux_240))
+  }
+  if `io.fire` != 0 {
+    fracShiftMask = (((_mux_242 | _mux_243) | _mux_244) - expSrcNext__w1)#[0..=10]
+  }
+  if `io.fire` != 0 {
+    froundOldExp = expSrcNext__w1
+  }
+  if `io.fire` != 0 {
+    froundOldFrac = fracSrc__w1
+  }
+  if `io.fire` != 0 {
+    fcvtmodFracReg = _mux_382
+  }
+  if `io.fire` != 0 {
+    fcvtmodTrueExpReg = (expSrcNext__w1 - 0x3ff)#[0..=10]
+  }
+  if `io.fire` != 0 {
+    fcvtmodNxReg = (~((_GEN_0__w1 | _GEN_1__w1) & 1)) & 1 & (((~_GEN_2__w1) & 1) | unsigned(t2125)) & 1 & 1
+  }
+  if `io.fire` != 0 {
+    fcvtmodExpLessThanBias = (~((expSrcNext__w1 >> 10) & 1)) & 1 & unsigned(expSrcNext__w1#[0..=9] != 0x3ff) & 1
+  }
+  mut leadZerosNext_lzc = Lzc::[name=leadZerosNext_lzc](io_in = fracSrcLeftNext__w1)
+  mut `_leadZerosNext_lzc_io_out.isZero` = leadZerosNext_lzc["io_out.isZero"]
+  mut shiftRightJam = ShiftRightJam::[name=shiftRightJam](io_in = fracValueSrc__w1 << 12, io_shamt = _mux_237)
+  mut _mux_494:u6 = if _expPlus1EnableNext_T_2__w1 != 0 { leadZerosNext_lzc["io_out.data"]#[0..=5] } else { 0 }
+  {
+  }
+  mut _mux_496:u13 = if expPlus1EnableNext__w1 != 0 { (3 << 11) | (1 << 10) | (~(((_mux_494 | _mux_226) | _mux_227) | _mux_228))#[0..=9] } else { expSrcNext__w1 }
+  if `io.fire` != 0 {
+    shiftLeft = ((fracSrcLeftNext__w1 << 1) << leadZerosNext_lzc["io_out.data"])#[0..=127]#[0..=63]
+  }
+  if `io.fire` != 0 {
+    inRounder = shiftRightJam.io_out
+  }
+  if `io.fire` != 0 {
+    sticky = shiftRightJam.io_sticky
+  }
+  if `io.fire` != 0 {
+    expReg = ((((_mux_217 | _mux_218) | _mux_219) | _mux_220) + _mux_496)#[0..=12]
+  }
+  io_result = `io.result`
+  io_fflags = `io.fflags`
+}

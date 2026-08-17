@@ -1,0 +1,120 @@
+const FloatAdderF16Pipeline = import("FloatAdderF16Pipeline.FloatAdderF16Pipeline")
+const FloatAdderF32WidenF16MixedPipeline = import("FloatAdderF32WidenF16MixedPipeline.FloatAdderF32WidenF16MixedPipeline")
+const FloatAdderF64WidenPipeline = import("FloatAdderF64WidenPipeline.FloatAdderF64WidenPipeline")
+const FloatAdderWidenFormat = import("FloatAdderWidenFormat.FloatAdderWidenFormat")
+
+pub mod VectorFloatAdder::[timecheck=false](clock:u1, io_fire:u1, io_fp_a:u64, io_fp_b:u64, io_widen_a:u64, io_widen_b:u64, io_frs1:u64, io_is_frs1:u1, io_mask:u4, io_uop_idx:u1, io_is_vec:u1, io_round_mode:u3, io_fp_format:u2, io_opb_widening:u1, io_res_widening:u1, io_op_code:u5, io_fp_aIsFpCanonicalNAN:u1, io_fp_bIsFpCanonicalNAN:u1, io_maskForReduction:u8, io_is_vfwredosum:u1, io_is_fold:u3, io_vs2_fold:u128) -> (io_fp_result:u64@[], io_fflags:u20@[]) {
+  wire io:(fire:u1, fp_a:u64, fp_b:u64, widen_a:u64, widen_b:u64, frs1:u64, is_frs1:u1, mask:u4, uop_idx:u1, is_vec:u1, round_mode:u3, fp_format:u2, opb_widening:u1, res_widening:u1, op_code:u5, fp_aIsFpCanonicalNAN:u1, fp_bIsFpCanonicalNAN:u1, maskForReduction:u8, is_vfwredosum:u1, is_fold:u3, vs2_fold:u128, fp_result:u64, fflags:u20) = nil
+  reg is_vec_reg:u1
+  reg fp_format_reg:u2
+  wire _U_F16_3_io_fp_c:u16
+  wire _U_F16_3_io_fflags:u5
+  wire _U_F16_1_io_fp_c:u16
+  wire _U_F16_1_io_fflags:u5
+  wire _U_F64_Widen_0_io_fp_c:u64
+  wire _U_F64_Widen_0_io_fflags:u5
+  wire _U_F32_Mixed_1_io_fp_c:u32
+  wire _U_F32_Mixed_1_io_fflags:u5
+  wire _U_F32_Mixed_0_io_fp_c:u32
+  wire _U_F32_Mixed_0_io_fflags:u5
+  wire _U_Widen_Fotmat_32_fold_io_widen_a_f32_0:u32
+  wire _U_Widen_Fotmat_64_fold_io_widen_a_f64:u64
+  wire _U_Widen_Fotmat_io_widen_a_f32_0:u32
+  wire _U_Widen_Fotmat_io_widen_a_f64:u64
+  const res_is_f16__w1 = unsigned(fp_format_reg == 1)
+  const res_is_f32__w1 = unsigned(fp_format_reg == 2)
+  const res_is_f64__w1 = unsigned(fp_format_reg == 3)
+  const _io_fflags_T_3__w1 = is_vec_reg & res_is_f16__w1 & 1
+  const fold__w1 = io.is_fold
+  const fp_format__w1 = (io.fp_format - 1)#[0..=1]
+  const fast_is_sub__w1 = io.op_code & 1
+  const widen_a_foldTo1_2__w1 = io.vs2_fold#[64..=127]
+  const widen_a_foldTo1_4__w1 = io.vs2_fold#[32..=63]
+  mut _mux_26:u64 = if (fold__w1 & 1) != 0 { widen_a_foldTo1_2__w1 } else { io.fp_a#[0..=63] }
+  const _f32_1_fp_a_T_2__w1 = unsigned(fold__w1 != 0)
+  mut _mux_28:u32 = if (fold__w1 & 1) != 0 { io.vs2_fold#[64..=95] } else { 0 }
+  mut _mux_29:u32 = if ((fold__w1 >> 1) & 1) != 0 { io.vs2_fold#[32..=63] } else { 0 }
+  mut _mux_30:u16 = if ((fold__w1 >> 2) & 1) != 0 { io.vs2_fold#[16..=31] } else { 0 }
+  mut _mux_31:u32 = if _f32_1_fp_a_T_2__w1 != 0 { 0 } else { io.fp_a#[0..=31] }
+  const _f32_0_fp_a_T_13__w1 = _mux_28 | _mux_29
+  mut _mux_32:u32 = if (fold__w1 & 1) != 0 { io.vs2_fold#[96..=127] } else { 0 }
+  mut _mux_33:u32 = if _f32_1_fp_a_T_2__w1 != 0 { 0 } else { io.fp_a#[32..=63] }
+  mut _mux_34:u16 = if (fold__w1 & 1) != 0 { io.vs2_fold#[80..=95] } else { io.fp_a#[16..=31] }
+  mut _mux_35:u16 = if ((fold__w1 >> 1) & 1) != 0 { io.vs2_fold#[48..=63] } else { _mux_34 }
+  mut _mux_36:u16 = if (fold__w1 & 1) != 0 { io.vs2_fold#[112..=127] } else { io.fp_a#[48..=63] }
+  mut _mux_37:u32 = if io.is_frs1 != 0 { io.frs1#[0..=31] } else { io.fp_b#[0..=31] }
+  mut _mux_38:u32 = if ((fold__w1 >> 1) & 1) != 0 { _U_Widen_Fotmat_32_fold_io_widen_a_f32_0 } else { _U_Widen_Fotmat_io_widen_a_f32_0 }
+  mut _mux_39:u32 = if io.is_frs1 != 0 { io.frs1#[0..=31] } else { io.fp_b#[32..=63] }
+  const _U_F32_Mixed_1_io_maskForReduction_T__w1 = unsigned(fp_format__w1 == 1)
+  mut _mux_41:u1 = if _U_F32_Mixed_1_io_maskForReduction_T__w1 != 0 { (io.mask >> 1) & 1 } else { (io.mask >> 2) & 1 }
+  mut _mux_42:u2 = if _U_F32_Mixed_1_io_maskForReduction_T__w1 != 0 { (((io.maskForReduction >> 5) & 1) << 1) | ((io.maskForReduction >> 1) & 1) } else { (((io.maskForReduction >> 6) & 1) << 1) | ((io.maskForReduction >> 2) & 1) }
+  mut _mux_43:u64 = if io.is_frs1 != 0 { io.frs1#[0..=63] } else { io.fp_b#[0..=63] }
+  mut _mux_44:u64 = if (fold__w1 & 1) != 0 { _U_Widen_Fotmat_64_fold_io_widen_a_f64 } else { _U_Widen_Fotmat_io_widen_a_f64 }
+  mut _mux_45:u16 = if io.is_frs1 != 0 { io.frs1#[0..=15] } else { io.fp_b#[16..=31] }
+  mut _mux_46:u16 = if io.is_frs1 != 0 { io.frs1#[0..=15] } else { io.fp_b#[48..=63] }
+  mut _mux_47:u32 = if is_vec_reg != 0 { _U_F32_Mixed_1_io_fp_c } else { 0 }
+  mut _mux_48:u16 = if is_vec_reg != 0 { _U_F16_3_io_fp_c } else { 0 }
+  mut _mux_49:u16 = if is_vec_reg != 0 { _U_F32_Mixed_1_io_fp_c#[0..=15] } else { 0 }
+  mut _mux_50:u16 = if is_vec_reg != 0 { _U_F16_1_io_fp_c } else { 0 }
+  mut _mux_51:u64 = if res_is_f16__w1 != 0 { (_mux_48 << 48) | (_mux_49 << 32) | (_mux_50 << 16) | _U_F32_Mixed_0_io_fp_c#[0..=15] } else { 0 }
+  mut _mux_52:u64 = if res_is_f32__w1 != 0 { (_mux_47 << 32) | _U_F32_Mixed_0_io_fp_c } else { 0 }
+  mut _mux_53:u64 = if res_is_f64__w1 != 0 { _U_F64_Widen_0_io_fp_c } else { 0 }
+  mut _mux_54:u5 = if _io_fflags_T_3__w1 != 0 { _U_F16_3_io_fflags } else { 0 }
+  mut _mux_55:u5 = if _io_fflags_T_3__w1 != 0 { _U_F32_Mixed_1_io_fflags } else { 0 }
+  mut _mux_56:u5 = if res_is_f32__w1 != 0 { _U_F32_Mixed_1_io_fflags } else { _U_F16_1_io_fflags }
+  mut _mux_57:u5 = if (is_vec_reg & (~res_is_f64__w1) & 1 & 1) != 0 { _mux_56 } else { 0 }
+  mut _mux_58:u5 = if res_is_f64__w1 != 0 { _U_F64_Widen_0_io_fflags } else { _U_F32_Mixed_0_io_fflags }
+  io.fire = io_fire & 1
+  io.fp_a = io_fp_a
+  io.fp_b = io_fp_b
+  io.widen_a = io_widen_a
+  io.widen_b = io_widen_b
+  io.frs1 = io_frs1
+  io.is_frs1 = io_is_frs1 & 1
+  io.mask = io_mask
+  io.uop_idx = io_uop_idx & 1
+  io.is_vec = io_is_vec & 1
+  io.round_mode = io_round_mode
+  io.fp_format = io_fp_format
+  io.opb_widening = io_opb_widening & 1
+  io.res_widening = io_res_widening & 1
+  io.op_code = io_op_code
+  io.fp_aIsFpCanonicalNAN = io_fp_aIsFpCanonicalNAN & 1
+  io.fp_bIsFpCanonicalNAN = io_fp_bIsFpCanonicalNAN & 1
+  io.maskForReduction = io_maskForReduction
+  io.is_vfwredosum = io_is_vfwredosum & 1
+  io.is_fold = io_is_fold
+  io.vs2_fold = io_vs2_fold
+  io.fp_result = (_mux_51 | _mux_52) | _mux_53
+  io.fflags = (_mux_54 << 15) | (_mux_55 << 10) | (_mux_57 << 5) | _mux_58
+  if io.fire != 0 {
+    is_vec_reg = io.is_vec
+  }
+  if io.fire != 0 {
+    fp_format_reg = io.fp_format
+  }
+  mut U_Widen_Fotmat = FloatAdderWidenFormat::[name=U_Widen_Fotmat](io_widen_a = io.widen_a, io_widen_b = io.widen_b, io_frs1 = io.frs1, io_uop_idx = io.uop_idx, io_is_frs1 = io.is_frs1)
+  _U_Widen_Fotmat_io_widen_a_f32_0 = U_Widen_Fotmat.io_widen_a_f32_0
+  _U_Widen_Fotmat_io_widen_a_f64 = U_Widen_Fotmat.io_widen_a_f64
+  mut U_Widen_Fotmat_64_fold = FloatAdderWidenFormat::[name=U_Widen_Fotmat_64_fold](io_widen_a = widen_a_foldTo1_2__w1, io_widen_b = 0, io_frs1 = 0, io_uop_idx = 0, io_is_frs1 = 0)
+  _U_Widen_Fotmat_64_fold_io_widen_a_f64 = U_Widen_Fotmat_64_fold.io_widen_a_f64
+  mut U_Widen_Fotmat_32_fold = FloatAdderWidenFormat::[name=U_Widen_Fotmat_32_fold](io_widen_a = widen_a_foldTo1_4__w1, io_widen_b = 0, io_frs1 = 0, io_uop_idx = 0, io_is_frs1 = 0)
+  _U_Widen_Fotmat_32_fold_io_widen_a_f32_0 = U_Widen_Fotmat_32_fold.io_widen_a_f32_0
+  mut U_F32_Mixed_0 = FloatAdderF32WidenF16MixedPipeline::[name=U_F32_Mixed_0](clock = clock, io_fire = io.fire, io_fp_a = (((_f32_0_fp_a_T_13__w1#[16..=31] << 16) | (_f32_0_fp_a_T_13__w1#[0..=15] | _mux_30)) | _mux_31)#[0..=31], io_fp_b = _mux_37, io_widen_a = _mux_38, io_widen_b = U_Widen_Fotmat.io_widen_b_f32_0, io_is_sub = fast_is_sub__w1, io_mask = io.mask & 1, io_round_mode = io.round_mode, io_fp_format = fp_format__w1, io_opb_widening = io.opb_widening, io_res_widening = io.res_widening, io_op_code = io.op_code, io_fp_aIsFpCanonicalNAN = io.fp_aIsFpCanonicalNAN, io_fp_bIsFpCanonicalNAN = io.fp_bIsFpCanonicalNAN, io_maskForReduction = (((io.maskForReduction >> 4) & 1) << 1) | (io.maskForReduction & 1), io_is_vfwredosum = io.is_vfwredosum)
+  _U_F32_Mixed_0_io_fp_c = U_F32_Mixed_0.io_fp_c
+  _U_F32_Mixed_0_io_fflags = U_F32_Mixed_0.io_fflags
+  mut U_F32_Mixed_1 = FloatAdderF32WidenF16MixedPipeline::[name=U_F32_Mixed_1](clock = clock, io_fire = io.fire, io_fp_a = (_mux_32 | _mux_33)#[0..=31], io_fp_b = _mux_39, io_widen_a = U_Widen_Fotmat.io_widen_a_f32_1, io_widen_b = U_Widen_Fotmat.io_widen_b_f32_1, io_is_sub = fast_is_sub__w1, io_mask = _mux_41, io_round_mode = io.round_mode, io_fp_format = fp_format__w1, io_opb_widening = io.opb_widening, io_res_widening = io.res_widening, io_op_code = io.op_code, io_fp_aIsFpCanonicalNAN = io.fp_aIsFpCanonicalNAN, io_fp_bIsFpCanonicalNAN = io.fp_bIsFpCanonicalNAN, io_maskForReduction = _mux_42, io_is_vfwredosum = io.is_vfwredosum)
+  _U_F32_Mixed_1_io_fp_c = U_F32_Mixed_1.io_fp_c
+  _U_F32_Mixed_1_io_fflags = U_F32_Mixed_1.io_fflags
+  mut U_F64_Widen_0 = FloatAdderF64WidenPipeline::[name=U_F64_Widen_0](clock = clock, io_fire = io.fire, io_fp_a = _mux_26, io_fp_b = _mux_43, io_widen_a = _mux_44, io_widen_b = U_Widen_Fotmat.io_widen_b_f64, io_mask = io.mask & 1, io_is_sub = fast_is_sub__w1, io_round_mode = io.round_mode, io_opb_widening = io.opb_widening, io_res_widening = io.res_widening, io_op_code = io.op_code, io_fp_aIsFpCanonicalNAN = io.fp_aIsFpCanonicalNAN, io_fp_bIsFpCanonicalNAN = io.fp_bIsFpCanonicalNAN, io_maskForReduction = (((io.maskForReduction >> 4) & 1) << 1) | (io.maskForReduction & 1), io_is_vfwredosum = io.is_vfwredosum)
+  _U_F64_Widen_0_io_fp_c = U_F64_Widen_0.io_fp_c
+  _U_F64_Widen_0_io_fflags = U_F64_Widen_0.io_fflags
+  mut U_F16_1 = FloatAdderF16Pipeline::[name=U_F16_1](clock = clock, io_fire = io.fire, io_fp_a = _mux_35#[0..=15], io_fp_b = _mux_45, io_is_sub = fast_is_sub__w1, io_mask = (io.mask >> 1) & 1, io_round_mode = io.round_mode, io_op_code = io.op_code, io_fp_aIsFpCanonicalNAN = io.fp_aIsFpCanonicalNAN, io_fp_bIsFpCanonicalNAN = io.fp_bIsFpCanonicalNAN, io_maskForReduction = (((io.maskForReduction >> 5) & 1) << 1) | ((io.maskForReduction >> 1) & 1))
+  _U_F16_1_io_fp_c = U_F16_1.io_fp_c
+  _U_F16_1_io_fflags = U_F16_1.io_fflags
+  mut U_F16_3 = FloatAdderF16Pipeline::[name=U_F16_3](clock = clock, io_fire = io.fire, io_fp_a = _mux_36#[0..=15], io_fp_b = _mux_46, io_is_sub = fast_is_sub__w1, io_mask = (io.mask >> 3) & 1, io_round_mode = io.round_mode, io_op_code = io.op_code, io_fp_aIsFpCanonicalNAN = io.fp_aIsFpCanonicalNAN, io_fp_bIsFpCanonicalNAN = io.fp_bIsFpCanonicalNAN, io_maskForReduction = (((io.maskForReduction >> 7) & 1) << 1) | ((io.maskForReduction >> 3) & 1))
+  _U_F16_3_io_fp_c = U_F16_3.io_fp_c
+  _U_F16_3_io_fflags = U_F16_3.io_fflags
+  io_fp_result = io.fp_result
+  io_fflags = io.fflags
+}

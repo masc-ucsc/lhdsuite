@@ -1,0 +1,205 @@
+const Lzc = import("Lzc.Lzc")
+const Rec7Table = import("Rec7Table.Rec7Table")
+const Rsqrt7Table = import("Rsqrt7Table.Rsqrt7Table")
+
+pub mod Estimate7::[timecheck=false](clock:u1, reset:u1, io_fire:u1, io_src:u64, io_opType:u8, io_rm:u3, io_input1H:u4, io_output1H:u4) -> (io_result:u64@[], io_fflags:u5@[]) {
+  reg fireReg_last_r:u1:[init=0, reset_pin=ref reset, async=true]
+  reg rm:u3:[init=0, reset_pin=ref reset, async=true]
+  reg expIsOnesSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isSubnormalSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isRec:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isSNaNSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg signSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isZeroSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isQNaNSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isSubnormalRec2:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isInfSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isNaNSrc:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isNormalRec0:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isNormalRec1:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isNormalRec2:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isSubnormalRec0:u1:[init=0, reset_pin=ref reset, async=true]
+  reg isSubnormalRec1:u1:[init=0, reset_pin=ref reset, async=true]
+  reg output1HReg:u4:[init=0, reset_pin=ref reset, async=true]
+  reg fflags:u5:[init=0, reset_pin=ref reset, async=true]
+  reg result:u64:[init=0, reset_pin=ref reset, async=true]
+  reg expAdderIn0:u13
+  reg expAdderIn1:u13
+  reg expNormaled0:u1:[init=0, reset_pin=ref reset, async=true]
+  reg fracSrcLeft:u64:[init=0, reset_pin=ref reset, async=true]
+  reg leadZeros:u6
+  const fireReg__w1 = fireReg_last_r
+  const float1HOut__w1 = output1HReg#[1..=3]
+  const rmin__w1 = (((unsigned(rm == 1) | (signSrc & unsigned(rm == 3) & 1)) & 1) | ((~signSrc) & 1 & unsigned(rm == 2) & 1)) & 1
+  const exp__w1 = (expAdderIn0 + expAdderIn1)#[0..=12]
+  mut _mux_4:u64 = if isSubnormalSrc != 0 { ((fracSrcLeft << 1) << leadZeros)#[0..=127]#[0..=63] } else { fracSrcLeft }
+  const fracNormaled__w1 = _mux_4
+  const of__w1 = isRec & isSubnormalRec2 & 1
+  const recResult1H__w1 = ((isNaNSrc & 1) << 6) | ((isInfSrc & 1) << 5) | (((isZeroSrc | (isSubnormalRec2 & (~rmin__w1) & 1 & 1)) & 1) << 4) | ((isNormalRec0 & 1) << 3) | ((isNormalRec1 & 1) << 2) | (((((isNormalRec2 | isSubnormalRec0) & 1) | isSubnormalRec1) & 1) << 1) | (isSubnormalRec2 & rmin__w1 & 1)
+  mut _mux_5:u16 = if ((recResult1H__w1 >> 6) & 1) != 0 { 0x7e00 } else { 0 }
+  mut _mux_6:u16 = if ((recResult1H__w1 >> 5) & 1) != 0 { (signSrc & 1) << 15 } else { 0 }
+  mut _mux_7:u16 = if ((recResult1H__w1 >> 4) & 1) != 0 { ((signSrc & 1) << 15) | 0x7c00 } else { 0 }
+  mut _mux_8:u16 = if (recResult1H__w1 & 1) != 0 { ((signSrc & 1) << 15) | 0x7bff } else { 0 }
+  mut _mux_9:u32 = if ((recResult1H__w1 >> 6) & 1) != 0 { 0x7fc00000 } else { 0 }
+  mut _mux_10:u32 = if ((recResult1H__w1 >> 5) & 1) != 0 { (signSrc & 1) << 31 } else { 0 }
+  mut _mux_11:u32 = if ((recResult1H__w1 >> 4) & 1) != 0 { ((signSrc & 1) << 31) | 0x7f800000 } else { 0 }
+  mut _mux_12:u32 = if (recResult1H__w1 & 1) != 0 { ((signSrc & 1) << 31) | 0x7f7fffff } else { 0 }
+  mut _mux_13:u64 = if ((recResult1H__w1 >> 6) & 1) != 0 { 0x7ff8000000000000 } else { 0 }
+  mut _mux_14:u64 = if ((recResult1H__w1 >> 5) & 1) != 0 { (signSrc & 1) << 63 } else { 0 }
+  mut _mux_15:u64 = if ((recResult1H__w1 >> 4) & 1) != 0 { ((signSrc & 1) << 63) | 0x7ff0000000000000 } else { 0 }
+  mut _mux_16:u64 = if (recResult1H__w1 & 1) != 0 { ((signSrc & 1) << 63) | 0x7fefffffffffffff } else { 0 }
+  const sqrtResult1H__w1 = ((((signSrc & (~isZeroSrc) & 1 & 1) | isNaNSrc) & 1) << 3) | ((isZeroSrc & 1) << 2) | (((~signSrc) & 1 & (~isZeroSrc) & 1 & 1 & (~expIsOnesSrc) & 1 & 1) << 1) | ((~signSrc) & 1 & isInfSrc & 1)
+  mut _mux_17:u16 = if ((sqrtResult1H__w1 >> 3) & 1) != 0 { 0x7e00 } else { 0 }
+  mut _mux_18:u16 = if ((sqrtResult1H__w1 >> 2) & 1) != 0 { ((signSrc & 1) << 15) | 0x7c00 } else { 0 }
+  mut _mux_19:u32 = if ((sqrtResult1H__w1 >> 3) & 1) != 0 { 0x7fc00000 } else { 0 }
+  mut _mux_20:u32 = if ((sqrtResult1H__w1 >> 2) & 1) != 0 { ((signSrc & 1) << 31) | 0x7f800000 } else { 0 }
+  mut _mux_21:u64 = if ((sqrtResult1H__w1 >> 3) & 1) != 0 { 0x7ff8000000000000 } else { 0 }
+  mut _mux_22:u64 = if ((sqrtResult1H__w1 >> 2) & 1) != 0 { ((signSrc & 1) << 63) | 0x7ff0000000000000 } else { 0 }
+  mut `io.fire` = io_fire & 1
+  mut `io.src` = io_src
+  mut `io.opType` = io_opType
+  mut `io.rm` = io_rm
+  mut `io.input1H` = io_input1H
+  mut `io.output1H` = io_output1H
+  mut `io.result` = result
+  mut `io.fflags` = fflags
+  if ((`io.fire` | fireReg__w1) & 1) != 0 {
+    fireReg_last_r = `io.fire`
+  }
+  if `io.fire` != 0 {
+    rm = `io.rm`
+  }
+  if `io.fire` != 0 {
+    output1HReg = `io.output1H`
+  }
+  if fireReg__w1 != 0 {
+    fflags = ((((((~isRec) & 1 & signSrc & 1 & (~isZeroSrc) & 1 & 1 & (~isQNaNSrc) & 1 & 1) | isSNaNSrc) & 1) & 1) << 4) | ((isZeroSrc & 1) << 3) | ((of__w1 & 1) << 2) | (of__w1 & 1)
+  }
+  mut rsqrt7Table = Rsqrt7Table::[name=rsqrt7Table](src = ((expNormaled0 & 1) << 6) | fracNormaled__w1#[58..=63])
+  mut rec7Table = Rec7Table::[name=rec7Table](src = fracNormaled__w1#[57..=63])
+  const srcMap_3__w1 = `io.src`
+  const float1HSrcNext__w1 = `io.input1H`#[1..=3]
+  const float1HOutNext__w1 = `io.output1H`#[1..=3]
+  const srcMap_1__w1 = srcMap_3__w1#[0..=15]
+  const srcMap_2__w1 = srcMap_3__w1#[0..=31]
+  mut _mux_23:u65 = if (float1HSrcNext__w1 & 1) != 0 { ((((srcMap_1__w1 >> 15) & 1) & 1) << 64) | (srcMap_1__w1#[10..=14] << 53) | (srcMap_1__w1#[0..=9] << 43) } else { 0 }
+  mut _mux_24:u65 = if ((float1HSrcNext__w1 >> 1) & 1) != 0 { ((((srcMap_2__w1 >> 31) & 1) & 1) << 64) | (srcMap_2__w1#[23..=30] << 53) | (srcMap_2__w1#[0..=22] << 30) } else { 0 }
+  mut _mux_25:u65 = if ((float1HSrcNext__w1 >> 2) & 1) != 0 { srcMap_3__w1#[0..=63] << 1 } else { 0 }
+  const input_0__w1 = (_mux_23 | _mux_24) | _mux_25
+  const isRecNext__w1 = ((`io.opType` >> 5) & 1) & `io.opType` & 1 & 1
+  const expSrcNext__w1 = input_0__w1#[53..=63]
+  const fracSrc__w1 = input_0__w1#[1..=52]
+  mut _mux_29:u3 = if (float1HSrcNext__w1 & 1) != 0 { ((unsigned(fracSrc__w1#[42..=51] != 0) & 1) << 2) | ((unsigned(expSrcNext__w1#[0..=4] == 31) & 1) << 1) | (unsigned(expSrcNext__w1#[0..=4] != 0) & 1) } else { 0 }
+  mut _mux_33:u3 = if ((float1HSrcNext__w1 >> 1) & 1) != 0 { ((unsigned(fracSrc__w1#[29..=51] != 0) & 1) << 2) | ((unsigned(expSrcNext__w1#[0..=7] == 0xff) & 1) << 1) | (unsigned(expSrcNext__w1#[0..=7] != 0) & 1) } else { 0 }
+  mut _mux_37:u3 = if ((float1HSrcNext__w1 >> 2) & 1) != 0 { ((unsigned(fracSrc__w1 != 0) & 1) << 2) | ((unsigned(expSrcNext__w1 == 0x7ff) & 1) << 1) | (unsigned(expSrcNext__w1 != 0) & 1) } else { 0 }
+  const decodeFloatSrc__w1 = (_mux_29 | _mux_33) | _mux_37
+  const expNotZeroSrcNext__w1 = decodeFloatSrc__w1 & 1
+  const expIsOnesSrcNext__w1 = (decodeFloatSrc__w1 >> 1) & 1
+  const fracNotZeroSrcNext__w1 = (decodeFloatSrc__w1 >> 2) & 1
+  const isSubnormalSrcNext__w1 = (~expNotZeroSrcNext__w1) & 1 & fracNotZeroSrcNext__w1 & 1
+  const isNaNSrcNext__w1 = expIsOnesSrcNext__w1 & fracNotZeroSrcNext__w1 & 1
+  mut _mux_41:u2 = if (float1HSrcNext__w1 & 1) != 0 { (((unsigned(expSrcNext__w1#[2..=4] == 7) & (~((expSrcNext__w1 >> 1) & 1)) & 1 & 1) << 1) | (unsigned(expSrcNext__w1#[1..=4] == 15) & 1)) & (((expSrcNext__w1 & 1) << 1) | ((~(expSrcNext__w1 & 1)) & 1)) } else { 0 }
+  mut _mux_44:u2 = if ((float1HSrcNext__w1 >> 1) & 1) != 0 { (((unsigned(expSrcNext__w1#[2..=7] == 63) & (~((expSrcNext__w1 >> 1) & 1)) & 1 & 1) << 1) | (unsigned(expSrcNext__w1#[1..=7] == 0x7f) & 1)) & (((expSrcNext__w1 & 1) << 1) | ((~(expSrcNext__w1 & 1)) & 1)) } else { 0 }
+  mut _mux_47:u2 = if ((float1HSrcNext__w1 >> 2) & 1) != 0 { (((unsigned(expSrcNext__w1#[2..=10] == 0x1ff) & (~((expSrcNext__w1 >> 1) & 1)) & 1 & 1) << 1) | (unsigned(expSrcNext__w1#[1..=10] == 0x3ff) & 1)) & (((expSrcNext__w1 & 1) << 1) | ((~(expSrcNext__w1 & 1)) & 1)) } else { 0 }
+  const decodeFloatSrcRec__w1 = (_mux_41 | _mux_44) | _mux_47
+  const isNormalRec0Next__w1 = decodeFloatSrcRec__w1 & 1
+  const isNormalRec1Next__w1 = (decodeFloatSrcRec__w1 >> 1) & 1
+  const _fracSrcLeftNext_T__w1 = fracSrc__w1 << 12
+  const _minusExp_T_2__w1 = (((1 << 11) | (~expSrcNext__w1)#[0..=10]) + 1)#[0..=11]
+  mut _mux_48:u6 = if isRecNext__w1 != 0 { 29 } else { 44 }
+  mut _mux_49:u9 = if isRecNext__w1 != 0 { 0xfd } else { 0x17c }
+  mut _mux_50:u12 = if isRecNext__w1 != 0 { 0x7fd } else { 0xbfc }
+  mut _mux_51:u6 = if (float1HOutNext__w1 & 1) != 0 { _mux_48 } else { 0 }
+  mut _mux_52:u9 = if ((float1HOutNext__w1 >> 1) & 1) != 0 { _mux_49 } else { 0 }
+  mut _mux_53:u12 = if ((float1HOutNext__w1 >> 2) & 1) != 0 { _mux_50 } else { 0 }
+  mut _mux_54:u7 = if isRec != 0 { rec7Table#[0..=6] } else { rsqrt7Table#[0..=6] }
+  const fracEstimate__w1 = _mux_54
+  mut _mux_55:u16 = if ((recResult1H__w1 >> 3) & 1) != 0 { ((signSrc & 1) << 15) | (1 << 8) | (fracEstimate__w1 << 1) } else { 0 }
+  mut _mux_56:u16 = if ((recResult1H__w1 >> 2) & 1) != 0 { ((signSrc & 1) << 15) | (1 << 9) | (fracEstimate__w1 << 2) } else { 0 }
+  mut _mux_57:u16 = if ((recResult1H__w1 >> 1) & 1) != 0 { ((signSrc & 1) << 15) | (exp__w1#[0..=4] << 10) | (fracEstimate__w1 << 3) } else { 0 }
+  mut _mux_58:u32 = if ((recResult1H__w1 >> 3) & 1) != 0 { ((signSrc & 1) << 31) | (1 << 21) | (fracEstimate__w1 << 14) } else { 0 }
+  mut _mux_59:u32 = if ((recResult1H__w1 >> 2) & 1) != 0 { ((signSrc & 1) << 31) | (1 << 22) | (fracEstimate__w1 << 15) } else { 0 }
+  mut _mux_60:u32 = if ((recResult1H__w1 >> 1) & 1) != 0 { ((signSrc & 1) << 31) | (exp__w1#[0..=7] << 23) | (fracEstimate__w1 << 16) } else { 0 }
+  mut _mux_61:u64 = if ((recResult1H__w1 >> 3) & 1) != 0 { ((signSrc & 1) << 63) | (1 << 50) | (fracEstimate__w1 << 43) } else { 0 }
+  mut _mux_62:u64 = if ((recResult1H__w1 >> 2) & 1) != 0 { ((signSrc & 1) << 63) | (1 << 51) | (fracEstimate__w1 << 44) } else { 0 }
+  mut _mux_63:u64 = if ((recResult1H__w1 >> 1) & 1) != 0 { ((signSrc & 1) << 63) | (exp__w1#[0..=10] << 52) | (fracEstimate__w1 << 45) } else { 0 }
+  mut _mux_64:u16 = if ((sqrtResult1H__w1 >> 1) & 1) != 0 { ((signSrc & 1) << 15) | (exp__w1#[1..=5] << 10) | (fracEstimate__w1 << 3) } else { 0 }
+  mut _mux_65:u32 = if ((sqrtResult1H__w1 >> 1) & 1) != 0 { ((signSrc & 1) << 31) | (exp__w1#[1..=8] << 23) | (fracEstimate__w1 << 16) } else { 0 }
+  mut _mux_66:u64 = if ((sqrtResult1H__w1 >> 1) & 1) != 0 { ((signSrc & 1) << 63) | (exp__w1#[1..=11] << 52) | (fracEstimate__w1 << 45) } else { 0 }
+  mut _mux_67:u16 = if (float1HOut__w1 & 1) != 0 { (((((_mux_5 | _mux_6) | _mux_7) | _mux_55) | _mux_56) | _mux_57) | _mux_8 } else { 0 }
+  mut _mux_68:u32 = if ((float1HOut__w1 >> 1) & 1) != 0 { (((((_mux_9 | _mux_10) | _mux_11) | _mux_58) | _mux_59) | _mux_60) | _mux_12 } else { 0 }
+  mut _mux_69:u64 = if ((float1HOut__w1 >> 2) & 1) != 0 { (((((_mux_13 | _mux_14) | _mux_15) | _mux_61) | _mux_62) | _mux_63) | _mux_16 } else { 0 }
+  mut _mux_70:u16 = if (float1HOut__w1 & 1) != 0 { (_mux_17 | _mux_18) | _mux_64 } else { 0 }
+  mut _mux_71:u32 = if ((float1HOut__w1 >> 1) & 1) != 0 { (_mux_19 | _mux_20) | _mux_65 } else { 0 }
+  mut _mux_72:u64 = if ((float1HOut__w1 >> 2) & 1) != 0 { (_mux_21 | _mux_22) | _mux_66 } else { 0 }
+  mut _mux_73:u64 = if isRec != 0 { (_mux_67 | _mux_68) | _mux_69 } else { (_mux_70 | _mux_71) | _mux_72 }
+  if `io.fire` != 0 {
+    expIsOnesSrc = expIsOnesSrcNext__w1
+  }
+  if `io.fire` != 0 {
+    isSubnormalSrc = isSubnormalSrcNext__w1
+  }
+  if `io.fire` != 0 {
+    isRec = isRecNext__w1
+  }
+  if `io.fire` != 0 {
+    isSNaNSrc = isNaNSrcNext__w1 & (~((fracSrc__w1 >> 51) & 1)) & 1 & 1
+  }
+  if `io.fire` != 0 {
+    signSrc = (input_0__w1 >> 0x40) & 1
+  }
+  if `io.fire` != 0 {
+    isZeroSrc = (~expNotZeroSrcNext__w1) & 1 & (~fracNotZeroSrcNext__w1) & 1 & 1
+  }
+  if `io.fire` != 0 {
+    isQNaNSrc = isNaNSrcNext__w1 & (fracSrc__w1 >> 51) & 1 & 1
+  }
+  if `io.fire` != 0 {
+    isSubnormalRec2 = isSubnormalSrcNext__w1 & unsigned(fracSrc__w1#[50..=51] == 0) & 1
+  }
+  if `io.fire` != 0 {
+    isInfSrc = expIsOnesSrcNext__w1 & (~fracNotZeroSrcNext__w1) & 1 & 1
+  }
+  if `io.fire` != 0 {
+    isNaNSrc = isNaNSrcNext__w1
+  }
+  if `io.fire` != 0 {
+    isNormalRec0 = isNormalRec0Next__w1
+  }
+  if `io.fire` != 0 {
+    isNormalRec1 = isNormalRec1Next__w1
+  }
+  if `io.fire` != 0 {
+    isNormalRec2 = expNotZeroSrcNext__w1 & (~expIsOnesSrcNext__w1) & 1 & 1 & (~isNormalRec0Next__w1) & 1 & 1 & (~isNormalRec1Next__w1) & 1 & 1
+  }
+  if `io.fire` != 0 {
+    isSubnormalRec0 = isSubnormalSrcNext__w1 & (fracSrc__w1 >> 51) & 1 & 1
+  }
+  if `io.fire` != 0 {
+    isSubnormalRec1 = isSubnormalSrcNext__w1 & (~((fracSrc__w1 >> 51) & 1)) & 1 & 1 & (fracSrc__w1 >> 50) & 1 & 1
+  }
+  if fireReg__w1 != 0 {
+    result = _mux_73
+  }
+  if `io.fire` != 0 {
+    expAdderIn0 = ((_mux_51 | _mux_52) | _mux_53)
+  }
+  if `io.fire` != 0 {
+    fracSrcLeft = _fracSrcLeftNext_T__w1
+  }
+  mut leadZerosNext_lzc = Lzc::[name=leadZerosNext_lzc](io_in = _fracSrcLeftNext_T__w1)
+  mut `_leadZerosNext_lzc_io_out.isZero` = leadZerosNext_lzc["io_out.isZero"]
+  mut _mux_74:u13 = if isSubnormalSrcNext__w1 != 0 { leadZerosNext_lzc["io_out.data"]#[0..=5] } else { ((((_minusExp_T_2__w1 >> 11) & 1) & 1) << 12) | _minusExp_T_2__w1 }
+  mut _mux_75:u1 = if isSubnormalSrcNext__w1 != 0 { leadZerosNext_lzc["io_out.data"] & 1 } else { expSrcNext__w1 & 1 }
+  if `io.fire` != 0 {
+    expAdderIn1 = _mux_74
+  }
+  if `io.fire` != 0 {
+    expNormaled0 = _mux_75
+  }
+  if `io.fire` != 0 {
+    leadZeros = leadZerosNext_lzc["io_out.data"]
+  }
+  io_result = `io.result`
+  io_fflags = `io.fflags`
+}

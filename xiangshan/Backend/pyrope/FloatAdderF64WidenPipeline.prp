@@ -1,0 +1,272 @@
+const ClosePathFloatAdderF64WidenPipeline = import("ClosePathFloatAdderF64WidenPipeline.ClosePathFloatAdderF64WidenPipeline")
+const FarPathFloatAdderF64WidenPipeline = import("FarPathFloatAdderF64WidenPipeline.FarPathFloatAdderF64WidenPipeline")
+
+pub mod FloatAdderF64WidenPipeline::[timecheck=false](clock:u1, io_fire:u1, io_fp_a:u64, io_fp_b:u64, io_widen_a:u64, io_widen_b:u64, io_mask:u1, io_is_sub:u1, io_round_mode:u3, io_opb_widening:u1, io_res_widening:u1, io_op_code:u5, io_fp_aIsFpCanonicalNAN:u1, io_fp_bIsFpCanonicalNAN:u1, io_maskForReduction:u2, io_is_vfwredosum:u1) -> (io_fp_c:u64@[], io_fflags:u5@[]) {
+  wire io:(fire:u1, fp_a:u64, fp_b:u64, widen_a:u64, widen_b:u64, fp_c:u64, mask:u1, is_sub:u1, round_mode:u3, fflags:u5, opb_widening:u1, res_widening:u1, op_code:u5, fp_aIsFpCanonicalNAN:u1, fp_bIsFpCanonicalNAN:u1, maskForReduction:u2, is_vfwredosum:u1) = nil
+  mut _float_adder_result_T_6:u1 = 0
+  mut _mux_96:u1 = 0
+  reg fp_a_is_zero_reg:u1
+  reg fp_b_is_zero_reg:u1
+  reg res_widening_reg:u1
+  reg is_far_path_reg:u1
+  reg r:u1
+  reg r_1:u1
+  reg r_2:u1
+  reg r_3:u1
+  reg float_adder_result_r_1:u64
+  reg float_adder_result_r_2:u64
+  reg float_adder_result_r_3:u64
+  reg float_adder_result_r_4:u64
+  reg io_fp_c_r:u1
+  reg io_fp_c_r_1:u64
+  reg io_fflags_r:u1
+  reg io_fflags_r_1:u5
+  wire _U_close_path_io_fp_c:u64
+  wire _U_close_path_io_fflags:u5
+  wire _U_close_path_io_CS1:u54
+  wire _U_far_path_io_fp_c:u64
+  wire _U_far_path_io_fflags:u5
+  wire _U_far_path_io_absEaSubEb:u11
+  wire _U_far_path_io_isEfp_bGreater:u1
+  const _GEN_1__w1 = res_widening_reg & fp_a_is_zero_reg & 1
+  mut _mux_1:u64 = if (io.res_widening & (~io.opb_widening) & 1 & 1) != 0 { io.widen_a#[0..=63] } else { io.fp_a#[0..=63] }
+  const fp_a_to64__w1 = _mux_1
+  mut _mux_2:u64 = if (io.res_widening & (~io.is_vfwredosum) & 1 & 1) != 0 { io.widen_b#[0..=63] } else { io.fp_b#[0..=63] }
+  const fp_b_to64__w1 = _mux_2
+  const EOP__w1 = (((((fp_a_to64__w1 >> 63) & 1) ^ io.is_sub) & 1) ^ ((fp_b_to64__w1 >> 63) & 1)) & 1
+  const fp_a_mantissa__w1 = fp_a_to64__w1#[0..=51]
+  const fp_b_mantissa__w1 = fp_b_to64__w1#[0..=51]
+  const fp_a_mantissa_isnot_zero__w1 = unsigned(fp_a_mantissa__w1 != 0)
+  const fp_b_mantissa_isnot_zero__w1 = unsigned(fp_b_mantissa__w1 != 0)
+  const fp_a_is_f32__w1 = io.res_widening & (~io.opb_widening) & 1 & 1
+  const fp_b_is_f32__w1 = io.res_widening & (~io.is_vfwredosum) & 1 & 1
+  const Efp_a__w1 = fp_a_to64__w1#[52..=62]
+  const Efp_b__w1 = fp_b_to64__w1#[52..=62]
+  const Efp_a_is_zero__w1 = (unsigned(Efp_a__w1 == 0) | (fp_a_is_f32__w1 & unsigned(Efp_a__w1 == 0x369) & 1)) & 1
+  const Efp_b_is_zero__w1 = (unsigned(Efp_b__w1 == 0) | (fp_b_is_f32__w1 & unsigned(Efp_b__w1 == 0x369) & 1)) & 1
+  const Efp_a_is_all_one__w1 = (unsigned(Efp_a__w1 == 0x7ff) | (fp_a_is_f32__w1 & unsigned(Efp_a__w1 == 0x47f) & 1)) & 1
+  const Efp_b_is_all_one__w1 = (unsigned(Efp_b__w1 == 0x7ff) | (fp_b_is_f32__w1 & unsigned(Efp_b__w1 == 0x47f) & 1)) & 1
+  const fp_a_is_NAN__w1 = (io.fp_aIsFpCanonicalNAN | (Efp_a_is_all_one__w1 & fp_a_mantissa_isnot_zero__w1 & 1)) & 1
+  const fp_a_is_SNAN__w1 = (~io.fp_aIsFpCanonicalNAN) & 1 & Efp_a_is_all_one__w1 & 1 & fp_a_mantissa_isnot_zero__w1 & 1 & (~((fp_a_to64__w1 >> 51) & 1)) & 1 & 1
+  const fp_b_is_NAN__w1 = (io.fp_bIsFpCanonicalNAN | (Efp_b_is_all_one__w1 & fp_b_mantissa_isnot_zero__w1 & 1)) & 1
+  const fp_b_is_SNAN__w1 = (~io.fp_bIsFpCanonicalNAN) & 1 & Efp_b_is_all_one__w1 & 1 & fp_b_mantissa_isnot_zero__w1 & 1 & (~((fp_b_to64__w1 >> 51) & 1)) & 1 & 1
+  const fp_a_is_infinite__w1 = (~io.fp_aIsFpCanonicalNAN) & 1 & Efp_a_is_all_one__w1 & 1 & (~fp_a_mantissa_isnot_zero__w1) & 1 & 1
+  const fp_b_is_infinite__w1 = (~io.fp_bIsFpCanonicalNAN) & 1 & Efp_b_is_all_one__w1 & 1 & (~fp_b_mantissa_isnot_zero__w1) & 1 & 1
+  const fp_a_is_zero__w1 = (~io.fp_aIsFpCanonicalNAN) & 1 & Efp_a_is_zero__w1 & 1 & (~fp_a_mantissa_isnot_zero__w1) & 1 & 1
+  const fp_b_is_zero__w1 = (~io.fp_bIsFpCanonicalNAN) & 1 & Efp_b_is_zero__w1 & 1 & (~fp_b_mantissa_isnot_zero__w1) & 1 & 1
+  const _fflags_NV_stage0_T_4__w1 = (fp_a_is_SNAN__w1 | fp_b_is_SNAN__w1) & 1
+  const _GEN__w1 = EOP__w1 & fp_a_is_infinite__w1 & 1 & fp_b_is_infinite__w1 & 1
+  mut _mux_13:u5 = if is_far_path_reg != 0 { _U_far_path_io_fflags } else { _U_close_path_io_fflags }
+  mut _mux_14:u5 = if ((r_1 | ((fp_b_is_zero_reg | fp_a_is_zero_reg) & 1 & res_widening_reg & 1)) & 1) != 0 { 0 } else { _mux_13 }
+  mut _mux_15:u5 = if r != 0 { 16 } else { _mux_14 }
+  const _fflags_NV_stage0_T_10__w1 = (fp_a_is_NAN__w1 | fp_b_is_NAN__w1) & 1
+  mut _mux_16:u64 = if is_far_path_reg != 0 { _U_far_path_io_fp_c } else { _U_close_path_io_fp_c }
+  mut _mux_17:u64 = if (res_widening_reg & fp_b_is_zero_reg & 1) != 0 { float_adder_result_r_4 } else { _mux_16 }
+  mut _mux_18:u64 = if _GEN_1__w1 != 0 { float_adder_result_r_3 } else { _mux_17 }
+  mut _mux_19:u64 = if (_GEN_1__w1 & fp_b_is_zero_reg & 1) != 0 { float_adder_result_r_2 } else { _mux_18 }
+  mut _mux_20:u64 = if r_3 != 0 { float_adder_result_r_1 } else { _mux_19 }
+  mut _mux_21:u64 = if r_2 != 0 { 0x7ff8000000000000 } else { _mux_20 }
+  const is_min__w1 = unsigned(io.op_code == 2)
+  const is_max__w1 = unsigned(io.op_code == 3)
+  const is_feq__w1 = unsigned(io.op_code == 9)
+  const is_fne__w1 = unsigned(io.op_code == 10)
+  const is_flt__w1 = unsigned(io.op_code == 11)
+  const is_fle__w1 = unsigned(io.op_code == 12)
+  const is_fgt__w1 = unsigned(io.op_code == 13)
+  const is_fge__w1 = unsigned(io.op_code == 14)
+  const is_fsum_ure__w1 = unsigned(io.op_code == 26)
+  const is_fmin_re__w1 = unsigned(io.op_code == 20)
+  const is_fmax_re__w1 = unsigned(io.op_code == 21)
+  const is_fsum_ore__w1 = unsigned(io.op_code == 22)
+  const fp_a_sign__w1 = (io.fp_a >> 63) & 1
+  const fp_b_sign__w1 = (io.fp_b >> 63) & 1
+  const fp_b_exponent_is_equal__w1 = unsigned(Efp_a__w1 == Efp_b__w1)
+  const fp_b_significand_is_greater__w1 = (~((_U_close_path_io_CS1 >> 53) & 1)) & 1 & unsigned(fp_a_mantissa__w1 != fp_b_mantissa__w1) & 1
+  const fp_b_significand_is_equal__w1 = unsigned(fp_a_mantissa__w1 == fp_b_mantissa__w1)
+  const _fp_b_is_equal_T_2__w1 = fp_b_is_zero__w1 & fp_a_is_zero__w1 & 1
+  const fp_b_is_greater__w1 = (((~fp_b_sign__w1) & 1 & ((((fp_a_sign__w1 & (~_fp_b_is_equal_T_2__w1) & 1 & 1) | _U_far_path_io_isEfp_bGreater) & 1) | (fp_b_exponent_is_equal__w1 & fp_b_significand_is_greater__w1 & 1)) & 1 & 1) | (fp_b_sign__w1 & fp_a_sign__w1 & 1 & (((~_U_far_path_io_isEfp_bGreater) & 1 & (~fp_b_exponent_is_equal__w1) & 1 & 1) | (fp_b_exponent_is_equal__w1 & ((~fp_b_significand_is_greater__w1) & 1 & (~fp_b_significand_is_equal__w1) & 1 & 1) & 1)) & 1 & 1)) & 1
+  const fp_b_is_equal__w1 = ((unsigned(fp_a_sign__w1 == fp_b_sign__w1) & fp_b_exponent_is_equal__w1 & 1 & fp_b_significand_is_equal__w1 & 1) | _fp_b_is_equal_T_2__w1) & 1
+  const t307 = (~fp_b_is_greater__w1) & 1
+  const t310 = t307 & (~fp_b_is_equal__w1) & 1
+  const t311 = t310 & 1
+  const fp_b_is_less__w1 = t311
+  mut _mux_48:u64 = if io.fp_aIsFpCanonicalNAN != 0 { 0x7ff8000000000000 } else { io.fp_a#[0..=63] }
+  const fp_aFix__w1 = _mux_48
+  mut _mux_49:u64 = if io.fp_bIsFpCanonicalNAN != 0 { 0x7ff8000000000000 } else { io.fp_b#[0..=63] }
+  const fp_bFix__w1 = _mux_49
+  mut _mux_50:u64 = if io.mask != 0 { fp_bFix__w1 } else { fp_aFix__w1 }
+  const _result_max_T_7__w1 = fp_a_is_NAN__w1 & fp_b_is_NAN__w1 & 1
+  const t352 = fp_b_is_less__w1 | (fp_b_sign__w1 & fp_b_is_zero__w1 & 1 & fp_a_is_zero__w1 & 1)
+  const t353 = t352 & 1
+  const t354 = t353 != 0
+  mut _mux_52:u64 = if t354 { io.fp_b#[0..=63] } else { io.fp_a#[0..=63] }
+  const _GEN_6__w1 = (fp_a_is_NAN__w1 | fp_b_is_NAN__w1) & 1
+  mut _mux_53:u64 = if _GEN_6__w1 != 0 { 0 } else { _mux_52 }
+  mut _mux_54:u64 = if ((~fp_a_is_NAN__w1) & 1 & fp_b_is_NAN__w1 & 1) != 0 { io.fp_a#[0..=63] } else { 0 }
+  mut _mux_55:u64 = if (fp_a_is_NAN__w1 & (~fp_b_is_NAN__w1) & 1 & 1) != 0 { io.fp_b#[0..=63] } else { 0 }
+  mut _mux_56:u64 = if _result_max_T_7__w1 != 0 { 0x7ff8000000000000 } else { 0 }
+  const result_min__w1 = ((_mux_53 | _mux_54) | _mux_55) | _mux_56
+  const t391 = (fp_b_is_greater__w1 | ((~fp_b_sign__w1) & 1 & fp_b_is_zero__w1 & 1 & fp_a_is_zero__w1 & 1)) & 1
+  const t392 = t391 != 0
+  mut _mux_57:u64 = if t392 { io.fp_b#[0..=63] } else { io.fp_a#[0..=63] }
+  mut _mux_58:u64 = if _GEN_6__w1 != 0 { 0 } else { _mux_57 }
+  mut _mux_59:u64 = if ((~fp_a_is_NAN__w1) & 1 & fp_b_is_NAN__w1 & 1) != 0 { io.fp_a#[0..=63] } else { 0 }
+  mut _mux_60:u64 = if (fp_a_is_NAN__w1 & (~fp_b_is_NAN__w1) & 1 & 1) != 0 { io.fp_b#[0..=63] } else { 0 }
+  mut _mux_61:u64 = if _result_max_T_7__w1 != 0 { 0x7ff8000000000000 } else { 0 }
+  const result_max__w1 = ((_mux_58 | _mux_59) | _mux_60) | _mux_61
+  const result_feq__w1 = ((~_fflags_NV_stage0_T_10__w1) & 1 & fp_b_is_equal__w1 & 1)
+  const t431 = (~_fflags_NV_stage0_T_10__w1) & 1 & fp_b_is_greater__w1 & 1
+  const t432 = t431
+  const result_flt__w1 = t432
+  const t436 = (fp_b_is_greater__w1 | fp_b_is_equal__w1) & 1
+  const t437 = (~_fflags_NV_stage0_T_10__w1) & 1 & t436
+  const t438 = t437 & 1
+  const t439 = t438
+  const result_fle__w1 = t439
+  const t442 = (~_fflags_NV_stage0_T_10__w1) & 1 & fp_b_is_less__w1
+  const t443 = t442 & 1
+  const t444 = t443
+  const result_fgt__w1 = t444
+  const t447 = fp_b_is_less__w1 | fp_b_is_equal__w1
+  const t448 = t447 & 1
+  const t449 = (~_fflags_NV_stage0_T_10__w1) & 1 & t448
+  const t450 = t449 & 1
+  const t451 = t450
+  const result_fge__w1 = t451
+  const _result_fclass_T_7__w1 = fp_a_sign__w1 & Efp_a_is_zero__w1 & 1
+  const _result_fclass_T_36__w1 = (((_result_fclass_T_7__w1 & fp_a_mantissa_isnot_zero__w1 & 1) << 3) | ((_result_fclass_T_7__w1 & (~fp_a_mantissa_isnot_zero__w1) & 1 & 1) << 2) | (((~fp_a_sign__w1) & 1 & Efp_a_is_zero__w1 & 1 & (~fp_a_mantissa_isnot_zero__w1) & 1 & 1) << 1) | ((~fp_a_sign__w1) & 1 & Efp_a_is_zero__w1 & 1 & fp_a_mantissa_isnot_zero__w1 & 1)) | ((((~fp_a_sign__w1) & 1 & (~Efp_a_is_zero__w1) & 1 & 1 & (~Efp_a_is_all_one__w1) & 1 & 1) << 7) | (((~fp_a_sign__w1) & 1 & fp_a_is_infinite__w1 & 1) << 6) | ((fp_a_is_SNAN__w1 & 1) << 5) | ((fp_a_is_NAN__w1 & (~fp_a_is_SNAN__w1) & 1 & 1) << 4))
+  const _result_fclass_T_46__w1 = (_result_fclass_T_36__w1#[2..=7] & 51) | ((_result_fclass_T_36__w1#[0..=5] & 51) << 2)
+  const t509 = _result_fclass_T_46__w1#[1..=7]
+  const t510 = t509 & 0x55
+  const t511 = t510
+  const t512 = t511
+  const t513 = _result_fclass_T_46__w1#[0..=6]
+  const t514 = t513 & 0x55
+  const t515 = t514
+  const t516 = t515 << 1
+  const t517 = t512 | t516
+  const t518 = t517
+  const t529 = (t518 << 2) | ((fp_a_sign__w1 & (~Efp_a_is_zero__w1) & 1 & 1 & (~Efp_a_is_all_one__w1) & 1 & 1) << 1) | (fp_a_sign__w1 & fp_a_is_infinite__w1 & 1)
+  mut _mux_63:u10 = if io.fp_aIsFpCanonicalNAN != 0 { 0x200 } else { t529 }
+  const _result_fmin_re_T_1__w1 = unsigned(io.maskForReduction == 3)
+  const is_fsum_ure_notmasked__w1 = is_fsum_ure__w1 & _result_fmin_re_T_1__w1 & 1
+  const is_fsum_ore_notmasked__w1 = is_fsum_ore__w1 & io.maskForReduction & 1 & 1
+  const _result_fmin_re_T__w1 = unsigned(io.maskForReduction == 0)
+  mut _mux_66:u64 = if (io.maskForReduction & 1) != 0 { io.fp_a#[0..=63] } else { io.fp_b#[0..=63] }
+  mut _mux_67:u64 = if _result_fmin_re_T__w1 != 0 { (unsigned(io.round_mode != 2) & 1) << 63 } else { _mux_66 }
+  mut _mux_68:u64 = if (io.maskForReduction & 1) != 0 { 0 } else { io.fp_b#[0..=63] }
+  mut _mux_69:u64 = if (io.maskForReduction & 1) != 0 { io.fp_a#[0..=63] } else { io.fp_b#[0..=63] }
+  const re_masked_one_out__w1 = _mux_69
+  mut _mux_70:u64 = if _result_fmin_re_T_1__w1 != 0 { result_max__w1 } else { re_masked_one_out__w1 }
+  mut _mux_71:u64 = if _result_fmin_re_T__w1 != 0 { 0x7ff8000000000000 } else { _mux_70 }
+  mut _mux_72:u64 = if _result_fmin_re_T_1__w1 != 0 { result_min__w1 } else { re_masked_one_out__w1 }
+  mut _mux_73:u64 = if _result_fmin_re_T__w1 != 0 { 0x7ff8000000000000 } else { _mux_72 }
+  mut _mux_74:u64 = if is_min__w1 != 0 { result_min__w1 } else { 0 }
+  mut _mux_75:u64 = if is_max__w1 != 0 { result_max__w1 } else { 0 }
+  mut _mux_76:u64 = if is_feq__w1 != 0 { result_feq__w1 } else { 0 }
+  mut _mux_77:u64 = if is_fne__w1 != 0 { (unsigned(result_feq__w1 == 0) & 1) } else { 0 }
+  const t595 = result_flt__w1
+  mut _mux_78:u64 = if is_flt__w1 != 0 { t595 } else { 0 }
+  const t597 = result_fle__w1
+  mut _mux_79:u64 = if is_fle__w1 != 0 { t597 } else { 0 }
+  const t599 = result_fgt__w1
+  mut _mux_80:u64 = if is_fgt__w1 != 0 { t599 } else { 0 }
+  const t601 = result_fge__w1
+  mut _mux_81:u64 = if is_fge__w1 != 0 { t601 } else { 0 }
+  mut _mux_82:u64 = if unsigned(io.op_code == 6) != 0 { (((fp_bFix__w1 >> 63) & 1) << 63) | fp_aFix__w1#[0..=62] } else { 0 }
+  mut _mux_83:u64 = if unsigned(io.op_code == 7) != 0 { (((~((fp_bFix__w1 >> 63) & 1)) & 1) << 63) | fp_aFix__w1#[0..=62] } else { 0 }
+  mut _mux_84:u64 = if unsigned(io.op_code == 8) != 0 { (((((fp_bFix__w1 >> 63) & 1) ^ ((fp_aFix__w1 >> 63) & 1)) & 1) << 63) | fp_aFix__w1#[0..=62] } else { 0 }
+  mut _mux_85:u64 = if unsigned(io.op_code == 15) != 0 { _mux_63 } else { 0 }
+  mut _mux_86:u64 = if unsigned(io.op_code == 4) != 0 { _mux_50 } else { 0 }
+  mut _mux_87:u64 = if ((((unsigned(io.op_code == 5) | unsigned(io.op_code == 17)) & 1) | unsigned(io.op_code == 18)) & 1) != 0 { fp_bFix__w1 } else { 0 }
+  mut _mux_88:u64 = if (is_fsum_ure__w1 & (~_result_fmin_re_T_1__w1) & 1 & 1) != 0 { _mux_67 } else { 0 }
+  mut _mux_89:u64 = if is_fmax_re__w1 != 0 { _mux_71 } else { 0 }
+  mut _mux_90:u64 = if is_fmin_re__w1 != 0 { _mux_73 } else { 0 }
+  mut _mux_91:u64 = if (is_fsum_ore__w1 & (~(io.maskForReduction & 1)) & 1 & 1) != 0 { _mux_68 } else { 0 }
+  const t654 = ((((((((((((((((_mux_74 | _mux_75) | _mux_76) | _mux_77) | _mux_78) | _mux_79) | _mux_80) | _mux_81) | _mux_82) | _mux_83) | _mux_84) | _mux_85) | _mux_86) | _mux_87) | _mux_88) | _mux_89) | _mux_90) | _mux_91
+  const t655 = t654
+  const result_stage0__w1 = t655
+  const fflags_stage0__w1 = (((((((((is_min__w1 | is_max__w1) & 1 & _fflags_NV_stage0_T_4__w1 & 1) | ((is_feq__w1 | is_fne__w1) & 1 & _fflags_NV_stage0_T_4__w1 & 1)) & 1) | ((((((is_flt__w1 | is_fle__w1) & 1) | is_fgt__w1) & 1) | is_fge__w1) & 1 & _fflags_NV_stage0_T_10__w1 & 1)) & 1) | ((is_fmax_re__w1 | is_fmin_re__w1) & 1 & ((io.maskForReduction & 1 & fp_a_is_SNAN__w1 & 1) | ((io.maskForReduction >> 1) & 1 & fp_b_is_SNAN__w1 & 1)) & 1 & 1)) & 1) & 1) << 4
+  const _io_fflags_T__w1 = (unsigned(io.op_code == 0) | unsigned(io.op_code == 1)) & 1
+  mut _mux_92:u64 = if io_fp_c_r != 0 { _mux_21 } else { io_fp_c_r_1 }
+  mut _mux_93:u5 = if io_fflags_r != 0 { _mux_15 } else { io_fflags_r_1 }
+  io.fire = io_fire & 1
+  io.fp_a = io_fp_a
+  io.fp_b = io_fp_b
+  io.widen_a = io_widen_a
+  io.widen_b = io_widen_b
+  io.fp_c = _mux_92
+  io.mask = io_mask & 1
+  io.is_sub = io_is_sub & 1
+  io.round_mode = io_round_mode
+  io.fflags = _mux_93
+  io.opb_widening = io_opb_widening & 1
+  io.res_widening = io_res_widening & 1
+  io.op_code = io_op_code
+  io.fp_aIsFpCanonicalNAN = io_fp_aIsFpCanonicalNAN & 1
+  io.fp_bIsFpCanonicalNAN = io_fp_bIsFpCanonicalNAN & 1
+  io.maskForReduction = io_maskForReduction
+  io.is_vfwredosum = io_is_vfwredosum & 1
+  if io.fire != 0 {
+    fp_a_is_zero_reg = fp_a_is_zero__w1
+  }
+  if io.fire != 0 {
+    fp_b_is_zero_reg = fp_b_is_zero__w1
+  }
+  if io.fire != 0 {
+    res_widening_reg = io.res_widening
+  }
+  if io.fire != 0 {
+    is_far_path_reg = (unsigned(((((~EOP__w1) & 1) << 10) | _U_far_path_io_absEaSubEb#[1..=10]) != 0) | (unsigned(_U_far_path_io_absEaSubEb == 1) & (Efp_a_is_zero__w1 ^ Efp_b_is_zero__w1) & 1 & 1)) & 1
+  }
+  if io.fire != 0 {
+    r = (_fflags_NV_stage0_T_4__w1 | _GEN__w1) & 1
+  }
+  if io.fire != 0 {
+    r_1 = (((((fp_a_is_NAN__w1 | fp_b_is_NAN__w1) & 1) | fp_a_is_infinite__w1) & 1) | fp_b_is_infinite__w1) & 1
+  }
+  if io.fire != 0 {
+    r_2 = (_fflags_NV_stage0_T_10__w1 | _GEN__w1) & 1
+  }
+  if io.fire != 0 {
+    r_3 = (fp_a_is_infinite__w1 | fp_b_is_infinite__w1) & 1
+  }
+  if io.fire != 0 {
+    _float_adder_result_T_6 = 0ub?
+    _mux_96 = if fp_a_is_infinite__w1 != 0 { (fp_a_to64__w1 >> 63) & 1 } else { (io.is_sub ^ ((fp_b_to64__w1 >> 63) & 1)) & 1 }
+    _float_adder_result_T_6 = _mux_96
+    float_adder_result_r_1 = ((_float_adder_result_T_6 & 1) << 63) | 0x7ff0000000000000
+  }
+  if io.fire != 0 {
+    float_adder_result_r_2 = (((unsigned(io.round_mode == 2) & EOP__w1 & 1) | ((fp_a_to64__w1 >> 63) & 1 & (~EOP__w1) & 1 & 1)) & 1) << 63
+  }
+  if io.fire != 0 {
+    float_adder_result_r_3 = (((io.is_sub ^ ((fp_b_to64__w1 >> 63) & 1)) & 1) << 63) | fp_b_to64__w1#[0..=62]
+  }
+  if io.fire != 0 {
+    float_adder_result_r_4 = fp_a_to64__w1
+  }
+  if io.fire != 0 {
+    io_fp_c_r = (((_io_fflags_T__w1 | is_fsum_ure_notmasked__w1) & 1) | is_fsum_ore_notmasked__w1) & 1
+  }
+  if io.fire != 0 {
+    io_fp_c_r_1 = result_stage0__w1
+  }
+  if io.fire != 0 {
+    io_fflags_r = (((_io_fflags_T__w1 | is_fsum_ure_notmasked__w1) & 1) | is_fsum_ore_notmasked__w1) & 1
+  }
+  if io.fire != 0 {
+    io_fflags_r_1 = fflags_stage0__w1
+  }
+  mut U_far_path = FarPathFloatAdderF64WidenPipeline::[name=U_far_path](clock = clock, io_fire = io.fire, io_fp_a = fp_a_to64__w1, io_fp_b = fp_b_to64__w1, io_is_sub = io.is_sub, io_round_mode = io.round_mode)
+  _U_far_path_io_fp_c = U_far_path.io_fp_c
+  _U_far_path_io_fflags = U_far_path.io_fflags
+  _U_far_path_io_absEaSubEb = U_far_path.io_absEaSubEb
+  _U_far_path_io_isEfp_bGreater = U_far_path.io_isEfp_bGreater
+  mut U_close_path = ClosePathFloatAdderF64WidenPipeline::[name=U_close_path](clock = clock, io_fire = io.fire, io_fp_a = fp_a_to64__w1, io_fp_b = fp_b_to64__w1, io_round_mode = io.round_mode)
+  _U_close_path_io_fp_c = U_close_path.io_fp_c
+  _U_close_path_io_fflags = U_close_path.io_fflags
+  _U_close_path_io_CS1 = U_close_path.io_CS1
+  io_fp_c = io.fp_c
+  io_fflags = io.fflags
+}

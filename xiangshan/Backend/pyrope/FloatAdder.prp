@@ -1,0 +1,52 @@
+const FloatAdderF32F16MixedPipeline = import("FloatAdderF32F16MixedPipeline.FloatAdderF32F16MixedPipeline")
+const FloatAdderF64Pipeline = import("FloatAdderF64Pipeline.FloatAdderF64Pipeline")
+
+pub mod FloatAdder::[timecheck=false](clock:u1, io_fire:u1, io_fp_a:u64, io_fp_b:u64, io_round_mode:u3, io_fp_format:u2, io_op_code:u5, io_fp_aIsFpCanonicalNAN:u1, io_fp_bIsFpCanonicalNAN:u1) -> (io_fp_result:u64@[], io_fflags:u5@[]) {
+  wire io:(fire:u1, fp_a:u64, fp_b:u64, round_mode:u3, fp_format:u2, op_code:u5, fp_aIsFpCanonicalNAN:u1, fp_bIsFpCanonicalNAN:u1, fp_result:u64, fflags:u5) = nil
+  reg fp_format_reg:u2
+  reg resultNeedBox:u1
+  wire _F32Adder_io_fp_c:u32
+  wire _F32Adder_io_fflags:u5
+  wire _F64Adder_io_fp_c:u64
+  wire _F64Adder_io_fflags:u5
+  const res_is_f16__w1 = unsigned(fp_format_reg == 1)
+  const res_is_f32__w1 = unsigned(fp_format_reg == 2)
+  const res_is_f64__w1 = unsigned(fp_format_reg == 3)
+  const f64_fp_a__w1 = io.fp_a
+  const f64_fp_b__w1 = io.fp_b
+  const fp_format__w1 = (io.fp_format - 1)#[0..=1]
+  const fast_is_sub__w1 = io.op_code & 1
+  const f32_fp_a__w1 = f64_fp_a__w1#[0..=31]
+  const f32_fp_b__w1 = f64_fp_b__w1#[0..=31]
+  mut _rep_17:u32 = if (resultNeedBox & 1) != 0 { 0xffffffff } else { 0 }
+  mut _rep_18:u48 = if (resultNeedBox & 1) != 0 { 0xffffffffffff } else { 0 }
+  mut _mux_19:u64 = if res_is_f16__w1 != 0 { (_rep_18 << 16) | _F32Adder_io_fp_c#[0..=15] } else { 0 }
+  mut _mux_20:u64 = if res_is_f32__w1 != 0 { (_rep_17 << 32) | _F32Adder_io_fp_c } else { 0 }
+  mut _mux_21:u64 = if res_is_f64__w1 != 0 { _F64Adder_io_fp_c } else { 0 }
+  mut _mux_22:u5 = if res_is_f64__w1 != 0 { _F64Adder_io_fflags } else { 0 }
+  mut _mux_23:u5 = if ((res_is_f16__w1 | res_is_f32__w1) & 1) != 0 { _F32Adder_io_fflags } else { 0 }
+  io.fire = io_fire & 1
+  io.fp_a = io_fp_a
+  io.fp_b = io_fp_b
+  io.round_mode = io_round_mode
+  io.fp_format = io_fp_format
+  io.op_code = io_op_code
+  io.fp_aIsFpCanonicalNAN = io_fp_aIsFpCanonicalNAN & 1
+  io.fp_bIsFpCanonicalNAN = io_fp_bIsFpCanonicalNAN & 1
+  io.fp_result = (_mux_19 | _mux_20) | _mux_21
+  io.fflags = _mux_23 | _mux_22
+  if io.fire != 0 {
+    fp_format_reg = io.fp_format
+  }
+  if io.fire != 0 {
+    resultNeedBox = (((((((((((((((unsigned(io.op_code == 0) | unsigned(io.op_code == 1)) & 1) | unsigned(io.op_code == 2)) & 1) | unsigned(io.op_code == 3)) & 1) | unsigned(io.op_code == 6)) & 1) | unsigned(io.op_code == 7)) & 1) | unsigned(io.op_code == 8)) & 1) | unsigned(io.op_code == 30)) & 1) | unsigned(io.op_code == 19)) & 1
+  }
+  mut F64Adder = FloatAdderF64Pipeline::[name=F64Adder](clock = clock, io_fire = io.fire, io_fp_a = f64_fp_a__w1, io_fp_b = f64_fp_b__w1, io_is_sub = fast_is_sub__w1, io_round_mode = io.round_mode, io_op_code = io.op_code, io_fp_aIsFpCanonicalNAN = io.fp_aIsFpCanonicalNAN, io_fp_bIsFpCanonicalNAN = io.fp_bIsFpCanonicalNAN)
+  _F64Adder_io_fp_c = F64Adder.io_fp_c
+  _F64Adder_io_fflags = F64Adder.io_fflags
+  mut F32Adder = FloatAdderF32F16MixedPipeline::[name=F32Adder](clock = clock, io_fire = io.fire, io_fp_a = f32_fp_a__w1#[0..=31], io_fp_b = f32_fp_b__w1#[0..=31], io_is_sub = fast_is_sub__w1, io_round_mode = io.round_mode, io_fp_format = fp_format__w1, io_op_code = io.op_code, io_fp_aIsFpCanonicalNAN = io.fp_aIsFpCanonicalNAN, io_fp_bIsFpCanonicalNAN = io.fp_bIsFpCanonicalNAN)
+  _F32Adder_io_fp_c = F32Adder.io_fp_c
+  _F32Adder_io_fflags = F32Adder.io_fflags
+  io_fp_result = io.fp_result
+  io_fflags = io.fflags
+}
