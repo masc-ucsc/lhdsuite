@@ -32,6 +32,14 @@ sh_binary(
     data = ["show.py"],
 )
 
+# Append the most recent successful synthesis results to bench/ledger.jsonl:
+#   bazel run //bench:ledger -- baseline-v1 dino minion xs_alu
+sh_binary(
+    name = "ledger",
+    srcs = ["ledger.sh"],
+    data = ["ledger.py"],
+)
+
 # The dino dual-issue RISC-V CPU: one top, complete in both languages.
 core_benches("dino")
 
@@ -45,6 +53,15 @@ core_benches("cva6")
 # scenarios use vpu_top, the largest subtree complete in both languages
 # (see minion/BUILD for why).
 core_benches("minion")
+
+# XiangShan Backend blocks share one 1088-module source tree. These are
+# synth-only cores: each top is independently cone-pruned, and the two largest
+# blocks carry the `slow` tag for exclusion from the routine loop.
+core_benches("xs_rob")
+core_benches("xs_alu")
+core_benches("xs_div")
+core_benches("xs_exu")
+core_benches("xs_backend")
 
 # Cross-core scenario suites, for comparing one flow across both designs.
 test_suite(

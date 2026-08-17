@@ -8,8 +8,10 @@ incremental). Targets are named `<core>_<scenario>`, so a single core runs
 with `bazel test //bench:<core>` and a single scenario with
 `bazel test //bench:<core>_<scenario>`.
 
-Adding a core = one CORES entry + a package exposing the same filegroup names
-as //dino (verilog, verilog_filelist, pyrope, pyrope_top, sim, verif, tests).
+Adding a full core = one CORES entry + a package exposing the same filegroup
+names as //dino.  A `synth_only` core needs only verilog,
+verilog_filelist, pyrope, and pyrope_top; it emits the compile and synthesis
+scenarios, not simulation/formal/LEC scenarios.
 """
 
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
@@ -286,6 +288,48 @@ CORES = {
         # interval is dominated by simulation rather than process startup.
         "verilator_cycles": 200000,
     },
+    "xs_rob": {
+        "pkg": "//xiangshan/Backend",
+        "top": "Rob",
+        "unit": "Rob",
+        "v_flags": "--single-unit",
+        "color_algs": ["synth"],
+        "synth_only": True,
+    },
+    "xs_alu": {
+        "pkg": "//xiangshan/Backend",
+        "top": "Alu",
+        "unit": "Alu",
+        "v_flags": "--single-unit",
+        "color_algs": ["synth"],
+        "synth_only": True,
+    },
+    "xs_div": {
+        "pkg": "//xiangshan/Backend",
+        "top": "DivUnit",
+        "unit": "DivUnit",
+        "v_flags": "--single-unit",
+        "color_algs": ["synth"],
+        "synth_only": True,
+    },
+    "xs_exu": {
+        "pkg": "//xiangshan/Backend",
+        "top": "ExuBlock",
+        "unit": "ExuBlock",
+        "v_flags": "--single-unit",
+        "color_algs": ["synth"],
+        "synth_only": True,
+        "slow": True,
+    },
+    "xs_backend": {
+        "pkg": "//xiangshan/Backend",
+        "top": "Backend",
+        "unit": "Backend",
+        "v_flags": "--single-unit",
+        "color_algs": ["synth"],
+        "synth_only": True,
+        "slow": True,
+    },
 }
 
 # Scenario table shared by every core:
@@ -340,48 +384,64 @@ _SCENARIOS = [
 
 def _lhd_bench(name, core, cfg, script, mode, timeout):
     pkg = cfg["pkg"]
+    synth_only = cfg.get("synth_only", False)
+    data = [
+        "common.sh",
+        # scan.json -> build.mk + BUILD.bazel for MODE=pyrope_parallel.
+        "gen_build.py",
+        # lhd's own runfiles carry the `lhd sim` runtime headers (slop.hpp
+        # & friends) — no extra staging needed here.
+        "@livehd//lhd:lhd",
+        pkg + ":pyrope",
+        pkg + ":pyrope_top",
+        pkg + ":verilog",
+        pkg + ":verilog_filelist",
+    ]
+    if not synth_only:
+        data.extend([
+            pkg + ":sim",
+            pkg + ":tests",
+            pkg + ":verif",
+        ])
+    else:
+        data.extend([
+            pkg + ":pyrope_stubs",
+            pkg + ":pyrope_stub_top",
+        ])
+
     sh_test(
         name = name,
         size = "medium",
         timeout = timeout,
         srcs = [script],
-        data = [
-            "common.sh",
-            # scan.json -> build.mk + BUILD.bazel for MODE=pyrope_parallel.
-            "gen_build.py",
-            # lhd's own runfiles carry the `lhd sim` runtime headers (slop.hpp
-            # & friends) — no extra staging needed here.
-            "@livehd//lhd:lhd",
-            pkg + ":pyrope",
-            pkg + ":pyrope_top",
-            pkg + ":sim",
-            pkg + ":tests",
-            pkg + ":verif",
-            pkg + ":verilog",
-            pkg + ":verilog_filelist",
-        ],
+        data = data,
         env = {
             "LHD": "$(rlocationpath @livehd//lhd:lhd)",
             "CORE": core,
             "CORE_V_FLIST": "$(rlocationpath %s:verilog_filelist)" % pkg,
             "CORE_P_TOP": "$(rlocationpath %s:pyrope_top)" % pkg,
+            "CORE_P_STUB_TOP": "$(rlocationpath %s:pyrope_stub_top)" % pkg if synth_only else "",
             "CORE_TOP": cfg["top"],
             "CORE_V_FLAGS": cfg["v_flags"],
             "CORE_UNIT": cfg["unit"],
             "CORE_SEQ_UNIT": cfg.get("seq_unit", ""),
             "CORE_COLOR_ALGS": " ".join(cfg["color_algs"]),
-            "CORE_SIM_TB": cfg["sim_tb"],
-            "CORE_SIM_CYCLES": str(cfg["sim_cycles"]),
-            "CORE_SIM_TB_UNIT": cfg["sim_tb_unit"],
+            "CORE_SYNTH_ONLY": "1" if synth_only else "",
+            # The 30-minute hard gate applies to the end-to-end synthesis
+            # scenarios, not source-only compile measurements.
+            "CORE_SYNTH_BUDGET_S": "1800" if cfg.get("slow", False) and script == "synth.sh" else "",
+            "CORE_SIM_TB": cfg.get("sim_tb", ""),
+            "CORE_SIM_CYCLES": str(cfg.get("sim_cycles", "")),
+            "CORE_SIM_TB_UNIT": cfg.get("sim_tb_unit", ""),
             "CORE_SIM_TOP_UNIT": cfg.get("sim_top_tb_unit", ""),
             "CORE_SIM_PROG_UNIT": cfg.get("sim_prog_tb_unit", ""),
             "CORE_SIM_TB_V": cfg.get("sim_tb_v", ""),
             "CORE_SIM_SETS": cfg.get("sim_sets", ""),
-            "CORE_SIM_MARKER": cfg["sim_marker"],
-            "CORE_SIM_EXPECT": cfg["sim_expect"],
-            "CORE_SIM_TOP_TB": cfg["sim_top_tb"],
+            "CORE_SIM_MARKER": cfg.get("sim_marker", ""),
+            "CORE_SIM_EXPECT": cfg.get("sim_expect", ""),
+            "CORE_SIM_TOP_TB": cfg.get("sim_top_tb", ""),
             "CORE_SIM_TOP_CYCLES": str(cfg.get("sim_top_cycles", "")),
-            "CORE_SIM_PROG_TB": cfg["sim_prog_tb"],
+            "CORE_SIM_PROG_TB": cfg.get("sim_prog_tb", ""),
             "CORE_SIM_PROG_CYCLES": str(cfg.get("sim_prog_cycles", "")),
             # "1" = the whole-top drivers gate the target; "" = metric only.
             "CORE_SIM_TOP_ASSERT": "1" if cfg.get("sim_top_assert", False) else "",
@@ -392,7 +452,7 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "MODE": mode,
         },
         # Timing benchmarks: never share the machine with other tests.
-        tags = ["exclusive", "core_" + core],
+        tags = ["exclusive", "core_" + core] + (["slow"] if cfg.get("slow", False) else []),
     )
 
 def core_benches(core):
@@ -400,6 +460,14 @@ def core_benches(core):
     cfg = CORES[core]
     names = []
     for suffix, script, mode, timeout, needs_color, needs_cfg in _SCENARIOS:
+        if cfg.get("synth_only", False) and suffix not in [
+            "compile_verilog",
+            "compile_pyrope",
+            "compile_pyrope_parallel",
+            "synth",
+            "synth_incremental",
+        ]:
+            continue
         if needs_color and needs_color not in cfg["color_algs"]:
             continue  # e.g. no synth_lec_flat on a core too big to color flat
         if needs_cfg and not cfg.get(needs_cfg, ""):

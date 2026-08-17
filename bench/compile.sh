@@ -30,6 +30,11 @@
 RF="${TEST_SRCDIR:-${RUNFILES_DIR:-$0.runfiles}}"
 . "$RF/_main/bench/common.sh"
 
+P_STUBS=()
+if [ -n "$CORE_P_STUB_DIR" ]; then
+  P_STUBS=("$CORE_P_STUB_DIR"/*.prp)
+fi
+
 case "${MODE:?}" in
 verilog)
   n_loc=$(loc $(core_v_sources))
@@ -38,20 +43,34 @@ verilog)
     --emit-dir lg:out_lg --workdir w -- -F "$CORE_V_DIR/filelist.f" -DSYNTHESIS $CORE_V_FLAGS
   ;;
 pyrope)
-  n_loc=$(loc "$CORE_P_DIR"/*.prp)
-  n_words=$(words "$CORE_P_DIR"/*.prp)
   run_timed compile_pyrope lhd compile "$CORE_P_DIR/$CORE_TOP.prp" \
-    --top "$CORE_TOP" --emit-dir lg:out_lg --workdir w
+    "${P_STUBS[@]}" \
+    --top "$CORE_TOP" --emit-dir lg:out_lg --workdir w --result-json compile_pyrope.json
+  read -r n_loc n_words <<EOF
+$(compile_input_stats compile_pyrope.json "$CORE_P_DIR" "$CORE_P_STUB_DIR")
+EOF
+  [[ "$n_loc" =~ ^[0-9]+$ && "$n_words" =~ ^[0-9]+$ ]] || {
+    echo "FAIL: could not count the compiled Pyrope cone" >&2
+    exit 1
+  }
   ;;
 pyrope_parallel)
-  n_loc=$(loc "$CORE_P_DIR"/*.prp)
-  n_words=$(words "$CORE_P_DIR"/*.prp)
   NPROC=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8)
   GEN="$RF/_main/bench/gen_build.py"
   command -v make >/dev/null || { echo "FAIL: make not on PATH" >&2; exit 1; }
 
-  run_timed scan lhd scan "$CORE_P_DIR"/*.prp -q --result-json scan.json --workdir sw
+  # Avoid expanding 1088 source paths into the human CMD line. The command is
+  # still exact and retypable: the shell glob is the source-tree contract.
+  scan_tree() {
+    printf 'CMD %s: lhd scan %s/pyrope/*.prp -q --result-json scan.json --workdir sw\n' \
+      "${CURRENT_STEP:--}" "$CORE" >&3
+    "$LHD_BIN" scan "$CORE_P_DIR"/*.prp "${P_STUBS[@]}" -q --result-json scan.json --workdir sw
+  }
+  run_timed scan scan_tree
   scan_ms=$LAST_MS
+  read -r n_loc n_words <<EOF
+$(scan_cone_stats scan.json "$CORE_TOP")
+EOF
 
   # scan.json -> build.mk (+ an illustrative BUILD.bazel). --top prunes to the
   # cone actually reachable from the whole-design top; both cores currently

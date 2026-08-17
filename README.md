@@ -36,12 +36,16 @@ suite against that binary.
    ```bash
    pip install ciel
    ciel enable --pdk-family sky130 $(ciel ls-remote --pdk-family sky130 | head -1)
-   export HAGENT_TECH_DIR=$(dirname $(find ~/.ciel -name 'sky130_fd_sc_hd__tt_025C_1v80.lib' | head -1))
    ```
 
-   Any directory containing `sky130_fd_sc_hd__tt_025C_1v80.lib` works.
-   `.bazelrc` passes `HAGENT_TECH_DIR` through the test sandbox; tests that
-   need it fail with these instructions when it is missing.
+   Synthesis benchmarks resolve the newest installed version through `ciel`,
+   verify that it is also the enabled version, and record its hash. An
+   inherited `HAGENT_TECH_DIR` is deliberately ignored so a stale shell
+   setting cannot change the library being measured. If several versions are
+   installed and release-date metadata is unavailable, or if newest and
+   enabled disagree, the benchmark stops and asks for an explicit human
+   choice. `.bazelrc` retains the `HAGENT_TECH_DIR` passthrough for CI
+   compatibility, but the benchmark replaces its value after resolution.
 
 3. **Verilator** (optional) — the `sim_verilator` scenario compares `lhd sim`
    against Verilator on the same RTL. `brew install verilator` /

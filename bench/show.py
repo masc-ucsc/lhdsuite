@@ -9,13 +9,15 @@ Targets are named <core>_<scenario>; one section is printed per core. Limit
 the report with `--core <name>` (repeatable).
 """
 
+import json
 import re
 import sys
 import time
 from pathlib import Path
 
 # Keep in sync with the CORES table in bench/defs.bzl.
-CORES = ("dino", "minion")
+CORES = ("dino", "cva6", "minion", "xs_rob", "xs_alu", "xs_div", "xs_exu", "xs_backend")
+SYNTH_ONLY_CORES = ("xs_rob", "xs_alu", "xs_div", "xs_exu", "xs_backend")
 # ...and with which of those entries carry a `verilator_tb` (only those get a
 # <core>_sim_verilator target, so only those may be looked up — asking for a
 # target that is not generated would report it as "not run yet" forever).
@@ -165,11 +167,12 @@ def report_core(root: Path, core: str) -> list:
     rep.head("synth (color flat vs synth)", sy)
     if sy:
         m = sy[3]
-        print(f"   {'':7} {'color':>7} {'abc':>8} {'regions':>8} {'gates':>8} {'area um2':>11} {'delay':>7}")
+        print(f"   {'':7} {'color':>7} {'abc':>8} {'regions':>8} {'gates':>8} {'area um2':>11} {'ABC':>7} {'STA':>7}")
         for alg in ("flat", "synth"):
             print(f"   {alg:7} {fmt(m.get(f'{alg}_color_ms'), 'ms'):>7} {fmt(m.get(f'{alg}_abc_ms'), 'ms'):>8}"
                   f" {fmt(m.get(f'{alg}_regions')):>8} {fmt(m.get(f'{alg}_gates')):>8}"
-                  f" {fmt(m.get(f'{alg}_area')):>11} {fmt(m.get(f'{alg}_max_delay')):>7}")
+                  f" {fmt(m.get(f'{alg}_area')):>11} {fmt(m.get(f'{alg}_max_delay')):>7}"
+                  f" {fmt(m.get(f'{alg}_sta_delay')):>7}")
         rep.cmds(("synth", sy))
 
     # ---- synth incremental ------------------------------------------------
@@ -190,6 +193,9 @@ def report_core(root: Path, core: str) -> list:
         print(f"   abc warm speedup (pass2 vs pass1): "
               f"{speedup(m.get('pass1_abc_ms'), m.get('pass2_abc_ms'))}")
         rep.cmds(("synth_incremental", si))
+
+    if core in SYNTH_ONLY_CORES:
+        return rep.missing
 
     # ---- netlist lec: 2nd-run netlist proven against the design ------------
     nf, ns = G("synth_lec_flat"), G("synth_lec_synth")
@@ -331,6 +337,31 @@ def main():
     global SHOW_CMDS
     argv = sys.argv[2:]
     root = Path(sys.argv[1])
+    if "--diff-config" in argv:
+        i = argv.index("--diff-config")
+        try:
+            before, after = argv[i + 1:i + 3]
+        except ValueError:
+            raise SystemExit("--diff-config requires BEFORE AFTER")
+        ledger = root.parents[1] / "bench" / "ledger.jsonl"
+        if not ledger.is_file():
+            raise SystemExit(f"no ledger at {ledger}; use bazel run //bench:ledger first")
+        rows = [json.loads(line) for line in ledger.read_text().splitlines() if line.strip()]
+        a = {r["target"]: r for r in rows if r["config_id"] == before}
+        b = {r["target"]: r for r in rows if r["config_id"] == after}
+        common = sorted(set(a) & set(b))
+        if not common:
+            raise SystemExit(f"no common targets for config_id {before!r} and {after!r}")
+        print(f"ledger diff: {before} -> {after}")
+        print(f"{'target':14} {'STA':>10} {'area':>10} {'ABC ms':>10} {'color ms':>10}")
+        for target in common:
+            if a[target]["host"] != b[target]["host"]:
+                raise SystemExit(f"{target}: refusing direct comparison across hosts")
+            def pct(k):
+                return 100.0 * (b[target][k] / a[target][k] - 1.0)
+            print(f"{target:14} {pct('sta_delay'):>+9.2f}% {pct('area'):>+9.2f}%"
+                  f" {pct('abc_ms'):>+9.2f}% {pct('color_ms'):>+9.2f}%")
+        return
     if "--no-cmds" in argv:
         SHOW_CMDS = False
     cores = [c for i, a in enumerate(argv) if a == "--core" for c in argv[i + 1:i + 2]]

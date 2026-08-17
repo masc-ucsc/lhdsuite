@@ -42,11 +42,18 @@
 RF="${TEST_SRCDIR:-${RUNFILES_DIR:-$0.runfiles}}"
 . "$RF/_main/bench/common.sh"
 require_tech_dir
+SYNTH_START_MS=$(now_ms)
+printf '{"pdk_version":"%s","target":"%s"}\n' \
+  "$PDK_VERSION" "${TEST_TARGET:-$CORE}" >"$OUT_DIR/run_metadata.json"
 
 TOP=$CORE_TOP.$CORE_TOP
 
 compile_p() {  # SRC_DIR OUT_LG
-  lhd compile "$1/$CORE_TOP.prp" --top "$CORE_TOP" \
+  local stubs=()
+  if [ -n "$CORE_P_STUB_DIR" ]; then
+    stubs=("$CORE_P_STUB_DIR"/*.prp)
+  fi
+  lhd compile "$1/$CORE_TOP.prp" "${stubs[@]}" --top "$CORE_TOP" \
     --emit-dir "lg:$2" --workdir "cw_$2"
 }
 
@@ -58,6 +65,14 @@ synth_pass() {  # LABEL LG_DIR COLOR_ALG WORKDIR — color in place, abc into ne
   fi
   run_timed "${1}_abc" lhd pass abc --top "$TOP" "lg:$2" \
     --emit-dir "lg:net_$1" --workdir "$4" --result-json "r_$1.json"
+  run_timed "${1}_sta" lhd pass opentimer --top "$TOP" "lg:net_$1" \
+    "$HAGENT_TECH_DIR/sky130_fd_sc_hd__tt_025C_1v80.lib" --workdir "OT_$1"
+  STA_DELAY=$(sta_max_delay "OT_$1/timing.json")
+  [ "$STA_DELAY" != MISSING ] || {
+    step_failed "${1}_sta" "$1: pass.opentimer did not report a whole-design max_delay"
+    exit 1
+  }
+  metric "${1}_sta_delay" "$STA_DELAY" ns
   ABC_COUNTS=$(abc_incr_counts "r_$1.json")
   if [ "$ABC_COUNTS" != MISSING ]; then
     read -r ic_hits ic_misses ic_hit_ms ic_miss_ms ic_failed <<EOF
@@ -101,7 +116,7 @@ cold)
     fi
 
     synth_pass "$alg" "lg_$alg" "$alg" "W_$alg"
-    read -r q_regions q_gates q_area q_delay <<EOF
+    read -r q_regions q_gates q_area q_delay q_div_blackbox <<EOF
 $(qor_totals "W_$alg/qor.json")
 EOF
     [ "$q_regions" != MISSING ] || { echo "FAIL: no QoR total in W_$alg/qor.json" >&2; exit 1; }
@@ -109,8 +124,10 @@ EOF
     metric "${alg}_gates" "$q_gates" gates
     metric "${alg}_area" "$q_area" um2
     metric "${alg}_max_delay" "$q_delay" ns
+    metric "${alg}_div_blackbox" "$q_div_blackbox" cones
     [ -n "$(ls -A "net_$alg" 2>/dev/null)" ] || { echo "FAIL: empty netlist for $alg" >&2; exit 1; }
   done
+  metric synthesis_elapsed_ms "$(( $(now_ms) - SYNTH_START_MS ))" ms
   echo "PASS: QoR reported for coloring(s):$(printf ' color %s' $CORE_COLOR_ALGS) (see METRIC lines)"
   ;;
 incr)
@@ -121,7 +138,11 @@ incr)
 
   cold_miss_ms=$ic_miss_ms
 
-  apply_variant comment1 src/pyrope
+  if [ -n "$CORE_SYNTH_ONLY" ]; then
+    apply_synth_only_variant comment1 src/pyrope
+  else
+    apply_variant comment1 src/pyrope
+  fi
   run_timed compile_pass2 compile_p src/pyrope lg_p2
   synth_pass pass2 lg_p2 synth W
   h2=$ic_hits m2=$ic_misses warm_miss_ms=$ic_miss_ms
@@ -136,12 +157,17 @@ incr)
     exit 1
   }
 
-  apply_variant bug1 src/pyrope
+  if [ -n "$CORE_SYNTH_ONLY" ]; then
+    apply_synth_only_variant bug1 src/pyrope
+  else
+    apply_variant bug1 src/pyrope
+  fi
   run_timed compile_pass3 compile_p src/pyrope lg_p3
   synth_pass pass3 lg_p3 synth W
   h3=$ic_hits m3=$ic_misses
   [ "${m3:-0}" -ge 1 ] || { echo "FAIL: real edit re-synthesized nothing ($ABC_COUNTS)" >&2; exit 1; }
   [ "${h3:-0}" -gt 0 ] || { echo "FAIL: real edit lost every cache hit ($ABC_COUNTS)" >&2; exit 1; }
+  metric synthesis_elapsed_ms "$(( $(now_ms) - SYNTH_START_MS ))" ms
   echo "PASS: warm hits=$h2/misses=$m2 (${warm_miss_ms}ms re-mapped of ${cold_miss_ms}ms cold);" \
     "after one-line edit hits=$h3/misses=$m3"
   ;;
@@ -182,6 +208,7 @@ lec_flat | lec_synth)
     echo "FAIL: pass-2 $alg netlist NOT equivalent to the design" >&2
     exit 1
   fi
+  metric synthesis_elapsed_ms "$(( $(now_ms) - SYNTH_START_MS ))" ms
   echo "PASS: pass-2 $alg netlist LEC-equivalent to the design (lec ${LAST_MS} ms)"
   ;;
 *)

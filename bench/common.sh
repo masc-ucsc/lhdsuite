@@ -54,7 +54,22 @@ set -euo pipefail
 if [ -z "${TEST_SRCDIR:-}" ]; then
   TEST_SRCDIR="${RF:?source common.sh from a bench script (RF unset)}"
 fi
-: "${TEST_TMPDIR:=$(mktemp -d "${TMPDIR:-/tmp}/lhdbench.XXXXXX")}"
+: "${TEST_TMPDIR:=$(mktemp -d "${TMPDIR:-/tmp}/lhdbench.XXXXXX")}" 
+
+# The two largest XiangShan synthesis scenarios have a hard 30-minute
+# end-to-end budget. Re-exec the complete scenario under coreutils timeout so
+# setup/compile/color/ABC/STA all count, not just one selected command.
+if [ -n "${CORE_SYNTH_BUDGET_S:-}" ] && [ -z "${CORE_SYNTH_BUDGET_ACTIVE:-}" ]; then
+  export CORE_SYNTH_BUDGET_ACTIVE=1
+  set +e
+  timeout --foreground "$CORE_SYNTH_BUDGET_S" "$0" "$@"
+  budget_rc=$?
+  set -e
+  if [ "$budget_rc" = 124 ]; then
+    echo "FAIL: end-to-end synthesis exceeded ${CORE_SYNTH_BUDGET_S}s budget" >&2
+  fi
+  exit "$budget_rc"
+fi
 
 rloc() {
   case "$1" in
@@ -67,14 +82,19 @@ LHD_BIN=$(rloc "${LHD:?LHD env var unset — set in bench/defs.bzl}")
 CORE=${CORE:?CORE env var unset — set in bench/defs.bzl}
 CORE_V_DIR=$(cd "$(dirname "$(rloc "${CORE_V_FLIST:?}")")" && pwd)
 CORE_P_DIR=$(cd "$(dirname "$(rloc "${CORE_P_TOP:?}")")" && pwd)
+CORE_P_STUB_DIR=
+if [ -n "${CORE_P_STUB_TOP:-}" ]; then
+  CORE_P_STUB_DIR=$(cd "$(dirname "$(rloc "$CORE_P_STUB_TOP")")" && pwd)
+fi
 CORE_DIR=$(dirname "$CORE_P_DIR")
 CORE_SIM_DIR=$CORE_DIR/sim
 CORE_VERIF_DIR=$CORE_DIR/verif
 CORE_TESTS_DIR=$CORE_DIR/tests
 : "${CORE_TOP:?}" "${CORE_UNIT:?}" "${CORE_COLOR_ALGS:?}"
-: "${CORE_V_FLAGS=}" "${CORE_SIM_MARKER:?}" "${CORE_SIM_EXPECT=}" "${CORE_LEC_TRUST=}" "${CORE_SIM_TB_V=}"
+: "${CORE_SYNTH_ONLY=}" "${CORE_SYNTH_BUDGET_S=}"
+: "${CORE_V_FLAGS=}" "${CORE_SIM_MARKER=}" "${CORE_SIM_EXPECT=}" "${CORE_LEC_TRUST=}" "${CORE_SIM_TB_V=}"
 : "${CORE_SIM_SETS=}"
-: "${CORE_SIM_CYCLES:?}" "${CORE_SIM_TB_UNIT:?}"
+: "${CORE_SIM_CYCLES=}" "${CORE_SIM_TB_UNIT=}"
 : "${CORE_SIM_TOP_UNIT=}" "${CORE_SIM_PROG_UNIT=}"
 : "${CORE_SIM_TOP_CYCLES=}" "${CORE_SIM_PROG_CYCLES=}"
 : "${CORE_VERILATOR_TB=}" "${CORE_VERILATOR_FLAGS=}" "${CORE_VERILATOR_CYCLES=}"
@@ -342,7 +362,7 @@ print(inc["hits"], inc["misses"], round(inc.get("hit_ms", 0)), round(inc.get("mi
 PY
 }
 
-# qor_totals QOR_JSON — echo "regions gates area max_delay" from the pass.abc
+# qor_totals QOR_JSON — echo "regions gates area max_delay div_blackbox" from the pass.abc
 # QoR report's "total" member (or "MISSING").
 qor_totals() {
   python3 - "$1" <<'PY'
@@ -351,7 +371,23 @@ try:
     t = json.load(open(sys.argv[1])).get("total") or {}
 except Exception:
     t = {}
-print(" ".join(str(t.get(k, "MISSING")) for k in ("regions", "gates", "area", "max_delay")))
+print(" ".join(str(t.get(k, 0 if k == "div_blackbox" else "MISSING"))
+               for k in ("regions", "gates", "area", "max_delay", "div_blackbox")))
+PY
+}
+
+# sta_max_delay TIMING_JSON — echo the worst whole-design OpenTimer delay (or
+# MISSING). pass.opentimer currently emits one selected design per invocation;
+# max() keeps this helper correct if that envelope grows later.
+sta_max_delay() {
+  python3 - "$1" <<'PY'
+import json, sys
+try:
+    ds = json.load(open(sys.argv[1])).get("designs") or []
+    values = [float(d["max_delay"]) for d in ds if "max_delay" in d]
+except Exception:
+    values = []
+print(max(values) if values else "MISSING")
 PY
 }
 
@@ -378,19 +414,149 @@ core_v_sources() {
   done <"$CORE_V_DIR/filelist.f"
 }
 
+# compile_input_stats RESULT_JSON SOURCE_DIR [STUB_DIR] — print "lines words" for the exact Pyrope
+# import cone reported by lhd, rather than every file in a shared source tree.
+compile_input_stats() {
+  python3 - "$1" "$2" "${3:-}" <<'PY'
+import json, os, sys
+paths = json.load(open(sys.argv[1])).get("inputs", [])
+lines = words = 0
+# The explicit top can appear twice in a sandbox envelope (once via the
+# command path and once via sibling discovery); a compilation unit is counted
+# once, matching `lhd scan`'s build graph.
+unique = {os.path.basename(path): path for path in paths}
+for base, path in unique.items():
+    # lhd's result envelope makes sandbox paths workspace-relative. Those
+    # paths are intentionally not meaningful after lhd returns to the shell;
+    # every imported unit is present in the resolved runfiles source dir.
+    if not os.path.isfile(path):
+        path = os.path.join(sys.argv[2], base)
+    if not os.path.isfile(path) and sys.argv[3]:
+        path = os.path.join(sys.argv[3], base)
+    with open(path, "r", errors="replace") as f:
+        for line in f:
+            lines += 1
+            words += len(line.split())
+print(lines, words)
+PY
+}
+
+# scan_cone_stats SCAN_JSON TOP — the same exact-cone source count for the
+# generated per-file build, whose individual compile result envelopes cannot
+# conveniently be merged.
+scan_cone_stats() {
+  python3 - "$1" "$2" <<'PY'
+import json, os, sys
+entries = json.load(open(sys.argv[1]))["scan"]
+src = {os.path.basename(e["file"])[:-4]: e["file"] for e in entries}
+deps = {os.path.basename(e["file"])[:-4]:
+        {i.split(".")[0] for i in e["imports"] if i.split(".")[0] in src}
+        for e in entries}
+seen, stack = set(), [sys.argv[2]]
+while stack:
+    unit = stack.pop()
+    if unit in seen:
+        continue
+    seen.add(unit)
+    stack.extend(deps[unit])
+lines = words = 0
+for unit in seen:
+    with open(src[unit], "r", errors="replace") as f:
+        for line in f:
+            lines += 1
+            words += len(line.split())
+print(lines, words)
+PY
+}
+
 require_tech_dir() {
-  local lib="${HAGENT_TECH_DIR:-}/sky130_fd_sc_hd__tt_025C_1v80.lib"
-  if [ -z "${HAGENT_TECH_DIR:-}" ] || [ ! -f "$lib" ]; then
-    cat >&2 <<'EOF'
-FAIL: HAGENT_TECH_DIR is unset or does not contain
-sky130_fd_sc_hd__tt_025C_1v80.lib. Install the sky130 PDK (ciel is the
-recommended installer — see README.md) and export HAGENT_TECH_DIR to the
-directory holding the Liberty file, e.g.:
-  export HAGENT_TECH_DIR=$HOME/.ciel/sky130A/libs.ref/sky130_fd_sc_hd/lib
-bazel passes it through the test sandbox (test --test_env=HAGENT_TECH_DIR).
-EOF
+  # Resolve the PDK from ciel every time.  In particular, do not trust an
+  # inherited HAGENT_TECH_DIR: it can silently pin a benchmark to an older
+  # library after `ciel enable` moves on.
+  command -v ciel >/dev/null 2>&1 || {
+    echo "FAIL: synthesis benchmarks require 'ciel' on PATH (see README.md)" >&2
     return 1
+  }
+
+  local installed_json hashes count enabled latest rendered dates lib root
+  installed_json=$(ciel ls --pdk-family sky130) || {
+    echo "FAIL: could not enumerate installed sky130 versions with ciel" >&2
+    return 1
+  }
+  hashes=$(python3 -c 'import json,sys; print("\\n".join(json.loads(sys.stdin.read())))' <<<"$installed_json") || {
+    echo "FAIL: ciel returned an invalid installed-version list: $installed_json" >&2
+    return 1
+  }
+  count=$(printf '%s\n' "$hashes" | grep -c . || true)
+  [ "$count" -gt 0 ] || {
+    echo "FAIL: ciel has no installed sky130 version (see README.md)" >&2
+    return 1
+  }
+
+  enabled=$(ciel output --pdk-family sky130) || {
+    echo "FAIL: ciel has no enabled sky130 version" >&2
+    return 1
+  }
+
+  if [ "$count" -eq 1 ]; then
+    # One installed version is newest regardless of whether ciel can obtain
+    # release-date metadata (offline machines commonly cannot).
+    latest=$hashes
+  else
+    # `ciel ls` deliberately emits dates only to a tty.  Give it a small pty
+    # and parse the rendered YYYY.MM.DD values; this is portable across the
+    # GNU/BSD variants of the external `script` utility.
+    rendered=$(python3 - <<'PY'
+import os, pty, sys
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp("ciel", ["ciel", "ls", "--pdk-family", "sky130"])
+chunks = []
+while True:
+    try:
+        chunks.append(os.read(fd, 65536))
+    except OSError:
+        break
+_, status = os.waitpid(pid, 0)
+sys.stdout.buffer.write(b"".join(chunks))
+raise SystemExit(os.waitstatus_to_exitcode(status))
+PY
+    ) || {
+      echo "FAIL: could not obtain dated sky130 version list from ciel" >&2
+      return 1
+    }
+    dates=$(python3 -c '
+import re,sys
+s=re.sub(r"\\x1b\\[[0-9;]*m", "", sys.stdin.read())
+for h,d in re.findall(r"([0-9a-f]{7,64})\\s+\\((\\d{4}\\.\\d{2}\\.\\d{2})\\)", s):
+    print(d, h)
+' <<<"$rendered")
+    [ "$(printf '%s\n' "$dates" | grep -c . || true)" -eq "$count" ] || {
+      echo "FAIL: ciel listed $count sky130 versions but did not provide all release dates; cannot choose the newest safely" >&2
+      printf '%s\n' "$rendered" >&2
+      return 1
+    }
+    latest=$(printf '%s\n' "$dates" | sort -r | head -1 | awk '{print $2}')
   fi
+
+  [ "$latest" = "$enabled" ] || {
+    echo "FAIL: newest installed sky130 version ($latest) differs from ciel-enabled version ($enabled)" >&2
+    echo "      run 'ciel enable --pdk-family sky130 $latest' or remove the unintended version" >&2
+    return 1
+  }
+
+  root=$(ciel path --pdk-family sky130 "$latest") || {
+    echo "FAIL: ciel could not resolve sky130 version $latest" >&2
+    return 1
+  }
+  HAGENT_TECH_DIR="$root/sky130A/libs.ref/sky130_fd_sc_hd/lib"
+  lib="$HAGENT_TECH_DIR/sky130_fd_sc_hd__tt_025C_1v80.lib"
+  [ -f "$lib" ] || {
+    echo "FAIL: ciel sky130 version $latest does not contain $lib" >&2
+    return 1
+  }
+  PDK_VERSION=$latest
+  export HAGENT_TECH_DIR PDK_VERSION
 }
 
 # copy_core_pyrope DEST — writable copy of the Pyrope tree for the
@@ -422,4 +588,36 @@ apply_variant() {
   local vdir="$CORE_TESTS_DIR/$1"
   [ -d "$vdir" ] || { echo "FAIL: variant '$1' not found at $vdir" >&2; return 1; }
   cp -fL "$vdir"/* "$2"/
+}
+
+# apply_synth_only_variant NAME DIR — synth-only cores deliberately have no
+# tests/ overlays. Make equivalent edits to their writable top copy without
+# naming any design in this shared script.
+apply_synth_only_variant() {
+  local name=$1 dir=$2 file="$2/$CORE_TOP.prp" tmp="$2/$CORE_TOP.prp.tmp"
+  case "$name" in
+  comment1)
+    printf '\n// lhdsuite incremental comment-only touch\n' >>"$file"
+    ;;
+  bug1)
+    # Every imported XiangShan top currently drives at least one public output
+    # through `... & 1`. Flip exactly the first such output operation to XOR:
+    # unlike an input-unpacking edit that cprop may erase, this necessarily
+    # changes the selected top's observable logic and therefore its region key.
+    awk '
+      !done && /^  io_[A-Za-z0-9_.]+ = .* & 1/ && sub(/ & 1/, " ^ 1") { done=1 }
+      { print }
+      END { if (!done) exit 42 }
+    ' "$file" >"$tmp" || {
+      rm -f "$tmp"
+      echo "FAIL: no generic one-line incremental edit found in $CORE_TOP.prp" >&2
+      return 1
+    }
+    mv "$tmp" "$file"
+    ;;
+  *)
+    echo "FAIL: unknown synth-only variant '$name'" >&2
+    return 1
+    ;;
+  esac
 }
