@@ -1,0 +1,51 @@
+// Free-running simulation driver for the XiangShan `Backend` block.
+//
+// See xs_alu_tb.prp for the contract: a COMPILE-TIME and THROUGHPUT benchmark
+// plus a cross-language oracle, deliberately NOT functional coverage. `Backend`
+// is the largest block in the set and the one carrying the 30-minute robustness
+// budget, so this driver stays as small as the other two -- what it measures is
+// how long lhd takes to generate and host-compile the block, and how fast the
+// result runs, not whether the core executes anything.
+//
+// Only ports that are PLAIN SCALARS on BOTH language sides are touched, so the
+// one driver serves `MODE=pyrope` and `MODE=verilog`. `Backend` declares
+// `clock` and `reset`, so the cycle loop binds the clock and holds reset for
+// two cycles.
+const backend = import("lg:Backend")
+
+test backend.free_run(cycles:u32 = 1000) {
+  mut acc = backend
+
+  mut lfsr:u64 = 0x123456789abcdef
+  mut sum:u64  = 0
+  mut obs:u64  = 0
+
+  tick cycles clocks=(clock=1) {
+    acc.reset = clock < 2
+
+    acc.io_fenceio_sbuffer_sbIsEmpty = lfsr#[0]
+    acc.io_frontend_cfVec_0_valid    = lfsr#[1]
+    acc.io_frontend_cfVec_1_valid    = lfsr#[2]
+    acc.io_frontend_cfVec_2_valid    = lfsr#[3]
+    acc.io_frontend_cfVec_3_valid    = lfsr#[4]
+    acc.io_frontend_wfi_wfiSafe      = lfsr#[5]
+
+    step
+
+    obs = acc.io_fenceio_fencei
+    wrap obs = obs | (acc.io_fenceio_sbuffer_flushSb << 1)
+    wrap obs = obs | (acc.io_frontend_cfVec_0_ready << 2)
+    wrap obs = obs | (acc.io_frontend_cfVec_1_ready << 3)
+    wrap obs = obs | (acc.io_frontend_cfVec_2_ready << 4)
+    wrap obs = obs | (acc.io_frontend_cfVec_3_ready << 5)
+
+    // Masked to 63 bits so the printed checksum is unambiguously positive.
+    wrap sum = ((sum << 1) + obs) & 0x7fffffffffffffff
+
+    wrap lfsr = lfsr ^ (lfsr << 13)
+    wrap lfsr = lfsr ^ (lfsr >> 7)
+    wrap lfsr = lfsr ^ (lfsr << 17)
+  }
+
+  puts("xs_backend: cycles={cycles} sum={sum}")
+}

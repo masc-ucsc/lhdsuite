@@ -1,0 +1,78 @@
+// Free-running simulation driver for the XiangShan `Alu` block.
+//
+// The XS blocks ship no testbench of their own, and their bench cores are
+// `synth_only`. This driver exists so the incremental loop (livehd
+// todo_incr.md, ruling I3) can measure the sim phase on them too: it is a
+// CODEGEN-TIME, HOST-COMPILE-TIME and THROUGHPUT benchmark, plus a
+// cross-language oracle. It is deliberately NOT functional verification of the
+// ALU -- no golden result is asserted, only that the two language sides
+// compute the same thing.
+//
+// The DUT is named as `lg:Alu` -- a module already compiled in the same
+// `lhd sim` invocation -- rather than as a source path, which is what lets one
+// driver take either a Pyrope tree or an `lg:` library built from the Verilog:
+//   lhd sim xiangshan/Backend/pyrope/Alu.prp xiangshan/Backend/sim/xs_alu_tb.prp
+//   lhd compile verilog --top Alu --emit-dir lg:V -- -F .../filelist.f -DSYNTHESIS
+//   lhd sim lg:V xiangshan/Backend/sim/xs_alu_tb.prp
+// Both must print the SAME checksum; that equality is the oracle, so no golden
+// value is invented by hand here.
+//
+// Only fields that are <=64 bits, ONE level deep, and identically named on
+// BOTH language sides are touched, so one driver serves `MODE=pyrope` and
+// `MODE=verilog`. Two hard limits shape what is reachable:
+//   * `lhd sim` refuses to WRITE a deeper hierarchical path --
+//     "cannot write hierarchical path 'acc.io_in_bits.ctrl.toRobValid'
+//     (read-only; use `sigref`)" -- and string `sigref` is not implemented.
+//     READS at that depth are fine, which is why `io_out_bits_res.data` is
+//     observed but `io_in_bits.data.imm` cannot be driven. Alu's whole
+//     datapath (`ctrl.fuOpType`, `data.src`, `data.imm`) sits at that depth,
+//     so the arithmetic core is NOT stimulated from here;
+//   * `io_in_bits.dataPipe` (242b) is left alone -- a testbench scalar
+//     truncates past 64 bits.
+// `io_flush` / `io_instrAddrTransType` are left at their defaults. What IS
+// driven -- `ctrlPipe`, the packed pipelined control word the `io_out_bits_ctrl_*`
+// outputs are derived from -- keeps the checksum moving cycle to cycle.
+//
+// `Alu` holds no registers and declares no clock or reset port, so there is no
+// `clocks=(...)` binding and no reset ramp -- each `step` is one combinational
+// evaluation of a fresh stimulus vector.
+const alu = import("lg:Alu")
+
+test alu.free_run(cycles:u32 = 1000) {
+  mut acc = alu
+
+  // xorshift64: deterministic and seeded in source, so the checksum is
+  // reproducible on every host and comparable between the two language sides.
+  mut lfsr:u64 = 0x123456789abcdef
+  mut sum:u64  = 0
+  mut obs:u64  = 0
+
+  tick cycles {
+    acc.io_in_valid  = lfsr#[0]
+    acc.io_out_ready = lfsr#[1]
+
+    acc.io_in_bits.validPipe = lfsr#[2]
+    acc.io_in_bits.ctrlPipe  = lfsr#[3..=31]
+
+    step
+
+    obs = acc.io_out_bits_res.data
+    wrap obs = obs ^ (acc.io_out_bits_ctrl_robIdx.value << 1)
+    wrap obs = obs ^ (acc.io_out_bits_ctrl_pdest << 11)
+    wrap obs = obs ^ (acc.io_out_valid << 19)
+    wrap obs = obs ^ (acc.io_in_ready << 20)
+    wrap obs = obs ^ (acc.io_out_bits_ctrl_toRobValid << 21)
+    wrap obs = obs ^ (acc.io_out_bits_ctrl_rfWen << 22)
+
+    // Order-sensitive fold: a schedule that computes the right values in the
+    // wrong cycle still changes the checksum.
+    // Masked to 63 bits so the printed checksum is unambiguously positive.
+    wrap sum = ((sum << 1) + obs) & 0x7fffffffffffffff
+
+    wrap lfsr = lfsr ^ (lfsr << 13)
+    wrap lfsr = lfsr ^ (lfsr >> 7)
+    wrap lfsr = lfsr ^ (lfsr << 17)
+  }
+
+  puts("xs_alu: cycles={cycles} sum={sum}")
+}

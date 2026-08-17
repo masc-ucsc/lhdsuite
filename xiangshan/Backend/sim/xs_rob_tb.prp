@@ -1,0 +1,52 @@
+// Free-running simulation driver for the XiangShan `Rob` block.
+//
+// See xs_alu_tb.prp for the contract: this is a COMPILE-TIME and THROUGHPUT
+// benchmark plus a cross-language oracle (the Pyrope and Verilog trees must
+// produce the same checksum), and deliberately NOT functional coverage. `Rob`'s
+// real enqueue port `io_enq_req` is 4080 bits wide and a testbench scalar
+// truncates past 64, so the dispatch datapath cannot be driven from here.
+//
+// Only ports that are PLAIN SCALARS on BOTH language sides are touched, so the
+// one driver serves `MODE=pyrope` and `MODE=verilog`.
+//
+// Unlike `Alu`, `Rob` declares `clock` and `reset`, so the cycle loop binds the
+// clock port and the driver holds reset for the first two cycles -- exactly the
+// shape dino/sim/dino_tb.prp uses.
+const rob = import("lg:Rob")
+
+test rob.free_run(cycles:u32 = 1000) {
+  mut acc = rob
+
+  mut lfsr:u64 = 0x123456789abcdef
+  mut sum:u64  = 0
+  mut obs:u64  = 0
+
+  tick cycles clocks=(clock=1) {
+    acc.reset = clock < 2
+
+    acc.io_hartId         = 0
+    acc.io_enq_needAlloc  = lfsr#[0..=7]
+    acc.io_writeback_19_valid = lfsr#[8]
+    acc.io_writeback_18_valid = lfsr#[9]
+    acc.io_writeback_17_valid = lfsr#[10]
+
+    step
+
+    obs = acc.io_enq_canAccept
+    wrap obs = obs | (acc.io_enq_canAcceptForDispatch << 1)
+    wrap obs = obs | (acc.io_enq_isEmpty << 2)
+    wrap obs = obs | (acc.io_robFull << 3)
+    wrap obs = obs | (acc.io_cpu_wfi << 4)
+    wrap obs = obs | (acc.io_lsq_lcommit << 8)
+    wrap obs = obs | (acc.io_lsq_scommit << 12)
+
+    // Masked to 63 bits so the printed checksum is unambiguously positive.
+    wrap sum = ((sum << 1) + obs) & 0x7fffffffffffffff
+
+    wrap lfsr = lfsr ^ (lfsr << 13)
+    wrap lfsr = lfsr ^ (lfsr >> 7)
+    wrap lfsr = lfsr ^ (lfsr << 17)
+  }
+
+  puts("xs_rob: cycles={cycles} sum={sum}")
+}

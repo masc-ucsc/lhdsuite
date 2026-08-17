@@ -601,11 +601,25 @@ apply_synth_only_variant() {
     ;;
   bug1)
     # Every imported XiangShan top currently drives at least one public output
-    # through `... & 1`. Flip exactly the first such output operation to XOR:
-    # unlike an input-unpacking edit that cprop may erase, this necessarily
-    # changes the selected top's observable logic and therefore its region key.
+    # through `... & 1`. Invert exactly the first such output: unlike an
+    # input-unpacking edit that cprop may erase, this necessarily changes the
+    # selected top's observable logic and therefore its region key.
+    #
+    # The rewrite REPLACES the whole right-hand side with `(RHS) ^ 1` rather
+    # than swapping an inner `&` for a `^`. Both the anchor and the parentheses
+    # are load-bearing:
+    #   * anchoring the match at end-of-line takes the LAST `& 1`, so the value
+    #     being inverted is one bit wide and the assignment cannot narrow;
+    #   * parenthesizing keeps Pyrope's shallow precedence happy. Rewriting an
+    #     inner `&` in place produced `a & (b >> 8) ^ 1 & 1` on `Rob`, which is
+    #     `error[syntax]: operators at the same precedence cannot be mixed
+    #     without parentheses` — i.e. xs_rob's bug1 pass could never compile.
     awk '
-      !done && /^  io_[A-Za-z0-9_.]+ = .* & 1/ && sub(/ & 1/, " ^ 1") { done=1 }
+      !done && /^  io_[A-Za-z0-9_.]+ = .+ & 1$/ {
+        eq  = index($0, " = ")
+        $0  = substr($0, 1, eq + 2) "(" substr($0, eq + 3) ") ^ 1"
+        done = 1
+      }
       { print }
       END { if (!done) exit 42 }
     ' "$file" >"$tmp" || {
