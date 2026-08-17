@@ -2,38 +2,73 @@
 // x2 and DECREMENTS x3, then stores both to dmem — the testbench taps the
 // store bus (io_dmem_*) to check the architectural relationship
 //   x2 == iters   and   x3 == -(iters + 2)
-// (the +2: the branch-shadow addi pair at 0x1c/0x20 is flushed on every taken
+// (the +2: the branch-shadow addi pair at 0x94/0x98 is flushed on every taken
 // bne but architecturally EXECUTES once, on the final fall-through)
 // and computes/prints the IPC (committed instructions / cycles to the final
 // store). Reading the registers through the program's own stores keeps the
 // testbench architectural — no internal register-file taps needed.
 //
-// The program lives in a flat 16-entry ROM of 32-bit instructions (assembly
+// The program lives in a flat 64-entry ROM of 32-bit instructions (assembly
 // inline below). The CPU is a 2-wide superscalar: each fetch delivers TWO
 // consecutive slots, composed from the aligned fetch address (upper bits
-// dropped, index masked). //bench:sim_* tracks this test as METRIC
+// dropped, index masked). The first 31 instructions initialize every writable
+// architectural register; x0 is hardwired by the register file. This makes
+// the program deterministic even when the physical register array powers up
+// randomized. //bench:sim_* tracks this test as METRIC
 // sim_cpu_prog_ok.
 // const cpu = import("PipelinedDualIssueCPU.PipelinedDualIssueCPU")
 const cpu = import("lg:PipelinedDualIssueCPU")
 
 test cpu.prog(cycles:u20 = 1000000) {
   mut acc = cpu
-  mut rom = [0x06400093,  // [0]  0x00: addi x1, x0, 100   ; x1 = iteration bound
-             0x00000013,  // [1]  0x04: nop
-             0x00000113,  // [2]  0x08: addi x2, x0, 0     ; x2 = 0 (counts up)
-             0x00000193,  // [3]  0x0c: addi x3, x0, 0     ; x3 = 0 (counts down)
-             0x00110113,  // [4]  0x10: addi x2, x2, 1     ; loop: dual-issued pair...
-             0xFFF18193,  // [5]  0x14: addi x3, x3, -1    ; ...independent, same fetch
-             0xFE111CE3,  // [6]  0x18: bne  x2, x1, -8    ; until x2 == x1 (-> 0x10)
-             0xFFF18193,  // [5]  0x14: addi x3, x3, -1    ; Should not execute -- flushed
-             0xFFF18193,  // [5]  0x14: addi x3, x3, -1    ; Should not execute -- flushed
-             0x00000013,  // [9]  0x24: nop                ; write-back before the sd
-             0x00203023,  // [10] 0x28: sd   x2, 0(x0)     ; expose x2 to the tb
-             0x00303423,  // [11] 0x2c: sd   x3, 8(x0)     ; expose x3 to the tb
-             0x00000063,  // [12] 0x30: beq  x0, x0, 0     ; spin forever
-             0x00000013,  // [13] 0x34: nop
-             0x00000013,  // [14] 0x38: nop
-             0x00000013]  // [15] 0x3c: nop
+  mut rom = [0x00000093,  // [0]   addi x1,  x0, 0
+             0x00000113,  // [1]   addi x2,  x0, 0
+             0x00000193,  // [2]   addi x3,  x0, 0
+             0x00000213,  // [3]   addi x4,  x0, 0
+             0x00000293,  // [4]   addi x5,  x0, 0
+             0x00000313,  // [5]   addi x6,  x0, 0
+             0x00000393,  // [6]   addi x7,  x0, 0
+             0x00000413,  // [7]   addi x8,  x0, 0
+             0x00000493,  // [8]   addi x9,  x0, 0
+             0x00000513,  // [9]   addi x10, x0, 0
+             0x00000593,  // [10]  addi x11, x0, 0
+             0x00000613,  // [11]  addi x12, x0, 0
+             0x00000693,  // [12]  addi x13, x0, 0
+             0x00000713,  // [13]  addi x14, x0, 0
+             0x00000793,  // [14]  addi x15, x0, 0
+             0x00000813,  // [15]  addi x16, x0, 0
+             0x00000893,  // [16]  addi x17, x0, 0
+             0x00000913,  // [17]  addi x18, x0, 0
+             0x00000993,  // [18]  addi x19, x0, 0
+             0x00000A13,  // [19]  addi x20, x0, 0
+             0x00000A93,  // [20]  addi x21, x0, 0
+             0x00000B13,  // [21]  addi x22, x0, 0
+             0x00000B93,  // [22]  addi x23, x0, 0
+             0x00000C13,  // [23]  addi x24, x0, 0
+             0x00000C93,  // [24]  addi x25, x0, 0
+             0x00000D13,  // [25]  addi x26, x0, 0
+             0x00000D93,  // [26]  addi x27, x0, 0
+             0x00000E13,  // [27]  addi x28, x0, 0
+             0x00000E93,  // [28]  addi x29, x0, 0
+             0x00000F13,  // [29]  addi x30, x0, 0
+             0x00000F93,  // [30]  addi x31, x0, 0
+             0x00000013,  // [31]  nop; align the workload to a fetch pair
+             0x06400093,  // [32]  addi x1, x0, 100; iteration bound
+             0x00000013,  // [33]  nop
+             0x00110113,  // [34]  addi x2, x2, 1; loop, dual-issued pair...
+             0xFFF18193,  // [35]  addi x3, x3, -1; ...independent, same fetch
+             0xFE111CE3,  // [36]  bne  x2, x1, -8; until x2 == x1 (-> [34])
+             0xFFF18193,  // [37]  addi x3, x3, -1; flushed while branch taken
+             0xFFF18193,  // [38]  addi x3, x3, -1; flushed while branch taken
+             0x00000013,  // [39]  nop; write-back before the stores
+             0x00203023,  // [40]  sd   x2, 0(x0); expose x2 to the tb
+             0x00303423,  // [41]  sd   x3, 8(x0); expose x3 to the tb
+             0x00000063,  // [42]  beq  x0, x0, 0; spin forever
+             0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013,
+             0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013,
+             0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013,
+             0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013,
+             0x00000013]
   mut st0 = 0      // sd x2,0(x0) data
   mut st8:s64 = 0  // sd x3,8(x0) data
   mut got0 = 0
@@ -43,8 +78,8 @@ test cpu.prog(cycles:u20 = 1000000) {
     acc.reset = clock < 2
     acc.io_imem_good = 1
     acc.io_imem_ready = 1
-    // 2 consecutive 32-bit slots from the aligned fetch address (mask to 16)
-    mut i = (acc.io_imem_address >> 2) & 0xE // No RISC-V compress
+    // 2 consecutive 32-bit slots from the aligned fetch address (mask to 64)
+    mut i = (acc.io_imem_address >> 2) & 0x3E // No RISC-V compress
     mut w = rom[i] | (rom[i + 1] << 32)
     acc.io_imem_instruction = w
     acc.io_dmem_good = 1
@@ -66,11 +101,12 @@ test cpu.prog(cycles:u20 = 1000000) {
   assert(got0 == 1 and got8 == 1, "program stored both counters")
   assert(st0 == 100, "x2 counted up to the iteration bound")
   assert(st8 == -102, "x3 counted down in lockstep: x3 == -(100 + 2)")
-  // Committed instructions: 3 setup + 100*(addi,addi,bne) + 2 stores = 305
+  // Committed instructions: 31 register clears + 1 setup
+  //                         + 100*(addi,addi,bne) + 2 stores = 334
   // (nops excluded). IPC in milli-units to stay integer-friendly.
   mut ipc_milli = 0
   if done_cycle > 0 {
-    ipc_milli = (305 * 1000) / done_cycle
+    ipc_milli = (334 * 1000) / done_cycle
   }
   // st8 is s64, so negating it directly is exact; the old two's-complement
   // fold (0xFF..F - st8 + 1) was written for an unsigned readback and printed

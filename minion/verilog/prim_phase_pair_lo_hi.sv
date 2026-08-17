@@ -4,6 +4,7 @@
 // Low-phase to high-phase two-stage capture pair.
 //
 // Contract:
+//   - reset_i is active high and clears both phase registers and their enables
 //   - q_lo_o is the low-phase stage of the pair
 //   - q_hi_o is the following high-phase stage
 //   - lo_en_i and hi_en_i preserve the original phase-local gate-plus-latch
@@ -19,6 +20,7 @@ module prim_phase_pair_lo_hi #(
 ) (
   /* verilator lint_off SYNCASYNCNET */  // The shared phase clock intentionally drives both low-phase and high-phase latch legs in the preserved two-phase pair.
   input  logic             clk_i,
+  input  logic             reset_i,
   input  logic             lo_en_i,
   input  logic             hi_en_i,
   input  logic [Width-1:0] d_i,
@@ -36,13 +38,18 @@ module prim_phase_pair_lo_hi #(
   /* verilator lint_off COMBDLY */
   /* verilator lint_off NOLATCH */  // Intentionally preserves the direct low-phase then high-phase transparent handoff.
   always_latch begin
-    if (clk_i) begin
+    if (reset_i) begin
+      lo_en_2p <= 1'b0;
+    end else if (clk_i) begin
       lo_en_2p <= lo_en_i;
     end
   end
 
   always_latch begin
-    if (!clk_i) begin
+    if (reset_i) begin
+      hi_en_1p <= 1'b0;
+      q_lo_reg <= '0;
+    end else if (!clk_i) begin
       hi_en_1p <= hi_en_i;
       if (lo_en_2p) begin
         q_lo_reg <= d_i;
@@ -51,7 +58,9 @@ module prim_phase_pair_lo_hi #(
   end
 
   always_latch begin
-    if (clk_i && hi_en_1p) begin
+    if (reset_i) begin
+      q_hi_reg <= '0;
+    end else if (clk_i && hi_en_1p) begin
       q_hi_reg <= q_lo_reg;
     end
   end

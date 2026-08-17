@@ -107,6 +107,7 @@ module intpipe_mul_div_ctl
 
   prim_phase_pair_lo_hi u_start_mul_pair (
     .clk_i   (clock),
+    .reset_i (reset),
     .lo_en_i (1'b1),
     .hi_en_i (1'b1),
     .d_i     (id_new_mul),
@@ -116,6 +117,7 @@ module intpipe_mul_div_ctl
 
   prim_phase_pair_lo_hi u_start_div_pair (
     .clk_i   (clock),
+    .reset_i (reset),
     .lo_en_i (1'b1),
     .hi_en_i (1'b1),
     .d_i     (id_new_div),
@@ -157,6 +159,7 @@ module intpipe_mul_div_ctl
     .Width (7)
   ) u_loop_cnt_pair (
     .clk_i   (clock),
+    .reset_i (reset),
     .lo_en_i (1'b1),
     .hi_en_i (1'b1),
     .d_i     ((reset || early_out_2d) ? 7'b0 :
@@ -169,6 +172,7 @@ module intpipe_mul_div_ctl
 
   prim_phase_pair_lo_hi u_mdctl_dw_pair (
     .clk_i   (clock),
+    .reset_i (reset),
     .lo_en_i (1'b1),
     .hi_en_i (1'b1),
     .d_i     (reset ? 1'b0 : ((start_div_2p || start_mul_2p) ? ex_dw_2p : mdctl_dw_2q)),
@@ -210,6 +214,7 @@ module intpipe_mul_div_ctl
 
   prim_phase_pair_lo_hi u_md_op2_sgn_pair (
     .clk_i   (clock),
+    .reset_i (reset),
     .lo_en_i (1'b1),
     .hi_en_i (1'b1),
     .d_i     (md_op2_sgn_2d),
@@ -254,6 +259,7 @@ module intpipe_mul_div_ctl
 
   prim_phase_pair_lo_hi u_mul_lo_lsb_pair (
     .clk_i   (clock),
+    .reset_i (reset),
     .lo_en_i (1'b1),
     .hi_en_i (1'b1),
     .d_i     (md_mplr_2d[7]),
@@ -263,6 +269,7 @@ module intpipe_mul_div_ctl
 
   prim_phase_pair_lo_hi u_mul_op_pair (
     .clk_i   (clock),
+    .reset_i (reset),
     .lo_en_i (1'b1),
     .hi_en_i (1'b1),
     .d_i     (start_mul_2p || mul_op_2p && |loop_cnt_2p),
@@ -293,6 +300,7 @@ module intpipe_mul_div_ctl
 
   prim_phase_pair_lo_hi u_div_op_pair (
     .clk_i   (clock),
+    .reset_i (reset),
     .lo_en_i (1'b1),
     .hi_en_i (1'b1),
     .d_i     (start_div_2p ||
@@ -303,6 +311,7 @@ module intpipe_mul_div_ctl
 
   prim_phase_pair_lo_hi u_rem_adj_ph_pair (
     .clk_i   (clock),
+    .reset_i (reset),
     .lo_en_i (1'b1),
     .hi_en_i (1'b1),
     .d_i     (!early_out_2d && div_op_2p && (loop_cnt_2p == 7'd1)),
@@ -312,6 +321,7 @@ module intpipe_mul_div_ctl
 
   prim_phase_pair_lo_hi u_quot_adj_ph_pair (
     .clk_i   (clock),
+    .reset_i (reset),
     .lo_en_i (1'b1),
     .hi_en_i (1'b1),
     .d_i     (!early_out_2d && rem_adj_ph_2p),

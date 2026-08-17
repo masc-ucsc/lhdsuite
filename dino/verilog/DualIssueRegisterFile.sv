@@ -32,10 +32,10 @@ module DualIssueRegisterFile(	// src/main/scala/components/dual/register-file.sc
       pipeB_writereg: io_pipeB_writereg,
       pipeB_writedata: io_pipeB_writedata,
       pipeB_wen: io_pipeB_wen,
-      pipeA_readdata1: regs[io.pipeA_readreg1],
-      pipeA_readdata2: regs[io.pipeA_readreg2],
-      pipeB_readdata1: regs[io.pipeB_readreg1],
-      pipeB_readdata2: regs[io.pipeB_readreg2]};	// src/main/scala/components/dual/register-file.scala:45:7, :68:17, :85:22, :86:22, :87:22, :88:22
+      pipeA_readdata1: io.pipeA_readreg1 == 0 ? 64'b0 : regs[io.pipeA_readreg1],
+      pipeA_readdata2: io.pipeA_readreg2 == 0 ? 64'b0 : regs[io.pipeA_readreg2],
+      pipeB_readdata1: io.pipeB_readreg1 == 0 ? 64'b0 : regs[io.pipeB_readreg1],
+      pipeB_readdata2: io.pipeB_readreg2 == 0 ? 64'b0 : regs[io.pipeB_readreg2]};	// src/main/scala/components/dual/register-file.scala:45:7, :68:17, :85:22, :86:22, :87:22, :88:22
   always @(posedge clock) begin	// src/main/scala/components/dual/register-file.scala:45:7
     if (io.pipeA_wen & io.pipeB_wen & io.pipeA_writereg == io.pipeB_writereg)	// src/main/scala/components/dual/register-file.scala:45:7, :72:{22,38,59}
       regs[io.pipeB_writereg] <= io.pipeB_writedata;	// src/main/scala/components/dual/register-file.scala:45:7, :68:17
@@ -175,4 +175,3 @@ module DualIssueRegisterFile(	// src/main/scala/components/dual/register-file.sc
   assign io_pipeB_readdata1 = io.pipeB_readdata1;	// src/main/scala/components/dual/register-file.scala:45:7
   assign io_pipeB_readdata2 = io.pipeB_readdata2;	// src/main/scala/components/dual/register-file.scala:45:7
 endmodule
-

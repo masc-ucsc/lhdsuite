@@ -69,12 +69,9 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             (both the timed benchmark and the correctness drivers), space
 #             separated, each already spelled `--set k=v`. "" = none. It exists
 #             for a driver whose contract needs a knob the shared script cannot
-#             infer: minion_prog needs `sim.init_zero=true`, because the lhd
-#             model's power-on X differs from Verilator's 2-state zero and the
-#             comparison is only apples-to-apples once both start from zero.
-#             NOT applied to the verilator scenario — verilator has no such
-#             knob, being 2-state by construction, which is the whole reason
-#             the lhd side needs one.
+#             infer. No current core needs one: Minion's architectural state is
+#             initialized by its boot ROM and its control bookkeeping resets in
+#             hardware, so it runs correctly with randomized startup.
 #   lec_trust  comma-separated module-def names the LEC scenarios ASSUME
 #             equivalent WITHOUT proving them (`--set formal.lec.trust=…`) —
 #             the escape hatch for defs holding a latch or negedge flop the LEC
@@ -117,7 +114,7 @@ CORES = {
         "color_algs": ["flat", "synth"],
         # Time the real program on the whole CPU. This checks architectural
         # state through the program's stores, unlike the old StageReg
-        # microbench. The program's two stores land at cycle 506 and it then
+        # microbench. The program's two stores land at cycle 521 and it then
         # spins, so every cycle past that is pure throughput and the gates hold
         # at any count.
         #
@@ -160,7 +157,7 @@ CORES = {
         # The Verilator comparison. dino/sim/dino_prog_tb_verilator.cpp is a
         # line-by-line twin of dino_prog_tb.prp (same ROM, same poke/peek
         # order), and all three simulators print the same
-        # `x2=100 -x3=102, done at cycle 506, IPC=602`.
+        # `x2=100 -x3=102, done at cycle 521, IPC=641`.
         # 8M cycles for the throughput run: verilator does dino at ~4.3M
         # cycles/s (re-measured 2026-08-09; it was ~2.8M when this knob was
         # added), so anything shorter measures process startup. The matched 4M
@@ -234,13 +231,14 @@ CORES = {
         # minion_top's ports are flat on both sides — one driver serves
         # MODE=pyrope and MODE=verilog.
         "sim_tb_v": "",
-        # The lhd model's power-on X vs Verilator's 2-state zero: the two are
-        # only comparable once both start from zero. See the sim_sets doc.
-        "sim_sets": "--set sim.init_zero=true",
+        # The boot ROM zeros the architectural integer registers. The mul/div
+        # phase-pair control state also has an explicit reset, so the whole-core
+        # workload is deterministic under fully randomized simulator startup.
+        "sim_sets": "",
         "sim_marker": "minion program:",
         # Marker only, deliberately. The driver's own asserts are the real gate
-        # (`retired >= 100`, `last_pc < 32`), and they are the RIGHT gate: the
-        # two simulators sit at a small phase offset, so an exact retire count
+        # (`retired >= 100`, `1024 <= last_pc < 1088`), and they are the RIGHT
+        # gate: the two simulators sit at a small phase offset, so an exact retire count
         # is not a valid cross-simulator oracle — and sim_expect is applied to
         # the verilator scenario too.
         "sim_expect": "",

@@ -3,18 +3,19 @@
 //
 // ============================================================================
 // STATUS 2026-08-10: this is a scalable throughput workload. Its instruction
-// stream loops forever and is duplicated in both fetch lines, so increasing
-// `cycles` increases active core work instead of extending an idle spin.
-// At 50,000 cycles the Verilog-imported lhd model retires 20,581 instructions
-// and remains in pc [0, 28]; the Verilator twin retires 20,578 and remains in
-// the same loop. The small phase offset is still an oracle issue, so benchmark
+// stream loops forever and is duplicated in both workload fetch lines, so
+// increasing `cycles` increases active core work instead of extending an idle spin.
+// At 50,000 cycles the Verilog-imported lhd model retires 20,731 instructions
+// and remains in the workload at pc 1048. The Verilator twin remains in the
+// two prefetched workload lines [1024, 1088).
+// Its small phase offset is still an oracle issue, so benchmark
 // validity is gated on sustained retirement and loop residency, not an exact
 // retire-count equality.
 //
-// The lhd model currently needs deterministic zero initialization for a fair
-// comparison with Verilator's 2-state model. Until the minion RTL/test reset
-// contract makes that explicit, run this workload with `sim.init_zero=true`
-// manually rather than wiring a known-failing default invocation into //bench.
+// The boot ROM explicitly zeros all 31 writable integer registers before
+// entering the workload. This is the software initialization a real boot path
+// performs and keeps architectural state deterministic even when the physical
+// register file powers up randomized.
 // ============================================================================
 //
 // WHY THE INTERFACE IS DIFFERENT FROM dino. dino exposes a combinational
@@ -38,9 +39,11 @@ const minion = import("lg:minion_top")
 test minion.prog(cycles:u20 = 100000) {
   mut acc = minion
 
-  // Always-active loop, duplicated in both 256-bit fetch lines so the
-  // benchmark never reaches a completed/idle phase and remains scalable to
-  // any requested cycle count:
+  // Boot dedicates one 256-bit line to each writable register x1..x31, with
+  // all eight words in a line repeating the same clear instruction. Repetition
+  // makes the program robust to the frontend's one-line prefetch temporarily
+  // mixing old/new buffer words. Line 31 is a nop barrier; the always-active
+  // loop starts at line 32 and every later line repeats it:
   //   [0] addi x2, x2, 1
   //   [1] addi x3, x3, 3
   //   [2] xor  x4, x2, x3
@@ -49,10 +52,8 @@ test minion.prog(cycles:u20 = 100000) {
   //   [5] add  x7, x6, x2
   //   [6] bne  x2, x0, -24         ; back to [0], effectively forever
   //   [7] nop                       ; branch shadow
-  mut rom = [0x00110113, 0x00318193, 0x00314233, 0x002202B3,
-             0x40328333, 0x002303B3, 0xFE0114E3, 0x00000013,
-             0x00110113, 0x00318193, 0x00314233, 0x002202B3,
-             0x40328333, 0x002303B3, 0xFE0114E3, 0x00000013]
+  mut loop_rom = [0x00110113, 0x00318193, 0x00314233, 0x002202B3,
+                  0x40328333, 0x002303B3, 0xFE0114E3, 0x00000013]
 
   mut retired    = 0
   mut took_exc   = 0
@@ -94,7 +95,7 @@ test minion.prog(cycles:u20 = 100000) {
     acc.reset_vector_i = 0      // boot at ROM word [0]
 
     // ---- instruction fetch: serve one 256-bit line per request -------------
-    acc.icache_req_ready_i  = 1        // never backpressure the fetch
+    acc.icache_req_ready_i = 1
     acc.icache_resp_miss_i  = 0
     acc.icache_fill_done_i  = 1
 
@@ -104,13 +105,40 @@ test minion.prog(cycles:u20 = 100000) {
     // cycle late (see AGENTS.md on the settle/commit model).
     acc.icache_resp_valid_i = u1(d5 != 0)
     mut fetch_line = 0
-    if d5 == 2 {
-      fetch_line = 1
+    if d5 != 0 {
+      fetch_line = d5 - 1
     }
-    mut b = fetch_line * 8
-    acc.icache_resp_i.data = rom[b] | (rom[b + 1] << 32) | (rom[b + 2] << 64) | (rom[b + 3] << 96)
-                           | (rom[b + 4] << 128) | (rom[b + 5] << 160) | (rom[b + 6] << 192)
-                           | (rom[b + 7] << 224)
+    mut w0 = 0x00000013
+    mut w1 = 0x00000013
+    mut w2 = 0x00000013
+    mut w3 = 0x00000013
+    mut w4 = 0x00000013
+    mut w5 = 0x00000013
+    mut w6 = 0x00000013
+    mut w7 = 0x00000013
+    if fetch_line < 31 {
+      // addi x(fetch_line+1), x0, 0
+      mut clear_reg = ((fetch_line + 1) << 7) | 0x13
+      w0 = clear_reg
+      w1 = clear_reg
+      w2 = clear_reg
+      w3 = clear_reg
+      w4 = clear_reg
+      w5 = clear_reg
+      w6 = clear_reg
+      w7 = clear_reg
+    } elif fetch_line > 31 {
+      w0 = loop_rom[0]
+      w1 = loop_rom[1]
+      w2 = loop_rom[2]
+      w3 = loop_rom[3]
+      w4 = loop_rom[4]
+      w5 = loop_rom[5]
+      w6 = loop_rom[6]
+      w7 = loop_rom[7]
+    }
+    acc.icache_resp_i.data = w0 | (w1 << 32) | (w2 << 64) | (w3 << 96)
+                           | (w4 << 128) | (w5 << 160) | (w6 << 192) | (w7 << 224)
     acc.icache_resp_i.page_fault   = 0
     acc.icache_resp_i.access_fault = 0
     acc.icache_resp_i.cacheable    = 1
@@ -139,7 +167,7 @@ test minion.prog(cycles:u20 = 100000) {
     d2 = d1
     d1 = 0
     if acc.icache_req_valid_o != 0 {
-      d1 = ((acc.icache_req_o.addr >> 5) & 1) + 1   // 2 lines in this ROM; +1 = valid marker
+      d1 = (acc.icache_req_o.addr >> 5) + 1   // +1 = valid marker
     }
 
     // Retirement, straight from the trace encoder — no need to infer
@@ -156,6 +184,6 @@ test minion.prog(cycles:u20 = 100000) {
   // Pin activity rather than a terminal count: more requested cycles must
   // continue to retire work while the PC remains inside this loop.
   assert(retired >= 100, "the core fetches, decodes and retires a stream of instructions")
-  assert(last_pc < 32, "the active loop stays inside its duplicated fetch line")
+  assert(last_pc >= 1024 and last_pc < 1088, "the active loop stays inside its two prefetched lines")
   puts("minion program: retired={retired} last_pc={last_pc}, active through cycle {cycles}")
 }
