@@ -48,6 +48,18 @@ printf '{"pdk_version":"%s","target":"%s"}\n' \
 
 TOP=$CORE_TOP.$CORE_TOP
 
+# Experiment-only synthesis knobs. Bazel tests can set BENCH_ABC_*=...,
+# BENCH_COLOR_SYNTH_ALG=pipe|synth, or BENCH_COLOR_REDUCE=1 so one candidate is
+# applied uniformly across targets without editing LiveHD defaults between
+# measurements. The reduction step is timed separately as <alg>_reduce_ms.
+ABC_ARGS=()
+[ -z "${BENCH_ABC_ADDER:-}" ] || ABC_ARGS+=(--set "abc.adder=$BENCH_ABC_ADDER")
+[ -z "${BENCH_ABC_BLOCK_SIZE:-}" ] || ABC_ARGS+=(--set "abc.block_size=$BENCH_ABC_BLOCK_SIZE")
+[ -z "${BENCH_ABC_DELAY:-}" ] || ABC_ARGS+=(--set "abc.delay=$BENCH_ABC_DELAY")
+[ -z "${BENCH_ABC_LOAD:-}" ] || ABC_ARGS+=(--set "abc.load=$BENCH_ABC_LOAD")
+[ -z "${BENCH_ABC_FLOW:-}" ] || ABC_ARGS+=(--set "abc.flow=$BENCH_ABC_FLOW")
+[ -z "${BENCH_ABC_CACHE:-}" ] || ABC_ARGS+=(--set "abc.cache=$BENCH_ABC_CACHE")
+
 compile_p() {  # SRC_DIR OUT_LG
   local stubs=()
   if [ -n "$CORE_P_STUB_DIR" ]; then
@@ -58,15 +70,27 @@ compile_p() {  # SRC_DIR OUT_LG
 }
 
 synth_pass() {  # LABEL LG_DIR COLOR_ALG WORKDIR — color in place, abc into net_LABEL
+  if [ -n "${BENCH_COLOR_REDUCE:-}" ]; then
+    run_timed "${1}_reduce" lhd pass color reduce --top "$TOP" "lg:$2" --workdir "$4"
+  fi
   if [ "$3" = flat ]; then
     run_timed "${1}_color" lhd pass color flat --top "$TOP" "lg:$2" --workdir "$4"
   else
-    run_timed "${1}_color" lhd pass color synth --top "$TOP" "lg:$2" --workdir "$4"
+    local color_args=()
+    [ -z "${BENCH_COLOR_SYNTH_ALG:-}" ] || color_args+=(--set "color.synth_alg=$BENCH_COLOR_SYNTH_ALG")
+    run_timed "${1}_color" lhd pass color synth --top "$TOP" "lg:$2" --workdir "$4" "${color_args[@]}"
   fi
   run_timed "${1}_abc" lhd pass abc --top "$TOP" "lg:$2" \
-    --emit-dir "lg:net_$1" --workdir "$4" --result-json "r_$1.json"
+    --emit-dir "lg:net_$1" --workdir "$4" --result-json "r_$1.json" "${ABC_ARGS[@]}"
+  # Preserve successful mapper QoR/logs even when a later STA/LEC gate fails:
+  # the ABC experiment remains measurable without weakening the downstream
+  # correctness gate. Keep the successful timing report too, so critical-path
+  # evidence survives Bazel's test sandbox.
+  cp "$4/qor.json" "$OUT_DIR/${1}_qor.json"
+  cp "step_${1}_abc.log" "$OUT_DIR/${1}_abc.log"
   run_timed "${1}_sta" lhd pass opentimer --top "$TOP" "lg:net_$1" \
     "$HAGENT_TECH_DIR/sky130_fd_sc_hd__tt_025C_1v80.lib" --workdir "OT_$1"
+  cp "OT_$1/timing.json" "$OUT_DIR/${1}_timing.json"
   STA_DELAY=$(sta_max_delay "OT_$1/timing.json")
   [ "$STA_DELAY" != MISSING ] || {
     step_failed "${1}_sta" "$1: pass.opentimer did not report a whole-design max_delay"
