@@ -94,7 +94,7 @@ CORE_TESTS_DIR=$CORE_DIR/tests
 : "${CORE_SYNTH_ONLY=}" "${CORE_SYNTH_BUDGET_S=}"
 : "${CORE_V_FLAGS=}" "${CORE_SIM_MARKER=}" "${CORE_SIM_EXPECT=}" "${CORE_LEC_TRUST=}" "${CORE_SIM_TB_V=}"
 : "${CORE_SIM_SETS=}"
-: "${CORE_SIM_CYCLES=}" "${CORE_SIM_TB_UNIT=}"
+: "${CORE_SIM_CYCLES=}" "${CORE_SIM_TB_UNIT=}" "${CORE_SIM_PERF_CYCLES=}"
 : "${CORE_SIM_TOP_UNIT=}" "${CORE_SIM_PROG_UNIT=}"
 : "${CORE_SIM_TOP_CYCLES=}" "${CORE_SIM_PROG_CYCLES=}"
 : "${CORE_VERILATOR_TB=}" "${CORE_VERILATOR_FLAGS=}" "${CORE_VERILATOR_CYCLES=}"
@@ -255,9 +255,16 @@ run_expect_fail() {
 # schedule prints data=0 and would otherwise go green). Both simulators are
 # held to the SAME two strings, so `lhd sim` and verilator disagreeing about
 # the design fails a target instead of quietly reporting two numbers.
+# SIM_GATE_EXPECT=0 relaxes the gate to the MARKER alone for one call. Two
+# callers need that and neither is a loophole: an incremental scenario's pass 3
+# deliberately injects a bug, so the checksum MUST move, and the throughput leg
+# runs a different cycle count, which is a different checksum by construction.
+# The marker gate always applies — a sim that never reached its readback is a
+# failure in every mode.
 sim_gate() {
   grep -qa -- "$CORE_SIM_MARKER" "step_$1.log" \
     || { step_failed "$1" "sim ran but printed no '$CORE_SIM_MARKER' marker"; exit 1; }
+  [ "${SIM_GATE_EXPECT:-1}" != 0 ] || return 0
   [ -n "$CORE_SIM_EXPECT" ] || return 0
   # No extra grep: the sim's readback is the last thing it prints, so it is
   # already inside the excerpt step_failed shows.
@@ -619,10 +626,11 @@ apply_synth_only_variant() {
         eq  = index($0, " = ")
         $0  = substr($0, 1, eq + 2) "(" substr($0, eq + 3) ") ^ 1"
         done = 1
+        printf "%d\t%s\n", NR, $0 > "/dev/stderr"
       }
       { print }
       END { if (!done) exit 42 }
-    ' "$file" >"$tmp" || {
+    ' "$file" 2>"$dir/.variant_site" >"$tmp" || {
       rm -f "$tmp"
       echo "FAIL: no generic one-line incremental edit found in $CORE_TOP.prp" >&2
       return 1
@@ -634,4 +642,51 @@ apply_synth_only_variant() {
     return 1
     ;;
   esac
+}
+
+# core_variant NAME DIR — apply variant NAME the way THIS core supports it, and
+# say on the main output exactly what was injected.
+#
+# The disclosure is not decoration (T11). A synthesized edit leaves no diff in
+# git, so the log line is the only record of the site pass 3 measured; a
+# regression that silently moved the edit to a different net would otherwise
+# change what the scenario measures with nothing to show for it. A variant that
+# finds no site is a hard failure, never a skipped edit.
+core_variant() {
+  local name=$1 dir=$2
+  if [ -n "${CORE_SYNTH_ONLY:-}" ]; then
+    apply_synth_only_variant "$name" "$dir" || return 1
+    if [ -s "$dir/.variant_site" ]; then
+      printf 'VARIANT %s: %s.prp:%s\n' "$name" "$CORE_TOP" \
+        "$(tr '\t' ' ' <"$dir/.variant_site" | head -1)" >&3
+    else
+      printf 'VARIANT %s: appended to %s.prp\n' "$name" "$CORE_TOP" >&3
+    fi
+    rm -f "$dir/.variant_site"
+  else
+    apply_variant "$name" "$dir" || return 1
+    printf 'VARIANT %s: overlaid %s\n' "$name" \
+      "$(cd "$CORE_TESTS_DIR/$name" && echo *)" >&3
+  fi
+}
+
+# dir_bytes DIR — apparent size of a cache/workdir in bytes, 0 when absent.
+# Cache size is a real cost (H6 workdir_bytes), so every incremental scenario
+# reports it rather than letting a lever buy time with unbounded disk.
+dir_bytes() {
+  [ -d "$1" ] || { echo 0; return 0; }
+  # -k is the one du unit POSIX guarantees; BSD and GNU disagree on -b/-A.
+  echo $(($(du -sk "$1" 2>/dev/null | awk '{print $1}') * 1024))
+}
+
+# tree_fingerprint DIR [FIND-ARGS...] — sorted "sha  relpath" listing of a
+# generated tree, for the H5 "warm equals cold" check (I2). Content, not
+# mtimes: a warm pass that legitimately skips a rewrite must still leave the
+# same bytes on disk as a cold pass would have written.
+tree_fingerprint() {
+  local dir=$1
+  shift
+  (cd "$dir" 2>/dev/null || exit 0
+   find . -type f "$@" -print0 2>/dev/null | LC_ALL=C sort -z \
+     | xargs -0 shasum -a 256 2>/dev/null)
 }

@@ -22,6 +22,11 @@
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load(":defs.bzl", "core_benches")
 
+# Consumed by //xiangshan/Backend's stub genrule: it derives the DiffExt* DPI
+# sink models from the DummyDPICWrapper_* sources instead of checking 20
+# generated files into git.
+exports_files(["gen_stubs.py"])
+
 # `bazel run //bench:show` — pretty-print the last `bazel test //bench:...`
 # results from bazel-testlogs (a run target cannot trigger tests, so:
 #   bazel test //bench:all; bazel run //bench:show
@@ -32,8 +37,10 @@ sh_binary(
     data = ["show.py"],
 )
 
-# Append the most recent successful synthesis results to bench/ledger.jsonl:
-#   bazel run //bench:ledger -- baseline-v1 dino minion xs_alu
+# The shared result ledger (bench/ledger.jsonl) and its rendered scoreboard.
+#   bazel run //bench:ledger -- add --config-id baseline-v1 matrix_rows.jsonl
+#   bazel run //bench:ledger -- append baseline-v1 dino minion xs_alu
+#   bazel run //bench:ledger -- render --flow incr
 sh_binary(
     name = "ledger",
     srcs = ["ledger.sh"],

@@ -54,6 +54,45 @@ EOF
     exit 1
   }
   ;;
+incr)
+  # The three-pass FRONT-END rebuild over one --workdir and one lg: output:
+  # cold, comment-only touch, one real edit. There is no front-end cache today,
+  # so on day one this scenario's job is to put honest cold numbers in the
+  # ledger and make a future lever attributable — which is why it gates on WALL
+  # TIME and never on a hit count. A hit count would go green the moment
+  # something starts hitting, whether or not any time was saved.
+  copy_core_pyrope tree
+  if [ -n "$CORE_P_STUB_DIR" ]; then
+    cp -fL "$CORE_P_STUB_DIR"/*.prp tree/
+  fi
+
+  compile_pass() {
+    run_timed "compile_$1" lhd compile "tree/$CORE_TOP.prp" \
+      --top "$CORE_TOP" --emit-dir lg:out_lg --workdir w \
+      --result-json "compile_$1.json"
+  }
+
+  rm -rf w out_lg
+  compile_pass cold || exit 1
+  metric workdir_bytes_cold "$(dir_bytes w)" bytes
+
+  core_variant comment1 tree || exit 1
+  compile_pass comment || exit 1
+
+  core_variant bug1 tree || exit 1
+  compile_pass edit || exit 1
+  metric workdir_bytes_edit "$(dir_bytes w)" bytes
+
+  read -r n_loc n_words <<EOF
+$(compile_input_stats compile_cold.json tree "")
+EOF
+  [[ "$n_loc" =~ ^[0-9]+$ && "$n_words" =~ ^[0-9]+$ ]] || {
+    echo "FAIL: could not count the compiled Pyrope cone" >&2
+    exit 1
+  }
+  echo "PASS: compile_incremental (cold/comment/edit over one workdir)"
+  exit 0
+  ;;
 pyrope_parallel)
   NPROC=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8)
   GEN="$RF/_main/bench/gen_build.py"

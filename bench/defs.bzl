@@ -288,6 +288,15 @@ CORES = {
         # interval is dominated by simulation rather than process startup.
         "verilator_cycles": 200000,
     },
+    # The two XS blocks that also carry the SIM phase. Their drivers are
+    # compile/throughput benchmarks and a cross-language oracle, NOT functional
+    # coverage: `lhd sim` refuses to WRITE a hierarchical path more than one
+    # level into a DUT port, and a testbench scalar truncates past 64 bits, so
+    # Alu's whole datapath (ctrl.*, data.*) and Rob's 4080-bit io_enq_req are
+    # left at their defaults. What they DO measure is exactly what this loop
+    # optimizes — codegen time, host C++ compile time and cycles/s — and the
+    # checksum is cross-validated against the Verilog side rather than blessed
+    # from one run.
     "xs_rob": {
         "pkg": "//xiangshan/Backend",
         "top": "Rob",
@@ -295,6 +304,18 @@ CORES = {
         "v_flags": "--single-unit",
         "color_algs": ["synth"],
         "synth_only": True,
+        "sim_tb": "xs_rob_tb.prp",
+        "sim_cycles": 1000,
+        "sim_tb_unit": "Rob",
+        "sim_marker": "xs_rob:",
+        # Verilog side prints sum=4607111980261556205; the Pyrope side became
+        # compilable only once the DPI sink models existed, so the two are
+        # cross-checked by the sim_pyrope/sim_verilog pair rather than pinned
+        # here from one side's output.
+        "sim_expect": "",
+        # Rob at 1000 cycles simulates in milliseconds — that count is the
+        # marker/checksum gate, not a throughput measurement (T1).
+        "sim_perf_cycles": 200000,
     },
     "xs_alu": {
         "pkg": "//xiangshan/Backend",
@@ -303,6 +324,15 @@ CORES = {
         "v_flags": "--single-unit",
         "color_algs": ["synth"],
         "synth_only": True,
+        "sim_tb": "xs_alu_tb.prp",
+        "sim_cycles": 1000,
+        "sim_tb_unit": "Alu",
+        "sim_marker": "xs_alu:",
+        # Verified identical from BOTH language sides at 1000 cycles, which is
+        # what makes it safe to pin: 888709067567740450 from the .prp tree and
+        # from `lhd compile verilog --top Alu`.
+        "sim_expect": "sum=888709067567740450",
+        "sim_perf_cycles": 2000000,
     },
     "xs_div": {
         "pkg": "//xiangshan/Backend",
@@ -348,6 +378,11 @@ _SCENARIOS = [
     # pre-lowered as positional `lg:DIR` inputs (IR inputs are positional, never
     # a flag), falling back to `ln:DIR` only for packages that emit no lgraph.
     ("compile_pyrope_parallel", "compile.sh", "pyrope_parallel", "eternal", "", ""),
+    # The three-pass front-end rebuild over ONE --workdir: cold, comment-only
+    # touch, one real edit. Gated on WALL TIME, never on a hit count (I4) —
+    # there is no front-end cache yet, so its job on day one is to put the cold
+    # numbers in the ledger and make a future L8 lever attributable.
+    ("compile_incremental", "compile.sh", "incr", "eternal", "", ""),
     # --- coloring + abc synthesis; cold vs --workdir incremental ---
     ("synth", "synth.sh", "cold", "eternal", "", ""),
     ("synth_incremental", "synth.sh", "incr", "eternal", "", ""),
@@ -356,8 +391,16 @@ _SCENARIOS = [
     ("synth_lec_flat", "synth.sh", "lec_flat", "eternal", "flat", ""),
     ("synth_lec_synth", "synth.sh", "lec_synth", "eternal", "synth", ""),
     # --- asserted simulation benchmark, both language sources ---
-    ("sim_verilog", "sim.sh", "verilog", "long", "", ""),
-    ("sim_pyrope", "sim.sh", "pyrope", "long", "", ""),
+    # needs_cfg="sim_tb": a core with no driver has no sim target at all, rather
+    # than one that fails on `--top ''`. That is also what lets a synth-only
+    # core opt IN to simulation just by naming a driver.
+    ("sim_verilog", "sim.sh", "verilog", "long", "", "sim_tb"),
+    ("sim_pyrope", "sim.sh", "pyrope", "long", "", "sim_tb"),
+    # The sim counterpart of synth_incremental: three passes over ONE workdir
+    # AND one emit dir, reporting sim_setup_ms / sim_cc_ms / sim_exec_ms on
+    # every pass. sim_exec_ms is the I3 guardrail — a pass that cuts the host
+    # compile while slowing the simulation fails here.
+    ("sim_incremental", "sim.sh", "incr", "eternal", "", "sim_tb"),
     # The same benchmark under Verilator, for cores carrying a C++ twin of
     # their sim_tb: how `lhd sim` compares against the reference simulator on
     # compile time AND on cycles/s. Held to the same output gates, so it is
@@ -399,7 +442,6 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
     ]
     if not synth_only:
         data.extend([
-            pkg + ":sim",
             pkg + ":tests",
             pkg + ":verif",
         ])
@@ -408,6 +450,11 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             pkg + ":pyrope_stubs",
             pkg + ":pyrope_stub_top",
         ])
+
+    # The drivers are staged for any core that names one, synth-only or not —
+    # otherwise a synth-only core's sim scenario would run with an empty tree/.
+    if cfg.get("sim_tb", ""):
+        data.append(pkg + ":sim")
 
     sh_test(
         name = name,
@@ -432,6 +479,10 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_SYNTH_BUDGET_S": "1800" if cfg.get("slow", False) and script == "synth.sh" else "",
             "CORE_SIM_TB": cfg.get("sim_tb", ""),
             "CORE_SIM_CYCLES": str(cfg.get("sim_cycles", "")),
+            # The I3 throughput leg's cycle count, when the gate count is too
+            # short to clear the noise floor (T1: 1000 cycles measures process
+            # startup). "" = time the gate count itself.
+            "CORE_SIM_PERF_CYCLES": str(cfg.get("sim_perf_cycles", "")),
             "CORE_SIM_TB_UNIT": cfg.get("sim_tb_unit", ""),
             "CORE_SIM_TOP_UNIT": cfg.get("sim_top_tb_unit", ""),
             "CORE_SIM_PROG_UNIT": cfg.get("sim_prog_tb_unit", ""),
@@ -460,12 +511,20 @@ def core_benches(core):
     cfg = CORES[core]
     names = []
     for suffix, script, mode, timeout, needs_color, needs_cfg in _SCENARIOS:
+        # `synth_only` says "this core ships no verify sidecar and no LEC
+        # reference", not "this core cannot be simulated". Simulation is
+        # decided by needs_cfg="sim_tb" below, so a synth-only core that names
+        # a driver gets the sim scenarios and one that does not gets none.
         if cfg.get("synth_only", False) and suffix not in [
             "compile_verilog",
             "compile_pyrope",
             "compile_pyrope_parallel",
+            "compile_incremental",
             "synth",
             "synth_incremental",
+            "sim_verilog",
+            "sim_pyrope",
+            "sim_incremental",
         ]:
             continue
         if needs_color and needs_color not in cfg["color_algs"]:

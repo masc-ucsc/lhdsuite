@@ -96,11 +96,19 @@ done
 TOP_INPUT=
 PROG_INPUT=
 case "${MODE:?}" in
-pyrope)
+pyrope | incr)
   copy_core_pyrope tree
   BENCH_INPUT="tree/$CORE_SIM_TB_UNIT.prp"
   [ -z "$CORE_SIM_TOP_TB" ] || TOP_INPUT="tree/$CORE_SIM_TOP_UNIT.prp"
   [ -z "$CORE_SIM_PROG_TB" ] || PROG_INPUT="tree/$CORE_SIM_PROG_UNIT.prp"
+  # A synth-only core's tree references DPI cells that exist only as generated
+  # sink models. They go in BESIDE the design rather than as extra positional
+  # inputs: sibling import discovery then resolves them, and `lhd sim` — which
+  # cgen's every graph in the library it is handed — is not asked to emit 20
+  # empty modules the testbench never instantiates.
+  if [ -n "$CORE_P_STUB_DIR" ]; then
+    cp -fL "$CORE_P_STUB_DIR"/*.prp tree/
+  fi
   ;;
 verilog)
   mkdir -p tree
@@ -136,6 +144,131 @@ esac
 cp -L "$CORE_SIM_DIR"/*.prp tree/
 
 SIM_INPUTS=("$BENCH_INPUT" "tree/$SIM_TB")
+
+# ---- MODE=incr: the three-pass rebuild over ONE workdir ----------------------
+#
+# The sim counterpart of synth_incremental. Everything this loop optimizes shows
+# up in the split: sim_setup_ms is `lhd sim` codegen, sim_cc_ms is the host C++
+# compile+link, sim_exec_ms is the simulation itself.
+#
+#   pass 1  cold          fresh workdir AND fresh emit dir. Both, because sim
+#                         keys its generation digests off the EMIT DIR, not the
+#                         workdir — a "cold" run that only renamed the workdir
+#                         would silently start warm (trap T5).
+#   pass 2  comment1      nothing really changed. Gate: NO generated file is
+#                         rewritten, and the generated tree is byte-identical
+#                         to pass 1's (the mechanical "warm equals cold" check).
+#   pass 3  bug1          one real edit. Gate: something IS rewritten — a pass
+#                         that rebuilds nothing after a real edit is a stale
+#                         cache, not a fast one.
+#
+# On every pass sim_exec_ms is re-measured, because it is the hard guardrail: a
+# change that cuts the host compile by slowing the simulation is a net loss,
+# and only a per-pass measurement can see that.
+#
+# sim.ninja is deliberately NOT pinned here (unlike the cold sim_pyrope
+# benchmark, which pins it off for reproducibility): the incremental host build
+# is precisely what is under test. Which path ran is reported instead.
+if [ "$MODE" = incr ]; then
+  # The exec leg re-runs the binary at $PERF_CYCLES rather than the gate count.
+  # 1000 cycles is a marker/checksum count and measures process startup, not the
+  # simulator (T1) — a guardrail read off startup noise cannot reject anything.
+  PERF_CYCLES=${CORE_SIM_PERF_CYCLES:-}
+  [ -n "$PERF_CYCLES" ] || PERF_CYCLES=$CYCLES
+  : "${SIM_REPS:=3}"
+
+  ninja_path=$(type -P ninja || true)
+  metric sim_ninja_present "$([ -n "$ninja_path" ] && echo 1 || echo 0)" bool
+
+  # sim_pass TAG GATE_EXPECT — one full pass. GATE_EXPECT=0 relaxes to the
+  # marker alone, which is what pass 3 needs: `bug1` changes the design, so the
+  # checksum MUST move. Keeping the pass-1 checksum as a gate there would fail
+  # the target for doing its job.
+  sim_pass() {
+    local tag=$1 expect=$2 run_ms exec_ms cc_ms
+    # shellcheck disable=SC2086  # CORE_SIM_SETS is a token LIST, split on purpose
+    run_timed "sim_setup_$tag" lhd sim "${SIM_INPUTS[@]}" --setup-only \
+      --set sim.vcd=false $CORE_SIM_SETS --workdir SW || return 1
+    # shellcheck disable=SC2086
+    run_timed "sim_run_$tag" lhd sim "${SIM_INPUTS[@]}" --run-only \
+      --arg "cycles=$CYCLES" $CORE_SIM_SETS --diag-fmt pretty --workdir SW || return 1
+    run_ms=$LAST_MS
+    SIM_GATE_EXPECT=$expect sim_gate "sim_run_$tag"
+
+    # exec at the GATE count first: sim_cc_ms is only meaningful as
+    # sim_run_ms minus the same simulation sim_run just paid for.
+    log_cmd "sim_exec_$tag" "SW/sim/drv.bin --cycles $CYCLES  (x$SIM_REPS, best)"
+    SIM_GATE_EXPECT=$expect best_run "sim_exec_$tag" "$SIM_REPS" \
+      SW/sim/drv.bin --cycles "$CYCLES" --result-json SW/sim/exec_tests.json
+    exec_ms=$BEST_MS
+    cc_ms=$((run_ms - exec_ms))
+    [ "$cc_ms" -ge 0 ] || cc_ms=0
+    metric "sim_cc_ms_$tag" "$cc_ms" ms
+
+    # ...then the throughput leg, at the count that actually clears the noise
+    # floor. Marker-only: a different cycle count is a different checksum.
+    if [ "$PERF_CYCLES" != "$CYCLES" ]; then
+      log_cmd "sim_perf_$tag" "SW/sim/drv.bin --cycles $PERF_CYCLES  (x$SIM_REPS, best)"
+      SIM_GATE_EXPECT=0 best_run "sim_perf_$tag" "$SIM_REPS" \
+        SW/sim/drv.bin --cycles "$PERF_CYCLES" --result-json SW/sim/perf_tests.json
+      exec_ms=$BEST_MS
+    fi
+    metric "sim_exec_ms_$tag" "$exec_ms" ms
+    rate "sim_cycles_per_s_$tag" "$PERF_CYCLES" "$exec_ms" "cycles/s"
+    rate "sim_cycles_per_s_with_cc_$tag" "$CYCLES" "$run_ms" "cycles/s"
+    metric "workdir_bytes_$tag" "$(dir_bytes SW)" bytes
+    LAST_EXEC_MS=$exec_ms
+  }
+
+  # generated_newer MARKER — the generated C++/objects touched since MARKER.
+  # `find -newer`, not a timestamp read: a whole-second stamp cannot separate
+  # two passes that land in the same second, and that makes a no-op pass look
+  # green for the wrong reason.
+  generated_newer() {
+    find SW/sim -maxdepth 1 -type f \
+      \( -name '*.hpp' -o -name '*.cpp' -o -name '*.llvm.o' -o -name '*.iface.json' \) \
+      -newer "$1" -exec basename {} \; 2>/dev/null | sort | tr '\n' ' '
+  }
+
+  rm -rf SW
+  sim_pass cold 1 || exit 1
+  BASE_EXEC_MS=$LAST_EXEC_MS
+  tree_fingerprint SW/sim -name '*.cpp' -o -name '*.hpp' -o -name '*.iface.json' >fp_cold.txt
+
+  core_variant comment1 tree || exit 1
+  touch marker
+  sim_pass comment 1 || exit 1
+  rewritten=$(generated_newer marker)
+  metric sim_rewritten_comment "$(echo "$rewritten" | wc -w | tr -d ' ')" files
+  if [ -n "$rewritten" ]; then
+    echo "NOTE: a comment-only edit rewrote $rewritten" >&2
+  fi
+
+  # H5, the mechanical "warm equals cold" check (I2). A cache that skipped work
+  # must leave the same bytes a cold run would have written; anything else is a
+  # miscompile wearing a speedup's clothes.
+  tree_fingerprint SW/sim -name '*.cpp' -o -name '*.hpp' -o -name '*.iface.json' >fp_warm.txt
+  if cmp -s fp_cold.txt fp_warm.txt; then
+    metric sim_warm_equals_cold 1 bool
+  else
+    metric sim_warm_equals_cold 0 bool
+    echo "FAIL: warm generated tree differs from cold for a comment-only edit:" >&2
+    diff fp_cold.txt fp_warm.txt | head -20 >&2
+    exit 1
+  fi
+
+  core_variant bug1 tree || exit 1
+  touch marker
+  sim_pass edit 0 || exit 1
+  rewritten=$(generated_newer marker)
+  metric sim_rewritten_edit "$(echo "$rewritten" | wc -w | tr -d ' ')" files
+  [ -n "$rewritten" ] \
+    || { echo "FAIL: a real one-line edit rewrote NO generated file — stale cache" >&2; exit 1; }
+
+  echo "PASS: sim_incremental (cold/comment/edit over one workdir;" \
+    "exec ${BASE_EXEC_MS} ms cold, ${LAST_EXEC_MS} ms after the edit)"
+  exit 0
+fi
 
 # The setup phase WRITES the driver sources; sim.vcd is read back from what was
 # baked, so it is fixed here and not at --run-only. See the header for why the
