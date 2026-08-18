@@ -1,127 +1,1640 @@
 #!/usr/bin/env python3
-"""Append successful synthesis benchmark results to bench/ledger.jsonl."""
+"""The shared result ledger for the two optimization loops.
 
-import hashlib
+`bench/ledger.jsonl` is one append-only file, shared by `docs/opt_loop_synth.md`
+(flow="synth") and `docs/opt_loop_incr.md` (flow="incr"). Every row carries a
+full identity block — host, lhd sha, lhdsuite sha, PDK version — because the ONE
+thing this file must never allow is a comparison across hosts or across a
+library change. A number from another box is not evidence; only a delta within
+one host's ledger is (I11).
+
+ROW SHAPE, flow="incr" — one row per (target, phase, MODE):
+
+    {"date","host","lhd_git_sha","lhdsuite_git_sha","pdk_version",
+     "flow":"incr", "target":"dino", "phase":"compile|synth|sim|lec",
+     "mode":"full|cold|incremental", "config_id":"...", "passed":true,
+     "wall_ms": 12244.0,                     // end-to-end for this phase+mode
+     "phases": {"inou.prp":41234.5, ...},    // per-pass ms, from --result-json
+     ...optional extras: sim_exec_ms, sim_cc_ms, abc_hits, workdir_bytes, ...}
+
+ROW SHAPE, flow="synth" — one row per (target, config): the QoR block of
+`docs/opt_loop_synth.md` M0.4 (`regions gates area max_delay sta_delay
+cache_hits cache_misses cache_hit_ms cache_miss_ms div_blackbox compile_ms
+color_ms abc_ms`), with no mode axis.
+
+The three incr modes are not interchangeable, and the page says so in prose:
+
+  full         every cache that has an off switch is off, every output dir
+               fresh: what the flow costs with no incremental machinery at all.
+  cold         caches on, dirs still fresh: the same work as `full` PLUS the
+               cost of POPULATING the caches. `(cold-full)/full` is the price of
+               admission for incrementality and is flagged past +5%.
+  incremental  the identical command again over that workdir after a
+               comment-only source touch. Every content-keyed cache must hit.
+
+Subcommands:
+
+  add [PATH]          read json-lines (or one JSON array) of PARTIAL rows —
+                      target/phase/mode/wall_ms/phases/passed — from a file or
+                      stdin, stamp the identity block, append. This is the path
+                      `bench/matrix.sh` feeds.
+  append CFG TARGET…  the older scraper: read the most recent bazel-testlogs run
+                      and append rows in the SAME new shape (its three scenario
+                      passes map to modes cold / incremental / edit; it has no
+                      `full` mode, so that column renders "-").
+  render              re-derive the scoreboard HTML from the ledger.
+
+The HTML is a pure rendering of the JSONL and is regenerated on land AND on
+revert, so a measured negative result is visible rather than silently retried.
+Nothing may be recorded only in the HTML.
+
+THE RULE THIS FILE IS BUILT AROUND: a number the page cannot interpret is
+rendered WITHOUT a verdict, never with a guessed one. Every silent-green path
+found in review came from a two-state answer to a three-state question — is
+this metric better up or down (`direction()`), did this measurement happen at
+all (`verdict()` on a zero or absent reference), and is this measurement
+evidence (`usable()` on a run that did not pass).
+"""
+
+import argparse
+import html
 import json
-import platform
+import os
 import re
+import socket
 import subprocess
 import sys
-from datetime import datetime, timezone
+import time
+import traceback
 from pathlib import Path
 
-ROUTINE = ("dino", "minion", "xs_rob", "xs_alu", "xs_div")
+LEDGER = "bench/ledger.jsonl"
+
+# The three columns the page is built around, in reading order, plus the two
+# modes that exist but are not part of the triptych: `edit` (a real one-line
+# edit — the old scraper's pass 3) and `control` (the T12 drift probe, rendered
+# in the header rather than as a data row).
+MODE_COLS = ("full", "cold", "incremental")
+KNOWN_MODES = MODE_COLS + ("edit", "control")
+PHASE_ORDER = ("compile", "synth", "sim", "lec", "formal")
+
+# `(cold-full)/full` past this is a warning: a cache that costs this much on
+# every clean build has to earn it back before it is worth having.
+CACHE_COST_WARN = 0.05
+
+# Run-queue length past which a row's ABSOLUTE milliseconds stop being
+# trustworthy. Deliberately low relative to the core count: the damage starts
+# well before the machine is saturated, because the phases that dominate here
+# (the host C++ build, ABC, the solver workers) are already parallel and are
+# competing for the same cores.
+LOAD_WARN = 4.0
+
+# `drift` (the T12 control probe) this far from 1.00 invalidates the sitting.
+DRIFT_WARN = 0.10
+
+# `area` regressing past this is a guardrail breach, not a note
+# (docs/opt_loop_synth.md M0.4b).
+AREA_GUARDRAIL = 0.01
+
+# The I3 guardrail columns. A regression here fails the gate no matter how good
+# the compile-side columns look, which is the entire point of the scoreboard.
+# A PREFIX match, so it catches both the per-mode `sim_exec_ms` of the new rows
+# and the `sim_exec_ms_cold` of the old scraper's flat metrics.
+GUARDRAIL_RE = re.compile(r"^(sim_exec_ms|sim_cycles_per_s)")
 
 
-def git(repo: Path, *args: str) -> str:
-    return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+def _tokens(*words):
+    """A metric name is `_`-separated tokens: `abc_max_delay_cold` is prefixed
+    by its tool and suffixed by its pass. Match on whole tokens so a rule
+    written for `delay` fires on `abc_max_delay_cold` and never on `delayed`."""
+    return re.compile(r"(?:^|_)(?:%s)(?:_|$)" % "|".join(words))
 
 
-def diff_hash(repo: Path) -> str:
-    tracked = subprocess.check_output(["git", "-C", str(repo), "diff", "--binary", "HEAD"])
-    names = git(repo, "status", "--porcelain").encode()
-    return hashlib.sha256(tracked + b"\0" + names).hexdigest()
+# WHICH DIRECTION IS GOOD — and, crucially, a third answer. These two tables are
+# deliberately NOT exhaustive-by-fallback: a name matching neither is UNKNOWN
+# and its delta renders with no verdict (see `direction`). The bug this replaces
+# was a two-way classifier whose else-branch was "higher is better", which
+# rendered a 98k -> 151k `area` regression as bold green.
+LOWER_IS_BETTER = _tokens(
+    # time, size, work redone
+    "ms", "bytes", "misses", "miss", "redone", "refused", "rewritten",
+    "store_failed", "failed", "errors", "budget",
+    # synthesis QoR (docs/opt_loop_synth.md M0.4) — named explicitly, because
+    # every one of them is a regression when it RISES and none of them carries a
+    # suffix that says so.
+    "area", "gates", "cells", "regions", "delay", "max_delay", "sta_delay",
+    "div_blackbox", "blackbox", "wirelength", "depth", "levels",
+)
+HIGHER_IS_BETTER = _tokens(
+    "cycles_per_s", "speedup", "hits", "coverage", "proven",
+)
+
+# Reported, never trended: a percentage delta on a boolean or on a configured
+# constant is meaningless. These still RENDER (see `section_gates` and the
+# non-trend rows of the gate table) — a cycle count that CHANGED between two
+# configs invalidates every exec-time comparison on the page, so it is shown and
+# flagged rather than dropped.
+# `cycles(?!_per_s)`: a raw cycle COUNT is a configured constant, but
+# `sim_cycles_per_s` is a RATE and the second half of the I3 guardrail. Treating
+# them as one token silently dropped half of I3 from the gate.
+NOT_A_TREND = re.compile(
+    r"(?:^|_)(?:cycles(?!_per_s)|ok|gated|present|passed|drift|equals)(?:_|$)")
 
 
-def metrics(log: Path) -> dict[str, float]:
+def not_a_trend(m):
+    """...and a guardrail column is ALWAYS a trend, whatever else it matches.
+    This is the belt to the lookahead's braces: the one thing the page may never
+    do is stop trending `sim_exec_ms` / `sim_cycles_per_s`."""
+    return bool(NOT_A_TREND.search(m)) and not GUARDRAIL_RE.match(m)
+
+
+# ...with one exception: a `*_ok` that was 1 and is now 0 is the correctness
+# gate (§8 rule 5) going red. It is not a trend, but it IS a rejection.
+CORRECTNESS = _tokens("ok", "equals", "proven")
+
+# Keys that describe the row rather than measure anything.
+STRUCTURAL = {
+    "date", "host", "lhd_git_sha", "lhdsuite_git_sha", "pdk_version", "flow",
+    "target", "phase", "mode", "config_id", "passed", "phases",
+    "control_start_ms", "control_end_ms", "loadavg",
+}
+
+# Preferred reading order for metric rows: the two contracts' column lists
+# (docs/opt_loop_incr.md H6, docs/opt_loop_synth.md M0.4), then everything else
+# alphabetically. A name is matched by whole-token containment, so `abc_area`
+# and `synth_area` sort where `area` does.
+METRIC_ORDER = (
+    "wall_ms", "cold_ms", "warm_ms", "edit_ms",
+    "warm_speedup", "edit_speedup",
+    "hits", "misses", "redone_ms", "refused", "store_failed",
+    "sim_setup_ms", "sim_cc_ms", "sim_run_ms", "sim_exec_ms",
+    "sim_cycles", "sim_perf_cycles",
+    "sim_cycles_per_s", "sim_cycles_per_s_with_cc", "sim_rewritten",
+    "workdir_bytes",
+    "compile_ms", "color_ms", "abc_ms", "sta_ms",
+    "regions", "gates", "area", "max_delay", "sta_delay",
+    "cache_hits", "cache_misses", "cache_hit_ms", "cache_miss_ms",
+    "div_blackbox",
+)
+
+# The QoR quartet a `div_blackbox` row may not report as numbers (T1): a design
+# whose dividers were blackboxed has not been fully mapped, so its area/delay
+# are not the design's.
+QOR_INVALIDATED = ("area", "gates", "max_delay", "sta_delay", "regions")
+
+# ---------------------------------------------------------------- scraping ---
+# Which scenario target feeds which ledger phase, and how that scenario's flat
+# `METRIC` lines split into per-mode rows. `{p}` is the pass token; the stored
+# key is the template with `{p}` deleted and any orphan `_` collapsed, so
+# `sim_cc_ms_cold` lands as `sim_cc_ms` and `pass1_color_ms` as `color_ms` — one
+# name across modes, and the same names the two contracts use.
+#
+# `wall` is a LIST of templates, SUMMED. A phase is rarely one command: a sim
+# rebuild is `--setup-only` plus `--run-only` and a synth rebuild is color plus
+# abc. `bench/matrix.sh` puts their sum in `wall_ms` because the sum is what an
+# edit costs; taking only the first here put a DIFFERENT quantity in the same
+# column depending on which tool wrote the row.
+PASS_TOKENS = {"cold": "_cold", "incremental": "_comment", "edit": "_edit"}
+NUMBERED_TOKENS = {"cold": "pass1", "incremental": "pass2", "edit": "pass3"}
+WARM_TOKENS = {"cold": "_cold", "incremental": "_warm", "edit": "_touch"}
+
+PHASES = {
+    "compile": {
+        "target": "{core}_compile_incremental",
+        "tokens": PASS_TOKENS,
+        "wall": ["compile{p}_ms"],
+        "extra": ["workdir_bytes{p}"],
+        "scenario": [],
+    },
+    "sim": {
+        "target": "{core}_sim_incremental",
+        "tokens": PASS_TOKENS,
+        "wall": ["sim_setup{p}_ms", "sim_run{p}_ms"],
+        "extra": [
+            "sim_setup{p}_ms", "sim_run{p}_ms",
+            "sim_cc_ms{p}", "sim_exec_ms{p}", "sim_cycles_per_s{p}",
+            "sim_cycles_per_s_with_cc{p}", "sim_rewritten{p}",
+            "workdir_bytes{p}",
+        ],
+        "scenario": ["sim_warm_equals_cold", "sim_ninja_present"],
+    },
+    "synth": {
+        "target": "{core}_synth_incremental",
+        "tokens": NUMBERED_TOKENS,
+        "wall": ["{p}_color_ms", "{p}_abc_ms"],
+        "extra": [
+            "{p}_color_ms", "{p}_abc_ms", "{p}_sta_ms", "{p}_sta_delay",
+            "{p}_cache_hits", "{p}_cache_misses",
+            "{p}_cache_hit_ms", "{p}_cache_miss_ms",
+        ],
+        "scenario": ["abc_warm_speedup"],
+    },
+    "lec": {
+        "target": "{core}_lec_incremental",
+        "tokens": WARM_TOKENS,
+        "wall": ["lec{p}_ms"],
+        "extra": [],
+        "scenario": [],
+    },
+    "formal": {
+        "target": "{core}_verify_incremental",
+        "tokens": WARM_TOKENS,
+        "wall": ["verify{p}_ms"],
+        "extra": [],
+        "scenario": [],
+    },
+}
+
+
+def stored_key(tmpl):
+    """`sim_cc_ms{p}` -> `sim_cc_ms`; `{p}_cache_hits` -> `cache_hits`."""
+    return re.sub(r"__+", "_", tmpl.format(p="")).strip("_")
+
+
+def sh(*cmd, cwd=None):
+    try:
+        return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
+                              check=True).stdout.strip()
+    except Exception:
+        return ""
+
+
+def identity(root: Path):
+    """The block that makes a row comparable — or refuses to."""
+    livehd = root.parent / "livehd"
+    pdk = os.environ.get("PDK_VERSION", "")
+    if not pdk:
+        # Same resolution bench/common.sh uses; absent is recorded as absent,
+        # never as a guess. A synthesis row without it is unusable (H6).
+        # `Path(tech).name` alone recorded the literal string "lib", because the
+        # tech dir ends `.../sky130_fd_sc_hd/lib/` — a value that looks like data
+        # and is not. The version is the component after `versions/`.
+        parts = [p for p in os.environ.get("HAGENT_TECH_DIR", "").split("/") if p]
+        if "versions" in parts and parts.index("versions") + 1 < len(parts):
+            pdk = parts[parts.index("versions") + 1]
+        elif parts:
+            pdk = next((p for p in reversed(parts) if p not in ("lib", "libs.ref")), "")
+    return {
+        "host": socket.gethostname().split(".")[0],
+        "lhd_git_sha": sh("git", "rev-parse", "--short", "HEAD", cwd=livehd),
+        "lhdsuite_git_sha": sh("git", "rev-parse", "--short", "HEAD", cwd=root),
+        "pdk_version": pdk,
+    }
+
+
+def norm_phases(v):
+    """Accept either shape of `phases` and return {name: ms}, dups summed.
+
+    `lhd --result-json` emits the ARRAY form (ordered, one entry per executed
+    step, names repeatable); the ledger row stores the MAP. Taking both here
+    means a driver can paste the tool's own member straight through.
+    """
     out = {}
+    if isinstance(v, dict):
+        items = list(v.items())
+    elif isinstance(v, list):
+        items = [(d.get("name"), d.get("ms")) for d in v if isinstance(d, dict)]
+    else:
+        return {}
+    for name, ms in items:
+        if name is None or ms is None:
+            continue
+        try:
+            out[str(name)] = round(out.get(str(name), 0.0) + float(ms), 3)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+# --------------------------------------------------------------------- add ---
+def merge_rows(rows):
+    """Fold rows that share (config_id, target, phase, mode) into the one row the
+    contract promises. `bench/matrix.sh` deliberately times a phase as two
+    commands — synth is color+abc, sim is setup+run — because what an edit costs
+    is their sum; the per-pass breakdown separates them again by name.
+
+    `config_id` IS PART OF THE IDENTITY. Without it, concatenating two sittings'
+    `matrix_rows.jsonl` (an anticipated workflow) summed the baseline's wall time
+    into the new config's row and then dropped the baseline row entirely: the
+    measurement the whole loop is gated against, destroyed by the default path.
+    """
+    order, merged = [], {}
+    for r in rows:
+        key = (r.get("config_id"), r.get("target"), r.get("phase"), r.get("mode"))
+        if key not in merged:
+            merged[key] = dict(r)
+            order.append(key)
+            continue
+        a = merged[key]
+        for k, v in r.items():
+            if k == "wall_ms":
+                a[k] = (a.get(k) or 0.0) + (v or 0.0)
+            elif k == "phases":
+                p = a.setdefault("phases", {})
+                for n, ms in (v or {}).items():
+                    p[n] = round(p.get(n, 0.0) + ms, 3)
+            elif k == "passed":
+                a[k] = bool(a.get(k, True)) and bool(v)
+            else:
+                a[k] = v
+    return [merged[k] for k in order]
+
+
+def parse_json_lines(text, where):
+    text = text.strip()
+    if not text:
+        sys.exit("FAIL: %s is empty — nothing to add" % where)
+    try:  # a whole-file JSON array or a single object is accepted too
+        whole = json.loads(text)
+        return whole if isinstance(whole, list) else [whole]
+    except json.JSONDecodeError:
+        pass
+    rows = []
+    for n, line in enumerate(text.splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError as e:
+            sys.exit("FAIL: %s line %d is not JSON: %s" % (where, n, e))
+    return rows
+
+
+def cmd_add(args, root: Path):
+    if args.path in ("", "-", None):
+        raw, where = sys.stdin.read(), "<stdin>"
+    else:
+        p = Path(args.path)
+        if not p.is_file():
+            p = root / args.path
+        if not p.is_file():
+            sys.exit("FAIL: no such file: %s" % args.path)
+        raw, where = p.read_text(), str(p)
+
+    ident = identity(root)
+    stamp_date = time.strftime("%Y-%m-%dT%H:%M:%S")
+    rows = []
+    for i, r in enumerate(parse_json_lines(raw, where), 1):
+        if not isinstance(r, dict):
+            sys.exit("FAIL: %s row %d is not a JSON object" % (where, i))
+        row = dict(r)
+        for miss in ("target", "phase", "mode"):
+            if not row.get(miss):
+                sys.exit("FAIL: %s row %d has no `%s`" % (where, i, miss))
+        if row["mode"] not in KNOWN_MODES:
+            sys.exit("FAIL: %s row %d mode=%r — expected one of %s (a typo here "
+                     "would silently grow a column)"
+                     % (where, i, row["mode"], ", ".join(KNOWN_MODES)))
+        if row.get("wall_ms") is None:
+            sys.exit("FAIL: %s row %d (%s/%s/%s) has no `wall_ms`"
+                     % (where, i, row["target"], row["phase"], row["mode"]))
+        row["wall_ms"] = float(row["wall_ms"])
+        row["phases"] = norm_phases(row.get("phases"))
+        row["passed"] = bool(row.get("passed", True))
+        # The identity block is stamped HERE, never taken from the driver: a
+        # measurement must not be able to claim it ran on another host.
+        row.update(ident)
+        row["flow"] = args.flow
+        row.setdefault("date", stamp_date)
+        cid = row.get("config_id") or args.config_id
+        if not cid:
+            sys.exit("FAIL: %s row %d has no config_id and none was given "
+                     "(--config-id ID)" % (where, i))
+        row["config_id"] = cid
+        rows.append(row)
+
+    if args.merge:
+        before = len(rows)
+        rows = merge_rows(rows)
+        if before != len(rows):
+            print("merged %d row(s) into %d by (config_id, target, phase, mode)"
+                  % (before, len(rows)))
+    write_rows(root, rows, dry_run=args.dry_run)
+
+
+def write_rows(root: Path, rows, dry_run=False):
+    if not rows:
+        sys.exit("FAIL: no rows to append")
+    if dry_run:
+        for r in rows:
+            print(json.dumps(r, sort_keys=True))
+        print("dry run — %s untouched" % LEDGER, file=sys.stderr)
+        return
+    dest = root / LEDGER
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with dest.open("a") as f:
+        for r in rows:
+            f.write(json.dumps(r, sort_keys=True) + "\n")
+    print("appended %d row(s) to %s" % (len(rows), LEDGER))
+    for r in rows:
+        print("  %-10s %-8s %-12s %-14s wall=%s ms  passes=%d"
+              % (r.get("target"), r.get("phase"), r.get("mode"),
+                 r.get("config_id"), r.get("wall_ms"), len(r.get("phases") or {})))
+
+
+# ------------------------------------------------------------------ append ---
+def read_metrics(logdir: Path, target: str):
+    """-> ({metric: value}, passed) or None when the target has not run."""
+    log = logdir / target / "test.log"
+    if not log.is_file():
+        return None
+    metrics = {}
     for line in log.read_text(errors="replace").splitlines():
         m = re.match(r"METRIC\s+(\S+)\s+(\S+)\s+(\S+)", line)
         if m:
             try:
-                out[m.group(1)] = float(m.group(2))
+                metrics[m.group(1)] = float(m.group(2))
             except ValueError:
                 pass
-    return out
+    ok = True
+    xml = logdir / target / "test.xml"
+    if xml.is_file():
+        t = xml.read_text(errors="replace")
+        bad = int((re.search(r'failures="(\d+)"', t) or ["", "0"])[1]) + \
+            int((re.search(r'errors="(\d+)"', t) or ["", "0"])[1])
+        ok = bad == 0
+    return metrics, ok
 
 
-def successful(test_dir: Path) -> bool:
-    xml = test_dir / "test.xml"
-    if not xml.is_file():
-        return False
-    text = xml.read_text(errors="replace")
-    return re.search(r'failures="0"', text) is not None and re.search(r'errors="0"', text) is not None
+def cmd_append(args, root: Path):
+    """The bazel-testlogs scraper, emitting the NEW per-mode row shape.
 
-
-def need(m: dict, key: str):
-    if key not in m:
-        raise SystemExit(f"missing metric {key}; rerun the benchmark with current harness")
-    value = m[key]
-    return int(value) if value.is_integer() else value
-
-
-def main() -> None:
-    if len(sys.argv) < 3:
-        raise SystemExit("usage: bazel run //bench:ledger -- CONFIG_ID [CORE ...]")
-    ws = Path(sys.argv[1]).resolve()
-    config_id = sys.argv[2]
-    targets = sys.argv[3:] or list(ROUTINE)
-    logs = ws / "bazel-testlogs" / "bench"
-    ledger = ws / "bench" / "ledger.jsonl"
-
-    existing = []
-    if ledger.is_file():
-        existing = [json.loads(line) for line in ledger.read_text().splitlines() if line.strip()]
-    used = {(r["config_id"], r["target"]) for r in existing}
-    duplicate = [t for t in targets if (config_id, t) in used]
-    if duplicate:
-        raise SystemExit(f"append-only ledger already has {config_id}: {', '.join(duplicate)}")
-
-    lhd_repo = ws.parent / "livehd"
-    common = {
-        "date": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "host": platform.node(),
-        "lhd_git_sha": git(lhd_repo, "rev-parse", "HEAD"),
-        "lhdsuite_git_sha": git(ws, "rev-parse", "HEAD"),
-        # The SHA fields name the base commits; these hashes distinguish the
-        # intentionally uncommitted configurations used by this loop.
-        "lhd_diff_sha256": diff_hash(lhd_repo),
-        "lhdsuite_diff_sha256": diff_hash(ws),
-        "config_id": config_id,
-    }
-
+    Its three scenario passes are cold / comment-only / one-line-edit, which are
+    modes cold / incremental / edit. It never runs a caches-off pass, so it
+    produces no `full` row and the page's `full` column shows "-" for it — an
+    honest gap, not a zero.
+    """
+    logdir = root / "bazel-testlogs" / "bench"
+    if not logdir.is_dir():
+        sys.exit("FAIL: no bazel-testlogs/bench — run `bazel test //bench:...` first")
+    ident = identity(root)
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
     rows = []
-    for target in targets:
-        cold_dir = logs / f"{target}_synth"
-        incr_dir = logs / f"{target}_synth_incremental"
-        if not successful(cold_dir) or not successful(incr_dir):
-            raise SystemExit(f"{target}: cold and incremental synthesis tests must both pass before collection")
-        meta_path = cold_dir / "test.outputs" / "run_metadata.json"
-        if not meta_path.is_file():
-            raise SystemExit(f"{target}: missing run_metadata.json; rerun with current harness")
-        meta = json.loads(meta_path.read_text())
-        cm = metrics(cold_dir / "test.log")
-        im = metrics(incr_dir / "test.log")
-        row = dict(common)
-        row.update({
-            "pdk_version": meta.get("pdk_version"),
-            "target": target,
-            "compile_ms": need(cm, "compile_setup_ms"),
-            "color_ms": need(cm, "synth_color_ms"),
-            "abc_ms": need(cm, "synth_abc_ms"),
-            "sta_ms": need(cm, "synth_sta_ms"),
-            "synthesis_elapsed_ms": need(cm, "synthesis_elapsed_ms"),
-            "regions": need(cm, "synth_regions"),
-            "gates": need(cm, "synth_gates"),
-            "area": need(cm, "synth_area"),
-            "max_delay": need(cm, "synth_max_delay"),
-            "sta_delay": need(cm, "synth_sta_delay"),
-            "cache_hits": need(im, "pass2_cache_hits"),
-            "cache_misses": need(im, "pass2_cache_misses"),
-            "cache_hit_ms": need(im, "pass2_cache_hit_ms"),
-            "cache_miss_ms": need(im, "pass2_cache_miss_ms"),
-            "edit_cache_hits": need(im, "pass3_cache_hits"),
-            "edit_cache_misses": need(im, "pass3_cache_misses"),
-            "div_blackbox": need(cm, "synth_div_blackbox"),
-        })
-        if not row["pdk_version"] or not row["host"]:
-            raise SystemExit(f"{target}: unusable row without pdk_version and host")
-        rows.append(row)
+    for core in args.targets:
+        for phase, spec in PHASES.items():
+            got = read_metrics(logdir, spec["target"].format(core=core))
+            if got is None:
+                continue
+            metrics, ok = got
+            for mode, tok in spec["tokens"].items():
+                parts = [metrics.get(t.format(p=tok)) for t in spec["wall"]]
+                if all(v is None for v in parts):
+                    continue
+                # The contracted `wall_ms` is the SUM of the commands the phase
+                # takes, matching what bench/matrix.sh writes for the same cell.
+                wall = sum(v for v in parts if v is not None)
+                row = dict(ident)
+                row.update({
+                    "date": now, "flow": args.flow, "target": core,
+                    "phase": phase, "mode": mode, "config_id": args.config_id,
+                    "passed": ok, "wall_ms": wall, "phases": {},
+                })
+                for tmpl in spec["extra"]:
+                    v = metrics.get(tmpl.format(p=tok))
+                    if v is not None:
+                        row[stored_key(tmpl)] = v
+                if mode == "cold":  # scenario-wide, not per-pass
+                    for k in spec["scenario"]:
+                        if k in metrics:
+                            row[k] = metrics[k]
+                rows.append(row)
+    if not rows:
+        sys.exit("FAIL: none of the requested targets have results in bazel-testlogs")
+    write_rows(root, rows, dry_run=args.dry_run)
 
-    with ledger.open("a") as f:
-        for row in rows:
-            f.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
-    print(f"appended {len(rows)} row(s) to {ledger}: {config_id}")
+
+# ------------------------------------------------------------------ render ---
+def load_rows(root: Path, flow: str):
+    path = root / LEDGER
+    if not path.is_file():
+        return []
+    rows = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(r, dict) and r.get("flow") == flow:
+            rows.append(r)
+    return rows
+
+
+def esc(v):
+    return html.escape(str(v), quote=True)
+
+
+def ms(v):
+    return "-" if v is None else "{:,.1f}".format(v)
+
+
+def pct(v):
+    return "-" if v is None else "{:+.1f}%".format(v * 100)
+
+
+def num(v):
+    if v is None:
+        return "-"
+    if isinstance(v, bool):
+        return "yes" if v else "no"
+    if isinstance(v, (int, float)):
+        # `%g` turned a workdir byte count into `4.4e+08`, which is unreadable
+        # and, worse, hides a doubling. Group instead of exponent — from four
+        # digits up, so a `10,000` never sits in a column next to a `6000`.
+        return "{:,.0f}".format(v) if abs(v) >= 1000 else "{:g}".format(v)
+    return esc(v)
+
+
+def is_num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def direction(metric):
+    """-1 lower-is-better, +1 higher-is-better, 0 UNKNOWN.
+
+    The third state is the point. A metric this page has no rule for gets its
+    delta shown and NO verdict; guessing produced a bold-green "better" on an
+    `area` regression, which is the worst thing a scoreboard can do.
+    """
+    lo = bool(LOWER_IS_BETTER.search(metric))
+    hi = bool(HIGHER_IS_BETTER.search(metric))
+    if lo == hi:          # neither rule, or (impossibly) both — say so
+        return 0
+    return -1 if lo else 1
+
+
+DIRECTION_WORD = {-1: "lower is better", 1: "higher is better",
+                  0: "direction unknown"}
+
+# verdict token -> CSS class. `unclassified` is deliberately grey, not green.
+V_CLASS = {
+    "better": "better", "worse": "worse", "noise": "noise",
+    "I3 VIOLATION": "worse", "AREA GUARDRAIL": "worse",
+    "unclassified": "unknown", "not passed": "warn",
+    "CHANGED": "warn", "same": "noise", "CORRECTNESS": "worse",
+    "": "miss",
+}
+
+
+def vcell(verd):
+    return cell(verd or "-", V_CLASS.get(verd, ""))
+
+
+def verdict(base, cur, dirn, eps):
+    """The §8 gate, computed rather than eyeballed. Three inputs, four answers.
+
+    A ZERO reference is not an absent one. `base=0, cur=9999` is an infinite
+    regression — the old code returned ("","") for it, so an `sim_exec_ms` that
+    went from 0 to 9999 rendered as a blank cell, raised no I3 breach and exited
+    0. Only a genuinely missing number gets the empty verdict now.
+    """
+    if base is None or cur is None:
+        return "", ""
+    if base == 0:
+        if cur == 0:
+            return "+0.0%", "noise"
+        d = "+&infin;%" if cur > 0 else "&minus;&infin;%"
+        if dirn == 0:
+            return d, "unclassified"
+        return d, ("better" if ((cur < 0) if dirn < 0 else (cur > 0)) else "worse")
+    delta = (cur - base) / abs(base)
+    txt = "%+.1f%%" % (delta * 100)
+    if abs(delta) <= eps:
+        return txt, "noise"
+    if dirn == 0:
+        return txt, "unclassified"
+    return txt, ("better" if (delta < 0 if dirn < 0 else delta > 0) else "worse")
+
+
+def cell(text, cls=""):
+    return '<td class="%s">%s</td>' % (cls, text)
+
+
+def phase_key(p):
+    p = "" if p is None else str(p)
+    return (PHASE_ORDER.index(p) if p in PHASE_ORDER else len(PHASE_ORDER), p)
+
+
+def mode_key(m):
+    m = "" if m is None else str(m)
+    return (MODE_COLS.index(m) if m in MODE_COLS else len(MODE_COLS), m)
+
+
+def metric_key(m):
+    for i, o in enumerate(METRIC_ORDER):
+        if m == o or m.startswith(o + "_") or m.endswith("_" + o) \
+                or ("_" + o + "_") in m:
+            return (i, m)
+    return (len(METRIC_ORDER), m)
+
+
+def metrics_of(*rows):
+    """Every numeric measurement on these rows, in contract order.
+
+    A WHITELIST used to stand here (`^(wall_ms|sim_|abc_|workdir_bytes)`), and
+    it silently dropped `refused`, `redone_ms`, `hits`, `misses`,
+    `warm_speedup`, `edit_speedup` — all named in the H6 contract — plus every
+    unprefixed synthesis QoR column. The ledger is the source of truth: if a
+    number is in it, it appears on the page.
+    """
+    names = set()
+    for r in rows:
+        for k, v in (r or {}).items():
+            if k not in STRUCTURAL and is_num(v):
+                names.add(k)
+    return sorted(names, key=metric_key)
+
+
+def usable(r):
+    """Is this row EVIDENCE? A run that crashed after 300 ms has a `wall_ms`,
+    and reading it produced a bold-green 340x speedup on the same line that said
+    FAILED. A non-passing measurement is excluded from every derived number."""
+    return bool(r) and bool(r.get("passed", True))
+
+
+def uwall(cells, mode):
+    """`wall_ms` of a mode, or None if that mode is missing, did not pass, or
+    recorded something that is not a number."""
+    r = cells.get(mode)
+    if not usable(r):
+        return None
+    v = r.get("wall_ms")
+    return v if is_num(v) else None
+
+
+def uval(cells, mode, key):
+    r = cells.get(mode)
+    if not usable(r):
+        return None
+    v = r.get(key)
+    return v if is_num(v) else None
+
+
+def index_modes(rows, cid):
+    """(target, phase) -> {mode: row} for one config. A later line supersedes an
+    earlier one: a re-run of the same cell replaces it rather than averaging.
+
+    Rows with NO `mode` are skipped, not crashed on: the ledger is append-only
+    and shared, so one pre-mode row in a host that also has moded rows used to
+    raise `KeyError` and leave the page unwritten for EVERY host.
+    """
+    data = {}
+    for r in rows:
+        if r.get("config_id") != cid or r.get("phase") == "control":
+            continue
+        mode = r.get("mode")
+        if not mode:
+            continue
+        data.setdefault((r.get("target", "?"), r.get("phase", "?")), {})[mode] = r
+    return data
+
+
+def any_of(cells, key):
+    """The scenario-wide gates are recorded on whichever mode row carried them."""
+    for mode in sorted(cells, key=mode_key):
+        if key in cells[mode]:
+            return cells[mode][key]
+    return None
+
+
+def section_wall(out, data, modes, eps):
+    out.append("<h3>1. Wall clock — full vs cold vs incremental</h3>")
+    out.append("<p><b>incr speedup</b> = cold / incremental: what the machinery "
+               "buys on a rebuild. <b>cache cost</b> = (cold &minus; full) / full: "
+               "what it charges on a first run — flagged past "
+               "<b>+%.0f%%</b>. A cell reading &quot;-&quot; is a mode that was "
+               "not run; it is never a zero. <b>A mode that did not pass is "
+               "shown but never used</b>: its wall clock is the time to a crash, "
+               "not the time to an answer, so both derived columns read "
+               "&quot;-&quot;.</p>" % (CACHE_COST_WARN * 100))
+    out.append("<p><b>load</b> is the 1-minute run queue while the three modes ran, "
+               "highest of the three. It is not a result — it is how much to trust "
+               "the row. The control probe is single-threaded and cannot see this: "
+               "one desktop app pinning one core leaves the control at 36&nbsp;ms "
+               "while tripling a parallel host C++ build, which is exactly what "
+               "happened during the first sitting of this page. A load well above "
+               "the core count means the absolute milliseconds are inflated; the "
+               "<i>ratio</i> columns, measured back to back, survive it better than "
+               "the raw cells do.</p>")
+    out.append("<table><tr><th>target</th><th>phase</th>"
+               + "".join("<th>%s (ms)</th>" % esc(m) for m in modes)
+               + "<th>incr speedup</th><th>cache cost</th><th>load</th></tr>")
+    warned = []
+    for target, phase in sorted(data, key=lambda k: (k[0], phase_key(k[1]))):
+        cells = data[(target, phase)]
+        tds = []
+        for m in modes:
+            r = cells.get(m)
+            if r is None:
+                tds.append(cell("-", "miss"))
+            elif not r.get("passed", True):
+                tds.append(cell(ms(r.get("wall_ms")) + " FAILED", "worse"))
+            else:
+                tds.append(cell(ms(r.get("wall_ms"))))
+        cold, incr, full = (uwall(cells, "cold"), uwall(cells, "incremental"),
+                            uwall(cells, "full"))
+        if cold is None or incr is None:
+            tds.append(cell("-", "miss"))
+        elif incr <= 0:
+            tds.append(cell("incremental measured %s ms — not a speedup" % num(incr),
+                            "warn"))
+        else:
+            sp = cold / incr
+            tds.append(cell("%.2f&times;" % sp,
+                            "better" if sp > 1 + eps else
+                            ("worse" if sp < 1 - eps else "noise")))
+        if full is None or cold is None:
+            tds.append(cell("-", "miss"))
+        elif full == 0:
+            tds.append(cell("full measured 0 ms", "warn"))
+        else:
+            cc = (cold - full) / full
+            if cc > CACHE_COST_WARN:
+                warned.append("%s/%s %+.1f%%" % (target, phase, cc * 100))
+                tds.append(cell(pct(cc) + " WARN", "warn"))
+            else:
+                tds.append(cell(pct(cc), "noise" if abs(cc) <= eps else ""))
+        # How contended the box was, worst of the three modes. Shown last so it
+        # reads as a qualifier on the row rather than as one of its results.
+        loads = [r.get("loadavg") for r in cells.values() if is_num(r.get("loadavg"))]
+        if loads:
+            hi = max(loads)
+            tds.append(cell("%.1f" % hi, "warn" if hi >= LOAD_WARN else ""))
+        else:
+            tds.append(cell("-", "miss"))
+        out.append("<tr><td>%s</td><td>%s</td>%s</tr>"
+                   % (esc(target), esc(phase), "".join(tds)))
+    out.append("</table>")
+    if warned:
+        out.append('<p class="warn">cache cost over +%.0f%% on: %s — the '
+                   'incremental machinery is charging a first build more than it '
+                   'should.</p>' % (CACHE_COST_WARN * 100, esc(", ".join(warned))))
+    return warned
+
+
+def section_guardrail(out, data, modes, eps):
+    """I3, measured within one sitting: the mode a design was BUILT in must not
+    change how fast the built thing RUNS."""
+    rows_html, breached, notes = [], [], []
+    for target, phase in sorted(data, key=lambda k: (k[0], phase_key(k[1]))):
+        cells = data[(target, phase)]
+        keys = sorted({k for r in cells.values() for k in r if GUARDRAIL_RE.match(k)})
+        for k in keys:
+            ref_mode = "full" if uval(cells, "full", k) is not None else "cold"
+            ref = uval(cells, ref_mode, k)
+            tds, verds = [], []
+            for m in modes:
+                r = cells.get(m)
+                v = (r or {}).get(k)
+                if r is None or not is_num(v):
+                    tds.append(cell("-", "miss"))
+                elif not usable(r):
+                    tds.append(cell(num(v) + " FAILED", "worse"))
+                else:
+                    tds.append(cell(num(v)))
+            for m in modes:
+                if m == ref_mode:
+                    verds.append(cell("ref", "noise"))
+                    continue
+                if not usable(cells.get(m)):
+                    verds.append(cell("-" if cells.get(m) is None else "not passed",
+                                      "miss" if cells.get(m) is None else "warn"))
+                    continue
+                v = uval(cells, m, k)
+                if v is None or ref is None:
+                    verds.append(cell("-", "miss"))
+                    continue
+                d, verd = verdict(ref, v, direction(k), eps)
+                if verd == "worse":
+                    verd = "I3 VIOLATION"
+                    breached.append("%s/%s %s (%s)" % (target, phase, k, m))
+                verds.append(cell("%s %s" % (d or "-", verd or "-"),
+                                  V_CLASS.get(verd, "")))
+            if ref is None:
+                notes.append("%s/%s %s (no usable %s-mode reference)"
+                             % (target, phase, k, ref_mode))
+            rows_html.append('<tr class="guard"><td>%s</td><td>%s</td><td>%s</td>'
+                             '%s%s</tr>' % (esc(target), esc(phase), esc(k),
+                                            "".join(tds), "".join(verds)))
+    out.append("<h3>2. I3 guardrail — the built thing's own speed</h3>")
+    if not rows_html:
+        out.append("<p>no <code>sim_exec_ms</code> / <code>sim_cycles_per_s</code> "
+                   "rows in this config — the guardrail is unmeasured, which is "
+                   "not the same as held.</p>")
+        return []
+    out.append("<p>Each mode against the <b>reference</b> mode (full, or cold "
+               "when full was not run). Incremental reuse must not produce a "
+               "slower binary: a regression here rejects the change regardless "
+               "of net wall time (&sect;8.3). A reference of <b>0</b> with a "
+               "non-zero mode is an infinite regression, not an absent one.</p>")
+    out.append("<table><tr><th>target</th><th>phase</th><th>metric</th>"
+               + "".join("<th>%s</th>" % esc(m) for m in modes)
+               + "".join("<th>%s vs ref</th>" % esc(m) for m in modes) + "</tr>")
+    out.extend(rows_html)
+    out.append("</table>")
+    if notes:
+        out.append('<p class="warn">unmeasured guardrail (no reference to '
+                   'compare against, so nothing here can be cleared): %s</p>'
+                   % esc("; ".join(notes)))
+    if breached:
+        out.append('<p class="worse">I3 GUARDRAIL BREACHED on: %s</p>'
+                   % esc(", ".join(breached)))
+    return breached
+
+
+# Metrics §3 owns as named columns; they are not repeated in §4.
+GATE_KEYS = ("sim_warm_equals_cold", "sim_rewritten", "abc_store_failed",
+             "store_failed", "abc_refused", "refused", "workdir_bytes",
+             "sim_ninja_present")
+
+
+def section_gates(out, data):
+    out.append("<h3>3. Non-time gates</h3>")
+    out.append("<p>The gates a time-only scoreboard tempts you to forget (&sect;8.4): "
+               "<code>store_failed</code> must be 0, <code>refused</code> must be "
+               "<i>attributed</i> (a principled refusal is data, an unexplained "
+               "one is a bug), warm must equal cold byte for byte, and cache size "
+               "is a cost.</p>")
+    out.append("<table><tr><th>target</th><th>phase</th><th>passed (per mode)</th>"
+               "<th>warm==cold</th><th>rewritten</th><th>store_failed</th>"
+               "<th>refused</th><th>workdir bytes</th></tr>")
+    for target, phase in sorted(data, key=lambda k: (k[0], phase_key(k[1]))):
+        cells = data[(target, phase)]
+        marks = []
+        for m in sorted(cells, key=mode_key):
+            ok = cells[m].get("passed", True)
+            marks.append("%s=%s" % (m, "yes" if ok else "NO"))
+        bad = any(not c.get("passed", True) for c in cells.values())
+        wec = any_of(cells, "sim_warm_equals_cold")
+        sf = any_of(cells, "abc_store_failed")
+        if sf is None:
+            sf = any_of(cells, "store_failed")
+        ref = any_of(cells, "refused")
+        if ref is None:
+            ref = any_of(cells, "abc_refused")
+        wb = any_of(cells, "workdir_bytes")
+        out.append("<tr><td>%s</td><td>%s</td>%s<td class='%s'>%s</td>"
+                   "<td>%s</td><td class='%s'>%s</td><td class='%s'>%s</td>"
+                   "<td>%s</td></tr>"
+                   % (esc(target), esc(phase),
+                      cell(esc(" ".join(marks)), "worse" if bad else ""),
+                      "" if wec in (None, True, 1, 1.0) else "worse",
+                      "-" if wec is None else ("yes" if wec else "NO"),
+                      num(any_of(cells, "sim_rewritten")),
+                      "worse" if sf else "", num(sf),
+                      "warn" if ref else "", num(ref), num(wb)))
+    out.append("</table>")
+
+
+def section_other(out, data, modes):
+    """Everything else the ledger recorded, per mode. No verdict is invented
+    here: the baseline-to-current gate below is where deltas are judged. The
+    point of this table is that NOTHING in the ledger is silently dropped."""
+    body = []
+    for target, phase in sorted(data, key=lambda k: (k[0], phase_key(k[1]))):
+        cells = data[(target, phase)]
+        names = [m for m in metrics_of(*cells.values())
+                 if m != "wall_ms" and not GUARDRAIL_RE.match(m)
+                 and m not in GATE_KEYS]
+        for m in names:
+            tds = "".join(cell(num((cells.get(k) or {}).get(m)),
+                               "" if (cells.get(k) or {}).get(m) is not None
+                               else "miss") for k in modes)
+            if not_a_trend(m):
+                word, cls = "reported, not trended", "noise"
+            else:
+                dirn = direction(m)
+                word, cls = DIRECTION_WORD[dirn], "noise" if dirn else "unknown"
+            body.append("<tr><td>%s</td><td>%s</td><td><code>%s</code></td>%s%s</tr>"
+                        % (esc(target), esc(phase), esc(m), tds,
+                           cell(word, cls)))
+    out.append("<h3>4. Other recorded metrics</h3>")
+    if not body:
+        out.append("<p>no further metrics on these rows.</p>")
+        return
+    out.append("<p>Every remaining number on the rows, per mode — the contract's "
+               "cache columns (<code>hits</code>, <code>misses</code>, "
+               "<code>redone_ms</code> &mdash; the I4 number), the synthesis QoR "
+               "block, and anything a driver added since. The last column is "
+               "what this page knows about the metric: a "
+               "<span class=\"unknown\">direction unknown</span> metric is "
+               "reported and never given a verdict.</p>")
+    out.append("<table><tr><th>target</th><th>phase</th><th>metric</th>"
+               + "".join("<th>%s</th>" % esc(m) for m in modes)
+               + "<th>direction</th></tr>")
+    out.extend(body)
+    out.append("</table>")
+
+
+def section_breakdown(out, data, modes):
+    out.append("<h3>5. Where the time goes — per-pass breakdown</h3>")
+    out.append("<p>One table per (target, phase). <b>Sorted by cold-mode ms, "
+               "descending</b>, so the pass that owns the rebuild is the first "
+               "row. Each mode's percent column is that pass's share of that "
+               "mode's wall clock; <b>(unattributed)</b> is wall minus the sum "
+               "of the reported passes, so the column adds to 100%.</p>")
+    empty = []
+    for target, phase in sorted(data, key=lambda k: (k[0], phase_key(k[1]))):
+        cells = data[(target, phase)]
+        maps = {m: norm_phases(cells[m].get("phases")) for m in cells}
+        if not any(maps.values()):
+            empty.append("%s/%s" % (target, phase))
+            continue
+        names = sorted({n for mm in maps.values() for n in mm})
+
+        def sortkey(n):
+            cold = maps.get("cold", {}).get(n)
+            best = max([mm.get(n, 0.0) for mm in maps.values()] or [0.0])
+            return (0 if cold is not None else 1, -(cold or 0.0), -best, n)
+
+        names.sort(key=sortkey)
+        out.append("<h4>%s / %s</h4>" % (esc(target), esc(phase)))
+        out.append("<table><tr><th>pass</th>"
+                   + "".join("<th>%s ms</th><th>%s %%</th>" % (esc(m), esc(m))
+                             for m in modes) + "</tr>")
+
+        def emit(label, values, cls=""):
+            tds = []
+            for m in modes:
+                r, v = cells.get(m), values.get(m)
+                wall = (r or {}).get("wall_ms")
+                if r is None:
+                    tds.append(cell("-", "miss") + cell("-", "miss"))
+                    continue
+                tds.append(cell(ms(v)))
+                tds.append(cell("-" if (v is None or not wall)
+                                else "%.1f%%" % (100.0 * v / wall)))
+            out.append('<tr class="%s"><td>%s</td>%s</tr>'
+                       % (cls, label, "".join(tds)))
+
+        for n in names:
+            emit("<code>%s</code>" % esc(n),
+                 {m: maps.get(m, {}).get(n) for m in modes})
+        una, tot = {}, {}
+        for m in modes:
+            r = cells.get(m)
+            if r is None:
+                continue
+            wall = r.get("wall_ms")
+            s = sum(maps.get(m, {}).values())
+            tot[m] = wall
+            if wall is not None:
+                una[m] = round(wall - s, 3)
+        emit("(unattributed)", una, "una")
+        emit("<b>total (wall)</b>", tot, "total")
+        out.append("</table>")
+    if empty:
+        out.append("<p><i>no per-pass data recorded for: %s</i> — the command "
+                   "ran without <code>--result-json</code>, so only its wall "
+                   "clock is known.</p>" % esc(", ".join(empty)))
+
+
+def plain(d):
+    """The delta strings carry HTML entities (`+&infin;%`) because they are
+    written into the page; the same string also reaches a stderr banner, where
+    an entity is noise."""
+    return (d or "-").replace("&infin;", "inf").replace("&minus;", "-")
+
+
+def brief(items, n=6, sep=", "):
+    """A banner names the first few and counts the rest: an unbounded list in a
+    stderr line is as unreadable as no line."""
+    items = list(items)
+    if len(items) <= n:
+        return sep.join(items)
+    return sep.join(items[:n]) + " (+%d more)" % (len(items) - n)
+
+
+def missing_config_note(out, which, cid, here, everywhere):
+    """A typo'd --baseline used to render a header and an empty table, which
+    reads exactly like a gate that ran and found nothing wrong."""
+    known = ", ".join(sorted(c for c in everywhere if c)) or "(none)"
+    mine = ", ".join(sorted(c for c in here if c)) or "(none)"
+    if cid not in everywhere:
+        out.append('<p class="worse">NO SUCH CONFIG: <code>%s</code> was given '
+                   'as the %s but appears on <b>no row in the ledger</b> — the '
+                   '&sect;8 gate did not run. config_ids in this flow: <b>%s</b>.'
+                   '</p>' % (esc(cid), esc(which), esc(known)))
+        return True
+    out.append('<p class="warn">%s <code>%s</code> was not measured on this host, '
+               'so the &sect;8 gate cannot run here (I11 — a number from another '
+               'box is not a baseline). config_ids on this host: <b>%s</b>.</p>'
+               % (esc(which), esc(cid), esc(mine)))
+    return False
+
+
+def section_config_delta(out, hrows, base_id, cur_id, eps):
+    """The §8 accept/reject gate: this config against the loop's baseline, in
+    the SAME mode. Never across hosts, never across modes."""
+    base, cur = index_modes(hrows, base_id), index_modes(hrows, cur_id)
+    out.append("<h3>6. &sect;8 gate — baseline <code>%s</code> &rarr; current "
+               "<code>%s</code></h3>" % (esc(base_id), esc(cur_id)))
+    if base_id == cur_id:
+        out.append("<p>only one config_id on this host yet — nothing to gate "
+                   "against. The baseline column does not move once set "
+                   "(&sect;9.6).</p>")
+        return [], []
+    out.append("<table><tr><th>target</th><th>phase</th><th>mode</th><th>metric</th>"
+               "<th>baseline</th><th>current</th><th>&Delta;</th><th>verdict</th></tr>")
+    breached, regressed = [], []
+    for key in sorted(set(base) | set(cur), key=lambda k: (k[0], phase_key(k[1]))):
+        bm, cm = base.get(key, {}), cur.get(key, {})
+        for mode in sorted(set(bm) | set(cm), key=mode_key):
+            b, c = bm.get(mode, {}), cm.get(mode, {})
+            ok = usable(b) and usable(c)
+            for m in metrics_of(b, c):
+                bv, cv = b.get(m), c.get(m)
+                if not is_num(bv) and not is_num(cv):
+                    continue
+                if not (is_num(bv) and is_num(cv)):
+                    d, verd = "", ""   # one side simply was not measured
+                elif not_a_trend(m):
+                    # Shown, not trended — and a CHANGE here invalidates the
+                    # time columns above it rather than being a regression.
+                    verd = "same" if bv == cv else "CHANGED"
+                    d = "-" if bv == cv else "not comparable"
+                    if CORRECTNESS.search(m) and bv and not cv:
+                        verd, d = "CORRECTNESS", "1 &rarr; 0"
+                        regressed.append("%s/%s %s (%s) went 1 -> 0"
+                                         % (key[0], key[1], m, mode))
+                elif not ok:
+                    verd, d = "not passed", "-"
+                else:
+                    d, verd = verdict(bv if is_num(bv) else None,
+                                      cv if is_num(cv) else None,
+                                      direction(m), eps)
+                    if verd == "worse":
+                        if GUARDRAIL_RE.match(m):
+                            verd = "I3 VIOLATION"
+                            breached.append("%s/%s %s (%s)"
+                                            % (key[0], key[1], m, mode))
+                        else:
+                            # §8 rule 2: no number regresses past the noise
+                            # floor. Rendering that red and exiting 0 leaves the
+                            # gate to be eyeballed, which is what the page is for.
+                            regressed.append("%s/%s %s (%s) %s"
+                                             % (key[0], key[1], m, mode,
+                                                plain(d)))
+                out.append('<tr class="%s"><td>%s</td><td>%s</td><td>%s</td>'
+                           '<td>%s</td><td>%s</td><td>%s</td><td>%s</td>%s</tr>'
+                           % ("guard" if GUARDRAIL_RE.match(m) else "",
+                              esc(key[0]), esc(key[1]), esc(mode), esc(m),
+                              num(bv), num(cv), d or "-", vcell(verd)))
+    out.append("</table>")
+    if breached:
+        out.append('<p class="worse">I3 GUARDRAIL BREACHED vs baseline on: %s</p>'
+                   % esc(", ".join(breached)))
+    if regressed:
+        out.append('<p class="worse">REJECTED by the &sect;8 gate — a number '
+                   'regressed past the %.1f%% noise floor (rule 2: a lever must '
+                   'not pay for one column with another), or a correctness '
+                   'metric flipped (rule 5): %s</p>'
+                   % (eps * 100, esc(", ".join(regressed))))
+    return breached, regressed
+
+
+# ------------------------------------------------------- flat / synth shape ---
+def flat_index(hrows, cid):
+    """(target, phase, mode) -> row, for rows that have no mode axis (every
+    flow=synth row, and anything written before the axis existed)."""
+    got = {}
+    for r in hrows:
+        if r.get("config_id") != cid or r.get("phase") == "control":
+            continue
+        got[(str(r.get("target", "?")), r.get("phase") or "",
+             r.get("mode") or "")] = r
+    return got
+
+
+def render_flat_host(out, hrows, base_id, cur_id, eps, synth):
+    """Rows with no full/cold/incremental axis: one baseline-vs-current table.
+
+    Returns (hard, warn) — and it MUST return them. The previous version
+    computed a `breached` list, dropped it on the floor and left the caller's
+    `hard_any` empty, so a legacy I3 breach printed inside the page and still
+    exited 0 with no banner: the one machine-readable signal, lost.
+    """
+    base, cur = flat_index(hrows, base_id), flat_index(hrows, cur_id)
+    hard, warn = [], []
+    if synth:
+        out.append("<p>The synthesis QoR gate (docs/opt_loop_synth.md M0.4b). "
+                   "<code>sta_delay</code> is the authority and "
+                   "<code>max_delay</code> the cheap signal (R3); the two moving "
+                   "in <b>opposite directions</b> stops a land until it is "
+                   "explained. <code>area</code> regressing past <b>%.0f%%</b> is "
+                   "a guardrail breach, and a non-zero <code>div_blackbox</code> "
+                   "makes that row's QoR cells <b>invalid</b> rather than "
+                   "numbers (T1).</p>" % (AREA_GUARDRAIL * 100))
+    else:
+        out.append("<p><i>These rows predate the full/cold/incremental axis: "
+                   "rendered in the older baseline-vs-current shape.</i></p>")
+    keys = sorted(set(base) | set(cur),
+                  key=lambda k: (k[0], phase_key(k[1]), mode_key(k[2])))
+    show_phase = any(k[1] for k in keys)
+    show_mode = any(k[2] for k in keys)
+    head = "<th>target</th>"
+    if show_phase:
+        head += "<th>phase</th>"
+    if show_mode:
+        head += "<th>mode</th>"
+    out.append("<table><tr>" + head + "<th>metric</th><th>baseline</th>"
+               "<th>current</th><th>&Delta;</th><th>verdict</th></tr>")
+    for key in keys:
+        b, c = base.get(key, {}), cur.get(key, {})
+        ok = usable(b) and usable(c)
+        # T1: a blackboxed divider means the design was not fully mapped, so its
+        # QoR numbers are not the design's. Do not let them average into a "no
+        # regression" claim.
+        blackboxed = any(is_num(r.get(k)) and r.get(k)
+                         for r in (b, c) for k in r if "div_blackbox" in k)
+        moved = {}
+        for m in metrics_of(b, c):
+            bv, cv = b.get(m), c.get(m)
+            if not is_num(bv) and not is_num(cv):
+                continue
+            invalid = blackboxed and any(q in m for q in QOR_INVALIDATED)
+            if not (is_num(bv) and is_num(cv)):
+                d, verd = "", ""   # one side simply was not measured
+            elif not_a_trend(m):
+                verd = "same" if bv == cv else "CHANGED"
+                d = "-" if bv == cv else "not comparable"
+                if CORRECTNESS.search(m) and bv and not cv:
+                    verd, d = "CORRECTNESS", "1 &rarr; 0"
+                    hard.append("correctness gate (§8 rule 5): %s %s went 1 -> 0"
+                                % ("/".join(x for x in key if x), m))
+            elif invalid:
+                verd, d = "", "invalid (div_blackbox)"
+            elif not ok:
+                verd, d = "not passed", "-"
+            else:
+                d, verd = verdict(bv if is_num(bv) else None,
+                                  cv if is_num(cv) else None,
+                                  direction(m), eps)
+                where = "/".join(x for x in key if x)
+                if GUARDRAIL_RE.match(m) and verd == "worse":
+                    verd = "I3 VIOLATION"
+                    hard.append("I3 guardrail breached: %s %s %s"
+                                % (where, m, plain(d)))
+                else:
+                    if verd in ("better", "worse", "noise") \
+                            and is_num(bv) and is_num(cv) and bv:
+                        rel = (cv - bv) / abs(bv)
+                        # `area` past +1% is a guardrail breach, not a note
+                        # (docs/opt_loop_synth.md M0.4b).
+                        if synth and "area" in m and rel > AREA_GUARDRAIL:
+                            verd = "AREA GUARDRAIL"
+                            hard.append("area guardrail (>+%.0f%%): %s %s %+.1f%%"
+                                        % (AREA_GUARDRAIL * 100, where, m,
+                                           rel * 100))
+                        if "sta_delay" in m:
+                            moved["sta"] = rel
+                        elif "max_delay" in m:
+                            moved["max"] = rel
+                    if verd == "worse":
+                        hard.append("regressed (§8 rule 2): %s %s %s"
+                                    % (where, m, plain(d)))
+            cols = "<td>%s</td>" % esc(key[0])
+            if show_phase:
+                cols += "<td>%s</td>" % esc(key[1])
+            if show_mode:
+                cols += "<td>%s</td>" % esc(key[2])
+            out.append('<tr class="%s">%s<td><code>%s</code></td><td>%s</td>'
+                       '<td>%s</td><td>%s</td>%s</tr>'
+                       % ("guard" if GUARDRAIL_RE.match(m) else "", cols,
+                          esc(m), num(bv), num(cv), d or "-", vcell(verd)))
+        if blackboxed:
+            warn.append("%s div_blackbox non-zero — QoR cells invalid"
+                        % "/".join(x for x in key if x))
+        if len(moved) == 2 and moved["sta"] * moved["max"] < 0 \
+                and max(abs(moved["sta"]), abs(moved["max"])) > eps:
+            warn.append("%s max_delay %+.1f%% and sta_delay %+.1f%% moved in "
+                        "OPPOSITE directions (§4.4 rule 3 — stop and explain)"
+                        % ("/".join(x for x in key if x),
+                           moved["max"] * 100, moved["sta"] * 100))
+    out.append("</table>")
+    if warn:
+        out.append('<p class="warn">%s</p>' % esc("; ".join(warn)))
+    if hard:
+        out.append('<p class="worse">HARD: %s</p>' % esc(", ".join(hard)))
+    return hard, warn
+
+
+STYLE = """
+body{font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;margin:2rem;max-width:82rem}
+table{border-collapse:collapse;margin:1rem 0;width:100%}
+th,td{border:1px solid #bbb;padding:.25rem .5rem;text-align:right}
+th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
+th{background:#eee}
+h2{border-top:3px solid #333;padding-top:.6rem;margin-top:2.5rem}
+h4{margin:1.2rem 0 0}
+.better{color:#0a0;font-weight:bold}.worse{color:#c00;font-weight:bold}
+.warn{color:#a60;font-weight:bold}.noise{color:#888}.miss{color:#999}
+.unknown{color:#66c;font-style:italic}
+.guard{background:#fff6f6}.una{color:#666}.total{background:#f7f7f7;font-weight:bold}
+code{background:#f4f4f4;padding:0 .2rem}
+dt{font-weight:bold;margin-top:.4rem}
+"""
+
+VERDICT_PROSE = """
+<p><b>The verdict column has four states, not two.</b>
+<span class="better">better</span> / <span class="worse">worse</span> is a move
+past the epsilon in the direction this page knows the metric runs;
+<span class="noise">noise</span> is inside it; and
+<span class="unknown">unclassified</span> means <b>this page has no direction
+rule for that metric</b> — the delta is shown and deliberately NOT judged,
+because a guessed direction paints a regression green. Add the name to
+<code>LOWER_IS_BETTER</code> / <code>HIGHER_IS_BETTER</code> in
+<code>bench/ledger.py</code> to give it a verdict.</p>
+"""
+
+MODE_PROSE = """
+<h2>What the three columns mean</h2>
+<dl>
+<dt>full</dt><dd>&mdash; Every cache that has an off switch is <b>off</b>
+(<code>pass.abc.cache=false</code>, <code>formal.cache=false</code>), every output
+directory fresh. This is what the flow costs with <b>no incremental machinery at
+all</b>: the honest denominator.</dd>
+<dt>cold</dt><dd>&mdash; Caches <b>on</b>, every directory still fresh: the same
+work as <code>full</code> <b>plus the cost of populating the caches</b>. The
+difference is the price of admission for incrementality, charged on every clean
+build.</dd>
+<dt>incremental</dt><dd>&mdash; The <b>identical command again</b> over that
+workdir, after a comment-only touch to the source. Nothing semantic changed, so
+every content-keyed cache must hit. This is the number the loop exists to
+move.</dd>
+</dl>
+<p>Where a phase has no cache off-switch today, <code>full</code> and
+<code>cold</code> run the same command and are expected to match within noise —
+that is a measurement, not redundancy.</p>
+"""
+
+
+def render_host(out, host, hrows, args, eps, all_configs):
+    """Everything for one host. Returns the list of hard-failure strings.
+
+    The banner slot is reserved BEFORE any section runs and filled afterwards
+    WHATEVER happens, including a renderer bug: a host section that ends without
+    a verdict line reads as a section that found nothing wrong. The page is
+    written first and always — this file is append-only and shared, so one bad
+    row must cost that row its section, never every host's page.
+    """
+    configs = []
+    for r in hrows:
+        if r.get("config_id") not in configs:
+            configs.append(r.get("config_id"))
+    base_id = args.baseline or configs[0]
+    cur_id = args.current or configs[-1]
+    newest = max(hrows, key=lambda r: str(r.get("date") or ""))
+    out.append("<h2>host: %s</h2>" % esc(host))
+    out.append(
+        "<p>lhd <code>%s</code> &middot; lhdsuite <code>%s</code> &middot; "
+        "pdk <code>%s</code><br>baseline <b>%s</b> &rarr; current <b>%s</b> "
+        "(latest row %s)</p>"
+        % (esc(newest.get("lhd_git_sha", "?")),
+           esc(newest.get("lhdsuite_git_sha", "?")),
+           esc(newest.get("pdk_version", "")) or "<i>unset</i>",
+           esc(base_id), esc(cur_id), esc(newest.get("date", "?"))))
+
+    banner_at = len(out)
+    out.append("")            # reserved before anything else can throw
+    try:
+        hard, warned, measured = host_sections(
+            out, hrows, args, eps, all_configs, configs, base_id, cur_id)
+    except Exception:
+        hard, warned, measured = (
+            ["renderer crashed on this host's rows"], [], True)
+        out.append('<p class="worse">RENDERER ERROR on host %s — the rows below '
+                   'this point were not rendered. This is a bug in '
+                   'bench/ledger.py, not a result.</p><pre>%s</pre>'
+                   % (esc(host), esc(traceback.format_exc())))
+    fill_banner(out, banner_at, hard, warned, measured, cur_id)
+    return hard
+
+
+def host_sections(out, hrows, args, eps, all_configs, configs, base_id, cur_id):
+    """Every table for one host, below its banner."""
+    hard, warned = [], []
+
+    # A named config that is not here at all is a TYPO, and a typo must not
+    # render as a gate that ran and passed.
+    for which, cid in (("baseline", base_id), ("current", cur_id)):
+        if cid not in configs:
+            if missing_config_note(out, which, cid, configs, all_configs):
+                hard.append("%s config_id %r does not exist in the ledger"
+                            % (which, cid))
+            else:
+                warned.append("%s %s not measured on this host" % (which, cid))
+
+    drifts = [r for r in hrows
+              if r.get("phase") == "control" and r.get("config_id") == cur_id]
+    if drifts:
+        out.append("<p>control probe (trap T12 — this class of box throttles "
+                   "mid-session): %s. A drift far from 1.00 means no absolute "
+                   "number in this sitting compares to another's.</p>"
+                   % "; ".join(
+                       "%s %s ms &rarr; %s ms (%s&times;)"
+                       % (esc(r.get("target", "?")), num(r.get("control_start_ms")),
+                          num(r.get("control_end_ms")), num(r.get("drift")))
+                       for r in drifts))
+        # The error bar on the whole sitting. Past this, the numbers below are
+        # the box changing speed, not the change under test.
+        bad = ["%s %sx" % (r.get("target", "?"), num(r.get("drift")))
+               for r in drifts
+               if is_num(r.get("drift")) and abs(r["drift"] - 1.0) > DRIFT_WARN]
+        if bad:
+            warned.append("control drift past %.0f%% (T12 — this sitting's "
+                          "absolute numbers are not comparable): %s"
+                          % (DRIFT_WARN * 100, ", ".join(bad)))
+
+    moded = [r for r in hrows if r.get("mode") and r.get("phase") != "control"]
+    flat = [r for r in hrows if not r.get("mode") and r.get("phase") != "control"]
+    data = index_modes(hrows, cur_id) if args.flow != "synth" else {}
+    measured = bool(data) or bool(flat_index(hrows, base_id)) \
+        or bool(flat_index(hrows, cur_id))
+
+    if args.flow == "synth":
+        # The synthesis loop has no mode axis: every row is one measured
+        # configuration of one target (docs/opt_loop_synth.md M0.4).
+        h, w = render_flat_host(out, hrows, base_id, cur_id, eps, synth=True)
+        hard += h
+        warned += w
+    elif data:
+        present = {m for cells in data.values() for m in cells}
+        modes = list(MODE_COLS) + sorted(present - set(MODE_COLS), key=mode_key)
+        warned += section_wall(out, data, modes, eps)
+        breach = section_guardrail(out, data, modes, eps)
+        section_gates(out, data)
+        section_other(out, data, modes)
+        section_breakdown(out, data, modes)
+        gate_breach, regressed = section_config_delta(out, hrows, base_id,
+                                                      cur_id, eps)
+        breach += gate_breach
+        if breach:
+            hard.append("I3 guardrail breached (%d): %s"
+                        % (len(breach), ", ".join(breach)))
+        if regressed:
+            hard.append("rejected by the §8 gate (%d): %s"
+                        % (len(regressed), brief(regressed)))
+        failed = sorted({"%s/%s (%s)" % (t, p, m)
+                         for (t, p), cs in data.items() for m, r in cs.items()
+                         if not r.get("passed", True)})
+        stored = sorted({"%s/%s" % (t, p) for (t, p), cs in data.items()
+                         if any_of(cs, "abc_store_failed") or any_of(cs, "store_failed")})
+        if failed:
+            hard.append("did not pass: " + ", ".join(failed))
+        if stored:
+            hard.append("store_failed non-zero on: " + ", ".join(stored))
+        if flat:
+            out.append("<h3>7. Rows with no mode axis</h3>")
+            h, w = render_flat_host(out, flat, base_id, cur_id, eps, synth=False)
+            hard += h
+            warned += w
+    else:
+        if moded:
+            out.append("<p>no <b>moded</b> data rows for config <b>%s</b> on this "
+                       "host.</p>" % esc(cur_id))
+        if flat:
+            h, w = render_flat_host(out, flat, base_id, cur_id, eps, synth=False)
+            hard += h
+            warned += w
+        elif not moded:
+            out.append("<p>no data rows for config <b>%s</b> on this host.</p>"
+                       % esc(cur_id))
+
+    return hard, warned, measured
+
+
+def fill_banner(out, banner_at, hard, warned, measured, cur_id):
+    if hard:
+        out[banner_at] = ('<p class="worse">HARD FAILURE &mdash; %s</p>'
+                          % esc(brief(hard, 8, "; ")))
+    elif not measured:
+        # "no hard failure" over an empty section reads as a pass. It is not one.
+        out[banner_at] = ('<p class="warn">NOTHING MEASURED for config <b>%s</b> '
+                          'on this host — this section clears nothing.%s</p>'
+                          % (esc(cur_id),
+                             " " + esc(brief(warned, 8, "; ")) if warned else ""))
+    elif warned:
+        out[banner_at] = ('<p class="warn">no hard failure; %s</p>'
+                          % esc(brief(warned, 8, "; ")))
+    else:
+        out[banner_at] = '<p class="better">no hard failure on this host.</p>'
+
+
+
+def glance_rows(hrows, cid):
+    """(target, phase) -> {mode: row} for one config, ready for the summary."""
+    data = {}
+    for r in hrows:
+        if r.get("config_id") != cid or r.get("phase") == "control":
+            continue
+        if r.get("mode") not in MODE_COLS:
+            continue
+        data.setdefault((r.get("target"), r.get("phase")), {})[r["mode"]] = r
+    return data
+
+
+def glance_takeaway(data):
+    """The one sentence a reader should leave with, COMPUTED not authored.
+
+    Splits the phases into those the machinery does nothing for and those it
+    does, because that split is the actual state of the loop and it is the first
+    thing anyone wants. Deriving it means it cannot drift from the table under
+    it — the moment `compile` starts reusing, this sentence changes by itself.
+    """
+    per_phase = {}
+    for (target, phase), cells in data.items():
+        cold, incr = uwall(cells, "cold"), uwall(cells, "incremental")
+        if cold and incr and incr > 0:
+            per_phase.setdefault(phase, []).append(cold / incr)
+    if not per_phase:
+        return ""
+    flat = sorted(p for p, v in per_phase.items() if max(v) < 1.1)
+    live = {p: v for p, v in per_phase.items() if max(v) >= 1.1}
+    bits = []
+    if flat:
+        n = max(len(per_phase[p]) for p in flat)
+        bits.append("<b>%s</b> gets nothing from the incremental machinery "
+                    "(&le;1.1&times; on all %d target(s) measured)"
+                    % (esc(", ".join(flat)), n))
+    if live:
+        lo = min(min(v) for v in live.values())
+        hi = max(max(v) for v in live.values())
+        best = max(((max(v), p) for p, v in live.items()))
+        bits.append("%s reuse at <b>%.1f&times;&ndash;%.0f&times;</b> (best: %s)"
+                    % (esc(", ".join(sorted(live))), lo, hi, esc(best[1])))
+    return "; ".join(bits) + "."
+
+
+def section_glance(out, data, show_host=None):
+    """The headline: three walls and the speedup, nothing else.
+
+    Deliberately ABOVE the methodology. A status page whose first screen is
+    definitions is a page nobody reads twice; the detail is all still below, and
+    §1 repeats these columns with the cache-cost and load qualifiers.
+    """
+    if not data:
+        return
+    if show_host:
+        out.append("<h3>host: %s</h3>" % esc(show_host))
+    out.append("<table><tr><th>target</th><th>phase</th><th>full (ms)</th>"
+               "<th>cold (ms)</th><th>incremental (ms)</th>"
+               "<th>incr speedup</th></tr>")
+    for target, phase in sorted(data, key=lambda k: (k[0], phase_key(k[1]))):
+        cells = data[(target, phase)]
+        tds = []
+        for m in MODE_COLS:
+            r = cells.get(m)
+            if r is None:
+                tds.append(cell("-", "miss"))
+            elif not r.get("passed", True):
+                tds.append(cell(ms(r.get("wall_ms")) + " FAILED", "worse"))
+            else:
+                tds.append(cell(ms(r.get("wall_ms"))))
+        cold, incr = uwall(cells, "cold"), uwall(cells, "incremental")
+        if cold is None or incr is None or incr <= 0:
+            tds.append(cell("-", "miss"))
+        else:
+            sp = cold / incr
+            # 1.1x is the line between "there is reuse here" and "there is not".
+            tds.append(cell("%.1f&times;" % sp,
+                            "better" if sp >= 1.1 else "worse" if sp < 0.95 else "noise"))
+        out.append("<tr><td>%s</td><td>%s</td>%s</tr>"
+                   % (esc(target), esc(phase), "".join(tds)))
+    out.append("</table>")
+    tell = glance_takeaway(data)
+    if tell:
+        out.append("<p>%s</p>" % tell)
+
+
+def cmd_render(args, root: Path):
+    rows = load_rows(root, args.flow)
+    if not rows:
+        sys.exit("FAIL: %s holds no flow=%s rows yet" % (LEDGER, args.flow))
+    eps = args.epsilon / 100.0
+
+    # One section per host. Never a cross-host diff (I11): different boxes are
+    # different experiments that happen to share a file.
+    by_host = {}
+    for r in rows:
+        by_host.setdefault(r.get("host", "?"), []).append(r)
+    all_configs = {r.get("config_id") for r in rows}
+
+    out = [
+        "<title>%s</title>" % esc(args.title),
+        "<style>%s</style>" % STYLE,
+        "<h1>%s</h1>" % esc(args.title),
+        "<p>Generated from <code>%s</code> at %s. Derived, never authored — "
+        "re-run <code>bazel run //bench:ledger -- render</code> to refresh. "
+        "Verdicts use an epsilon of <b>%.1f%%</b>; anything inside it is not a "
+        "win. <b>%d host section(s) — never compare a number across them</b> "
+        "(I11).</p>"
+        % (LEDGER, time.strftime("%Y-%m-%d %H:%M"), args.epsilon, len(by_host)),
+    ]
+
+    # THE HEADLINE, before any methodology. One block per host, because a
+    # cross-host summary is exactly the comparison I11 forbids; with a single
+    # host this is simply the top of the page.
+    if args.flow != "synth":
+        out.append("<h2>At a glance</h2>")
+        for host, hrows in sorted(by_host.items()):
+            cid = args.current or (
+                [r.get("config_id") for r in hrows if r.get("config_id")] or [""])[-1]
+            section_glance(out, glance_rows(hrows, cid),
+                           show_host=host if len(by_host) > 1 else None)
+
+    # ...and the methodology below it, collapsed. It is load-bearing (a reader
+    # who does not know what `full` means will misread every number above) but
+    # it is reference material, and a status page must open on status.
+    out.append("<details><summary><b>How to read this page</b> — what the three "
+               "columns mean, and the four verdict states</summary>")
+    out.append(VERDICT_PROSE)
+    if args.flow != "synth":
+        out.append(MODE_PROSE)
+    out.append("</details>")
+
+    hard_any = []
+    for host, hrows in sorted(by_host.items()):
+        try:
+            hard = render_host(out, host, hrows, args, eps, all_configs)
+        except Exception:
+            # `render_host` already contains the per-section guard; this is the
+            # last resort for its own header. Either way the page still gets
+            # written — the ledger is append-only and shared, and an unwritable
+            # page is a one-way trap.
+            hard = ["renderer crashed before this host's header"]
+            out.append('<p class="worse">RENDERER ERROR on host %s.</p>'
+                       '<pre>%s</pre>'
+                       % (esc(host), esc(traceback.format_exc())))
+        if hard:
+            hard_any.append("%s: %s" % (host, brief(hard, 8, "; ")))
+
+    dest = Path(args.out)
+    if not dest.is_absolute():
+        dest = root.parent / "livehd" / args.out
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text("\n".join(out) + "\n")
+    print("wrote %s (%d row(s), %d host(s))" % (dest, len(rows), len(by_host)))
+    # §9.5 regenerates the page on land and on revert, so a non-zero exit must
+    # never cost you the rendering.
+    if hard_any:
+        for h in hard_any:
+            print("HARD FAILURE %s" % h, file=sys.stderr)
+        if args.fail_on_regression:
+            sys.exit(1)
+
+
+def main():
+    root = Path(os.environ.get("BUILD_WORKSPACE_DIRECTORY", ".")).resolve()
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    d = sub.add_parser("add", help="append driver-produced json-lines rows")
+    d.add_argument("path", nargs="?", default="-",
+                   help="json-lines file of partial rows, or - for stdin")
+    d.add_argument("--config-id", default="",
+                   help="config_id for rows that do not carry their own")
+    d.add_argument("--flow", default="incr", choices=["incr", "synth"])
+    d.add_argument("--no-merge", dest="merge", action="store_false",
+                   help="keep rows that share (config_id, target, phase, mode) "
+                        "separate instead of summing them into the one "
+                        "contracted row")
+    d.add_argument("--dry-run", action="store_true",
+                   help="print the stamped rows, do not touch the ledger")
+    d.set_defaults(fn=cmd_add, merge=True)
+
+    a = sub.add_parser("append", help="scrape bazel-testlogs into the ledger")
+    a.add_argument("config_id")
+    a.add_argument("targets", nargs="+")
+    a.add_argument("--flow", default="incr", choices=["incr", "synth"])
+    a.add_argument("--dry-run", action="store_true")
+    a.set_defaults(fn=cmd_append)
+
+    r = sub.add_parser("render", help="regenerate the scoreboard HTML")
+    r.add_argument("--flow", default="incr", choices=["incr", "synth"])
+    r.add_argument("--out", default="")
+    r.add_argument("--title", default="")
+    r.add_argument("--baseline", default="", help="config_id of the baseline column")
+    r.add_argument("--current", default="", help="config_id of the current column")
+    r.add_argument("--epsilon", type=float, default=3.0,
+                   help="noise floor, in percent (H6); a delta inside it is not a win")
+    r.add_argument("--fail-on-regression", action="store_true",
+                   help="exit 1 if any host has a hard failure (I3 breach, a "
+                        "non-passing mode, store_failed). The page is written "
+                        "either way.")
+    r.set_defaults(fn=cmd_render)
+
+    args = ap.parse_args()
+    if args.cmd == "render":
+        args.out = args.out or "current_opt_loop_%s.html" % args.flow
+        args.title = args.title or ("Incremental rebuild loop — full vs cold vs "
+                                    "incremental" if args.flow == "incr"
+                                    else "Synthesis QoR loop")
+    args.fn(args, root)
 
 
 if __name__ == "__main__":
