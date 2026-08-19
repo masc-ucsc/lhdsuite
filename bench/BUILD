@@ -66,6 +66,7 @@ core_benches("minion")
 # blocks carry the `slow` tag for exclusion from the routine loop.
 core_benches("xs_rob")
 core_benches("xs_alu")
+core_benches("xs_renametable")
 core_benches("xs_div")
 core_benches("xs_exu")
 core_benches("xs_backend")

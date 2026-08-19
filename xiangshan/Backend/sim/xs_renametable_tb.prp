@@ -1,0 +1,65 @@
+// Free-running simulation driver for the XiangShan `RenameTableWrapper` block.
+//
+// See xs_alu_tb.prp for the contract: this is a COMPILE-TIME and THROUGHPUT
+// benchmark plus a cross-language oracle (the Pyrope and Verilog trees must
+// produce the same checksum), and deliberately NOT functional coverage.
+//
+// `RenameTableWrapper` is the medium-scale XS target: 5,973 lines at the top
+// but a hierarchy of five near-identical `RenameTable*` children plus three DPI
+// wrappers and two DelayRegs, so it is the block that exercises REPLICA reuse
+// (L9) at a size where a whole matrix still fits in the iteration budget.
+//
+// Only ports that are PLAIN SCALARS on BOTH language sides are touched, so the
+// one driver serves `MODE=pyrope` and `MODE=verilog`. The rename/commit
+// datapath is bundles and >64-bit vectors (io_intRenamePorts is u112,
+// io_diffCommits.info is u10400), so it is left at its default and the read
+// ports are what actually moves.
+const rtw = import("lg:RenameTableWrapper")
+
+test rtw.free_run(cycles:u32 = 1000) {
+  mut acc = rtw
+
+  mut lfsr:u64 = 0x123456789abcdef
+  mut sum:u64  = 0
+  mut obs:u64  = 0
+
+  tick cycles clocks=(clock=1) {
+    acc.reset = clock < 2
+
+    acc.io_hartId   = lfsr#[0..=7]
+    acc.io_redirect = lfsr#[8]
+
+    // Two read ports per file, driven from disjoint LFSR slices so the three
+    // register files see different address streams.
+    acc.io_intReadPorts_0_0_hold = lfsr#[9]
+    acc.io_intReadPorts_0_0_addr = lfsr#[10..=14]
+    acc.io_intReadPorts_1_1_hold = lfsr#[15]
+    acc.io_intReadPorts_1_1_addr = lfsr#[16..=20]
+    acc.io_fpReadPorts_0_0_hold  = lfsr#[21]
+    acc.io_fpReadPorts_0_0_addr  = lfsr#[22..=27]
+    acc.io_fpReadPorts_2_1_hold  = lfsr#[28]
+    acc.io_fpReadPorts_2_1_addr  = lfsr#[29..=34]
+    acc.io_vecReadPorts_0_0_hold = lfsr#[35]
+    acc.io_vecReadPorts_0_0_addr = lfsr#[36..=41]
+    acc.io_vecReadPorts_3_2_hold = lfsr#[42]
+    acc.io_vecReadPorts_3_2_addr = lfsr#[43..=48]
+
+    step
+
+    obs = acc.io_intReadPorts_0_0_data
+    wrap obs = obs | (acc.io_intReadPorts_1_1_data << 8)
+    wrap obs = obs | (acc.io_fpReadPorts_0_0_data << 16)
+    wrap obs = obs | (acc.io_fpReadPorts_2_1_data << 24)
+    wrap obs = obs | (acc.io_vecReadPorts_0_0_data << 32)
+    wrap obs = obs | (acc.io_vecReadPorts_3_2_data << 40)
+
+    // Masked to 63 bits so the printed checksum is unambiguously positive.
+    wrap sum = ((sum << 1) + obs) & 0x7fffffffffffffff
+
+    wrap lfsr = lfsr ^ (lfsr << 13)
+    wrap lfsr = lfsr ^ (lfsr >> 7)
+    wrap lfsr = lfsr ^ (lfsr << 17)
+  }
+
+  puts("xs_renametable: cycles={cycles} sum={sum}")
+}

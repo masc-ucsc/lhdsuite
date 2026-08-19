@@ -601,16 +601,22 @@ apply_variant() {
 # tests/ overlays. Make equivalent edits to their writable top copy without
 # naming any design in this shared script.
 apply_synth_only_variant() {
-  local name=$1 dir=$2 file="$2/$CORE_TOP.prp" tmp="$2/$CORE_TOP.prp.tmp"
+  local name=$1 dir=$2 edit_unit=$CORE_TOP
+  if [ "$name" = bug1 ] && [ -n "${CORE_INCR_EDIT_UNIT:-}" ]; then
+    edit_unit=$CORE_INCR_EDIT_UNIT
+  fi
+  local file="$2/$edit_unit.prp" tmp="$2/$edit_unit.prp.tmp"
   case "$name" in
   comment1)
     printf '\n// lhdsuite incremental comment-only touch\n' >>"$file"
     ;;
   bug1)
-    # Every imported XiangShan top currently drives at least one public output
-    # through `... & 1`. Invert exactly the first such output: unlike an
-    # input-unpacking edit that cprop may erase, this necessarily changes the
-    # selected top's observable logic and therefore its region key.
+    # By default every imported XiangShan top drives at least one public output
+    # through `... & 1`; invert exactly the first such output. A core may name
+    # a small, definitely-instantiated stateful leaf instead: Backend's huge
+    # generated output expression makes its cache-disabled cold cprop exceed
+    # Bazel's one-hour test ceiling, while inverting DelayN_6.io_out remains a
+    # real hierarchical behavior change and keeps H5 runnable.
     #
     # The rewrite REPLACES the whole right-hand side with `(RHS) ^ 1` rather
     # than swapping an inner `&` for a `^`. Both the anchor and the parentheses
@@ -621,8 +627,12 @@ apply_synth_only_variant() {
     #     inner `&` in place produced `a & (b >> 8) ^ 1 & 1` on `Rob`, which is
     #     `error[syntax]: operators at the same precedence cannot be mixed
     #     without parentheses` — i.e. xs_rob's bug1 pass could never compile.
-    awk '
-      !done && /^  io_[A-Za-z0-9_.]+ = .+ & 1$/ {
+    local anchor='^  io_[A-Za-z0-9_.]+ = .+ & 1$'
+    if [ "$edit_unit" != "$CORE_TOP" ]; then
+      anchor='^  io_[A-Za-z0-9_.]+ = .+$'
+    fi
+    awk -v anchor="$anchor" '
+      !done && $0 ~ anchor {
         eq  = index($0, " = ")
         $0  = substr($0, 1, eq + 2) "(" substr($0, eq + 3) ") ^ 1"
         done = 1
@@ -632,7 +642,7 @@ apply_synth_only_variant() {
       END { if (!done) exit 42 }
     ' "$file" 2>"$dir/.variant_site" >"$tmp" || {
       rm -f "$tmp"
-      echo "FAIL: no generic one-line incremental edit found in $CORE_TOP.prp" >&2
+      echo "FAIL: no generic one-line incremental edit found in $edit_unit.prp" >&2
       return 1
     }
     mv "$tmp" "$file"
@@ -656,8 +666,12 @@ core_variant() {
   local name=$1 dir=$2
   if [ -n "${CORE_SYNTH_ONLY:-}" ]; then
     apply_synth_only_variant "$name" "$dir" || return 1
+    local variant_unit=$CORE_TOP
+    if [ "$name" = bug1 ] && [ -n "${CORE_INCR_EDIT_UNIT:-}" ]; then
+      variant_unit=$CORE_INCR_EDIT_UNIT
+    fi
     if [ -s "$dir/.variant_site" ]; then
-      printf 'VARIANT %s: %s.prp:%s\n' "$name" "$CORE_TOP" \
+      printf 'VARIANT %s: %s.prp:%s\n' "$name" "$variant_unit" \
         "$(tr '\t' ' ' <"$dir/.variant_site" | head -1)" >&3
     else
       printf 'VARIANT %s: appended to %s.prp\n' "$name" "$CORE_TOP" >&3

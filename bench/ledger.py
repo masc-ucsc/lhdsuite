@@ -102,6 +102,21 @@ AREA_GUARDRAIL = 0.01
 # and the `sim_exec_ms_cold` of the old scraper's flat metrics.
 GUARDRAIL_RE = re.compile(r"^(sim_exec_ms|sim_cycles_per_s)")
 
+# Below this, a guardrail reference is process startup rather than the
+# simulator, and a percentage taken against it is arithmetic on noise (trap T1):
+# `xs_alu`/sim_llvm read 33 ms then 34 ms and the flat 3% epsilon called one
+# millisecond an I3 VIOLATION. Such a row is reported as UNMEASURED — shown, not
+# judged — which is deliberately not the same as passing. The fix is to raise
+# that target's `sim_perf_cycles` until the sample clears the floor.
+GUARDRAIL_FLOOR_MS = 50
+
+# Phases with no cache off-switch: `full` and `cold` run the IDENTICAL command,
+# so their difference is not an effect, it is this row's own noise sample. Using
+# it as the row's epsilon is the only noise floor this page can measure rather
+# than assume (H6), and it stops the page reporting its own control measurement
+# as a violation.
+NO_OFF_SWITCH_PHASES = ("sim", "sim_llvm")
+
 
 def _tokens(*words):
     """A metric name is `_`-separated tokens: `abc_max_delay_cold` is prefixed
@@ -159,6 +174,20 @@ STRUCTURAL = {
     "control_start_ms", "control_end_ms", "loadavg",
 }
 
+# A baseline/current delta is evidence only when it describes the same build
+# universe.  Host partitioning happens outside the per-config gate; these are
+# the remaining identity fields that must match before two numeric cells may be
+# compared.  The optional diff hashes are included when either row carries one.
+IDENTITY_KEYS = ("lhd_git_sha", "lhdsuite_git_sha", "pdk_version")
+OPTIONAL_IDENTITY_KEYS = ("lhd_diff_sha256", "lhdsuite_diff_sha256")
+
+
+def same_build_identity(a, b):
+    if any(a.get(k) != b.get(k) for k in IDENTITY_KEYS):
+        return False
+    return all(a.get(k) == b.get(k) for k in OPTIONAL_IDENTITY_KEYS
+               if k in a or k in b)
+
 # Preferred reading order for metric rows: the two contracts' column lists
 # (docs/opt_loop_incr.md H6, docs/opt_loop_synth.md M0.4), then everything else
 # alphabetically. A name is matched by whole-token containment, so `abc_area`
@@ -203,8 +232,11 @@ PHASES = {
         "target": "{core}_compile_incremental",
         "tokens": PASS_TOKENS,
         "wall": ["compile{p}_ms"],
-        "extra": ["workdir_bytes{p}"],
-        "scenario": [],
+        "extra": [
+            "hits{p}", "misses{p}", "redone_ms{p}", "refused{p}",
+            "store_failed{p}", "workdir_bytes{p}",
+        ],
+        "scenario": ["compile_warm_equals_cold", "compile_edit_changes_cold"],
     },
     "sim": {
         "target": "{core}_sim_incremental",
@@ -471,9 +503,13 @@ def cmd_append(args, root: Path):
     ident = identity(root)
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     rows = []
+    selected = set(args.phase or PHASES)
     for core in args.targets:
         for phase, spec in PHASES.items():
-            got = read_metrics(logdir, spec["target"].format(core=core))
+            if phase not in selected:
+                continue
+            target_name = spec["target"].format(core=core)
+            got = read_metrics(logdir, target_name)
             if got is None:
                 continue
             metrics, ok = got
@@ -490,6 +526,15 @@ def cmd_append(args, root: Path):
                     "phase": phase, "mode": mode, "config_id": args.config_id,
                     "passed": ok, "wall_ms": wall, "phases": {},
                 })
+                if phase == "compile":
+                    result_name = "compile_%s.json" % tok.removeprefix("_")
+                    result_path = logdir / target_name / "test.outputs" / result_name
+                    if result_path.is_file():
+                        try:
+                            result = json.loads(result_path.read_text())
+                            row["phases"] = norm_phases(result.get("phases"))
+                        except (OSError, ValueError):
+                            pass
                 for tmpl in spec["extra"]:
                     v = metrics.get(tmpl.format(p=tok))
                     if v is not None:
@@ -574,6 +619,7 @@ V_CLASS = {
     "better": "better", "worse": "worse", "noise": "noise",
     "I3 VIOLATION": "worse", "AREA GUARDRAIL": "worse",
     "unclassified": "unknown", "not passed": "warn",
+    "not comparable": "warn",
     "CHANGED": "warn", "same": "noise", "CORRECTNESS": "worse",
     "": "miss",
 }
@@ -785,6 +831,19 @@ def section_guardrail(out, data, modes, eps):
         for k in keys:
             ref_mode = "full" if uval(cells, "full", k) is not None else "cold"
             ref = uval(cells, ref_mode, k)
+            # This row's own epsilon. `full` vs `cold` on a phase with no cache
+            # off-switch is the same command twice, so it measures this row's
+            # noise; nothing inside it can be a verdict in either direction.
+            row_eps, eps_note = eps, ""
+            twin = uval(cells, "cold" if ref_mode == "full" else "full", k)
+            if (phase in NO_OFF_SWITCH_PHASES and ref not in (None, 0)
+                    and twin is not None):
+                measured = abs(twin - ref) / abs(ref)
+                if measured > row_eps:
+                    row_eps = measured
+                    eps_note = "%.1f%% measured" % (measured * 100)
+            below_floor = (k.startswith("sim_exec_ms") and ref is not None
+                           and ref < GUARDRAIL_FLOOR_MS)
             tds, verds = [], []
             for m in modes:
                 r = cells.get(m)
@@ -807,15 +866,24 @@ def section_guardrail(out, data, modes, eps):
                 if v is None or ref is None:
                     verds.append(cell("-", "miss"))
                     continue
-                d, verd = verdict(ref, v, direction(k), eps)
+                d, verd = verdict(ref, v, direction(k), row_eps)
+                if below_floor:
+                    # Shown, never judged: see GUARDRAIL_FLOOR_MS.
+                    verds.append(cell("%s below floor" % (d or "-"), "una"))
+                    continue
                 if verd == "worse":
                     verd = "I3 VIOLATION"
                     breached.append("%s/%s %s (%s)" % (target, phase, k, m))
-                verds.append(cell("%s %s" % (d or "-", verd or "-"),
+                verds.append(cell("%s %s%s" % (d or "-", verd or "-",
+                                               " [eps %s]" % eps_note if eps_note and verd == "noise" else ""),
                                   V_CLASS.get(verd, "")))
             if ref is None:
                 notes.append("%s/%s %s (no usable %s-mode reference)"
                              % (target, phase, k, ref_mode))
+            elif below_floor:
+                notes.append("%s/%s %s (reference %s ms is under the %d ms floor "
+                             "— raise sim_perf_cycles, trap T1)"
+                             % (target, phase, k, num(ref), GUARDRAIL_FLOOR_MS))
             rows_html.append('<tr class="guard"><td>%s</td><td>%s</td><td>%s</td>'
                              '%s%s</tr>' % (esc(target), esc(phase), esc(k),
                                             "".join(tds), "".join(verds)))
@@ -829,15 +897,24 @@ def section_guardrail(out, data, modes, eps):
                "when full was not run). Incremental reuse must not produce a "
                "slower binary: a regression here rejects the change regardless "
                "of net wall time (&sect;8.3). A reference of <b>0</b> with a "
-               "non-zero mode is an infinite regression, not an absent one.</p>")
+               "non-zero mode is an infinite regression, not an absent one. "
+               "Two floors keep this column honest rather than merely strict: "
+               "on <code>sim</code>/<code>sim_llvm</code> the <code>full</code> "
+               "vs <code>cold</code> pair is the SAME command run twice, so its "
+               "spread is this row's measured epsilon (shown as "
+               "<code>[eps N%% measured]</code>) and the page never reports its "
+               "own noise sample as a violation; and a reference under %d&nbsp;ms "
+               "is process startup rather than the simulator (T1), so those "
+               "rows read <i>below floor</i> &mdash; unmeasured, which is not "
+               "the same as passing.</p>" % GUARDRAIL_FLOOR_MS)
     out.append("<table><tr><th>target</th><th>phase</th><th>metric</th>"
                + "".join("<th>%s</th>" % esc(m) for m in modes)
                + "".join("<th>%s vs ref</th>" % esc(m) for m in modes) + "</tr>")
     out.extend(rows_html)
     out.append("</table>")
     if notes:
-        out.append('<p class="warn">unmeasured guardrail (no reference to '
-                   'compare against, so nothing here can be cleared): %s</p>'
+        out.append('<p class="warn">UNMEASURED guardrail — nothing in these rows '
+                   'is cleared, and an absent guardrail is not a held one: %s</p>'
                    % esc("; ".join(notes)))
     if breached:
         out.append('<p class="worse">I3 GUARDRAIL BREACHED on: %s</p>'
@@ -846,7 +923,7 @@ def section_guardrail(out, data, modes, eps):
 
 
 # Metrics §3 owns as named columns; they are not repeated in §4.
-GATE_KEYS = ("sim_warm_equals_cold", "sim_rewritten", "abc_store_failed",
+GATE_KEYS = ("sim_warm_equals_cold", "compile_warm_equals_cold", "compile_edit_changes_cold", "sim_rewritten", "abc_store_failed",
              "store_failed", "abc_refused", "refused", "workdir_bytes",
              "sim_ninja_present")
 
@@ -856,10 +933,12 @@ def section_gates(out, data):
     out.append("<p>The gates a time-only scoreboard tempts you to forget (&sect;8.4): "
                "<code>store_failed</code> must be 0, <code>refused</code> must be "
                "<i>attributed</i> (a principled refusal is data, an unexplained "
-               "one is a bug), warm must equal cold byte for byte, and cache size "
+               "one is a bug), warm must equal cold (structurally for compile, "
+               "byte for byte for generated simulation), a compile edit fixture "
+               "must actually change the graph, and cache size "
                "is a cost.</p>")
     out.append("<table><tr><th>target</th><th>phase</th><th>passed (per mode)</th>"
-               "<th>warm==cold</th><th>rewritten</th><th>store_failed</th>"
+               "<th>warm==cold</th><th>edit changed</th><th>rewritten</th><th>store_failed</th>"
                "<th>refused</th><th>workdir bytes</th></tr>")
     for target, phase in sorted(data, key=lambda k: (k[0], phase_key(k[1]))):
         cells = data[(target, phase)]
@@ -868,7 +947,10 @@ def section_gates(out, data):
             ok = cells[m].get("passed", True)
             marks.append("%s=%s" % (m, "yes" if ok else "NO"))
         bad = any(not c.get("passed", True) for c in cells.values())
-        wec = any_of(cells, "sim_warm_equals_cold")
+        wec = any_of(cells, "compile_warm_equals_cold")
+        if wec is None:
+            wec = any_of(cells, "sim_warm_equals_cold")
+        changed = any_of(cells, "compile_edit_changes_cold")
         sf = any_of(cells, "abc_store_failed")
         if sf is None:
             sf = any_of(cells, "store_failed")
@@ -876,13 +958,15 @@ def section_gates(out, data):
         if ref is None:
             ref = any_of(cells, "abc_refused")
         wb = any_of(cells, "workdir_bytes")
-        out.append("<tr><td>%s</td><td>%s</td>%s<td class='%s'>%s</td>"
+        out.append("<tr><td>%s</td><td>%s</td>%s<td class='%s'>%s</td><td class='%s'>%s</td>"
                    "<td>%s</td><td class='%s'>%s</td><td class='%s'>%s</td>"
                    "<td>%s</td></tr>"
                    % (esc(target), esc(phase),
                       cell(esc(" ".join(marks)), "worse" if bad else ""),
                       "" if wec in (None, True, 1, 1.0) else "worse",
                       "-" if wec is None else ("yes" if wec else "NO"),
+                      "" if changed in (None, True, 1, 1.0) else "worse",
+                      "-" if changed is None else ("yes" if changed else "NO"),
                       num(any_of(cells, "sim_rewritten")),
                       "worse" if sf else "", num(sf),
                       "warn" if ref else "", num(ref), num(wb)))
@@ -1028,7 +1112,8 @@ def missing_config_note(out, which, cid, here, everywhere):
 
 def section_config_delta(out, hrows, base_id, cur_id, eps):
     """The §8 accept/reject gate: this config against the loop's baseline, in
-    the SAME mode. Never across hosts, never across modes."""
+    the SAME mode and build identity. Never across hosts, modes, revisions, or
+    PDK snapshots."""
     base, cur = index_modes(hrows, base_id), index_modes(hrows, cur_id)
     out.append("<h3>6. &sect;8 gate — baseline <code>%s</code> &rarr; current "
                "<code>%s</code></h3>" % (esc(base_id), esc(cur_id)))
@@ -1036,21 +1121,25 @@ def section_config_delta(out, hrows, base_id, cur_id, eps):
         out.append("<p>only one config_id on this host yet — nothing to gate "
                    "against. The baseline column does not move once set "
                    "(&sect;9.6).</p>")
-        return [], []
+        return [], [], []
     out.append("<table><tr><th>target</th><th>phase</th><th>mode</th><th>metric</th>"
                "<th>baseline</th><th>current</th><th>&Delta;</th><th>verdict</th></tr>")
-    breached, regressed = [], []
+    breached, regressed, incomparable = [], [], []
     for key in sorted(set(base) | set(cur), key=lambda k: (k[0], phase_key(k[1]))):
         bm, cm = base.get(key, {}), cur.get(key, {})
         for mode in sorted(set(bm) | set(cm), key=mode_key):
             b, c = bm.get(mode, {}), cm.get(mode, {})
             ok = usable(b) and usable(c)
+            same_identity = bool(b) and bool(c) and same_build_identity(b, c)
             for m in metrics_of(b, c):
                 bv, cv = b.get(m), c.get(m)
                 if not is_num(bv) and not is_num(cv):
                     continue
                 if not (is_num(bv) and is_num(cv)):
                     d, verd = "", ""   # one side simply was not measured
+                elif not same_identity:
+                    d, verd = "identity changed", "not comparable"
+                    incomparable.append("%s/%s (%s)" % (key[0], key[1], mode))
                 elif not_a_trend(m):
                     # Shown, not trended — and a CHANGE here invalidates the
                     # time columns above it rather than being a regression.
@@ -1093,7 +1182,13 @@ def section_config_delta(out, hrows, base_id, cur_id, eps):
                    'not pay for one column with another), or a correctness '
                    'metric flipped (rule 5): %s</p>'
                    % (eps * 100, esc(", ".join(regressed))))
-    return breached, regressed
+    if incomparable:
+        out.append('<p class="warn">NOT COMPARED across build identities (LiveHD, '
+                   'lhdsuite, PDK, or recorded dirty diff): %s. Re-measure the '
+                   'baseline with the same identity before treating these cells '
+                   'as an accept/reject gate.</p>'
+                   % esc(brief(sorted(set(incomparable)), 10)))
+    return breached, regressed, sorted(set(incomparable))
 
 
 # ------------------------------------------------------- flat / synth shape ---
@@ -1118,7 +1213,7 @@ def render_flat_host(out, hrows, base_id, cur_id, eps, synth):
     exited 0 with no banner: the one machine-readable signal, lost.
     """
     base, cur = flat_index(hrows, base_id), flat_index(hrows, cur_id)
-    hard, warn = [], []
+    hard, warn, identity_mismatch = [], [], []
     if synth:
         out.append("<p>The synthesis QoR gate (docs/opt_loop_synth.md M0.4b). "
                    "<code>sta_delay</code> is the authority and "
@@ -1145,6 +1240,7 @@ def render_flat_host(out, hrows, base_id, cur_id, eps, synth):
     for key in keys:
         b, c = base.get(key, {}), cur.get(key, {})
         ok = usable(b) and usable(c)
+        same_identity = bool(b) and bool(c) and same_build_identity(b, c)
         # T1: a blackboxed divider means the design was not fully mapped, so its
         # QoR numbers are not the design's. Do not let them average into a "no
         # regression" claim.
@@ -1158,6 +1254,9 @@ def render_flat_host(out, hrows, base_id, cur_id, eps, synth):
             invalid = blackboxed and any(q in m for q in QOR_INVALIDATED)
             if not (is_num(bv) and is_num(cv)):
                 d, verd = "", ""   # one side simply was not measured
+            elif not same_identity:
+                d, verd = "identity changed", "not comparable"
+                identity_mismatch.append("/".join(x for x in key if x))
             elif not_a_trend(m):
                 verd = "same" if bv == cv else "CHANGED"
                 d = "-" if bv == cv else "not comparable"
@@ -1215,6 +1314,9 @@ def render_flat_host(out, hrows, base_id, cur_id, eps, synth):
                         % ("/".join(x for x in key if x),
                            moved["max"] * 100, moved["sta"] * 100))
     out.append("</table>")
+    if identity_mismatch:
+        warn.append("not compared across build identities: %s"
+                    % brief(sorted(set(identity_mismatch)), 10))
     if warn:
         out.append('<p class="warn">%s</p>' % esc("; ".join(warn)))
     if hard:
@@ -1369,9 +1471,12 @@ def host_sections(out, hrows, args, eps, all_configs, configs, base_id, cur_id):
         section_gates(out, data)
         section_other(out, data, modes)
         section_breakdown(out, data, modes)
-        gate_breach, regressed = section_config_delta(out, hrows, base_id,
-                                                      cur_id, eps)
+        gate_breach, regressed, incomparable = section_config_delta(
+            out, hrows, base_id, cur_id, eps)
         breach += gate_breach
+        if incomparable:
+            warned.append("baseline identity differs on %s"
+                          % brief(incomparable, 6))
         if breach:
             hard.append("I3 guardrail breached (%d): %s"
                         % (len(breach), ", ".join(breach)))
@@ -1611,6 +1716,8 @@ def main():
     a.add_argument("config_id")
     a.add_argument("targets", nargs="+")
     a.add_argument("--flow", default="incr", choices=["incr", "synth"])
+    a.add_argument("--phase", action="append", choices=sorted(PHASES),
+                   help="append only this phase (repeatable)")
     a.add_argument("--dry-run", action="store_true")
     a.set_defaults(fn=cmd_append)
 

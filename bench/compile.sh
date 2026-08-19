@@ -72,16 +72,82 @@ incr)
       --result-json "compile_$1.json"
   }
 
-  rm -rf w out_lg
-  compile_pass cold || exit 1
-  metric workdir_bytes_cold "$(dir_bytes w)" bytes
+  compile_cache_metrics() {  # TOKEN RESULT_JSON
+    local token=$1 result=$2
+    read -r hits misses redone refused failed <<EOF
+$(python3 - "$result" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        c = json.load(f).get("compile_cache", {})
+    print(c.get("hits", 0), c.get("misses", 0), c.get("redone_ms", 0),
+          c.get("refused", 0), c.get("store_failed", 0))
+except Exception:
+    print(0, 0, 0, 0, 0)
+PY
+)
+EOF
+    metric "hits_$token" "$hits" units
+    metric "misses_$token" "$misses" units
+    metric "redone_ms_$token" "$redone" ms
+    metric "refused_$token" "$refused" units
+    metric "store_failed_$token" "$failed" units
+  }
 
-  core_variant comment1 tree || exit 1
+  rm -rf w out_lg cold_lg
+  compile_pass cold || exit 1
+  compile_cache_metrics cold compile_cold.json
+  metric workdir_bytes_cold "$(dir_bytes w)" bytes
+  cp -R out_lg cold_lg
+
+  # The checked-in dino tests/comment1/ALU.prp has drifted into a genuinely
+  # different (though equivalent) implementation. The compile-cache contract
+  # needs an actual comment-only byte edit, so make one directly on the current
+  # top instead of weakening the semantic key to accommodate that fixture.
+  printf '\n// compile incremental comment-only touch\n' >> "tree/$CORE_TOP.prp"
+  echo "VARIANT comment-only: appended to $CORE_TOP.prp"
   compile_pass comment || exit 1
+  compile_cache_metrics comment compile_comment.json
+  metric workdir_bytes_comment "$(dir_bytes w)" bytes
+  warm_equal=0
+  comment_diff=$(lhd tool diff lg:cold_lg lg:out_lg --structural -q 2>/dev/null)
+  [ "$comment_diff" = identical ] && warm_equal=1
+  [ "$comment_diff" = identical ] || echo "H5 comment mismatch: $comment_diff" >&2
 
   core_variant bug1 tree || exit 1
   compile_pass edit || exit 1
+  compile_cache_metrics edit compile_edit.json
   metric workdir_bytes_edit "$(dir_bytes w)" bytes
+
+  # H5 for the semantic edit too: compare the incremental result against an
+  # honestly cache-disabled compile of the edited tree. Verification is outside
+  # run_timed, so it never contaminates compile_edit_ms.
+  rm -rf edit_cold_lg edit_cold_w
+  lhd compile "tree/$CORE_TOP.prp" --top "$CORE_TOP" --emit-dir lg:edit_cold_lg \
+    --workdir edit_cold_w --set compile.cache=false -q --result-json edit_cold.json \
+    || { echo "FAIL: cache-disabled H5 reference compile failed" >&2; exit 1; }
+  edit_diff=$(lhd tool diff lg:edit_cold_lg lg:out_lg --structural -q 2>/dev/null)
+  [ "$edit_diff" = identical ] || warm_equal=0
+  if [ "$edit_diff" != identical ]; then
+    echo "H5 edit mismatch: $edit_diff" >&2
+    lhd tool diff lg:edit_cold_lg lg:out_lg --top "$CORE_TOP" --max 80 -q >&2 || true
+  fi
+  edit_changed=0
+  cold_edit_diff=$(lhd tool diff lg:cold_lg lg:edit_cold_lg --structural -q 2>/dev/null)
+  [ "$cold_edit_diff" != identical ] && edit_changed=1
+  metric compile_edit_changes_cold "$edit_changed" bool
+  [ "$edit_changed" = 1 ] \
+    || { echo "FAIL: semantic edit fixture did not change the compiled graph" >&2; exit 1; }
+  metric compile_warm_equals_cold "$warm_equal" bool
+  [ "$warm_equal" = 1 ] || { echo "FAIL: incremental compile differs structurally from cold" >&2; exit 1; }
+
+  # Preserve the per-pass timers alongside the scalar METRIC lines. The ledger
+  # scraper consumes the latter, while optimization work needs the former to
+  # attribute residual wall time without rerunning a large cold build.
+  if [ -n "${TEST_UNDECLARED_OUTPUTS_DIR:-}" ]; then
+    cp compile_cold.json compile_comment.json compile_edit.json edit_cold.json \
+      "$TEST_UNDECLARED_OUTPUTS_DIR"/ 2>/dev/null || true
+  fi
 
   read -r n_loc n_words <<EOF
 $(compile_input_stats compile_cold.json tree "")

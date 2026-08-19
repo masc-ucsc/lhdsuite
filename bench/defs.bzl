@@ -20,6 +20,10 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #   top       whole-design top, in BOTH languages (compile, synthesis, LEC).
 #   unit      module carrying the verify sidecar and the bug1/comment1
 #             variants; must be inside the top's cone.
+#   incremental_edit_unit  synth-only override for the semantic incremental
+#             edit. Empty means `top`; use a small, definitely-instantiated
+#             stateful leaf when mutating the generated top would make the
+#             cache-disabled H5 reference pathologically expensive.
 #   seq_unit  module carrying a SEQUENTIAL verify sidecar
 #             (<core>/verif/<seq_unit>.verify.prp), i.e. one whose properties
 #             relate a cycle to the next with `past`/`stable`/`rose`/... The
@@ -332,7 +336,35 @@ CORES = {
         # what makes it safe to pin: 888709067567740450 from the .prp tree and
         # from `lhd compile verilog --top Alu`.
         "sim_expect": "sum=888709067567740450",
-        "sim_perf_cycles": 2000000,
+        # 5M: 500k measured 32 ms, which is process startup rather than the
+        # simulator (T1). Alu runs at ~15.6M cycles/s on mascm1.
+        "sim_perf_cycles": 5000000,
+    },
+    "xs_renametable": {
+        "pkg": "//xiangshan/Backend",
+        "top": "RenameTableWrapper",
+        "unit": "RenameTableWrapper",
+        # RenameTableWrapper is pure structure: 87 `io_… = …` lines and NOT ONE
+        # of them ends in `& 1`, so the shared top-file anchor finds no site and
+        # bug1 fails outright. Edit the instantiated leaf instead (the same
+        # escape hatch xs_backend uses for DelayN_6): inverting
+        # RenameTable.io_readPorts_0_data is a real hierarchical behaviour
+        # change and keeps the H5 comparison runnable.
+        "incremental_edit_unit": "RenameTable",
+        "v_flags": "--single-unit",
+        "color_algs": ["synth"],
+        "synth_only": True,
+        "sim_tb": "xs_renametable_tb.prp",
+        "sim_cycles": 1000,
+        "sim_tb_unit": "RenameTableWrapper",
+        "sim_marker": "xs_renametable:",
+        # Verified identical from BOTH language sides at 1000 cycles, which is
+        # what makes it safe to pin: 7374455199715033088 from the .prp tree and
+        # from `lhd compile verilog --top RenameTableWrapper`.
+        "sim_expect": "sum=7374455199715033088",
+        # 20k cycles runs 3.1 s; 5k keeps the throughput sample under a second
+        # while staying far above the process-startup floor (T1).
+        "sim_perf_cycles": 5000,
     },
     "xs_div": {
         "pkg": "//xiangshan/Backend",
@@ -355,6 +387,7 @@ CORES = {
         "pkg": "//xiangshan/Backend",
         "top": "Backend",
         "unit": "Backend",
+        "incremental_edit_unit": "DelayN_6",
         "v_flags": "--single-unit",
         "color_algs": ["synth"],
         "synth_only": True,
@@ -471,6 +504,7 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_TOP": cfg["top"],
             "CORE_V_FLAGS": cfg["v_flags"],
             "CORE_UNIT": cfg["unit"],
+            "CORE_INCR_EDIT_UNIT": cfg.get("incremental_edit_unit", ""),
             "CORE_SEQ_UNIT": cfg.get("seq_unit", ""),
             "CORE_COLOR_ALGS": " ".join(cfg["color_algs"]),
             "CORE_SYNTH_ONLY": "1" if synth_only else "",
