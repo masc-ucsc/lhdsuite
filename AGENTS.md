@@ -104,6 +104,30 @@ Every core shares one shape (`<core>/` = `dino/`, `minion/` or `cva6/`):
   reproduce drive / read / `step` / read; "simplifying" it to the usual two-eval
   clock toggle shifts `done at cycle N` by one and silently decouples the two
   benchmarks).
+- **A `u64` testbench variable is not unsigned after `wrap`.** The XS drivers'
+  xorshift64 used to spell its right shift `lfsr >> 7`, and that made the Pyrope
+  stimulus diverge from a plain `uint64_t` xorshift64 at cycle 4: after
+  `wrap lfsr = lfsr ^ (lfsr << 13)` the variable held a NEGATIVE representative
+  of the value (measured -5632980608351860010, and values below -2^63 elsewhere
+  — the stored Slop is signed AND wider than the declared 64 bits), so `>>` was
+  an ARITHMETIC shift. `#[]` reads the two's-complement
+  bits regardless, so the drivers now spell it `lfsr#[7..=63]` — the same
+  logical shift under either reading, which is what the Verilator twins need.
+  Before pinning a checksum from a Pyrope driver, check that every `>>` in it is
+  over a value that cannot go negative, or slice instead.
+- **A checksum driver and its Verilator twin need the same POWER-ON fill.**
+  `lhd sim` draws the power-on bits of a reset-free flop from the run's seeded
+  PRNG — deterministic per run, but not zero, and it MOVES with `--seed`;
+  Verilator is 2-state and zero-fills. On a block whose observable outputs
+  depend on unreset state the two therefore disagree for a legitimate reason,
+  and the disagreement is NOT a codegen bug to chase. `xs_rob` is the case in
+  this suite (three plain `always @(posedge clock)` flops reaching
+  `io_enq_isEmpty`), and it carries `sim_sets: --set sim.unknown_zero=true` — the
+  knob is `unknown_zero`, NOT `init_zero`: the latter covers state with no
+  initializer, and these flops reach the simulator carrying an unknown one, so
+  `init_zero` changed nothing. Zeroing them is also what makes lhd's throughput
+  number honest: the drawn bits defeat constant folding, and Rob goes from 6.1k
+  to 15.2k cycles/s with them zeroed.
 - **A testbench read is a reference, not a recompute.** `lhd sim` used to lower
   every output read to `peek()` — a whole `cycle()` plus a snapshot/restore of
   all design state, ~33% of dino's runtime. Reads are now references into the

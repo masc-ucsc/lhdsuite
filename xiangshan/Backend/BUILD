@@ -49,9 +49,17 @@ filegroup(
 # `import("lg:<Block>")`, so ONE driver serves MODE=pyrope (the .prp tree) and
 # MODE=verilog (an lg: library built from the .sv tree) — which is what makes
 # the two language sides a cross-checkable oracle rather than two numbers.
+#
+# *.cpp too: each .prp driver has a Verilator twin next to it
+# (xs_<block>_tb_verilator.cpp) that bench/sim_verilator.sh stages from here,
+# exactly as //dino and //minion do. Without it the verilate step succeeds and
+# `make` then dies with "No rule to make target .../xs_alu_tb_verilator.cpp".
 filegroup(
     name = "sim",
-    srcs = glob(["sim/*.prp"]),
+    srcs = glob([
+        "sim/*.prp",
+        "sim/*.cpp",
+    ]),
     visibility = ["//visibility:public"],
 )
 

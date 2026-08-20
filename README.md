@@ -109,7 +109,7 @@ Every row below exists once per core — write `//bench:dino_compile_verilog`,
 | `synth_incremental` | `color synth` + abc over 3 passes; incremental reuse needs the distinct colors/partitions that `color synth` creates (and `color flat` intentionally does not): asserts cache hits on the comment-only pass and a single-region re-synth after a one-line edit |
 | `synth_lec_flat` / `synth_lec_synth` | netlist integrity: synthesize twice (2nd run after a comment touch — under `color synth` that netlist is largely cache-CLONED), then `lhd lec --impl lg:netlist --ref lg:design --lib lg:models` proves it against the compiled design (`pass liberty gensim` provides the sky130 cell models; strict, so UNKNOWN fails). Only generated for colorings the core actually runs, so minion has no `synth_lec_flat` |
 | `sim_verilog` / `sim_pyrope` | asserted `lhd sim` benchmark: dino runs `dino_prog_tb` on the whole CPU for 1M cycles; minion runs `minion_prog_tb` on the whole core for 100k cycles. The Verilog side compiles straight to an `lg:` library rooted at the module each driver drives. Host C++ compilation and simulation are timed separately, and the timed path disables VCD. Additional whole-top correctness drivers are reported separately; dino gates on them, while minion's remain informational because one is still blocked by a derived clock that sim cgen cannot fold |
-| `sim_verilator` | the same benchmark under **Verilator**, for cores carrying a C++ twin of their `sim_tb` (currently dino and minion). Same RTL, same timing split, and the same marker/data gates make it both a throughput comparison and a cross-simulator oracle. Verilator is optional host state: a machine without it SKIPS rather than failing |
+| `sim_verilator` | the same benchmark under **Verilator**, for cores carrying a C++ twin of their `sim_tb` (dino, minion, and the three XiangShan blocks that ship a sim driver — `xs_alu`, `xs_rob`, `xs_renametable`). Same RTL, same timing split, and the same marker/data gates make it both a throughput comparison and a cross-simulator oracle. Verilator is optional host state: a machine without it SKIPS rather than failing |
 
 | `lec` | Pyrope impl ≡ Verilog ref (both pre-compiled to `lg:`; the Verilog side needs its slang options — `-F`/`-DSYNTHESIS` plus the core’s `v_flags`), PROVEN |
 | `lec_bug` | the core's `tests/bug1` variant must be REFUTED (dino: the ALU's 32-bit add flipped to subtract; minion: the same flip in `txfma_adder`; cva6: way 0's hit ignores the line's valid bit). **`cva6_lec_bug` FAILS** — see [Known-failing scenarios](#known-failing-scenarios) |
@@ -260,6 +260,35 @@ target.
 
 Minion follows the same pairing with `minion_prog_tb_verilator.cpp` and
 `minion_prog_tb.prp`, driving `minion_top` for the whole-core program workload.
+
+The XiangShan blocks pair the same way — `xs_<block>_tb.prp` with
+`xs_<block>_tb_verilator.cpp`. Their `sim_cycles` is chosen so that VERILATOR
+spends 1-2 s simulating (25M for `Alu`, 25k for `Rob`, 40k for
+`RenameTableWrapper`), and `verilator_cycles` is set equal to it, which makes
+the matched run the throughput run and skips the second long leg — at those
+counts neither simulator is reporting its own ~16-19 ms process startup, and
+`lhd sim` and Verilator can be read cycles/s against cycles/s on the same work.
+One difference matters when reading their numbers: these drivers assert no
+golden value in source (they cannot reach the datapath — see the header of
+`xs_alu_tb.prp`), so the ONLY statement that the simulators agree about the
+block is that all three print the same `sum=` checksum, which is what
+`sim_expect` pins at the matched count. A divergence there is a bug in one of
+them, and building the twins surfaced two:
+
+* **`wrap` on a `u64` can leave a NEGATIVE representative of the value**, which
+  made `lfsr >> 7` an ARITHMETIC shift and the Pyrope stimulus diverge from a
+  plain `uint64_t` xorshift64 at cycle 4. The drivers now spell that shift as
+  the bit slice `lfsr#[7..=63]`, the same logical shift under either reading —
+  do not change it back to `>> 7`.
+* **X-fill is not the same on both sides.** `lhd sim` draws the power-on bits of
+  a reset-free flop from the run's seeded PRNG; Verilator is 2-state and
+  zero-fills. `Rob` has three such flops and their bits reach `io_enq_isEmpty`,
+  so its checksum moved with `--seed` and never matched Verilator. `xs_rob`
+  therefore carries `sim_sets: --set sim.unknown_zero=true`, which is the fair
+  setting for the comparison (holding X-uncertainty is work Verilator does not
+  do at all) and also the one that makes lhd's own number honest — the drawn
+  bits defeat constant folding, and lhd goes from 6.1k to 15.2k cycles/s with
+  them zeroed, i.e. from 2.5x slower than Verilator to a dead heat.
 
 ## Known-failing scenarios
 

@@ -42,8 +42,17 @@ test backend.free_run(cycles:u32 = 1000) {
     // Masked to 63 bits so the printed checksum is unambiguously positive.
     wrap sum = ((sum << 1) + obs) & 0x7fffffffffffffff
 
+    // xorshift64's right shift is spelled as a BIT SLICE, not as `>> 7`.
+    // `wrap` on a u64 can leave a NEGATIVE representative of the same value —
+    // measured: after `wrap lfsr = lfsr ^ (lfsr << 13)` lhd sim held
+    // -5632980608351860010, and it prints values below -2^63 elsewhere, so the
+    // stored Slop is both signed and wider than the declared 64 bits. `>>` on
+    // that is an ARITHMETIC shift, which made this stimulus diverge from a
+    // plain uint64_t xorshift64 at cycle 4 and every checksum after it.
+    // `#[7..=63]` reads the two's-complement bits and is therefore the same
+    // logical shift in every simulator, which is what the C++ twin needs.
     wrap lfsr = lfsr ^ (lfsr << 13)
-    wrap lfsr = lfsr ^ (lfsr >> 7)
+    wrap lfsr = lfsr ^ lfsr#[7..=63]
     wrap lfsr = lfsr ^ (lfsr << 17)
   }
 

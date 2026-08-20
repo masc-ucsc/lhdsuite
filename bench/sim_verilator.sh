@@ -36,8 +36,13 @@
 # row for row. But it is far too short to MEASURE verilator with: dino at
 # 20k cycles takes ~7 ms, i.e. mostly process startup. So a second, long run at
 # $CORE_VERILATOR_CYCLES reports the throughput number
-# (sim_long_cycles_per_s). Both runs are gated; the program spins forever after
-# its two stores, so any count past ~510 cycles produces the same readback.
+# (sim_long_cycles_per_s) — unless the core sets verilator_cycles EQUAL to
+# sim_cycles, meaning its matched count is already long enough to measure, in
+# which case the matched run IS the throughput run and 3b is skipped.
+# Both runs are gated, but not identically: the matched run carries the full
+# marker+data gate, since it is the one that has to agree with `lhd sim`, while
+# the long run is marker-only — a driver that folds a checksum over the whole
+# run prints a different (correct) value at a different count. See step 3b.
 RF="${TEST_SRCDIR:-${RUNFILES_DIR:-$0.runfiles}}"
 . "$RF/_main/bench/common.sh"
 
@@ -105,11 +110,33 @@ rate sim_cycles_per_s "$CYCLES" "$EXEC_MS" "cycles/s"
 rate sim_cycles_per_s_with_cc "$CYCLES" "$((CC_MS + EXEC_MS))" "cycles/s"
 
 # --- 3b. long run: the throughput number --------------------------------------
-log_cmd sim_exec_long "$VBIN --cycles $LONG_CYCLES  (x$SIM_REPS, best)"
-best_run sim_exec_long "$SIM_REPS" "./$VBIN" --cycles "$LONG_CYCLES"
-metric sim_long_exec_ms "$BEST_MS" ms
+# Skipped when the core's verilator_cycles EQUALS its sim_cycles, which is how
+# the XiangShan blocks are tuned: their matched count is already sized for a
+# 1-2 s verilator run, so a second leg at the same count would measure the same
+# thing twice and double the target's wall time. The metrics are still emitted
+# (from the matched run) so //bench:show has a row either way. Same
+# short-circuit bench/sim.sh applies to its own PERF_CYCLES leg.
+#
+# When it does run it is MARKER ONLY (SIM_GATE_EXPECT=0), again the same
+# relaxation as bench/sim.sh's throughput leg and for the same reason: a
+# different cycle count is a different result by construction. dino's
+# $CORE_SIM_EXPECT is a readback that holds at any count past ~510 cycles, but a
+# driver that folds a CHECKSUM over the whole run prints a different (correct)
+# value at a different count. The full gate still applies to the matched run
+# above — the leg that has to agree with `lhd sim` — and the marker gate applies
+# here, so a long run that died before its report is still a failure.
+if [ "$LONG_CYCLES" != "$CYCLES" ]; then
+  log_cmd sim_exec_long "$VBIN --cycles $LONG_CYCLES  (x$SIM_REPS, best)"
+  SIM_GATE_EXPECT=0 best_run sim_exec_long "$SIM_REPS" "./$VBIN" --cycles "$LONG_CYCLES"
+  LONG_MS=$BEST_MS
+else
+  LONG_MS=$EXEC_MS
+fi
+metric sim_long_exec_ms "$LONG_MS" ms
 metric sim_long_cycles "$LONG_CYCLES" cycles
-rate sim_long_cycles_per_s "$LONG_CYCLES" "$BEST_MS" "cycles/s"
+rate sim_long_cycles_per_s "$LONG_CYCLES" "$LONG_MS" "cycles/s"
 
+LONG_NOTE="$LONG_CYCLES-cycle run for throughput"
+[ "$LONG_CYCLES" != "$CYCLES" ] || LONG_NOTE="matched run is the throughput run"
 echo "PASS: $VERSION, $CORE_VERILATOR_TB benchmark ($CYCLES cycles in ${EXEC_MS} ms" \
-  "sim, ${CC_MS} ms host c++; $LONG_CYCLES-cycle run for throughput)"
+  "sim, ${CC_MS} ms host c++; $LONG_NOTE)"

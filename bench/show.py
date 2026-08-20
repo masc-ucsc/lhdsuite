@@ -268,9 +268,12 @@ def report_core(root: Path, core: str) -> list:
         print(f"   sim cyc/s: {bench}, no VCD on either simulator;"
               f" +c++ includes that driver's host compile")
 
-        # The verilator row's matched-count run is over in milliseconds, so its
-        # cycles/s column is mostly process startup; the honest throughput
-        # number is the long run, printed here with the count it used.
+        # The verilator row's matched-count run can be over in milliseconds, so
+        # its cycles/s column would be mostly process startup; the honest
+        # throughput number is the long run, printed here with the count it
+        # used. A core whose verilator_cycles EQUALS its sim_cycles (the
+        # XiangShan blocks, tuned so the matched run is already 1-2 s) reports
+        # the matched run in these same metrics, so this row stays correct.
         if svl:
             m = svl[3]
             if skipped:
