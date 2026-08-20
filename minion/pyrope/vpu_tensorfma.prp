@@ -98,6 +98,7 @@ pub mod vpu_tensorfma::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tenso
   mut `load_ctrl_pre0.thread_id` = 0
   mut `load_ctrl_pre0.broadcast_sel` = 0
   mut `load_ctrl_pre0.waddr` = 0
+  mut `dcache_ctrl__bpo.reduce_wait` = 0
   mut fma_exec_cd_next__wtmp:u3 = 0sb?
   wire fma_exec_cd_next:u3
   mut enabled_next__wtmp:u1 = 0sb?
@@ -184,10 +185,10 @@ pub mod vpu_tensorfma::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tenso
   mut ex_tima_rf_wen:u16 = 0
   mut start:u1 = 0
   mut tenb_credit_s0:u1 = 0
-  load_ctrl.broadcast_sel = load_ctrl_q#[5..=7]
-  load_ctrl.thread_id = (load_ctrl_q >> 8) & 1
-  load_ctrl.waddr = load_ctrl_q#[0..=4]
   load_ctrl.wen = (load_ctrl_q >> 9) & 1
+  load_ctrl.thread_id = (load_ctrl_q >> 8) & 1
+  load_ctrl.broadcast_sel = load_ctrl_q#[5..=7]
+  load_ctrl.waddr = load_ctrl_q#[0..=4]
   ex_tima_mask = 0sb?
   const enabled__w1 = (enabled_int | ((enabled_flush >> (vpu_defs_pkg.TFMA_ENABLED_FLUSH_BITS - 1)) & 1)) & 1
   const enabled_flush_next__w1 = (enabled_flush#[0..=1] << 1) | (enabled_int & 1)
@@ -215,7 +216,6 @@ pub mod vpu_tensorfma::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tenso
     fma_accum_6_cycle = fma_accum_5_cycle
   }
   const fma_exec_a_col_no_start__w1 = (fma_exec_a_col - f0_core_ctrl.tensorfma_ctrl.start_a)#[0..=3]
-  mut `dcache_ctrl__bpo.reduce_wait` = 0
   mut `dcache_ctrl__bpo.tenb_credit` = tenb_credit_s3
   mut `dcache_ctrl__bpo.tenb_credit_entry` = tenb_credit_entry_s3
   const s0_tima_last_pass__w1 = unsigned((req_int8__w1 != 0) and (fma_exec_a_col == tensorfma_ctrl_cols_start_a__w1#[0..=3]) and (f0_core_ctrl.tensorfma_ctrl.to_vrf != 0))
@@ -373,12 +373,13 @@ pub mod vpu_tensorfma::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tenso
     pending_vpu_tenc_vrf_write = pending_vpu_tenc_vrf_write_next
   }
   enabled_next__wtmp = enabled_int
+  start = 0ub?
   first_pass_next__wtmp = first_pass
   start = 0
   if f0_core_ctrl.tensorfma_start != 0 {
     enabled_next__wtmp = 1
-    first_pass_next__wtmp = f0_core_ctrl.tensorfma_ctrl.first_pass
     start = 1
+    first_pass_next__wtmp = f0_core_ctrl.tensorfma_ctrl.first_pass
   }
   if (enabled_int != 0) and (done_sticky != 0) and (s0_fma_en == 0) and (fma_en_next == 0) and (not (fma_exec_cd != 0)) {
     enabled_next__wtmp = 0
@@ -448,9 +449,9 @@ pub mod vpu_tensorfma::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tenso
   const dc_read_addr_mod__w1 = (1 << 10) | (dest_wrap#[0..=3] << 6) | dc_read_addr_flat__w1#[0..=5]
   const dc_read_a_skip__w1 = unsigned((req_int8__w1 != 0) and (unsigned(((dc_read_a_col & 1) != 0) and (((~(dc_read_a_row & 1)) & 1) != 0)) != 0) and (dc_read_start_a_is_odd == 0))
   mut `dcache_ctrl__bpo.scp_req.read_en` = unsigned((enabled_int != 0) and (((dc_read_doing_a__w1 != 0) and (((~dc_read_a_skip__w1) & 1) != 0)) or (unsigned(((~dc_read_b_req_sent[fma_exec_b_rd_ptr_next])#[0..=1] != 0) and (dc_read_b_done == 0) and (dc_read_doing_a__w1 == 0) and (f0_core_ctrl.tensorfma_ctrl.ten_b == 0)) != 0)))
-  mut `dcache_ctrl__bpo.scp_req.addr` = dc_read_addr_mod__w1#[0..=9]
-  mut `dcache_ctrl__bpo.scp_req.size256` = (~dc_read_doing_a__w1) & 1
   mut `dcache_ctrl__bpo.scp_req.size64` = unsigned((req_int8__w1 != 0) and (dc_read_doing_a__w1 != 0) and (dc_read_acol_even_arow_even__w1 != 0))
+  mut `dcache_ctrl__bpo.scp_req.size256` = (~dc_read_doing_a__w1) & 1
+  mut `dcache_ctrl__bpo.scp_req.addr` = dc_read_addr_mod__w1#[0..=9]
   mut `dcache_ctrl__bpo.scp_req.way` = (dc_read_addr_mod__w1 >> vpu_defs_pkg.DCACHE_LRAM_ADDR_SIZE)#[0..=1]
   mut _mux_59:u1 = if req_int8__w1 != 0 { `dcache_ctrl__bpo.scp_req.read_en` & 1 } else { dc_read_req_a & 1 }
   mut _mux_60:u1 = if ((~enabled__w1) & 1) != 0 { 0 } else { _mux_59 & 1 }
@@ -484,32 +485,34 @@ pub mod vpu_tensorfma::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tenso
     dc_read_a_req_sent_next__wtmp = (dc_read_a_req_sent_next__wtmp - 1)#[0..=31]#[0..=1]
   }
   if dc_read_req_b__w1 != 0 {
-    const t713 = (dc_read_b_row#[0..=1] * 2) + dc_read_b_col
-    dc_read_b_req_sent_next__wtmp = ((dc_read_b_req_sent_next__wtmp & (~(1 << t713))) | (1 << t713))#[0..=7]
+    const t715 = (dc_read_b_row#[0..=1] * 2) + dc_read_b_col
+    dc_read_b_req_sent_next__wtmp = ((dc_read_b_req_sent_next__wtmp & (~(1 << t715))) | (1 << t715))#[0..=7]
   }
   if dcache_scp_resp.fill_is_tenb != 0 {
-    const t725 = (dcache_scp_resp.tenb_line#[0..=1] * 2) + tenb_fill_pass
-    dc_read_b_req_sent_next__wtmp = ((dc_read_b_req_sent_next__wtmp & (~(1 << t725))) | (1 << t725))#[0..=7]
+    const t727 = (dcache_scp_resp.tenb_line#[0..=1] * 2) + tenb_fill_pass
+    dc_read_b_req_sent_next__wtmp = ((dc_read_b_req_sent_next__wtmp & (~(1 << t727))) | (1 << t727))#[0..=7]
   }
   if dcache_scp_resp.tenb_flush != 0 {
     dc_read_b_req_sent_next__wtmp = 0
   }
   dc_read_b_req_sent_up__wtmp = unsigned((working != 0) or (dcache_scp_resp.fill_is_tenb != 0) or (dcache_scp_resp.tenb_flush != 0))
+  tenb_credit_s0 = 0ub?
   tenb_credit_s0 = 0
   if (s0_fma_en != 0) and (fma_exec_a_row == f0_core_ctrl.tensorfma_ctrl.rows_a) {
+    fma_exec_a_col_req_sent_ptr = 0ub????
     fma_exec_a_col_req_sent_ptr = (fma_exec_a_col - f0_core_ctrl.tensorfma_ctrl.start_a)#[0..=3]
-    const t756 = (fma_exec_a_col_req_sent_ptr#[0..=1] * 2) + fma_exec_b_col
-    dc_read_b_req_sent_next__wtmp = ((0 & (~(1 << t756))) | (0 << t756))#[0..=7]
+    const t758 = (fma_exec_a_col_req_sent_ptr#[0..=1] * 2) + fma_exec_b_col
+    dc_read_b_req_sent_next__wtmp = ((0 & (~(1 << t758))) | (0 << t758))#[0..=7]
     if req_int8__w1 != 0 {
-      const t766 = (fma_exec_a_col_req_sent_ptr#[0..=1] * 2) + 1
-      dc_read_b_req_sent_next__wtmp = ((dc_read_b_req_sent_next__wtmp & (~(1 << t766))) | (0 << t766))#[0..=7]
+      const t768 = (fma_exec_a_col_req_sent_ptr#[0..=1] * 2) + 1
+      dc_read_b_req_sent_next__wtmp = ((dc_read_b_req_sent_next__wtmp & (~(1 << t768))) | (0 << t768))#[0..=7]
     }
     tenb_credit_s0 = unsigned((f0_core_ctrl.tensorfma_ctrl.ten_b != 0) and ((req_int8__w1 != 0) or (fma_exec_b_col != 0)))
   }
   const pend_sticky_wait__w1 = unsigned(((scoreboard_pend_sticky != 0) or (tquant_pend_sticky != 0) or (tstore_pend_sticky != 0)) and (not ((req_int8__w1 != 0) and (f0_core_ctrl.tensorfma_ctrl.to_vrf == 0))))
   mut `dcache_ctrl__bpo.tfma_enabled` = unsigned((enabled_int != 0) and (pend_sticky_wait__w1 == 0))
-  dc_read_a_wr_ptr_next__wtmp = dc_read_a_wr_ptr
   mut `dcache_ctrl__bpo.tfma_rf_write` = unsigned((working != 0) and (req_int8__w1 != 0) and (f0_core_ctrl.tensorfma_ctrl.to_vrf != 0) and (pend_sticky_wait__w1 == 0))
+  dc_read_a_wr_ptr_next__wtmp = dc_read_a_wr_ptr
   if start != 0 {
     dc_read_a_wr_ptr_next__wtmp = 0
   } elif dc_read_req_a != 0 {
@@ -528,18 +531,18 @@ pub mod vpu_tensorfma::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tenso
   }
   if reset != 0 {
     dc_read_a_col = 0
-    dc_read_a_done = 1
     dc_read_a_row = 0
+    dc_read_a_done = 1
     dc_read_start_a_is_odd = 0
   } elif working != 0 {
     dc_read_a_col = dc_read_a_col_next
-    dc_read_a_done = dc_read_a_done_next
     dc_read_a_row = dc_read_a_row_next
+    dc_read_a_done = dc_read_a_done_next
     dc_read_start_a_is_odd = dc_read_start_a_is_odd_next
   }
   dc_read_a_col_next__wtmp = dc_read_a_col
-  dc_read_a_done_next__wtmp = dc_read_a_done
   dc_read_a_row_next__wtmp = dc_read_a_row
+  dc_read_a_done_next__wtmp = dc_read_a_done
   dc_read_start_a_is_odd_next__wtmp = dc_read_start_a_is_odd
   if start != 0 {
     dc_read_a_col_next__wtmp = f0_core_ctrl.tensorfma_ctrl.start_a
@@ -550,8 +553,8 @@ pub mod vpu_tensorfma::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tenso
     dc_read_a_row_next__wtmp = (dc_read_a_row + 1)#[0..=3]
     if dc_read_a_row == f0_core_ctrl.tensorfma_ctrl.rows_a {
       dc_read_a_col_next__wtmp = (dc_read_a_col + 1)#[0..=3]
-      dc_read_a_row_next__wtmp = 0
       dc_read_start_a_is_odd_next__wtmp = 0
+      dc_read_a_row_next__wtmp = 0
       if dc_read_a_col == tensorfma_ctrl_cols_start_a__w1#[0..=3] {
         dc_read_a_done_next__wtmp = 1
       }
@@ -559,16 +562,16 @@ pub mod vpu_tensorfma::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tenso
   }
   if reset != 0 {
     dc_read_b_col = 0
-    dc_read_b_done = 1
     dc_read_b_row = 0
+    dc_read_b_done = 1
   } elif working != 0 {
     dc_read_b_col = dc_read_b_col_next
-    dc_read_b_done = dc_read_b_done_next
     dc_read_b_row = dc_read_b_row_next
+    dc_read_b_done = dc_read_b_done_next
   }
   dc_read_b_col_next__wtmp = dc_read_b_col
-  dc_read_b_done_next__wtmp = dc_read_b_done
   dc_read_b_row_next__wtmp = dc_read_b_row
+  dc_read_b_done_next__wtmp = dc_read_b_done
   if start != 0 {
     dc_read_b_done_next__wtmp = 0
     dc_read_b_row_next__wtmp = 0
@@ -586,29 +589,28 @@ pub mod vpu_tensorfma::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tenso
     load_ctrl_pre1 = (`load_ctrl_pre0.wen` << 9) | (`load_ctrl_pre0.thread_id` << 8) | (`load_ctrl_pre0.broadcast_sel` << 5) | `load_ctrl_pre0.waddr`
     load_ctrl_q = load_ctrl_pre1
   }
-  `load_ctrl_pre0.broadcast_sel` = dc_read_addr_flat__w1#[2..=4]
-  `load_ctrl_pre0.thread_id` = 1
   `load_ctrl_pre0.wen` = `dcache_ctrl__bpo.scp_req.read_en` & 1
+  `load_ctrl_pre0.broadcast_sel` = dc_read_addr_flat__w1#[2..=4]
   mut _mux_70:u5 = if dc_read_doing_a__w1 != 0 { (dc_read_a_wr_ptr & 1) } else { (1 << 3) | (dc_read_b_wr_ptr << 1) | (dc_read_b_col & 1) }
   `load_ctrl_pre0.waddr` = _mux_70
   if reset != 0 {
-    done_sticky = 0
-    fma_exec_a_col = 0
-    fma_exec_a_row = 0
     fma_exec_b_col = 0
-    fma_exec_start_a_is_odd = 0
+    fma_exec_a_row = 0
+    fma_exec_a_col = 0
     fma_mask_next = 0
+    fma_exec_start_a_is_odd = 0
+    done_sticky = 0
   } elif working != 0 {
-    done_sticky = done_sticky_next
-    fma_exec_a_col = fma_exec_a_col_next
-    fma_exec_a_row = fma_exec_a_row_next
     fma_exec_b_col = fma_exec_b_col_next
-    fma_exec_start_a_is_odd = fma_exec_start_a_is_odd_next
+    fma_exec_a_row = fma_exec_a_row_next
+    fma_exec_a_col = fma_exec_a_col_next
     fma_mask_next = s0_fma_mask
+    fma_exec_start_a_is_odd = fma_exec_start_a_is_odd_next
+    done_sticky = done_sticky_next
   }
   if reset != 0 {
-    fma_en = 0
     fma_en_next = 0
+    fma_en = 0
   } elif (working != 0) and (((~req_int8__w1) & 1) != 0) {
     fma_en_next = unsigned((s0_fma_en_conv != 0) and (((~req_int8__w1) & 1) != 0) and ((req_fp32__w1 != 0) or (req_fp16afp32__w1 != 0)))
     fma_en = fma_en_next
@@ -669,11 +671,11 @@ pub mod vpu_tensorfma::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tenso
   if ((~first_pass) & 1) != 0 {
     fma_inst_s0__wtmp#[27..=31] = fma_exec_accum_reg__w1
   }
-  done_sticky_next__wtmp = done_sticky
   first_pass_clear__wtmp = 0
-  fma_exec_a_col_next__wtmp = fma_exec_a_col
-  fma_exec_a_row_next__wtmp = fma_exec_a_row
+  done_sticky_next__wtmp = done_sticky
   fma_exec_b_col_next__wtmp = fma_exec_b_col
+  fma_exec_a_row_next__wtmp = fma_exec_a_row
+  fma_exec_a_col_next__wtmp = fma_exec_a_col
   fma_exec_start_a_is_odd_next__wtmp = fma_exec_start_a_is_odd
   if s0_fma_en != 0 {
     _mux_94 = if req_int8__w1 != 0 { fma_exec_b_col & 1 } else { (fma_exec_b_col + 1) & 1 }
@@ -681,9 +683,9 @@ pub mod vpu_tensorfma::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tenso
     if fma_exec_last_b_col__w1 != 0 {
       fma_exec_a_row_next__wtmp = (fma_exec_a_row + 1)#[0..=3]
       if fma_exec_a_row == f0_core_ctrl.tensorfma_ctrl.rows_a {
+        fma_exec_a_row_next__wtmp = 0
         first_pass_clear__wtmp = 1
         fma_exec_a_col_next__wtmp = (fma_exec_a_col + 1)#[0..=3]
-        fma_exec_a_row_next__wtmp = 0
         done_sticky_next__wtmp = unsigned(fma_exec_a_col == tensorfma_ctrl_cols_start_a__w1#[0..=3])
         fma_exec_start_a_is_odd_next__wtmp = 0
       }
@@ -694,8 +696,8 @@ pub mod vpu_tensorfma::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tenso
   }
   fma_exec_a_rd_ptr_next__wtmp = fma_exec_a_rd_ptr
   if start != 0 {
-    fma_exec_a_col_next__wtmp = f0_core_ctrl.tensorfma_ctrl.start_a
     fma_exec_a_rd_ptr_next__wtmp = 0
+    fma_exec_a_col_next__wtmp = f0_core_ctrl.tensorfma_ctrl.start_a
     fma_exec_start_a_is_odd_next__wtmp = f0_core_ctrl.tensorfma_ctrl.start_a & 1
   } elif (s0_fma_en != 0) and (fma_exec_last_b_col__w1 != 0) {
     fma_exec_a_rd_ptr_next__wtmp = (~fma_exec_a_rd_ptr) & 1
@@ -758,40 +760,40 @@ pub mod vpu_tensorfma::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tenso
     s1_tima_valid = unsigned((s0_fma_en_conv != 0) and (req_int8__w1 != 0))
   }
   if tima_clk_en__w1 != 0 {
-    s1_tima_last_pass = s0_tima_last_pass__w1
-    s1_tima_ren3 = (~first_pass) & 1
     s1_tima_tena_raddr = fma_exec_a_rd_ptr
     s1_tima_tenb_raddr = fma_exec_b_rd_ptr << 1
+    s1_tima_last_pass = s0_tima_last_pass__w1
+    s1_tima_ren3 = (~first_pass) & 1
     s1_tima_tenc_raddr = fma_exec_a_row
   }
   if working != 0 {
     s1_tena_rf_rdata_mask = (~conv_skip__w1) & 1
   }
   if reset != 0 {
-    ex_fma_mask = 0
     ex_tima_valid = 0
+    ex_fma_mask = 0
   } elif tima_clk_en__w1 != 0 {
-    ex_fma_mask = fma_mask_next
     ex_tima_valid = s1_tima_valid
+    ex_fma_mask = fma_mask_next
   }
   if tima_clk_en__w1 != 0 {
+    ex_tima_tenb_raddr = s1_tima_tenb_raddr
+    ex_tima_tena_raddr = s1_tima_tena_raddr
     ex_tima_last_pass = s1_tima_last_pass
     ex_tima_ren3 = s1_tima_ren3
-    ex_tima_tena_raddr = s1_tima_tena_raddr
-    ex_tima_tenb_raddr = s1_tima_tenb_raddr
     ex_tima_tenc_raddr = s1_tima_tenc_raddr
   }
   if working != 0 {
     ex_tena_rdata_mask = s1_tena_rf_rdata_mask
   }
   if reset != 0 {
-    f2_tima_ren3 = 0
-    f2_tima_rf_wen = 0
     f2_tima_tenc_wen = 0
+    f2_tima_rf_wen = 0
+    f2_tima_ren3 = 0
   } elif tima_clk_en__w1 != 0 {
-    f2_tima_ren3 = ex_tima_ren3
-    f2_tima_rf_wen = ex_tima_rf_wen__w16
     f2_tima_tenc_wen = ex_tima_tenc_wen__w16
+    f2_tima_rf_wen = ex_tima_rf_wen__w16
+    f2_tima_ren3 = ex_tima_ren3
   }
   if f0_core_ctrl.tensorfma_start != 0 {
     ex_tima_sa = unsigned(f0_core_ctrl.tensorfma_ctrl.u_a == 0)
@@ -801,11 +803,11 @@ pub mod vpu_tensorfma::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tenso
     f2_tima_tenc_raddr = ex_tima_tenc_raddr
   }
   if reset != 0 {
-    f3_tima_rf_wen = 0
     f3_tima_tenc_wen = 0
+    f3_tima_rf_wen = 0
   } elif tima_clk_en__w1 != 0 {
-    f3_tima_rf_wen = f2_tima_rf_wen
     f3_tima_tenc_wen = f2_tima_tenc_wen
+    f3_tima_rf_wen = f2_tima_rf_wen
   }
   if tima_clk_en__w1 != 0 {
     f3_tima_tenc_waddr = f2_tima_tenc_raddr
@@ -844,64 +846,64 @@ pub mod vpu_tensorfma::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tenso
     tensortmp_rf_written_next__wtmp = ((tensortmp_rf_written_next__wtmp & (~(1 << ex_tima_tenc_raddr#[1..=3]))) | (0 << ex_tima_tenc_raddr#[1..=3]))#[0..=7]
   }
   const vpu_tensorfma_debug__w1 = ((enabled_int & 1) << 24) | ((working & 1) << 23) | ((pend_sticky_wait__w1 & 1) << 22) | (dc_read_a_req_sent << 20) | (dc_read_b_req_sent#[0..=7] << 12) | (fma_exec_b_rd_ptr << 10) | ((fma_exec_b_col & 1) << 9) | ((req_int8__w1 & 1) << 8) | ((fma_accum_collision & 1) << 7) | ((conv_bits_pending & 1) << 6) | (tenb_credit_entry_s1 << 4) | (tenb_credit_entry_s2 << 2) | tenb_credit_entry_s3
-  dcache_ctrl.reduce_wait = 0
-  conv_bits_pending_next = conv_bits_pending_next__wtmp
+  fma_exec_cd_next = fma_exec_cd_next__wtmp
+  enabled_next = enabled_next__wtmp
+  working = working__wtmp
+  s0_fma_en = s0_fma_en__wtmp
+  first_pass_next = first_pass_next__wtmp
+  first_pass_clear = first_pass_clear__wtmp
   conv_bits_up = conv_bits_up__wtmp
-  dc_read_a_col_next = dc_read_a_col_next__wtmp
-  dc_read_a_done_next = dc_read_a_done_next__wtmp
-  dc_read_a_req_sent_next = dc_read_a_req_sent_next__wtmp
-  dc_read_a_row_next = dc_read_a_row_next__wtmp
-  dc_read_a_wr_ptr_next = dc_read_a_wr_ptr_next__wtmp
-  dc_read_b_col_next = dc_read_b_col_next__wtmp
-  dc_read_b_done_next = dc_read_b_done_next__wtmp
-  dc_read_b_req_sent_next = dc_read_b_req_sent_next__wtmp
-  dc_read_b_req_sent_up = dc_read_b_req_sent_up__wtmp
-  dc_read_b_row_next = dc_read_b_row_next__wtmp
-  dc_read_b_wr_ptr_next = dc_read_b_wr_ptr_next__wtmp
-  dc_read_req_a = dc_read_req_a__wtmp
+  conv_bits_pending_next = conv_bits_pending_next__wtmp
+  fma_exec_b_rd_ptr_next = fma_exec_b_rd_ptr_next__wtmp
+  scoreboard_pend_sticky_next = scoreboard_pend_sticky_next__wtmp
+  tquant_pend_sticky_next = tquant_pend_sticky_next__wtmp
+  tstore_pend_sticky_next = tstore_pend_sticky_next__wtmp
+  tensortmp_rf_written_next = tensortmp_rf_written_next__wtmp
+  pending_vpu_rf_write_next = pending_vpu_rf_write_next__wtmp
+  pending_vpu_tenc_vrf_write_next = pending_vpu_tenc_vrf_write_next__wtmp
   dc_read_scp_a_addr_next = dc_read_scp_a_addr_next__wtmp
   dc_read_scp_b_addr_next = dc_read_scp_b_addr_next__wtmp
+  dc_read_req_a = dc_read_req_a__wtmp
   dc_read_start_a_is_odd_next = dc_read_start_a_is_odd_next__wtmp
-  dcache_ctrl.scp_req.addr = `dcache_ctrl__bpo.scp_req.addr`
-  dcache_ctrl.scp_req.bid = `dcache_ctrl__bpo.scp_req.bid`
+  dc_read_a_req_sent_next = dc_read_a_req_sent_next__wtmp
+  dc_read_b_req_sent_next = dc_read_b_req_sent_next__wtmp
+  dc_read_b_req_sent_up = dc_read_b_req_sent_up__wtmp
+  dc_read_b_wr_ptr_next = dc_read_b_wr_ptr_next__wtmp
+  dc_read_a_wr_ptr_next = dc_read_a_wr_ptr_next__wtmp
+  dc_read_a_col_next = dc_read_a_col_next__wtmp
+  dc_read_a_row_next = dc_read_a_row_next__wtmp
+  dc_read_a_done_next = dc_read_a_done_next__wtmp
+  dc_read_b_row_next = dc_read_b_row_next__wtmp
+  dc_read_b_col_next = dc_read_b_col_next__wtmp
+  dc_read_b_done_next = dc_read_b_done_next__wtmp
+  fma_inst_s0 = fma_inst_s0__wtmp
+  fma_exec_a_row_next = fma_exec_a_row_next__wtmp
+  fma_exec_a_col_next = fma_exec_a_col_next__wtmp
+  fma_exec_b_col_next = fma_exec_b_col_next__wtmp
+  fma_exec_a_rd_ptr_next = fma_exec_a_rd_ptr_next__wtmp
+  fma_accum_collision = fma_accum_collision__wtmp
+  s0_fma_en_conv = s0_fma_en_conv__wtmp
+  done_sticky_next = done_sticky_next__wtmp
+  s0_fma_mask = s0_fma_mask__wtmp
+  fma_exec_start_a_is_odd_next = fma_exec_start_a_is_odd_next__wtmp
+  fma_exec_hazard_wait_next = fma_exec_hazard_wait_next__wtmp
   dcache_ctrl.scp_req.read_en = `dcache_ctrl__bpo.scp_req.read_en`
-  dcache_ctrl.scp_req.size256 = `dcache_ctrl__bpo.scp_req.size256`
-  dcache_ctrl.scp_req.size64 = `dcache_ctrl__bpo.scp_req.size64`
   dcache_ctrl.scp_req.way = `dcache_ctrl__bpo.scp_req.way`
+  dcache_ctrl.scp_req.addr = `dcache_ctrl__bpo.scp_req.addr`
+  dcache_ctrl.scp_req.size64 = `dcache_ctrl__bpo.scp_req.size64`
+  dcache_ctrl.scp_req.size256 = `dcache_ctrl__bpo.scp_req.size256`
+  dcache_ctrl.scp_req.bid = `dcache_ctrl__bpo.scp_req.bid`
   dcache_ctrl.tenb_credit = `dcache_ctrl__bpo.tenb_credit`
   dcache_ctrl.tenb_credit_entry = `dcache_ctrl__bpo.tenb_credit_entry`
   dcache_ctrl.tfma_enabled = `dcache_ctrl__bpo.tfma_enabled`
+  dcache_ctrl.reduce_wait = 0
   dcache_ctrl.tfma_rf_write = `dcache_ctrl__bpo.tfma_rf_write`
-  done_sticky_next = done_sticky_next__wtmp
   enabled = enabled__w1
-  enabled_next = enabled_next__wtmp
-  ex_tentmp_raddr = ex_tentmp_raddr__w1
-  ex_tentmp_ren = unsigned((req_int8__w1 != 0) and (ex_tentmp_acol_odd != 0) and (((~(ex_tima_tenc_raddr & 1)) & 1) != 0))
-  ex_tima_mask = ex_tima_mask__w16
-  first_pass_clear = first_pass_clear__wtmp
-  first_pass_next = first_pass_next__wtmp
-  fma_accum_collision = fma_accum_collision__wtmp
-  fma_exec_a_col_next = fma_exec_a_col_next__wtmp
-  fma_exec_a_rd_ptr_next = fma_exec_a_rd_ptr_next__wtmp
-  fma_exec_a_row_next = fma_exec_a_row_next__wtmp
-  fma_exec_b_col_next = fma_exec_b_col_next__wtmp
-  fma_exec_b_rd_ptr_next = fma_exec_b_rd_ptr_next__wtmp
-  fma_exec_cd_next = fma_exec_cd_next__wtmp
-  fma_exec_hazard_wait_next = fma_exec_hazard_wait_next__wtmp
-  fma_exec_start_a_is_odd_next = fma_exec_start_a_is_odd_next__wtmp
-  fma_inst_s0 = fma_inst_s0__wtmp
-  io_events_wait_tenb = unsigned((enabled_int != 0) and (dc_read_a_req_sent != 0) and (((~(((dc_read_b_req_sent[fma_exec_b_rd_ptr] << 1) >> (fma_exec_b_col + 1)) & 1)) & 1) != 0) and ((((~((dc_read_b_req_sent[fma_exec_b_rd_ptr] >> 1) & 1)) & 1) != 0) or (((~req_int8__w1) & 1) != 0)) and (fma_accum_collision == 0) and ((f0_core_ctrl.tensorfma_ctrl.is_conv == 0) or (conv_bits_pending == 0)))
   load_ctrl_pre_tena_wen = load_ctrl_pre_tena_wen__w1
   load_ctrl_pre_tenb_wen = load_ctrl_pre_tenb_wen__w1
-  pending_vpu_rf_write_next = pending_vpu_rf_write_next__wtmp
-  pending_vpu_tenc_vrf_write_next = pending_vpu_tenc_vrf_write_next__wtmp
-  s0_fma_en = s0_fma_en__wtmp
-  s0_fma_en_conv = s0_fma_en_conv__wtmp
-  s0_fma_mask = s0_fma_mask__wtmp
-  scoreboard_pend_sticky_next = scoreboard_pend_sticky_next__wtmp
-  tensortmp_rf_written_next = tensortmp_rf_written_next__wtmp
-  tquant_pend_sticky_next = tquant_pend_sticky_next__wtmp
-  tstore_pend_sticky_next = tstore_pend_sticky_next__wtmp
+  ex_tentmp_ren = unsigned((req_int8__w1 != 0) and (ex_tentmp_acol_odd != 0) and (((~(ex_tima_tenc_raddr & 1)) & 1) != 0))
+  ex_tentmp_raddr = ex_tentmp_raddr__w1
+  ex_tima_mask = ex_tima_mask__w16
+  io_events_wait_tenb = unsigned((enabled_int != 0) and (dc_read_a_req_sent != 0) and (((~(((dc_read_b_req_sent[fma_exec_b_rd_ptr] << 1) >> (fma_exec_b_col + 1)) & 1)) & 1) != 0) and ((((~((dc_read_b_req_sent[fma_exec_b_rd_ptr] >> 1) & 1)) & 1) != 0) or (((~req_int8__w1) & 1) != 0)) and (fma_accum_collision == 0) and ((f0_core_ctrl.tensorfma_ctrl.is_conv == 0) or (conv_bits_pending == 0)))
   vpu_tensorfma_debug = vpu_tensorfma_debug__w1
-  working = working__wtmp
 }

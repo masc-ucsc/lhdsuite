@@ -6,10 +6,12 @@ pub mod intpipe_csr_file_fl_barrier::[timecheck=false](clk_i:u1, rst_ni:u1, star
   reg rf_wen_addr:u5:[clock_pin=ref clk_i]
   reg state_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
   reg rf_wen_data_r:u1:[clock_pin=ref clk_i]
+  mut `scoreboard_addr__bpo.fp` = 0
   if neigh_resp_valid != 0 {
     rf_wen_data_r = neigh_resp_data
   }
-  mut state_d:u2 = if (state_q == 0) and (start_valid != 0) { 1 } else { state_q }
+  mut state_d:u2 = 0sb?
+  state_d = if (state_q == 0) and (start_valid != 0) { 1 } else { state_q }
   if state_q == 1 {
     state_d = 2
   }
@@ -23,7 +25,6 @@ pub mod intpipe_csr_file_fl_barrier::[timecheck=false](clk_i:u1, rst_ni:u1, star
   const start_accepted__w1 = unsigned((start_ready__w1 != 0) and (start_valid != 0))
   const rf_wen_valid__w1 = unsigned(state_q == 3)
   mut `scoreboard_addr__bpo.addr` = rf_wen_addr
-  mut `scoreboard_addr__bpo.fp` = 0
   mut `scoreboard_addr__bpo.thread_id` = rf_wen_thread_id
   if unsigned((start_valid != 0) or (state_q != 0)) != 0 {
     state_q = state_d
@@ -38,12 +39,12 @@ pub mod intpipe_csr_file_fl_barrier::[timecheck=false](clk_i:u1, rst_ni:u1, star
     rf_wen_thread_id = start_thread_id
   }
   scoreboard_addr.fp = 0
-  neigh_req_valid = unsigned(state_q == 1)
-  rf_wen_data = (rf_wen_data_r & 1)
-  rf_wen_valid = rf_wen_valid__w1
-  rf_wen_valid_early = unsigned((rf_wen_valid__w1 != 0) or (neigh_resp_valid != 0))
   scoreboard_addr.addr = `scoreboard_addr__bpo.addr`
   scoreboard_addr.thread_id = `scoreboard_addr__bpo.thread_id`
-  scoreboard_valid = unsigned(state_q != 0)
   start_ready = start_ready__w1
+  neigh_req_valid = unsigned(state_q == 1)
+  rf_wen_valid = rf_wen_valid__w1
+  rf_wen_valid_early = unsigned((rf_wen_valid__w1 != 0) or (neigh_resp_valid != 0))
+  rf_wen_data = (rf_wen_data_r & 1)
+  scoreboard_valid = unsigned(state_q != 0)
 }

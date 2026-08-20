@@ -25,12 +25,22 @@ pub mod minion_dcache_miss_handler::[timecheck=false](clk_i:u1, rst_ni:u1, neigh
   reg clear_soft_lock_q:u1:[clock_pin=ref clk_i]
   reg refill_address_inc_q:u1:[clock_pin=ref clk_i]
   mut req_d:u102 = 0
+  mut `l2_evict_req_o__bpo.source` = 0
+  mut `l2_evict_req_o__bpo.wdata` = 0
   mut `l2_evict_req_o__bpo.opcode` = 0
+  mut `l2_evict_req_o__bpo.data` = 0
   mut `l2_evict_req_o__bpo.qwen` = 0
   mut `l2_evict_req_o__bpo.subopcode` = 0
+  mut `l2_miss_req_o__bpo.source` = 0
+  mut `l2_miss_req_o__bpo.wdata` = 0
   mut `l2_miss_req_o__bpo.address` = 0
+  mut `l2_miss_req_o__bpo.data` = 0
   mut `l2_miss_req_o__bpo.size` = 0
+  mut `l2_miss_req_o__bpo.qwen` = 0
   mut `l2_miss_req_o__bpo.subopcode` = 0
+  mut `writeback_req_o__bpo.is_tbox` = 0
+  mut `writeback_req_o__bpo.mem_idx` = 0
+  mut `writeback_req_o__bpo.addr_low` = 0
   mut req_pri_rdy_o__wtmp:u1 = 0sb?
   wire req_pri_rdy_o:u1
   mut req_sec_rdy_o__wtmp:u1 = 0sb?
@@ -53,10 +63,10 @@ pub mod minion_dcache_miss_handler::[timecheck=false](clk_i:u1, rst_ni:u1, neigh
   mut metawrite_pending_d:u1 = 0
   mut clear_soft_lock_d:u1 = 0
   mut typ_s1:u4 = 0
-  fence_rdy_o = 0sb?
   req_d = 0sb?
-  sm_data_debug_signals_o = 0sb?
   writeback_valid_o = 0ub?
+  fence_rdy_o = 0sb?
+  sm_data_debug_signals_o = 0sb?
   const my_l2_miss_id__w1 = minion_dcache_pkg.EtLinkCoreMissIdMissHandler0 + 0
   const my_l2_miss_id_uc_st__w1 = minion_dcache_pkg.EtLinkCoreMissIdMissHandlerUcSt0 + 0
   const my_l2_miss_id_uc_ld__w1 = minion_dcache_pkg.EtLinkCoreMissIdMissHandlerUcLd0 + 0
@@ -69,21 +79,21 @@ pub mod minion_dcache_miss_handler::[timecheck=false](clk_i:u1, rst_ni:u1, neigh
   const set_match__w1 = unsigned((set_o__w1 == req_info_i.set) and ((state_q != minion_dcache_pkg.MhInvalid) or (state_was_fill_resp_q != 0)))
   const tag_match_o__w1 = unsigned((tag__w1 == req_info_i.addr#[7..=39]) and (set_match__w1 != 0) and (req_info_i.is_msg == 0) and (req_info_i.is_bypass == 0) and (req_info_i.cacheable != 0))
   const evict_match_o__w1 = unsigned((state_q != minion_dcache_pkg.MhInvalid) and (set_o__w1 == req_info_i.set) and (req_q#[42..=45] == req_info_i.way_en) and (req_info_i.is_msg == 0) and (req_info_i.is_bypass == 0) and (req_info_i.cacheable != 0))
-  const cmd__w1 = req_info_i.cmd
-  const cmd_s1__w1 = cmd__w1
-  const cmd_s2__w1 = cmd_s1__w1
   cmd = 0sb?
-  cmd_s1 = 0sb?
-  cmd_s2 = 0sb?
-  dcache_cmd_is_amo = 0ub?
-  dcache_cmd_is_write = 0ub?
+  const cmd__w1 = req_info_i.cmd
   dcache_cmd_to_type = 0sb?
   temp = 0sb?
+  cmd_s1 = 0sb?
+  const cmd_s1__w1 = cmd__w1
+  dcache_cmd_is_write = 0ub?
+  cmd_s2 = 0sb?
+  const cmd_s2__w1 = cmd_s1__w1
+  dcache_cmd_is_amo = 0ub?
+  cmd_s3 = 0sb?
   const cmd_s3__w1 = cmd__w1
+  dcache_cmd_is_write_intent = 0ub?
   const cmd_s1__w2 = cmd_s3__w1
   const cmd_s2__w2 = cmd_s1__w2
-  cmd_s3 = 0sb?
-  dcache_cmd_is_write_intent = 0ub?
   const temp__w1 = ((unsigned((cmd_s1__w1 == minion_dcache_pkg.DcCmdXwr) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXsc) or (unsigned((cmd_s2__w1 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s2__w1 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s2__w1 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s2__w1 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s2__w1 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s2__w1 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s2__w1 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s2__w1 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s2__w1 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s2__w1 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s2__w1 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s2__w1 == minion_dcache_pkg.DcCmdXaMaxPs)) != 0) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdSc32) or (cmd_s1__w1 == minion_dcache_pkg.DcCmdXwrb)) & 1) << 1) | (unsigned((unsigned((cmd_s1__w2 == minion_dcache_pkg.DcCmdXwr) or (cmd_s1__w2 == minion_dcache_pkg.DcCmdXsc) or (unsigned((cmd_s2__w2 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s2__w2 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s2__w2 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s2__w2 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s2__w2 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s2__w2 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s2__w2 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s2__w2 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s2__w2 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s2__w2 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s2__w2 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s2__w2 == minion_dcache_pkg.DcCmdXaMaxPs)) != 0) or (cmd_s1__w2 == minion_dcache_pkg.DcCmdSc32) or (cmd_s1__w2 == minion_dcache_pkg.DcCmdXwrb)) != 0) or (cmd_s3__w1 == minion_dcache_pkg.DcCmdPfw) or (cmd_s3__w1 == minion_dcache_pkg.DcCmdXlr)) & 1)
   const dcache_cmd_to_type__w1 = temp__w1
   if dcache_cmd_to_type__w1 == minion_dcache_pkg.DcacheAccessRd {
@@ -99,6 +109,7 @@ pub mod minion_dcache_miss_handler::[timecheck=false](clk_i:u1, rst_ni:u1, neigh
   const cmd_s1__w4 = cmd_s3__w3
   const cmd_s2__w4 = cmd_s1__w4
   const dcache_cmd_is_write_intent__w3 = unsigned((unsigned((cmd_s1__w4 == minion_dcache_pkg.DcCmdXwr) or (cmd_s1__w4 == minion_dcache_pkg.DcCmdXsc) or (unsigned((cmd_s2__w4 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s2__w4 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s2__w4 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s2__w4 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s2__w4 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s2__w4 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s2__w4 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s2__w4 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s2__w4 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s2__w4 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s2__w4 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s2__w4 == minion_dcache_pkg.DcCmdXaMaxPs)) != 0) or (cmd_s1__w4 == minion_dcache_pkg.DcCmdSc32) or (cmd_s1__w4 == minion_dcache_pkg.DcCmdXwrb)) != 0) or (cmd_s3__w3 == minion_dcache_pkg.DcCmdPfw) or (cmd_s3__w3 == minion_dcache_pkg.DcCmdXlr))
+  sec_rdy = 0ub?
   sec_rdy = unsigned((tag_match_o__w1 != 0) and (req_info_i.cacheable != 0) and (req_info_i.is_bypass == 0))
   {
     sec_rdy = sec_rdy & unsigned(unsigned((unsigned((unsigned((cmd_s1__w3 == minion_dcache_pkg.DcCmdXwr) or (cmd_s1__w3 == minion_dcache_pkg.DcCmdXsc) or (unsigned((cmd_s2__w3 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s2__w3 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s2__w3 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s2__w3 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s2__w3 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s2__w3 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s2__w3 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s2__w3 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s2__w3 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s2__w3 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s2__w3 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s2__w3 == minion_dcache_pkg.DcCmdXaMaxPs)) != 0) or (cmd_s1__w3 == minion_dcache_pkg.DcCmdSc32) or (cmd_s1__w3 == minion_dcache_pkg.DcCmdXwrb)) != 0) or (cmd_s3__w2 == minion_dcache_pkg.DcCmdPfw) or (cmd_s3__w2 == minion_dcache_pkg.DcCmdXlr)) != 0) and (dcache_cmd_is_write_intent__w3 == 0)) == 0) & 1
@@ -106,6 +117,7 @@ pub mod minion_dcache_miss_handler::[timecheck=false](clk_i:u1, rst_ni:u1, neigh
   const refill_address_inc_en__w1 = unsigned((l2_resp_valid_i != 0) and (l2_resp_is_my_id__w1 != 0) and (l2_resp_opcode__w1 == minion_pkg.EtLinkRspAckData))
   const refill_inc_is_last__w1 = unsigned(refill_address_inc_q == 1)
   if (refill_inc_is_last__w1 != 0) or (state_q == minion_dcache_pkg.MhInvalid) {
+    refill_address_inc_d = 0ub?
     refill_address_inc_d = 0
   } else {
     refill_address_inc_d = (refill_address_inc_q + 1) & 1
@@ -135,17 +147,18 @@ pub mod minion_dcache_miss_handler::[timecheck=false](clk_i:u1, rst_ni:u1, neigh
   const cmd_s2__w5 = cmd_s1__w5
   const dcache_cmd_is_amo__w5 = unsigned((cmd_s2__w5 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s2__w5 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s2__w5 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s2__w5 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s2__w5 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s2__w5 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s2__w5 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s2__w5 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s2__w5 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s2__w5 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s2__w5 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s2__w5 == minion_dcache_pkg.DcCmdXaMaxPs))
   const dcache_cmd_is_write__w5 = unsigned((cmd_s1__w5 == minion_dcache_pkg.DcCmdXwr) or (cmd_s1__w5 == minion_dcache_pkg.DcCmdXsc) or (dcache_cmd_is_amo__w5 != 0) or (cmd_s1__w5 == minion_dcache_pkg.DcCmdSc32) or (cmd_s1__w5 == minion_dcache_pkg.DcCmdXwrb))
-  cmd = cmd__w1
-  cmd_s1 = cmd_s1__w5
-  cmd_s2 = cmd_s2__w5
+  req_up = 0ub?
+  req_up = 0
   cmd_s3 = cmd_s3__w3
-  dcache_cmd_is_amo = dcache_cmd_is_amo__w5
+  temp = temp__w1
+  cmd_s1 = cmd_s1__w5
+  cmd = cmd__w1
   dcache_cmd_is_write = dcache_cmd_is_write__w5
   dcache_cmd_is_write_intent = dcache_cmd_is_write_intent__w3
-  dcache_cmd_to_type = dcache_cmd_to_type__w1
   req_d = req_q
-  req_up = 0
-  temp = temp__w1
+  dcache_cmd_to_type = dcache_cmd_to_type__w1
+  dcache_cmd_is_amo = dcache_cmd_is_amo__w5
+  cmd_s2 = cmd_s2__w5
   if (req_pri_val_i != 0) and (req_pri_rdy_o != 0) {
     req_d = (req_info_i.addr << 62) | (req_info_i.set << 58) | (req_info_i.cmd << 53) | (req_info_i.typ << 49) | (req_info_i.buf_id << 46) | (req_info_i.way_en << 42) | (req_info_i.tag_match << 41) | (req_info_i.old_meta.coh_state << 39) | (req_info_i.old_meta.tag << 6) | (req_info_i.cacheable << 5) | (req_info_i.thread_id << 4) | (req_info_i.mem_g << 3) | (req_info_i.is_amo << 2) | (req_info_i.is_msg << 1) | req_info_i.is_bypass
     req_up = 1
@@ -155,64 +168,65 @@ pub mod minion_dcache_miss_handler::[timecheck=false](clk_i:u1, rst_ni:u1, neigh
     cmd_s2 = cmd_s1
     dcache_cmd_is_amo = unsigned((cmd_s2 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s2 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s2 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s2 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s2 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s2 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMaxPs))
     dcache_cmd_is_write = unsigned((cmd_s1 == minion_dcache_pkg.DcCmdXwr) or (cmd_s1 == minion_dcache_pkg.DcCmdXsc) or (dcache_cmd_is_amo != 0) or (cmd_s1 == minion_dcache_pkg.DcCmdSc32) or (cmd_s1 == minion_dcache_pkg.DcCmdXwrb))
-    const t471 = dcache_cmd_is_write & 1
+    const t487 = dcache_cmd_is_write & 1
     cmd_s3 = cmd
     cmd_s1 = cmd_s3
     cmd_s2 = cmd_s1
     dcache_cmd_is_amo = unsigned((cmd_s2 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s2 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s2 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s2 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s2 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s2 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMaxPs))
     dcache_cmd_is_write = unsigned((cmd_s1 == minion_dcache_pkg.DcCmdXwr) or (cmd_s1 == minion_dcache_pkg.DcCmdXsc) or (dcache_cmd_is_amo != 0) or (cmd_s1 == minion_dcache_pkg.DcCmdSc32) or (cmd_s1 == minion_dcache_pkg.DcCmdXwrb))
     dcache_cmd_is_write_intent = unsigned((dcache_cmd_is_write != 0) or (cmd_s3 == minion_dcache_pkg.DcCmdPfw) or (cmd_s3 == minion_dcache_pkg.DcCmdXlr))
-    temp = (t471 << 1) | (dcache_cmd_is_write_intent & 1)
+    temp = (t487 << 1) | (dcache_cmd_is_write_intent & 1)
+    dcache_cmd_to_type = temp
+    const t530 = dcache_cmd_to_type
     cmd = req_info_i.cmd
     cmd_s1 = cmd
     cmd_s2 = cmd_s1
-    dcache_cmd_to_type = temp
     dcache_cmd_is_amo = unsigned((cmd_s2 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s2 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s2 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s2 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s2 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s2 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMaxPs))
     dcache_cmd_is_write = unsigned((cmd_s1 == minion_dcache_pkg.DcCmdXwr) or (cmd_s1 == minion_dcache_pkg.DcCmdXsc) or (dcache_cmd_is_amo != 0) or (cmd_s1 == minion_dcache_pkg.DcCmdSc32) or (cmd_s1 == minion_dcache_pkg.DcCmdXwrb))
-    const t544 = dcache_cmd_is_write & 1
+    const t566 = dcache_cmd_is_write & 1
     cmd_s3 = cmd
     cmd_s1 = cmd_s3
     cmd_s2 = cmd_s1
     dcache_cmd_is_amo = unsigned((cmd_s2 == minion_dcache_pkg.DcCmdXaSwap) or (cmd_s2 == minion_dcache_pkg.DcCmdXaAdd) or (cmd_s2 == minion_dcache_pkg.DcCmdXaXor) or (cmd_s2 == minion_dcache_pkg.DcCmdXaOr) or (cmd_s2 == minion_dcache_pkg.DcCmdXaAnd) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMin) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMax) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMinu) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMaxu) or (cmd_s2 == minion_dcache_pkg.DcCmdXaCmpswp) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMinPs) or (cmd_s2 == minion_dcache_pkg.DcCmdXaMaxPs))
     dcache_cmd_is_write = unsigned((cmd_s1 == minion_dcache_pkg.DcCmdXwr) or (cmd_s1 == minion_dcache_pkg.DcCmdXsc) or (dcache_cmd_is_amo != 0) or (cmd_s1 == minion_dcache_pkg.DcCmdSc32) or (cmd_s1 == minion_dcache_pkg.DcCmdXwrb))
     dcache_cmd_is_write_intent = unsigned((dcache_cmd_is_write != 0) or (cmd_s3 == minion_dcache_pkg.DcCmdPfw) or (cmd_s3 == minion_dcache_pkg.DcCmdXlr))
-    temp = (t544 << 1) | (dcache_cmd_is_write_intent & 1)
+    temp = (t566 << 1) | (dcache_cmd_is_write_intent & 1)
     dcache_cmd_to_type = temp
-    if (req_sec_val_i != 0) and (req_sec_rdy_o != 0) and (dcache_cmd_to_type < dcache_cmd_to_type) {
+    if (req_sec_val_i != 0) and (req_sec_rdy_o != 0) and (t530 < dcache_cmd_to_type) {
       req_d#[53..=57] = req_info_i.cmd#[0..=4]
       req_up = 1
     }
   }
-  clear_soft_lock_d = 0ub?
-  metawrite_pending_d = 0ub?
-  new_coh_d = 0sb?
   mut state_d:u4 = 0sb?
+  new_coh_d = 0sb?
   writeback_pending_d = 0ub?
+  metawrite_pending_d = 0ub?
+  clear_soft_lock_d = 0ub?
   clear_soft_lock_d = clear_soft_lock_q
-  metawrite_pending_d = metawrite_pending_q
-  new_coh_d = new_coh_q
   state_d = state_q
+  new_coh_d = new_coh_q
+  metawrite_pending_d = metawrite_pending_q
   if (req_pri_val_i != 0) and (req_pri_rdy_o != 0) {
     if req_info_i.tag_match != 0 {
       if (dcache_cmd_is_write__w5 != 0) and (req_info_i.old_meta.coh_state == minion_dcache_pkg.StateExclusive) {
         new_coh_d = minion_dcache_pkg.StateModified
-        metawrite_pending_d = 1
         state_d = minion_dcache_pkg.MhMetaWriteReq
+        metawrite_pending_d = 1
       } else {
         new_coh_d = coh_on_grant
-        metawrite_pending_d = 1
         state_d = minion_dcache_pkg.MhFillReq
+        metawrite_pending_d = 1
       }
     } elif req_info_i.cacheable == 0 {
       state_d = minion_dcache_pkg.MhUcWaitIdle
     } else {
-      clear_soft_lock_d = 1
       new_coh_d = coh_on_grant
+      clear_soft_lock_d = 1
       if req_info_i.old_meta.coh_state == minion_dcache_pkg.StateModified {
         state_d = minion_dcache_pkg.MhAcquireWb
       } else {
-        metawrite_pending_d = 1
         state_d = minion_dcache_pkg.MhFillReq
+        metawrite_pending_d = 1
       }
     }
   }
@@ -221,9 +235,9 @@ pub mod minion_dcache_miss_handler::[timecheck=false](clk_i:u1, rst_ni:u1, neigh
   if state_q == minion_dcache_pkg.MhAcquireWb {
     writeback_valid_o = 1
     if writeback_ready_i != 0 {
-      metawrite_pending_d = 1
       state_d = minion_dcache_pkg.MhFillReq
       writeback_pending_d = 1
+      metawrite_pending_d = 1
     }
   }
   if (state_q == minion_dcache_pkg.MhFillReq) and (l2_miss_ready_i != 0) {
@@ -290,15 +304,17 @@ pub mod minion_dcache_miss_handler::[timecheck=false](clk_i:u1, rst_ni:u1, neigh
     writeback_pending_d = 0
   }
   if (metawrite_pending_q != 0) and (meta_write_ready_i != 0) {
-    clear_soft_lock_d = 0
     metawrite_pending_d = 0
+    clear_soft_lock_d = 0
   }
-  mut set_way_conf:u1 = if true and (((inflight_misses_i#[9..=17] >> 8) & 1) != 0) and (inflight_misses_i#[9..=17]#[0..=3] == req_info_i.set) and (inflight_misses_i#[9..=17]#[4..=7] == req_info_i.way_en) { 1 } else { 0 }
+  mut set_way_conf = 0ub?
+  set_way_conf = if true and (((inflight_misses_i#[9..=17] >> 8) & 1) != 0) and (inflight_misses_i#[9..=17]#[0..=3] == req_info_i.set) and (inflight_misses_i#[9..=17]#[4..=7] == req_info_i.way_en) { 1 } else { 0 }
   req_pri_rdy_o__wtmp = unsigned((state_q == minion_dcache_pkg.MhInvalid) and (unsigned((req_info_i.tag_match == 0) and (req_info_i.cacheable != 0) and (req_info_i.old_meta.coh_state == minion_dcache_pkg.StateModified) and (writeback_ready_i == 0) and (req_info_i.is_bypass == 0)) == 0) and (not ((set_way_conf != 0) and (req_info_i.is_msg == 0) and (req_info_i.cacheable != 0))) and ((req_info_i.thread_id == 0) or (req_info_i.cacheable != 0)))
   req_sec_rdy_o__wtmp = sec_rdy
   const can_accept_uc_o__w1 = unsigned((req_pri_rdy_o__wtmp != 0) and (req_info_i.cacheable == 0))
   const ways__w1 = req_q#[42..=45]
-  mut dcache_way_encode:u2 = if (ways__w1 & 1) != 0 { 0 } else { 0 }
+  mut dcache_way_encode:u2 = 0sb?
+  dcache_way_encode = if (ways__w1 & 1) != 0 { 0 } else { 0 }
   if ((ways__w1 >> 1) & 1) != 0 {
     dcache_way_encode = dcache_way_encode | 1
   }
@@ -309,23 +325,21 @@ pub mod minion_dcache_miss_handler::[timecheck=false](clk_i:u1, rst_ni:u1, neigh
     dcache_way_encode = dcache_way_encode | 3
   }
   const refill_addr_o__w1 = (set_o__w1 << 6) | ((refill_address_inc_q & 1) << 5)
-  mut `writeback_req_o__bpo.addr_low` = 0
-  mut `writeback_req_o__bpo.is_tbox` = 0
-  mut `writeback_req_o__bpo.mem_idx` = 0
-  mut `writeback_req_o__bpo.set` = req_q#[58..=61]
   mut `writeback_req_o__bpo.tag` = req_q#[6..=40]#[0..=32]
+  mut `writeback_req_o__bpo.set` = req_q#[58..=61]
   mut `writeback_req_o__bpo.way_en` = req_q#[42..=45]
   mut `l2_evict_req_o__bpo.id` = my_l2_miss_id_uc_st__w1
-  mut `l2_evict_req_o__bpo.source` = 0
-  mut `l2_evict_req_o__bpo.wdata` = 1
   if ((req_q >> 2) & 1) != 0 {
-    cmd_s4 = req_q#[53..=57]
-    dcache_get_et_link_amo_config = 0ub???????
     `l2_evict_req_o__bpo.opcode` = minion_dcache_pkg.EtLinkReqAtomic
+    cmd_s4 = 0ub?????
+    cmd_s4 = req_q#[53..=57]
+    typ = 0ub????
+    typ = req_q#[49..=52]
+    mem_global = 0ub?
     mem_global = (req_q >> 3) & 1
+    dcache_get_et_link_amo_config = 0ub???????
     opcode = 0ub????
     size = 0ub?
-    typ = req_q#[49..=52]
     if cmd_s4 == minion_dcache_pkg.DcCmdXaSwap {
       opcode = minion_dcache_pkg.EtLinkAmoSwap
     } elif cmd_s4 == minion_dcache_pkg.DcCmdXaAdd {
@@ -361,11 +375,10 @@ pub mod minion_dcache_miss_handler::[timecheck=false](clk_i:u1, rst_ni:u1, neigh
     `l2_evict_req_o__bpo.opcode` = minion_dcache_pkg.EtLinkReqWrite
     `l2_evict_req_o__bpo.subopcode` = ((req_q >> 3) & 1)
   }
+  mut `l2_evict_req_o__bpo.address` = req_q#[62..=101]
+  typ_s1 = 0sb?
   const typ_s1__w1 = req_q#[49..=52]
   mut dcache_uc_size:u3 = 0sb?
-  mut `l2_evict_req_o__bpo.address` = req_q#[62..=101]
-  mut `l2_evict_req_o__bpo.data` = 0
-  typ_s1 = 0sb?
   if (typ_s1__w1 == minion_dcache_pkg.DcTypeB) or (typ_s1__w1 == minion_dcache_pkg.DcTypeBu) or (typ_s1__w1 == minion_dcache_pkg.DcTypePsGs8) {
     dcache_uc_size = minion_dcache_pkg.EtLinkByte
   } elif (typ_s1__w1 == minion_dcache_pkg.DcTypeH) or (typ_s1__w1 == minion_dcache_pkg.DcTypeHu) or (typ_s1__w1 == minion_dcache_pkg.DcTypePsGs16) {
@@ -379,9 +392,11 @@ pub mod minion_dcache_miss_handler::[timecheck=false](clk_i:u1, rst_ni:u1, neigh
   }
   mut `l2_evict_req_o__bpo.size` = dcache_uc_size
   if (((req_q >> 2) & 1) != 0) or (((req_q >> 1) & 1) != 0) {
+    typ_s2 = 0ub????
     typ_s2 = req_q#[49..=52]
-    dcache_typ2qwen = 0ub????
+    qwaddr = 0ub??
     qwaddr = 0
+    dcache_typ2qwen = 0ub????
     dcache_typ2qwen = if typ_s2 == minion_dcache_pkg.DcTypePs { 3 } else { 1 }
     dcache_typ2qwen = dcache_typ2qwen << 0
     `l2_evict_req_o__bpo.qwen` = dcache_typ2qwen
@@ -395,8 +410,6 @@ pub mod minion_dcache_miss_handler::[timecheck=false](clk_i:u1, rst_ni:u1, neigh
   mut _mux_59:u5 = if state_q == minion_dcache_pkg.MhFillReq { my_l2_miss_id__w1#[0..=4] } else { my_l2_miss_id_uc_ld__w1#[0..=4] }
   mut `l2_miss_req_o__bpo.id` = _mux_59
   mut `l2_miss_req_o__bpo.opcode` = minion_dcache_pkg.EtLinkReqRead
-  mut `l2_miss_req_o__bpo.source` = 0
-  mut `l2_miss_req_o__bpo.wdata` = 0
   if state_q == minion_dcache_pkg.MhFillReq {
     `l2_miss_req_o__bpo.subopcode` = 0
   } else {
@@ -407,8 +420,8 @@ pub mod minion_dcache_miss_handler::[timecheck=false](clk_i:u1, rst_ni:u1, neigh
     `l2_miss_req_o__bpo.address` = req_q#[62..=101]#[6..=39] << 6
     `l2_miss_req_o__bpo.size` = minion_dcache_pkg.EtLinkLine
   } else {
-    typ_s1 = req_q#[49..=52]
     `l2_miss_req_o__bpo.address` = req_q#[62..=101]
+    typ_s1 = req_q#[49..=52]
     if (typ_s1 == minion_dcache_pkg.DcTypeB) or (typ_s1 == minion_dcache_pkg.DcTypeBu) or (typ_s1 == minion_dcache_pkg.DcTypePsGs8) {
       dcache_uc_size = minion_dcache_pkg.EtLinkByte
     } elif (typ_s1 == minion_dcache_pkg.DcTypeH) or (typ_s1 == minion_dcache_pkg.DcTypeHu) or (typ_s1 == minion_dcache_pkg.DcTypePsGs16) {
@@ -424,13 +437,11 @@ pub mod minion_dcache_miss_handler::[timecheck=false](clk_i:u1, rst_ni:u1, neigh
   }
   mut `l2_miss_req_o__bpo.data__w1` = 0
   `l2_miss_req_o__bpo.data__w1`#[0..=7] = ((0 & (~(1 << neigh_min_id_i))) | (1 << neigh_min_id_i))#[0..=7]
-  mut `l2_miss_req_o__bpo.data` = 0
-  mut `l2_miss_req_o__bpo.qwen` = 0
-  mut `meta_write_req_o__bpo.data.coh_state` = new_coh_q
-  mut `meta_write_req_o__bpo.data.tag` = tag__w1
+  meta_write_valid_o__wtmp = unsigned((metawrite_pending_q != 0) and (writeback_pending_q == 0))
   mut `meta_write_req_o__bpo.set_idx` = set_o__w1
   mut `meta_write_req_o__bpo.way_en` = req_q#[42..=45]
-  meta_write_valid_o__wtmp = unsigned((metawrite_pending_q != 0) and (writeback_pending_q == 0))
+  mut `meta_write_req_o__bpo.data.coh_state` = new_coh_q
+  mut `meta_write_req_o__bpo.data.tag` = tag__w1
   const ba_rptr_o__w1 = req_q#[46..=48]
   const ba_is_amo_o__w1 = (req_q >> 2) & 1
   const going_to_uc_store_o__w1 = unsigned((state_q == minion_dcache_pkg.MhUcStoreWait) or (state_q == minion_dcache_pkg.MhUcStoreReq))
@@ -441,78 +452,78 @@ pub mod minion_dcache_miss_handler::[timecheck=false](clk_i:u1, rst_ni:u1, neigh
     req_q = req_d
   }
   if rst_ni == 0 {
-    clear_soft_lock_q = 0
-    metawrite_pending_q = 0
     state_q = minion_dcache_pkg.MhInvalid
     writeback_pending_q = 0
+    metawrite_pending_q = 0
+    clear_soft_lock_q = 0
   } else {
-    clear_soft_lock_q = clear_soft_lock_d
-    metawrite_pending_q = metawrite_pending_d
     state_q = state_d
     writeback_pending_q = writeback_pending_d
+    metawrite_pending_q = metawrite_pending_d
+    clear_soft_lock_q = clear_soft_lock_d
   }
   new_coh_q = new_coh_d
+  state_was_fill_resp_q = unsigned(state_q == minion_dcache_pkg.MhFillResp)
   l2_evict_valid_o = unsigned(state_d == minion_dcache_pkg.MhUcStoreReq)
   l2_miss_valid_o = unsigned((state_d == minion_dcache_pkg.MhFillReq) or (state_d == minion_dcache_pkg.MhUcLoadReq))
-  state_was_fill_resp_q = unsigned(state_q == minion_dcache_pkg.MhFillResp)
+  req_pri_rdy_o = req_pri_rdy_o__wtmp
+  req_sec_rdy_o = req_sec_rdy_o__wtmp
+  meta_write_valid_o = meta_write_valid_o__wtmp
+  l2_evict_req_o.id = `l2_evict_req_o__bpo.id`
+  l2_evict_req_o.source = 0
+  l2_evict_req_o.wdata = 1
+  l2_evict_req_o.opcode = `l2_evict_req_o__bpo.opcode`
+  l2_evict_req_o.address = `l2_evict_req_o__bpo.address`
+  l2_evict_req_o.data = 0
+  l2_evict_req_o.size = `l2_evict_req_o__bpo.size`
+  l2_evict_req_o.qwen = `l2_evict_req_o__bpo.qwen`
+  l2_evict_req_o.subopcode = `l2_evict_req_o__bpo.subopcode`
+  l2_miss_req_o.id = `l2_miss_req_o__bpo.id`
+  l2_miss_req_o.source = 0
+  l2_miss_req_o.wdata = 0
+  l2_miss_req_o.opcode = `l2_miss_req_o__bpo.opcode`
+  l2_miss_req_o.address = `l2_miss_req_o__bpo.address`
+  l2_miss_req_o.data = `l2_miss_req_o__bpo.data__w1`
+  l2_miss_req_o.size = `l2_miss_req_o__bpo.size`
   l2_miss_req_o.qwen = 0
+  l2_miss_req_o.subopcode = `l2_miss_req_o__bpo.subopcode`
+  meta_write_req_o.set_idx = `meta_write_req_o__bpo.set_idx`
+  meta_write_req_o.way_en = `meta_write_req_o__bpo.way_en`
+  meta_write_req_o.data.coh_state = `meta_write_req_o__bpo.data.coh_state`
+  meta_write_req_o.data.tag = `meta_write_req_o__bpo.data.tag`
+  writeback_req_o.tag = `writeback_req_o__bpo.tag`
+  writeback_req_o.set = `writeback_req_o__bpo.set`
+  writeback_req_o.way_en = `writeback_req_o__bpo.way_en`
   writeback_req_o.is_tbox = 0
   writeback_req_o.mem_idx = 0
   writeback_req_o.addr_low = 0
-  sm_match_debug_signals_o = 0
-  ba_is_amo_o = ba_is_amo_o__w1
-  ba_rptr_o = ba_rptr_o__w1
-  bus_err_addr_o = bus_err_addr_o__w1
-  bus_err_o = bus_err_o__w1
   can_accept_uc_o = can_accept_uc_o__w1
-  csr_debug_signals_o = csr_debug_signals_o__w1
+  tag_match_o = tag_match_o__w1
   evict_match_o = evict_match_o__w1
-  fence_rdy_o = fence_rdy_o__w2
-  fill_bus_error_o = unsigned((response_err_fill__w1 != 0) and (state_q == minion_dcache_pkg.MhFillResp))
+  set_o = set_o__w1
+  going_to_uc_store_o = going_to_uc_store_o__w1
+  idle_o = unsigned(state_q == minion_dcache_pkg.MhInvalid)
+  wait_l2_to_ba_resp_o = unsigned(state_q == minion_dcache_pkg.MhUcLoadResp)
+  have_l2_to_ba_resp_o = unsigned((state_q == minion_dcache_pkg.MhUcLoadResp) and (l2_resp_valid_i != 0) and (l2_resp_is_my_id_uc__w1 != 0))
+  l2_resp_stall_o = unsigned((metawrite_pending_q != 0) or ((writeback_pending_q != 0) and (writeback_done_i == 0)))
+  refill_way_o = dcache_way_encode
+  refill_addr_o = refill_addr_o__w1
   force_ba_rptr_next_o = unsigned(state_d == minion_dcache_pkg.MhUcStoreReq)
   force_ba_rptr_qual_o = unsigned((unsigned(state_q == minion_dcache_pkg.MhUcStoreReq) != 0) and (l2_evict_ready_i != 0))
-  going_to_uc_store_o = going_to_uc_store_o__w1
-  have_l2_to_ba_resp_o = unsigned((state_q == minion_dcache_pkg.MhUcLoadResp) and (l2_resp_valid_i != 0) and (l2_resp_is_my_id_uc__w1 != 0))
-  idle_o = unsigned(state_q == minion_dcache_pkg.MhInvalid)
-  l2_evict_req_o.address = `l2_evict_req_o__bpo.address`
-  l2_evict_req_o.data = `l2_evict_req_o__bpo.data`
-  l2_evict_req_o.id = `l2_evict_req_o__bpo.id`
-  l2_evict_req_o.opcode = `l2_evict_req_o__bpo.opcode`
-  l2_evict_req_o.qwen = `l2_evict_req_o__bpo.qwen`
-  l2_evict_req_o.size = `l2_evict_req_o__bpo.size`
-  l2_evict_req_o.source = `l2_evict_req_o__bpo.source`
-  l2_evict_req_o.subopcode = `l2_evict_req_o__bpo.subopcode`
-  l2_evict_req_o.wdata = `l2_evict_req_o__bpo.wdata`
-  l2_miss_req_o.address = `l2_miss_req_o__bpo.address`
-  l2_miss_req_o.data = `l2_miss_req_o__bpo.data__w1`
-  l2_miss_req_o.id = `l2_miss_req_o__bpo.id`
-  l2_miss_req_o.opcode = `l2_miss_req_o__bpo.opcode`
-  l2_miss_req_o.size = `l2_miss_req_o__bpo.size`
-  l2_miss_req_o.source = `l2_miss_req_o__bpo.source`
-  l2_miss_req_o.subopcode = `l2_miss_req_o__bpo.subopcode`
-  l2_miss_req_o.wdata = `l2_miss_req_o__bpo.wdata`
-  l2_resp_stall_o = unsigned((metawrite_pending_q != 0) or ((writeback_pending_q != 0) and (writeback_done_i == 0)))
-  meta_write_clear_slock_o = meta_write_clear_slock_o__w1
-  meta_write_req_o.data.coh_state = `meta_write_req_o__bpo.data.coh_state`
-  meta_write_req_o.data.tag = `meta_write_req_o__bpo.data.tag`
-  meta_write_req_o.set_idx = `meta_write_req_o__bpo.set_idx`
-  meta_write_req_o.way_en = `meta_write_req_o__bpo.way_en`
+  ba_rptr_o = ba_rptr_o__w1
+  ba_is_amo_o = ba_is_amo_o__w1
   meta_write_valid_next_o = unsigned((metawrite_pending_d != 0) and (writeback_pending_d == 0))
-  meta_write_valid_o = meta_write_valid_o__wtmp
-  metaw_rdy_o = unsigned((metawrite_pending_q == 0) and (state_q != minion_dcache_pkg.MhAcquireWb) and (state_q != minion_dcache_pkg.MhFillReq) and (state_q != minion_dcache_pkg.MhFillResp) and (state_q != minion_dcache_pkg.MhFillClean))
-  probe_rdy_o = unsigned((set_match__w1 == 0) or (state_q == minion_dcache_pkg.MhInvalid))
-  ready_o = unsigned((state_q == minion_dcache_pkg.MhInvalid) or (state_q == minion_dcache_pkg.MhMetaHazard) or ((state_q == minion_dcache_pkg.MhFillResp) and (refill_inc_is_last__w1 != 0) and (l2_resp_slot_avail_i != 0)))
-  refill_addr_o = refill_addr_o__w1
-  refill_way_o = dcache_way_encode
-  req_pri_rdy_o = req_pri_rdy_o__wtmp
-  req_sec_rdy_o = req_sec_rdy_o__wtmp
-  set_o = set_o__w1
-  sm_data_debug_signals_o = sm_data_debug_signals_o__w4
-  sm_filter_debug_signals_o = sm_filter_debug_signals_o__w1
-  tag_match_o = tag_match_o__w1
+  meta_write_clear_slock_o = meta_write_clear_slock_o__w1
+  bus_err_o = bus_err_o__w1
+  bus_err_addr_o = bus_err_addr_o__w1
+  fill_bus_error_o = unsigned((response_err_fill__w1 != 0) and (state_q == minion_dcache_pkg.MhFillResp))
   uc_load_bus_error_o = unsigned((response_err_uc__w1 != 0) and (state_q == minion_dcache_pkg.MhUcLoadResp))
-  wait_l2_to_ba_resp_o = unsigned(state_q == minion_dcache_pkg.MhUcLoadResp)
-  writeback_req_o.set = `writeback_req_o__bpo.set`
-  writeback_req_o.tag = `writeback_req_o__bpo.tag`
-  writeback_req_o.way_en = `writeback_req_o__bpo.way_en`
+  probe_rdy_o = unsigned((set_match__w1 == 0) or (state_q == minion_dcache_pkg.MhInvalid))
+  fence_rdy_o = fence_rdy_o__w2
+  metaw_rdy_o = unsigned((metawrite_pending_q == 0) and (state_q != minion_dcache_pkg.MhAcquireWb) and (state_q != minion_dcache_pkg.MhFillReq) and (state_q != minion_dcache_pkg.MhFillResp) and (state_q != minion_dcache_pkg.MhFillClean))
+  ready_o = unsigned((state_q == minion_dcache_pkg.MhInvalid) or (state_q == minion_dcache_pkg.MhMetaHazard) or ((state_q == minion_dcache_pkg.MhFillResp) and (refill_inc_is_last__w1 != 0) and (l2_resp_slot_avail_i != 0)))
+  csr_debug_signals_o = csr_debug_signals_o__w1
+  sm_match_debug_signals_o = 0
+  sm_filter_debug_signals_o = sm_filter_debug_signals_o__w1
+  sm_data_debug_signals_o = sm_data_debug_signals_o__w4
 }

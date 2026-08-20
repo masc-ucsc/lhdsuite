@@ -19,11 +19,11 @@ pub mod vpu_sh_sw::[timecheck=false](lane_id_i:u3, clk_i:u1, rst_ni:u1, ex_in_va
   f2_in_valid_q = ex_in_valid_i
   if ex_in_valid_i != 0 {
     f2_cmd_q = ex_cmd_i
-    f2_dtype_q = ex_dtype_i
-    f2_imm_q = ex_imm_i
     f2_in1_q = ex_in1_i
     f2_in2_q = ex_in2_i
     f2_in3_q = ex_in3_i
+    f2_imm_q = ex_imm_i
+    f2_dtype_q = ex_dtype_i
     f2_mask_in1_q = ex_mask_in1_i
   }
   mut _mux_2:u32 = if f2_cmd_q == minion_pkg.VpuCmdSlli { f2_imm_q#[0..=4] } else { f2_in2_q }
@@ -71,9 +71,11 @@ pub mod vpu_sh_sw::[timecheck=false](lane_id_i:u3, clk_i:u1, rst_ni:u1, ex_in_va
   mut _mux_59:u32 = if (f2_in1_q & 1) != 0 { 0 } else { 2 }
   mut _mux_60:u32 = if (f2_in3_q & 1) != 0 { _mux_58 } else { _mux_59 }
   const cubeface_idx_enable__w1 = unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdCubefaceIdx))
+  cubeface_idx_out = 0sb?
+  cubeface_idx_flag_out = 0sb?
   const t255 = (((f2_in2_q >> 31) & 1) << 2) | f2_in1_q#[0..=1]
-  cubeface_idx_flag_out = 0
   cubeface_idx_out = 0
+  cubeface_idx_flag_out = 0
   match t255 {
     == 0 {
       cubeface_idx_out = 0
@@ -94,9 +96,9 @@ pub mod vpu_sh_sw::[timecheck=false](lane_id_i:u3, clk_i:u1, rst_ni:u1, ex_in_va
       cubeface_idx_out = 0x40a00000
     }
     in (3, 7) {
+      cubeface_idx_out = vpu_pkg.Float32PosCqnan
       cubeface_idx_flag_out = 16
       cubeface_idx_flag_out#[4] = 1
-      cubeface_idx_out = vpu_pkg.Float32PosCqnan
     }
     else {
     }
@@ -107,6 +109,7 @@ pub mod vpu_sh_sw::[timecheck=false](lane_id_i:u3, clk_i:u1, rst_ni:u1, ex_in_va
   mut _mux_68:u12 = if imm_ps_low_fbci__w1 < 8 { (imm_ps_low_fbci__w1 << 8) | (imm_ps_low_fbci__w1 << 4) | imm_ps_low_fbci__w1 } else { (imm_ps_low_fbci__w1 << 8) | (imm_ps_low_fbci__w1 << 4) | (imm_ps_low_fbci__w1 + 1)#[0..=3] }
   match f2_cmd_q {
     in (minion_pkg.VpuCmdMvXf, minion_pkg.VpuTransLogFma1, minion_pkg.VpuTransLogFma2, minion_pkg.VpuTransLogMul) {
+      is_mvxf = 0ub?
       is_mvxf = 1
     }
     else {
@@ -128,6 +131,7 @@ pub mod vpu_sh_sw::[timecheck=false](lane_id_i:u3, clk_i:u1, rst_ni:u1, ex_in_va
   mut _rep_86:u32 = if (add_enable__w1 & 1) != 0 { 0xffffffff } else { 0 }
   mut _mux_87:u32 = if f2_cmd_q == minion_pkg.VpuCmdAddi { f2_imm_q#[0..=9]#sext[0..=9]#[0..=31] & _rep_83 } else { (f2_in3_q ^ _rep_85) & _rep_86 }
   const out_valids_packed__w1 = ((gfx_out_valids_ored__w1 & 1) << 7) | ((unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdMvsFx) or (f2_cmd_q == minion_pkg.VpuCmdMvzFx) or (f2_cmd_q == minion_pkg.VpuCmdFbc))) & 1) << 6) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFbci) and (f2_dtype_q == minion_pkg.VpuDtypeF32)) & 1) << 5) | ((unsigned((f2_in_valid_q != 0) and (is_mvxf != 0)) & 1) << 4) | ((unsigned((f2_in_valid_q != 0) and ((f2_cmd_q == minion_pkg.VpuCmdFsgnj) or (f2_cmd_q == minion_pkg.VpuCmdFsgnjn) or (f2_cmd_q == minion_pkg.VpuCmdFsgnjx))) & 1) << 3) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFsat8)) & 1) << 2) | ((unsigned((f2_in_valid_q != 0) and (f2_cmd_q == minion_pkg.VpuCmdFsatu8)) & 1) << 1) | (add_enable__w1 & 1)
+  gfx_out = 0sb?
   gfx_out = 0
   if gfx_out_valids_ored__w1 != 0 {
     match gfx_out_valids_packed__w1 {
@@ -198,7 +202,8 @@ pub mod vpu_sh_sw::[timecheck=false](lane_id_i:u3, clk_i:u1, rst_ni:u1, ex_in_va
       }
     }
   }
-  mut f2_data = 0
+  mut f2_data:u32 = 0sb?
+  f2_data = 0
   if unsigned(out_valids_packed__w1 != 0) != 0 {
     f2_data = unique if out_valids_packed__w1 == 0x80 { gfx_out } elif out_valids_packed__w1 == 0x40 { f2_in1_q } elif out_valids_packed__w1 == 32 { (f2_imm_q << 12) | _mux_68 } elif out_valids_packed__w1 == 16 { _mux_71 } elif out_valids_packed__w1 == 8 { ((_mux_74 & 1) << 31) | f2_in1_q#[0..=30] } elif out_valids_packed__w1 == 4 { _mux_77 } elif out_valids_packed__w1 == 2 { _mux_80 } elif out_valids_packed__w1 == 1 { (((f2_in1_q & _rep_82) + _mux_87)#[0..=31] + (unsigned(f2_cmd_q == minion_pkg.VpuCmdSub) & 1))#[0..=31] } else { 0 }
   }
@@ -209,7 +214,7 @@ pub mod vpu_sh_sw::[timecheck=false](lane_id_i:u3, clk_i:u1, rst_ni:u1, ex_in_va
   }
   mut `f3_out_bits_o__bpo.data` = f3_data_q
   mut `f3_out_bits_o__bpo.exc` = f3_flags_q
-  f2_fswizz_rdata_o = f2_in1_q
   f3_out_bits_o.data = `f3_out_bits_o__bpo.data`
   f3_out_bits_o.exc = `f3_out_bits_o__bpo.exc`
+  f2_fswizz_rdata_o = f2_in1_q
 }

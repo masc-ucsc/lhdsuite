@@ -11,6 +11,8 @@ pub mod minion_dcache_writeback_unit::[timecheck=false](clk_i:u1, rst_ni:u1, req
   reg r3_data_req_fired_q:u1:[clock_pin=ref clk_i]
   reg r2_invalid_q:u1:[clock_pin=ref clk_i]
   reg r3_invalid_q:u1:[clock_pin=ref clk_i]
+  mut `data_req_o__bpo.valid_l` = 0
+  mut `data_req_o__bpo.valid_h` = 0
   mut `data_req_o__bpo.addr` = 0
   mut `l2_req_data_o__bpo.id` = 0
   mut `l2_req_data_o__bpo.source` = 0
@@ -33,9 +35,8 @@ pub mod minion_dcache_writeback_unit::[timecheck=false](clk_i:u1, rst_ni:u1, req
   mut _mux_2:u2 = if ((req_q >> 8) & 1) != 0 { 1 } else { minion_dcache_pkg.CoreL2BlockExtPasses#[0..=1] }
   const data_req_cnt_limit__w1 = _mux_2
   const ways__w1 = req_q#[9..=12]
-  mut `data_req_o__bpo.valid_h` = 1
-  mut `data_req_o__bpo.valid_l` = 1
-  mut dcache_way_encode:u2 = if (ways__w1 & 1) != 0 { 0 } else { 0 }
+  mut dcache_way_encode:u2 = 0sb?
+  dcache_way_encode = if (ways__w1 & 1) != 0 { 0 } else { 0 }
   if ((ways__w1 >> 1) & 1) != 0 {
     dcache_way_encode = dcache_way_encode | 1
   }
@@ -51,44 +52,41 @@ pub mod minion_dcache_writeback_unit::[timecheck=false](clk_i:u1, rst_ni:u1, req
   } else {
     `data_req_o__bpo.addr` = (req_q#[13..=16] << 6) | (((req_q >> 7) & 1) << 5)
   }
-  `l2_req_data_o__bpo.address` = 0
-  `l2_req_data_o__bpo.data` = 0
-  `l2_req_data_o__bpo.id` = 0
-  `l2_req_data_o__bpo.opcode` = 0
-  `l2_req_data_o__bpo.qwen` = 0
-  `l2_req_data_o__bpo.size` = 0
-  `l2_req_data_o__bpo.source` = 0
-  `l2_req_data_o__bpo.subopcode` = 0
-  `l2_req_data_o__bpo.wdata` = 0
   if ((req_q >> 8) & 1) == 0 {
+    `l2_req_data_o__bpo.id` = minion_dcache_pkg.EtLinkCoreMissIdWriteBack
+    `l2_req_data_o__bpo.source` = 0
+    `l2_req_data_o__bpo.wdata` = 1
+    `l2_req_data_o__bpo.opcode` = minion_dcache_pkg.EtLinkReqWrite
+    `l2_req_data_o__bpo.subopcode` = 0
     `l2_req_data_o__bpo.address` = (req_q#[17..=49] << 7) | ((req_q#[13..=16] & 1) << 6)
     `l2_req_data_o__bpo.data` = data_resp_i
-    `l2_req_data_o__bpo.id` = minion_dcache_pkg.EtLinkCoreMissIdWriteBack
-    `l2_req_data_o__bpo.opcode` = minion_dcache_pkg.EtLinkReqWrite
-    `l2_req_data_o__bpo.qwen` = 15
     `l2_req_data_o__bpo.size` = minion_dcache_pkg.EtLinkLine
-    `l2_req_data_o__bpo.source` = 0
-    `l2_req_data_o__bpo.subopcode` = 0
-    `l2_req_data_o__bpo.wdata` = 1
+    `l2_req_data_o__bpo.qwen` = 15
   } else {
+    `l2_req_data_o__bpo.id` = minion_dcache_pkg.EtLinkCoreMissIdWriteBack
+    `l2_req_data_o__bpo.source` = 0
+    `l2_req_data_o__bpo.wdata` = 1
+    `l2_req_data_o__bpo.opcode` = minion_dcache_pkg.EtLinkReqMsgSendData
+    `l2_req_data_o__bpo.subopcode` = 0
     `l2_req_data_o__bpo.address` = (req_q#[17..=49] << 7) | req_q#[0..=6]
     `l2_req_data_o__bpo.data` = data_resp_i
-    `l2_req_data_o__bpo.id` = minion_dcache_pkg.EtLinkCoreMissIdWriteBack
-    `l2_req_data_o__bpo.opcode` = minion_dcache_pkg.EtLinkReqMsgSendData
-    `l2_req_data_o__bpo.qwen` = 3
     `l2_req_data_o__bpo.size` = minion_dcache_pkg.EtLinkHLine
-    `l2_req_data_o__bpo.source` = 0
-    `l2_req_data_o__bpo.subopcode` = 0
-    `l2_req_data_o__bpo.wdata` = 1
+    `l2_req_data_o__bpo.qwen` = 3
   }
   const new_req__w1 = unsigned((req_ready_o__w1 != 0) and (req_valid_i != 0))
-  l2_req_valid_o = 0
-  data_req_bid_o = 0
+  r1_data_req_fired_d = 0ub?
+  r2_data_req_fired_d = 0ub?
+  r3_data_req_fired_d = 0ub?
+  data_req_cnt_d = 0sb?
+  data_req_valid_d = 0ub?
+  active_d = 0ub?
   active_d = active_q
+  r2_data_req_fired_d = 0
+  data_req_bid_o = 0
+  r1_data_req_fired_d = 0
+  l2_req_valid_o = 0
   data_req_cnt_d = data_req_cnt_q
   data_req_valid_d = data_req_grant_i
-  r1_data_req_fired_d = 0
-  r2_data_req_fired_d = 0
   r3_data_req_fired_d = 0
   if new_req__w1 != 0 {
     active_d = 1
@@ -106,15 +104,15 @@ pub mod minion_dcache_writeback_unit::[timecheck=false](clk_i:u1, rst_ni:u1, req
     if r3_data_req_fired_q != 0 {
       l2_req_valid_o = unsigned(r3_invalid_q == 0)
       if (l2_req_ready_i == 0) or (r3_invalid_q != 0) {
+        data_req_valid_d = 0
+        r1_data_req_fired_d = 0
+        r2_data_req_fired_d = 0
+        r3_data_req_fired_d = 0
         data_req_cnt_d = (data_req_cnt_d - data_req_grant_i)#[0..=1]
         data_req_cnt_d = (data_req_cnt_d - data_req_valid_o)#[0..=1]
         data_req_cnt_d = (data_req_cnt_d - r1_data_req_fired_q)#[0..=1]
         data_req_cnt_d = (data_req_cnt_d - r2_data_req_fired_q)#[0..=1]
         data_req_cnt_d = (data_req_cnt_d - r3_data_req_fired_q)#[0..=1]
-        data_req_valid_d = 0
-        r1_data_req_fired_d = 0
-        r2_data_req_fired_d = 0
-        r3_data_req_fired_d = 0
       } elif (r3_invalid_q == 0) and (r1_data_req_fired_q == 0) and (r2_data_req_fired_q == 0) and (data_req_valid_o == 0) {
         active_d = unsigned(data_req_cnt_q < data_req_cnt_limit__w1)
       }
@@ -127,32 +125,32 @@ pub mod minion_dcache_writeback_unit::[timecheck=false](clk_i:u1, rst_ni:u1, req
     req_q = (req_data_i.tag << 17) | (req_data_i.set << 13) | (req_data_i.way_en << 9) | (req_data_i.is_tbox << 8) | (req_data_i.mem_idx << 7) | req_data_i.addr_low
   }
   if rst_ni == 0 {
-    data_req_valid_o = 0
     r1_data_req_fired_q = 0
     r2_data_req_fired_q = 0
-    r2_invalid_q = 0
     r3_data_req_fired_q = 0
+    data_req_valid_o = 0
+    r2_invalid_q = 0
     r3_invalid_q = 0
   } else {
-    r2_invalid_q = data_req_nack_i
-    data_req_valid_o = data_req_valid_d
     r1_data_req_fired_q = r1_data_req_fired_d
     r2_data_req_fired_q = r2_data_req_fired_d
     r3_data_req_fired_q = r3_data_req_fired_d
+    data_req_valid_o = data_req_valid_d
+    r2_invalid_q = data_req_nack_i
     r3_invalid_q = r2_invalid_q
   }
-  data_req_o.addr = `data_req_o__bpo.addr`
-  data_req_o.valid_h = `data_req_o__bpo.valid_h`
-  data_req_o.valid_l = `data_req_o__bpo.valid_l`
+  data_req_o.valid_l = 1
+  data_req_o.valid_h = 1
   data_req_o.way = `data_req_o__bpo.way`
+  data_req_o.addr = `data_req_o__bpo.addr`
+  l2_req_data_o.id = `l2_req_data_o__bpo.id`
+  l2_req_data_o.source = `l2_req_data_o__bpo.source`
+  l2_req_data_o.wdata = `l2_req_data_o__bpo.wdata`
+  l2_req_data_o.opcode = `l2_req_data_o__bpo.opcode`
   l2_req_data_o.address = `l2_req_data_o__bpo.address`
   l2_req_data_o.data = `l2_req_data_o__bpo.data`
-  l2_req_data_o.id = `l2_req_data_o__bpo.id`
-  l2_req_data_o.opcode = `l2_req_data_o__bpo.opcode`
-  l2_req_data_o.qwen = `l2_req_data_o__bpo.qwen`
   l2_req_data_o.size = `l2_req_data_o__bpo.size`
-  l2_req_data_o.source = `l2_req_data_o__bpo.source`
+  l2_req_data_o.qwen = `l2_req_data_o__bpo.qwen`
   l2_req_data_o.subopcode = `l2_req_data_o__bpo.subopcode`
-  l2_req_data_o.wdata = `l2_req_data_o__bpo.wdata`
   req_ready_o = req_ready_o__w1
 }

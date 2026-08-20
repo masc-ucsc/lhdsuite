@@ -50,8 +50,10 @@ pub mod minion_dcache_buffer_array::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
     s2_write_entry_o = s2_write_replay_entry_i
   }
   const full_o__w1 = unsigned(entry_count_available_q == 0)
-  alloc_req_pre_applied_d = 0
+  entry_count_available_d = 0sb?
+  alloc_req_pre_applied_d = 0ub?
   entry_count_available_d = entry_count_available_q
+  alloc_req_pre_applied_d = 0
   if (alloc_req_pre_i != 0) or (reduce_alloc_req_i != 0) {
     if entry_count_available_d != 0 {
       if reduce_alloc_req_i == 0 {
@@ -81,6 +83,7 @@ pub mod minion_dcache_buffer_array::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   if reduce_dealloc_req_i != 0 {
     entry_count_available_d = (entry_count_available_d + 1)#[0..=3]
   }
+  entry_mask_available_d = 0sb?
   entry_mask_available_d = entry_mask_available_q
   if s2_write_needed_i != 0 {
     entry_mask_available_d = ((entry_mask_available_d & (~(1 << s2_write_entry_o))) | (0 << s2_write_entry_o))#[0..=7]
@@ -94,6 +97,7 @@ pub mod minion_dcache_buffer_array::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   if reduce_dealloc_req_i != 0 {
     entry_mask_available_d = ((entry_mask_available_d & (~(1 << reduce_dealloc_entry_i))) | (1 << reduce_dealloc_entry_i))#[0..=7]
   }
+  reduce_count_available_d = 0sb?
   reduce_count_available_d = reduce_count_available_q
   if (reduce_alloc_req_i != 0) and (reduce_count_available_q != 0) {
     reduce_count_available_d = (reduce_count_available_d - 1)#[0..=3]
@@ -102,39 +106,41 @@ pub mod minion_dcache_buffer_array::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
     reduce_count_available_d = (reduce_count_available_d + 1)#[0..=3]
   }
   if s3_write_en_q != 0 {
-    s3_write_data_mux = s3_write_data_i
+    s3_write_entry_mux = 0ub???
     s3_write_entry_mux = s3_write_entry_q
+    s3_write_data_mux = 0ub????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+    s3_write_data_mux = s3_write_data_i
   } else {
-    s3_write_data_mux = s3_write_data_ext_i
     s3_write_entry_mux = s3_write_entry_ext_i
+    s3_write_data_mux = s3_write_data_ext_i
   }
   if rst_ni == 0 {
-    alloc_req_pre_applied_q = 0
-    entry_count_available_q = EntryCountReset
-    entry_mask_available_q = 0xff
-    reduce_count_available_q = 4
-    s0_alloc_gsc_q = 0
     s0_alloc_req_pre_q = 0
-    s1_alloc_gsc_q = 0
     s1_alloc_req_q = 0
-    s2_alloc_gsc_q = 0
     s2_alloc_req_q = 0
     s3_alloc_req_q = 0
+    s0_alloc_gsc_q = 0
+    s1_alloc_gsc_q = 0
+    s2_alloc_gsc_q = 0
+    entry_count_available_q = EntryCountReset
+    entry_mask_available_q = 0xff
+    alloc_req_pre_applied_q = 0
+    reduce_count_available_q = 4
     s3_write_en_q = 0
     s3_write_entry_q = 0
   } else {
     if unsigned((alloc_req_pre_i != 0) or (reduce_alloc_req_i != 0) or (s0_alloc_req_pre_q != 0) or (s1_alloc_req_q != 0) or (s2_alloc_req_q != 0) or (s3_alloc_req_q != 0) or (s2_dealloc_i != 0) or (s1_dealloc_uc_i != 0) or (s2_write_needed_i != 0) or (reduce_dealloc_req_i != 0)) != 0 {
-      alloc_req_pre_applied_q = alloc_req_pre_applied_d
-      entry_count_available_q = entry_count_available_d
-      entry_mask_available_q = entry_mask_available_d
-      reduce_count_available_q = reduce_count_available_d
-      s0_alloc_gsc_q = alloc_gsc_i
       s0_alloc_req_pre_q = alloc_req_pre_i
-      s1_alloc_gsc_q = s1_alloc_gsc_d__w1
       s1_alloc_req_q = s0_alloc_req__w1
-      s2_alloc_gsc_q = s2_alloc_gsc_d__w1
       s2_alloc_req_q = s2_alloc_req_d__w1
       s3_alloc_req_q = unsigned((s2_alloc_req_q != 0) and (s2_alloc_gsc_q != 0))
+      s0_alloc_gsc_q = alloc_gsc_i
+      s1_alloc_gsc_q = s1_alloc_gsc_d__w1
+      s2_alloc_gsc_q = s2_alloc_gsc_d__w1
+      entry_count_available_q = entry_count_available_d
+      entry_mask_available_q = entry_mask_available_d
+      alloc_req_pre_applied_q = alloc_req_pre_applied_d
+      reduce_count_available_q = reduce_count_available_d
     }
     s3_write_en_q = s2_write_en_i
     s3_write_entry_q = s2_write_entry_o
@@ -142,6 +148,6 @@ pub mod minion_dcache_buffer_array::[timecheck=false](clk_i:u1, rst_ni:u1, alloc
   mut u_rf_buffer_array = prim_rf_1r1w_preview_p2::[name=u_rf_buffer_array](preview_clk_i = clk_i, rf_clk_i = clk_i, wr_data_en_1p_next_i = unsigned((s2_write_en_ext_prev_i != 0) or (s2_write_en_i != 0)), wr_en_i = unsigned((s3_write_en_q != 0) or (s3_write_en_ext_i != 0)), wr_addr_i = s3_write_entry_mux, wr_data_i = s3_write_data_mux, rd_addr_i = s1_read_entry_i)
   full_o = full_o__w1
   reduce_full_o = unsigned((reduce_count_available_q == 0) or (full_o__w1 != 0))
-  s1_read_data_o = u_rf_buffer_array
   s3_write_en_o = s3_write_en_q
+  s1_read_data_o = u_rf_buffer_array
 }

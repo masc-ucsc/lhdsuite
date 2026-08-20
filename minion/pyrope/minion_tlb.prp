@@ -21,7 +21,13 @@ pub mod minion_tlb::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, s
   mut `ptw_req_data_d.satp_ppn` = 0
   mut `ptw_req_data_d.prv` = 0
   mut `ptw_req_data_d.addr` = 0
+  mut `resp_data_o__bpo.fill_pending` = 0
+  mut `resp_data_o__bpo.miss` = 0
   mut `resp_data_o__bpo.ppn` = 0
+  mut `resp_data_o__bpo.xcpt_ld` = 0
+  mut `resp_data_o__bpo.xcpt_st` = 0
+  mut `resp_data_o__bpo.xcpt_if` = 0
+  mut `resp_data_o__bpo.access_fault` = 0
   mut tag:u33 = 0
   mut state_d:u2 = 0
   mut req_min_id_d:u1 = 0
@@ -36,6 +42,7 @@ pub mod minion_tlb::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, s
   const privilege_mode__w1 = _mux_2
   const vpn_i__w1 = req_data_i.vpn
   const typ_i__w1 = vmspagesize_i
+  tag = 0sb?
   tag = 0
   if coop_mode_q != 0 {
     match typ_i__w1 {
@@ -68,21 +75,23 @@ pub mod minion_tlb::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, s
   mut _mux_9:u28 = if privilege_mode__w1 == minion_pkg.PrvM { ((matp_info_i << 32) >> ((req_min_id_i * 32)#[0..=7] + 32))#[0..=31]#[0..=27] } else { ((satp_info_i << 32) >> ((req_min_id_i * 32)#[0..=7] + 32))#[0..=31]#[0..=27] }
   const vm_enabled_o__w1 = unsigned((vm_mode__w1 != minion_pkg.CsrSatpModeBare) and (unsigned(((req_data_i.status.mprv != 0) and (req_data_i.instruction == 0)) or (req_data_i.status.debug == 0)) != 0) and (req_data_i.passthrough == 0))
   if vm_mode__w1 == minion_pkg.CsrSatpModeSv48 {
+    invalid_address = 0ub?
     invalid_address = req_data_i.msb_err
   } elif vm_mode__w1 == minion_pkg.CsrSatpModeSv39 {
     invalid_address = unsigned((req_data_i.msb_err != 0) or (not ((req_data_i.vpn#[26..=35] == 0) or (req_data_i.vpn#[26..=35] == 0x3ff))))
   } else {
     invalid_address = 0
   }
-  mut tlb_invalidated_d:u1 = if (state_q == tlb_pkg.TlbStateReady) or ((state_q == tlb_pkg.TlbStateWait) and (ptw_resp_valid_q != 0)) { 0 } else { tlb_invalidated_q }
+  mut tlb_invalidated_d = 0ub?
+  tlb_invalidated_d = if (state_q == tlb_pkg.TlbStateReady) or ((state_q == tlb_pkg.TlbStateWait) and (ptw_resp_valid_q != 0)) { 0 } else { tlb_invalidated_q }
   const tlb_invalidated_d__w2 = (tlb_invalidated_d | tlb_invalidate_i) & 1
   const ptw_req_invalidated__w1 = ((coop_mode_q & unsigned(tlb_invalidated_q != 0) & 1) | ((~coop_mode_q) & 1 & unsigned(((((0 & (~(1 << req_min_id_q))) | (1 << req_min_id_q)) & 1) & tlb_invalidated_q & 1) != 0) & 1)) & 1
-  const ptw_req_valid_o__w1 = ptw_req_valid_q
-  const ptw_invalidate_o__w1 = tlb_invalidate_q
-  mut `ptw_req_data_o__bpo.addr` = ptw_req_data_q#[0..=35]
-  mut `ptw_req_data_o__bpo.prv` = ptw_req_data_q#[36..=37]
   mut `ptw_req_data_o__bpo.satp_mode` = ptw_req_data_q#[66..=69]
   mut `ptw_req_data_o__bpo.satp_ppn` = ptw_req_data_q#[38..=65]
+  mut `ptw_req_data_o__bpo.prv` = ptw_req_data_q#[36..=37]
+  mut `ptw_req_data_o__bpo.addr` = ptw_req_data_q#[0..=35]
+  const ptw_req_valid_o__w1 = ptw_req_valid_q
+  const ptw_invalidate_o__w1 = tlb_invalidate_q
   const pte_is_leaf__w1 = unsigned(((ptw_resp_data_q & 1) != 0) and ((((ptw_resp_data_q >> 1) & 1) != 0) or ((((ptw_resp_data_q >> 3) & 1) != 0) and (((ptw_resp_data_q >> 2) & 1) == 0))) and (((ptw_resp_data_q >> 62) & 1) == 0))
   const min_id_i__w1 = req_min_id_q
   const vpn_i_s1__w1 = req_vpn_q
@@ -138,28 +147,21 @@ pub mod minion_tlb::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, s
   }
   mut u_tlb_cache_rf = prim_rf_1r1w_preview_p1::[name=u_tlb_cache_rf](preview_clk_i = clk_i, rf_clk_i = clk_i, wr_data_en_1p_next_i = unsigned((not (tlb_invalidated_d__w2 != 0)) and (ptw_resp_valid_i != 0) and (ptw_resp_data_i.canceled_req == 0)), wr_en_i = unsigned((ptw_req_invalidated__w1 == 0) and (ptw_resp_valid_q != 0) and (((ptw_resp_data_q >> 63) & 1) == 0)), wr_addr_i = tlb_cache_waddr__w1, wr_data_i = (req_tag_q << 36) | ((`tlb_cache_wdata.ptw_access_fault` << 35) | (`tlb_cache_wdata.expected_ex_mode` << 34) | (`tlb_cache_wdata.dirty` << 33) | (`tlb_cache_wdata.access` << 32) | (`tlb_cache_wdata.sx` << 31) | (`tlb_cache_wdata.sw` << 30) | (`tlb_cache_wdata.sr` << 29) | (`tlb_cache_wdata.u` << 28) | `tlb_cache_wdata.ppn`)#[0..=35], rd_addr_i = tlb_cache_raddr__w1)
   const tlb_cache_rdata_flat__w1 = u_tlb_cache_rf
-  mut `tlb_cache_rdata.expected_ex_mode` = (tlb_cache_rdata_flat__w1#[0..=35] >> 34) & 1
-  mut `tlb_cache_rdata.access` = (tlb_cache_rdata_flat__w1#[0..=35] >> 32) & 1
-  mut `tlb_cache_rdata.dirty` = (tlb_cache_rdata_flat__w1#[0..=35] >> 33) & 1
-  mut `tlb_cache_rdata.ppn` = tlb_cache_rdata_flat__w1#[0..=35]#[0..=27]
   mut `tlb_cache_rdata.ptw_access_fault` = (tlb_cache_rdata_flat__w1#[0..=35] >> 35) & 1
-  mut `tlb_cache_rdata.sr` = (tlb_cache_rdata_flat__w1#[0..=35] >> 29) & 1
-  mut `tlb_cache_rdata.sw` = (tlb_cache_rdata_flat__w1#[0..=35] >> 30) & 1
+  mut `tlb_cache_rdata.expected_ex_mode` = (tlb_cache_rdata_flat__w1#[0..=35] >> 34) & 1
+  mut `tlb_cache_rdata.dirty` = (tlb_cache_rdata_flat__w1#[0..=35] >> 33) & 1
+  mut `tlb_cache_rdata.access` = (tlb_cache_rdata_flat__w1#[0..=35] >> 32) & 1
   mut `tlb_cache_rdata.sx` = (tlb_cache_rdata_flat__w1#[0..=35] >> 31) & 1
+  mut `tlb_cache_rdata.sw` = (tlb_cache_rdata_flat__w1#[0..=35] >> 30) & 1
+  mut `tlb_cache_rdata.sr` = (tlb_cache_rdata_flat__w1#[0..=35] >> 29) & 1
   mut `tlb_cache_rdata.u` = (tlb_cache_rdata_flat__w1#[0..=35] >> 28) & 1
+  mut `tlb_cache_rdata.ppn` = tlb_cache_rdata_flat__w1#[0..=35]#[0..=27]
   const tlb_cache_hit__w1 = unsigned(((((tlb_cache_valid_q << 1) >> (tlb_cache_raddr__w1 + 1)) & 1) != 0) and (vm_enabled_o__w1 != 0) and ((tlb_cache_rdata_flat__w1 >> 36)#[0..=32] == req_tag__w1) and (((`tlb_cache_rdata.expected_ex_mode` ^ unsigned(privilege_mode__w1 != minion_pkg.PrvM)) & 1) != 0))
   const tlb_miss__w1 = unsigned((vm_enabled_o__w1 != 0) and (tlb_cache_hit__w1 == 0))
   mut _mux_27:u1 = if req_data_i.status.sum != 0 { 1 } else { unsigned(`tlb_cache_rdata.u` == 0) & 1 }
   mut _mux_28:u1 = if privilege_mode__w1 == minion_pkg.PrvU { `tlb_cache_rdata.u` & 1 } else { _mux_27 & 1 }
   const priv_ok__w1 = _mux_28
   const tlb_xcpt_accessed__w1 = unsigned(`tlb_cache_rdata.access` == 0)
-  mut `resp_data_o__bpo.access_fault` = 0
-  mut `resp_data_o__bpo.fill_pending` = 0
-  mut `resp_data_o__bpo.miss` = 0
-  `resp_data_o__bpo.ppn` = 0
-  mut `resp_data_o__bpo.xcpt_if` = 0
-  mut `resp_data_o__bpo.xcpt_ld` = 0
-  mut `resp_data_o__bpo.xcpt_st` = 0
   const `resp_data_o__bpo.fill_pending__w1` = unsigned(state_q != tlb_pkg.TlbStateReady)
   const `resp_data_o__bpo.miss__w1` = tlb_miss__w1
   if vm_enabled_o__w1 == 0 {
@@ -171,36 +173,41 @@ pub mod minion_tlb::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, s
   const `resp_data_o__bpo.xcpt_st__w1` = unsigned((((unsigned((priv_ok__w1 != 0) and (`tlb_cache_rdata.sw` != 0)) == 0) or (unsigned((`tlb_cache_rdata.dirty` == 0) and (req_data_i.store != 0)) != 0)) and (tlb_cache_hit__w1 != 0)) or (invalid_address != 0))
   const `resp_data_o__bpo.xcpt_if__w1` = unsigned((((unsigned((priv_ok__w1 != 0) and (`tlb_cache_rdata.sx` != 0)) == 0) or (tlb_xcpt_accessed__w1 != 0)) and (tlb_cache_hit__w1 != 0)) or (invalid_address != 0))
   const `resp_data_o__bpo.access_fault__w1` = unsigned((`tlb_cache_rdata.ptw_access_fault` != 0) and (tlb_cache_hit__w1 != 0))
-  `ptw_req_data_d.addr` = ptw_req_data_q#[0..=35]
-  `ptw_req_data_d.prv` = ptw_req_data_q#[36..=37]
+  state_d = 0sb?
+  req_min_id_d = 0ub?
+  req_vpn_d = 0sb?
+  req_tag_d = 0sb?
   `ptw_req_data_d.satp_mode` = ptw_req_data_q#[66..=69]
   `ptw_req_data_d.satp_ppn` = ptw_req_data_q#[38..=65]
+  `ptw_req_data_d.prv` = ptw_req_data_q#[36..=37]
+  `ptw_req_data_d.addr` = ptw_req_data_q#[0..=35]
+  ptw_req_valid_d = 0ub?
   ptw_req_valid_d = ptw_req_valid_q
-  req_min_id_d = req_min_id_q
-  req_tag_d = req_tag_q
-  req_vpn_d = req_vpn_q
   state_d = state_q
+  req_min_id_d = req_min_id_q
+  req_vpn_d = req_vpn_q
+  req_tag_d = req_tag_q
   match state_q {
     == tlb_pkg.TlbStateReady {
       if (req_valid_i != 0) and (tlb_miss__w1 != 0) and (invalid_address == 0) {
-        `ptw_req_data_d.addr` = req_data_i.vpn#[0..=35]
-        `ptw_req_data_d.prv` = req_data_i.status.prv#[0..=1]
+        state_d = tlb_pkg.TlbStateRequest
+        req_min_id_d = req_min_id_i
+        req_vpn_d = req_data_i.vpn
+        req_tag_d = req_tag__w1
         `ptw_req_data_d.satp_mode` = vm_mode__w1
         `ptw_req_data_d.satp_ppn` = _mux_9
+        `ptw_req_data_d.prv` = req_data_i.status.prv#[0..=1]
+        `ptw_req_data_d.addr` = req_data_i.vpn#[0..=35]
         ptw_req_valid_d = 1
-        req_min_id_d = req_min_id_i
-        req_tag_d = req_tag__w1
-        req_vpn_d = req_data_i.vpn
-        state_d = tlb_pkg.TlbStateRequest
       }
     }
     == tlb_pkg.TlbStateRequest {
       if ptw_req_invalidated__w1 != 0 {
-        ptw_req_valid_d = 0
         state_d = tlb_pkg.TlbStateReady
-      } elif ptw_req_ready_i != 0 {
         ptw_req_valid_d = 0
+      } elif ptw_req_ready_i != 0 {
         state_d = tlb_pkg.TlbStateWait
+        ptw_req_valid_d = 0
       }
     }
     == tlb_pkg.TlbStateWait {
@@ -209,33 +216,33 @@ pub mod minion_tlb::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, s
       }
     }
     else {
-      ptw_req_valid_d = 0
       state_d = tlb_pkg.TlbStateReady
+      ptw_req_valid_d = 0
     }
   }
   if rst_ni == 0 {
-    ptw_req_valid_q = 0
     state_q = tlb_pkg.TlbStateReady
+    ptw_req_valid_q = 0
   } elif unsigned((state_q != tlb_pkg.TlbStateReady) or ((req_valid_i != 0) and (tlb_miss__w1 != 0)) or (rst_ni == 0)) != 0 {
+    state_q = state_d
+    req_min_id_q = req_min_id_d
+    req_vpn_q = req_vpn_d
+    req_tag_q = req_tag_d
     ptw_req_data_q = (`ptw_req_data_d.satp_mode` << 0x42) | (`ptw_req_data_d.satp_ppn` << 38) | (`ptw_req_data_d.prv` << 36) | `ptw_req_data_d.addr`
     ptw_req_valid_q = ptw_req_valid_d
-    req_min_id_q = req_min_id_d
-    req_tag_q = req_tag_d
-    req_vpn_q = req_vpn_d
-    state_q = state_d
   }
-  ptw_invalidate_o = ptw_invalidate_o__w1
-  ptw_req_data_o.addr = `ptw_req_data_o__bpo.addr`
-  ptw_req_data_o.prv = `ptw_req_data_o__bpo.prv`
-  ptw_req_data_o.satp_mode = `ptw_req_data_o__bpo.satp_mode`
-  ptw_req_data_o.satp_ppn = `ptw_req_data_o__bpo.satp_ppn`
-  ptw_req_valid_o = ptw_req_valid_o__w1
-  resp_data_o.access_fault = `resp_data_o__bpo.access_fault__w1`
   resp_data_o.fill_pending = `resp_data_o__bpo.fill_pending__w1`
   resp_data_o.miss = `resp_data_o__bpo.miss__w1`
   resp_data_o.ppn = `resp_data_o__bpo.ppn`
-  resp_data_o.xcpt_if = `resp_data_o__bpo.xcpt_if__w1`
   resp_data_o.xcpt_ld = `resp_data_o__bpo.xcpt_ld__w1`
   resp_data_o.xcpt_st = `resp_data_o__bpo.xcpt_st__w1`
+  resp_data_o.xcpt_if = `resp_data_o__bpo.xcpt_if__w1`
+  resp_data_o.access_fault = `resp_data_o__bpo.access_fault__w1`
+  ptw_req_data_o.satp_mode = `ptw_req_data_o__bpo.satp_mode`
+  ptw_req_data_o.satp_ppn = `ptw_req_data_o__bpo.satp_ppn`
+  ptw_req_data_o.prv = `ptw_req_data_o__bpo.prv`
+  ptw_req_data_o.addr = `ptw_req_data_o__bpo.addr`
+  ptw_req_valid_o = ptw_req_valid_o__w1
+  ptw_invalidate_o = ptw_invalidate_o__w1
   vm_enabled_o = vm_enabled_o__w1
 }

@@ -48,6 +48,7 @@ pub mod minion_frontend_thread_buffer_p1::[timecheck=false](clk_i:u1, rst_ni:u1,
   reg f7_inst_rvc:u1:[clock_pin=ref clock_gated]
   wire f6_inst_rvc:u1
   wire clock_gated:u1
+  mut `f0_icache_req_o__bpo.thread_id` = 0
   mut `f7_inst_data_o__bpo.page_fault0` = 0
   mut `f7_inst_data_o__bpo.access_fault0` = 0
   mut `f7_inst_data_o__bpo.page_fault1` = 0
@@ -110,6 +111,7 @@ pub mod minion_frontend_thread_buffer_p1::[timecheck=false](clk_i:u1, rst_ni:u1,
   const f7_inst_rvc_o__w1 = f7_inst_rvc
   const debug_mode_start__w1 = unsigned((f0_core_req_i.debug_info.halt != 0) and (f0_core_req_valid_i != 0))
   const debug_mode_end__w1 = unsigned((f0_core_req_i.debug_info.resume != 0) and (f0_core_req_valid_i != 0))
+  using_pfb_next = 0ub?
   using_pfb_next = using_pfb_reg
   if debug_mode_start__w1 != 0 {
     using_pfb_next = 1
@@ -126,11 +128,14 @@ pub mod minion_frontend_thread_buffer_p1::[timecheck=false](clk_i:u1, rst_ni:u1,
   mut buffer_word_en__w1 = buffer_word_en
   buffer_word_en__w1#[8..=15] = (0xff << buffer_pc[1]#[2..=4])#[0..=7]
   mut _mux_22:u8 = if (f5_req_valid_to_f6__w1 != 0) and (f5_icache_resp_miss_i == 0) { ((buffer_word_en__w1 << 8) >> ((f5_req_buffer * 8)#[0..=5] + 8))#[0..=7] } else { 0 }
+  f6_buffer_wr_1p_next = 0sb?
   f6_buffer_wr_1p_next = _mux_22
   if using_pfb__w1 != 0 {
     _mux_23 = if (debug_mode_start__w1 != 0) or (reset_debug_i != 0) { 0xff } else { debug_ffb_en_i }
     f6_buffer_wr_1p_next = _mux_23
+    f6_buffer_wren = 0ub????????
     f6_buffer_wren = debug_ffb_en_2
+    f6_write_ad = 0ub?
     f6_write_ad = if (in_debug_mode_i != 0) or (reset_prog_buffer__w1 != 0) { 0 } else { f6_req_buffer }
     if reset_prog_buffer__w1 != 0 {
       f6_buffer_wren = 15
@@ -140,6 +145,7 @@ pub mod minion_frontend_thread_buffer_p1::[timecheck=false](clk_i:u1, rst_ni:u1,
     f6_buffer_wren = _mux_24
     f6_write_ad = f6_req_buffer
   }
+  f6_wr_data = 0sb?
   f6_wr_data = f6_icache_resp_i.data
   if using_pfb__w1 != 0 {
     f6_wr_data#[0..=63] = debug_ffb_wdata_i
@@ -165,6 +171,7 @@ pub mod minion_frontend_thread_buffer_p1::[timecheck=false](clk_i:u1, rst_ni:u1,
     debug_ffb_en_2 = debug_ffb_en_i
     debug_ffb_exec_2 = debug_ffb_exec_i
   }
+  icache_inflight_next = 0ub?
   icache_inflight_next = icache_inflight
   if f0_icache_req_valid_o != 0 {
     icache_inflight_next = 1
@@ -181,17 +188,17 @@ pub mod minion_frontend_thread_buffer_p1::[timecheck=false](clk_i:u1, rst_ni:u1,
   }
   f0_miss_pending = f0_miss_pending_next
   const f0_new_inst_req__w1 = unsigned((f0_thread_enabled_i != 0) and (f0_enable_thread_i == 0) and (not ((f0_miss_pending != 0) and (f7_icache_fill_done_i == 0))) and (f0_core_req_valid_i == 0) and (f1_req_valid == 0) and (f2_req_valid == 0) and (f3_req_valid == 0) and (f4_req_valid == 0) and (f5_req_valid == 0) and (f6_req_valid == 0) and ((buffer_empty != 0) or (f6_clear_buffer != 0)) and (rst_ni != 0) and (using_pfb__w1 == 0))
-  const t264 = (vm_status_i.prv << 6) | (vm_status_i.mprv << 5) | (vm_status_i.mpp << 3) | (vm_status_i.sum << 2) | (vm_status_i.mxr << 1) | vm_status_i.debug
-  mut `f0_icache_req_o__bpo.addr` = f0_pc
-  mut `f0_icache_req_o__bpo.thread_id` = 1
-  mut `f0_icache_req_o__bpo.vm_status.debug` = t264 & 1
-  mut `f0_icache_req_o__bpo.vm_status.mpp` = (t264 >> 3)#[0..=1]
-  mut `f0_icache_req_o__bpo.vm_status.mprv` = (t264 >> 5) & 1
-  mut `f0_icache_req_o__bpo.vm_status.mxr` = (t264 >> 1) & 1
-  mut `f0_icache_req_o__bpo.vm_status.prv` = (t264 >> 6)#[0..=1]
-  mut `f0_icache_req_o__bpo.vm_status.sum` = (t264 >> 2) & 1
   f0_icache_req_valid_o__wtmp = unsigned((f0_new_inst_req__w1 != 0) and (io_halt_i == 0))
-  mut f0_req_buffer:u1 = if ((buffer_empty & 1) != 0) or (((f6_clear_buffer & 1) != 0) and ((f6_buffer_en__w2 & 1) == 0)) { 0 } else { 0 }
+  const t264 = (vm_status_i.prv << 6) | (vm_status_i.mprv << 5) | (vm_status_i.mpp << 3) | (vm_status_i.sum << 2) | (vm_status_i.mxr << 1) | vm_status_i.debug
+  mut `f0_icache_req_o__bpo.vm_status.prv` = (t264 >> 6)#[0..=1]
+  mut `f0_icache_req_o__bpo.vm_status.mprv` = (t264 >> 5) & 1
+  mut `f0_icache_req_o__bpo.vm_status.mpp` = (t264 >> 3)#[0..=1]
+  mut `f0_icache_req_o__bpo.vm_status.sum` = (t264 >> 2) & 1
+  mut `f0_icache_req_o__bpo.vm_status.mxr` = (t264 >> 1) & 1
+  mut `f0_icache_req_o__bpo.vm_status.debug` = t264 & 1
+  mut `f0_icache_req_o__bpo.addr` = f0_pc
+  mut f0_req_buffer = 0ub?
+  f0_req_buffer = if ((buffer_empty & 1) != 0) or (((f6_clear_buffer & 1) != 0) and ((f6_buffer_en__w2 & 1) == 0)) { 0 } else { 0 }
   if (((buffer_empty >> 1) & 1) != 0) or ((((f6_clear_buffer >> 1) & 1) != 0) and (((f6_buffer_en__w2 >> 1) & 1) == 0)) {
     f0_req_buffer = 1
   }
@@ -291,6 +298,7 @@ pub mod minion_frontend_thread_buffer_p1::[timecheck=false](clk_i:u1, rst_ni:u1,
   } elif (f0_core_req_valid_i != 0) or (f0_disable_thread_i != 0) {
     buffer_empty_next__wtmp#[1] = 1
   }
+  dbg_clear_f7 = 0ub?
   dbg_clear_f7 = 0
   if debug_mode_start_ff != 0 {
     buffer_empty_next__wtmp = 3
@@ -305,9 +313,9 @@ pub mod minion_frontend_thread_buffer_p1::[timecheck=false](clk_i:u1, rst_ni:u1,
     _mux_43 = if ffb_update_read_pointer__w1 != 0 { 0 } else { f6_buffer_ptr_next }
     f6_buffer_ptr = _mux_43
   }
+  f6_inst_bits = 0sb?
   const f6_buffer_pos__w1 = f6_buffer_ptr#[0..=3]
   f6_buffer_id__wtmp = (f6_buffer_ptr >> 4) & 1
-  f6_inst_bits = 0sb?
   if (buffer_empty == 3) and (f5_req_valid != 0) {
     f6_buffer_ptr_next__wtmp = ((f5_req_buffer & 1) << 4) | buffer_pc[f5_req_buffer]#[1..=4]
   } else {
@@ -320,14 +328,14 @@ pub mod minion_frontend_thread_buffer_p1::[timecheck=false](clk_i:u1, rst_ni:u1,
   if f6_split__w1 == 0 {
     f6_valid__wtmp = unsigned((((buffer_empty << 1) >> (f6_buffer_id__wtmp + 1)) & 1) == 0)
     if (f6_valid__wtmp == 0) and (f6_buffer_wr__w1 != 0) {
-      f6_inst_bits = ((f6_icache_resp_i.data << 32) >> ((f6_buffer_pos__w1 * 16) + 32))#[0..=31]
       f6_valid__wtmp = 1
+      f6_inst_bits = ((f6_icache_resp_i.data << 32) >> ((f6_buffer_pos__w1 * 16) + 32))#[0..=31]
     }
   } else {
     f6_valid__wtmp = unsigned(((((buffer_empty << 1) >> (f6_buffer_id__wtmp + 1)) & 1) == 0) and ((((buffer_empty << 1) >> (f6_buffer_id_next__w1 + 1)) & 1) == 0))
     if (f6_valid__wtmp == 0) and ((((buffer_empty << 1) >> (f6_buffer_id__wtmp + 1)) & 1) == 0) and ((((buffer_empty << 1) >> (f6_buffer_id_next__w1 + 1)) & 1) != 0) and (f6_buffer_wr__w1 != 0) {
-      f6_inst_bits#[16..=31] = f6_icache_resp_i.data#[0..=15]
       f6_valid__wtmp = 1
+      f6_inst_bits#[16..=31] = f6_icache_resp_i.data#[0..=15]
     }
   }
   f6_valid__wtmp = unsigned((f6_valid__wtmp != 0) and (dbg_clear_f7 == 0))
@@ -355,8 +363,8 @@ pub mod minion_frontend_thread_buffer_p1::[timecheck=false](clk_i:u1, rst_ni:u1,
     f7_inst_pc_msb = buffer_pc[f6_buffer_id__wtmp]#[5..=48]
   }
   f7_stall__wtmp = unsigned(f7_inst_ready_i == 0)
-  const f7_buffer_id__w1 = (f7_buffer_ptr >> 4) & 1
   f6_stall__wtmp = unsigned((f7_valid != 0) and (f7_stall__wtmp != 0))
+  const f7_buffer_id__w1 = (f7_buffer_ptr >> 4) & 1
   mut `f7_inst_data_o__bpo.pc` = (f7_inst_pc_msb << 5) | (f7_buffer_ptr#[0..=3] << 1)
   `f7_inst_data_o__bpo.page_fault0` = unsigned(((((buffer_page_fault << 1) >> (f7_buffer_id__w1 + 1)) & 1) != 0) and (using_pfb_reg == 0))
   `f7_inst_data_o__bpo.access_fault0` = unsigned(((((buffer_access_fault << 1) >> (f7_buffer_id__w1 + 1)) & 1) != 0) and (using_pfb_reg == 0))
@@ -366,19 +374,19 @@ pub mod minion_frontend_thread_buffer_p1::[timecheck=false](clk_i:u1, rst_ni:u1,
     `f7_inst_data_o__bpo.bus_err` = unsigned((buffer_l2_err != 0) and (using_pfb_reg == 0))
     `f7_inst_data_o__bpo.ecc_err` = unsigned((buffer_ecc_err != 0) and (using_pfb_reg == 0))
   } else {
-    `f7_inst_data_o__bpo.access_fault1` = 0
     `f7_inst_data_o__bpo.page_fault1` = 0
+    `f7_inst_data_o__bpo.access_fault1` = 0
     `f7_inst_data_o__bpo.bus_err` = unsigned(((((buffer_l2_err << 1) >> (f7_buffer_id__w1 + 1)) & 1) != 0) and (using_pfb_reg == 0))
     `f7_inst_data_o__bpo.ecc_err` = unsigned(((((buffer_ecc_err << 1) >> (f7_buffer_id__w1 + 1)) & 1) != 0) and (using_pfb_reg == 0))
   }
   `f7_inst_data_o__bpo.replay` = unsigned(((((buffer_cacheable << 1) >> (f7_buffer_id__w1 + 1)) & 1) == 0) and (f0_core_req_i.speculative != 0))
   if using_pfb__w1 != 0 {
+    `f7_inst_data_o__bpo.page_fault0` = 0
+    `f7_inst_data_o__bpo.page_fault1` = 0
     `f7_inst_data_o__bpo.access_fault0` = 0
     `f7_inst_data_o__bpo.access_fault1` = 0
     `f7_inst_data_o__bpo.bus_err` = 0
     `f7_inst_data_o__bpo.ecc_err` = 0
-    `f7_inst_data_o__bpo.page_fault0` = 0
-    `f7_inst_data_o__bpo.page_fault1` = 0
     `f7_inst_data_o__bpo.replay` = 0
   }
   mut `f7_inst_data_o__bpo.inst_bits` = f7_inst_bits
@@ -387,16 +395,15 @@ pub mod minion_frontend_thread_buffer_p1::[timecheck=false](clk_i:u1, rst_ni:u1,
     using_pfb_reg = using_pfb_next
   }
   debug_mode_start_ff = debug_mode_start__w1
-  mut `debug_o__bpo.buffer_empty` = buffer_empty
-  mut `debug_o__bpo.clock_enable` = clock_enable__w1
-  mut `debug_o__bpo.core_req_pc` = f0_core_req_i.pc
   mut `debug_o__bpo.core_req_valid` = f0_core_req_valid_i
+  mut `debug_o__bpo.core_req_pc` = f0_core_req_i.pc
   mut `debug_o__bpo.f0_pc` = f0_pc
   mut `debug_o__bpo.f0_pc_next` = f0_pc_next
   mut `debug_o__bpo.f0_pc_update` = f0_pc_update
+  mut `debug_o__bpo.clock_enable` = clock_enable__w1
   mut `debug_o__bpo.gated_clk_ticks` = debug_gated_clk_ticks_q
+  mut `debug_o__bpo.buffer_empty` = buffer_empty
   mut `debug_o__bpo.buffer_pc0` = buffer_pc[0]
-  f0_icache_req_o.thread_id = 1
   mut `debug_o__bpo.buffer_pc1` = buffer_pc[1]
   mut `debug_o__bpo.req_buffer` = f0_req_buffer
   mut `debug_o__bpo.f6_req_buffer` = f6_req_buffer
@@ -415,62 +422,63 @@ pub mod minion_frontend_thread_buffer_p1::[timecheck=false](clk_i:u1, rst_ni:u1,
   mut `debug_o__bpo.f6_stall` = f6_stall
   mut `debug_o__bpo.f7_valid` = f7_valid
   mut `debug_o__bpo.f7_stall` = f7_stall
+  f0_icache_req_valid_o = f0_icache_req_valid_o__wtmp
   buffer_empty_next = buffer_empty_next__wtmp
-  debug_o.buffer_empty = `debug_o__bpo.buffer_empty`
-  debug_o.buffer_pc0 = `debug_o__bpo.buffer_pc0`
-  debug_o.buffer_pc1 = `debug_o__bpo.buffer_pc1`
-  debug_o.clock_enable = `debug_o__bpo.clock_enable`
-  debug_o.core_req_pc = `debug_o__bpo.core_req_pc`
+  f0_pc_next = f0_pc_next__wtmp
+  f0_icache_req_acc = f0_icache_req_acc__wtmp
+  f0_pc_update = f0_pc_update__wtmp
+  f0_miss_pending_next = f0_miss_pending_next__wtmp
+  f6_clear_buffer = f6_clear_buffer__wtmp__w1
+  f6_valid = f6_valid__wtmp
+  f6_stall = f6_stall__wtmp
+  f6_buffer_ptr_next = f6_buffer_ptr_next__wtmp
+  f6_buffer_id = f6_buffer_id__wtmp
+  f6_last_from_buffer = f6_last_from_buffer__wtmp
+  f7_stall = f7_stall__wtmp
+  f0_icache_req_o.thread_id = 1
+  f0_icache_req_o.vm_status.prv = `f0_icache_req_o__bpo.vm_status.prv`
+  f0_icache_req_o.vm_status.mprv = `f0_icache_req_o__bpo.vm_status.mprv`
+  f0_icache_req_o.vm_status.mpp = `f0_icache_req_o__bpo.vm_status.mpp`
+  f0_icache_req_o.vm_status.sum = `f0_icache_req_o__bpo.vm_status.sum`
+  f0_icache_req_o.vm_status.mxr = `f0_icache_req_o__bpo.vm_status.mxr`
+  f0_icache_req_o.vm_status.debug = `f0_icache_req_o__bpo.vm_status.debug`
+  f0_icache_req_o.addr = `f0_icache_req_o__bpo.addr`
+  f7_inst_data_o.pc = `f7_inst_data_o__bpo.pc`
+  f7_inst_data_o.inst_bits = `f7_inst_data_o__bpo.inst_bits`
+  f7_inst_data_o.page_fault0 = `f7_inst_data_o__bpo.page_fault0`
+  f7_inst_data_o.access_fault0 = `f7_inst_data_o__bpo.access_fault0`
+  f7_inst_data_o.page_fault1 = `f7_inst_data_o__bpo.page_fault1`
+  f7_inst_data_o.access_fault1 = `f7_inst_data_o__bpo.access_fault1`
+  f7_inst_data_o.replay = `f7_inst_data_o__bpo.replay`
+  f7_inst_data_o.bus_err = `f7_inst_data_o__bpo.bus_err`
+  f7_inst_data_o.ecc_err = `f7_inst_data_o__bpo.ecc_err`
   debug_o.core_req_valid = `debug_o__bpo.core_req_valid`
+  debug_o.core_req_pc = `debug_o__bpo.core_req_pc`
   debug_o.f0_pc = `debug_o__bpo.f0_pc`
   debug_o.f0_pc_next = `debug_o__bpo.f0_pc_next`
   debug_o.f0_pc_update = `debug_o__bpo.f0_pc_update`
-  debug_o.f1_req_valid = `debug_o__bpo.f1_req_valid`
-  debug_o.f5_req_valid = `debug_o__bpo.f5_req_valid`
+  debug_o.clock_enable = `debug_o__bpo.clock_enable`
+  debug_o.gated_clk_ticks = `debug_o__bpo.gated_clk_ticks`
+  debug_o.buffer_empty = `debug_o__bpo.buffer_empty`
+  debug_o.buffer_pc0 = `debug_o__bpo.buffer_pc0`
+  debug_o.buffer_pc1 = `debug_o__bpo.buffer_pc1`
+  debug_o.req_buffer = `debug_o__bpo.req_buffer`
+  debug_o.f6_req_buffer = `debug_o__bpo.f6_req_buffer`
   debug_o.f6_buffer_id = `debug_o__bpo.f6_buffer_id`
+  debug_o.f7_buffer_id = `debug_o__bpo.f7_buffer_id`
   debug_o.f6_buffer_ptr = `debug_o__bpo.f6_buffer_ptr`
   debug_o.f6_buffer_ptr_next = `debug_o__bpo.f6_buffer_ptr_next`
-  debug_o.f6_buffer_wr = `debug_o__bpo.f6_buffer_wr`
-  debug_o.f6_req_buffer = `debug_o__bpo.f6_req_buffer`
-  debug_o.f6_req_valid = `debug_o__bpo.f6_req_valid`
-  debug_o.f6_stall = `debug_o__bpo.f6_stall`
-  debug_o.f6_valid = `debug_o__bpo.f6_valid`
-  debug_o.f7_buffer_id = `debug_o__bpo.f7_buffer_id`
   debug_o.f7_buffer_ptr = `debug_o__bpo.f7_buffer_ptr`
-  debug_o.f7_stall = `debug_o__bpo.f7_stall`
-  debug_o.f7_valid = `debug_o__bpo.f7_valid`
-  debug_o.gated_clk_ticks = `debug_o__bpo.gated_clk_ticks`
   debug_o.icache_inflight = `debug_o__bpo.icache_inflight`
   debug_o.miss_pending = `debug_o__bpo.miss_pending`
-  debug_o.req_buffer = `debug_o__bpo.req_buffer`
-  f0_icache_req_acc = f0_icache_req_acc__wtmp
-  f0_icache_req_o.addr = `f0_icache_req_o__bpo.addr`
-  f0_icache_req_o.vm_status.debug = `f0_icache_req_o__bpo.vm_status.debug`
-  f0_icache_req_o.vm_status.mpp = `f0_icache_req_o__bpo.vm_status.mpp`
-  f0_icache_req_o.vm_status.mprv = `f0_icache_req_o__bpo.vm_status.mprv`
-  f0_icache_req_o.vm_status.mxr = `f0_icache_req_o__bpo.vm_status.mxr`
-  f0_icache_req_o.vm_status.prv = `f0_icache_req_o__bpo.vm_status.prv`
-  f0_icache_req_o.vm_status.sum = `f0_icache_req_o__bpo.vm_status.sum`
-  f0_icache_req_valid_o = f0_icache_req_valid_o__wtmp
-  f0_miss_pending_next = f0_miss_pending_next__wtmp
-  f0_pc_next = f0_pc_next__wtmp
-  f0_pc_update = f0_pc_update__wtmp
-  f6_buffer_id = f6_buffer_id__wtmp
-  f6_buffer_ptr_next = f6_buffer_ptr_next__wtmp
-  f6_clear_buffer = f6_clear_buffer__wtmp__w1
-  f6_last_from_buffer = f6_last_from_buffer__wtmp
-  f6_stall = f6_stall__wtmp
-  f6_valid = f6_valid__wtmp
-  f7_inst_data_o.access_fault0 = `f7_inst_data_o__bpo.access_fault0`
-  f7_inst_data_o.access_fault1 = `f7_inst_data_o__bpo.access_fault1`
-  f7_inst_data_o.bus_err = `f7_inst_data_o__bpo.bus_err`
-  f7_inst_data_o.ecc_err = `f7_inst_data_o__bpo.ecc_err`
-  f7_inst_data_o.inst_bits = `f7_inst_data_o__bpo.inst_bits`
-  f7_inst_data_o.page_fault0 = `f7_inst_data_o__bpo.page_fault0`
-  f7_inst_data_o.page_fault1 = `f7_inst_data_o__bpo.page_fault1`
-  f7_inst_data_o.pc = `f7_inst_data_o__bpo.pc`
-  f7_inst_data_o.replay = `f7_inst_data_o__bpo.replay`
+  debug_o.f1_req_valid = `debug_o__bpo.f1_req_valid`
+  debug_o.f5_req_valid = `debug_o__bpo.f5_req_valid`
+  debug_o.f6_req_valid = `debug_o__bpo.f6_req_valid`
+  debug_o.f6_buffer_wr = `debug_o__bpo.f6_buffer_wr`
+  debug_o.f6_valid = `debug_o__bpo.f6_valid`
+  debug_o.f6_stall = `debug_o__bpo.f6_stall`
+  debug_o.f7_valid = `debug_o__bpo.f7_valid`
+  debug_o.f7_stall = `debug_o__bpo.f7_stall`
   f7_inst_rvc_o = f7_inst_rvc_o__w1
   f7_inst_valid_o = unsigned((f7_valid != 0) and (dbg_clear_f7 == 0))
-  f7_stall = f7_stall__wtmp
 }

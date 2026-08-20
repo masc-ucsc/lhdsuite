@@ -59,6 +59,13 @@ pub mod minion_top::[timecheck=false](clk_i:u1, rst_c_ni:u1, rst_d_ni:u1, rst_w_
   mut `id_vpu_decoder_sigs.mul` = 0
   mut `id_vpu_decoder_sigs.round` = 0
   mut `id_vpu_decoder_sigs.wflags` = 0
+  mut `intpipe_dbg_match.id_csr_interrupt` = 0
+  mut `intpipe_dbg_match.excl_mode_stall` = 0
+  mut `intpipe_dbg_match.ipi_with_pc` = 0
+  mut `intpipe_dbg_match.id_xcpt` = 0
+  mut `intpipe_dbg_match.wb_xcpt` = 0
+  mut `intpipe_dbg_match.csr_fe_stall` = 0
+  mut `intpipe_dbg_match.id_do_fence` = 0
   mut `minion_dbg_signals_next.filter_signals` = 0
   mut `minion_dbg_signals_next.filter_valid` = 0
   mut `minion_dbg_signals_next.match_signals` = 0
@@ -103,12 +110,12 @@ pub mod minion_top::[timecheck=false](clk_i:u1, rst_c_ni:u1, rst_d_ni:u1, rst_w_
   wire sm_filter_debug_signals_dc:u200
   wire sm_data_debug_signals_dc:u512
   mut mem_ctrl_override:u2 = 0
-  minion_dbg_signals_o.data_signals = minion_dbg_signals_o_q#[1..=128]
-  minion_dbg_signals_o.data_valid = minion_dbg_signals_o_q & 1
   minion_dbg_signals_o.filter_signals = minion_dbg_signals_o_q#[195..=394]
   minion_dbg_signals_o.filter_valid = (minion_dbg_signals_o_q >> 0xc2) & 1
   minion_dbg_signals_o.match_signals = minion_dbg_signals_o_q#[130..=193]
   minion_dbg_signals_o.match_valid = (minion_dbg_signals_o_q >> 0x81) & 1
+  minion_dbg_signals_o.data_signals = minion_dbg_signals_o_q#[1..=128]
+  minion_dbg_signals_o.data_valid = minion_dbg_signals_o_q & 1
   mut u_rst_sync_c = prim_rst_sync::[name=u_rst_sync_c](clk_i = clk_i, rst_ni = rst_c_ni, dft_i.scanmode = dft_i.scanmode, dft_i.scan_reset_n = dft_i.scan_reset_n, dft_i.sram_clk_override = dft_i.sram_clk_override, dft_i.ram_rei = dft_i.ram_rei, dft_i.ram_wei = dft_i.ram_wei)
   const rst_c_sync_ni__w1 = u_rst_sync_c
   mut u_rst_sync_d = prim_rst_sync::[name=u_rst_sync_d](clk_i = clk_i, rst_ni = rst_d_ni, dft_i.scanmode = dft_i.scanmode, dft_i.scan_reset_n = dft_i.scan_reset_n, dft_i.sram_clk_override = dft_i.sram_clk_override, dft_i.ram_rei = dft_i.ram_rei, dft_i.ram_wei = dft_i.ram_wei)
@@ -118,20 +125,21 @@ pub mod minion_top::[timecheck=false](clk_i:u1, rst_c_ni:u1, rst_d_ni:u1, rst_w_
   debug_in_reg_q = (debug_in_i.halt << 6) | (debug_in_i.resume << 4) | (debug_in_i.resethalt << 2) | debug_in_i.ackhavereset
   enabled_reg_q = enabled_i
   if minion_dbg_signals_mux_ff#[2..=5] > 5 {
-    `minion_dbg_signals_next.data_signals` = minion_dbg_signals_1_q#[1..=128]
-    `minion_dbg_signals_next.data_valid` = minion_dbg_signals_1_q & 1
     `minion_dbg_signals_next.filter_signals` = minion_dbg_signals_1_q#[195..=394]
     `minion_dbg_signals_next.filter_valid` = (minion_dbg_signals_1_q >> 0xc2) & 1
     `minion_dbg_signals_next.match_signals` = minion_dbg_signals_1_q#[130..=193]
     `minion_dbg_signals_next.match_valid` = (minion_dbg_signals_1_q >> 0x81) & 1
+    `minion_dbg_signals_next.data_signals` = minion_dbg_signals_1_q#[1..=128]
+    `minion_dbg_signals_next.data_valid` = minion_dbg_signals_1_q & 1
   } else {
-    `minion_dbg_signals_next.data_signals` = minion_dbg_signals_0_q#[1..=128]
-    `minion_dbg_signals_next.data_valid` = minion_dbg_signals_0_q & 1
     `minion_dbg_signals_next.filter_signals` = minion_dbg_signals_0_q#[195..=394]
     `minion_dbg_signals_next.filter_valid` = (minion_dbg_signals_0_q >> 0xc2) & 1
     `minion_dbg_signals_next.match_signals` = minion_dbg_signals_0_q#[130..=193]
     `minion_dbg_signals_next.match_valid` = (minion_dbg_signals_0_q >> 0x81) & 1
+    `minion_dbg_signals_next.data_signals` = minion_dbg_signals_0_q#[1..=128]
+    `minion_dbg_signals_next.data_valid` = minion_dbg_signals_0_q & 1
   }
+  mem_ctrl_override = 0sb?
   mut mem_ctrl_override__w2 = 0
   mem_ctrl_override__w2#[1] = dft_i.ram_wei & 1
   mut mem_ctrl_override__w3 = mem_ctrl_override__w2
@@ -148,144 +156,128 @@ pub mod minion_top::[timecheck=false](clk_i:u1, rst_c_ni:u1, rst_d_ni:u1, rst_w_
   const `intpipe_dbg_match.wb_xcpt__w1` = intpipe_debug_monitor_out.wb_xcpt & 1
   const `intpipe_dbg_match.csr_fe_stall__w1` = intpipe_debug_monitor_out.csr_fe_stall & 1
   const `intpipe_dbg_match.id_do_fence__w1` = intpipe_debug_monitor_out.id_do_fence & 1
-  mut `intpipe_dbg_match.csr_fe_stall` = 0
-  mut `intpipe_dbg_match.excl_mode_stall` = 0
-  mut `intpipe_dbg_match.id_csr_interrupt` = 0
-  mut `intpipe_dbg_match.id_do_fence` = 0
-  mut `intpipe_dbg_match.id_xcpt` = 0
-  mut `intpipe_dbg_match.ipi_with_pc` = 0
-  mut `intpipe_dbg_match.wb_xcpt` = 0
-  `minion_dbg_signals_next_0.data_signals` = 0
-  `minion_dbg_signals_next_0.data_valid` = 0
-  `minion_dbg_signals_next_0.filter_signals` = 0
-  `minion_dbg_signals_next_0.filter_valid` = 0
-  `minion_dbg_signals_next_0.match_signals` = 0
-  `minion_dbg_signals_next_0.match_valid` = 0
   match minion_dbg_signals_mux_ff#[2..=6] {
     == 0 {
-      `minion_dbg_signals_next_0.data_signals` = ((vpu_dbg_data << 0x80) >> ((minion_dbg_signals_mux_ff#[0..=1] * 0x80) + 0x80))#[0..=127]
-      `minion_dbg_signals_next_0.data_valid` = 1
-      `minion_dbg_signals_next_0.filter_signals` = vpu_dbg_filter
       `minion_dbg_signals_next_0.filter_valid` = 1
-      `minion_dbg_signals_next_0.match_signals` = vpu_dbg_match
       `minion_dbg_signals_next_0.match_valid` = 1
+      `minion_dbg_signals_next_0.data_valid` = 1
+      `minion_dbg_signals_next_0.match_signals` = vpu_dbg_match
+      `minion_dbg_signals_next_0.filter_signals` = vpu_dbg_filter
+      `minion_dbg_signals_next_0.data_signals` = ((vpu_dbg_data << 0x80) >> ((minion_dbg_signals_mux_ff#[0..=1] * 0x80) + 0x80))#[0..=127]
     }
     == 1 {
-      `minion_dbg_signals_next_0.data_signals` = vpu_dbg_data#[512..=639]
-      `minion_dbg_signals_next_0.data_valid` = 1
-      `minion_dbg_signals_next_0.filter_signals` = vpu_dbg_filter
       `minion_dbg_signals_next_0.filter_valid` = 1
-      `minion_dbg_signals_next_0.match_signals` = vpu_dbg_match
       `minion_dbg_signals_next_0.match_valid` = 1
+      `minion_dbg_signals_next_0.data_valid` = 1
+      `minion_dbg_signals_next_0.match_signals` = vpu_dbg_match
+      `minion_dbg_signals_next_0.filter_signals` = vpu_dbg_filter
+      `minion_dbg_signals_next_0.data_signals` = vpu_dbg_data#[512..=639]
     }
     == 2 {
-      gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
+      `minion_dbg_signals_next_0.filter_valid` = 1
+      `minion_dbg_signals_next_0.match_valid` = 1
+      `minion_dbg_signals_next_0.data_valid` = 1
+      `minion_dbg_signals_next_0.match_signals` = sm_match_debug_signals_tl0
+      `minion_dbg_signals_next_0.filter_signals` = sm_filter_debug_signals_tl0
+      gen_debug_monitor_data_i = 0ub????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
       gen_debug_monitor_data_i = sm_data_debug_signals_tl0
+      gen_debug_monitor_sel_i = 0ub??
+      gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
+      gen_debug_monitor_dcache_dbg_data_group = 0ub????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
       gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 0x80) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 0x80))#[0..=127]
       `minion_dbg_signals_next_0.data_signals` = gen_debug_monitor_dcache_dbg_data_group
-      `minion_dbg_signals_next_0.data_valid` = 1
-      `minion_dbg_signals_next_0.filter_signals` = sm_filter_debug_signals_tl0
-      `minion_dbg_signals_next_0.filter_valid` = 1
-      `minion_dbg_signals_next_0.match_signals` = sm_match_debug_signals_tl0
-      `minion_dbg_signals_next_0.match_valid` = 1
     }
     == 3 {
-      gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
+      `minion_dbg_signals_next_0.filter_valid` = 1
+      `minion_dbg_signals_next_0.match_valid` = 1
+      `minion_dbg_signals_next_0.data_valid` = 1
+      `minion_dbg_signals_next_0.match_signals` = sm_match_debug_signals_tl1
+      `minion_dbg_signals_next_0.filter_signals` = sm_filter_debug_signals_tl1
       gen_debug_monitor_data_i = sm_data_debug_signals_tl1
+      gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
       gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 0x80) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 0x80))#[0..=127]
       `minion_dbg_signals_next_0.data_signals` = gen_debug_monitor_dcache_dbg_data_group
-      `minion_dbg_signals_next_0.data_valid` = 1
-      `minion_dbg_signals_next_0.filter_signals` = sm_filter_debug_signals_tl1
-      `minion_dbg_signals_next_0.filter_valid` = 1
-      `minion_dbg_signals_next_0.match_signals` = sm_match_debug_signals_tl1
-      `minion_dbg_signals_next_0.match_valid` = 1
     }
     == 4 {
-      gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
+      `minion_dbg_signals_next_0.filter_valid` = 1
+      `minion_dbg_signals_next_0.match_valid` = 1
+      `minion_dbg_signals_next_0.data_valid` = 1
+      `minion_dbg_signals_next_0.match_signals` = sm_match_debug_signals_ts
+      `minion_dbg_signals_next_0.filter_signals` = sm_filter_debug_signals_ts
       gen_debug_monitor_data_i = sm_data_debug_signals_ts
+      gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
       gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 0x80) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 0x80))#[0..=127]
       `minion_dbg_signals_next_0.data_signals` = gen_debug_monitor_dcache_dbg_data_group
-      `minion_dbg_signals_next_0.data_valid` = 1
-      `minion_dbg_signals_next_0.filter_signals` = sm_filter_debug_signals_ts
-      `minion_dbg_signals_next_0.filter_valid` = 1
-      `minion_dbg_signals_next_0.match_signals` = sm_match_debug_signals_ts
-      `minion_dbg_signals_next_0.match_valid` = 1
     }
     == 5 {
-      gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
+      `minion_dbg_signals_next_0.filter_valid` = 1
+      `minion_dbg_signals_next_0.match_valid` = 1
+      `minion_dbg_signals_next_0.data_valid` = 1
+      `minion_dbg_signals_next_0.match_signals` = sm_match_debug_signals_co
+      `minion_dbg_signals_next_0.filter_signals` = sm_filter_debug_signals_co
       gen_debug_monitor_data_i = sm_data_debug_signals_co
+      gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
       gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 0x80) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 0x80))#[0..=127]
       `minion_dbg_signals_next_0.data_signals` = gen_debug_monitor_dcache_dbg_data_group
-      `minion_dbg_signals_next_0.data_valid` = 1
-      `minion_dbg_signals_next_0.filter_signals` = sm_filter_debug_signals_co
-      `minion_dbg_signals_next_0.filter_valid` = 1
-      `minion_dbg_signals_next_0.match_signals` = sm_match_debug_signals_co
-      `minion_dbg_signals_next_0.match_valid` = 1
     }
     else {
     }
   }
-  `minion_dbg_signals_next_1.data_signals` = 0
-  `minion_dbg_signals_next_1.data_valid` = 0
-  `minion_dbg_signals_next_1.filter_signals` = 0
-  `minion_dbg_signals_next_1.filter_valid` = 0
-  `minion_dbg_signals_next_1.match_signals` = 0
-  `minion_dbg_signals_next_1.match_valid` = 0
   match minion_dbg_signals_mux_ff#[2..=6] {
     == 6 {
-      gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
+      `minion_dbg_signals_next_1.filter_valid` = 1
+      `minion_dbg_signals_next_1.match_valid` = 1
+      `minion_dbg_signals_next_1.data_valid` = 1
+      `minion_dbg_signals_next_1.match_signals` = sm_match_debug_signals_col2
+      `minion_dbg_signals_next_1.filter_signals` = sm_filter_debug_signals_col2
       gen_debug_monitor_data_i = sm_data_debug_signals_col2
+      gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
       gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 0x80) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 0x80))#[0..=127]
       `minion_dbg_signals_next_1.data_signals` = gen_debug_monitor_dcache_dbg_data_group
-      `minion_dbg_signals_next_1.data_valid` = 1
-      `minion_dbg_signals_next_1.filter_signals` = sm_filter_debug_signals_col2
-      `minion_dbg_signals_next_1.filter_valid` = 1
-      `minion_dbg_signals_next_1.match_signals` = sm_match_debug_signals_col2
-      `minion_dbg_signals_next_1.match_valid` = 1
     }
     == 7 {
-      gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
+      `minion_dbg_signals_next_1.filter_valid` = 1
+      `minion_dbg_signals_next_1.match_valid` = 1
+      `minion_dbg_signals_next_1.data_valid` = 1
+      `minion_dbg_signals_next_1.match_signals` = sm_match_debug_signals_mh#[0..=63]
+      `minion_dbg_signals_next_1.filter_signals` = sm_filter_debug_signals_mh#[0..=199]
       gen_debug_monitor_data_i = sm_data_debug_signals_mh#[0..=511]
+      gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
       gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 0x80) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 0x80))#[0..=127]
       `minion_dbg_signals_next_1.data_signals` = gen_debug_monitor_dcache_dbg_data_group
-      `minion_dbg_signals_next_1.data_valid` = 1
-      `minion_dbg_signals_next_1.filter_signals` = sm_filter_debug_signals_mh#[0..=199]
-      `minion_dbg_signals_next_1.filter_valid` = 1
-      `minion_dbg_signals_next_1.match_signals` = sm_match_debug_signals_mh#[0..=63]
-      `minion_dbg_signals_next_1.match_valid` = 1
     }
     == 8 {
-      gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
+      `minion_dbg_signals_next_1.filter_valid` = 1
+      `minion_dbg_signals_next_1.match_valid` = 1
+      `minion_dbg_signals_next_1.data_valid` = 1
+      `minion_dbg_signals_next_1.match_signals` = sm_match_debug_signals_mh#[64..=127]
+      `minion_dbg_signals_next_1.filter_signals` = sm_filter_debug_signals_mh#[200..=399]
       gen_debug_monitor_data_i = sm_data_debug_signals_mh#[512..=1023]
+      gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
       gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 0x80) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 0x80))#[0..=127]
       `minion_dbg_signals_next_1.data_signals` = gen_debug_monitor_dcache_dbg_data_group
-      `minion_dbg_signals_next_1.data_valid` = 1
-      `minion_dbg_signals_next_1.filter_signals` = sm_filter_debug_signals_mh#[200..=399]
-      `minion_dbg_signals_next_1.filter_valid` = 1
-      `minion_dbg_signals_next_1.match_signals` = sm_match_debug_signals_mh#[64..=127]
-      `minion_dbg_signals_next_1.match_valid` = 1
     }
     == 9 {
-      gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
+      `minion_dbg_signals_next_1.filter_valid` = 1
+      `minion_dbg_signals_next_1.match_valid` = 1
+      `minion_dbg_signals_next_1.data_valid` = 1
+      `minion_dbg_signals_next_1.match_signals` = sm_match_debug_signals_dc
+      `minion_dbg_signals_next_1.filter_signals` = sm_filter_debug_signals_dc
       gen_debug_monitor_data_i = sm_data_debug_signals_dc
+      gen_debug_monitor_sel_i = minion_dbg_signals_mux_ff#[0..=1]
       gen_debug_monitor_dcache_dbg_data_group = ((gen_debug_monitor_data_i << 0x80) >> ((gen_debug_monitor_sel_i * minion_dcache_pkg.DcacheDbgSmDataGroupBits) + 0x80))#[0..=127]
       `minion_dbg_signals_next_1.data_signals` = gen_debug_monitor_dcache_dbg_data_group
-      `minion_dbg_signals_next_1.data_valid` = 1
-      `minion_dbg_signals_next_1.filter_signals` = sm_filter_debug_signals_dc
-      `minion_dbg_signals_next_1.filter_valid` = 1
-      `minion_dbg_signals_next_1.match_signals` = sm_match_debug_signals_dc
-      `minion_dbg_signals_next_1.match_valid` = 1
     }
     == 10 {
+      `minion_dbg_signals_next_1.filter_valid` = 1
+      `minion_dbg_signals_next_1.match_valid` = 1
+      `minion_dbg_signals_next_1.data_valid` = 1
       `minion_dbg_signals_next_1.filter_signals` = 0
+      `minion_dbg_signals_next_1.filter_signals`#[0..=79] = (intpipe_debug_monitor_out.id_thread_id << 0x4f) | (intpipe_debug_monitor_out.id_pc << 30) | (intpipe_debug_monitor_out.id_valid << 29) | (intpipe_debug_monitor_out.id_valid_qual << 28) | (intpipe_debug_monitor_out.id_inst_replay << 27) | (intpipe_debug_monitor_out.id_take_pc << 26) | (intpipe_debug_monitor_out.id_csr_interrupt << 25) | (intpipe_debug_monitor_out.excl_mode_stall << 24) | (intpipe_debug_monitor_out.ex_valid_qual << 23) | (intpipe_debug_monitor_out.tag_valid_qual << 22) | (intpipe_debug_monitor_out.mem_valid_qual << 21) | (intpipe_debug_monitor_out.wb_valid << 20) | (intpipe_debug_monitor_out.gsc_reg_gsc_cnt << 17) | (intpipe_debug_monitor_out.tag_take_pc << 16) | (intpipe_debug_monitor_out.ipi_with_pc << 14) | (intpipe_debug_monitor_out.wb_take_pc << 13) | (intpipe_debug_monitor_out.id_xcpt << 12) | (intpipe_debug_monitor_out.wb_xcpt << 11) | (intpipe_debug_monitor_out.id_stall_fp2int << 10) | (intpipe_debug_monitor_out.ex_gsc_busy << 9) | (intpipe_debug_monitor_out.csr_fe_stall << 8) | (intpipe_debug_monitor_out.id_ctrl_stall_csr << 7) | (intpipe_debug_monitor_out.id_ctrl_stall_dcache << 6) | (intpipe_debug_monitor_out.id_do_fence << 5) | (intpipe_debug_monitor_out.id_ctrl_stall_trans << 4) | (intpipe_debug_monitor_out.id_ctrl_stall_div << 3) | (intpipe_debug_monitor_out.id_int_sboard_hazard << 2) | (intpipe_debug_monitor_out.id_ctrl_stall_hazard_vpu << 1) | intpipe_debug_monitor_out.id_ctrl_stall_hazard
       `minion_dbg_signals_next_1.match_signals` = 0
+      `minion_dbg_signals_next_1.match_signals`#[0..=7] = (`intpipe_dbg_match.id_csr_interrupt__w1` << 7) | (`intpipe_dbg_match.excl_mode_stall__w1` << 6) | (`intpipe_dbg_match.ipi_with_pc__w1` << 4) | (`intpipe_dbg_match.id_xcpt__w1` << 3) | (`intpipe_dbg_match.wb_xcpt__w1` << 2) | (`intpipe_dbg_match.csr_fe_stall__w1` << 1) | `intpipe_dbg_match.id_do_fence__w1`
       `minion_dbg_signals_next_1.data_signals` = 0
       `minion_dbg_signals_next_1.data_signals`#[0..=79] = (intpipe_debug_monitor_out.id_thread_id << 0x4f) | (intpipe_debug_monitor_out.id_pc << 30) | (intpipe_debug_monitor_out.id_valid << 29) | (intpipe_debug_monitor_out.id_valid_qual << 28) | (intpipe_debug_monitor_out.id_inst_replay << 27) | (intpipe_debug_monitor_out.id_take_pc << 26) | (intpipe_debug_monitor_out.id_csr_interrupt << 25) | (intpipe_debug_monitor_out.excl_mode_stall << 24) | (intpipe_debug_monitor_out.ex_valid_qual << 23) | (intpipe_debug_monitor_out.tag_valid_qual << 22) | (intpipe_debug_monitor_out.mem_valid_qual << 21) | (intpipe_debug_monitor_out.wb_valid << 20) | (intpipe_debug_monitor_out.gsc_reg_gsc_cnt << 17) | (intpipe_debug_monitor_out.tag_take_pc << 16) | (intpipe_debug_monitor_out.ipi_with_pc << 14) | (intpipe_debug_monitor_out.wb_take_pc << 13) | (intpipe_debug_monitor_out.id_xcpt << 12) | (intpipe_debug_monitor_out.wb_xcpt << 11) | (intpipe_debug_monitor_out.id_stall_fp2int << 10) | (intpipe_debug_monitor_out.ex_gsc_busy << 9) | (intpipe_debug_monitor_out.csr_fe_stall << 8) | (intpipe_debug_monitor_out.id_ctrl_stall_csr << 7) | (intpipe_debug_monitor_out.id_ctrl_stall_dcache << 6) | (intpipe_debug_monitor_out.id_do_fence << 5) | (intpipe_debug_monitor_out.id_ctrl_stall_trans << 4) | (intpipe_debug_monitor_out.id_ctrl_stall_div << 3) | (intpipe_debug_monitor_out.id_int_sboard_hazard << 2) | (intpipe_debug_monitor_out.id_ctrl_stall_hazard_vpu << 1) | intpipe_debug_monitor_out.id_ctrl_stall_hazard
-      `minion_dbg_signals_next_1.data_valid` = 1
-      `minion_dbg_signals_next_1.filter_signals`#[0..=79] = (intpipe_debug_monitor_out.id_thread_id << 0x4f) | (intpipe_debug_monitor_out.id_pc << 30) | (intpipe_debug_monitor_out.id_valid << 29) | (intpipe_debug_monitor_out.id_valid_qual << 28) | (intpipe_debug_monitor_out.id_inst_replay << 27) | (intpipe_debug_monitor_out.id_take_pc << 26) | (intpipe_debug_monitor_out.id_csr_interrupt << 25) | (intpipe_debug_monitor_out.excl_mode_stall << 24) | (intpipe_debug_monitor_out.ex_valid_qual << 23) | (intpipe_debug_monitor_out.tag_valid_qual << 22) | (intpipe_debug_monitor_out.mem_valid_qual << 21) | (intpipe_debug_monitor_out.wb_valid << 20) | (intpipe_debug_monitor_out.gsc_reg_gsc_cnt << 17) | (intpipe_debug_monitor_out.tag_take_pc << 16) | (intpipe_debug_monitor_out.ipi_with_pc << 14) | (intpipe_debug_monitor_out.wb_take_pc << 13) | (intpipe_debug_monitor_out.id_xcpt << 12) | (intpipe_debug_monitor_out.wb_xcpt << 11) | (intpipe_debug_monitor_out.id_stall_fp2int << 10) | (intpipe_debug_monitor_out.ex_gsc_busy << 9) | (intpipe_debug_monitor_out.csr_fe_stall << 8) | (intpipe_debug_monitor_out.id_ctrl_stall_csr << 7) | (intpipe_debug_monitor_out.id_ctrl_stall_dcache << 6) | (intpipe_debug_monitor_out.id_do_fence << 5) | (intpipe_debug_monitor_out.id_ctrl_stall_trans << 4) | (intpipe_debug_monitor_out.id_ctrl_stall_div << 3) | (intpipe_debug_monitor_out.id_int_sboard_hazard << 2) | (intpipe_debug_monitor_out.id_ctrl_stall_hazard_vpu << 1) | intpipe_debug_monitor_out.id_ctrl_stall_hazard
-      `minion_dbg_signals_next_1.filter_valid` = 1
-      `minion_dbg_signals_next_1.match_signals`#[0..=7] = (`intpipe_dbg_match.id_csr_interrupt__w1` << 7) | (`intpipe_dbg_match.excl_mode_stall__w1` << 6) | (`intpipe_dbg_match.ipi_with_pc__w1` << 4) | (`intpipe_dbg_match.id_xcpt__w1` << 3) | (`intpipe_dbg_match.wb_xcpt__w1` << 2) | (`intpipe_dbg_match.csr_fe_stall__w1` << 1) | `intpipe_dbg_match.id_do_fence__w1`
-      `minion_dbg_signals_next_1.match_valid` = 1
     }
     else {
     }
@@ -293,48 +285,48 @@ pub mod minion_top::[timecheck=false](clk_i:u1, rst_c_ni:u1, rst_d_ni:u1, rst_w_
   if minion_dbg_sig_enable_i != 0 {
     minion_dbg_signals_0_q = (`minion_dbg_signals_next_0.filter_signals` << 0xc3) | (`minion_dbg_signals_next_0.filter_valid` << 0xc2) | (`minion_dbg_signals_next_0.match_signals` << 0x82) | (`minion_dbg_signals_next_0.match_valid` << 0x81) | (`minion_dbg_signals_next_0.data_signals` << 1) | `minion_dbg_signals_next_0.data_valid`
     minion_dbg_signals_1_q = (`minion_dbg_signals_next_1.filter_signals` << 0xc3) | (`minion_dbg_signals_next_1.filter_valid` << 0xc2) | (`minion_dbg_signals_next_1.match_signals` << 0x82) | (`minion_dbg_signals_next_1.match_valid` << 0x81) | (`minion_dbg_signals_next_1.data_signals` << 1) | `minion_dbg_signals_next_1.data_valid`
-    minion_dbg_signals_mux_ff = minion_dbg_signals_mux_i
     minion_dbg_signals_o_q = (`minion_dbg_signals_next.filter_signals` << 0xc3) | (`minion_dbg_signals_next.filter_valid` << 0xc2) | (`minion_dbg_signals_next.match_signals` << 0x82) | (`minion_dbg_signals_next.match_valid` << 0x81) | (`minion_dbg_signals_next.data_signals` << 1) | `minion_dbg_signals_next.data_valid`
+    minion_dbg_signals_mux_ff = minion_dbg_signals_mux_i
   }
   mut u_core = core_top::[name=u_core](clk_i = clk_i, rst_c_ni = rst_c_sync_ni__w1, rst_w_ni = u_rst_sync_w, rst_d_ni = u_rst_sync_d, dft_i.scanmode = dft_i.scanmode, dft_i.scan_reset_n = dft_i.scan_reset_n, dft_i.sram_clk_override = dft_i.sram_clk_override, dft_i.ram_rei = dft_i.ram_rei, dft_i.ram_wei = dft_i.ram_wei, ioshire_i = ioshire_i, chicken_bit_dcache_i = (chicken_bits_clock_gate_disable_q >> 4) & 1, chicken_bit_intpipe_i = chicken_bits_clock_gate_disable_q & 1, chicken_bit_frontend_i = (chicken_bits_clock_gate_disable_q >> 5) & 1, l2_dcache_evict_req_ready_i = l2_dcache_evict_req_ready_i, l2_dcache_miss_req_ready_i = l2_dcache_miss_req_ready_i, l2_dcache_resp_valid_i = l2_dcache_resp_valid_i, l2_dcache_resp_i.id = l2_dcache_resp_i.id, l2_dcache_resp_i.dest = l2_dcache_resp_i.dest, l2_dcache_resp_i.wdata = l2_dcache_resp_i.wdata, l2_dcache_resp_i.opcode = l2_dcache_resp_i.opcode, l2_dcache_resp_i.data = l2_dcache_resp_i.data, l2_dcache_resp_i.size = l2_dcache_resp_i.size, l2_dcache_resp_i.qwen = l2_dcache_resp_i.qwen, icache_req_ready_i = icache_req_ready_i, icache_resp_valid_i = icache_resp_valid_i, icache_resp_miss_i = icache_resp_miss_i, icache_resp_i.data = icache_resp_i.data, icache_resp_i.page_fault = icache_resp_i.page_fault, icache_resp_i.access_fault = icache_resp_i.access_fault, icache_resp_i.cacheable = icache_resp_i.cacheable, icache_resp_i.bus_err = icache_resp_i.bus_err, icache_resp_i.ecc_err = icache_resp_i.ecc_err, icache_fill_done_i = icache_fill_done_i, dc_ptw_req_ready_i = dc_ptw_req_ready_i, ptw_dc_resp_data_i.canceled_req = ptw_dc_resp_data_i.canceled_req, ptw_dc_resp_data_i.access_fault = ptw_dc_resp_data_i.access_fault, ptw_dc_resp_data_i.rsvd_for_hw = ptw_dc_resp_data_i.rsvd_for_hw, ptw_dc_resp_data_i.ppn = ptw_dc_resp_data_i.ppn, ptw_dc_resp_data_i.rsvd_for_sw = ptw_dc_resp_data_i.rsvd_for_sw, ptw_dc_resp_data_i.d = ptw_dc_resp_data_i.d, ptw_dc_resp_data_i.a = ptw_dc_resp_data_i.a, ptw_dc_resp_data_i.g = ptw_dc_resp_data_i.g, ptw_dc_resp_data_i.u = ptw_dc_resp_data_i.u, ptw_dc_resp_data_i.x = ptw_dc_resp_data_i.x, ptw_dc_resp_data_i.w = ptw_dc_resp_data_i.w, ptw_dc_resp_data_i.r = ptw_dc_resp_data_i.r, ptw_dc_resp_data_i.v = ptw_dc_resp_data_i.v, ptw_dc_resp_valid_i = ptw_dc_resp_valid_i, interrupts_i.mieco = interrupts_i.mieco, interrupts_i.mtip = interrupts_i.mtip, interrupts_i.msip = interrupts_i.msip, interrupts_i.meip = interrupts_i.meip, interrupts_i.seip = interrupts_i.seip, interrupts_i.fcc = interrupts_i.fcc, interrupts_i.ipi_with_pc = interrupts_i.ipi_with_pc, interrupts_i.ipi_pc = interrupts_i.ipi_pc, shire_id_i = shire_id_i, shire_min_id_i = shire_min_id_i, `enabled_i.e1` = (enabled_reg_q >> 1) & 1, `enabled_i.e0` = enabled_reg_q & 1, reset_vector_i = reset_vector_i, mprot_i.enable_secure_memory = mprot_i.enable_secure_memory, mprot_i.dram_size = mprot_i.dram_size, mprot_i.disable_osbox_access = mprot_i.disable_osbox_access, mprot_i.disable_pcie_access = mprot_i.disable_pcie_access, mprot_i.io_access_mode = mprot_i.io_access_mode, vmspagesize_i = vmspagesize_i, `vpu_dcache_ctl_i.scp_req.read_en` = (vpu_dcache_ctl.scp_req >> 15) & 1, `vpu_dcache_ctl_i.scp_req.way` = vpu_dcache_ctl.scp_req#[13..=14], `vpu_dcache_ctl_i.scp_req.addr` = vpu_dcache_ctl.scp_req#[3..=12], `vpu_dcache_ctl_i.scp_req.size64` = (vpu_dcache_ctl.scp_req >> 2) & 1, `vpu_dcache_ctl_i.scp_req.size256` = (vpu_dcache_ctl.scp_req >> 1) & 1, `vpu_dcache_ctl_i.scp_req.bid` = vpu_dcache_ctl.scp_req & 1, `vpu_dcache_ctl_i.tenb_credit` = vpu_dcache_ctl.tenb_credit, `vpu_dcache_ctl_i.tenb_credit_entry` = vpu_dcache_ctl.tenb_credit_entry, `vpu_dcache_ctl_i.tfma_enabled` = vpu_dcache_ctl.tfma_enabled, `vpu_dcache_ctl_i.reduce_wait` = vpu_dcache_ctl.reduce_wait, `vpu_dcache_ctl_i.tfma_rf_write` = vpu_dcache_ctl.tfma_rf_write, `id_vpu_ctrl_i.m0ren` = id_vpu_core_ctrl.m0ren, `id_vpu_ctrl_i.mallren` = id_vpu_core_ctrl.mallren, `id_vpu_ctrl_i.mren1` = id_vpu_core_ctrl.mren1, `id_vpu_ctrl_i.mren2` = id_vpu_core_ctrl.mren2, `id_vpu_ctrl_i.wen` = id_vpu_core_ctrl.wen, `id_vpu_ctrl_i.ren1` = id_vpu_core_ctrl.ren1, `id_vpu_ctrl_i.ren2` = id_vpu_core_ctrl.ren2, `id_vpu_ctrl_i.ren3` = id_vpu_core_ctrl.ren3, `id_vpu_ctrl_i.rend` = id_vpu_core_ctrl.rend, `id_vpu_ctrl_i.is_trans` = id_vpu_core_ctrl.is_trans, `id_vpu_ctrl_i.trans_busy` = id_vpu_core_ctrl.trans_busy, `id_vpu_ctrl_i.id_trans_insert` = id_vpu_core_ctrl.id_trans_insert, `id_vpu_ctrl_i.scoreboard.fp_valid` = id_vpu_core_ctrl.scoreboard#[150..=163], `id_vpu_ctrl_i.scoreboard.fp_dest` = id_vpu_core_ctrl.scoreboard#[52..=149], `id_vpu_ctrl_i.scoreboard.toint_valid` = id_vpu_core_ctrl.scoreboard#[48..=51], `id_vpu_ctrl_i.scoreboard.toint_dest` = id_vpu_core_ctrl.scoreboard#[20..=47], `id_vpu_ctrl_i.scoreboard.mask_valid` = id_vpu_core_ctrl.scoreboard#[16..=19], `id_vpu_ctrl_i.scoreboard.mask_dest` = id_vpu_core_ctrl.scoreboard#[0..=15], `id_vpu_ctrl_i.tfma_enabled` = id_vpu_core_ctrl.tfma_enabled, `id_vpu_ctrl_i.tfma_wrrf_enabled` = id_vpu_core_ctrl.tfma_wrrf_enabled, `id_vpu_ctrl_i.tquant_enabled` = id_vpu_core_ctrl.tquant_enabled, `id_vpu_ctrl_i.reduce_enabled` = id_vpu_core_ctrl.reduce_enabled, `id_vpu_ctrl_i.fflags_stall` = id_vpu_core_ctrl.fflags_stall, `id_vpu_ctrl_i.fromint` = id_vpu_core_ctrl.fromint, `ex_vpu_ctrl_i.tointm` = ex_vpu_core_ctrl.tointm, `ex_vpu_ctrl_i.illegal_rm` = ex_vpu_core_ctrl.illegal_rm, `ex_vpu_ctrl_i.ps_mask` = ex_vpu_core_ctrl.ps_mask, `ex_vpu_ctrl_i.gsc_fs` = ex_vpu_core_ctrl.gsc_fs, `f2_vpu_ctrl_i.fma` = f2_vpu_core_ctrl.fma, `f2_vpu_ctrl_i.store_data` = f2_vpu_core_ctrl.store_data, `f2_vpu_ctrl_i.scatter_data` = f2_vpu_core_ctrl.scatter_data, `f2_vpu_ctrl_i.tointm` = f2_vpu_core_ctrl.tointm, `f3_vpu_ctrl_i.fma` = f3_vpu_core_ctrl.fma, `f3_vpu_ctrl_i.tointm` = f3_vpu_core_ctrl.tointm, `wb_vpu_ctrl_i.fma` = wb_vpu_core_ctrl.fma, `wb_vpu_ctrl_i.toint_data` = wb_vpu_core_ctrl.toint_data, `wb_vpu_ctrl_i.mova_mx` = wb_vpu_core_ctrl.mova_mx, `wb_vpu_ctrl_i.fcsr_flags_valid` = wb_vpu_core_ctrl.fcsr_flags_valid, `wb_vpu_ctrl_i.fcsr_flags` = wb_vpu_core_ctrl.fcsr_flags, `wb_vpu_ctrl_i.thread_id` = wb_vpu_core_ctrl.thread_id, `wb_vpu_ctrl_i.tointm` = wb_vpu_core_ctrl.tointm, flb_neigh_resp_valid_i = flb_neigh_resp_valid_i, flb_neigh_resp_data_i = flb_neigh_resp_data_i, te_thread_sel_i = te_thread_sel_i, te_enable_i = te_enable_i, apb_paddr_i = apb_paddr_i, apb_pwrite_i = apb_pwrite_i, apb_psel_i = apb_psel_i, apb_penable_i = apb_penable_i, apb_pwdata_i = apb_pwdata_i, debug_in_i.halt = debug_in_reg_q#[6..=7], debug_in_i.resume = debug_in_reg_q#[4..=5], debug_in_i.resethalt = debug_in_reg_q#[2..=3], debug_in_i.ackhavereset = debug_in_reg_q#[0..=1], esr_features_i.disable_lock_unlock = esr_features_i.disable_lock_unlock, esr_features_i.disable_multithreading = esr_features_i.disable_multithreading, esr_features_i.trap_on_u_scp = esr_features_i.trap_on_u_scp, esr_features_i.trap_on_u_cacheops = esr_features_i.trap_on_u_cacheops, esr_features_i.trap_on_ml = esr_features_i.trap_on_ml, esr_features_i.trap_on_gfx = esr_features_i.trap_on_gfx, esr_bypass_dcache_i = esr_bypass_dcache_i, esr_shire_coop_mode_i = esr_shire_coop_mode_i, mem_ctrl_override_i = mem_ctrl_override, pmu_read_data_i = pmu_read_data_i, io_events_vpu_i = io_events_vpu)
-  `id_vpu_decoder_sigs.cmd` = u_core["id_vpu_decoder_sigs_o.cmd"]
-  `id_vpu_decoder_sigs.txfma` = u_core["id_vpu_decoder_sigs_o.txfma"]
-  `id_vpu_decoder_sigs.shsw` = u_core["id_vpu_decoder_sigs_o.shsw"]
-  `id_vpu_decoder_sigs.rom` = u_core["id_vpu_decoder_sigs_o.rom"]
-  `id_vpu_decoder_sigs.scatter` = u_core["id_vpu_decoder_sigs_o.scatter"]
-  `id_vpu_decoder_sigs.cvt` = u_core["id_vpu_decoder_sigs_o.cvt"]
-  `id_vpu_decoder_sigs.trans` = u_core["id_vpu_decoder_sigs_o.trans"]
-  `id_vpu_decoder_sigs.gcvt` = u_core["id_vpu_decoder_sigs_o.gcvt"]
-  `id_vpu_decoder_sigs.fromintf` = u_core["id_vpu_decoder_sigs_o.fromintf"]
-  `id_vpu_decoder_sigs.tointm` = u_core["id_vpu_decoder_sigs_o.tointm"]
-  `id_vpu_decoder_sigs.tointf` = u_core["id_vpu_decoder_sigs_o.tointf"]
-  `id_vpu_decoder_sigs.maskop` = u_core["id_vpu_decoder_sigs_o.maskop"]
-  `id_vpu_decoder_sigs.ldst` = u_core["id_vpu_decoder_sigs_o.ldst"]
-  `id_vpu_decoder_sigs.m0ren` = u_core["id_vpu_decoder_sigs_o.m0ren"]
-  `id_vpu_decoder_sigs.mallren` = u_core["id_vpu_decoder_sigs_o.mallren"]
-  `id_vpu_decoder_sigs.mren1` = u_core["id_vpu_decoder_sigs_o.mren1"]
-  `id_vpu_decoder_sigs.mren2` = u_core["id_vpu_decoder_sigs_o.mren2"]
-  `id_vpu_decoder_sigs.wen` = u_core["id_vpu_decoder_sigs_o.wen"]
-  `id_vpu_decoder_sigs.ren1` = u_core["id_vpu_decoder_sigs_o.ren1"]
-  `id_vpu_decoder_sigs.ren2` = u_core["id_vpu_decoder_sigs_o.ren2"]
-  `id_vpu_decoder_sigs.ren3` = u_core["id_vpu_decoder_sigs_o.ren3"]
-  `id_vpu_decoder_sigs.rend` = u_core["id_vpu_decoder_sigs_o.rend"]
-  `id_vpu_decoder_sigs.swap12` = u_core["id_vpu_decoder_sigs_o.swap12"]
-  `id_vpu_decoder_sigs.swap23` = u_core["id_vpu_decoder_sigs_o.swap23"]
-  `id_vpu_decoder_sigs.swap13` = u_core["id_vpu_decoder_sigs_o.swap13"]
-  `id_vpu_decoder_sigs.vector` = u_core["id_vpu_decoder_sigs_o.vector"]
-  `id_vpu_decoder_sigs.dtype` = u_core["id_vpu_decoder_sigs_o.dtype"]
-  `id_vpu_decoder_sigs.fromint` = u_core["id_vpu_decoder_sigs_o.fromint"]
-  `id_vpu_decoder_sigs.toint` = u_core["id_vpu_decoder_sigs_o.toint"]
-  `id_vpu_decoder_sigs.fma` = u_core["id_vpu_decoder_sigs_o.fma"]
-  `id_vpu_decoder_sigs.fms` = u_core["id_vpu_decoder_sigs_o.fms"]
-  `id_vpu_decoder_sigs.add` = u_core["id_vpu_decoder_sigs_o.add"]
-  `id_vpu_decoder_sigs.sub` = u_core["id_vpu_decoder_sigs_o.sub"]
-  `id_vpu_decoder_sigs.mul` = u_core["id_vpu_decoder_sigs_o.mul"]
-  `id_vpu_decoder_sigs.round` = u_core["id_vpu_decoder_sigs_o.round"]
-  `id_vpu_decoder_sigs.wflags` = u_core["id_vpu_decoder_sigs_o.wflags"]
-  mut `f0_core_vpu_ctrl.tensorfma_ctrl` = (u_core["f0_vpu_ctrl_o.tensorfma_ctrl.is_conv"] << 63) | (u_core["f0_vpu_ctrl_o.tensorfma_ctrl.padding3"] << 57) | (u_core["f0_vpu_ctrl_o.tensorfma_ctrl.cols_b"] << 55) | (u_core["f0_vpu_ctrl_o.tensorfma_ctrl.rows_a"] << 51) | (u_core["f0_vpu_ctrl_o.tensorfma_ctrl.cols_a"] << 47) | (u_core["f0_vpu_ctrl_o.tensorfma_ctrl.start_a"] << 43) | (u_core["f0_vpu_ctrl_o.tensorfma_ctrl.padding2"] << 24) | (u_core["f0_vpu_ctrl_o.tensorfma_ctrl.to_vrf"] << 23) | (u_core["f0_vpu_ctrl_o.tensorfma_ctrl.u_b"] << 22) | (u_core["f0_vpu_ctrl_o.tensorfma_ctrl.u_a"] << 21) | (u_core["f0_vpu_ctrl_o.tensorfma_ctrl.ten_b"] << 20) | (u_core["f0_vpu_ctrl_o.tensorfma_ctrl.padding1"] << 18) | (u_core["f0_vpu_ctrl_o.tensorfma_ctrl.scp_b"] << 12) | (u_core["f0_vpu_ctrl_o.tensorfma_ctrl.padding0"] << 10) | (u_core["f0_vpu_ctrl_o.tensorfma_ctrl.scp_a"] << 4) | (u_core["f0_vpu_ctrl_o.tensorfma_ctrl.mode"] << 1) | u_core["f0_vpu_ctrl_o.tensorfma_ctrl.first_pass"]
-  mut `f0_core_vpu_ctrl.tensorquant_ctrl` = (u_core["f0_vpu_ctrl_o.tensorquant_ctrl.padding2"] << 62) | (u_core["f0_vpu_ctrl_o.tensorquant_ctrl.start_reg"] << 57) | (u_core["f0_vpu_ctrl_o.tensorquant_ctrl.cols"] << 55) | (u_core["f0_vpu_ctrl_o.tensorquant_ctrl.rows"] << 51) | (u_core["f0_vpu_ctrl_o.tensorquant_ctrl.scp_src"] << 45) | (u_core["f0_vpu_ctrl_o.tensorquant_ctrl.padding"] << 40) | u_core["f0_vpu_ctrl_o.tensorquant_ctrl.trans"]
+  `id_vpu_decoder_sigs.cmd` = u_core.id_vpu_decoder_sigs_o.cmd
+  `id_vpu_decoder_sigs.txfma` = u_core.id_vpu_decoder_sigs_o.txfma
+  `id_vpu_decoder_sigs.shsw` = u_core.id_vpu_decoder_sigs_o.shsw
+  `id_vpu_decoder_sigs.rom` = u_core.id_vpu_decoder_sigs_o.rom
+  `id_vpu_decoder_sigs.scatter` = u_core.id_vpu_decoder_sigs_o.scatter
+  `id_vpu_decoder_sigs.cvt` = u_core.id_vpu_decoder_sigs_o.cvt
+  `id_vpu_decoder_sigs.trans` = u_core.id_vpu_decoder_sigs_o.trans
+  `id_vpu_decoder_sigs.gcvt` = u_core.id_vpu_decoder_sigs_o.gcvt
+  `id_vpu_decoder_sigs.fromintf` = u_core.id_vpu_decoder_sigs_o.fromintf
+  `id_vpu_decoder_sigs.tointm` = u_core.id_vpu_decoder_sigs_o.tointm
+  `id_vpu_decoder_sigs.tointf` = u_core.id_vpu_decoder_sigs_o.tointf
+  `id_vpu_decoder_sigs.maskop` = u_core.id_vpu_decoder_sigs_o.maskop
+  `id_vpu_decoder_sigs.ldst` = u_core.id_vpu_decoder_sigs_o.ldst
+  `id_vpu_decoder_sigs.m0ren` = u_core.id_vpu_decoder_sigs_o.m0ren
+  `id_vpu_decoder_sigs.mallren` = u_core.id_vpu_decoder_sigs_o.mallren
+  `id_vpu_decoder_sigs.mren1` = u_core.id_vpu_decoder_sigs_o.mren1
+  `id_vpu_decoder_sigs.mren2` = u_core.id_vpu_decoder_sigs_o.mren2
+  `id_vpu_decoder_sigs.wen` = u_core.id_vpu_decoder_sigs_o.wen
+  `id_vpu_decoder_sigs.ren1` = u_core.id_vpu_decoder_sigs_o.ren1
+  `id_vpu_decoder_sigs.ren2` = u_core.id_vpu_decoder_sigs_o.ren2
+  `id_vpu_decoder_sigs.ren3` = u_core.id_vpu_decoder_sigs_o.ren3
+  `id_vpu_decoder_sigs.rend` = u_core.id_vpu_decoder_sigs_o.rend
+  `id_vpu_decoder_sigs.swap12` = u_core.id_vpu_decoder_sigs_o.swap12
+  `id_vpu_decoder_sigs.swap23` = u_core.id_vpu_decoder_sigs_o.swap23
+  `id_vpu_decoder_sigs.swap13` = u_core.id_vpu_decoder_sigs_o.swap13
+  `id_vpu_decoder_sigs.vector` = u_core.id_vpu_decoder_sigs_o.vector
+  `id_vpu_decoder_sigs.dtype` = u_core.id_vpu_decoder_sigs_o.dtype
+  `id_vpu_decoder_sigs.fromint` = u_core.id_vpu_decoder_sigs_o.fromint
+  `id_vpu_decoder_sigs.toint` = u_core.id_vpu_decoder_sigs_o.toint
+  `id_vpu_decoder_sigs.fma` = u_core.id_vpu_decoder_sigs_o.fma
+  `id_vpu_decoder_sigs.fms` = u_core.id_vpu_decoder_sigs_o.fms
+  `id_vpu_decoder_sigs.add` = u_core.id_vpu_decoder_sigs_o.add
+  `id_vpu_decoder_sigs.sub` = u_core.id_vpu_decoder_sigs_o.sub
+  `id_vpu_decoder_sigs.mul` = u_core.id_vpu_decoder_sigs_o.mul
+  `id_vpu_decoder_sigs.round` = u_core.id_vpu_decoder_sigs_o.round
+  `id_vpu_decoder_sigs.wflags` = u_core.id_vpu_decoder_sigs_o.wflags
+  mut `f0_core_vpu_ctrl.tensorfma_ctrl` = (u_core.f0_vpu_ctrl_o.tensorfma_ctrl.is_conv << 63) | (u_core.f0_vpu_ctrl_o.tensorfma_ctrl.padding3 << 57) | (u_core.f0_vpu_ctrl_o.tensorfma_ctrl.cols_b << 55) | (u_core.f0_vpu_ctrl_o.tensorfma_ctrl.rows_a << 51) | (u_core.f0_vpu_ctrl_o.tensorfma_ctrl.cols_a << 47) | (u_core.f0_vpu_ctrl_o.tensorfma_ctrl.start_a << 43) | (u_core.f0_vpu_ctrl_o.tensorfma_ctrl.padding2 << 24) | (u_core.f0_vpu_ctrl_o.tensorfma_ctrl.to_vrf << 23) | (u_core.f0_vpu_ctrl_o.tensorfma_ctrl.u_b << 22) | (u_core.f0_vpu_ctrl_o.tensorfma_ctrl.u_a << 21) | (u_core.f0_vpu_ctrl_o.tensorfma_ctrl.ten_b << 20) | (u_core.f0_vpu_ctrl_o.tensorfma_ctrl.padding1 << 18) | (u_core.f0_vpu_ctrl_o.tensorfma_ctrl.scp_b << 12) | (u_core.f0_vpu_ctrl_o.tensorfma_ctrl.padding0 << 10) | (u_core.f0_vpu_ctrl_o.tensorfma_ctrl.scp_a << 4) | (u_core.f0_vpu_ctrl_o.tensorfma_ctrl.mode << 1) | u_core.f0_vpu_ctrl_o.tensorfma_ctrl.first_pass
+  mut `f0_core_vpu_ctrl.tensorquant_ctrl` = (u_core.f0_vpu_ctrl_o.tensorquant_ctrl.padding2 << 62) | (u_core.f0_vpu_ctrl_o.tensorquant_ctrl.start_reg << 57) | (u_core.f0_vpu_ctrl_o.tensorquant_ctrl.cols << 55) | (u_core.f0_vpu_ctrl_o.tensorquant_ctrl.rows << 51) | (u_core.f0_vpu_ctrl_o.tensorquant_ctrl.scp_src << 45) | (u_core.f0_vpu_ctrl_o.tensorquant_ctrl.padding << 40) | u_core.f0_vpu_ctrl_o.tensorquant_ctrl.trans
   sm_match_debug_signals_tl0 = u_core.sm_match_debug_signals_tl0_o
   sm_filter_debug_signals_tl0 = u_core.sm_filter_debug_signals_tl0_o
   sm_data_debug_signals_tl0 = u_core.sm_data_debug_signals_tl0_o
@@ -356,151 +348,151 @@ pub mod minion_top::[timecheck=false](clk_i:u1, rst_c_ni:u1, rst_d_ni:u1, rst_w_
   sm_match_debug_signals_dc = u_core.sm_match_debug_signals_dc_o
   sm_filter_debug_signals_dc = u_core.sm_filter_debug_signals_dc_o
   sm_data_debug_signals_dc = u_core.sm_data_debug_signals_dc_o
-  intpipe_debug_monitor_out.id_thread_id = u_core["intpipe_debug_monitor_o.id_thread_id"]
-  intpipe_debug_monitor_out.id_pc = u_core["intpipe_debug_monitor_o.id_pc"]
-  intpipe_debug_monitor_out.id_valid = u_core["intpipe_debug_monitor_o.id_valid"]
-  intpipe_debug_monitor_out.id_valid_qual = u_core["intpipe_debug_monitor_o.id_valid_qual"]
-  intpipe_debug_monitor_out.id_inst_replay = u_core["intpipe_debug_monitor_o.id_inst_replay"]
-  intpipe_debug_monitor_out.id_take_pc = u_core["intpipe_debug_monitor_o.id_take_pc"]
-  intpipe_debug_monitor_out.id_csr_interrupt = u_core["intpipe_debug_monitor_o.id_csr_interrupt"]
-  intpipe_debug_monitor_out.excl_mode_stall = u_core["intpipe_debug_monitor_o.excl_mode_stall"]
-  intpipe_debug_monitor_out.ex_valid_qual = u_core["intpipe_debug_monitor_o.ex_valid_qual"]
-  intpipe_debug_monitor_out.tag_valid_qual = u_core["intpipe_debug_monitor_o.tag_valid_qual"]
-  intpipe_debug_monitor_out.mem_valid_qual = u_core["intpipe_debug_monitor_o.mem_valid_qual"]
-  intpipe_debug_monitor_out.wb_valid = u_core["intpipe_debug_monitor_o.wb_valid"]
-  intpipe_debug_monitor_out.gsc_reg_gsc_cnt = u_core["intpipe_debug_monitor_o.gsc_reg_gsc_cnt"]
-  intpipe_debug_monitor_out.tag_take_pc = u_core["intpipe_debug_monitor_o.tag_take_pc"]
-  intpipe_debug_monitor_out.ipi_with_pc = u_core["intpipe_debug_monitor_o.ipi_with_pc"]
-  intpipe_debug_monitor_out.wb_take_pc = u_core["intpipe_debug_monitor_o.wb_take_pc"]
-  intpipe_debug_monitor_out.id_xcpt = u_core["intpipe_debug_monitor_o.id_xcpt"]
-  intpipe_debug_monitor_out.wb_xcpt = u_core["intpipe_debug_monitor_o.wb_xcpt"]
-  intpipe_debug_monitor_out.id_stall_fp2int = u_core["intpipe_debug_monitor_o.id_stall_fp2int"]
-  intpipe_debug_monitor_out.ex_gsc_busy = u_core["intpipe_debug_monitor_o.ex_gsc_busy"]
-  intpipe_debug_monitor_out.csr_fe_stall = u_core["intpipe_debug_monitor_o.csr_fe_stall"]
-  intpipe_debug_monitor_out.id_ctrl_stall_csr = u_core["intpipe_debug_monitor_o.id_ctrl_stall_csr"]
-  intpipe_debug_monitor_out.id_ctrl_stall_dcache = u_core["intpipe_debug_monitor_o.id_ctrl_stall_dcache"]
-  intpipe_debug_monitor_out.id_do_fence = u_core["intpipe_debug_monitor_o.id_do_fence"]
-  intpipe_debug_monitor_out.id_ctrl_stall_trans = u_core["intpipe_debug_monitor_o.id_ctrl_stall_trans"]
-  intpipe_debug_monitor_out.id_ctrl_stall_div = u_core["intpipe_debug_monitor_o.id_ctrl_stall_div"]
-  intpipe_debug_monitor_out.id_int_sboard_hazard = u_core["intpipe_debug_monitor_o.id_int_sboard_hazard"]
-  intpipe_debug_monitor_out.id_ctrl_stall_hazard_vpu = u_core["intpipe_debug_monitor_o.id_ctrl_stall_hazard_vpu"]
-  intpipe_debug_monitor_out.id_ctrl_stall_hazard = u_core["intpipe_debug_monitor_o.id_ctrl_stall_hazard"]
-  mut u_vpu = vpu_top::[name=u_vpu](clock = clk_i, reset = unsigned(rst_c_sync_ni__w1 == 0), `id_core_req.valid` = u_core["id_vpu_req_o.valid"], `id_core_req.thread_id` = u_core["id_vpu_req_o.thread_id"], `id_core_req.fcsr_rm` = u_core["id_vpu_req_o.fcsr_rm"], `id_core_req.inst_bits` = u_core["id_vpu_req_o.inst_bits"], `id_vpu_decoder_sigs.cmd` = `id_vpu_decoder_sigs.cmd`, `id_vpu_decoder_sigs.txfma` = `id_vpu_decoder_sigs.txfma`, `id_vpu_decoder_sigs.shsw` = `id_vpu_decoder_sigs.shsw`, `id_vpu_decoder_sigs.rom` = `id_vpu_decoder_sigs.rom`, `id_vpu_decoder_sigs.scatter` = `id_vpu_decoder_sigs.scatter`, `id_vpu_decoder_sigs.cvt` = `id_vpu_decoder_sigs.cvt`, `id_vpu_decoder_sigs.trans` = `id_vpu_decoder_sigs.trans`, `id_vpu_decoder_sigs.gcvt` = `id_vpu_decoder_sigs.gcvt`, `id_vpu_decoder_sigs.fromintf` = `id_vpu_decoder_sigs.fromintf`, `id_vpu_decoder_sigs.tointm` = `id_vpu_decoder_sigs.tointm`, `id_vpu_decoder_sigs.tointf` = `id_vpu_decoder_sigs.tointf`, `id_vpu_decoder_sigs.maskop` = `id_vpu_decoder_sigs.maskop`, `id_vpu_decoder_sigs.ldst` = `id_vpu_decoder_sigs.ldst`, `id_vpu_decoder_sigs.m0ren` = `id_vpu_decoder_sigs.m0ren`, `id_vpu_decoder_sigs.mallren` = `id_vpu_decoder_sigs.mallren`, `id_vpu_decoder_sigs.mren1` = `id_vpu_decoder_sigs.mren1`, `id_vpu_decoder_sigs.mren2` = `id_vpu_decoder_sigs.mren2`, `id_vpu_decoder_sigs.wen` = `id_vpu_decoder_sigs.wen`, `id_vpu_decoder_sigs.ren1` = `id_vpu_decoder_sigs.ren1`, `id_vpu_decoder_sigs.ren2` = `id_vpu_decoder_sigs.ren2`, `id_vpu_decoder_sigs.ren3` = `id_vpu_decoder_sigs.ren3`, `id_vpu_decoder_sigs.rend` = `id_vpu_decoder_sigs.rend`, `id_vpu_decoder_sigs.swap12` = `id_vpu_decoder_sigs.swap12`, `id_vpu_decoder_sigs.swap23` = `id_vpu_decoder_sigs.swap23`, `id_vpu_decoder_sigs.swap13` = `id_vpu_decoder_sigs.swap13`, `id_vpu_decoder_sigs.vector` = `id_vpu_decoder_sigs.vector`, `id_vpu_decoder_sigs.dtype` = `id_vpu_decoder_sigs.dtype`, `id_vpu_decoder_sigs.fromint` = `id_vpu_decoder_sigs.fromint`, `id_vpu_decoder_sigs.toint` = `id_vpu_decoder_sigs.toint`, `id_vpu_decoder_sigs.fma` = `id_vpu_decoder_sigs.fma`, `id_vpu_decoder_sigs.fms` = `id_vpu_decoder_sigs.fms`, `id_vpu_decoder_sigs.add` = `id_vpu_decoder_sigs.add`, `id_vpu_decoder_sigs.sub` = `id_vpu_decoder_sigs.sub`, `id_vpu_decoder_sigs.mul` = `id_vpu_decoder_sigs.mul`, `id_vpu_decoder_sigs.round` = `id_vpu_decoder_sigs.round`, `id_vpu_decoder_sigs.wflags` = `id_vpu_decoder_sigs.wflags`, `ex_core_req.gscing` = u_core["ex_vpu_req_o.gscing"], `ex_core_req.gsc_src` = u_core["ex_vpu_req_o.gsc_src"], `ex_core_req.kill` = u_core["ex_vpu_req_o.kill"], `ex_core_req.fromint_data` = u_core["ex_vpu_req_o.fromint_data"], `ex_core_req.thread_id` = u_core["ex_vpu_req_o.thread_id"], f2_core_kill = u_core.tag_vpu_kill_o, f3_core_kill = u_core.mem_vpu_kill_o, f4_core_kill = u_core.wb_vpu_kill_o, `f0_core_ctrl.tensorfma_start` = u_core["f0_vpu_ctrl_o.tensorfma_start"], `f0_core_ctrl.tensorfma_ctrl.is_conv` = (`f0_core_vpu_ctrl.tensorfma_ctrl` >> 63) & 1, `f0_core_ctrl.tensorfma_ctrl.padding3` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[57..=62], `f0_core_ctrl.tensorfma_ctrl.cols_b` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[55..=56], `f0_core_ctrl.tensorfma_ctrl.rows_a` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[51..=54], `f0_core_ctrl.tensorfma_ctrl.cols_a` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[47..=50], `f0_core_ctrl.tensorfma_ctrl.start_a` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[43..=46], `f0_core_ctrl.tensorfma_ctrl.padding2` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[24..=42], `f0_core_ctrl.tensorfma_ctrl.to_vrf` = (`f0_core_vpu_ctrl.tensorfma_ctrl` >> 23) & 1, `f0_core_ctrl.tensorfma_ctrl.u_b` = (`f0_core_vpu_ctrl.tensorfma_ctrl` >> 22) & 1, `f0_core_ctrl.tensorfma_ctrl.u_a` = (`f0_core_vpu_ctrl.tensorfma_ctrl` >> 21) & 1, `f0_core_ctrl.tensorfma_ctrl.ten_b` = (`f0_core_vpu_ctrl.tensorfma_ctrl` >> 20) & 1, `f0_core_ctrl.tensorfma_ctrl.padding1` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[18..=19], `f0_core_ctrl.tensorfma_ctrl.scp_b` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[12..=17], `f0_core_ctrl.tensorfma_ctrl.padding0` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[10..=11], `f0_core_ctrl.tensorfma_ctrl.scp_a` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[4..=9], `f0_core_ctrl.tensorfma_ctrl.mode` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[1..=3], `f0_core_ctrl.tensorfma_ctrl.first_pass` = `f0_core_vpu_ctrl.tensorfma_ctrl` & 1, `f0_core_ctrl.tensorfma_conv_bits_ready` = u_core["f0_vpu_ctrl_o.tensorfma_conv_bits_ready"], `f0_core_ctrl.tensorfma_conv_bits` = u_core["f0_vpu_ctrl_o.tensorfma_conv_bits"], `f0_core_ctrl.reduce_start` = u_core["f0_vpu_ctrl_o.reduce_start"], `f0_core_ctrl.tensorstore_start` = u_core["f0_vpu_ctrl_o.tensorstore_start"], `f0_core_ctrl.reduce_ctrl` = u_core["f0_vpu_ctrl_o.reduce_ctrl"], `f0_core_ctrl.tensorquant_start` = u_core["f0_vpu_ctrl_o.tensorquant_start"], `f0_core_ctrl.tensorquant_ctrl.padding2` = `f0_core_vpu_ctrl.tensorquant_ctrl`#[62..=63], `f0_core_ctrl.tensorquant_ctrl.start_reg` = `f0_core_vpu_ctrl.tensorquant_ctrl`#[57..=61], `f0_core_ctrl.tensorquant_ctrl.cols` = `f0_core_vpu_ctrl.tensorquant_ctrl`#[55..=56], `f0_core_ctrl.tensorquant_ctrl.rows` = `f0_core_vpu_ctrl.tensorquant_ctrl`#[51..=54], `f0_core_ctrl.tensorquant_ctrl.scp_src` = `f0_core_vpu_ctrl.tensorquant_ctrl`#[45..=50], `f0_core_ctrl.tensorquant_ctrl.padding` = `f0_core_vpu_ctrl.tensorquant_ctrl`#[40..=44], `f0_core_ctrl.tensorquant_ctrl.trans` = `f0_core_vpu_ctrl.tensorquant_ctrl`#[0..=39], `f0_core_ctrl.pending_scoreboard_t0` = u_core["f0_vpu_ctrl_o.pending_scoreboard_t0"], chicken_bit_vpulane = (chicken_bits_clock_gate_disable_q >> 1) & 1, chicken_bit_vputima = (chicken_bits_clock_gate_disable_q >> 2) & 1, chicken_bit_vputrans = (chicken_bits_clock_gate_disable_q >> 3) & 1, mem_ctrl_override = mem_ctrl_override, wb_dcache_resp_valid = u_core.wb_dcache_vpu_resp_valid_o, `wb_dcache_resp.thread_id` = u_core["wb_dcache_vpu_resp_o.thread_id"], `wb_dcache_resp.gdst` = u_core["wb_dcache_vpu_resp_o.gdst"], `wb_dcache_resp.typ` = u_core["wb_dcache_vpu_resp_o.typ"], `wb_dcache_resp.addr` = u_core["wb_dcache_vpu_resp_o.addr"], `wb_dcache_resp.data` = u_core["wb_dcache_vpu_resp_o.data"], `wb_dcache_resp.ps_mask` = u_core["wb_dcache_vpu_resp_o.ps_mask"], `dcache_scp_resp.fill_is_tenb_early` = u_core["dcache_vpu_scp_res_o.fill_is_tenb_early"], `dcache_scp_resp.fill_is_tenb` = u_core["dcache_vpu_scp_res_o.fill_is_tenb"], `dcache_scp_resp.tenb_flush` = u_core["dcache_vpu_scp_res_o.tenb_flush"], `dcache_scp_resp.tenb_line` = u_core["dcache_vpu_scp_res_o.tenb_line"], dcache_scp_data = u_core.dcache_vpu_scp_data_o, dcache_tenb_data = u_core.dcache_vpu_tenb_data_o, `dcache_reduce_ctrl.send_reg` = u_core["vpu_reduce_ctrl_o.send_reg"], `dcache_reduce_ctrl.exec_op` = u_core["vpu_reduce_ctrl_o.exec_op"], `dcache_reduce_ctrl.nothing` = u_core["vpu_reduce_ctrl_o.nothing"])
-  vpu_dcache_ctl.scp_req = (u_vpu["dcache_ctrl.scp_req.read_en"] << 15) | (u_vpu["dcache_ctrl.scp_req.way"] << 13) | (u_vpu["dcache_ctrl.scp_req.addr"] << 3) | (u_vpu["dcache_ctrl.scp_req.size64"] << 2) | (u_vpu["dcache_ctrl.scp_req.size256"] << 1) | u_vpu["dcache_ctrl.scp_req.bid"]
-  vpu_dcache_ctl.tenb_credit = u_vpu["dcache_ctrl.tenb_credit"]
-  vpu_dcache_ctl.tenb_credit_entry = u_vpu["dcache_ctrl.tenb_credit_entry"]
-  vpu_dcache_ctl.tfma_enabled = u_vpu["dcache_ctrl.tfma_enabled"]
-  vpu_dcache_ctl.reduce_wait = u_vpu["dcache_ctrl.reduce_wait"]
-  vpu_dcache_ctl.tfma_rf_write = u_vpu["dcache_ctrl.tfma_rf_write"]
-  id_vpu_core_ctrl.m0ren = u_vpu["id_core_ctrl.m0ren"]
-  id_vpu_core_ctrl.mallren = u_vpu["id_core_ctrl.mallren"]
-  id_vpu_core_ctrl.mren1 = u_vpu["id_core_ctrl.mren1"]
-  id_vpu_core_ctrl.mren2 = u_vpu["id_core_ctrl.mren2"]
-  id_vpu_core_ctrl.wen = u_vpu["id_core_ctrl.wen"]
-  id_vpu_core_ctrl.ren1 = u_vpu["id_core_ctrl.ren1"]
-  id_vpu_core_ctrl.ren2 = u_vpu["id_core_ctrl.ren2"]
-  id_vpu_core_ctrl.ren3 = u_vpu["id_core_ctrl.ren3"]
-  id_vpu_core_ctrl.rend = u_vpu["id_core_ctrl.rend"]
-  id_vpu_core_ctrl.is_trans = u_vpu["id_core_ctrl.is_trans"]
-  id_vpu_core_ctrl.trans_busy = u_vpu["id_core_ctrl.trans_busy"]
-  id_vpu_core_ctrl.id_trans_insert = u_vpu["id_core_ctrl.id_trans_insert"]
-  id_vpu_core_ctrl.scoreboard = (u_vpu["id_core_ctrl.scoreboard.fp_valid"] << 0x96) | (u_vpu["id_core_ctrl.scoreboard.fp_dest"] << 52) | (u_vpu["id_core_ctrl.scoreboard.toint_valid"] << 48) | (u_vpu["id_core_ctrl.scoreboard.toint_dest"] << 20) | (u_vpu["id_core_ctrl.scoreboard.mask_valid"] << 16) | u_vpu["id_core_ctrl.scoreboard.mask_dest"]
-  id_vpu_core_ctrl.tfma_enabled = u_vpu["id_core_ctrl.tfma_enabled"]
-  id_vpu_core_ctrl.tfma_wrrf_enabled = u_vpu["id_core_ctrl.tfma_wrrf_enabled"]
-  id_vpu_core_ctrl.tquant_enabled = u_vpu["id_core_ctrl.tquant_enabled"]
-  id_vpu_core_ctrl.reduce_enabled = u_vpu["id_core_ctrl.reduce_enabled"]
-  id_vpu_core_ctrl.fflags_stall = u_vpu["id_core_ctrl.fflags_stall"]
-  id_vpu_core_ctrl.fromint = u_vpu["id_core_ctrl.fromint"]
-  ex_vpu_core_ctrl.tointm = u_vpu["ex_core_ctrl.tointm"]
-  ex_vpu_core_ctrl.illegal_rm = u_vpu["ex_core_ctrl.illegal_rm"]
-  ex_vpu_core_ctrl.ps_mask = u_vpu["ex_core_ctrl.ps_mask"]
-  ex_vpu_core_ctrl.gsc_fs = u_vpu["ex_core_ctrl.gsc_fs"]
-  f2_vpu_core_ctrl.fma = u_vpu["f2_core_ctrl.fma"]
-  f2_vpu_core_ctrl.store_data = u_vpu["f2_core_ctrl.store_data"]
-  f2_vpu_core_ctrl.scatter_data = u_vpu["f2_core_ctrl.scatter_data"]
-  f2_vpu_core_ctrl.tointm = u_vpu["f2_core_ctrl.tointm"]
-  f3_vpu_core_ctrl.fma = u_vpu["f3_core_ctrl.fma"]
-  f3_vpu_core_ctrl.tointm = u_vpu["f3_core_ctrl.tointm"]
-  wb_vpu_core_ctrl.fma = u_vpu["wb_core_ctrl.fma"]
-  wb_vpu_core_ctrl.toint_data = u_vpu["wb_core_ctrl.toint_data"]
-  wb_vpu_core_ctrl.mova_mx = u_vpu["wb_core_ctrl.mova_mx"]
-  wb_vpu_core_ctrl.fcsr_flags_valid = u_vpu["wb_core_ctrl.fcsr_flags_valid"]
-  wb_vpu_core_ctrl.fcsr_flags = u_vpu["wb_core_ctrl.fcsr_flags"]
-  wb_vpu_core_ctrl.thread_id = u_vpu["wb_core_ctrl.thread_id"]
-  wb_vpu_core_ctrl.tointm = u_vpu["wb_core_ctrl.tointm"]
+  intpipe_debug_monitor_out.id_thread_id = u_core.intpipe_debug_monitor_o.id_thread_id
+  intpipe_debug_monitor_out.id_pc = u_core.intpipe_debug_monitor_o.id_pc
+  intpipe_debug_monitor_out.id_valid = u_core.intpipe_debug_monitor_o.id_valid
+  intpipe_debug_monitor_out.id_valid_qual = u_core.intpipe_debug_monitor_o.id_valid_qual
+  intpipe_debug_monitor_out.id_inst_replay = u_core.intpipe_debug_monitor_o.id_inst_replay
+  intpipe_debug_monitor_out.id_take_pc = u_core.intpipe_debug_monitor_o.id_take_pc
+  intpipe_debug_monitor_out.id_csr_interrupt = u_core.intpipe_debug_monitor_o.id_csr_interrupt
+  intpipe_debug_monitor_out.excl_mode_stall = u_core.intpipe_debug_monitor_o.excl_mode_stall
+  intpipe_debug_monitor_out.ex_valid_qual = u_core.intpipe_debug_monitor_o.ex_valid_qual
+  intpipe_debug_monitor_out.tag_valid_qual = u_core.intpipe_debug_monitor_o.tag_valid_qual
+  intpipe_debug_monitor_out.mem_valid_qual = u_core.intpipe_debug_monitor_o.mem_valid_qual
+  intpipe_debug_monitor_out.wb_valid = u_core.intpipe_debug_monitor_o.wb_valid
+  intpipe_debug_monitor_out.gsc_reg_gsc_cnt = u_core.intpipe_debug_monitor_o.gsc_reg_gsc_cnt
+  intpipe_debug_monitor_out.tag_take_pc = u_core.intpipe_debug_monitor_o.tag_take_pc
+  intpipe_debug_monitor_out.ipi_with_pc = u_core.intpipe_debug_monitor_o.ipi_with_pc
+  intpipe_debug_monitor_out.wb_take_pc = u_core.intpipe_debug_monitor_o.wb_take_pc
+  intpipe_debug_monitor_out.id_xcpt = u_core.intpipe_debug_monitor_o.id_xcpt
+  intpipe_debug_monitor_out.wb_xcpt = u_core.intpipe_debug_monitor_o.wb_xcpt
+  intpipe_debug_monitor_out.id_stall_fp2int = u_core.intpipe_debug_monitor_o.id_stall_fp2int
+  intpipe_debug_monitor_out.ex_gsc_busy = u_core.intpipe_debug_monitor_o.ex_gsc_busy
+  intpipe_debug_monitor_out.csr_fe_stall = u_core.intpipe_debug_monitor_o.csr_fe_stall
+  intpipe_debug_monitor_out.id_ctrl_stall_csr = u_core.intpipe_debug_monitor_o.id_ctrl_stall_csr
+  intpipe_debug_monitor_out.id_ctrl_stall_dcache = u_core.intpipe_debug_monitor_o.id_ctrl_stall_dcache
+  intpipe_debug_monitor_out.id_do_fence = u_core.intpipe_debug_monitor_o.id_do_fence
+  intpipe_debug_monitor_out.id_ctrl_stall_trans = u_core.intpipe_debug_monitor_o.id_ctrl_stall_trans
+  intpipe_debug_monitor_out.id_ctrl_stall_div = u_core.intpipe_debug_monitor_o.id_ctrl_stall_div
+  intpipe_debug_monitor_out.id_int_sboard_hazard = u_core.intpipe_debug_monitor_o.id_int_sboard_hazard
+  intpipe_debug_monitor_out.id_ctrl_stall_hazard_vpu = u_core.intpipe_debug_monitor_o.id_ctrl_stall_hazard_vpu
+  intpipe_debug_monitor_out.id_ctrl_stall_hazard = u_core.intpipe_debug_monitor_o.id_ctrl_stall_hazard
+  mut u_vpu = vpu_top::[name=u_vpu](clock = clk_i, reset = unsigned(rst_c_sync_ni__w1 == 0), `id_core_req.valid` = u_core.id_vpu_req_o.valid, `id_core_req.thread_id` = u_core.id_vpu_req_o.thread_id, `id_core_req.fcsr_rm` = u_core.id_vpu_req_o.fcsr_rm, `id_core_req.inst_bits` = u_core.id_vpu_req_o.inst_bits, `id_vpu_decoder_sigs.cmd` = `id_vpu_decoder_sigs.cmd`, `id_vpu_decoder_sigs.txfma` = `id_vpu_decoder_sigs.txfma`, `id_vpu_decoder_sigs.shsw` = `id_vpu_decoder_sigs.shsw`, `id_vpu_decoder_sigs.rom` = `id_vpu_decoder_sigs.rom`, `id_vpu_decoder_sigs.scatter` = `id_vpu_decoder_sigs.scatter`, `id_vpu_decoder_sigs.cvt` = `id_vpu_decoder_sigs.cvt`, `id_vpu_decoder_sigs.trans` = `id_vpu_decoder_sigs.trans`, `id_vpu_decoder_sigs.gcvt` = `id_vpu_decoder_sigs.gcvt`, `id_vpu_decoder_sigs.fromintf` = `id_vpu_decoder_sigs.fromintf`, `id_vpu_decoder_sigs.tointm` = `id_vpu_decoder_sigs.tointm`, `id_vpu_decoder_sigs.tointf` = `id_vpu_decoder_sigs.tointf`, `id_vpu_decoder_sigs.maskop` = `id_vpu_decoder_sigs.maskop`, `id_vpu_decoder_sigs.ldst` = `id_vpu_decoder_sigs.ldst`, `id_vpu_decoder_sigs.m0ren` = `id_vpu_decoder_sigs.m0ren`, `id_vpu_decoder_sigs.mallren` = `id_vpu_decoder_sigs.mallren`, `id_vpu_decoder_sigs.mren1` = `id_vpu_decoder_sigs.mren1`, `id_vpu_decoder_sigs.mren2` = `id_vpu_decoder_sigs.mren2`, `id_vpu_decoder_sigs.wen` = `id_vpu_decoder_sigs.wen`, `id_vpu_decoder_sigs.ren1` = `id_vpu_decoder_sigs.ren1`, `id_vpu_decoder_sigs.ren2` = `id_vpu_decoder_sigs.ren2`, `id_vpu_decoder_sigs.ren3` = `id_vpu_decoder_sigs.ren3`, `id_vpu_decoder_sigs.rend` = `id_vpu_decoder_sigs.rend`, `id_vpu_decoder_sigs.swap12` = `id_vpu_decoder_sigs.swap12`, `id_vpu_decoder_sigs.swap23` = `id_vpu_decoder_sigs.swap23`, `id_vpu_decoder_sigs.swap13` = `id_vpu_decoder_sigs.swap13`, `id_vpu_decoder_sigs.vector` = `id_vpu_decoder_sigs.vector`, `id_vpu_decoder_sigs.dtype` = `id_vpu_decoder_sigs.dtype`, `id_vpu_decoder_sigs.fromint` = `id_vpu_decoder_sigs.fromint`, `id_vpu_decoder_sigs.toint` = `id_vpu_decoder_sigs.toint`, `id_vpu_decoder_sigs.fma` = `id_vpu_decoder_sigs.fma`, `id_vpu_decoder_sigs.fms` = `id_vpu_decoder_sigs.fms`, `id_vpu_decoder_sigs.add` = `id_vpu_decoder_sigs.add`, `id_vpu_decoder_sigs.sub` = `id_vpu_decoder_sigs.sub`, `id_vpu_decoder_sigs.mul` = `id_vpu_decoder_sigs.mul`, `id_vpu_decoder_sigs.round` = `id_vpu_decoder_sigs.round`, `id_vpu_decoder_sigs.wflags` = `id_vpu_decoder_sigs.wflags`, `ex_core_req.gscing` = u_core.ex_vpu_req_o.gscing, `ex_core_req.gsc_src` = u_core.ex_vpu_req_o.gsc_src, `ex_core_req.kill` = u_core.ex_vpu_req_o.kill, `ex_core_req.fromint_data` = u_core.ex_vpu_req_o.fromint_data, `ex_core_req.thread_id` = u_core.ex_vpu_req_o.thread_id, f2_core_kill = u_core.tag_vpu_kill_o, f3_core_kill = u_core.mem_vpu_kill_o, f4_core_kill = u_core.wb_vpu_kill_o, `f0_core_ctrl.tensorfma_start` = u_core.f0_vpu_ctrl_o.tensorfma_start, `f0_core_ctrl.tensorfma_ctrl.is_conv` = (`f0_core_vpu_ctrl.tensorfma_ctrl` >> 63) & 1, `f0_core_ctrl.tensorfma_ctrl.padding3` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[57..=62], `f0_core_ctrl.tensorfma_ctrl.cols_b` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[55..=56], `f0_core_ctrl.tensorfma_ctrl.rows_a` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[51..=54], `f0_core_ctrl.tensorfma_ctrl.cols_a` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[47..=50], `f0_core_ctrl.tensorfma_ctrl.start_a` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[43..=46], `f0_core_ctrl.tensorfma_ctrl.padding2` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[24..=42], `f0_core_ctrl.tensorfma_ctrl.to_vrf` = (`f0_core_vpu_ctrl.tensorfma_ctrl` >> 23) & 1, `f0_core_ctrl.tensorfma_ctrl.u_b` = (`f0_core_vpu_ctrl.tensorfma_ctrl` >> 22) & 1, `f0_core_ctrl.tensorfma_ctrl.u_a` = (`f0_core_vpu_ctrl.tensorfma_ctrl` >> 21) & 1, `f0_core_ctrl.tensorfma_ctrl.ten_b` = (`f0_core_vpu_ctrl.tensorfma_ctrl` >> 20) & 1, `f0_core_ctrl.tensorfma_ctrl.padding1` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[18..=19], `f0_core_ctrl.tensorfma_ctrl.scp_b` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[12..=17], `f0_core_ctrl.tensorfma_ctrl.padding0` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[10..=11], `f0_core_ctrl.tensorfma_ctrl.scp_a` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[4..=9], `f0_core_ctrl.tensorfma_ctrl.mode` = `f0_core_vpu_ctrl.tensorfma_ctrl`#[1..=3], `f0_core_ctrl.tensorfma_ctrl.first_pass` = `f0_core_vpu_ctrl.tensorfma_ctrl` & 1, `f0_core_ctrl.tensorfma_conv_bits_ready` = u_core.f0_vpu_ctrl_o.tensorfma_conv_bits_ready, `f0_core_ctrl.tensorfma_conv_bits` = u_core.f0_vpu_ctrl_o.tensorfma_conv_bits, `f0_core_ctrl.reduce_start` = u_core.f0_vpu_ctrl_o.reduce_start, `f0_core_ctrl.tensorstore_start` = u_core.f0_vpu_ctrl_o.tensorstore_start, `f0_core_ctrl.reduce_ctrl` = u_core.f0_vpu_ctrl_o.reduce_ctrl, `f0_core_ctrl.tensorquant_start` = u_core.f0_vpu_ctrl_o.tensorquant_start, `f0_core_ctrl.tensorquant_ctrl.padding2` = `f0_core_vpu_ctrl.tensorquant_ctrl`#[62..=63], `f0_core_ctrl.tensorquant_ctrl.start_reg` = `f0_core_vpu_ctrl.tensorquant_ctrl`#[57..=61], `f0_core_ctrl.tensorquant_ctrl.cols` = `f0_core_vpu_ctrl.tensorquant_ctrl`#[55..=56], `f0_core_ctrl.tensorquant_ctrl.rows` = `f0_core_vpu_ctrl.tensorquant_ctrl`#[51..=54], `f0_core_ctrl.tensorquant_ctrl.scp_src` = `f0_core_vpu_ctrl.tensorquant_ctrl`#[45..=50], `f0_core_ctrl.tensorquant_ctrl.padding` = `f0_core_vpu_ctrl.tensorquant_ctrl`#[40..=44], `f0_core_ctrl.tensorquant_ctrl.trans` = `f0_core_vpu_ctrl.tensorquant_ctrl`#[0..=39], `f0_core_ctrl.pending_scoreboard_t0` = u_core.f0_vpu_ctrl_o.pending_scoreboard_t0, chicken_bit_vpulane = (chicken_bits_clock_gate_disable_q >> 1) & 1, chicken_bit_vputima = (chicken_bits_clock_gate_disable_q >> 2) & 1, chicken_bit_vputrans = (chicken_bits_clock_gate_disable_q >> 3) & 1, mem_ctrl_override = mem_ctrl_override, wb_dcache_resp_valid = u_core.wb_dcache_vpu_resp_valid_o, `wb_dcache_resp.thread_id` = u_core.wb_dcache_vpu_resp_o.thread_id, `wb_dcache_resp.gdst` = u_core.wb_dcache_vpu_resp_o.gdst, `wb_dcache_resp.typ` = u_core.wb_dcache_vpu_resp_o.typ, `wb_dcache_resp.addr` = u_core.wb_dcache_vpu_resp_o.addr, `wb_dcache_resp.data` = u_core.wb_dcache_vpu_resp_o.data, `wb_dcache_resp.ps_mask` = u_core.wb_dcache_vpu_resp_o.ps_mask, `dcache_scp_resp.fill_is_tenb_early` = u_core.dcache_vpu_scp_res_o.fill_is_tenb_early, `dcache_scp_resp.fill_is_tenb` = u_core.dcache_vpu_scp_res_o.fill_is_tenb, `dcache_scp_resp.tenb_flush` = u_core.dcache_vpu_scp_res_o.tenb_flush, `dcache_scp_resp.tenb_line` = u_core.dcache_vpu_scp_res_o.tenb_line, dcache_scp_data = u_core.dcache_vpu_scp_data_o, dcache_tenb_data = u_core.dcache_vpu_tenb_data_o, `dcache_reduce_ctrl.send_reg` = u_core.vpu_reduce_ctrl_o.send_reg, `dcache_reduce_ctrl.exec_op` = u_core.vpu_reduce_ctrl_o.exec_op, `dcache_reduce_ctrl.nothing` = u_core.vpu_reduce_ctrl_o.nothing)
+  vpu_dcache_ctl.scp_req = (u_vpu.dcache_ctrl.scp_req.read_en << 15) | (u_vpu.dcache_ctrl.scp_req.way << 13) | (u_vpu.dcache_ctrl.scp_req.addr << 3) | (u_vpu.dcache_ctrl.scp_req.size64 << 2) | (u_vpu.dcache_ctrl.scp_req.size256 << 1) | u_vpu.dcache_ctrl.scp_req.bid
+  vpu_dcache_ctl.tenb_credit = u_vpu.dcache_ctrl.tenb_credit
+  vpu_dcache_ctl.tenb_credit_entry = u_vpu.dcache_ctrl.tenb_credit_entry
+  vpu_dcache_ctl.tfma_enabled = u_vpu.dcache_ctrl.tfma_enabled
+  vpu_dcache_ctl.reduce_wait = u_vpu.dcache_ctrl.reduce_wait
+  vpu_dcache_ctl.tfma_rf_write = u_vpu.dcache_ctrl.tfma_rf_write
+  id_vpu_core_ctrl.m0ren = u_vpu.id_core_ctrl.m0ren
+  id_vpu_core_ctrl.mallren = u_vpu.id_core_ctrl.mallren
+  id_vpu_core_ctrl.mren1 = u_vpu.id_core_ctrl.mren1
+  id_vpu_core_ctrl.mren2 = u_vpu.id_core_ctrl.mren2
+  id_vpu_core_ctrl.wen = u_vpu.id_core_ctrl.wen
+  id_vpu_core_ctrl.ren1 = u_vpu.id_core_ctrl.ren1
+  id_vpu_core_ctrl.ren2 = u_vpu.id_core_ctrl.ren2
+  id_vpu_core_ctrl.ren3 = u_vpu.id_core_ctrl.ren3
+  id_vpu_core_ctrl.rend = u_vpu.id_core_ctrl.rend
+  id_vpu_core_ctrl.is_trans = u_vpu.id_core_ctrl.is_trans
+  id_vpu_core_ctrl.trans_busy = u_vpu.id_core_ctrl.trans_busy
+  id_vpu_core_ctrl.id_trans_insert = u_vpu.id_core_ctrl.id_trans_insert
+  id_vpu_core_ctrl.scoreboard = (u_vpu.id_core_ctrl.scoreboard.fp_valid << 0x96) | (u_vpu.id_core_ctrl.scoreboard.fp_dest << 52) | (u_vpu.id_core_ctrl.scoreboard.toint_valid << 48) | (u_vpu.id_core_ctrl.scoreboard.toint_dest << 20) | (u_vpu.id_core_ctrl.scoreboard.mask_valid << 16) | u_vpu.id_core_ctrl.scoreboard.mask_dest
+  id_vpu_core_ctrl.tfma_enabled = u_vpu.id_core_ctrl.tfma_enabled
+  id_vpu_core_ctrl.tfma_wrrf_enabled = u_vpu.id_core_ctrl.tfma_wrrf_enabled
+  id_vpu_core_ctrl.tquant_enabled = u_vpu.id_core_ctrl.tquant_enabled
+  id_vpu_core_ctrl.reduce_enabled = u_vpu.id_core_ctrl.reduce_enabled
+  id_vpu_core_ctrl.fflags_stall = u_vpu.id_core_ctrl.fflags_stall
+  id_vpu_core_ctrl.fromint = u_vpu.id_core_ctrl.fromint
+  ex_vpu_core_ctrl.tointm = u_vpu.ex_core_ctrl.tointm
+  ex_vpu_core_ctrl.illegal_rm = u_vpu.ex_core_ctrl.illegal_rm
+  ex_vpu_core_ctrl.ps_mask = u_vpu.ex_core_ctrl.ps_mask
+  ex_vpu_core_ctrl.gsc_fs = u_vpu.ex_core_ctrl.gsc_fs
+  f2_vpu_core_ctrl.fma = u_vpu.f2_core_ctrl.fma
+  f2_vpu_core_ctrl.store_data = u_vpu.f2_core_ctrl.store_data
+  f2_vpu_core_ctrl.scatter_data = u_vpu.f2_core_ctrl.scatter_data
+  f2_vpu_core_ctrl.tointm = u_vpu.f2_core_ctrl.tointm
+  f3_vpu_core_ctrl.fma = u_vpu.f3_core_ctrl.fma
+  f3_vpu_core_ctrl.tointm = u_vpu.f3_core_ctrl.tointm
+  wb_vpu_core_ctrl.fma = u_vpu.wb_core_ctrl.fma
+  wb_vpu_core_ctrl.toint_data = u_vpu.wb_core_ctrl.toint_data
+  wb_vpu_core_ctrl.mova_mx = u_vpu.wb_core_ctrl.mova_mx
+  wb_vpu_core_ctrl.fcsr_flags_valid = u_vpu.wb_core_ctrl.fcsr_flags_valid
+  wb_vpu_core_ctrl.fcsr_flags = u_vpu.wb_core_ctrl.fcsr_flags
+  wb_vpu_core_ctrl.thread_id = u_vpu.wb_core_ctrl.thread_id
+  wb_vpu_core_ctrl.tointm = u_vpu.wb_core_ctrl.tointm
   io_events_vpu = u_vpu.io_events
   vpu_dbg_match = u_vpu.vpu_dbg_match
   vpu_dbg_filter = u_vpu.vpu_dbg_filter
+  vpu_dbg_data = u_vpu.vpu_dbg_data
+  l2_dcache_evict_req_o.id = u_core.l2_dcache_evict_req_o.id
+  l2_dcache_evict_req_o.source = u_core.l2_dcache_evict_req_o.source
+  l2_dcache_evict_req_o.wdata = u_core.l2_dcache_evict_req_o.wdata
+  l2_dcache_evict_req_o.opcode = u_core.l2_dcache_evict_req_o.opcode
+  l2_dcache_evict_req_o.address = u_core.l2_dcache_evict_req_o.address
+  l2_dcache_evict_req_o.data = u_core.l2_dcache_evict_req_o.data
+  l2_dcache_evict_req_o.size = u_core.l2_dcache_evict_req_o.size
+  l2_dcache_evict_req_o.qwen = u_core.l2_dcache_evict_req_o.qwen
+  l2_dcache_evict_req_o.subopcode = u_core.l2_dcache_evict_req_o.subopcode
+  l2_dcache_miss_req_o.id = u_core.l2_dcache_miss_req_o.id
+  l2_dcache_miss_req_o.source = u_core.l2_dcache_miss_req_o.source
+  l2_dcache_miss_req_o.wdata = u_core.l2_dcache_miss_req_o.wdata
+  l2_dcache_miss_req_o.opcode = u_core.l2_dcache_miss_req_o.opcode
+  l2_dcache_miss_req_o.address = u_core.l2_dcache_miss_req_o.address
+  l2_dcache_miss_req_o.data = u_core.l2_dcache_miss_req_o.data
+  l2_dcache_miss_req_o.size = u_core.l2_dcache_miss_req_o.size
+  l2_dcache_miss_req_o.qwen = u_core.l2_dcache_miss_req_o.qwen
+  l2_dcache_miss_req_o.subopcode = u_core.l2_dcache_miss_req_o.subopcode
+  icache_req_o.thread_id = u_core.icache_req_o.thread_id
+  icache_req_o.vm_status.prv = u_core.icache_req_o.vm_status.prv
+  icache_req_o.vm_status.mprv = u_core.icache_req_o.vm_status.mprv
+  icache_req_o.vm_status.mpp = u_core.icache_req_o.vm_status.mpp
+  icache_req_o.vm_status.sum = u_core.icache_req_o.vm_status.sum
+  icache_req_o.vm_status.mxr = u_core.icache_req_o.vm_status.mxr
+  icache_req_o.vm_status.debug = u_core.icache_req_o.vm_status.debug
+  icache_req_o.addr = u_core.icache_req_o.addr
+  satp_info_o.mode = u_core.satp_info_o.mode
+  satp_info_o.ppn = u_core.satp_info_o.ppn
+  matp_info_o.mode = u_core.matp_info_o.mode
+  matp_info_o.ppn = u_core.matp_info_o.ppn
+  dc_ptw_req_data_o.satp_mode = u_core.dc_ptw_req_data_o.satp_mode
+  dc_ptw_req_data_o.satp_ppn = u_core.dc_ptw_req_data_o.satp_ppn
+  dc_ptw_req_data_o.prv = u_core.dc_ptw_req_data_o.prv
+  dc_ptw_req_data_o.addr = u_core.dc_ptw_req_data_o.addr
+  trace_encoder_o.instr_valid = u_core.trace_encoder_o.instr_valid
+  trace_encoder_o.instr_bus = u_core.trace_encoder_o.instr_bus
+  trace_encoder_o.instr_addr = u_core.trace_encoder_o.instr_addr
+  trace_encoder_o.instr_context = u_core.trace_encoder_o.instr_context
+  trace_encoder_o.exception = u_core.trace_encoder_o.exception
+  trace_encoder_o.exception_cause = u_core.trace_encoder_o.exception_cause
+  trace_encoder_o.interrupt = u_core.trace_encoder_o.interrupt
+  trace_encoder_o.exception_trap_value = u_core.trace_encoder_o.exception_trap_value
+  trace_encoder_o.privilege_level = u_core.trace_encoder_o.privilege_level
+  trace_encoder_o.status_flags = u_core.trace_encoder_o.status_flags
+  trace_encoder_o.cpu_halted = u_core.trace_encoder_o.cpu_halted
+  trace_encoder_o.min_reset = u_core.trace_encoder_o.min_reset
+  debug_out_o.halted = u_core.debug_out_o.halted
+  debug_out_o.running = u_core.debug_out_o.running
+  debug_out_o.have_reset = u_core.debug_out_o.have_reset
+  debug_out_o.busy = u_core.debug_out_o.busy
+  debug_out_o.exception = u_core.debug_out_o.exception
+  debug_out_o.error = u_core.debug_out_o.error
+  eco_o = u_eco_ports
+  nsleepout_o = nsleepin_i
+  l2_dcache_evict_req_valid_o = u_core.l2_dcache_evict_req_valid_o
+  l2_dcache_miss_req_valid_o = u_core.l2_dcache_miss_req_valid_o
+  l2_dcache_resp_ready_o = u_core.l2_dcache_resp_ready_o
+  icache_req_valid_o = u_core.icache_req_valid_o
+  icache_flush_data_o = u_core.icache_flush_data_o
+  tlb_invalidate_o = u_core.tlb_invalidate_o
+  dc_ptw_req_valid_o = u_core.dc_ptw_req_valid_o
+  flb_neigh_req_valid_o = u_core.flb_neigh_req_valid_o
+  flb_neigh_req_data_o = u_core.flb_neigh_req_data_o
   apb_prdata_o = u_core.apb_prdata_o
   apb_pready_o = u_core.apb_pready_o
   apb_pslverr_o = u_core.apb_pslverr_o
-  dc_ptw_req_data_o.addr = u_core["dc_ptw_req_data_o.addr"]
-  dc_ptw_req_data_o.prv = u_core["dc_ptw_req_data_o.prv"]
-  dc_ptw_req_data_o.satp_mode = u_core["dc_ptw_req_data_o.satp_mode"]
-  dc_ptw_req_data_o.satp_ppn = u_core["dc_ptw_req_data_o.satp_ppn"]
-  dc_ptw_req_valid_o = u_core.dc_ptw_req_valid_o
-  debug_out_o.busy = u_core["debug_out_o.busy"]
-  debug_out_o.error = u_core["debug_out_o.error"]
-  debug_out_o.exception = u_core["debug_out_o.exception"]
-  debug_out_o.halted = u_core["debug_out_o.halted"]
-  debug_out_o.have_reset = u_core["debug_out_o.have_reset"]
-  debug_out_o.running = u_core["debug_out_o.running"]
-  eco_o = u_eco_ports
-  flb_neigh_req_data_o = u_core.flb_neigh_req_data_o
-  flb_neigh_req_valid_o = u_core.flb_neigh_req_valid_o
-  icache_flush_data_o = u_core.icache_flush_data_o
-  icache_req_o.addr = u_core["icache_req_o.addr"]
-  icache_req_o.thread_id = u_core["icache_req_o.thread_id"]
-  icache_req_o.vm_status.debug = u_core["icache_req_o.vm_status.debug"]
-  icache_req_o.vm_status.mpp = u_core["icache_req_o.vm_status.mpp"]
-  icache_req_o.vm_status.mprv = u_core["icache_req_o.vm_status.mprv"]
-  icache_req_o.vm_status.mxr = u_core["icache_req_o.vm_status.mxr"]
-  icache_req_o.vm_status.prv = u_core["icache_req_o.vm_status.prv"]
-  icache_req_o.vm_status.sum = u_core["icache_req_o.vm_status.sum"]
-  icache_req_valid_o = u_core.icache_req_valid_o
-  l2_dcache_evict_req_o.address = u_core["l2_dcache_evict_req_o.address"]
-  l2_dcache_evict_req_o.data = u_core["l2_dcache_evict_req_o.data"]
-  l2_dcache_evict_req_o.id = u_core["l2_dcache_evict_req_o.id"]
-  l2_dcache_evict_req_o.opcode = u_core["l2_dcache_evict_req_o.opcode"]
-  l2_dcache_evict_req_o.qwen = u_core["l2_dcache_evict_req_o.qwen"]
-  l2_dcache_evict_req_o.size = u_core["l2_dcache_evict_req_o.size"]
-  l2_dcache_evict_req_o.source = u_core["l2_dcache_evict_req_o.source"]
-  l2_dcache_evict_req_o.subopcode = u_core["l2_dcache_evict_req_o.subopcode"]
-  l2_dcache_evict_req_o.wdata = u_core["l2_dcache_evict_req_o.wdata"]
-  l2_dcache_evict_req_valid_o = u_core.l2_dcache_evict_req_valid_o
-  l2_dcache_miss_req_o.address = u_core["l2_dcache_miss_req_o.address"]
-  l2_dcache_miss_req_o.data = u_core["l2_dcache_miss_req_o.data"]
-  l2_dcache_miss_req_o.id = u_core["l2_dcache_miss_req_o.id"]
-  l2_dcache_miss_req_o.opcode = u_core["l2_dcache_miss_req_o.opcode"]
-  l2_dcache_miss_req_o.qwen = u_core["l2_dcache_miss_req_o.qwen"]
-  l2_dcache_miss_req_o.size = u_core["l2_dcache_miss_req_o.size"]
-  l2_dcache_miss_req_o.source = u_core["l2_dcache_miss_req_o.source"]
-  l2_dcache_miss_req_o.subopcode = u_core["l2_dcache_miss_req_o.subopcode"]
-  l2_dcache_miss_req_o.wdata = u_core["l2_dcache_miss_req_o.wdata"]
-  l2_dcache_miss_req_valid_o = u_core.l2_dcache_miss_req_valid_o
-  l2_dcache_resp_ready_o = u_core.l2_dcache_resp_ready_o
-  matp_info_o.mode = u_core["matp_info_o.mode"]
-  matp_info_o.ppn = u_core["matp_info_o.ppn"]
-  nsleepout_o = nsleepin_i
   pmu_count_up_o = u_core.pmu_count_up_o
-  pmu_neigh_event_sel_o = u_core.pmu_neigh_event_sel_o
   pmu_read_sel_o = u_core.pmu_read_sel_o
-  pmu_write_data_o = u_core.pmu_write_data_o
   pmu_write_en_o = u_core.pmu_write_en_o
-  satp_info_o.mode = u_core["satp_info_o.mode"]
-  satp_info_o.ppn = u_core["satp_info_o.ppn"]
-  tlb_invalidate_o = u_core.tlb_invalidate_o
-  trace_encoder_o.cpu_halted = u_core["trace_encoder_o.cpu_halted"]
-  trace_encoder_o.exception = u_core["trace_encoder_o.exception"]
-  trace_encoder_o.exception_cause = u_core["trace_encoder_o.exception_cause"]
-  trace_encoder_o.exception_trap_value = u_core["trace_encoder_o.exception_trap_value"]
-  trace_encoder_o.instr_addr = u_core["trace_encoder_o.instr_addr"]
-  trace_encoder_o.instr_bus = u_core["trace_encoder_o.instr_bus"]
-  trace_encoder_o.instr_context = u_core["trace_encoder_o.instr_context"]
-  trace_encoder_o.instr_valid = u_core["trace_encoder_o.instr_valid"]
-  trace_encoder_o.interrupt = u_core["trace_encoder_o.interrupt"]
-  trace_encoder_o.min_reset = u_core["trace_encoder_o.min_reset"]
-  trace_encoder_o.privilege_level = u_core["trace_encoder_o.privilege_level"]
-  trace_encoder_o.status_flags = u_core["trace_encoder_o.status_flags"]
-  vpu_dbg_data = u_vpu.vpu_dbg_data
+  pmu_write_data_o = u_core.pmu_write_data_o
+  pmu_neigh_event_sel_o = u_core.pmu_neigh_event_sel_o
 }

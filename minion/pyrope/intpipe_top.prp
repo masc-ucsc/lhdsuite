@@ -81,7 +81,7 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   reg fp_sboard_fe_stall:u2
   reg int_sboard_fe_stall:u2
   reg ex_div_ready_prev:u1
-  reg ex_reg_data:u128
+  reg ex_reg_data:[2]u64:[ordering="old"]
   reg vpu_ex_reg_data:u64
   reg ex_reg_cause:u5
   reg ex_reg_pc:u49
@@ -94,7 +94,7 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   reg ex_reg_replay:u1
   reg ex_uses_alu:u1
   reg ex_gsc_fs_valid:u2
-  reg vpu_gsc_fs_delayed_reg:u32
+  reg vpu_gsc_fs_delayed_reg:[1]u32:[ordering="old"]
   reg tag_div_req:u1
   reg mem_div_req:u1
   reg gsc_reg_gsc_cnt:u3
@@ -148,6 +148,7 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   mut `id_fe_stall__bpo.e0` = 0
   mut `vpu_ctrl__bpo.tensorfma_start` = 0
   mut `vpu_ctrl__bpo.tensorquant_start` = 0
+  mut `ex_dcache_req__bpo.phys` = 0
   mut id_fe_req_valid__wtmp:u2 = 0sb?
   wire id_fe_req_valid:u2
   mut ex_dcache_req_valid__wtmp:u1 = 0sb?
@@ -271,7 +272,6 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   mut tag_new_xcpt:u1 = 0
   mut tag_new_cause:u5 = 0
   mut debug_timing_next:u2 = 0
-  mut _mux_320:u5 = 0
   id_fe_req = 0sb?
   tag_dcache_store_data = 0sb?
   clock = clk_i
@@ -291,12 +291,12 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   const id_fetch_bus_error__w1 = id_fe_resp.bus_error
   const id_fetch_ecc_error__w1 = id_fe_resp.ecc_error
   const id_raddr__w1 = (id_raddr2__w1 << 5) | id_raddr1__w1
-  intpipe_int_fcc = interrupts.fcc
-  intpipe_int_meip = interrupts.meip
   intpipe_int_mieco = interrupts.mieco
-  intpipe_int_msip = interrupts.msip
   intpipe_int_mtip = interrupts.mtip
+  intpipe_int_msip = interrupts.msip
+  intpipe_int_meip = interrupts.meip
   intpipe_int_seip = interrupts.seip
+  intpipe_int_fcc = interrupts.fcc
   const id_int_hazard_en__w1 = ((unsigned((id_ctrl.rxs1 != 0) and (id_raddr1__w1 != 0)) & 1) << 2) | ((unsigned((id_ctrl.rxs2 != 0) and (id_raddr2__w1 != 0)) & 1) << 1) | (unsigned((id_ctrl.wxd != 0) and (id_waddr__w1 != 0)) & 1)
   const id_int_hazard_addr__w1 = (id_raddr1__w1 << 10) | (id_raddr2__w1 << 5) | id_waddr__w1
   mut _mux_7:u5 = if id_frontend_vpu_ctrl.rend != 0 { id_fe_resp.inst_bits#[7..=11] } else { id_fe_resp.inst_bits#[27..=31] }
@@ -307,6 +307,7 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   mut _rep_16:u8 = if (id_ctrl.wmad & 1) != 0 { 0xff } else { 0 }
   const id_mask_waddr_hazard__w2 = _rep_16 | ((id_ctrl.wmd & 1) << id_waddr__w1#[0..=2])#[0..=7]
   if id_vpu_ctrl.trans_busy != 0 {
+    intpipe_trans_busy_next = 0ub????
     intpipe_trans_busy_next = 15
   } else {
     intpipe_trans_busy_next = intpipe_trans_busy#[0..=2] << 1
@@ -361,8 +362,8 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   const ipi_pc__w1 = ipi_pc_reg << 1
   mut imm_src2 = intpipe_imm::[name=imm_src2](inst_bits = id_inst_bits__w1, sel_imm = id_ctrl.sel_imm)
   gsc_reg_gsc_cnt = if reset_w__w1 != 0 { 0 } else { ex_reg_gsc_cnt }
-  const vpu_gsc_fs_delayed__w1 = (vpu_gsc_fs_delayed_reg << 32) | ex_vpu_ctrl.gsc_fs#[0..=31]
   gsc_reg_flush_pipe = ex_reg_flush_pipe
+  const vpu_gsc_fs_delayed__w1 = (vpu_gsc_fs_delayed_reg#[0..=31] << 32) | ex_vpu_ctrl.gsc_fs#[0..=31]
   mut alu = intpipe_alu::[name=alu](dw = (ex_ctrl >> 29) & 1, fn = ex_ctrl#[24..=28], in1 = ex_op1, in2 = ex_op2)
   tag_reg_gscing = gsc_reg_gscing
   if reset_w__w1 != 0 {
@@ -370,9 +371,9 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   } else {
     tag_ctrl_fp_toint = unsigned((((ex_ctrl >> 8) & 1) != 0) and (((ex_ctrl >> 42) & 1) != 0))
   }
+  tag_csr_excl_mode = ex_csr_excl_mode
   const cmd__w1 = ex_ctrl#[18..=22]
   const cmd_s1__w1 = cmd__w1
-  tag_csr_excl_mode = ex_csr_excl_mode
   if (gsc_reg_valid != 0) and (unsigned((cmd__w1 == minion_pkg.DcCmdXwr) or (cmd__w1 == minion_pkg.DcCmdXsc) or (unsigned((cmd_s1__w1 == minion_pkg.DcCmdXaSwap) or (cmd_s1__w1 == minion_pkg.DcCmdXaAdd) or (cmd_s1__w1 == minion_pkg.DcCmdXaXor) or (cmd_s1__w1 == minion_pkg.DcCmdXaOr) or (cmd_s1__w1 == minion_pkg.DcCmdXaAnd) or (cmd_s1__w1 == minion_pkg.DcCmdXaMin) or (cmd_s1__w1 == minion_pkg.DcCmdXaMax) or (cmd_s1__w1 == minion_pkg.DcCmdXaMinu) or (cmd_s1__w1 == minion_pkg.DcCmdXaMaxu) or (cmd_s1__w1 == minion_pkg.DcCmdXaCmpswp) or (cmd_s1__w1 == minion_pkg.DcCmdXaMinPs) or (cmd_s1__w1 == minion_pkg.DcCmdXaMaxPs)) != 0) or (cmd__w1 == minion_pkg.DcCmdSc32) or (cmd__w1 == minion_pkg.DcCmdXwrb)) != 0) {
     vpu_scatter_store_data = tag_vpu_ctrl.scatter_data#[0..=31]
   }
@@ -382,8 +383,8 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   } else {
     mem_ctrl_fp_toint = unsigned((((tag_ctrl >> 8) & 1) != 0) and (((tag_ctrl >> 42) & 1) != 0))
   }
-  const mem_xcpt__w1 = mem_reg_xcpt
   mem_csr_excl_mode = tag_csr_excl_mode
+  const mem_xcpt__w1 = mem_reg_xcpt
   if mem_xcpt__w1 != 0 {
     wb_reg_cause = mem_reg_cause
   }
@@ -391,12 +392,12 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
     wb_reg_xcpt_interrupt = mem_reg_xcpt_interrupt
   }
   wb_reg_gscing = mem_reg_gscing
-  mut `wb_vpu_dcache_resp__bpo.addr` = wb_dcache_resp.dest.addr
   mut `wb_vpu_dcache_resp__bpo.data` = wb_dcache_resp.data
+  mut `wb_vpu_dcache_resp__bpo.typ` = wb_dcache_resp.typ
   mut `wb_vpu_dcache_resp__bpo.gdst` = wb_dcache_resp.gsc_cnt
+  mut `wb_vpu_dcache_resp__bpo.addr` = wb_dcache_resp.dest.addr
   mut `wb_vpu_dcache_resp__bpo.ps_mask` = wb_dcache_resp.ps_mask
   mut `wb_vpu_dcache_resp__bpo.thread_id` = wb_dcache_resp.dest.thread_id
-  mut `wb_vpu_dcache_resp__bpo.typ` = wb_dcache_resp.typ
   id_reg_fence = if reset_w__w1 != 0 { 0 } else { id_reg_fence_next }
   const minst_match__w1 = unsigned((((id_inst_bits__w1 ^ ((minstmatch_reg << 32) >> ((id_thread_id__w1 * 32) + 32))#[0..=31])#[0..=31] & ((minstmask_reg << 33) >> ((id_thread_id__w1 * 33) + 33))#[0..=32]#[0..=31]) == 0) and (((((minstmask_reg << 33) >> ((id_thread_id__w1 * 33) + 33))#[0..=32] >> 32) & 1) != 0))
   const id_xcpt_ignore_opcode__w1 = unsigned((id_xcpt_af != 0) or (id_xcpt_pf != 0) or (id_fetch_bus_error__w1 != 0) or (id_fetch_ecc_error__w1 != 0) or (id_ctrl.mcode != 0) or (minst_match__w1 != 0))
@@ -457,17 +458,17 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   const id_keepgsc__w1 = unsigned((ex_gscing != 0) and (ex_ctrl_kill == 0) and (id_dcache_ready != 0))
   const ex_gsc_busy__w1 = unsigned(((ex_gscing != 0) or (gsc_reg_gscing != 0)) and (ex_ctrl_kill == 0))
   const id_reg_gsc_cnt__w1 = ((gsc_progress << 3) >> ((id_thread_id__w1 * 3) + 3))#[0..=2]
-  const t1332 = ((rf.wb_x31_reg << 0x40) >> ((wb_thread_id * 0x40) + 0x40))#[0..=63]
-  mut csr_file = intpipe_csr_file::[name=csr_file](clk_i = clock, rst_ni = unsigned(unsigned(rst_ni == 0) == 0), rst_w_ni = unsigned(reset_w__w1 == 0), rst_d_ni = unsigned(unsigned(rst_d_ni == 0) == 0), test_en = 0, dft__reset_byp = dft__reset_byp, dft__reset = dft__reset, int_mieco = intpipe_int_mieco, int_mtip = intpipe_int_mtip, int_msip = intpipe_int_msip, int_meip = intpipe_int_meip, int_seip = intpipe_int_seip, int_fcc = intpipe_int_fcc, shire_id = shire_id, shire_min_id = shire_min_id, wb_thread_id = wb_thread_id, mem_thread_id = mem_thread_id, dcache_ctrl_resp.cache_op_ready = dcache_ctrl_resp.cache_op_ready, dcache_ctrl_resp.cache_op_busy_changed = dcache_ctrl_resp.cache_op_busy_changed, dcache_ctrl_resp.cache_op_complete_l1 = dcache_ctrl_resp.cache_op_complete_l1, dcache_ctrl_resp.cache_op_complete_l2 = dcache_ctrl_resp.cache_op_complete_l2, dcache_ctrl_resp.tl_ready_0 = dcache_ctrl_resp.tl_ready_0, dcache_ctrl_resp.tl_ready_1 = dcache_ctrl_resp.tl_ready_1, dcache_ctrl_resp.ts_ready = dcache_ctrl_resp.ts_ready, dcache_ctrl_resp.tl_complete_0 = dcache_ctrl_resp.tl_complete_0, dcache_ctrl_resp.reduce_ready = dcache_ctrl_resp.reduce_ready, dcache_ctrl_resp.tex_send_ready = dcache_ctrl_resp.tex_send_ready, dcache_ctrl_resp.gsc_progress_save = dcache_ctrl_resp.gsc_progress_save, dcache_ctrl_resp.gsc_progress = dcache_ctrl_resp.gsc_progress, pending_scoreboard_t0 = id_pending_scoreboard_t0__w24, vpu_tfma_enabled = unsigned((id_vpu_ctrl.tfma_enabled != 0) or (`vpu_ctrl__bpo.tensorfma_start` != 0)), vpu_tfma_tenb_working = vpu_tfma_tenb_working, vpu_tquant_enabled = unsigned((id_vpu_ctrl.tquant_enabled != 0) or (`vpu_ctrl__bpo.tensorquant_start` != 0)), vpu_treduce_enabled = id_vpu_ctrl.reduce_enabled, io_rw_mem_addr = mem_reg_inst#[20..=31], io_rw_wb_cmd = wb_csr_rw_cmd, io_rw_mem_cmd = mem_csr_rw_cmd, io_rw_wb_inst = wb_reg_inst#[20..=22], io_rw_mem_wdata = mem_reg_wdata, io_rw_wb_wdata = wb_reg_wdata, io_rw_wb_waddr = wb_waddr, wb_x31_reg = t1332, l2_resp_valid = l2_resp_valid, l2_resp_ready = l2_resp_ready, l2_resp.id = l2_resp.id, l2_resp.dest = l2_resp.dest, l2_resp.wdata = l2_resp.wdata, l2_resp.opcode = l2_resp.opcode, l2_resp.data = l2_resp.data, l2_resp.size = l2_resp.size, l2_resp.qwen = l2_resp.qwen, io_events_ext = io_events_ext, io_exception = wb_reg_xcpt, io_retire = wb_valid, `io_cause.interrupt_x` = wb_reg_cause_ie.interrupt_x, `io_cause.reserved1` = wb_reg_cause_ie.reserved1, `io_cause.cause` = wb_reg_cause_ie.cause, io_pc = wb_reg_pc, io_badaddr = wb_csr_badaddr, io_inst_bits = wb_reg_inst, io_inst_rvc = wb_reg_rvc, io_bad_redirect = id_bad_redirect, io_redirect = id_take_redirect, io_fcsr_flags_valid = wb_vpu_ctrl.fcsr_flags_valid, io_fcsr_flags_bits = wb_vpu_ctrl.fcsr_flags, io_fcsr_thread_id = wb_vpu_ctrl.thread_id, `dcache_bus_error.e1` = (dcache_bus_error >> 1) & 1, `dcache_bus_error.e0` = dcache_bus_error & 1, dcache_bus_error_addr = dcache_bus_error_addr, debug_timing = debug_timing, bp_progress_save = unsigned((mem_dcache_bp_triggered != 0) and (((mem_ctrl >> 2) & 1) != 0)), read_ddata0 = read_ddata0, `halt.e1` = (halt >> 1) & 1, `halt.e0` = halt & 1, resume = resume, ex_progbuf = debug_ex_program_buffer, flb_neigh_resp_valid = flb_neigh_resp_valid, flb_neigh_resp_data = flb_neigh_resp_data, flb_rf_wen_ready = wb_flb_wen_ready, te_thread_sel = te_thread_sel, esr_shire_coop_mode = esr_shire_coop_mode, esr_features.disable_lock_unlock = esr_features.disable_lock_unlock, esr_features.disable_multithreading = esr_features.disable_multithreading, esr_features.trap_on_u_scp = esr_features.trap_on_u_scp, esr_features.trap_on_u_cacheops = esr_features.trap_on_u_cacheops, esr_features.trap_on_ml = esr_features.trap_on_ml, esr_features.trap_on_gfx = esr_features.trap_on_gfx, tensor_load_err_flags = tensor_load_err_flags, cache_ops_err_flags = cache_ops_err_flags, tensor_reduce_err_flags = tensor_reduce_err_flags, pmu_read_data = pmu_read_data, dcache_debug_signals.csr_signals_tl0 = dcache_debug_signals.csr_signals_tl0, dcache_debug_signals.csr_signals_tl1 = dcache_debug_signals.csr_signals_tl1, dcache_debug_signals.csr_signals_ts = dcache_debug_signals.csr_signals_ts, dcache_debug_signals.csr_signals_cou = dcache_debug_signals.csr_signals_cou, dcache_debug_signals.csr_signals_coul2 = dcache_debug_signals.csr_signals_coul2, dcache_debug_signals.csr_signals_txsnd = dcache_debug_signals.csr_signals_txsnd, dcache_debug_signals.csr_signals_mh0 = dcache_debug_signals.csr_signals_mh0, dcache_debug_signals.csr_signals_mh1 = dcache_debug_signals.csr_signals_mh1)
-  `vpu_ctrl__bpo.tensorfma_start` = csr_file["vpu_ctrl.tensorfma_start"]
-  `vpu_ctrl__bpo.tensorquant_start` = csr_file["vpu_ctrl.tensorquant_start"]
+  const t1334 = ((rf.wb_x31_reg << 0x40) >> ((wb_thread_id * 0x40) + 0x40))#[0..=63]
+  mut csr_file = intpipe_csr_file::[name=csr_file](clk_i = clock, rst_ni = unsigned(unsigned(rst_ni == 0) == 0), rst_w_ni = unsigned(reset_w__w1 == 0), rst_d_ni = unsigned(unsigned(rst_d_ni == 0) == 0), test_en = 0, dft__reset_byp = dft__reset_byp, dft__reset = dft__reset, int_mieco = intpipe_int_mieco, int_mtip = intpipe_int_mtip, int_msip = intpipe_int_msip, int_meip = intpipe_int_meip, int_seip = intpipe_int_seip, int_fcc = intpipe_int_fcc, shire_id = shire_id, shire_min_id = shire_min_id, wb_thread_id = wb_thread_id, mem_thread_id = mem_thread_id, dcache_ctrl_resp.cache_op_ready = dcache_ctrl_resp.cache_op_ready, dcache_ctrl_resp.cache_op_busy_changed = dcache_ctrl_resp.cache_op_busy_changed, dcache_ctrl_resp.cache_op_complete_l1 = dcache_ctrl_resp.cache_op_complete_l1, dcache_ctrl_resp.cache_op_complete_l2 = dcache_ctrl_resp.cache_op_complete_l2, dcache_ctrl_resp.tl_ready_0 = dcache_ctrl_resp.tl_ready_0, dcache_ctrl_resp.tl_ready_1 = dcache_ctrl_resp.tl_ready_1, dcache_ctrl_resp.ts_ready = dcache_ctrl_resp.ts_ready, dcache_ctrl_resp.tl_complete_0 = dcache_ctrl_resp.tl_complete_0, dcache_ctrl_resp.reduce_ready = dcache_ctrl_resp.reduce_ready, dcache_ctrl_resp.tex_send_ready = dcache_ctrl_resp.tex_send_ready, dcache_ctrl_resp.gsc_progress_save = dcache_ctrl_resp.gsc_progress_save, dcache_ctrl_resp.gsc_progress = dcache_ctrl_resp.gsc_progress, pending_scoreboard_t0 = id_pending_scoreboard_t0__w24, vpu_tfma_enabled = unsigned((id_vpu_ctrl.tfma_enabled != 0) or (`vpu_ctrl__bpo.tensorfma_start` != 0)), vpu_tfma_tenb_working = vpu_tfma_tenb_working, vpu_tquant_enabled = unsigned((id_vpu_ctrl.tquant_enabled != 0) or (`vpu_ctrl__bpo.tensorquant_start` != 0)), vpu_treduce_enabled = id_vpu_ctrl.reduce_enabled, io_rw_mem_addr = mem_reg_inst#[20..=31], io_rw_wb_cmd = wb_csr_rw_cmd, io_rw_mem_cmd = mem_csr_rw_cmd, io_rw_wb_inst = wb_reg_inst#[20..=22], io_rw_mem_wdata = mem_reg_wdata, io_rw_wb_wdata = wb_reg_wdata, io_rw_wb_waddr = wb_waddr, wb_x31_reg = t1334, l2_resp_valid = l2_resp_valid, l2_resp_ready = l2_resp_ready, l2_resp.id = l2_resp.id, l2_resp.dest = l2_resp.dest, l2_resp.wdata = l2_resp.wdata, l2_resp.opcode = l2_resp.opcode, l2_resp.data = l2_resp.data, l2_resp.size = l2_resp.size, l2_resp.qwen = l2_resp.qwen, io_events_ext = io_events_ext, io_exception = wb_reg_xcpt, io_retire = wb_valid, `io_cause.interrupt_x` = wb_reg_cause_ie.interrupt_x, `io_cause.reserved1` = wb_reg_cause_ie.reserved1, `io_cause.cause` = wb_reg_cause_ie.cause, io_pc = wb_reg_pc, io_badaddr = wb_csr_badaddr, io_inst_bits = wb_reg_inst, io_inst_rvc = wb_reg_rvc, io_bad_redirect = id_bad_redirect, io_redirect = id_take_redirect, io_fcsr_flags_valid = wb_vpu_ctrl.fcsr_flags_valid, io_fcsr_flags_bits = wb_vpu_ctrl.fcsr_flags, io_fcsr_thread_id = wb_vpu_ctrl.thread_id, `dcache_bus_error.e1` = (dcache_bus_error >> 1) & 1, `dcache_bus_error.e0` = dcache_bus_error & 1, dcache_bus_error_addr = dcache_bus_error_addr, debug_timing = debug_timing, bp_progress_save = unsigned((mem_dcache_bp_triggered != 0) and (((mem_ctrl >> 2) & 1) != 0)), read_ddata0 = read_ddata0, `halt.e1` = (halt >> 1) & 1, `halt.e0` = halt & 1, resume = resume, ex_progbuf = debug_ex_program_buffer, flb_neigh_resp_valid = flb_neigh_resp_valid, flb_neigh_resp_data = flb_neigh_resp_data, flb_rf_wen_ready = wb_flb_wen_ready, te_thread_sel = te_thread_sel, esr_shire_coop_mode = esr_shire_coop_mode, esr_features.disable_lock_unlock = esr_features.disable_lock_unlock, esr_features.disable_multithreading = esr_features.disable_multithreading, esr_features.trap_on_u_scp = esr_features.trap_on_u_scp, esr_features.trap_on_u_cacheops = esr_features.trap_on_u_cacheops, esr_features.trap_on_ml = esr_features.trap_on_ml, esr_features.trap_on_gfx = esr_features.trap_on_gfx, tensor_load_err_flags = tensor_load_err_flags, cache_ops_err_flags = cache_ops_err_flags, tensor_reduce_err_flags = tensor_reduce_err_flags, pmu_read_data = pmu_read_data, dcache_debug_signals.csr_signals_tl0 = dcache_debug_signals.csr_signals_tl0, dcache_debug_signals.csr_signals_tl1 = dcache_debug_signals.csr_signals_tl1, dcache_debug_signals.csr_signals_ts = dcache_debug_signals.csr_signals_ts, dcache_debug_signals.csr_signals_cou = dcache_debug_signals.csr_signals_cou, dcache_debug_signals.csr_signals_coul2 = dcache_debug_signals.csr_signals_coul2, dcache_debug_signals.csr_signals_txsnd = dcache_debug_signals.csr_signals_txsnd, dcache_debug_signals.csr_signals_mh0 = dcache_debug_signals.csr_signals_mh0, dcache_debug_signals.csr_signals_mh1 = dcache_debug_signals.csr_signals_mh1)
+  `vpu_ctrl__bpo.tensorfma_start` = csr_file.vpu_ctrl.tensorfma_start
+  `vpu_ctrl__bpo.tensorquant_start` = csr_file.vpu_ctrl.tensorquant_start
   csr_excl_mode_transition = csr_file.io_excl_mode_transition
-  mut `satp.reserved1` = csr_file["io_satp.reserved1"]
-  mut `satp.reserved2` = csr_file["io_satp.reserved2"]
-  mut `matp.lock` = csr_file["io_matp.lock"]
-  mut `matp.reserved2` = csr_file["io_matp.reserved2"]
-  mut `matp.reserved3` = csr_file["io_matp.reserved3"]
-  const id_csr_interrupt__w1 = (csr_file["io_interrupt.e1"] << 1) | csr_file["io_interrupt.e0"]
+  mut `satp.reserved1` = csr_file.io_satp.reserved1
+  mut `satp.reserved2` = csr_file.io_satp.reserved2
+  mut `matp.lock` = csr_file.io_matp.lock
+  mut `matp.reserved2` = csr_file.io_matp.reserved2
+  mut `matp.reserved3` = csr_file.io_matp.reserved3
+  const id_csr_interrupt__w1 = (csr_file.io_interrupt.e1 << 1) | csr_file.io_interrupt.e0
   minstmask_reg = csr_file.io_minstmask
   minstmatch_reg = csr_file.io_minstmatch
   gsc_progress = csr_file.gsc_progress
@@ -480,25 +481,30 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   const id_csr_flush_stall__w1 = unsigned(((ex_reg_valid != 0) and (ex_thread_id == id_thread_id__w1) and (ex_csr_flush != 0)) or ((tag_reg_valid != 0) and (tag_thread_id == id_thread_id__w1) and (tag_csr_flush != 0)) or ((mem_reg_valid != 0) and (mem_thread_id == id_thread_id__w1) and (mem_csr_flush != 0)) or ((wb_reg_valid != 0) and (wb_thread_id == id_thread_id__w1) and (wb_csr_flush != 0)))
   const id_uses_alu__w1 = unsigned(((((id_ctrl.alu_fn >> 4) & 1) == 0) or (id_xcpt_pf != 0) or (id_xcpt_af != 0) or (id_bp_xcpt != 0)) and (id_valid_qual != 0))
   const cmd_s2__w1 = id_ctrl.mem_cmd
-  const t1681 = (csr_file["io_satp.mode"]#[0..=3] << 28) | csr_file["io_satp.ppn"]#[0..=27]
-  const t1689 = (csr_file["io_matp.mode"]#[0..=3] << 28) | csr_file["io_matp.ppn"]#[0..=27]
+  const t1684 = (csr_file.io_satp.mode#[0..=3] << 28) | csr_file.io_satp.ppn#[0..=27]
+  mut `satp_info__bpo.ppn` = t1684#[0..=27]
+  mut `satp_info__bpo.mode` = (t1684 >> 28)#[0..=3]
+  const t1692 = (csr_file.io_matp.mode#[0..=3] << 28) | csr_file.io_matp.ppn#[0..=27]
+  mut `matp_info__bpo.ppn` = t1692#[0..=27]
+  mut `matp_info__bpo.mode` = (t1692 >> 28)#[0..=3]
   mut `st.mprv` = (csr_file.io_status#[6..=11] >> 5) & 1
   mut `st.mpp` = csr_file.io_status#[6..=11]#[3..=4]
   mut `st.sum` = (csr_file.io_status#[6..=11] >> 2) & 1
   mut `st.mxr` = (csr_file.io_status#[6..=11] >> 1) & 1
+  mut `st.fs` = csr_file.io_status#[6..=11] & 1
   mut `ret.prv` = csr_file.io_prv#[2..=3]
   mut `ret.mprv` = `st.mprv` & 1
   mut `ret.mpp` = `st.mpp`#[0..=1]
   mut `ret.sum` = `st.sum` & 1
   mut `ret.mxr` = `st.mxr` & 1
   mut `ret.debug` = ((csr_file.io_debug >> 1) & 1) & 1
-  const t1730 = (`ret.prv` << 6) | (`ret.mprv` << 5) | (`ret.mpp` << 3) | (`ret.sum` << 2) | (`ret.mxr` << 1) | `ret.debug`
-  mut `compose_vm_status.prv` = t1730#[6..=7]
-  mut `compose_vm_status.mprv` = (t1730 >> 5) & 1
-  mut `compose_vm_status.mpp` = t1730#[3..=4]
-  mut `compose_vm_status.sum` = (t1730 >> 2) & 1
-  mut `compose_vm_status.mxr` = (t1730 >> 1) & 1
-  mut `compose_vm_status.debug` = t1730 & 1
+  const t1733 = (`ret.prv` << 6) | (`ret.mprv` << 5) | (`ret.mpp` << 3) | (`ret.sum` << 2) | (`ret.mxr` << 1) | `ret.debug`
+  mut `compose_vm_status.prv` = t1733#[6..=7]
+  mut `compose_vm_status.mprv` = (t1733 >> 5) & 1
+  mut `compose_vm_status.mpp` = t1733#[3..=4]
+  mut `compose_vm_status.sum` = (t1733 >> 2) & 1
+  mut `compose_vm_status.mxr` = (t1733 >> 1) & 1
+  mut `compose_vm_status.debug` = t1733 & 1
   const `st.mprv__w1` = (csr_file.io_status#[0..=5] >> 5) & 1
   const `st.mpp__w1` = csr_file.io_status#[0..=5]#[3..=4]
   const `st.sum__w1` = (csr_file.io_status#[0..=5] >> 2) & 1
@@ -510,18 +516,13 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   const `ret.sum__w1` = `st.sum__w1` & 1
   const `ret.mxr__w1` = `st.mxr__w1` & 1
   const `ret.debug__w1` = (csr_file.io_debug & 1) & 1
-  const t1793 = (`ret.prv__w1` << 6) | (`ret.mprv__w1` << 5) | (`ret.mpp__w1` << 3) | (`ret.sum__w1` << 2) | (`ret.mxr__w1` << 1) | `ret.debug__w1`
-  const `compose_vm_status.prv__w1` = t1793#[6..=7]
-  const `compose_vm_status.mprv__w1` = (t1793 >> 5) & 1
-  const `compose_vm_status.mpp__w1` = t1793#[3..=4]
-  const `compose_vm_status.sum__w1` = (t1793 >> 2) & 1
-  const `compose_vm_status.mxr__w1` = (t1793 >> 1) & 1
-  const `compose_vm_status.debug__w1` = t1793 & 1
-  mut `matp_info__bpo.mode` = (t1689 >> 28)#[0..=3]
-  mut `matp_info__bpo.ppn` = t1689#[0..=27]
-  mut `satp_info__bpo.mode` = (t1681 >> 28)#[0..=3]
-  mut `satp_info__bpo.ppn` = t1681#[0..=27]
-  mut `st.fs` = csr_file.io_status#[6..=11] & 1
+  const t1797 = (`ret.prv__w1` << 6) | (`ret.mprv__w1` << 5) | (`ret.mpp__w1` << 3) | (`ret.sum__w1` << 2) | (`ret.mxr__w1` << 1) | `ret.debug__w1`
+  const `compose_vm_status.prv__w1` = t1797#[6..=7]
+  const `compose_vm_status.mprv__w1` = (t1797 >> 5) & 1
+  const `compose_vm_status.mpp__w1` = t1797#[3..=4]
+  const `compose_vm_status.sum__w1` = (t1797 >> 2) & 1
+  const `compose_vm_status.mxr__w1` = (t1797 >> 1) & 1
+  const `compose_vm_status.debug__w1` = t1797 & 1
   mut fetch_bp = debug_breakpoint::[name=fetch_bp](control_ip = csr_file.bp_control, in_debug_ip = csr_file.io_debug, prv_ip = csr_file.io_prv, tdata2_ip = csr_file.bp_address, address_ip = id_pc__w1, cmd_ip = 0, valid_ip = id_valid_qual, thread_id_ip = id_thread_id__w1)
   id_bp_xcpt = fetch_bp.xcpt_op
   id_xcpt_pf__wtmp = unsigned((id_pf0__w1 != 0) or (id_pf1__w1 != 0))
@@ -532,8 +533,8 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   const id_split_fetch_fault__w1 = _mux_81
   id_xcpt = 0ub?
   id_xcpt_cause = 0sb?
-  id_xcpt = 1
   id_xcpt_cause = minion_pkg.XcptMcodeInstruction
+  id_xcpt = 1
   if (((id_csr_interrupt__w1 << 1) >> (id_thread_id__w1 + 1)) & 1) != 0 {
     id_xcpt_cause = ((csr_file.io_interrupt_cause << 5) >> ((id_thread_id__w1 * 5) + 5))#[0..=4]
   } elif fetch_bp.enter_debug_op != 0 {
@@ -559,12 +560,12 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   mut _rep_109:u8 = if ((tag_ctrl >> 11) & 1) != 0 { 0xff } else { 0 }
   mut _rep_125:u8 = if ((mem_ctrl >> 11) & 1) != 0 { 0xff } else { 0 }
   mut _rep_141:u8 = if ((wb_ctrl >> 11) & 1) != 0 { 0xff } else { 0 }
-  mut scoreboard_int = intpipe_int_scoreboard::[name=scoreboard_int](rd_thread_id = id_thread_id__w1, rd_addr = id_int_hazard_addr__w1, `dcache_scoreboard.valid` = id_dcache_scoreboard.valid, `dcache_scoreboard.dest` = id_dcache_scoreboard.dest, int_div_valid = unsigned(ex_div_ready == 0), `int_div_dest.fp` = wb_div_resp_dest.fp, `int_div_dest.addr` = wb_div_resp_dest.addr, `int_div_dest.thread_id` = wb_div_resp_dest.thread_id, int_flb_valid = csr_file.flb_scoreboard_valid, `int_flb_dest.fp` = csr_file["flb_scoreboard_addr.fp"], `int_flb_dest.addr` = csr_file["flb_scoreboard_addr.addr"], `int_flb_dest.thread_id` = csr_file["flb_scoreboard_addr.thread_id"], `vpu_scoreboard.fp_valid` = ((id_vpu_ctrl.m0ren << 0xb5) | (id_vpu_ctrl.mallren << 0xb4) | (id_vpu_ctrl.mren1 << 0xb3) | (id_vpu_ctrl.mren2 << 0xb2) | (id_vpu_ctrl.wen << 0xb1) | (id_vpu_ctrl.ren1 << 0xb0) | (id_vpu_ctrl.ren2 << 0xaf) | (id_vpu_ctrl.ren3 << 0xae) | (id_vpu_ctrl.rend << 0xad) | (id_vpu_ctrl.is_trans << 0xac) | (id_vpu_ctrl.trans_busy << 0xab) | (id_vpu_ctrl.id_trans_insert << 0xaa) | (id_vpu_ctrl.scoreboard.fp_valid << 0x9c) | (id_vpu_ctrl.scoreboard.fp_dest << 58) | (id_vpu_ctrl.scoreboard.toint_valid << 54) | (id_vpu_ctrl.scoreboard.toint_dest << 26) | (id_vpu_ctrl.scoreboard.mask_valid << 22) | (id_vpu_ctrl.scoreboard.mask_dest << 6) | (id_vpu_ctrl.tfma_enabled << 5) | (id_vpu_ctrl.tfma_wrrf_enabled << 4) | (id_vpu_ctrl.tquant_enabled << 3) | (id_vpu_ctrl.reduce_enabled << 2) | (id_vpu_ctrl.fflags_stall << 1) | id_vpu_ctrl.fromint)#[6..=169]#[150..=163], `vpu_scoreboard.fp_dest` = ((id_vpu_ctrl.m0ren << 0xb5) | (id_vpu_ctrl.mallren << 0xb4) | (id_vpu_ctrl.mren1 << 0xb3) | (id_vpu_ctrl.mren2 << 0xb2) | (id_vpu_ctrl.wen << 0xb1) | (id_vpu_ctrl.ren1 << 0xb0) | (id_vpu_ctrl.ren2 << 0xaf) | (id_vpu_ctrl.ren3 << 0xae) | (id_vpu_ctrl.rend << 0xad) | (id_vpu_ctrl.is_trans << 0xac) | (id_vpu_ctrl.trans_busy << 0xab) | (id_vpu_ctrl.id_trans_insert << 0xaa) | (id_vpu_ctrl.scoreboard.fp_valid << 0x9c) | (id_vpu_ctrl.scoreboard.fp_dest << 58) | (id_vpu_ctrl.scoreboard.toint_valid << 54) | (id_vpu_ctrl.scoreboard.toint_dest << 26) | (id_vpu_ctrl.scoreboard.mask_valid << 22) | (id_vpu_ctrl.scoreboard.mask_dest << 6) | (id_vpu_ctrl.tfma_enabled << 5) | (id_vpu_ctrl.tfma_wrrf_enabled << 4) | (id_vpu_ctrl.tquant_enabled << 3) | (id_vpu_ctrl.reduce_enabled << 2) | (id_vpu_ctrl.fflags_stall << 1) | id_vpu_ctrl.fromint)#[6..=169]#[52..=149], `vpu_scoreboard.toint_valid` = ((id_vpu_ctrl.m0ren << 0xb5) | (id_vpu_ctrl.mallren << 0xb4) | (id_vpu_ctrl.mren1 << 0xb3) | (id_vpu_ctrl.mren2 << 0xb2) | (id_vpu_ctrl.wen << 0xb1) | (id_vpu_ctrl.ren1 << 0xb0) | (id_vpu_ctrl.ren2 << 0xaf) | (id_vpu_ctrl.ren3 << 0xae) | (id_vpu_ctrl.rend << 0xad) | (id_vpu_ctrl.is_trans << 0xac) | (id_vpu_ctrl.trans_busy << 0xab) | (id_vpu_ctrl.id_trans_insert << 0xaa) | (id_vpu_ctrl.scoreboard.fp_valid << 0x9c) | (id_vpu_ctrl.scoreboard.fp_dest << 58) | (id_vpu_ctrl.scoreboard.toint_valid << 54) | (id_vpu_ctrl.scoreboard.toint_dest << 26) | (id_vpu_ctrl.scoreboard.mask_valid << 22) | (id_vpu_ctrl.scoreboard.mask_dest << 6) | (id_vpu_ctrl.tfma_enabled << 5) | (id_vpu_ctrl.tfma_wrrf_enabled << 4) | (id_vpu_ctrl.tquant_enabled << 3) | (id_vpu_ctrl.reduce_enabled << 2) | (id_vpu_ctrl.fflags_stall << 1) | id_vpu_ctrl.fromint)#[6..=169]#[48..=51], `vpu_scoreboard.toint_dest` = ((id_vpu_ctrl.m0ren << 0xb5) | (id_vpu_ctrl.mallren << 0xb4) | (id_vpu_ctrl.mren1 << 0xb3) | (id_vpu_ctrl.mren2 << 0xb2) | (id_vpu_ctrl.wen << 0xb1) | (id_vpu_ctrl.ren1 << 0xb0) | (id_vpu_ctrl.ren2 << 0xaf) | (id_vpu_ctrl.ren3 << 0xae) | (id_vpu_ctrl.rend << 0xad) | (id_vpu_ctrl.is_trans << 0xac) | (id_vpu_ctrl.trans_busy << 0xab) | (id_vpu_ctrl.id_trans_insert << 0xaa) | (id_vpu_ctrl.scoreboard.fp_valid << 0x9c) | (id_vpu_ctrl.scoreboard.fp_dest << 58) | (id_vpu_ctrl.scoreboard.toint_valid << 54) | (id_vpu_ctrl.scoreboard.toint_dest << 26) | (id_vpu_ctrl.scoreboard.mask_valid << 22) | (id_vpu_ctrl.scoreboard.mask_dest << 6) | (id_vpu_ctrl.tfma_enabled << 5) | (id_vpu_ctrl.tfma_wrrf_enabled << 4) | (id_vpu_ctrl.tquant_enabled << 3) | (id_vpu_ctrl.reduce_enabled << 2) | (id_vpu_ctrl.fflags_stall << 1) | id_vpu_ctrl.fromint)#[6..=169]#[20..=47], `vpu_scoreboard.mask_valid` = ((id_vpu_ctrl.m0ren << 0xb5) | (id_vpu_ctrl.mallren << 0xb4) | (id_vpu_ctrl.mren1 << 0xb3) | (id_vpu_ctrl.mren2 << 0xb2) | (id_vpu_ctrl.wen << 0xb1) | (id_vpu_ctrl.ren1 << 0xb0) | (id_vpu_ctrl.ren2 << 0xaf) | (id_vpu_ctrl.ren3 << 0xae) | (id_vpu_ctrl.rend << 0xad) | (id_vpu_ctrl.is_trans << 0xac) | (id_vpu_ctrl.trans_busy << 0xab) | (id_vpu_ctrl.id_trans_insert << 0xaa) | (id_vpu_ctrl.scoreboard.fp_valid << 0x9c) | (id_vpu_ctrl.scoreboard.fp_dest << 58) | (id_vpu_ctrl.scoreboard.toint_valid << 54) | (id_vpu_ctrl.scoreboard.toint_dest << 26) | (id_vpu_ctrl.scoreboard.mask_valid << 22) | (id_vpu_ctrl.scoreboard.mask_dest << 6) | (id_vpu_ctrl.tfma_enabled << 5) | (id_vpu_ctrl.tfma_wrrf_enabled << 4) | (id_vpu_ctrl.tquant_enabled << 3) | (id_vpu_ctrl.reduce_enabled << 2) | (id_vpu_ctrl.fflags_stall << 1) | id_vpu_ctrl.fromint)#[6..=169]#[16..=19], `vpu_scoreboard.mask_dest` = ((id_vpu_ctrl.m0ren << 0xb5) | (id_vpu_ctrl.mallren << 0xb4) | (id_vpu_ctrl.mren1 << 0xb3) | (id_vpu_ctrl.mren2 << 0xb2) | (id_vpu_ctrl.wen << 0xb1) | (id_vpu_ctrl.ren1 << 0xb0) | (id_vpu_ctrl.ren2 << 0xaf) | (id_vpu_ctrl.ren3 << 0xae) | (id_vpu_ctrl.rend << 0xad) | (id_vpu_ctrl.is_trans << 0xac) | (id_vpu_ctrl.trans_busy << 0xab) | (id_vpu_ctrl.id_trans_insert << 0xaa) | (id_vpu_ctrl.scoreboard.fp_valid << 0x9c) | (id_vpu_ctrl.scoreboard.fp_dest << 58) | (id_vpu_ctrl.scoreboard.toint_valid << 54) | (id_vpu_ctrl.scoreboard.toint_dest << 26) | (id_vpu_ctrl.scoreboard.mask_valid << 22) | (id_vpu_ctrl.scoreboard.mask_dest << 6) | (id_vpu_ctrl.tfma_enabled << 5) | (id_vpu_ctrl.tfma_wrrf_enabled << 4) | (id_vpu_ctrl.tquant_enabled << 3) | (id_vpu_ctrl.reduce_enabled << 2) | (id_vpu_ctrl.fflags_stall << 1) | id_vpu_ctrl.fromint)#[6..=169]#[0..=15])
-  const id_int_sboard_hazard__w1 = unsigned(((((scoreboard_int["rd_data.e2"] << 2) | (scoreboard_int["rd_data.e1"] << 1) | scoreboard_int["rd_data.e0"]) & id_int_hazard_en__w1) != 0) or ((scoreboard_int.rd_x31 != 0) and (id_ctrl.x31 != 0)))
+  mut scoreboard_int = intpipe_int_scoreboard::[name=scoreboard_int](rd_thread_id = id_thread_id__w1, rd_addr = id_int_hazard_addr__w1, `dcache_scoreboard.valid` = id_dcache_scoreboard.valid, `dcache_scoreboard.dest` = id_dcache_scoreboard.dest, int_div_valid = unsigned(ex_div_ready == 0), `int_div_dest.fp` = wb_div_resp_dest.fp, `int_div_dest.addr` = wb_div_resp_dest.addr, `int_div_dest.thread_id` = wb_div_resp_dest.thread_id, int_flb_valid = csr_file.flb_scoreboard_valid, `int_flb_dest.fp` = csr_file.flb_scoreboard_addr.fp, `int_flb_dest.addr` = csr_file.flb_scoreboard_addr.addr, `int_flb_dest.thread_id` = csr_file.flb_scoreboard_addr.thread_id, `vpu_scoreboard.fp_valid` = ((id_vpu_ctrl.m0ren << 0xb5) | (id_vpu_ctrl.mallren << 0xb4) | (id_vpu_ctrl.mren1 << 0xb3) | (id_vpu_ctrl.mren2 << 0xb2) | (id_vpu_ctrl.wen << 0xb1) | (id_vpu_ctrl.ren1 << 0xb0) | (id_vpu_ctrl.ren2 << 0xaf) | (id_vpu_ctrl.ren3 << 0xae) | (id_vpu_ctrl.rend << 0xad) | (id_vpu_ctrl.is_trans << 0xac) | (id_vpu_ctrl.trans_busy << 0xab) | (id_vpu_ctrl.id_trans_insert << 0xaa) | (id_vpu_ctrl.scoreboard.fp_valid << 0x9c) | (id_vpu_ctrl.scoreboard.fp_dest << 58) | (id_vpu_ctrl.scoreboard.toint_valid << 54) | (id_vpu_ctrl.scoreboard.toint_dest << 26) | (id_vpu_ctrl.scoreboard.mask_valid << 22) | (id_vpu_ctrl.scoreboard.mask_dest << 6) | (id_vpu_ctrl.tfma_enabled << 5) | (id_vpu_ctrl.tfma_wrrf_enabled << 4) | (id_vpu_ctrl.tquant_enabled << 3) | (id_vpu_ctrl.reduce_enabled << 2) | (id_vpu_ctrl.fflags_stall << 1) | id_vpu_ctrl.fromint)#[6..=169]#[150..=163], `vpu_scoreboard.fp_dest` = ((id_vpu_ctrl.m0ren << 0xb5) | (id_vpu_ctrl.mallren << 0xb4) | (id_vpu_ctrl.mren1 << 0xb3) | (id_vpu_ctrl.mren2 << 0xb2) | (id_vpu_ctrl.wen << 0xb1) | (id_vpu_ctrl.ren1 << 0xb0) | (id_vpu_ctrl.ren2 << 0xaf) | (id_vpu_ctrl.ren3 << 0xae) | (id_vpu_ctrl.rend << 0xad) | (id_vpu_ctrl.is_trans << 0xac) | (id_vpu_ctrl.trans_busy << 0xab) | (id_vpu_ctrl.id_trans_insert << 0xaa) | (id_vpu_ctrl.scoreboard.fp_valid << 0x9c) | (id_vpu_ctrl.scoreboard.fp_dest << 58) | (id_vpu_ctrl.scoreboard.toint_valid << 54) | (id_vpu_ctrl.scoreboard.toint_dest << 26) | (id_vpu_ctrl.scoreboard.mask_valid << 22) | (id_vpu_ctrl.scoreboard.mask_dest << 6) | (id_vpu_ctrl.tfma_enabled << 5) | (id_vpu_ctrl.tfma_wrrf_enabled << 4) | (id_vpu_ctrl.tquant_enabled << 3) | (id_vpu_ctrl.reduce_enabled << 2) | (id_vpu_ctrl.fflags_stall << 1) | id_vpu_ctrl.fromint)#[6..=169]#[52..=149], `vpu_scoreboard.toint_valid` = ((id_vpu_ctrl.m0ren << 0xb5) | (id_vpu_ctrl.mallren << 0xb4) | (id_vpu_ctrl.mren1 << 0xb3) | (id_vpu_ctrl.mren2 << 0xb2) | (id_vpu_ctrl.wen << 0xb1) | (id_vpu_ctrl.ren1 << 0xb0) | (id_vpu_ctrl.ren2 << 0xaf) | (id_vpu_ctrl.ren3 << 0xae) | (id_vpu_ctrl.rend << 0xad) | (id_vpu_ctrl.is_trans << 0xac) | (id_vpu_ctrl.trans_busy << 0xab) | (id_vpu_ctrl.id_trans_insert << 0xaa) | (id_vpu_ctrl.scoreboard.fp_valid << 0x9c) | (id_vpu_ctrl.scoreboard.fp_dest << 58) | (id_vpu_ctrl.scoreboard.toint_valid << 54) | (id_vpu_ctrl.scoreboard.toint_dest << 26) | (id_vpu_ctrl.scoreboard.mask_valid << 22) | (id_vpu_ctrl.scoreboard.mask_dest << 6) | (id_vpu_ctrl.tfma_enabled << 5) | (id_vpu_ctrl.tfma_wrrf_enabled << 4) | (id_vpu_ctrl.tquant_enabled << 3) | (id_vpu_ctrl.reduce_enabled << 2) | (id_vpu_ctrl.fflags_stall << 1) | id_vpu_ctrl.fromint)#[6..=169]#[48..=51], `vpu_scoreboard.toint_dest` = ((id_vpu_ctrl.m0ren << 0xb5) | (id_vpu_ctrl.mallren << 0xb4) | (id_vpu_ctrl.mren1 << 0xb3) | (id_vpu_ctrl.mren2 << 0xb2) | (id_vpu_ctrl.wen << 0xb1) | (id_vpu_ctrl.ren1 << 0xb0) | (id_vpu_ctrl.ren2 << 0xaf) | (id_vpu_ctrl.ren3 << 0xae) | (id_vpu_ctrl.rend << 0xad) | (id_vpu_ctrl.is_trans << 0xac) | (id_vpu_ctrl.trans_busy << 0xab) | (id_vpu_ctrl.id_trans_insert << 0xaa) | (id_vpu_ctrl.scoreboard.fp_valid << 0x9c) | (id_vpu_ctrl.scoreboard.fp_dest << 58) | (id_vpu_ctrl.scoreboard.toint_valid << 54) | (id_vpu_ctrl.scoreboard.toint_dest << 26) | (id_vpu_ctrl.scoreboard.mask_valid << 22) | (id_vpu_ctrl.scoreboard.mask_dest << 6) | (id_vpu_ctrl.tfma_enabled << 5) | (id_vpu_ctrl.tfma_wrrf_enabled << 4) | (id_vpu_ctrl.tquant_enabled << 3) | (id_vpu_ctrl.reduce_enabled << 2) | (id_vpu_ctrl.fflags_stall << 1) | id_vpu_ctrl.fromint)#[6..=169]#[20..=47], `vpu_scoreboard.mask_valid` = ((id_vpu_ctrl.m0ren << 0xb5) | (id_vpu_ctrl.mallren << 0xb4) | (id_vpu_ctrl.mren1 << 0xb3) | (id_vpu_ctrl.mren2 << 0xb2) | (id_vpu_ctrl.wen << 0xb1) | (id_vpu_ctrl.ren1 << 0xb0) | (id_vpu_ctrl.ren2 << 0xaf) | (id_vpu_ctrl.ren3 << 0xae) | (id_vpu_ctrl.rend << 0xad) | (id_vpu_ctrl.is_trans << 0xac) | (id_vpu_ctrl.trans_busy << 0xab) | (id_vpu_ctrl.id_trans_insert << 0xaa) | (id_vpu_ctrl.scoreboard.fp_valid << 0x9c) | (id_vpu_ctrl.scoreboard.fp_dest << 58) | (id_vpu_ctrl.scoreboard.toint_valid << 54) | (id_vpu_ctrl.scoreboard.toint_dest << 26) | (id_vpu_ctrl.scoreboard.mask_valid << 22) | (id_vpu_ctrl.scoreboard.mask_dest << 6) | (id_vpu_ctrl.tfma_enabled << 5) | (id_vpu_ctrl.tfma_wrrf_enabled << 4) | (id_vpu_ctrl.tquant_enabled << 3) | (id_vpu_ctrl.reduce_enabled << 2) | (id_vpu_ctrl.fflags_stall << 1) | id_vpu_ctrl.fromint)#[6..=169]#[16..=19], `vpu_scoreboard.mask_dest` = ((id_vpu_ctrl.m0ren << 0xb5) | (id_vpu_ctrl.mallren << 0xb4) | (id_vpu_ctrl.mren1 << 0xb3) | (id_vpu_ctrl.mren2 << 0xb2) | (id_vpu_ctrl.wen << 0xb1) | (id_vpu_ctrl.ren1 << 0xb0) | (id_vpu_ctrl.ren2 << 0xaf) | (id_vpu_ctrl.ren3 << 0xae) | (id_vpu_ctrl.rend << 0xad) | (id_vpu_ctrl.is_trans << 0xac) | (id_vpu_ctrl.trans_busy << 0xab) | (id_vpu_ctrl.id_trans_insert << 0xaa) | (id_vpu_ctrl.scoreboard.fp_valid << 0x9c) | (id_vpu_ctrl.scoreboard.fp_dest << 58) | (id_vpu_ctrl.scoreboard.toint_valid << 54) | (id_vpu_ctrl.scoreboard.toint_dest << 26) | (id_vpu_ctrl.scoreboard.mask_valid << 22) | (id_vpu_ctrl.scoreboard.mask_dest << 6) | (id_vpu_ctrl.tfma_enabled << 5) | (id_vpu_ctrl.tfma_wrrf_enabled << 4) | (id_vpu_ctrl.tquant_enabled << 3) | (id_vpu_ctrl.reduce_enabled << 2) | (id_vpu_ctrl.fflags_stall << 1) | id_vpu_ctrl.fromint)#[6..=169]#[0..=15])
+  const id_int_sboard_hazard__w1 = unsigned(((((scoreboard_int.rd_data.e2 << 2) | (scoreboard_int.rd_data.e1 << 1) | scoreboard_int.rd_data.e0) & id_int_hazard_en__w1) != 0) or ((scoreboard_int.rd_x31 != 0) and (id_ctrl.x31 != 0)))
   const id_ctrl_stall_hazard__w1 = unsigned((unsigned(((ex_reg_valid != 0) or (gsc_reg_valid != 0)) and ((((((((((0 | unsigned(((id_int_hazard_en__w1 & 1) != 0) and (id_int_hazard_addr__w1#[0..=4] == ex_waddr))) & 1) | unsigned((((id_int_hazard_en__w1 >> 1) & 1) != 0) and (id_int_hazard_addr__w1#[5..=9] == ex_waddr))) & 1) | unsigned((((id_int_hazard_en__w1 >> 2) & 1) != 0) and (id_int_hazard_addr__w1#[10..=14] == ex_waddr))) & 1) & (ex_ctrl >> 8) & 1 & 1) != 0) and (unsigned((ex_csr_en != 0) or (((ex_ctrl >> 39) & 1) != 0) or (((ex_ctrl >> 23) & 1) != 0) or (((ex_ctrl >> 9) & 1) != 0) or (((ex_ctrl >> 42) & 1) != 0)) != 0)) or ((((((((((0 | unsigned(((id_fp_hazard_en__w1 & 1) != 0) and (id_fp_hazard_addr__w1#[0..=4] == ex_waddr) and ((id_ctrl.mem != 0) or (((ex_ctrl >> 23) & 1) != 0)))) & 1) | unsigned((((id_fp_hazard_en__w1 >> 1) & 1) != 0) and (id_fp_hazard_addr__w1#[5..=9] == ex_waddr))) & 1) | unsigned((((id_fp_hazard_en__w1 >> 2) & 1) != 0) and (id_fp_hazard_addr__w1#[10..=14] == ex_waddr))) & 1) | unsigned((((id_fp_hazard_en__w1 >> 3) & 1) != 0) and (id_fp_hazard_addr__w1#[15..=19] == ex_waddr))) & 1) & unsigned((((ex_ctrl >> 10) & 1) != 0) and (id_ctrl.fp != 0)) & 1) != 0) or (((((unsigned((((((ex_ctrl >> 12) & 1) << ex_waddr#[0..=2])#[0..=7] | _rep_93) & id_mask_raddr_hazard__w4) != 0) | unsigned((((ex_ctrl >> 13) & 1) != 0) and ((id_ctrl.wmd != 0) or (id_ctrl.wmad != 0)))) & 1) | unsigned(((((ex_ctrl >> 12) & 1 & ex_vpu_ctrl.tointm & 1) << ex_waddr#[0..=2])#[0..=7] & id_mask_waddr_hazard__w2) != 0)) & 1) != 0)) and (id_thread_id__w1 == ex_thread_id)) != 0) or (unsigned((tag_reg_valid != 0) and ((((((((((0 | unsigned(((id_int_hazard_en__w1 & 1) != 0) and (id_int_hazard_addr__w1#[0..=4] == tag_waddr))) & 1) | unsigned((((id_int_hazard_en__w1 >> 1) & 1) != 0) and (id_int_hazard_addr__w1#[5..=9] == tag_waddr))) & 1) | unsigned((((id_int_hazard_en__w1 >> 2) & 1) != 0) and (id_int_hazard_addr__w1#[10..=14] == tag_waddr))) & 1) & (tag_ctrl >> 8) & 1 & 1) != 0) and (unsigned((tag_ctrl#[5..=7] != minion_pkg.CsrN) or (((tag_ctrl >> 23) & 1) != 0) or (((tag_ctrl >> 9) & 1) != 0) or (((tag_ctrl >> 42) & 1) != 0)) != 0)) or ((((((((((0 | unsigned(((id_fp_hazard_en__w1 & 1) != 0) and (id_fp_hazard_addr__w1#[0..=4] == tag_waddr) and ((id_ctrl.mem != 0) or (((tag_ctrl >> 23) & 1) != 0)))) & 1) | unsigned((((id_fp_hazard_en__w1 >> 1) & 1) != 0) and (id_fp_hazard_addr__w1#[5..=9] == tag_waddr) and ((((tag_ctrl >> 23) & 1) != 0) or (tag_vpu_ctrl.fma != 0)))) & 1) | unsigned((((id_fp_hazard_en__w1 >> 2) & 1) != 0) and (id_fp_hazard_addr__w1#[10..=14] == tag_waddr) and ((((tag_ctrl >> 23) & 1) != 0) or (tag_vpu_ctrl.fma != 0)))) & 1) | unsigned((((id_fp_hazard_en__w1 >> 3) & 1) != 0) and (id_fp_hazard_addr__w1#[15..=19] == tag_waddr) and ((((tag_ctrl >> 23) & 1) != 0) or (tag_vpu_ctrl.fma != 0)))) & 1) & unsigned((((tag_ctrl >> 10) & 1) != 0) and (id_ctrl.fp != 0)) & 1) != 0) or (((((unsigned((((((tag_ctrl >> 12) & 1) << tag_waddr#[0..=2])#[0..=7] | _rep_109) & id_mask_raddr_hazard__w4) != 0) | unsigned((((tag_ctrl >> 13) & 1) != 0) and ((id_ctrl.wmd != 0) or (id_ctrl.wmad != 0)))) & 1) | unsigned(((((tag_ctrl >> 12) & 1 & tag_vpu_ctrl.tointm & 1) << tag_waddr#[0..=2])#[0..=7] & id_mask_waddr_hazard__w2) != 0)) & 1) != 0)) and (id_thread_id__w1 == tag_thread_id)) != 0) or (unsigned((mem_reg_valid != 0) and ((((((((((0 | unsigned(((id_int_hazard_en__w1 & 1) != 0) and (id_int_hazard_addr__w1#[0..=4] == mem_waddr))) & 1) | unsigned((((id_int_hazard_en__w1 >> 1) & 1) != 0) and (id_int_hazard_addr__w1#[5..=9] == mem_waddr))) & 1) | unsigned((((id_int_hazard_en__w1 >> 2) & 1) != 0) and (id_int_hazard_addr__w1#[10..=14] == mem_waddr))) & 1) & (mem_ctrl >> 8) & 1 & 1) != 0) and (unsigned((mem_ctrl#[5..=7] != minion_pkg.CsrN) or (((mem_ctrl >> 23) & 1) != 0) or (((mem_ctrl >> 9) & 1) != 0) or (((mem_ctrl >> 42) & 1) != 0)) != 0)) or ((((((((((0 | unsigned(((id_fp_hazard_en__w1 & 1) != 0) and (id_fp_hazard_addr__w1#[0..=4] == mem_waddr) and ((id_ctrl.mem != 0) or (((mem_ctrl >> 23) & 1) != 0)))) & 1) | unsigned((((id_fp_hazard_en__w1 >> 1) & 1) != 0) and (id_fp_hazard_addr__w1#[5..=9] == mem_waddr) and ((((mem_ctrl >> 23) & 1) != 0) or (mem_vpu_ctrl.fma != 0)))) & 1) | unsigned((((id_fp_hazard_en__w1 >> 2) & 1) != 0) and (id_fp_hazard_addr__w1#[10..=14] == mem_waddr) and ((((mem_ctrl >> 23) & 1) != 0) or (mem_vpu_ctrl.fma != 0)))) & 1) | unsigned((((id_fp_hazard_en__w1 >> 3) & 1) != 0) and (id_fp_hazard_addr__w1#[15..=19] == mem_waddr) and ((((mem_ctrl >> 23) & 1) != 0) or (mem_vpu_ctrl.fma != 0)))) & 1) & unsigned((((mem_ctrl >> 10) & 1) != 0) and (id_ctrl.fp != 0)) & 1) != 0) or (((((unsigned((((((mem_ctrl >> 12) & 1) << mem_waddr#[0..=2])#[0..=7] | _rep_125) & id_mask_raddr_hazard__w4) != 0) | unsigned((((mem_ctrl >> 13) & 1) != 0) and ((id_ctrl.wmd != 0) or (id_ctrl.wmad != 0)))) & 1) | unsigned(((((mem_ctrl >> 12) & 1 & mem_vpu_ctrl.tointm & 1) << mem_waddr#[0..=2])#[0..=7] & id_mask_waddr_hazard__w2) != 0)) & 1) != 0)) and (id_thread_id__w1 == mem_thread_id)) != 0) or (unsigned((wb_reg_valid != 0) and ((((((((((0 | unsigned(((id_int_hazard_en__w1 & 1) != 0) and (id_int_hazard_addr__w1#[0..=4] == wb_waddr))) & 1) | unsigned((((id_int_hazard_en__w1 >> 1) & 1) != 0) and (id_int_hazard_addr__w1#[5..=9] == wb_waddr))) & 1) | unsigned((((id_int_hazard_en__w1 >> 2) & 1) != 0) and (id_int_hazard_addr__w1#[10..=14] == wb_waddr))) & 1) & (wb_ctrl >> 8) & 1 & 1) != 0) and (unsigned((wb_ctrl#[5..=7] != minion_pkg.CsrN) or (((wb_ctrl >> 9) & 1) != 0) or (((wb_ctrl >> 42) & 1) != 0)) != 0)) or ((((((((((0 | unsigned(((id_fp_hazard_en__w1 & 1) != 0) and (id_fp_hazard_addr__w1#[0..=4] == wb_waddr) and ((id_ctrl.mem != 0) or (wb_vpu_ctrl.fma != 0) or (((wb_ctrl >> 23) & 1) != 0)))) & 1) | unsigned((((id_fp_hazard_en__w1 >> 1) & 1) != 0) and (id_fp_hazard_addr__w1#[5..=9] == wb_waddr) and (wb_vpu_ctrl.fma != 0))) & 1) | unsigned((((id_fp_hazard_en__w1 >> 2) & 1) != 0) and (id_fp_hazard_addr__w1#[10..=14] == wb_waddr) and (wb_vpu_ctrl.fma != 0))) & 1) | unsigned((((id_fp_hazard_en__w1 >> 3) & 1) != 0) and (id_fp_hazard_addr__w1#[15..=19] == wb_waddr) and (wb_vpu_ctrl.fma != 0))) & 1) & unsigned((((wb_ctrl >> 10) & 1) != 0) and (id_ctrl.fp != 0)) & 1) != 0) or (((((unsigned((((((wb_ctrl >> 12) & 1) << wb_waddr#[0..=2])#[0..=7] | _rep_141) & id_mask_raddr_hazard__w4) != 0) | unsigned((((wb_ctrl >> 13) & 1) != 0) and ((id_ctrl.wmd != 0) or (id_ctrl.wmad != 0)))) & 1) | unsigned(((((wb_ctrl >> 12) & 1 & wb_vpu_ctrl.tointm & 1) << wb_waddr#[0..=2])#[0..=7] & id_mask_waddr_hazard__w2) != 0)) & 1) != 0)) and (id_thread_id__w1 == wb_thread_id)) != 0))
   const id_ctrl_stall_div__w1 = unsigned((id_ctrl.div != 0) and ((ex_div_ready == 0) or ((wb_div_resp_valid != 0) and (wb_div_resp_ready == 0)) or (ex_div_req != 0)))
   const id_ctrl_stall_div_dist__w1 = unsigned((id_ctrl.div != 0) and ((((muldiv_needed << 1) >> (unsigned(id_thread_id__w1 == 0) + 1)) & 1) != 0) and (id_thread_id__w1 != next_muldiv_thread))
-  const id_ctrl_stall_hazard_vpu__w1 = unsigned((id_ctrl.fp != 0) and ((((((((((((((unsigned((((scoreboard_fp["rd_data.e3"] << 3) | (scoreboard_fp["rd_data.e2"] << 2) | (scoreboard_fp["rd_data.e1"] << 1) | scoreboard_fp["rd_data.e0"]) & id_fp_hazard_en__w1) != 0) | unsigned(scoreboard_mask.rd_data != 0)) & 1) | unsigned(scoreboard_mask.wd_data != 0)) & 1) | unsigned((id_vpu_ctrl.tfma_wrrf_enabled != 0) or (`vpu_ctrl__bpo.tensorfma_start` != 0))) & 1) | unsigned((id_vpu_ctrl.tquant_enabled != 0) or (`vpu_ctrl__bpo.tensorquant_start` != 0))) & 1) | id_vpu_ctrl.reduce_enabled) & 1) | unsigned((ex_csr_vpu != 0) or (tag_csr_vpu != 0) or (mem_csr_vpu != 0) or (wb_csr_vpu != 0))) & 1) != 0) or ((unsigned((id_frontend_vpu_ctrl.m0ren != 0) or (id_frontend_vpu_ctrl.mallren != 0) or (id_frontend_vpu_ctrl.mren1 != 0) or (id_frontend_vpu_ctrl.mren2 != 0)) != 0) and (wb_vpu_ctrl.mova_mx != 0))))
+  const id_ctrl_stall_hazard_vpu__w1 = unsigned((id_ctrl.fp != 0) and ((((((((((((((unsigned((((scoreboard_fp.rd_data.e3 << 3) | (scoreboard_fp.rd_data.e2 << 2) | (scoreboard_fp.rd_data.e1 << 1) | scoreboard_fp.rd_data.e0) & id_fp_hazard_en__w1) != 0) | unsigned(scoreboard_mask.rd_data != 0)) & 1) | unsigned(scoreboard_mask.wd_data != 0)) & 1) | unsigned((id_vpu_ctrl.tfma_wrrf_enabled != 0) or (`vpu_ctrl__bpo.tensorfma_start` != 0))) & 1) | unsigned((id_vpu_ctrl.tquant_enabled != 0) or (`vpu_ctrl__bpo.tensorquant_start` != 0))) & 1) | id_vpu_ctrl.reduce_enabled) & 1) | unsigned((ex_csr_vpu != 0) or (tag_csr_vpu != 0) or (mem_csr_vpu != 0) or (wb_csr_vpu != 0))) & 1) != 0) or ((unsigned((id_frontend_vpu_ctrl.m0ren != 0) or (id_frontend_vpu_ctrl.mallren != 0) or (id_frontend_vpu_ctrl.mren1 != 0) or (id_frontend_vpu_ctrl.mren2 != 0)) != 0) and (wb_vpu_ctrl.mova_mx != 0))))
   const id_ctrl_stall_trans__w1 = unsigned(((id_vpu_ctrl.id_trans_insert != 0) and (id_ctrl.fp != 0)) or ((id_vpu_ctrl.trans_busy != 0) and (id_ctrl.fp != 0) and (id_ctrl.gsc != 0)))
   const id_ctrl_stall_dcache__w1 = unsigned((id_dcache_ready == 0) and (id_ctrl.mem != 0))
   const id_ctrl_stall_csr__w1 = unsigned(((id_csr_en != 0) and (id_csr_wr_safe__w1 == 0) and (((ex_reg_valid != 0) and (ex_thread_id == id_thread_id__w1)) or ((tag_reg_valid != 0) and (tag_thread_id == id_thread_id__w1)) or ((mem_reg_valid != 0) and (mem_thread_id == id_thread_id__w1)) or ((wb_reg_valid != 0) and (wb_thread_id == id_thread_id__w1)) or (id_vpu_ctrl.trans_busy != 0) or (((intpipe_trans_busy >> 3) & 1) != 0) or ((unsigned((id_csr_addr__w1 == intpipe_csr_pkg.csr_ad_FCSR) or (id_csr_addr__w1 == intpipe_csr_pkg.csr_ad_FFLAGS)) != 0) and (id_vpu_ctrl.fflags_stall != 0)))) or (id_csr_flush_stall__w1 != 0) or ((unsigned((id_csr_addr__w1 == intpipe_csr_pkg.csr_ad_UCACHE_CONTROL) or (id_csr_addr__w1 == intpipe_csr_pkg.csr_ad_SATP) or (id_csr_addr__w1 == intpipe_csr_pkg.csr_ad_MATP) or (id_csr_addr__w1 == intpipe_csr_pkg.csr_ad_MENABLE_SHADOWS) or (id_csr_addr__w1 == intpipe_csr_pkg.csr_ad_MCACHE_CONTROL)) != 0) and (ex_reg_valid != 0) and (ex_csr_en != 0)))
@@ -575,20 +576,21 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   id_ctrl_stall_trans_cnt_maxed__w1#[0] = unsigned(id_ctrl_stall_trans_cnt[0] == 7) & 1
   mut id_ctrl_stall_trans_cnt_maxed__w2 = id_ctrl_stall_trans_cnt_maxed__w1
   id_ctrl_stall_trans_cnt_maxed__w2#[1] = unsigned(id_ctrl_stall_trans_cnt[1] == 7) & 1
+  id_ctrl_stall_trans_cnt_next = 0sb?
   id_ctrl_stall_trans_cnt_next = id_ctrl_stall_trans_cnt
   if (csr_file.io_excl_mode != 0) or (thread0_enable == 0) or (thread1_enable == 0) {
     id_ctrl_stall_trans_cnt_next = 0
   } elif (id_valid_qual != 0) or ((id_vpu_ctrl.trans_busy == 0) and (((intpipe_trans_busy >> 3) & 1) == 0)) {
-    const t2864 = id_thread_id__w1 * 3
-    id_ctrl_stall_trans_cnt_next = ((id_ctrl_stall_trans_cnt_next & (~(7 << t2864))) | (0 << t2864))#[0..=5]
+    const t2869 = id_thread_id__w1 * 3
+    id_ctrl_stall_trans_cnt_next = ((id_ctrl_stall_trans_cnt_next & (~(7 << t2869))) | (0 << t2869))#[0..=5]
   } else {
-    const t2890 = id_pending_scoreboard_t0__w24 != 0
-    const t2891 = (id_vpu_ctrl.tfma_enabled != 0) and t2890
-    const t2892 = (id_ctrl_stall_trans__w1 != 0) or ((id_csr_en != 0) and (id_csr_wr_safe__w1 == 0) and ((id_vpu_ctrl.trans_busy != 0) or (((intpipe_trans_busy >> 3) & 1) != 0))) or t2891
-    const t2893 = ((((id_ctrl_stall_trans_cnt_maxed__w2 << 1) >> (id_thread_id__w1 + 1)) & 1) == 0) and t2892
-    if t2893 {
-      const t2897 = id_thread_id__w1 * 3
-      id_ctrl_stall_trans_cnt_next = ((id_ctrl_stall_trans_cnt_next & (~(7 << t2897))) | ((id_ctrl_stall_trans_cnt[id_thread_id__w1] + 1)#[0..=2] << t2897))#[0..=5]
+    const t2895 = id_pending_scoreboard_t0__w24 != 0
+    const t2896 = (id_vpu_ctrl.tfma_enabled != 0) and t2895
+    const t2897 = (id_ctrl_stall_trans__w1 != 0) or ((id_csr_en != 0) and (id_csr_wr_safe__w1 == 0) and ((id_vpu_ctrl.trans_busy != 0) or (((intpipe_trans_busy >> 3) & 1) != 0))) or t2896
+    const t2898 = ((((id_ctrl_stall_trans_cnt_maxed__w2 << 1) >> (id_thread_id__w1 + 1)) & 1) == 0) and t2897
+    if t2898 {
+      const t2902 = id_thread_id__w1 * 3
+      id_ctrl_stall_trans_cnt_next = ((id_ctrl_stall_trans_cnt_next & (~(7 << t2902))) | ((id_ctrl_stall_trans_cnt[id_thread_id__w1] + 1)#[0..=2] << t2902))#[0..=5]
     }
   }
   if (`id_fe_stall__bpo.e0` != 0) or ((id_fe_req_valid & 1) != 0) {
@@ -642,13 +644,14 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   if (id_do_fence__w1 != 0) and (id_valid__w1 != 0) {
     fence_fe_stall_next__wtmp = ((fence_fe_stall_next__wtmp & (~(1 << id_thread_id__w1))) | (1 << id_thread_id__w1))#[0..=1]
   }
+  const fence_fe_stall_next__wtmp__w1 = fence_fe_stall_next__wtmp & (id_dcache_busy__w2 & (~id_fe_req_valid)#[0..=1])
   int_sboard_fe_stall_next__wtmp = int_sboard_fe_stall
-  if ((((scoreboard_int["rd_data_dcache_div.e2"] << 2) | (scoreboard_int["rd_data_dcache_div.e1"] << 1) | scoreboard_int["rd_data_dcache_div.e0"]) & id_int_hazard_en__w1) != 0) and (id_valid__w1 != 0) {
+  if ((((scoreboard_int.rd_data_dcache_div.e2 << 2) | (scoreboard_int.rd_data_dcache_div.e1 << 1) | scoreboard_int.rd_data_dcache_div.e0) & id_int_hazard_en__w1) != 0) and (id_valid__w1 != 0) {
     int_sboard_fe_stall_next__wtmp = ((int_sboard_fe_stall_next__wtmp & (~(1 << id_thread_id__w1))) | (1 << id_thread_id__w1))#[0..=1]
   }
   int_sboard_fe_stall_next__wtmp = if (ex_div_ready != 0) and (ex_div_ready_prev == 0) { 0 } else { int_sboard_fe_stall_next__wtmp & (~id_dcache_sb_int_dealloc)#[0..=1] }
   fp_sboard_fe_stall_next__wtmp = fp_sboard_fe_stall
-  if (unsigned(((((scoreboard_fp["rd_data_dcache.e3"] << 3) | (scoreboard_fp["rd_data_dcache.e2"] << 2) | (scoreboard_fp["rd_data_dcache.e1"] << 1) | scoreboard_fp["rd_data_dcache.e0"]) & id_fp_hazard_en__w1) != 0) and (not ((id_reg_gsc_cnt__w1 != 0) and (id_ctrl.gsc != 0)))) != 0) and (id_valid__w1 != 0) {
+  if (unsigned(((((scoreboard_fp.rd_data_dcache.e3 << 3) | (scoreboard_fp.rd_data_dcache.e2 << 2) | (scoreboard_fp.rd_data_dcache.e1 << 1) | scoreboard_fp.rd_data_dcache.e0) & id_fp_hazard_en__w1) != 0) and (not ((id_reg_gsc_cnt__w1 != 0) and (id_ctrl.gsc != 0)))) != 0) and (id_valid__w1 != 0) {
     fp_sboard_fe_stall_next__wtmp = ((fp_sboard_fe_stall_next__wtmp & (~(1 << id_thread_id__w1))) | (1 << id_thread_id__w1))#[0..=1]
   }
   id_fe_req_valid__wtmp#[0] = unsigned(((tag_take_pc != 0) and (tag_thread_id == 0)) or ((wb_take_pc != 0) and (wb_thread_id == 0)) or ((csr_file.io_resume & 1) != 0) or ((id_take_redirect & 1) != 0)) & 1
@@ -675,47 +678,47 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   id_fe_req__w5#[54] = unsigned(((ex_reg_valid != 0) and (ex_thread_id == 1)) or ((tag_reg_valid != 0) and (tag_thread_id == 1)) or ((mem_reg_valid != 0) and (mem_thread_id == 1)) or ((wb_reg_valid != 0) and (wb_thread_id == 1))) & 1
   mut id_fe_req__w6 = id_fe_req__w5
   id_fe_req__w6#[52..=53] = (((csr_file.io_resume >> 1) & 1) | (unsigned((csr_file.xcpt_traps_to_debug != 0) and (wb_thread_id == 1)) << 1))#[0..=1]
-  const t3329 = (id_ctrl.legal << 44) | (id_ctrl.mcode << 43) | (id_ctrl.fp << 42) | (id_ctrl.br << 41) | (id_ctrl.jal << 40) | (id_ctrl.jalr << 39) | (id_ctrl.rxs2 << 38) | (id_ctrl.rxs1 << 37) | (id_ctrl.sel_alu2 << 35) | (id_ctrl.sel_alu1 << 33) | (id_ctrl.sel_imm << 30) | (id_ctrl.alu_dw << 29) | (id_ctrl.alu_fn << 24) | (id_ctrl.mem << 23) | (id_ctrl.mem_cmd << 18) | (id_ctrl.mem_type << 14) | (id_ctrl.rma << 13) | (id_ctrl.wmd << 12) | (id_ctrl.wmad << 11) | (id_ctrl.wfd << 10) | (id_ctrl.div << 9) | (id_ctrl.wxd << 8) | (id_ctrl.csr << 5) | (id_ctrl.fence << 4) | (id_ctrl.mem_g << 3) | (id_ctrl.gsc << 2) | (id_ctrl.gfx << 1) | id_ctrl.x31
-  const `id_ctrl_to_ex.csr__w1` = _mux_61
-  `id_ctrl_to_ex.alu_dw` = (t3329 >> 29) & 1
-  `id_ctrl_to_ex.alu_fn` = t3329#[24..=28]
-  mut `id_ctrl_to_ex.br` = (t3329 >> 41) & 1
-  mut `id_ctrl_to_ex.csr` = t3329#[5..=7]
-  mut `id_ctrl_to_ex.div` = (t3329 >> 9) & 1
-  mut `id_ctrl_to_ex.fence` = (t3329 >> 4) & 1
-  mut `id_ctrl_to_ex.fp` = (t3329 >> 42) & 1
-  mut `id_ctrl_to_ex.gfx` = (t3329 >> 1) & 1
-  `id_ctrl_to_ex.gsc` = (t3329 >> 2) & 1
-  mut `id_ctrl_to_ex.jal` = (t3329 >> 40) & 1
-  mut `id_ctrl_to_ex.jalr` = (t3329 >> 39) & 1
-  mut `id_ctrl_to_ex.legal` = (t3329 >> 44) & 1
-  mut `id_ctrl_to_ex.mcode` = (t3329 >> 43) & 1
-  `id_ctrl_to_ex.mem` = (t3329 >> 23) & 1
-  mut `id_ctrl_to_ex.mem_cmd` = t3329#[18..=22]
-  mut `id_ctrl_to_ex.mem_g` = (t3329 >> 3) & 1
-  mut `id_ctrl_to_ex.mem_type` = t3329#[14..=17]
-  mut `id_ctrl_to_ex.rma` = (t3329 >> 13) & 1
-  mut `id_ctrl_to_ex.rxs1` = (t3329 >> 37) & 1
-  mut `id_ctrl_to_ex.rxs2` = (t3329 >> 38) & 1
-  `id_ctrl_to_ex.sel_alu1` = t3329#[33..=34]
-  `id_ctrl_to_ex.sel_alu2` = t3329#[35..=36]
-  mut `id_ctrl_to_ex.sel_imm` = t3329#[30..=32]
-  mut `id_ctrl_to_ex.wfd` = (t3329 >> 10) & 1
-  mut `id_ctrl_to_ex.wmad` = (t3329 >> 11) & 1
-  mut `id_ctrl_to_ex.wmd` = (t3329 >> 12) & 1
-  mut `id_ctrl_to_ex.wxd` = (t3329 >> 8) & 1
-  mut `id_ctrl_to_ex.x31` = t3329 & 1
   `id_fe_stall__bpo.e1` = unsigned((((csr_file.fe_ctrl_stall >> 1) & 1) != 0) or ((csr_file.io_excl_mode != 0) and (csr_file.io_excl_mode_sel != 1)) or (((fence_fe_stall >> 1) & 1) != 0) or (((int_sboard_fe_stall >> 1) & 1) != 0) or (((fp_sboard_fe_stall >> 1) & 1) != 0))
-  id_rvc = 0ub?
   id_take_pc__wtmp = ((id_fe_req_valid__wtmp__w1 << 1) >> (id_thread_id__w1 + 1)) & 1
+  const t3334 = (id_ctrl.legal << 44) | (id_ctrl.mcode << 43) | (id_ctrl.fp << 42) | (id_ctrl.br << 41) | (id_ctrl.jal << 40) | (id_ctrl.jalr << 39) | (id_ctrl.rxs2 << 38) | (id_ctrl.rxs1 << 37) | (id_ctrl.sel_alu2 << 35) | (id_ctrl.sel_alu1 << 33) | (id_ctrl.sel_imm << 30) | (id_ctrl.alu_dw << 29) | (id_ctrl.alu_fn << 24) | (id_ctrl.mem << 23) | (id_ctrl.mem_cmd << 18) | (id_ctrl.mem_type << 14) | (id_ctrl.rma << 13) | (id_ctrl.wmd << 12) | (id_ctrl.wmad << 11) | (id_ctrl.wfd << 10) | (id_ctrl.div << 9) | (id_ctrl.wxd << 8) | (id_ctrl.csr << 5) | (id_ctrl.fence << 4) | (id_ctrl.mem_g << 3) | (id_ctrl.gsc << 2) | (id_ctrl.gfx << 1) | id_ctrl.x31
+  mut `id_ctrl_to_ex.legal` = (t3334 >> 44) & 1
+  mut `id_ctrl_to_ex.mcode` = (t3334 >> 43) & 1
+  mut `id_ctrl_to_ex.fp` = (t3334 >> 42) & 1
+  mut `id_ctrl_to_ex.br` = (t3334 >> 41) & 1
+  mut `id_ctrl_to_ex.jal` = (t3334 >> 40) & 1
+  mut `id_ctrl_to_ex.jalr` = (t3334 >> 39) & 1
+  mut `id_ctrl_to_ex.rxs2` = (t3334 >> 38) & 1
+  mut `id_ctrl_to_ex.rxs1` = (t3334 >> 37) & 1
+  `id_ctrl_to_ex.sel_alu2` = t3334#[35..=36]
+  `id_ctrl_to_ex.sel_alu1` = t3334#[33..=34]
+  mut `id_ctrl_to_ex.sel_imm` = t3334#[30..=32]
+  `id_ctrl_to_ex.alu_dw` = (t3334 >> 29) & 1
+  `id_ctrl_to_ex.alu_fn` = t3334#[24..=28]
+  `id_ctrl_to_ex.mem` = (t3334 >> 23) & 1
+  mut `id_ctrl_to_ex.mem_cmd` = t3334#[18..=22]
+  mut `id_ctrl_to_ex.mem_type` = t3334#[14..=17]
+  mut `id_ctrl_to_ex.rma` = (t3334 >> 13) & 1
+  mut `id_ctrl_to_ex.wmd` = (t3334 >> 12) & 1
+  mut `id_ctrl_to_ex.wmad` = (t3334 >> 11) & 1
+  mut `id_ctrl_to_ex.wfd` = (t3334 >> 10) & 1
+  mut `id_ctrl_to_ex.div` = (t3334 >> 9) & 1
+  mut `id_ctrl_to_ex.wxd` = (t3334 >> 8) & 1
+  mut `id_ctrl_to_ex.csr` = t3334#[5..=7]
+  mut `id_ctrl_to_ex.fence` = (t3334 >> 4) & 1
+  mut `id_ctrl_to_ex.mem_g` = (t3334 >> 3) & 1
+  `id_ctrl_to_ex.gsc` = (t3334 >> 2) & 1
+  mut `id_ctrl_to_ex.gfx` = (t3334 >> 1) & 1
+  mut `id_ctrl_to_ex.x31` = t3334 & 1
+  const `id_ctrl_to_ex.csr__w1` = _mux_61
+  id_rvc = 0ub?
   if (id_uses_alu__w1 == 0) and (id_ctrl.div == 0) {
     `id_ctrl_to_ex.alu_dw` = (ex_ctrl >> 29) & 1
     `id_ctrl_to_ex.alu_fn` = ex_ctrl#[24..=28]
   }
   id_rvc = id_fe_resp.rvc
   if (id_xcpt_af != 0) or (id_xcpt_pf != 0) or (id_bp_xcpt != 0) {
-    `id_ctrl_to_ex.alu_dw` = minion_pkg.Dw64 & 1
     `id_ctrl_to_ex.alu_fn` = minion_pkg.AluAdd#[0..=4]
+    `id_ctrl_to_ex.alu_dw` = minion_pkg.Dw64 & 1
     `id_ctrl_to_ex.sel_alu1` = minion_pkg.A1Pc#[0..=1]
     _mux_196 = if id_split_fetch_fault__w1 != 0 { minion_pkg.A2Size#[0..=1] } else { minion_pkg.A2Zero#[0..=1] }
     `id_ctrl_to_ex.sel_alu2` = _mux_196
@@ -723,13 +726,13 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
     id_rvc = _mux_197
   }
   if id_xcpt != 0 {
-    `id_ctrl_to_ex.gsc` = 0
     `id_ctrl_to_ex.mem` = 0
+    `id_ctrl_to_ex.gsc` = 0
   }
   const id_xcpt_interrupt__w1 = unsigned((id_take_pc == 0) and (id_valid__w1 != 0) and ((((id_csr_interrupt__w1 << 1) >> (id_thread_id__w1 + 1)) & 1) != 0) and (id_csr_flush_stall__w1 == 0) and (ex_gsc_busy__w1 == 0))
   const id_inst_en__w1 = unsigned((id_valid_qual != 0) or (id_xcpt_interrupt__w1 != 0) or ((id_inst_replay__w1 != 0) and (id_valid__w1 != 0)))
-  mut `id_vpu_req__bpo.thread_id` = id_thread_id__w1
   mut `id_vpu_req__bpo.valid` = unsigned((id_valid_qual != 0) and (id_ctrl.fp != 0))
+  mut `id_vpu_req__bpo.thread_id` = id_thread_id__w1
   mut _mux_202:u3 = if (id_valid_qual != 0) and (id_ctrl.fp != 0) and (id_thread_id__w1 != 0) { csr_file.io_fcsr_rm_thread1#[0..=2] } else { csr_file.io_fcsr_rm_thread0#[0..=2] }
   mut `id_vpu_req__bpo.fcsr_rm` = _mux_202
   mut `id_vpu_req__bpo.inst_bits` = id_inst_bits__w1
@@ -752,7 +755,7 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
     ex_reg_rvc = id_rvc
   }
   if id_valid_qual != 0 {
-    ex_reg_flush_pipe = ((((csr_file["io_singleStep.e1"] << 1) | csr_file["io_singleStep.e0"]) << 1) >> (id_thread_id__w1 + 1)) & 1
+    ex_reg_flush_pipe = ((((csr_file.io_singleStep.e1 << 1) | csr_file.io_singleStep.e0) << 1) >> (id_thread_id__w1 + 1)) & 1
   }
   if unsigned((id_valid_qual != 0) and (id_ctrl.div != 0)) != 0 {
     ex_reg_data#[40..=63] = id_reg_data#[0..=63]#[40..=63]
@@ -764,7 +767,7 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
     vpu_ex_reg_data = id_reg_data#[0..=63]
   }
   if unsigned((id_valid_qual != 0) and ((id_ctrl.div != 0) or ((id_ctrl.mem != 0) and (id_ctrl.rxs2 != 0)))) != 0 {
-    ex_reg_data#[64..=127] = id_reg_data#[64..=127]
+    ex_reg_data[1] = id_reg_data#[64..=127]
   }
   if id_xcpt != 0 {
     ex_reg_cause = id_xcpt_cause
@@ -783,15 +786,15 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   }
   ex_gsc_fs_valid = ex_gsc_fs_valid_next
   ex_reg_xcpt_interrupt = unsigned((id_xcpt_interrupt__w1 != 0) and (id_take_pc == 0))
-  ex_csr_excl_mode = unsigned((id_csr_en__wtmp != 0) and (id_csr_ren__w1 == 0) and (id_csr_addr__w1 == intpipe_csr_pkg.csr_ad_EXCL_MODE))
-  ex_csr_vpu = unsigned((id_valid_qual != 0) and (unsigned((id_csr_en__wtmp != 0) and (id_csr_ren__w1 == 0) and ((id_csr_addr__w1 == intpipe_csr_pkg.csr_ad_TENSOR_REDUCE) or (id_csr_addr__w1 == intpipe_csr_pkg.csr_ad_TENSOR_FMA) or (id_csr_addr__w1 == intpipe_csr_pkg.csr_ad_TENSOR_QUANT) or (id_csr_addr__w1 == intpipe_csr_pkg.csr_ad_TENSOR_STORE))) != 0))
-  ex_dcache_alloc_rq_val = unsigned(((id_valid_qual != 0) and (id_ctrl.mem != 0)) or (id_keepgsc__w1 != 0))
-  ex_reg_replay = unsigned((id_take_pc == 0) and (id_valid__w1 != 0) and (id_inst_replay__w1 != 0))
   ex_reg_xcpt = unsigned((id_valid_qual != 0) and (id_xcpt != 0))
+  ex_reg_replay = unsigned((id_take_pc == 0) and (id_valid__w1 != 0) and (id_inst_replay__w1 != 0))
+  ex_csr_vpu = unsigned((id_valid_qual != 0) and (unsigned((id_csr_en__wtmp != 0) and (id_csr_ren__w1 == 0) and ((id_csr_addr__w1 == intpipe_csr_pkg.csr_ad_TENSOR_REDUCE) or (id_csr_addr__w1 == intpipe_csr_pkg.csr_ad_TENSOR_FMA) or (id_csr_addr__w1 == intpipe_csr_pkg.csr_ad_TENSOR_QUANT) or (id_csr_addr__w1 == intpipe_csr_pkg.csr_ad_TENSOR_STORE))) != 0))
+  ex_csr_excl_mode = unsigned((id_csr_en__wtmp != 0) and (id_csr_ren__w1 == 0) and (id_csr_addr__w1 == intpipe_csr_pkg.csr_ad_EXCL_MODE))
+  ex_dcache_alloc_rq_val = unsigned(((id_valid_qual != 0) and (id_ctrl.mem != 0)) or (id_keepgsc__w1 != 0))
   mut ex_reg_inst_ff = intpipe_inst_bits_stage::[name=ex_reg_inst_ff](clk_i = clock, enable_i = id_inst_en__w1, is_csr_i = id_csr_en, is_br_jal_i = unsigned((id_ctrl.br != 0) or (id_ctrl.jal != 0)), te_enable_i = te_enable, xcpt_i = unsigned((id_valid_qual != 0) and ((id_xcpt != 0) or (id_ctrl.fp != 0))), `in_i.e31` = (id_inst_bits__w1 >> 31) & 1, `in_i.e30` = (id_inst_bits__w1 >> 30) & 1, `in_i.e29` = (id_inst_bits__w1 >> 29) & 1, `in_i.e28` = (id_inst_bits__w1 >> 28) & 1, `in_i.e27` = (id_inst_bits__w1 >> 27) & 1, `in_i.e26` = (id_inst_bits__w1 >> 26) & 1, `in_i.e25` = (id_inst_bits__w1 >> 25) & 1, `in_i.e24` = (id_inst_bits__w1 >> 24) & 1, `in_i.e23` = (id_inst_bits__w1 >> 23) & 1, `in_i.e22` = (id_inst_bits__w1 >> 22) & 1, `in_i.e21` = (id_inst_bits__w1 >> 21) & 1, `in_i.e20` = (id_inst_bits__w1 >> 20) & 1, `in_i.e19` = (id_inst_bits__w1 >> 19) & 1, `in_i.e18` = (id_inst_bits__w1 >> 18) & 1, `in_i.e17` = (id_inst_bits__w1 >> 17) & 1, `in_i.e16` = (id_inst_bits__w1 >> 16) & 1, `in_i.e15` = (id_inst_bits__w1 >> 15) & 1, `in_i.e14` = (id_inst_bits__w1 >> 14) & 1, `in_i.e13` = (id_inst_bits__w1 >> 13) & 1, `in_i.e12` = (id_inst_bits__w1 >> 12) & 1, `in_i.e11` = (id_inst_bits__w1 >> 11) & 1, `in_i.e10` = (id_inst_bits__w1 >> 10) & 1, `in_i.e9` = (id_inst_bits__w1 >> 9) & 1, `in_i.e8` = (id_inst_bits__w1 >> 8) & 1, `in_i.e7` = (id_inst_bits__w1 >> 7) & 1, `in_i.e6` = (id_inst_bits__w1 >> 6) & 1, `in_i.e5` = (id_inst_bits__w1 >> 5) & 1, `in_i.e4` = (id_inst_bits__w1 >> 4) & 1, `in_i.e3` = (id_inst_bits__w1 >> 3) & 1, `in_i.e2` = (id_inst_bits__w1 >> 2) & 1, `in_i.e1` = (id_inst_bits__w1 >> 1) & 1, `in_i.e0` = id_inst_bits__w1 & 1)
-  const ex_reg_inst__w1 = (ex_reg_inst_ff["out_o.e31"] << 31) | (ex_reg_inst_ff["out_o.e30"] << 30) | (ex_reg_inst_ff["out_o.e29"] << 29) | (ex_reg_inst_ff["out_o.e28"] << 28) | (ex_reg_inst_ff["out_o.e27"] << 27) | (ex_reg_inst_ff["out_o.e26"] << 26) | (ex_reg_inst_ff["out_o.e25"] << 25) | (ex_reg_inst_ff["out_o.e24"] << 24) | (ex_reg_inst_ff["out_o.e23"] << 23) | (ex_reg_inst_ff["out_o.e22"] << 22) | (ex_reg_inst_ff["out_o.e21"] << 21) | (ex_reg_inst_ff["out_o.e20"] << 20) | (ex_reg_inst_ff["out_o.e19"] << 19) | (ex_reg_inst_ff["out_o.e18"] << 18) | (ex_reg_inst_ff["out_o.e17"] << 17) | (ex_reg_inst_ff["out_o.e16"] << 16) | (ex_reg_inst_ff["out_o.e15"] << 15) | (ex_reg_inst_ff["out_o.e14"] << 14) | (ex_reg_inst_ff["out_o.e13"] << 13) | (ex_reg_inst_ff["out_o.e12"] << 12) | (ex_reg_inst_ff["out_o.e11"] << 11) | (ex_reg_inst_ff["out_o.e10"] << 10) | (ex_reg_inst_ff["out_o.e9"] << 9) | (ex_reg_inst_ff["out_o.e8"] << 8) | (ex_reg_inst_ff["out_o.e7"] << 7) | (ex_reg_inst_ff["out_o.e6"] << 6) | (ex_reg_inst_ff["out_o.e5"] << 5) | (ex_reg_inst_ff["out_o.e4"] << 4) | (ex_reg_inst_ff["out_o.e3"] << 3) | (ex_reg_inst_ff["out_o.e2"] << 2) | (ex_reg_inst_ff["out_o.e1"] << 1) | ex_reg_inst_ff["out_o.e0"]
-  const t3761 = ex_reg_inst__w1#[7..=11]
-  ex_waddr__wtmp = t3761
+  const ex_reg_inst__w1 = (ex_reg_inst_ff.out_o.e31 << 31) | (ex_reg_inst_ff.out_o.e30 << 30) | (ex_reg_inst_ff.out_o.e29 << 29) | (ex_reg_inst_ff.out_o.e28 << 28) | (ex_reg_inst_ff.out_o.e27 << 27) | (ex_reg_inst_ff.out_o.e26 << 26) | (ex_reg_inst_ff.out_o.e25 << 25) | (ex_reg_inst_ff.out_o.e24 << 24) | (ex_reg_inst_ff.out_o.e23 << 23) | (ex_reg_inst_ff.out_o.e22 << 22) | (ex_reg_inst_ff.out_o.e21 << 21) | (ex_reg_inst_ff.out_o.e20 << 20) | (ex_reg_inst_ff.out_o.e19 << 19) | (ex_reg_inst_ff.out_o.e18 << 18) | (ex_reg_inst_ff.out_o.e17 << 17) | (ex_reg_inst_ff.out_o.e16 << 16) | (ex_reg_inst_ff.out_o.e15 << 15) | (ex_reg_inst_ff.out_o.e14 << 14) | (ex_reg_inst_ff.out_o.e13 << 13) | (ex_reg_inst_ff.out_o.e12 << 12) | (ex_reg_inst_ff.out_o.e11 << 11) | (ex_reg_inst_ff.out_o.e10 << 10) | (ex_reg_inst_ff.out_o.e9 << 9) | (ex_reg_inst_ff.out_o.e8 << 8) | (ex_reg_inst_ff.out_o.e7 << 7) | (ex_reg_inst_ff.out_o.e6 << 6) | (ex_reg_inst_ff.out_o.e5 << 5) | (ex_reg_inst_ff.out_o.e4 << 4) | (ex_reg_inst_ff.out_o.e3 << 3) | (ex_reg_inst_ff.out_o.e2 << 2) | (ex_reg_inst_ff.out_o.e1 << 1) | ex_reg_inst_ff.out_o.e0
+  const t3766 = ex_reg_inst__w1#[7..=11]
+  ex_waddr__wtmp = t3766
   ex_csr_en__wtmp = unsigned(ex_ctrl#[5..=7] != minion_pkg.CsrN)
   const ex_replay__w1 = unsigned((ex_reg_replay != 0) or ((csr_excl_mode_transition != 0) and (ex_reg_valid != 0)))
   ex_xcpt = 0ub?
@@ -807,22 +810,21 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   const ex_valid_qual__w1 = unsigned((ex_reg_valid != 0) and (ex_ctrl_kill__wtmp == 0) and (((ex_ctrl >> 2) & 1) == 0))
   const ex_valid_qual_to_gsc__w1 = unsigned((ex_reg_valid != 0) and (ex_ctrl_kill__wtmp == 0) and (((ex_ctrl >> 2) & 1) != 0) and ((ex_gsc_fs_valid & 1) != 0))
   const ex_pc_valid__w1 = unsigned(((ex_reg_valid != 0) or (ex_replay__w1 != 0) or (ex_reg_xcpt_interrupt != 0)) and (((ex_ctrl >> 2) & 1) == 0))
-  mut mul_div = intpipe_mul_div_top::[name=mul_div](clk_i = clock, rst_ni = unsigned(reset_w__w1 == 0), `dft_i.scanmode` = 0, `dft_i.scan_reset_n` = 0, `dft_i.sram_clk_override` = 0, `dft_i.ram_rei` = 0, `dft_i.ram_wei` = 0, req_valid = ex_div_req, req_valid_early = unsigned((id_valid_qual != 0) and (`id_ctrl_to_ex.div` != 0)), req_fn = ex_ctrl#[24..=28], req_fn_early = id_ctrl.alu_fn, req_dw = (ex_ctrl >> 29) & 1, req_in1 = ex_reg_data#[0..=63], req_in2 = ex_reg_data#[64..=127], `req_dest.fp` = `ex_div_dest.fp`, `req_dest.addr` = `ex_div_dest.addr`, `req_dest.thread_id` = `ex_div_dest.thread_id`, kill = div_kill, chicken_bit_mul_div = chicken_bit_intpipe, resp_ready = wb_div_resp_ready)
+  mut mul_div = intpipe_mul_div_top::[name=mul_div](clk_i = clock, rst_ni = unsigned(reset_w__w1 == 0), `dft_i.scanmode` = 0, `dft_i.scan_reset_n` = 0, `dft_i.sram_clk_override` = 0, `dft_i.ram_rei` = 0, `dft_i.ram_wei` = 0, req_valid = ex_div_req, req_valid_early = unsigned((id_valid_qual != 0) and (`id_ctrl_to_ex.div` != 0)), req_fn = ex_ctrl#[24..=28], req_fn_early = id_ctrl.alu_fn, req_dw = (ex_ctrl >> 29) & 1, req_in1 = ex_reg_data[0], req_in2 = ex_reg_data[1], `req_dest.fp` = `ex_div_dest.fp`, `req_dest.addr` = `ex_div_dest.addr`, `req_dest.thread_id` = `ex_div_dest.thread_id`, kill = div_kill, chicken_bit_mul_div = chicken_bit_intpipe, resp_ready = wb_div_resp_ready)
   ex_div_ready = mul_div.req_ready
   wb_div_resp_valid = mul_div.resp_valid
-  wb_div_resp_dest.fp = mul_div["resp_dest.fp"]
-  wb_div_resp_dest.addr = mul_div["resp_dest.addr"]
-  wb_div_resp_dest.thread_id = mul_div["resp_dest.thread_id"]
+  wb_div_resp_dest.fp = mul_div.resp_dest.fp
+  wb_div_resp_dest.addr = mul_div.resp_dest.addr
+  wb_div_resp_dest.thread_id = mul_div.resp_dest.thread_id
   tag_div_req = if reset_w__w1 != 0 { 0 } else { ex_div_req }
   if reset_w__w1 != 0 {
     mem_div_req = 0
   } else {
     mem_div_req = unsigned((tag_div_req != 0) and (div_kill == 0))
   }
-  `ex_div_dest.addr` = ex_waddr
-  `ex_div_dest.fp` = 0
-  `ex_div_dest.thread_id` = ex_thread_id & 1
   ex_div_req__wtmp = unsigned((ex_reg_valid != 0) and (((ex_ctrl >> 9) & 1) != 0))
+  `ex_div_dest.addr` = ex_waddr
+  `ex_div_dest.thread_id` = ex_thread_id & 1
   div_kill__wtmp = unsigned(((tag_div_req != 0) and ((tag_reg_valid == 0) or (tag_ctrl_kill != 0))) or ((mem_div_req != 0) and (mem_ctrl_kill != 0)))
   mut _mux_224:u3 = if ex_ctrl_kill != 0 { (minion_pkg.VpuLaneNum - 1)#[0..=31]#[0..=2] } else { ex_reg_gsc_cnt }
   mut _mux_225:u3 = if id_valid_qual != 0 { id_reg_gsc_cnt__w1 } else { _mux_224 }
@@ -832,11 +834,11 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   mut _mux_230:u1 = if (id_dcache_ready != 0) or (id_valid_qual != 0) { 0 } else { ex_gscing_one_lane & 1 }
   mut _mux_231:u1 = if unsigned((id_valid_qual != 0) and (id_reg_gsc_cnt__w1 == (minion_pkg.VpuLaneNum - 1)#[0..=31]#[0..=2]) and (id_ctrl.gsc != 0)) != 0 { 1 } else { _mux_230 & 1 }
   ex_gscing_one_lane_next__wtmp = _mux_231
-  mut `ex_vpu_req__bpo.fromint_data` = vpu_ex_reg_data
-  mut `ex_vpu_req__bpo.gsc_src` = ex_reg_gsc_cnt
-  mut `ex_vpu_req__bpo.gscing` = ex_gscing
-  mut `ex_vpu_req__bpo.kill` = ex_ctrl_kill
   mut `ex_vpu_req__bpo.thread_id` = ex_thread_id
+  mut `ex_vpu_req__bpo.kill` = ex_ctrl_kill
+  mut `ex_vpu_req__bpo.fromint_data` = vpu_ex_reg_data
+  mut `ex_vpu_req__bpo.gscing` = ex_gscing
+  mut `ex_vpu_req__bpo.gsc_src` = ex_reg_gsc_cnt
   gsc_reg_valid = if reset_w__w1 != 0 { 0 } else { ex_valid_qual_to_gsc__w1 }
   if ex_valid_qual_to_gsc__w1 != 0 {
     gsc_reg_ps_mask = ex_vpu_ctrl.ps_mask
@@ -847,18 +849,20 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   mut _mux_234:u2 = if id_valid_qual != 0 { 2 } else { _mux_233 }
   ex_gsc_fs_valid_next__wtmp = _mux_234
   if (ex_reg_valid != 0) and (ex_ctrl_kill == 0) and (((ex_ctrl >> 2) & 1) != 0) {
-    vpu_gsc_fs_delayed_reg#[0..=31] = vpu_gsc_fs_delayed__w1#[0..=31]
+    vpu_gsc_fs_delayed_reg[0] = vpu_gsc_fs_delayed__w1#[0..=31]
   }
-  mut id_op1 = 0
+  mut id_op1:u64 = 0sb?
+  id_op1 = 0
   if ex_gsc_busy__w1 != 0 {
     id_op1 = vpu_gsc_fs_delayed__w1#[0..=31]#sext[0..=31]#[0..=63]
   } else {
-    const t3972 = `id_ctrl_to_ex.sel_alu1`
-    id_op1 = unique if t3972 == minion_pkg.A1Rs1 { id_reg_data#[0..=63] } elif t3972 == minion_pkg.A1Pc { id_pc__w1#[0..=48]#sext[0..=48]#[0..=63] } elif t3972 == minion_pkg.A1Fs1 { vpu_gsc_fs_delayed__w1#[0..=31]#sext[0..=31]#[0..=63] } else { 0 }
+    const t3976 = `id_ctrl_to_ex.sel_alu1`
+    id_op1 = unique if t3976 == minion_pkg.A1Rs1 { id_reg_data#[0..=63] } elif t3976 == minion_pkg.A1Pc { id_pc__w1#[0..=48]#sext[0..=48]#[0..=63] } elif t3976 == minion_pkg.A1Fs1 { vpu_gsc_fs_delayed__w1#[0..=31]#sext[0..=31]#[0..=63] } else { 0 }
   }
-  const t3983 = `id_ctrl_to_ex.sel_alu2`
+  id_op2 = 0sb?
+  const t3987 = `id_ctrl_to_ex.sel_alu2`
   id_op2 = 0
-  match t3983 {
+  match t3987 {
     == minion_pkg.A2Rs2 {
       id_op2 = id_reg_data#[64..=127]
     }
@@ -880,20 +884,19 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
     ex_op2 = id_op2
   }
   mut _mux_239:u1 = if (unsigned(alu.adder_out#[47..=63] != 0) == 0) or (unsigned(alu.adder_out#[47..=63] == 0x1ffff) == 1) { 0 } else { 1 }
+  ex_dcache_req_valid__wtmp = unsigned(((ex_reg_valid != 0) and (((ex_ctrl >> 23) & 1) != 0) and (((ex_ctrl >> 2) & 1) == 0)) or (gsc_reg_valid != 0))
+  mut `ex_dcache_req__bpo.dest.fp` = (ex_ctrl >> 42) & 1
+  mut `ex_dcache_req__bpo.dest.addr` = ex_waddr
+  mut `ex_dcache_req__bpo.dest.thread_id` = ex_thread_id
+  mut `ex_dcache_req__bpo.cmd` = ex_ctrl#[18..=22]
+  mut `ex_dcache_req__bpo.typ` = ex_ctrl#[14..=17]
+  mut `ex_dcache_req__bpo.gsc_cnt` = gsc_reg_gsc_cnt
   mut `ex_dcache_req__bpo.addr` = alu.adder_out#[0..=47]
   mut `ex_dcache_req__bpo.addr_msb_err` = _mux_239
-  mut `ex_dcache_req__bpo.cmd` = ex_ctrl#[18..=22]
-  mut `ex_dcache_req__bpo.dest.addr` = ex_waddr
-  mut `ex_dcache_req__bpo.dest.fp` = (ex_ctrl >> 42) & 1
-  mut `ex_dcache_req__bpo.dest.thread_id` = ex_thread_id
-  mut `ex_dcache_req__bpo.gsc_cnt` = gsc_reg_gsc_cnt
-  mut `ex_dcache_req__bpo.phys` = 0
-  mut `ex_dcache_req__bpo.typ` = ex_ctrl#[14..=17]
-  ex_dcache_req_valid__wtmp = unsigned(((ex_reg_valid != 0) and (((ex_ctrl >> 23) & 1) != 0) and (((ex_ctrl >> 2) & 1) == 0)) or (gsc_reg_valid != 0))
   mut _mux_241:u8 = if gsc_reg_valid != 0 { gsc_reg_ps_mask } else { ex_vpu_ctrl.ps_mask#[0..=7] }
-  mut `ex_dcache_req__bpo.gsc32_idx` = ex_reg_data#[0..=63]#[0..=39]
-  mut `ex_dcache_req__bpo.mem_global` = (ex_ctrl >> 3) & 1
   mut `ex_dcache_req__bpo.ps_mask` = _mux_241
+  mut `ex_dcache_req__bpo.gsc32_idx` = ex_reg_data[0]#[0..=39]
+  mut `ex_dcache_req__bpo.mem_global` = (ex_ctrl >> 3) & 1
   if reset_w__w1 != 0 {
     tag_reg_valid = 0
   } else {
@@ -925,105 +928,105 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
     tag_reg_wdata = alu.out
   }
   if unsigned((((ex_ctrl >> 38) & 1) != 0) and (((ex_ctrl >> 23) & 1) != 0) and (ex_ctrl#[18..=22] != minion_pkg.DcCmdXrd) and (((ex_ctrl >> 42) & 1) == 0)) != 0 {
-    tag_reg_rs2 = ex_reg_data#[64..=127]
+    tag_reg_rs2 = ex_reg_data[1]
   }
   tag_reg_xcpt_interrupt = unsigned(((((id_fe_req_valid << 1) >> (ex_thread_id + 1)) & 1) == 0) and (ex_reg_xcpt_interrupt != 0))
   tag_reg_xcpt = unsigned((ex_xcpt != 0) and (ex_valid_qual__w1 != 0))
   tag_reg_replay = unsigned((ex_replay__w1 != 0) and (id_take_pc == 0))
   tag_csr_vpu = unsigned((ex_valid_qual__w1 != 0) and (ex_csr_vpu != 0))
-  const t4090 = ex_reg_inst__w1 >> 31
-  const t4091 = t4090 & 1
-  const t4092 = ex_reg_inst__w1 >> 30
-  const t4093 = t4092 & 1
-  const t4094 = ex_reg_inst__w1 >> 29
+  const t4094 = ex_reg_inst__w1 >> 31
   const t4095 = t4094 & 1
-  const t4096 = ex_reg_inst__w1 >> 28
+  const t4096 = ex_reg_inst__w1 >> 30
   const t4097 = t4096 & 1
-  const t4098 = ex_reg_inst__w1 >> 27
+  const t4098 = ex_reg_inst__w1 >> 29
   const t4099 = t4098 & 1
-  const t4100 = ex_reg_inst__w1 >> 26
+  const t4100 = ex_reg_inst__w1 >> 28
   const t4101 = t4100 & 1
-  const t4102 = ex_reg_inst__w1 >> 25
+  const t4102 = ex_reg_inst__w1 >> 27
   const t4103 = t4102 & 1
-  const t4104 = ex_reg_inst__w1 >> 24
+  const t4104 = ex_reg_inst__w1 >> 26
   const t4105 = t4104 & 1
-  const t4106 = ex_reg_inst__w1 >> 23
+  const t4106 = ex_reg_inst__w1 >> 25
   const t4107 = t4106 & 1
-  const t4108 = ex_reg_inst__w1 >> 22
+  const t4108 = ex_reg_inst__w1 >> 24
   const t4109 = t4108 & 1
-  const t4110 = ex_reg_inst__w1 >> 21
+  const t4110 = ex_reg_inst__w1 >> 23
   const t4111 = t4110 & 1
-  const t4112 = ex_reg_inst__w1 >> 20
+  const t4112 = ex_reg_inst__w1 >> 22
   const t4113 = t4112 & 1
-  const t4114 = ex_reg_inst__w1 >> 19
+  const t4114 = ex_reg_inst__w1 >> 21
   const t4115 = t4114 & 1
-  const t4116 = ex_reg_inst__w1 >> 18
+  const t4116 = ex_reg_inst__w1 >> 20
   const t4117 = t4116 & 1
-  const t4118 = ex_reg_inst__w1 >> 17
+  const t4118 = ex_reg_inst__w1 >> 19
   const t4119 = t4118 & 1
-  const t4120 = ex_reg_inst__w1 >> 16
+  const t4120 = ex_reg_inst__w1 >> 18
   const t4121 = t4120 & 1
-  const t4122 = ex_reg_inst__w1 >> 15
+  const t4122 = ex_reg_inst__w1 >> 17
   const t4123 = t4122 & 1
-  const t4124 = ex_reg_inst__w1 >> 14
+  const t4124 = ex_reg_inst__w1 >> 16
   const t4125 = t4124 & 1
-  const t4126 = ex_reg_inst__w1 >> 13
+  const t4126 = ex_reg_inst__w1 >> 15
   const t4127 = t4126 & 1
-  const t4128 = ex_reg_inst__w1 >> 12
+  const t4128 = ex_reg_inst__w1 >> 14
   const t4129 = t4128 & 1
-  const t4130 = ex_reg_inst__w1 >> 11
+  const t4130 = ex_reg_inst__w1 >> 13
   const t4131 = t4130 & 1
-  const t4132 = ex_reg_inst__w1 >> 10
+  const t4132 = ex_reg_inst__w1 >> 12
   const t4133 = t4132 & 1
-  const t4134 = ex_reg_inst__w1 >> 9
+  const t4134 = ex_reg_inst__w1 >> 11
   const t4135 = t4134 & 1
-  const t4136 = ex_reg_inst__w1 >> 8
+  const t4136 = ex_reg_inst__w1 >> 10
   const t4137 = t4136 & 1
-  const t4138 = ex_reg_inst__w1 >> 7
+  const t4138 = ex_reg_inst__w1 >> 9
   const t4139 = t4138 & 1
-  const t4140 = ex_reg_inst__w1 >> 6
+  const t4140 = ex_reg_inst__w1 >> 8
   const t4141 = t4140 & 1
-  const t4142 = ex_reg_inst__w1 >> 5
+  const t4142 = ex_reg_inst__w1 >> 7
   const t4143 = t4142 & 1
-  const t4144 = ex_reg_inst__w1 >> 4
+  const t4144 = ex_reg_inst__w1 >> 6
   const t4145 = t4144 & 1
-  const t4146 = ex_reg_inst__w1 >> 3
+  const t4146 = ex_reg_inst__w1 >> 5
   const t4147 = t4146 & 1
-  const t4148 = ex_reg_inst__w1 >> 2
+  const t4148 = ex_reg_inst__w1 >> 4
   const t4149 = t4148 & 1
-  const t4150 = ex_reg_inst__w1 >> 1
+  const t4150 = ex_reg_inst__w1 >> 3
   const t4151 = t4150 & 1
-  const t4152 = ex_reg_inst__w1 & 1
-  mut tag_reg_inst_ff = intpipe_inst_bits_stage::[name=tag_reg_inst_ff](clk_i = clock, enable_i = unsigned((ex_pc_valid__w1 != 0) or (gsc_pc_valid != 0)), is_csr_i = ex_csr_en, is_br_jal_i = unsigned((((ex_ctrl >> 41) & 1) != 0) or (((ex_ctrl >> 40) & 1) != 0)), te_enable_i = te_enable, xcpt_i = ex_xcpt, `in_i.e31` = t4091, `in_i.e30` = t4093, `in_i.e29` = t4095, `in_i.e28` = t4097, `in_i.e27` = t4099, `in_i.e26` = t4101, `in_i.e25` = t4103, `in_i.e24` = t4105, `in_i.e23` = t4107, `in_i.e22` = t4109, `in_i.e21` = t4111, `in_i.e20` = t4113, `in_i.e19` = t4115, `in_i.e18` = t4117, `in_i.e17` = t4119, `in_i.e16` = t4121, `in_i.e15` = t4123, `in_i.e14` = t4125, `in_i.e13` = t4127, `in_i.e12` = t4129, `in_i.e11` = t4131, `in_i.e10` = t4133, `in_i.e9` = t4135, `in_i.e8` = t4137, `in_i.e7` = t4139, `in_i.e6` = t4141, `in_i.e5` = t4143, `in_i.e4` = t4145, `in_i.e3` = t4147, `in_i.e2` = t4149, `in_i.e1` = t4151, `in_i.e0` = t4152)
-  const tag_reg_inst__w1 = (tag_reg_inst_ff["out_o.e31"] << 31) | (tag_reg_inst_ff["out_o.e30"] << 30) | (tag_reg_inst_ff["out_o.e29"] << 29) | (tag_reg_inst_ff["out_o.e28"] << 28) | (tag_reg_inst_ff["out_o.e27"] << 27) | (tag_reg_inst_ff["out_o.e26"] << 26) | (tag_reg_inst_ff["out_o.e25"] << 25) | (tag_reg_inst_ff["out_o.e24"] << 24) | (tag_reg_inst_ff["out_o.e23"] << 23) | (tag_reg_inst_ff["out_o.e22"] << 22) | (tag_reg_inst_ff["out_o.e21"] << 21) | (tag_reg_inst_ff["out_o.e20"] << 20) | (tag_reg_inst_ff["out_o.e19"] << 19) | (tag_reg_inst_ff["out_o.e18"] << 18) | (tag_reg_inst_ff["out_o.e17"] << 17) | (tag_reg_inst_ff["out_o.e16"] << 16) | (tag_reg_inst_ff["out_o.e15"] << 15) | (tag_reg_inst_ff["out_o.e14"] << 14) | (tag_reg_inst_ff["out_o.e13"] << 13) | (tag_reg_inst_ff["out_o.e12"] << 12) | (tag_reg_inst_ff["out_o.e11"] << 11) | (tag_reg_inst_ff["out_o.e10"] << 10) | (tag_reg_inst_ff["out_o.e9"] << 9) | (tag_reg_inst_ff["out_o.e8"] << 8) | (tag_reg_inst_ff["out_o.e7"] << 7) | (tag_reg_inst_ff["out_o.e6"] << 6) | (tag_reg_inst_ff["out_o.e5"] << 5) | (tag_reg_inst_ff["out_o.e4"] << 4) | (tag_reg_inst_ff["out_o.e3"] << 3) | (tag_reg_inst_ff["out_o.e2"] << 2) | (tag_reg_inst_ff["out_o.e1"] << 1) | tag_reg_inst_ff["out_o.e0"]
+  const t4152 = ex_reg_inst__w1 >> 2
+  const t4153 = t4152 & 1
+  const t4154 = ex_reg_inst__w1 >> 1
+  const t4155 = t4154 & 1
+  const t4156 = ex_reg_inst__w1 & 1
+  mut tag_reg_inst_ff = intpipe_inst_bits_stage::[name=tag_reg_inst_ff](clk_i = clock, enable_i = unsigned((ex_pc_valid__w1 != 0) or (gsc_pc_valid != 0)), is_csr_i = ex_csr_en, is_br_jal_i = unsigned((((ex_ctrl >> 41) & 1) != 0) or (((ex_ctrl >> 40) & 1) != 0)), te_enable_i = te_enable, xcpt_i = ex_xcpt, `in_i.e31` = t4095, `in_i.e30` = t4097, `in_i.e29` = t4099, `in_i.e28` = t4101, `in_i.e27` = t4103, `in_i.e26` = t4105, `in_i.e25` = t4107, `in_i.e24` = t4109, `in_i.e23` = t4111, `in_i.e22` = t4113, `in_i.e21` = t4115, `in_i.e20` = t4117, `in_i.e19` = t4119, `in_i.e18` = t4121, `in_i.e17` = t4123, `in_i.e16` = t4125, `in_i.e15` = t4127, `in_i.e14` = t4129, `in_i.e13` = t4131, `in_i.e12` = t4133, `in_i.e11` = t4135, `in_i.e10` = t4137, `in_i.e9` = t4139, `in_i.e8` = t4141, `in_i.e7` = t4143, `in_i.e6` = t4145, `in_i.e5` = t4147, `in_i.e4` = t4149, `in_i.e3` = t4151, `in_i.e2` = t4153, `in_i.e1` = t4155, `in_i.e0` = t4156)
+  const tag_reg_inst__w1 = (tag_reg_inst_ff.out_o.e31 << 31) | (tag_reg_inst_ff.out_o.e30 << 30) | (tag_reg_inst_ff.out_o.e29 << 29) | (tag_reg_inst_ff.out_o.e28 << 28) | (tag_reg_inst_ff.out_o.e27 << 27) | (tag_reg_inst_ff.out_o.e26 << 26) | (tag_reg_inst_ff.out_o.e25 << 25) | (tag_reg_inst_ff.out_o.e24 << 24) | (tag_reg_inst_ff.out_o.e23 << 23) | (tag_reg_inst_ff.out_o.e22 << 22) | (tag_reg_inst_ff.out_o.e21 << 21) | (tag_reg_inst_ff.out_o.e20 << 20) | (tag_reg_inst_ff.out_o.e19 << 19) | (tag_reg_inst_ff.out_o.e18 << 18) | (tag_reg_inst_ff.out_o.e17 << 17) | (tag_reg_inst_ff.out_o.e16 << 16) | (tag_reg_inst_ff.out_o.e15 << 15) | (tag_reg_inst_ff.out_o.e14 << 14) | (tag_reg_inst_ff.out_o.e13 << 13) | (tag_reg_inst_ff.out_o.e12 << 12) | (tag_reg_inst_ff.out_o.e11 << 11) | (tag_reg_inst_ff.out_o.e10 << 10) | (tag_reg_inst_ff.out_o.e9 << 9) | (tag_reg_inst_ff.out_o.e8 << 8) | (tag_reg_inst_ff.out_o.e7 << 7) | (tag_reg_inst_ff.out_o.e6 << 6) | (tag_reg_inst_ff.out_o.e5 << 5) | (tag_reg_inst_ff.out_o.e4 << 4) | (tag_reg_inst_ff.out_o.e3 << 3) | (tag_reg_inst_ff.out_o.e2 << 2) | (tag_reg_inst_ff.out_o.e1 << 1) | tag_reg_inst_ff.out_o.e0
   const tag_br_taken__w1 = tag_reg_wdata & 1
-  const t4260 = tag_reg_inst__w1 >> 31
-  const t4261 = t4260 & 1
-  const t4262 = t4261
-  const t4263 = t4262 != 0
-  mut _rep_251:u29 = if t4263 { 0x1fffffff } else { 0 }
-  const t4265 = tag_reg_inst__w1#[12..=19]
-  const t4266 = tag_reg_inst__w1 >> 20
-  const t4267 = t4266 & 1
-  const t4268 = tag_reg_inst__w1#[21..=30]
-  const t4269 = (_rep_251 << 20) | (t4265 << 12) | (t4267 << 11) | (t4268 << 1)
-  const tag_jal_imm__w1 = t4269
-  const t4270 = tag_reg_inst__w1 >> 31
+  const t4264 = tag_reg_inst__w1 >> 31
+  const t4265 = t4264 & 1
+  const t4266 = t4265
+  const t4267 = t4266 != 0
+  mut _rep_251:u29 = if t4267 { 0x1fffffff } else { 0 }
+  const t4269 = tag_reg_inst__w1#[12..=19]
+  const t4270 = tag_reg_inst__w1 >> 20
   const t4271 = t4270 & 1
-  const t4272 = t4271
-  const t4273 = t4272 != 0
-  mut _rep_252:u37 = if t4273 { 0x1fffffffff } else { 0 }
-  const t4275 = tag_reg_inst__w1 >> 7
-  const t4276 = t4275 & 1
-  const t4277 = tag_reg_inst__w1#[25..=30]
-  const t4278 = tag_reg_inst__w1#[8..=11]
-  const t4279 = (_rep_252 << 12) | (t4276 << 11) | (t4277 << 5) | (t4278 << 1)
-  const tag_br_imm__w1 = t4279
-  const t4285 = tag_br_imm__w1
-  const t4289 = tag_jal_imm__w1
+  const t4272 = tag_reg_inst__w1#[21..=30]
+  const t4273 = (_rep_251 << 20) | (t4269 << 12) | (t4271 << 11) | (t4272 << 1)
+  const tag_jal_imm__w1 = t4273
+  const t4274 = tag_reg_inst__w1 >> 31
+  const t4275 = t4274 & 1
+  const t4276 = t4275
+  const t4277 = t4276 != 0
+  mut _rep_252:u37 = if t4277 { 0x1fffffffff } else { 0 }
+  const t4279 = tag_reg_inst__w1 >> 7
+  const t4280 = t4279 & 1
+  const t4281 = tag_reg_inst__w1#[25..=30]
+  const t4282 = tag_reg_inst__w1#[8..=11]
+  const t4283 = (_rep_252 << 12) | (t4280 << 11) | (t4281 << 5) | (t4282 << 1)
+  const tag_br_imm__w1 = t4283
+  const t4289 = tag_br_imm__w1
+  const t4293 = tag_jal_imm__w1
   mut _mux_253:u49 = if tag_reg_rvc != 0 { 2 } else { 4 }
-  mut _mux_254:u49 = if ((tag_ctrl >> 40) & 1) != 0 { t4289 } else { _mux_253 }
-  mut _mux_255:u49 = if (((tag_ctrl >> 41) & 1) != 0) and (tag_br_taken__w1 != 0) { t4285 } else { _mux_254 }
+  mut _mux_254:u49 = if ((tag_ctrl >> 40) & 1) != 0 { t4293 } else { _mux_253 }
+  mut _mux_255:u49 = if (((tag_ctrl >> 41) & 1) != 0) and (tag_br_taken__w1 != 0) { t4289 } else { _mux_254 }
   const tag_br_target__w1 = (tag_reg_pc + _mux_255)#[0..=48]
   const in__w1 = tag_reg_wdata
   extend_VA = 0sb?
@@ -1042,14 +1045,14 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   tag_take_pc__wtmp = unsigned((tag_reg_valid != 0) and ((unsigned((((((tag_ctrl >> 41) & 1) != 0) and (tag_br_taken__w1 != 0)) or (((tag_ctrl >> 40) & 1) != 0) or (((tag_ctrl >> 39) & 1) != 0)) and (not ((tag_reg_xcpt != 0) or (tag_reg_xcpt_interrupt != 0)))) != 0) or (tag_reg_flush_pipe != 0)))
   mut _mux_260:u64 = if (tag_reg_xcpt == 0) and (((((tag_ctrl >> 39) & 1) ^ 0) & 1) != 0) { tag_br_target__w1#sext[0..=48]#[0..=63] } else { tag_reg_wdata }
   const tag_int_wdata__w1 = _mux_260
-  const t4350 = tag_reg_inst__w1#[7..=11]
-  tag_waddr__wtmp = t4350
+  const t4355 = tag_reg_inst__w1#[7..=11]
+  tag_waddr__wtmp = t4355
   tag_csr_en__wtmp = unsigned(tag_ctrl#[5..=7] != minion_pkg.CsrN)
   mut dcache_bp = debug_breakpoint_p1::[name=dcache_bp](control_ip = csr_file.bp_control, in_debug_ip = csr_file.io_debug, prv_ip = csr_file.io_prv, tdata2_ip = csr_file.bp_address, address_ip = tag_dcache_bp.address, cmd_ip = tag_dcache_bp.cmd, valid_ip = tag_dcache_bp_valid, thread_id_ip = tag_dcache_bp.thread_id)
-  const tag_breakpoint__w1 = dcache_bp.xcpt_op
   tag_dcache_bp_triggered = dcache_bp.update_op
-  tag_new_cause = 0sb?
+  const tag_breakpoint__w1 = dcache_bp.xcpt_op
   tag_new_xcpt = 0ub?
+  tag_new_cause = 0sb?
   tag_new_cause = minion_pkg.XcptMisalignedFetch
   tag_new_xcpt = 1
   if dcache_bp.enter_debug_op != 0 {
@@ -1079,6 +1082,7 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   }
   const tag_xcpt__w1 = unsigned((tag_reg_xcpt_interrupt != 0) or (tag_reg_xcpt != 0) or ((tag_reg_valid != 0) and (tag_new_xcpt != 0)))
   mut _mux_263:u5 = if (tag_reg_xcpt_interrupt != 0) or (tag_reg_xcpt != 0) { tag_reg_cause } else { tag_new_cause }
+  debug_timing_next = 0sb?
   debug_timing_next = debug_timing
   if fetch_bp.update_op != 0 {
     debug_timing_next = ((debug_timing_next & (~(1 << id_thread_id__w1))) | ((fetch_bp.timing_op & 1) << id_thread_id__w1))#[0..=1]
@@ -1137,72 +1141,72 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   }
   mem_reg_replay = unsigned((tag_replay != 0) and (not (((wb_take_pc != 0) and (wb_thread_id == tag_thread_id)) or ((((csr_file.io_resume << 1) >> (tag_thread_id + 1)) & 1) != 0))))
   mem_csr_vpu = unsigned((tag_valid_qual__w1 != 0) and (tag_csr_vpu != 0))
-  const t4598 = tag_reg_inst__w1 >> 31
-  const t4599 = t4598 & 1
-  const t4600 = tag_reg_inst__w1 >> 30
-  const t4601 = t4600 & 1
-  const t4602 = tag_reg_inst__w1 >> 29
-  const t4603 = t4602 & 1
-  const t4604 = tag_reg_inst__w1 >> 28
-  const t4605 = t4604 & 1
-  const t4606 = tag_reg_inst__w1 >> 27
-  const t4607 = t4606 & 1
-  const t4608 = tag_reg_inst__w1 >> 26
-  const t4609 = t4608 & 1
-  const t4610 = tag_reg_inst__w1 >> 25
-  const t4611 = t4610 & 1
-  const t4612 = tag_reg_inst__w1 >> 24
-  const t4613 = t4612 & 1
-  const t4614 = tag_reg_inst__w1 >> 23
-  const t4615 = t4614 & 1
-  const t4616 = tag_reg_inst__w1 >> 22
-  const t4617 = t4616 & 1
-  const t4618 = tag_reg_inst__w1 >> 21
-  const t4619 = t4618 & 1
-  const t4620 = tag_reg_inst__w1 >> 20
-  const t4621 = t4620 & 1
-  const t4622 = tag_reg_inst__w1 >> 19
-  const t4623 = t4622 & 1
-  const t4624 = tag_reg_inst__w1 >> 18
-  const t4625 = t4624 & 1
-  const t4626 = tag_reg_inst__w1 >> 17
-  const t4627 = t4626 & 1
-  const t4628 = tag_reg_inst__w1 >> 16
-  const t4629 = t4628 & 1
-  const t4630 = tag_reg_inst__w1 >> 15
-  const t4631 = t4630 & 1
-  const t4632 = tag_reg_inst__w1 >> 14
-  const t4633 = t4632 & 1
-  const t4634 = tag_reg_inst__w1 >> 13
-  const t4635 = t4634 & 1
-  const t4636 = tag_reg_inst__w1 >> 12
-  const t4637 = t4636 & 1
-  const t4638 = tag_reg_inst__w1 >> 11
-  const t4639 = t4638 & 1
-  const t4640 = tag_reg_inst__w1 >> 10
-  const t4641 = t4640 & 1
-  const t4642 = tag_reg_inst__w1 >> 9
-  const t4643 = t4642 & 1
-  const t4644 = tag_reg_inst__w1 >> 8
-  const t4645 = t4644 & 1
-  const t4646 = tag_reg_inst__w1 >> 7
-  const t4647 = t4646 & 1
-  const t4648 = tag_reg_inst__w1 >> 6
-  const t4649 = t4648 & 1
-  const t4650 = tag_reg_inst__w1 >> 5
-  const t4651 = t4650 & 1
-  const t4652 = tag_reg_inst__w1 >> 4
-  const t4653 = t4652 & 1
-  const t4654 = tag_reg_inst__w1 >> 3
-  const t4655 = t4654 & 1
-  const t4656 = tag_reg_inst__w1 >> 2
-  const t4657 = t4656 & 1
-  const t4658 = tag_reg_inst__w1 >> 1
-  const t4659 = t4658 & 1
-  const t4660 = tag_reg_inst__w1 & 1
   mem_dcache_bp_triggered_next = unsigned((tag_dcache_bp_triggered != 0) and ((mem_dcache_bp_triggered == 0) or (mem_thread_id != tag_thread_id)))
-  mut mem_reg_inst_ff = intpipe_inst_bits_stage_p1::[name=mem_reg_inst_ff](clk_i = clock, enable_i = tag_pc_valid__w1, is_csr_i = tag_csr_en, is_br_jal_i = 0, te_enable_i = te_enable, xcpt_i = tag_xcpt__w1, `in_i.e31` = t4599, `in_i.e30` = t4601, `in_i.e29` = t4603, `in_i.e28` = t4605, `in_i.e27` = t4607, `in_i.e26` = t4609, `in_i.e25` = t4611, `in_i.e24` = t4613, `in_i.e23` = t4615, `in_i.e22` = t4617, `in_i.e21` = t4619, `in_i.e20` = t4621, `in_i.e19` = t4623, `in_i.e18` = t4625, `in_i.e17` = t4627, `in_i.e16` = t4629, `in_i.e15` = t4631, `in_i.e14` = t4633, `in_i.e13` = t4635, `in_i.e12` = t4637, `in_i.e11` = t4639, `in_i.e10` = t4641, `in_i.e9` = t4643, `in_i.e8` = t4645, `in_i.e7` = t4647, `in_i.e6` = t4649, `in_i.e5` = t4651, `in_i.e4` = t4653, `in_i.e3` = t4655, `in_i.e2` = t4657, `in_i.e1` = t4659, `in_i.e0` = t4660)
-  mem_reg_inst = (mem_reg_inst_ff["out_o.e31"] << 31) | (mem_reg_inst_ff["out_o.e30"] << 30) | (mem_reg_inst_ff["out_o.e29"] << 29) | (mem_reg_inst_ff["out_o.e28"] << 28) | (mem_reg_inst_ff["out_o.e27"] << 27) | (mem_reg_inst_ff["out_o.e26"] << 26) | (mem_reg_inst_ff["out_o.e25"] << 25) | (mem_reg_inst_ff["out_o.e24"] << 24) | (mem_reg_inst_ff["out_o.e23"] << 23) | (mem_reg_inst_ff["out_o.e22"] << 22) | (mem_reg_inst_ff["out_o.e21"] << 21) | (mem_reg_inst_ff["out_o.e20"] << 20) | (mem_reg_inst_ff["out_o.e19"] << 19) | (mem_reg_inst_ff["out_o.e18"] << 18) | (mem_reg_inst_ff["out_o.e17"] << 17) | (mem_reg_inst_ff["out_o.e16"] << 16) | (mem_reg_inst_ff["out_o.e15"] << 15) | (mem_reg_inst_ff["out_o.e14"] << 14) | (mem_reg_inst_ff["out_o.e13"] << 13) | (mem_reg_inst_ff["out_o.e12"] << 12) | (mem_reg_inst_ff["out_o.e11"] << 11) | (mem_reg_inst_ff["out_o.e10"] << 10) | (mem_reg_inst_ff["out_o.e9"] << 9) | (mem_reg_inst_ff["out_o.e8"] << 8) | (mem_reg_inst_ff["out_o.e7"] << 7) | (mem_reg_inst_ff["out_o.e6"] << 6) | (mem_reg_inst_ff["out_o.e5"] << 5) | (mem_reg_inst_ff["out_o.e4"] << 4) | (mem_reg_inst_ff["out_o.e3"] << 3) | (mem_reg_inst_ff["out_o.e2"] << 2) | (mem_reg_inst_ff["out_o.e1"] << 1) | mem_reg_inst_ff["out_o.e0"]
+  const t4603 = tag_reg_inst__w1 >> 31
+  const t4604 = t4603 & 1
+  const t4605 = tag_reg_inst__w1 >> 30
+  const t4606 = t4605 & 1
+  const t4607 = tag_reg_inst__w1 >> 29
+  const t4608 = t4607 & 1
+  const t4609 = tag_reg_inst__w1 >> 28
+  const t4610 = t4609 & 1
+  const t4611 = tag_reg_inst__w1 >> 27
+  const t4612 = t4611 & 1
+  const t4613 = tag_reg_inst__w1 >> 26
+  const t4614 = t4613 & 1
+  const t4615 = tag_reg_inst__w1 >> 25
+  const t4616 = t4615 & 1
+  const t4617 = tag_reg_inst__w1 >> 24
+  const t4618 = t4617 & 1
+  const t4619 = tag_reg_inst__w1 >> 23
+  const t4620 = t4619 & 1
+  const t4621 = tag_reg_inst__w1 >> 22
+  const t4622 = t4621 & 1
+  const t4623 = tag_reg_inst__w1 >> 21
+  const t4624 = t4623 & 1
+  const t4625 = tag_reg_inst__w1 >> 20
+  const t4626 = t4625 & 1
+  const t4627 = tag_reg_inst__w1 >> 19
+  const t4628 = t4627 & 1
+  const t4629 = tag_reg_inst__w1 >> 18
+  const t4630 = t4629 & 1
+  const t4631 = tag_reg_inst__w1 >> 17
+  const t4632 = t4631 & 1
+  const t4633 = tag_reg_inst__w1 >> 16
+  const t4634 = t4633 & 1
+  const t4635 = tag_reg_inst__w1 >> 15
+  const t4636 = t4635 & 1
+  const t4637 = tag_reg_inst__w1 >> 14
+  const t4638 = t4637 & 1
+  const t4639 = tag_reg_inst__w1 >> 13
+  const t4640 = t4639 & 1
+  const t4641 = tag_reg_inst__w1 >> 12
+  const t4642 = t4641 & 1
+  const t4643 = tag_reg_inst__w1 >> 11
+  const t4644 = t4643 & 1
+  const t4645 = tag_reg_inst__w1 >> 10
+  const t4646 = t4645 & 1
+  const t4647 = tag_reg_inst__w1 >> 9
+  const t4648 = t4647 & 1
+  const t4649 = tag_reg_inst__w1 >> 8
+  const t4650 = t4649 & 1
+  const t4651 = tag_reg_inst__w1 >> 7
+  const t4652 = t4651 & 1
+  const t4653 = tag_reg_inst__w1 >> 6
+  const t4654 = t4653 & 1
+  const t4655 = tag_reg_inst__w1 >> 5
+  const t4656 = t4655 & 1
+  const t4657 = tag_reg_inst__w1 >> 4
+  const t4658 = t4657 & 1
+  const t4659 = tag_reg_inst__w1 >> 3
+  const t4660 = t4659 & 1
+  const t4661 = tag_reg_inst__w1 >> 2
+  const t4662 = t4661 & 1
+  const t4663 = tag_reg_inst__w1 >> 1
+  const t4664 = t4663 & 1
+  const t4665 = tag_reg_inst__w1 & 1
+  mut mem_reg_inst_ff = intpipe_inst_bits_stage_p1::[name=mem_reg_inst_ff](clk_i = clock, enable_i = tag_pc_valid__w1, is_csr_i = tag_csr_en, is_br_jal_i = 0, te_enable_i = te_enable, xcpt_i = tag_xcpt__w1, `in_i.e31` = t4604, `in_i.e30` = t4606, `in_i.e29` = t4608, `in_i.e28` = t4610, `in_i.e27` = t4612, `in_i.e26` = t4614, `in_i.e25` = t4616, `in_i.e24` = t4618, `in_i.e23` = t4620, `in_i.e22` = t4622, `in_i.e21` = t4624, `in_i.e20` = t4626, `in_i.e19` = t4628, `in_i.e18` = t4630, `in_i.e17` = t4632, `in_i.e16` = t4634, `in_i.e15` = t4636, `in_i.e14` = t4638, `in_i.e13` = t4640, `in_i.e12` = t4642, `in_i.e11` = t4644, `in_i.e10` = t4646, `in_i.e9` = t4648, `in_i.e8` = t4650, `in_i.e7` = t4652, `in_i.e6` = t4654, `in_i.e5` = t4656, `in_i.e4` = t4658, `in_i.e3` = t4660, `in_i.e2` = t4662, `in_i.e1` = t4664, `in_i.e0` = t4665)
+  mem_reg_inst = (mem_reg_inst_ff.out_o.e31 << 31) | (mem_reg_inst_ff.out_o.e30 << 30) | (mem_reg_inst_ff.out_o.e29 << 29) | (mem_reg_inst_ff.out_o.e28 << 28) | (mem_reg_inst_ff.out_o.e27 << 27) | (mem_reg_inst_ff.out_o.e26 << 26) | (mem_reg_inst_ff.out_o.e25 << 25) | (mem_reg_inst_ff.out_o.e24 << 24) | (mem_reg_inst_ff.out_o.e23 << 23) | (mem_reg_inst_ff.out_o.e22 << 22) | (mem_reg_inst_ff.out_o.e21 << 21) | (mem_reg_inst_ff.out_o.e20 << 20) | (mem_reg_inst_ff.out_o.e19 << 19) | (mem_reg_inst_ff.out_o.e18 << 18) | (mem_reg_inst_ff.out_o.e17 << 17) | (mem_reg_inst_ff.out_o.e16 << 16) | (mem_reg_inst_ff.out_o.e15 << 15) | (mem_reg_inst_ff.out_o.e14 << 14) | (mem_reg_inst_ff.out_o.e13 << 13) | (mem_reg_inst_ff.out_o.e12 << 12) | (mem_reg_inst_ff.out_o.e11 << 11) | (mem_reg_inst_ff.out_o.e10 << 10) | (mem_reg_inst_ff.out_o.e9 << 9) | (mem_reg_inst_ff.out_o.e8 << 8) | (mem_reg_inst_ff.out_o.e7 << 7) | (mem_reg_inst_ff.out_o.e6 << 6) | (mem_reg_inst_ff.out_o.e5 << 5) | (mem_reg_inst_ff.out_o.e4 << 4) | (mem_reg_inst_ff.out_o.e3 << 3) | (mem_reg_inst_ff.out_o.e2 << 2) | (mem_reg_inst_ff.out_o.e1 << 1) | mem_reg_inst_ff.out_o.e0
   const mem_replay__w1 = unsigned((((mem_reg_replay | mem_dcache_flush_pipeline) & 1) != 0) or ((csr_excl_mode_transition != 0) and (mem_reg_valid != 0)))
   const mem_pc_valid__w1 = unsigned((mem_reg_valid != 0) or (mem_replay__w1 != 0) or (mem_reg_xcpt != 0))
   mem_ctrl_kill__wtmp = unsigned((unsigned(((wb_take_pc != 0) and (wb_thread_id == mem_thread_id)) or ((((csr_file.io_resume << 1) >> (mem_thread_id + 1)) & 1) != 0) or ((mem_thread_id != 0) and (thread1_enable == 0)) or ((mem_thread_id == 0) and (thread0_enable == 0)) or (csr_excl_mode_transition != 0)) != 0) or (mem_dcache_flush_pipeline != 0))
@@ -1239,27 +1243,27 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   wb_reg_replay = unsigned((mem_replay__w1 != 0) and (not (((wb_take_pc != 0) and (wb_thread_id == mem_thread_id)) or ((((csr_file.io_resume << 1) >> (mem_thread_id + 1)) & 1) != 0))))
   wb_csr_vpu = unsigned((mem_valid_qual__w1 != 0) and (mem_csr_vpu != 0))
   mut wb_reg_inst_ff = intpipe_inst_bits_stage_p1::[name=wb_reg_inst_ff](clk_i = clock, enable_i = mem_pc_valid__w1, is_csr_i = mem_csr_en, is_br_jal_i = 0, te_enable_i = te_enable, xcpt_i = mem_xcpt__w1, `in_i.e31` = (mem_reg_inst >> 31) & 1, `in_i.e30` = (mem_reg_inst >> 30) & 1, `in_i.e29` = (mem_reg_inst >> 29) & 1, `in_i.e28` = (mem_reg_inst >> 28) & 1, `in_i.e27` = (mem_reg_inst >> 27) & 1, `in_i.e26` = (mem_reg_inst >> 26) & 1, `in_i.e25` = (mem_reg_inst >> 25) & 1, `in_i.e24` = (mem_reg_inst >> 24) & 1, `in_i.e23` = (mem_reg_inst >> 23) & 1, `in_i.e22` = (mem_reg_inst >> 22) & 1, `in_i.e21` = (mem_reg_inst >> 21) & 1, `in_i.e20` = (mem_reg_inst >> 20) & 1, `in_i.e19` = (mem_reg_inst >> 19) & 1, `in_i.e18` = (mem_reg_inst >> 18) & 1, `in_i.e17` = (mem_reg_inst >> 17) & 1, `in_i.e16` = (mem_reg_inst >> 16) & 1, `in_i.e15` = (mem_reg_inst >> 15) & 1, `in_i.e14` = (mem_reg_inst >> 14) & 1, `in_i.e13` = (mem_reg_inst >> 13) & 1, `in_i.e12` = (mem_reg_inst >> 12) & 1, `in_i.e11` = (mem_reg_inst >> 11) & 1, `in_i.e10` = (mem_reg_inst >> 10) & 1, `in_i.e9` = (mem_reg_inst >> 9) & 1, `in_i.e8` = (mem_reg_inst >> 8) & 1, `in_i.e7` = (mem_reg_inst >> 7) & 1, `in_i.e6` = (mem_reg_inst >> 6) & 1, `in_i.e5` = (mem_reg_inst >> 5) & 1, `in_i.e4` = (mem_reg_inst >> 4) & 1, `in_i.e3` = (mem_reg_inst >> 3) & 1, `in_i.e2` = (mem_reg_inst >> 2) & 1, `in_i.e1` = (mem_reg_inst >> 1) & 1, `in_i.e0` = mem_reg_inst & 1)
-  wb_reg_inst = (wb_reg_inst_ff["out_o.e31"] << 31) | (wb_reg_inst_ff["out_o.e30"] << 30) | (wb_reg_inst_ff["out_o.e29"] << 29) | (wb_reg_inst_ff["out_o.e28"] << 28) | (wb_reg_inst_ff["out_o.e27"] << 27) | (wb_reg_inst_ff["out_o.e26"] << 26) | (wb_reg_inst_ff["out_o.e25"] << 25) | (wb_reg_inst_ff["out_o.e24"] << 24) | (wb_reg_inst_ff["out_o.e23"] << 23) | (wb_reg_inst_ff["out_o.e22"] << 22) | (wb_reg_inst_ff["out_o.e21"] << 21) | (wb_reg_inst_ff["out_o.e20"] << 20) | (wb_reg_inst_ff["out_o.e19"] << 19) | (wb_reg_inst_ff["out_o.e18"] << 18) | (wb_reg_inst_ff["out_o.e17"] << 17) | (wb_reg_inst_ff["out_o.e16"] << 16) | (wb_reg_inst_ff["out_o.e15"] << 15) | (wb_reg_inst_ff["out_o.e14"] << 14) | (wb_reg_inst_ff["out_o.e13"] << 13) | (wb_reg_inst_ff["out_o.e12"] << 12) | (wb_reg_inst_ff["out_o.e11"] << 11) | (wb_reg_inst_ff["out_o.e10"] << 10) | (wb_reg_inst_ff["out_o.e9"] << 9) | (wb_reg_inst_ff["out_o.e8"] << 8) | (wb_reg_inst_ff["out_o.e7"] << 7) | (wb_reg_inst_ff["out_o.e6"] << 6) | (wb_reg_inst_ff["out_o.e5"] << 5) | (wb_reg_inst_ff["out_o.e4"] << 4) | (wb_reg_inst_ff["out_o.e3"] << 3) | (wb_reg_inst_ff["out_o.e2"] << 2) | (wb_reg_inst_ff["out_o.e1"] << 1) | wb_reg_inst_ff["out_o.e0"]
+  wb_reg_inst = (wb_reg_inst_ff.out_o.e31 << 31) | (wb_reg_inst_ff.out_o.e30 << 30) | (wb_reg_inst_ff.out_o.e29 << 29) | (wb_reg_inst_ff.out_o.e28 << 28) | (wb_reg_inst_ff.out_o.e27 << 27) | (wb_reg_inst_ff.out_o.e26 << 26) | (wb_reg_inst_ff.out_o.e25 << 25) | (wb_reg_inst_ff.out_o.e24 << 24) | (wb_reg_inst_ff.out_o.e23 << 23) | (wb_reg_inst_ff.out_o.e22 << 22) | (wb_reg_inst_ff.out_o.e21 << 21) | (wb_reg_inst_ff.out_o.e20 << 20) | (wb_reg_inst_ff.out_o.e19 << 19) | (wb_reg_inst_ff.out_o.e18 << 18) | (wb_reg_inst_ff.out_o.e17 << 17) | (wb_reg_inst_ff.out_o.e16 << 16) | (wb_reg_inst_ff.out_o.e15 << 15) | (wb_reg_inst_ff.out_o.e14 << 14) | (wb_reg_inst_ff.out_o.e13 << 13) | (wb_reg_inst_ff.out_o.e12 << 12) | (wb_reg_inst_ff.out_o.e11 << 11) | (wb_reg_inst_ff.out_o.e10 << 10) | (wb_reg_inst_ff.out_o.e9 << 9) | (wb_reg_inst_ff.out_o.e8 << 8) | (wb_reg_inst_ff.out_o.e7 << 7) | (wb_reg_inst_ff.out_o.e6 << 6) | (wb_reg_inst_ff.out_o.e5 << 5) | (wb_reg_inst_ff.out_o.e4 << 4) | (wb_reg_inst_ff.out_o.e3 << 3) | (wb_reg_inst_ff.out_o.e2 << 2) | (wb_reg_inst_ff.out_o.e1 << 1) | wb_reg_inst_ff.out_o.e0
   wb_xcpt__wtmp = unsigned((wb_reg_xcpt != 0) or (csr_file.io_csr_xcpt != 0))
   wb_valid__wtmp = unsigned((unsigned((wb_reg_valid != 0) and (wb_reg_replay == 0) and (wb_xcpt__wtmp == 0) and (csr_file.io_replay == 0)) != 0) and (wb_reg_gscing == 0))
-  wb_csr_badaddr__wtmp = wb_dcache_resp.addr
   wb_take_pc__wtmp = unsigned((wb_reg_replay != 0) or (wb_xcpt__wtmp != 0) or (csr_file.io_eret != 0) or (csr_file.io_replay != 0))
+  wb_csr_badaddr__wtmp = wb_dcache_resp.addr
   mut _mux_297:u3 = if wb_reg_valid != 0 { wb_ctrl#[5..=7] } else { minion_pkg.CsrN#[0..=2] }
   wb_csr_rw_cmd__wtmp = _mux_297
   wb_csr_en__wtmp = unsigned(wb_ctrl#[5..=7] != minion_pkg.CsrN)
-  wb_reg_cause_ie.cause = wb_reg_cause
   wb_reg_cause_ie.interrupt_x = wb_reg_xcpt_interrupt & 1
+  wb_reg_cause_ie.cause = wb_reg_cause
   wb_div_resp_ready__wtmp = unsigned(not ((wb_dcache_wen != 0) or (wb_wen != 0) or (wb_fp_toint_wen != 0)))
   wb_flb_wen_ready__wtmp = unsigned(not ((wb_dcache_wen != 0) or (wb_div_wen != 0) or (wb_wen != 0) or (wb_fp_toint_wen != 0)))
-  mut `wb_fp_toint_resp_dest.addr` = (id_vpu_ctrl.scoreboard.toint_dest >> ((minion_pkg.VpuTointScoreboardSize - 1)#[0..=31] * 7))#[0..=6]#[1..=5]
   mut `wb_fp_toint_resp_dest.fp` = ((id_vpu_ctrl.scoreboard.toint_dest >> ((minion_pkg.VpuTointScoreboardSize - 1)#[0..=31] * 7))#[0..=6] >> 6) & 1
+  mut `wb_fp_toint_resp_dest.addr` = (id_vpu_ctrl.scoreboard.toint_dest >> ((minion_pkg.VpuTointScoreboardSize - 1)#[0..=31] * 7))#[0..=6]#[1..=5]
   mut `wb_fp_toint_resp_dest.thread_id` = (id_vpu_ctrl.scoreboard.toint_dest >> ((minion_pkg.VpuTointScoreboardSize - 1)#[0..=31] * 7))#[0..=6] & 1
   wb_dcache_wen__wtmp = unsigned((wb_dcache_resp_valid != 0) and (wb_dcache_resp.dest.fp == 0))
   wb_div_wen__wtmp = unsigned((wb_div_resp_valid != 0) and (wb_div_resp_ready != 0))
   wb_wen__wtmp = unsigned((wb_valid != 0) and (((wb_ctrl >> 8) & 1) != 0) and (((wb_ctrl >> 42) & 1) == 0) and (((wb_ctrl >> 23) & 1) == 0) and (((wb_ctrl >> 9) & 1) == 0))
   wb_fp_toint_wen__wtmp = (id_vpu_ctrl.scoreboard.toint_valid >> (minion_pkg.VpuTointScoreboardSize - 1)#[0..=31]) & 1
-  wb_waddr__wtmp = wb_reg_inst#[7..=11]
   wb_rf_wen__wtmp = unsigned((wb_dcache_wen__wtmp != 0) or (wb_div_wen__wtmp != 0) or (wb_wen__wtmp != 0) or (wb_fp_toint_wen__wtmp != 0) or (csr_file.flb_rf_wen_valid != 0))
+  wb_waddr__wtmp = wb_reg_inst#[7..=11]
   mut _mux_305:u5 = if wb_wen__wtmp != 0 { wb_waddr__wtmp } else { csr_file.flb_rf_wen_addr#[0..=4] }
   mut _mux_306:u5 = if wb_div_wen__wtmp != 0 { wb_div_resp_dest.addr#[0..=4] } else { _mux_305 }
   mut _mux_307:u5 = if wb_fp_toint_wen__wtmp != 0 { `wb_fp_toint_resp_dest.addr`#[0..=4] } else { _mux_306 }
@@ -1276,68 +1280,65 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   mut _mux_316:u1 = if wb_fp_toint_wen__wtmp != 0 { `wb_fp_toint_resp_dest.thread_id` & 1 } else { _mux_315 & 1 }
   mut _mux_317:u1 = if wb_dcache_wen__wtmp != 0 { wb_dcache_resp.dest.thread_id & 1 } else { _mux_316 & 1 }
   wb_rf_thread_id__wtmp = _mux_317
-  mut `debug_monitor_out__bpo.id_csr_interrupt` = ((id_csr_interrupt__w1 << 1) >> (id_thread_id__w1 + 1)) & 1
-  mut `debug_monitor_out__bpo.id_inst_replay` = id_inst_replay__w1
-  mut `debug_monitor_out__bpo.id_pc` = id_pc__w1
-  mut `debug_monitor_out__bpo.id_take_pc` = id_take_pc
+  wb_rf_wen_early__wtmp = unsigned((unsigned((mem_reg_valid != 0) and (((mem_ctrl >> 8) & 1) != 0) and (((mem_ctrl >> 42) & 1) == 0)) != 0) or (mem_dcache_resp_int_valid != 0) or (mul_div.resp_valid_early != 0) or (((id_vpu_ctrl.scoreboard.toint_valid >> (minion_pkg.VpuTointScoreboardSize - 2)#[0..=31]) & 1) != 0) or (csr_file.flb_rf_wen_valid_early != 0))
   mut `debug_monitor_out__bpo.id_thread_id` = id_thread_id__w1
+  mut `debug_monitor_out__bpo.id_pc` = id_pc__w1
   mut `debug_monitor_out__bpo.id_valid` = id_valid__w1
   mut `debug_monitor_out__bpo.id_valid_qual` = id_valid_qual
-  wb_rf_wen_early__wtmp = unsigned((unsigned((mem_reg_valid != 0) and (((mem_ctrl >> 8) & 1) != 0) and (((mem_ctrl >> 42) & 1) == 0)) != 0) or (mem_dcache_resp_int_valid != 0) or (mul_div.resp_valid_early != 0) or (((id_vpu_ctrl.scoreboard.toint_valid >> (minion_pkg.VpuTointScoreboardSize - 2)#[0..=31]) & 1) != 0) or (csr_file.flb_rf_wen_valid_early != 0))
-  _mux_320 = 0
-  mut `debug_monitor_out__bpo.csr_fe_stall` = ((csr_file.fe_ctrl_stall << 1) >> (id_thread_id__w1 + 1)) & 1
-  mut `debug_monitor_out__bpo.ex_gsc_busy` = ex_gsc_busy__w1
-  mut `debug_monitor_out__bpo.ex_valid_qual` = ex_valid_qual__w1
+  mut `debug_monitor_out__bpo.id_inst_replay` = id_inst_replay__w1
+  mut `debug_monitor_out__bpo.id_take_pc` = id_take_pc
+  mut `debug_monitor_out__bpo.id_csr_interrupt` = ((id_csr_interrupt__w1 << 1) >> (id_thread_id__w1 + 1)) & 1
   mut `debug_monitor_out__bpo.excl_mode_stall` = unsigned(((csr_file.io_excl_mode != 0) and (csr_file.io_excl_mode_sel != id_thread_id__w1)) or (csr_excl_mode_stall__w1 != 0))
+  mut `debug_monitor_out__bpo.ex_valid_qual` = ex_valid_qual__w1
+  mut `debug_monitor_out__bpo.tag_valid_qual` = tag_valid_qual__w1
+  mut `debug_monitor_out__bpo.mem_valid_qual` = mem_valid_qual__w1
+  mut `debug_monitor_out__bpo.wb_valid` = wb_valid
   mut `debug_monitor_out__bpo.gsc_reg_gsc_cnt` = gsc_reg_gsc_cnt
+  mut `debug_monitor_out__bpo.tag_take_pc` = tag_take_pc
+  mut `debug_monitor_out__bpo.ipi_with_pc` = ipi_with_pc
+  mut `debug_monitor_out__bpo.wb_take_pc` = wb_take_pc
+  mut `debug_monitor_out__bpo.id_xcpt` = id_xcpt
+  mut `debug_monitor_out__bpo.wb_xcpt` = wb_xcpt
+  mut `debug_monitor_out__bpo.id_stall_fp2int` = id_stall_fp2int__w1
+  mut `debug_monitor_out__bpo.ex_gsc_busy` = ex_gsc_busy__w1
+  mut `debug_monitor_out__bpo.csr_fe_stall` = ((csr_file.fe_ctrl_stall << 1) >> (id_thread_id__w1 + 1)) & 1
   mut `debug_monitor_out__bpo.id_ctrl_stall_csr` = id_ctrl_stall_csr__w1
   mut `debug_monitor_out__bpo.id_ctrl_stall_dcache` = id_ctrl_stall_dcache__w1
-  mut `debug_monitor_out__bpo.id_ctrl_stall_div` = id_ctrl_stall_div__w1
-  mut `debug_monitor_out__bpo.id_ctrl_stall_hazard` = id_ctrl_stall_hazard__w1
-  mut `debug_monitor_out__bpo.id_ctrl_stall_hazard_vpu` = id_ctrl_stall_hazard_vpu__w1
-  mut `debug_monitor_out__bpo.id_ctrl_stall_trans` = id_ctrl_stall_trans__w1
   mut `debug_monitor_out__bpo.id_do_fence` = id_do_fence__w1
+  mut `debug_monitor_out__bpo.id_ctrl_stall_trans` = id_ctrl_stall_trans__w1
+  mut `debug_monitor_out__bpo.id_ctrl_stall_div` = id_ctrl_stall_div__w1
   mut `debug_monitor_out__bpo.id_int_sboard_hazard` = id_int_sboard_hazard__w1
-  mut `debug_monitor_out__bpo.id_stall_fp2int` = id_stall_fp2int__w1
-  mut `debug_monitor_out__bpo.id_xcpt` = id_xcpt
-  mut `debug_monitor_out__bpo.ipi_with_pc` = ipi_with_pc
-  mut `debug_monitor_out__bpo.mem_valid_qual` = mem_valid_qual__w1
-  mut `debug_monitor_out__bpo.tag_take_pc` = tag_take_pc
-  mut `debug_monitor_out__bpo.tag_valid_qual` = tag_valid_qual__w1
-  mut `debug_monitor_out__bpo.wb_take_pc` = wb_take_pc
-  mut `debug_monitor_out__bpo.wb_valid` = wb_valid
-  mut `debug_monitor_out__bpo.wb_xcpt` = wb_xcpt
-  mut `id_ctrl_to_ex_masked.alu_dw` = `id_ctrl_to_ex.alu_dw`
-  mut `id_ctrl_to_ex_masked.alu_fn` = `id_ctrl_to_ex.alu_fn`
-  mut `id_ctrl_to_ex_masked.br` = `id_ctrl_to_ex.br`
-  mut `id_ctrl_to_ex_masked.csr` = `id_ctrl_to_ex.csr__w1`
-  mut `id_ctrl_to_ex_masked.div` = `id_ctrl_to_ex.div`
-  mut `id_ctrl_to_ex_masked.fence` = `id_ctrl_to_ex.fence`
-  mut `id_ctrl_to_ex_masked.fp` = `id_ctrl_to_ex.fp`
-  mut `id_ctrl_to_ex_masked.gfx` = `id_ctrl_to_ex.gfx`
-  mut `id_ctrl_to_ex_masked.gsc` = `id_ctrl_to_ex.gsc`
-  mut `id_ctrl_to_ex_masked.jal` = `id_ctrl_to_ex.jal`
-  mut `id_ctrl_to_ex_masked.jalr` = `id_ctrl_to_ex.jalr`
+  mut `debug_monitor_out__bpo.id_ctrl_stall_hazard_vpu` = id_ctrl_stall_hazard_vpu__w1
+  mut `debug_monitor_out__bpo.id_ctrl_stall_hazard` = id_ctrl_stall_hazard__w1
   mut `id_ctrl_to_ex_masked.legal` = `id_ctrl_to_ex.legal`
   mut `id_ctrl_to_ex_masked.mcode` = `id_ctrl_to_ex.mcode`
+  mut `id_ctrl_to_ex_masked.fp` = `id_ctrl_to_ex.fp`
+  mut `id_ctrl_to_ex_masked.br` = `id_ctrl_to_ex.br`
+  mut `id_ctrl_to_ex_masked.jal` = `id_ctrl_to_ex.jal`
+  mut `id_ctrl_to_ex_masked.jalr` = `id_ctrl_to_ex.jalr`
+  mut `id_ctrl_to_ex_masked.rxs2` = `id_ctrl_to_ex.rxs2`
+  mut `id_ctrl_to_ex_masked.rxs1` = `id_ctrl_to_ex.rxs1`
+  mut `id_ctrl_to_ex_masked.sel_alu2` = `id_ctrl_to_ex.sel_alu2`
+  mut `id_ctrl_to_ex_masked.sel_alu1` = `id_ctrl_to_ex.sel_alu1`
+  mut `id_ctrl_to_ex_masked.sel_imm` = `id_ctrl_to_ex.sel_imm`
+  mut `id_ctrl_to_ex_masked.alu_dw` = `id_ctrl_to_ex.alu_dw`
+  mut `id_ctrl_to_ex_masked.alu_fn` = `id_ctrl_to_ex.alu_fn`
   mut `id_ctrl_to_ex_masked.mem` = `id_ctrl_to_ex.mem`
   mut `id_ctrl_to_ex_masked.mem_cmd` = `id_ctrl_to_ex.mem_cmd`
-  mut `id_ctrl_to_ex_masked.mem_g` = `id_ctrl_to_ex.mem_g`
   mut `id_ctrl_to_ex_masked.mem_type` = `id_ctrl_to_ex.mem_type`
   mut `id_ctrl_to_ex_masked.rma` = `id_ctrl_to_ex.rma`
-  mut `id_ctrl_to_ex_masked.rxs1` = `id_ctrl_to_ex.rxs1`
-  mut `id_ctrl_to_ex_masked.rxs2` = `id_ctrl_to_ex.rxs2`
-  mut `id_ctrl_to_ex_masked.sel_alu1` = `id_ctrl_to_ex.sel_alu1`
-  mut `id_ctrl_to_ex_masked.sel_alu2` = `id_ctrl_to_ex.sel_alu2`
-  mut `id_ctrl_to_ex_masked.sel_imm` = `id_ctrl_to_ex.sel_imm`
-  mut `id_ctrl_to_ex_masked.wfd` = `id_ctrl_to_ex.wfd`
-  mut `id_ctrl_to_ex_masked.wmad` = `id_ctrl_to_ex.wmad`
   mut `id_ctrl_to_ex_masked.wmd` = `id_ctrl_to_ex.wmd`
+  mut `id_ctrl_to_ex_masked.wmad` = `id_ctrl_to_ex.wmad`
+  mut `id_ctrl_to_ex_masked.wfd` = `id_ctrl_to_ex.wfd`
+  mut `id_ctrl_to_ex_masked.div` = `id_ctrl_to_ex.div`
   mut `id_ctrl_to_ex_masked.wxd` = `id_ctrl_to_ex.wxd`
+  mut `id_ctrl_to_ex_masked.csr` = `id_ctrl_to_ex.csr__w1`
+  mut `id_ctrl_to_ex_masked.fence` = `id_ctrl_to_ex.fence`
+  mut `id_ctrl_to_ex_masked.mem_g` = `id_ctrl_to_ex.mem_g`
+  mut `id_ctrl_to_ex_masked.gsc` = `id_ctrl_to_ex.gsc`
+  mut `id_ctrl_to_ex_masked.gfx` = `id_ctrl_to_ex.gfx`
   mut `id_ctrl_to_ex_masked.x31` = `id_ctrl_to_ex.x31`
-  if id_uses_alu__w1 != 0 {
-    _mux_320 = `id_ctrl_to_ex.alu_fn`#[0..=4]
-  }
+  mut _mux_320:u5 = if id_uses_alu__w1 != 0 { `id_ctrl_to_ex.alu_fn`#[0..=4] } else { 0 }
   const `id_ctrl_to_ex_masked.alu_fn__w1` = _mux_320
   mut _mux_321:u2 = if id_uses_alu__w1 != 0 { `id_ctrl_to_ex.sel_alu2`#[0..=1] } else { 0 }
   const `id_ctrl_to_ex_masked.sel_alu2__w1` = _mux_321
@@ -1351,33 +1352,33 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   const `id_ctrl_to_ex_masked.mem_cmd__w1` = _mux_325
   mut _mux_326:u4 = if `id_ctrl_to_ex.mem` != 0 { `id_ctrl_to_ex.mem_type`#[0..=3] } else { 0 }
   const `id_ctrl_to_ex_masked.mem_type__w1` = _mux_326
-  mut `ex_ctrl_masked.alu_dw` = (ex_ctrl >> 29) & 1
-  mut `ex_ctrl_masked.alu_fn` = ex_ctrl#[24..=28]
-  mut `ex_ctrl_masked.br` = (ex_ctrl >> 41) & 1
-  mut `ex_ctrl_masked.csr` = ex_ctrl#[5..=7]
-  mut `ex_ctrl_masked.div` = (ex_ctrl >> 9) & 1
-  mut `ex_ctrl_masked.fence` = (ex_ctrl >> 4) & 1
-  mut `ex_ctrl_masked.fp` = (ex_ctrl >> 42) & 1
-  mut `ex_ctrl_masked.gfx` = (ex_ctrl >> 1) & 1
-  mut `ex_ctrl_masked.gsc` = (ex_ctrl >> 2) & 1
-  mut `ex_ctrl_masked.jal` = (ex_ctrl >> 40) & 1
-  mut `ex_ctrl_masked.jalr` = (ex_ctrl >> 39) & 1
   mut `ex_ctrl_masked.legal` = (ex_ctrl >> 44) & 1
   mut `ex_ctrl_masked.mcode` = (ex_ctrl >> 43) & 1
+  mut `ex_ctrl_masked.fp` = (ex_ctrl >> 42) & 1
+  mut `ex_ctrl_masked.br` = (ex_ctrl >> 41) & 1
+  mut `ex_ctrl_masked.jal` = (ex_ctrl >> 40) & 1
+  mut `ex_ctrl_masked.jalr` = (ex_ctrl >> 39) & 1
+  mut `ex_ctrl_masked.rxs2` = (ex_ctrl >> 38) & 1
+  mut `ex_ctrl_masked.rxs1` = (ex_ctrl >> 37) & 1
+  mut `ex_ctrl_masked.sel_alu2` = ex_ctrl#[35..=36]
+  mut `ex_ctrl_masked.sel_alu1` = ex_ctrl#[33..=34]
+  mut `ex_ctrl_masked.sel_imm` = ex_ctrl#[30..=32]
+  mut `ex_ctrl_masked.alu_dw` = (ex_ctrl >> 29) & 1
+  mut `ex_ctrl_masked.alu_fn` = ex_ctrl#[24..=28]
   mut `ex_ctrl_masked.mem` = (ex_ctrl >> 23) & 1
   mut `ex_ctrl_masked.mem_cmd` = ex_ctrl#[18..=22]
-  mut `ex_ctrl_masked.mem_g` = (ex_ctrl >> 3) & 1
   mut `ex_ctrl_masked.mem_type` = ex_ctrl#[14..=17]
   mut `ex_ctrl_masked.rma` = (ex_ctrl >> 13) & 1
-  mut `ex_ctrl_masked.rxs1` = (ex_ctrl >> 37) & 1
-  mut `ex_ctrl_masked.rxs2` = (ex_ctrl >> 38) & 1
-  mut `ex_ctrl_masked.sel_alu1` = ex_ctrl#[33..=34]
-  mut `ex_ctrl_masked.sel_alu2` = ex_ctrl#[35..=36]
-  mut `ex_ctrl_masked.sel_imm` = ex_ctrl#[30..=32]
-  mut `ex_ctrl_masked.wfd` = (ex_ctrl >> 10) & 1
-  mut `ex_ctrl_masked.wmad` = (ex_ctrl >> 11) & 1
   mut `ex_ctrl_masked.wmd` = (ex_ctrl >> 12) & 1
+  mut `ex_ctrl_masked.wmad` = (ex_ctrl >> 11) & 1
+  mut `ex_ctrl_masked.wfd` = (ex_ctrl >> 10) & 1
+  mut `ex_ctrl_masked.div` = (ex_ctrl >> 9) & 1
   mut `ex_ctrl_masked.wxd` = (ex_ctrl >> 8) & 1
+  mut `ex_ctrl_masked.csr` = ex_ctrl#[5..=7]
+  mut `ex_ctrl_masked.fence` = (ex_ctrl >> 4) & 1
+  mut `ex_ctrl_masked.mem_g` = (ex_ctrl >> 3) & 1
+  mut `ex_ctrl_masked.gsc` = (ex_ctrl >> 2) & 1
+  mut `ex_ctrl_masked.gfx` = (ex_ctrl >> 1) & 1
   mut `ex_ctrl_masked.x31` = ex_ctrl & 1
   mut _mux_327:u2 = if ex_uses_alu != 0 { ex_ctrl#[35..=36] } else { 0 }
   const `ex_ctrl_masked.sel_alu2__w1` = _mux_327
@@ -1393,33 +1394,33 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   const `ex_ctrl_masked.mem_cmd__w1` = _mux_332
   mut _mux_333:u4 = if ((ex_ctrl >> 23) & 1) != 0 { ex_ctrl#[14..=17] } else { 0 }
   const `ex_ctrl_masked.mem_type__w1` = _mux_333
-  mut `tag_ctrl_masked.alu_dw` = (tag_ctrl >> 29) & 1
-  mut `tag_ctrl_masked.alu_fn` = tag_ctrl#[24..=28]
-  mut `tag_ctrl_masked.br` = (tag_ctrl >> 41) & 1
-  mut `tag_ctrl_masked.csr` = tag_ctrl#[5..=7]
-  mut `tag_ctrl_masked.div` = (tag_ctrl >> 9) & 1
-  mut `tag_ctrl_masked.fence` = (tag_ctrl >> 4) & 1
-  mut `tag_ctrl_masked.fp` = (tag_ctrl >> 42) & 1
-  mut `tag_ctrl_masked.gfx` = (tag_ctrl >> 1) & 1
-  mut `tag_ctrl_masked.gsc` = (tag_ctrl >> 2) & 1
-  mut `tag_ctrl_masked.jal` = (tag_ctrl >> 40) & 1
-  mut `tag_ctrl_masked.jalr` = (tag_ctrl >> 39) & 1
   mut `tag_ctrl_masked.legal` = (tag_ctrl >> 44) & 1
   mut `tag_ctrl_masked.mcode` = (tag_ctrl >> 43) & 1
+  mut `tag_ctrl_masked.fp` = (tag_ctrl >> 42) & 1
+  mut `tag_ctrl_masked.br` = (tag_ctrl >> 41) & 1
+  mut `tag_ctrl_masked.jal` = (tag_ctrl >> 40) & 1
+  mut `tag_ctrl_masked.jalr` = (tag_ctrl >> 39) & 1
+  mut `tag_ctrl_masked.rxs2` = (tag_ctrl >> 38) & 1
+  mut `tag_ctrl_masked.rxs1` = (tag_ctrl >> 37) & 1
+  mut `tag_ctrl_masked.sel_alu2` = tag_ctrl#[35..=36]
+  mut `tag_ctrl_masked.sel_alu1` = tag_ctrl#[33..=34]
+  mut `tag_ctrl_masked.sel_imm` = tag_ctrl#[30..=32]
+  mut `tag_ctrl_masked.alu_dw` = (tag_ctrl >> 29) & 1
+  mut `tag_ctrl_masked.alu_fn` = tag_ctrl#[24..=28]
   mut `tag_ctrl_masked.mem` = (tag_ctrl >> 23) & 1
   mut `tag_ctrl_masked.mem_cmd` = tag_ctrl#[18..=22]
-  mut `tag_ctrl_masked.mem_g` = (tag_ctrl >> 3) & 1
   mut `tag_ctrl_masked.mem_type` = tag_ctrl#[14..=17]
   mut `tag_ctrl_masked.rma` = (tag_ctrl >> 13) & 1
-  mut `tag_ctrl_masked.rxs1` = (tag_ctrl >> 37) & 1
-  mut `tag_ctrl_masked.rxs2` = (tag_ctrl >> 38) & 1
-  mut `tag_ctrl_masked.sel_alu1` = tag_ctrl#[33..=34]
-  mut `tag_ctrl_masked.sel_alu2` = tag_ctrl#[35..=36]
-  mut `tag_ctrl_masked.sel_imm` = tag_ctrl#[30..=32]
-  mut `tag_ctrl_masked.wfd` = (tag_ctrl >> 10) & 1
-  mut `tag_ctrl_masked.wmad` = (tag_ctrl >> 11) & 1
   mut `tag_ctrl_masked.wmd` = (tag_ctrl >> 12) & 1
+  mut `tag_ctrl_masked.wmad` = (tag_ctrl >> 11) & 1
+  mut `tag_ctrl_masked.wfd` = (tag_ctrl >> 10) & 1
+  mut `tag_ctrl_masked.div` = (tag_ctrl >> 9) & 1
   mut `tag_ctrl_masked.wxd` = (tag_ctrl >> 8) & 1
+  mut `tag_ctrl_masked.csr` = tag_ctrl#[5..=7]
+  mut `tag_ctrl_masked.fence` = (tag_ctrl >> 4) & 1
+  mut `tag_ctrl_masked.mem_g` = (tag_ctrl >> 3) & 1
+  mut `tag_ctrl_masked.gsc` = (tag_ctrl >> 2) & 1
+  mut `tag_ctrl_masked.gfx` = (tag_ctrl >> 1) & 1
   mut `tag_ctrl_masked.x31` = tag_ctrl & 1
   mut _mux_335:u5 = if ((tag_ctrl >> 8) & 1) != 0 { tag_ctrl#[24..=28] } else { 0 }
   const `tag_ctrl_masked.alu_fn__w1` = _mux_335
@@ -1427,276 +1428,276 @@ pub mod intpipe_top::[timecheck=false](clk_i:u1, rst_ni:u1, rst_w_ni:u1, rst_d_n
   const `tag_ctrl_masked.mem_cmd__w1` = _mux_336
   mut _mux_337:u4 = if ((tag_ctrl >> 23) & 1) != 0 { tag_ctrl#[14..=17] } else { 0 }
   const `tag_ctrl_masked.mem_type__w1` = _mux_337
-  mut `mem_ctrl_masked.alu_dw` = (mem_ctrl >> 29) & 1
-  mut `mem_ctrl_masked.alu_fn` = mem_ctrl#[24..=28]
-  mut `mem_ctrl_masked.br` = (mem_ctrl >> 41) & 1
-  mut `mem_ctrl_masked.csr` = mem_ctrl#[5..=7]
-  mut `mem_ctrl_masked.div` = (mem_ctrl >> 9) & 1
-  mut `mem_ctrl_masked.fence` = (mem_ctrl >> 4) & 1
-  mut `mem_ctrl_masked.fp` = (mem_ctrl >> 42) & 1
-  mut `mem_ctrl_masked.gfx` = (mem_ctrl >> 1) & 1
-  mut `mem_ctrl_masked.gsc` = (mem_ctrl >> 2) & 1
-  mut `mem_ctrl_masked.jal` = (mem_ctrl >> 40) & 1
-  mut `mem_ctrl_masked.jalr` = (mem_ctrl >> 39) & 1
   mut `mem_ctrl_masked.legal` = (mem_ctrl >> 44) & 1
   mut `mem_ctrl_masked.mcode` = (mem_ctrl >> 43) & 1
+  mut `mem_ctrl_masked.fp` = (mem_ctrl >> 42) & 1
+  mut `mem_ctrl_masked.br` = (mem_ctrl >> 41) & 1
+  mut `mem_ctrl_masked.jal` = (mem_ctrl >> 40) & 1
+  mut `mem_ctrl_masked.jalr` = (mem_ctrl >> 39) & 1
+  mut `mem_ctrl_masked.rxs2` = (mem_ctrl >> 38) & 1
+  mut `mem_ctrl_masked.rxs1` = (mem_ctrl >> 37) & 1
+  mut `mem_ctrl_masked.sel_alu2` = mem_ctrl#[35..=36]
+  mut `mem_ctrl_masked.sel_alu1` = mem_ctrl#[33..=34]
+  mut `mem_ctrl_masked.sel_imm` = mem_ctrl#[30..=32]
+  mut `mem_ctrl_masked.alu_dw` = (mem_ctrl >> 29) & 1
+  mut `mem_ctrl_masked.alu_fn` = mem_ctrl#[24..=28]
   mut `mem_ctrl_masked.mem` = (mem_ctrl >> 23) & 1
   mut `mem_ctrl_masked.mem_cmd` = mem_ctrl#[18..=22]
-  mut `mem_ctrl_masked.mem_g` = (mem_ctrl >> 3) & 1
   mut `mem_ctrl_masked.mem_type` = mem_ctrl#[14..=17]
   mut `mem_ctrl_masked.rma` = (mem_ctrl >> 13) & 1
-  mut `mem_ctrl_masked.rxs1` = (mem_ctrl >> 37) & 1
-  mut `mem_ctrl_masked.rxs2` = (mem_ctrl >> 38) & 1
-  mut `mem_ctrl_masked.sel_alu1` = mem_ctrl#[33..=34]
-  mut `mem_ctrl_masked.sel_alu2` = mem_ctrl#[35..=36]
-  mut `mem_ctrl_masked.sel_imm` = mem_ctrl#[30..=32]
-  mut `mem_ctrl_masked.wfd` = (mem_ctrl >> 10) & 1
-  mut `mem_ctrl_masked.wmad` = (mem_ctrl >> 11) & 1
   mut `mem_ctrl_masked.wmd` = (mem_ctrl >> 12) & 1
+  mut `mem_ctrl_masked.wmad` = (mem_ctrl >> 11) & 1
+  mut `mem_ctrl_masked.wfd` = (mem_ctrl >> 10) & 1
+  mut `mem_ctrl_masked.div` = (mem_ctrl >> 9) & 1
   mut `mem_ctrl_masked.wxd` = (mem_ctrl >> 8) & 1
+  mut `mem_ctrl_masked.csr` = mem_ctrl#[5..=7]
+  mut `mem_ctrl_masked.fence` = (mem_ctrl >> 4) & 1
+  mut `mem_ctrl_masked.mem_g` = (mem_ctrl >> 3) & 1
+  mut `mem_ctrl_masked.gsc` = (mem_ctrl >> 2) & 1
+  mut `mem_ctrl_masked.gfx` = (mem_ctrl >> 1) & 1
   mut `mem_ctrl_masked.x31` = mem_ctrl & 1
   mut _mux_339:u5 = if ((mem_ctrl >> 23) & 1) != 0 { mem_ctrl#[18..=22] } else { 0 }
   const `mem_ctrl_masked.mem_cmd__w1` = _mux_339
   mut _mux_340:u4 = if ((mem_ctrl >> 23) & 1) != 0 { mem_ctrl#[14..=17] } else { 0 }
   const `mem_ctrl_masked.mem_type__w1` = _mux_340
-  ex_dcache_req.phys = 0
-  wb_vpu_kill = 0
-  TE_wb_reg_context = 0
-  TE_exception = csr_file.TE_exception
-  TE_prv = csr_file.TE_prv
-  TE_tval = csr_file.TE_tval
-  TE_wb_reg_cause_ie.cause = csr_file["TE_wb_reg_cause_ie.cause"]
-  TE_wb_reg_cause_ie.interrupt_x = csr_file["TE_wb_reg_cause_ie.interrupt_x"]
-  TE_wb_reg_cause_ie.reserved1 = csr_file["TE_wb_reg_cause_ie.reserved1"]
-  TE_wb_reg_inst = wb_reg_inst
-  csr_excl_mode_stall_dcache_next = csr_excl_mode_stall_dcache_next__wtmp
-  dcache_ctrl.cache_ctrl.cacheop_max = csr_file["dcache_ctrl.cache_ctrl.cacheop_max"]
-  dcache_ctrl.cache_ctrl.cacheop_reprate = csr_file["dcache_ctrl.cache_ctrl.cacheop_reprate"]
-  dcache_ctrl.cache_ctrl.d1split = csr_file["dcache_ctrl.cache_ctrl.d1split"]
-  dcache_ctrl.cache_ctrl.padding = csr_file["dcache_ctrl.cache_ctrl.padding"]
-  dcache_ctrl.cache_ctrl.scpenable = csr_file["dcache_ctrl.cache_ctrl.scpenable"]
-  dcache_ctrl.cache_op_req.addr = csr_file["dcache_ctrl.cache_op_req.addr"]
-  dcache_ctrl.cache_op_req.cmd = csr_file["dcache_ctrl.cache_op_req.cmd"]
-  dcache_ctrl.cache_op_req.count = csr_file["dcache_ctrl.cache_op_req.count"]
-  dcache_ctrl.cache_op_req.dest_level = csr_file["dcache_ctrl.cache_op_req.dest_level"]
-  dcache_ctrl.cache_op_req.l2_scp_dest = csr_file["dcache_ctrl.cache_op_req.l2_scp_dest"]
-  dcache_ctrl.cache_op_req.l2_scp_fill = csr_file["dcache_ctrl.cache_op_req.l2_scp_fill"]
-  dcache_ctrl.cache_op_req.start_level = csr_file["dcache_ctrl.cache_op_req.start_level"]
-  dcache_ctrl.cache_op_req.stride = csr_file["dcache_ctrl.cache_op_req.stride"]
-  dcache_ctrl.cache_op_req.thread_id = csr_file["dcache_ctrl.cache_op_req.thread_id"]
-  dcache_ctrl.cache_op_req.tmask_bits = csr_file["dcache_ctrl.cache_op_req.tmask_bits"]
-  dcache_ctrl.cache_op_req.tmask_ready = csr_file["dcache_ctrl.cache_op_req.tmask_ready"]
-  dcache_ctrl.cache_op_req.use_tmask = csr_file["dcache_ctrl.cache_op_req.use_tmask"]
-  dcache_ctrl.cache_op_req.way = csr_file["dcache_ctrl.cache_op_req.way"]
-  dcache_ctrl.cache_op_req_next.cmd = csr_file["dcache_ctrl.cache_op_req_next.cmd"]
-  dcache_ctrl.cache_op_req_next.dest_level = csr_file["dcache_ctrl.cache_op_req_next.dest_level"]
-  dcache_ctrl.cache_op_req_next.start_level = csr_file["dcache_ctrl.cache_op_req_next.start_level"]
-  dcache_ctrl.cache_op_valid = csr_file["dcache_ctrl.cache_op_valid"]
-  dcache_ctrl.msg_port_wr_addr = csr_file["dcache_ctrl.msg_port_wr_addr"]
-  dcache_ctrl.msg_port_wr_en = csr_file["dcache_ctrl.msg_port_wr_en"]
-  dcache_ctrl.msg_port_wr_way = csr_file["dcache_ctrl.msg_port_wr_way"]
-  dcache_ctrl.reduce_start = csr_file["dcache_ctrl.reduce_start"]
-  dcache_ctrl.reduce_tensorstore_ctrl = csr_file["dcache_ctrl.reduce_tensorstore_ctrl"]
-  dcache_ctrl.tensorcoop_ctrl.id = csr_file["dcache_ctrl.tensorcoop_ctrl.id"]
-  dcache_ctrl.tensorcoop_ctrl.minion_mask = csr_file["dcache_ctrl.tensorcoop_ctrl.minion_mask"]
-  dcache_ctrl.tensorcoop_ctrl.neigh_mask = csr_file["dcache_ctrl.tensorcoop_ctrl.neigh_mask"]
-  dcache_ctrl.tensorcoop_ctrl.padding = csr_file["dcache_ctrl.tensorcoop_ctrl.padding"]
-  dcache_ctrl.tensorload_ctrl.addr = csr_file["dcache_ctrl.tensorload_ctrl.addr"]
-  dcache_ctrl.tensorload_ctrl.num_lines = csr_file["dcache_ctrl.tensorload_ctrl.num_lines"]
-  dcache_ctrl.tensorload_ctrl.offset = csr_file["dcache_ctrl.tensorload_ctrl.offset"]
-  dcache_ctrl.tensorload_ctrl.scp_dest = csr_file["dcache_ctrl.tensorload_ctrl.scp_dest"]
-  dcache_ctrl.tensorload_ctrl.tl_sel = csr_file["dcache_ctrl.tensorload_ctrl.tl_sel"]
-  dcache_ctrl.tensorload_ctrl.transform = csr_file["dcache_ctrl.tensorload_ctrl.transform"]
-  dcache_ctrl.tensorload_ctrl.use_coop = csr_file["dcache_ctrl.tensorload_ctrl.use_coop"]
-  dcache_ctrl.tensorload_ctrl.use_tmask = csr_file["dcache_ctrl.tensorload_ctrl.use_tmask"]
-  dcache_ctrl.tensorload_restart_b = csr_file["dcache_ctrl.tensorload_restart_b"]
-  dcache_ctrl.tensorload_start = csr_file["dcache_ctrl.tensorload_start"]
-  dcache_ctrl.tensorload_stride = csr_file["dcache_ctrl.tensorload_stride"]
-  dcache_ctrl.tensorload_tmask_bits = csr_file["dcache_ctrl.tensorload_tmask_bits"]
-  dcache_ctrl.tensorload_tmask_ready = csr_file["dcache_ctrl.tensorload_tmask_ready"]
-  dcache_ctrl.tensorstore_start = csr_file["dcache_ctrl.tensorstore_start"]
-  dcache_ctrl.tensorstore_stride = csr_file["dcache_ctrl.tensorstore_stride"]
-  dcache_ctrl.tex_send_ctrl.port_en = csr_file["dcache_ctrl.tex_send_ctrl.port_en"]
-  dcache_ctrl.tex_send_ctrl.port_id = csr_file["dcache_ctrl.tex_send_ctrl.port_id"]
-  dcache_ctrl.tex_send_ctrl.set = csr_file["dcache_ctrl.tex_send_ctrl.set"]
-  dcache_ctrl.tex_send_ctrl.size = csr_file["dcache_ctrl.tex_send_ctrl.size"]
-  dcache_ctrl.tex_send_ctrl.thread_id = csr_file["dcache_ctrl.tex_send_ctrl.thread_id"]
-  dcache_ctrl.tex_send_ctrl.way = csr_file["dcache_ctrl.tex_send_ctrl.way"]
-  dcache_ctrl.tex_send_valid = csr_file["dcache_ctrl.tex_send_valid"]
-  dcache_ctrl.thread_id = csr_file["dcache_ctrl.thread_id"]
-  ddata0_wdata = csr_file.ddata0_wdata
-  debug_busy = csr_file.busy
-  debug_exception = csr_file.debug_out_exception
-  debug_monitor_out.csr_fe_stall = `debug_monitor_out__bpo.csr_fe_stall`
-  debug_monitor_out.ex_gsc_busy = `debug_monitor_out__bpo.ex_gsc_busy`
-  debug_monitor_out.ex_valid_qual = `debug_monitor_out__bpo.ex_valid_qual`
-  debug_monitor_out.excl_mode_stall = `debug_monitor_out__bpo.excl_mode_stall`
-  debug_monitor_out.gsc_reg_gsc_cnt = `debug_monitor_out__bpo.gsc_reg_gsc_cnt`
-  debug_monitor_out.id_csr_interrupt = `debug_monitor_out__bpo.id_csr_interrupt`
-  debug_monitor_out.id_ctrl_stall_csr = `debug_monitor_out__bpo.id_ctrl_stall_csr`
-  debug_monitor_out.id_ctrl_stall_dcache = `debug_monitor_out__bpo.id_ctrl_stall_dcache`
-  debug_monitor_out.id_ctrl_stall_div = `debug_monitor_out__bpo.id_ctrl_stall_div`
-  debug_monitor_out.id_ctrl_stall_hazard = `debug_monitor_out__bpo.id_ctrl_stall_hazard`
-  debug_monitor_out.id_ctrl_stall_hazard_vpu = `debug_monitor_out__bpo.id_ctrl_stall_hazard_vpu`
-  debug_monitor_out.id_ctrl_stall_trans = `debug_monitor_out__bpo.id_ctrl_stall_trans`
-  debug_monitor_out.id_do_fence = `debug_monitor_out__bpo.id_do_fence`
-  debug_monitor_out.id_inst_replay = `debug_monitor_out__bpo.id_inst_replay`
-  debug_monitor_out.id_int_sboard_hazard = `debug_monitor_out__bpo.id_int_sboard_hazard`
-  debug_monitor_out.id_pc = `debug_monitor_out__bpo.id_pc`
-  debug_monitor_out.id_stall_fp2int = `debug_monitor_out__bpo.id_stall_fp2int`
-  debug_monitor_out.id_take_pc = `debug_monitor_out__bpo.id_take_pc`
-  debug_monitor_out.id_thread_id = `debug_monitor_out__bpo.id_thread_id`
-  debug_monitor_out.id_valid = `debug_monitor_out__bpo.id_valid`
-  debug_monitor_out.id_valid_qual = `debug_monitor_out__bpo.id_valid_qual`
-  debug_monitor_out.id_xcpt = `debug_monitor_out__bpo.id_xcpt`
-  debug_monitor_out.ipi_with_pc = `debug_monitor_out__bpo.ipi_with_pc`
-  debug_monitor_out.mem_valid_qual = `debug_monitor_out__bpo.mem_valid_qual`
-  debug_monitor_out.tag_take_pc = `debug_monitor_out__bpo.tag_take_pc`
-  debug_monitor_out.tag_valid_qual = `debug_monitor_out__bpo.tag_valid_qual`
-  debug_monitor_out.wb_take_pc = `debug_monitor_out__bpo.wb_take_pc`
-  debug_monitor_out.wb_valid = `debug_monitor_out__bpo.wb_valid`
-  debug_monitor_out.wb_xcpt = `debug_monitor_out__bpo.wb_xcpt`
-  div_kill = div_kill__wtmp
-  ex_csr_en = ex_csr_en__wtmp
-  ex_ctrl_kill = ex_ctrl_kill__wtmp
-  ex_dcache_gsc = ex_valid_qual_to_gsc__w1
-  ex_dcache_req.addr = `ex_dcache_req__bpo.addr`
-  ex_dcache_req.addr_msb_err = `ex_dcache_req__bpo.addr_msb_err`
-  ex_dcache_req.cmd = `ex_dcache_req__bpo.cmd`
-  ex_dcache_req.dest.addr = `ex_dcache_req__bpo.dest.addr`
-  ex_dcache_req.dest.fp = `ex_dcache_req__bpo.dest.fp`
-  ex_dcache_req.dest.thread_id = `ex_dcache_req__bpo.dest.thread_id`
-  ex_dcache_req.gsc32_idx = `ex_dcache_req__bpo.gsc32_idx`
-  ex_dcache_req.gsc_cnt = `ex_dcache_req__bpo.gsc_cnt`
-  ex_dcache_req.mem_global = `ex_dcache_req__bpo.mem_global`
-  ex_dcache_req.ps_mask = `ex_dcache_req__bpo.ps_mask`
-  ex_dcache_req.typ = `ex_dcache_req__bpo.typ`
-  ex_dcache_req_valid = ex_dcache_req_valid__wtmp
-  ex_div_req = ex_div_req__wtmp
-  ex_gsc_fs_valid_next = ex_gsc_fs_valid_next__wtmp
-  ex_gscing = ex_gscing__wtmp
-  ex_gscing_one_lane_next = ex_gscing_one_lane_next__wtmp
-  ex_reg_gsc_cnt_next = ex_reg_gsc_cnt_next__wtmp
-  ex_vpu_req.fromint_data = `ex_vpu_req__bpo.fromint_data`
-  ex_vpu_req.gsc_src = `ex_vpu_req__bpo.gsc_src`
-  ex_vpu_req.gscing = `ex_vpu_req__bpo.gscing`
-  ex_vpu_req.kill = `ex_vpu_req__bpo.kill`
-  ex_vpu_req.thread_id = `ex_vpu_req__bpo.thread_id`
-  ex_waddr = ex_waddr__wtmp
-  fence_fe_stall_next = fence_fe_stall_next__wtmp & (id_dcache_busy__w2 & (~id_fe_req_valid)#[0..=1])
-  flb_neigh_req_data = csr_file.flb_neigh_req_data
-  flb_neigh_req_valid = csr_file.flb_neigh_req_valid
-  fp_sboard_fe_stall_next = fp_sboard_fe_stall_next__wtmp & (~id_dcache_sb_fp_dealloc)#[0..=1]
-  icache_invalidate = csr_file.icache_invalidate
-  id_bad_redirect = id_bad_redirect__wtmp
-  id_csr_en = id_csr_en__wtmp
-  id_ctrl_stall_trans_starve = id_ctrl_stall_trans_starve__wtmp
-  id_dcache_alloc_rq_pre = unsigned(((id_valid__w1 != 0) and (id_ctrl.mem != 0)) or (id_keepgsc__w1 != 0))
-  id_dcache_gsc = unsigned((id_ctrl.gsc != 0) or (id_keepgsc__w1 != 0))
-  id_fe_req = id_fe_req__w6
   id_fe_req_valid = id_fe_req_valid__wtmp__w1
-  id_fe_resp_ready = id_valid_qual__wtmp
-  id_fe_stall.e0 = `id_fe_stall__bpo.e0`
-  id_fe_stall.e1 = `id_fe_stall__bpo.e1`
+  ex_dcache_req_valid = ex_dcache_req_valid__wtmp
+  wb_valid = wb_valid__wtmp
   id_reg_fence_next = id_reg_fence_next__wtmp__w1
-  id_take_pc = id_take_pc__wtmp
-  id_take_redirect = id_take_redirect__wtmp
   id_valid_qual = id_valid_qual__wtmp
-  id_vpu_req.fcsr_rm = `id_vpu_req__bpo.fcsr_rm`
-  id_vpu_req.inst_bits = `id_vpu_req__bpo.inst_bits`
-  id_vpu_req.thread_id = `id_vpu_req__bpo.thread_id`
-  id_vpu_req.valid = `id_vpu_req__bpo.valid`
-  id_xcpt_af = id_xcpt_af__wtmp
-  id_xcpt_pf = id_xcpt_pf__wtmp
-  in_debug_mode = csr_file.io_debug
-  int_sboard_fe_stall_next = int_sboard_fe_stall_next__wtmp
-  matp_info.mode = `matp_info__bpo.mode`
-  matp_info.ppn = `matp_info__bpo.ppn`
-  matp_info_en = csr_file.io_matp_en
-  mem_csr_en = mem_csr_en__wtmp
-  mem_csr_rw_cmd = mem_csr_rw_cmd__wtmp
-  mem_ctrl_kill = mem_ctrl_kill__wtmp
-  mem_dcache_kill = mem_ctrl_kill__wtmp
-  mem_vpu_kill = mem_ctrl_kill__wtmp
-  mem_waddr = mem_waddr__wtmp
-  muldiv_needed_next = muldiv_needed_next__wtmp
-  pmu_count_up = csr_file.pmu_count_up
-  pmu_neigh_event_sel = csr_file.pmu_neigh_event_sel
-  pmu_read_sel = csr_file.pmu_read_sel
-  pmu_write_data = csr_file.pmu_write_data
-  pmu_write_en = csr_file.pmu_write_en
-  satp_info.mode = `satp_info__bpo.mode`
-  satp_info.ppn = `satp_info__bpo.ppn`
-  satp_info_en = csr_file.io_satp_en
+  id_csr_en = id_csr_en__wtmp
+  ex_csr_en = ex_csr_en__wtmp
   tag_csr_en = tag_csr_en__wtmp
-  tag_ctrl_kill = tag_ctrl_kill__wtmp
-  tag_dcache_kill = unsigned((tag_reg_valid == 0) or (tag_kill_common__w1 != 0) or (tag_dcache_bp_triggered != 0) or (tag_thread_disabled__w1 != 0))
-  tag_npc = tag_npc__wtmp__w1
-  tag_replay = tag_replay__wtmp
-  tag_take_pc = tag_take_pc__wtmp
-  tag_vpu_kill = unsigned((tag_reg_valid == 0) or (tag_kill_common__w1 != 0) or (tag_thread_disabled__w1 != 0))
-  tag_waddr = tag_waddr__wtmp
-  tbranch_up = ((0 & (~(1 << tag_thread_id))) | ((unsigned((tag_br_taken__w1 != 0) and (((tag_ctrl >> 41) & 1) != 0)) & 1) << tag_thread_id))#[0..=1]
-  tlb_invalidate = csr_file.tlb_invalidate
-  update_ddata0 = csr_file.update_ddata0
-  vm_status = (((`compose_vm_status.prv` << 6) | (`compose_vm_status.mprv` << 5) | (`compose_vm_status.mpp` << 3) | (`compose_vm_status.sum` << 2) | (`compose_vm_status.mxr` << 1) | `compose_vm_status.debug`)#[0..=7] << 8) | ((`compose_vm_status.prv__w1` << 6) | (`compose_vm_status.mprv__w1` << 5) | (`compose_vm_status.mpp__w1` << 3) | (`compose_vm_status.sum__w1` << 2) | (`compose_vm_status.mxr__w1` << 1) | `compose_vm_status.debug__w1`)#[0..=7]
-  vpu_ctrl.pending_scoreboard_t0 = csr_file["vpu_ctrl.pending_scoreboard_t0"]
-  vpu_ctrl.reduce_ctrl = csr_file["vpu_ctrl.reduce_ctrl"]
-  vpu_ctrl.reduce_start = csr_file["vpu_ctrl.reduce_start"]
-  vpu_ctrl.tensorfma_conv_bits = csr_file["vpu_ctrl.tensorfma_conv_bits"]
-  vpu_ctrl.tensorfma_conv_bits_ready = csr_file["vpu_ctrl.tensorfma_conv_bits_ready"]
-  vpu_ctrl.tensorfma_ctrl.cols_a = csr_file["vpu_ctrl.tensorfma_ctrl.cols_a"]
-  vpu_ctrl.tensorfma_ctrl.cols_b = csr_file["vpu_ctrl.tensorfma_ctrl.cols_b"]
-  vpu_ctrl.tensorfma_ctrl.first_pass = csr_file["vpu_ctrl.tensorfma_ctrl.first_pass"]
-  vpu_ctrl.tensorfma_ctrl.is_conv = csr_file["vpu_ctrl.tensorfma_ctrl.is_conv"]
-  vpu_ctrl.tensorfma_ctrl.mode = csr_file["vpu_ctrl.tensorfma_ctrl.mode"]
-  vpu_ctrl.tensorfma_ctrl.padding0 = csr_file["vpu_ctrl.tensorfma_ctrl.padding0"]
-  vpu_ctrl.tensorfma_ctrl.padding1 = csr_file["vpu_ctrl.tensorfma_ctrl.padding1"]
-  vpu_ctrl.tensorfma_ctrl.padding2 = csr_file["vpu_ctrl.tensorfma_ctrl.padding2"]
-  vpu_ctrl.tensorfma_ctrl.padding3 = csr_file["vpu_ctrl.tensorfma_ctrl.padding3"]
-  vpu_ctrl.tensorfma_ctrl.rows_a = csr_file["vpu_ctrl.tensorfma_ctrl.rows_a"]
-  vpu_ctrl.tensorfma_ctrl.scp_a = csr_file["vpu_ctrl.tensorfma_ctrl.scp_a"]
-  vpu_ctrl.tensorfma_ctrl.scp_b = csr_file["vpu_ctrl.tensorfma_ctrl.scp_b"]
-  vpu_ctrl.tensorfma_ctrl.start_a = csr_file["vpu_ctrl.tensorfma_ctrl.start_a"]
-  vpu_ctrl.tensorfma_ctrl.ten_b = csr_file["vpu_ctrl.tensorfma_ctrl.ten_b"]
-  vpu_ctrl.tensorfma_ctrl.to_vrf = csr_file["vpu_ctrl.tensorfma_ctrl.to_vrf"]
-  vpu_ctrl.tensorfma_ctrl.u_a = csr_file["vpu_ctrl.tensorfma_ctrl.u_a"]
-  vpu_ctrl.tensorfma_ctrl.u_b = csr_file["vpu_ctrl.tensorfma_ctrl.u_b"]
-  vpu_ctrl.tensorfma_start = `vpu_ctrl__bpo.tensorfma_start`
-  vpu_ctrl.tensorquant_ctrl.cols = csr_file["vpu_ctrl.tensorquant_ctrl.cols"]
-  vpu_ctrl.tensorquant_ctrl.padding = csr_file["vpu_ctrl.tensorquant_ctrl.padding"]
-  vpu_ctrl.tensorquant_ctrl.padding2 = csr_file["vpu_ctrl.tensorquant_ctrl.padding2"]
-  vpu_ctrl.tensorquant_ctrl.rows = csr_file["vpu_ctrl.tensorquant_ctrl.rows"]
-  vpu_ctrl.tensorquant_ctrl.scp_src = csr_file["vpu_ctrl.tensorquant_ctrl.scp_src"]
-  vpu_ctrl.tensorquant_ctrl.start_reg = csr_file["vpu_ctrl.tensorquant_ctrl.start_reg"]
-  vpu_ctrl.tensorquant_ctrl.trans = csr_file["vpu_ctrl.tensorquant_ctrl.trans"]
-  vpu_ctrl.tensorquant_start = `vpu_ctrl__bpo.tensorquant_start`
-  vpu_ctrl.tensorstore_start = csr_file["vpu_ctrl.tensorstore_start"]
-  wb_csr_badaddr = wb_csr_badaddr__wtmp
+  mem_csr_en = mem_csr_en__wtmp
   wb_csr_en = wb_csr_en__wtmp
-  wb_csr_rw_cmd = wb_csr_rw_cmd__wtmp
-  wb_dcache_invalidate_lr = wb_xcpt__wtmp
-  wb_dcache_wen = wb_dcache_wen__wtmp
-  wb_dcache_x31 = wb_dcache_x31__w1
-  wb_div_resp_ready = wb_div_resp_ready__wtmp
-  wb_div_wen = wb_div_wen__wtmp
-  wb_flb_wen_ready = wb_flb_wen_ready__wtmp
-  wb_fp_toint_wen = wb_fp_toint_wen__wtmp
-  wb_rf_thread_id = wb_rf_thread_id__wtmp
+  csr_excl_mode_stall_dcache_next = csr_excl_mode_stall_dcache_next__wtmp
+  id_xcpt_pf = id_xcpt_pf__wtmp
+  id_xcpt_af = id_xcpt_af__wtmp
   wb_rf_waddr = wb_rf_waddr__wtmp
   wb_rf_wdata = wb_rf_wdata__wtmp
-  wb_rf_wen = wb_rf_wen__wtmp
   wb_rf_wen_early = wb_rf_wen_early__wtmp
+  wb_rf_wen = wb_rf_wen__wtmp
+  wb_rf_thread_id = wb_rf_thread_id__wtmp
+  ex_waddr = ex_waddr__wtmp
+  tag_waddr = tag_waddr__wtmp
+  mem_waddr = mem_waddr__wtmp
+  wb_dcache_wen = wb_dcache_wen__wtmp
+  wb_wen = wb_wen__wtmp
+  wb_waddr = wb_waddr__wtmp
+  ex_gscing = ex_gscing__wtmp
+  ex_ctrl_kill = ex_ctrl_kill__wtmp
   wb_take_pc = wb_take_pc__wtmp
-  wb_valid = wb_valid__wtmp
+  mem_csr_rw_cmd = mem_csr_rw_cmd__wtmp
+  wb_csr_rw_cmd = wb_csr_rw_cmd__wtmp
+  wb_csr_badaddr = wb_csr_badaddr__wtmp
+  id_bad_redirect = id_bad_redirect__wtmp
+  id_take_redirect = id_take_redirect__wtmp
+  wb_flb_wen_ready = wb_flb_wen_ready__wtmp
+  tbranch_up = ((0 & (~(1 << tag_thread_id))) | ((unsigned((tag_br_taken__w1 != 0) and (((tag_ctrl >> 41) & 1) != 0)) & 1) << tag_thread_id))#[0..=1]
+  wb_div_wen = wb_div_wen__wtmp
+  id_take_pc = id_take_pc__wtmp
+  ex_div_req = ex_div_req__wtmp
+  wb_div_resp_ready = wb_div_resp_ready__wtmp
+  id_ctrl_stall_trans_starve = id_ctrl_stall_trans_starve__wtmp
+  tag_npc = tag_npc__wtmp__w1
+  tag_take_pc = tag_take_pc__wtmp
+  wb_xcpt = wb_xcpt__wtmp
+  fence_fe_stall_next = fence_fe_stall_next__wtmp__w1
+  fp_sboard_fe_stall_next = fp_sboard_fe_stall_next__wtmp & (~id_dcache_sb_fp_dealloc)#[0..=1]
+  int_sboard_fe_stall_next = int_sboard_fe_stall_next__wtmp
+  div_kill = div_kill__wtmp
+  muldiv_needed_next = muldiv_needed_next__wtmp
+  ex_reg_gsc_cnt_next = ex_reg_gsc_cnt_next__wtmp
+  ex_gscing_one_lane_next = ex_gscing_one_lane_next__wtmp
+  ex_gsc_fs_valid_next = ex_gsc_fs_valid_next__wtmp
+  tag_replay = tag_replay__wtmp
+  tag_ctrl_kill = tag_ctrl_kill__wtmp
+  mem_ctrl_kill = mem_ctrl_kill__wtmp
+  wb_fp_toint_wen = wb_fp_toint_wen__wtmp
+  id_fe_stall.e1 = `id_fe_stall__bpo.e1`
+  id_fe_stall.e0 = `id_fe_stall__bpo.e0`
+  dcache_ctrl.tensorload_ctrl.use_tmask = csr_file.dcache_ctrl.tensorload_ctrl.use_tmask
+  dcache_ctrl.tensorload_ctrl.use_coop = csr_file.dcache_ctrl.tensorload_ctrl.use_coop
+  dcache_ctrl.tensorload_ctrl.transform = csr_file.dcache_ctrl.tensorload_ctrl.transform
+  dcache_ctrl.tensorload_ctrl.scp_dest = csr_file.dcache_ctrl.tensorload_ctrl.scp_dest
+  dcache_ctrl.tensorload_ctrl.tl_sel = csr_file.dcache_ctrl.tensorload_ctrl.tl_sel
+  dcache_ctrl.tensorload_ctrl.addr = csr_file.dcache_ctrl.tensorload_ctrl.addr
+  dcache_ctrl.tensorload_ctrl.offset = csr_file.dcache_ctrl.tensorload_ctrl.offset
+  dcache_ctrl.tensorload_ctrl.num_lines = csr_file.dcache_ctrl.tensorload_ctrl.num_lines
+  dcache_ctrl.tensorcoop_ctrl.neigh_mask = csr_file.dcache_ctrl.tensorcoop_ctrl.neigh_mask
+  dcache_ctrl.tensorcoop_ctrl.minion_mask = csr_file.dcache_ctrl.tensorcoop_ctrl.minion_mask
+  dcache_ctrl.tensorcoop_ctrl.padding = csr_file.dcache_ctrl.tensorcoop_ctrl.padding
+  dcache_ctrl.tensorcoop_ctrl.id = csr_file.dcache_ctrl.tensorcoop_ctrl.id
+  dcache_ctrl.tensorload_stride = csr_file.dcache_ctrl.tensorload_stride
+  dcache_ctrl.tensorload_start = csr_file.dcache_ctrl.tensorload_start
+  dcache_ctrl.tensorload_restart_b = csr_file.dcache_ctrl.tensorload_restart_b
+  dcache_ctrl.tensorload_tmask_ready = csr_file.dcache_ctrl.tensorload_tmask_ready
+  dcache_ctrl.tensorload_tmask_bits = csr_file.dcache_ctrl.tensorload_tmask_bits
+  dcache_ctrl.cache_op_valid = csr_file.dcache_ctrl.cache_op_valid
+  dcache_ctrl.cache_op_req.cmd = csr_file.dcache_ctrl.cache_op_req.cmd
+  dcache_ctrl.cache_op_req.start_level = csr_file.dcache_ctrl.cache_op_req.start_level
+  dcache_ctrl.cache_op_req.dest_level = csr_file.dcache_ctrl.cache_op_req.dest_level
+  dcache_ctrl.cache_op_req.count = csr_file.dcache_ctrl.cache_op_req.count
+  dcache_ctrl.cache_op_req.addr = csr_file.dcache_ctrl.cache_op_req.addr
+  dcache_ctrl.cache_op_req.way = csr_file.dcache_ctrl.cache_op_req.way
+  dcache_ctrl.cache_op_req.stride = csr_file.dcache_ctrl.cache_op_req.stride
+  dcache_ctrl.cache_op_req.thread_id = csr_file.dcache_ctrl.cache_op_req.thread_id
+  dcache_ctrl.cache_op_req.use_tmask = csr_file.dcache_ctrl.cache_op_req.use_tmask
+  dcache_ctrl.cache_op_req.tmask_ready = csr_file.dcache_ctrl.cache_op_req.tmask_ready
+  dcache_ctrl.cache_op_req.tmask_bits = csr_file.dcache_ctrl.cache_op_req.tmask_bits
+  dcache_ctrl.cache_op_req.l2_scp_dest = csr_file.dcache_ctrl.cache_op_req.l2_scp_dest
+  dcache_ctrl.cache_op_req.l2_scp_fill = csr_file.dcache_ctrl.cache_op_req.l2_scp_fill
+  dcache_ctrl.cache_op_req_next.cmd = csr_file.dcache_ctrl.cache_op_req_next.cmd
+  dcache_ctrl.cache_op_req_next.start_level = csr_file.dcache_ctrl.cache_op_req_next.start_level
+  dcache_ctrl.cache_op_req_next.dest_level = csr_file.dcache_ctrl.cache_op_req_next.dest_level
+  dcache_ctrl.msg_port_wr_way = csr_file.dcache_ctrl.msg_port_wr_way
+  dcache_ctrl.msg_port_wr_addr = csr_file.dcache_ctrl.msg_port_wr_addr
+  dcache_ctrl.msg_port_wr_en = csr_file.dcache_ctrl.msg_port_wr_en
+  dcache_ctrl.reduce_start = csr_file.dcache_ctrl.reduce_start
+  dcache_ctrl.tensorstore_start = csr_file.dcache_ctrl.tensorstore_start
+  dcache_ctrl.reduce_tensorstore_ctrl = csr_file.dcache_ctrl.reduce_tensorstore_ctrl
+  dcache_ctrl.tensorstore_stride = csr_file.dcache_ctrl.tensorstore_stride
+  dcache_ctrl.tex_send_valid = csr_file.dcache_ctrl.tex_send_valid
+  dcache_ctrl.tex_send_ctrl.port_id = csr_file.dcache_ctrl.tex_send_ctrl.port_id
+  dcache_ctrl.tex_send_ctrl.size = csr_file.dcache_ctrl.tex_send_ctrl.size
+  dcache_ctrl.tex_send_ctrl.way = csr_file.dcache_ctrl.tex_send_ctrl.way
+  dcache_ctrl.tex_send_ctrl.set = csr_file.dcache_ctrl.tex_send_ctrl.set
+  dcache_ctrl.tex_send_ctrl.port_en = csr_file.dcache_ctrl.tex_send_ctrl.port_en
+  dcache_ctrl.tex_send_ctrl.thread_id = csr_file.dcache_ctrl.tex_send_ctrl.thread_id
+  dcache_ctrl.cache_ctrl.cacheop_max = csr_file.dcache_ctrl.cache_ctrl.cacheop_max
+  dcache_ctrl.cache_ctrl.padding = csr_file.dcache_ctrl.cache_ctrl.padding
+  dcache_ctrl.cache_ctrl.cacheop_reprate = csr_file.dcache_ctrl.cache_ctrl.cacheop_reprate
+  dcache_ctrl.cache_ctrl.scpenable = csr_file.dcache_ctrl.cache_ctrl.scpenable
+  dcache_ctrl.cache_ctrl.d1split = csr_file.dcache_ctrl.cache_ctrl.d1split
+  dcache_ctrl.thread_id = csr_file.dcache_ctrl.thread_id
+  vpu_ctrl.tensorfma_start = `vpu_ctrl__bpo.tensorfma_start`
+  vpu_ctrl.tensorfma_ctrl.is_conv = csr_file.vpu_ctrl.tensorfma_ctrl.is_conv
+  vpu_ctrl.tensorfma_ctrl.padding3 = csr_file.vpu_ctrl.tensorfma_ctrl.padding3
+  vpu_ctrl.tensorfma_ctrl.cols_b = csr_file.vpu_ctrl.tensorfma_ctrl.cols_b
+  vpu_ctrl.tensorfma_ctrl.rows_a = csr_file.vpu_ctrl.tensorfma_ctrl.rows_a
+  vpu_ctrl.tensorfma_ctrl.cols_a = csr_file.vpu_ctrl.tensorfma_ctrl.cols_a
+  vpu_ctrl.tensorfma_ctrl.start_a = csr_file.vpu_ctrl.tensorfma_ctrl.start_a
+  vpu_ctrl.tensorfma_ctrl.padding2 = csr_file.vpu_ctrl.tensorfma_ctrl.padding2
+  vpu_ctrl.tensorfma_ctrl.to_vrf = csr_file.vpu_ctrl.tensorfma_ctrl.to_vrf
+  vpu_ctrl.tensorfma_ctrl.u_b = csr_file.vpu_ctrl.tensorfma_ctrl.u_b
+  vpu_ctrl.tensorfma_ctrl.u_a = csr_file.vpu_ctrl.tensorfma_ctrl.u_a
+  vpu_ctrl.tensorfma_ctrl.ten_b = csr_file.vpu_ctrl.tensorfma_ctrl.ten_b
+  vpu_ctrl.tensorfma_ctrl.padding1 = csr_file.vpu_ctrl.tensorfma_ctrl.padding1
+  vpu_ctrl.tensorfma_ctrl.scp_b = csr_file.vpu_ctrl.tensorfma_ctrl.scp_b
+  vpu_ctrl.tensorfma_ctrl.padding0 = csr_file.vpu_ctrl.tensorfma_ctrl.padding0
+  vpu_ctrl.tensorfma_ctrl.scp_a = csr_file.vpu_ctrl.tensorfma_ctrl.scp_a
+  vpu_ctrl.tensorfma_ctrl.mode = csr_file.vpu_ctrl.tensorfma_ctrl.mode
+  vpu_ctrl.tensorfma_ctrl.first_pass = csr_file.vpu_ctrl.tensorfma_ctrl.first_pass
+  vpu_ctrl.tensorfma_conv_bits_ready = csr_file.vpu_ctrl.tensorfma_conv_bits_ready
+  vpu_ctrl.tensorfma_conv_bits = csr_file.vpu_ctrl.tensorfma_conv_bits
+  vpu_ctrl.reduce_start = csr_file.vpu_ctrl.reduce_start
+  vpu_ctrl.tensorstore_start = csr_file.vpu_ctrl.tensorstore_start
+  vpu_ctrl.reduce_ctrl = csr_file.vpu_ctrl.reduce_ctrl
+  vpu_ctrl.tensorquant_start = `vpu_ctrl__bpo.tensorquant_start`
+  vpu_ctrl.tensorquant_ctrl.padding2 = csr_file.vpu_ctrl.tensorquant_ctrl.padding2
+  vpu_ctrl.tensorquant_ctrl.start_reg = csr_file.vpu_ctrl.tensorquant_ctrl.start_reg
+  vpu_ctrl.tensorquant_ctrl.cols = csr_file.vpu_ctrl.tensorquant_ctrl.cols
+  vpu_ctrl.tensorquant_ctrl.rows = csr_file.vpu_ctrl.tensorquant_ctrl.rows
+  vpu_ctrl.tensorquant_ctrl.scp_src = csr_file.vpu_ctrl.tensorquant_ctrl.scp_src
+  vpu_ctrl.tensorquant_ctrl.padding = csr_file.vpu_ctrl.tensorquant_ctrl.padding
+  vpu_ctrl.tensorquant_ctrl.trans = csr_file.vpu_ctrl.tensorquant_ctrl.trans
+  vpu_ctrl.pending_scoreboard_t0 = csr_file.vpu_ctrl.pending_scoreboard_t0
+  ex_dcache_req.addr = `ex_dcache_req__bpo.addr`
+  ex_dcache_req.addr_msb_err = `ex_dcache_req__bpo.addr_msb_err`
+  ex_dcache_req.dest.fp = `ex_dcache_req__bpo.dest.fp`
+  ex_dcache_req.dest.addr = `ex_dcache_req__bpo.dest.addr`
+  ex_dcache_req.dest.thread_id = `ex_dcache_req__bpo.dest.thread_id`
+  ex_dcache_req.cmd = `ex_dcache_req__bpo.cmd`
+  ex_dcache_req.typ = `ex_dcache_req__bpo.typ`
+  ex_dcache_req.gsc_cnt = `ex_dcache_req__bpo.gsc_cnt`
+  ex_dcache_req.ps_mask = `ex_dcache_req__bpo.ps_mask`
+  ex_dcache_req.phys = 0
+  ex_dcache_req.gsc32_idx = `ex_dcache_req__bpo.gsc32_idx`
+  ex_dcache_req.mem_global = `ex_dcache_req__bpo.mem_global`
+  satp_info.mode = `satp_info__bpo.mode`
+  satp_info.ppn = `satp_info__bpo.ppn`
+  matp_info.mode = `matp_info__bpo.mode`
+  matp_info.ppn = `matp_info__bpo.ppn`
+  id_vpu_req.valid = `id_vpu_req__bpo.valid`
+  id_vpu_req.thread_id = `id_vpu_req__bpo.thread_id`
+  id_vpu_req.fcsr_rm = `id_vpu_req__bpo.fcsr_rm`
+  id_vpu_req.inst_bits = `id_vpu_req__bpo.inst_bits`
+  ex_vpu_req.gscing = `ex_vpu_req__bpo.gscing`
+  ex_vpu_req.gsc_src = `ex_vpu_req__bpo.gsc_src`
+  ex_vpu_req.kill = `ex_vpu_req__bpo.kill`
+  ex_vpu_req.fromint_data = `ex_vpu_req__bpo.fromint_data`
+  ex_vpu_req.thread_id = `ex_vpu_req__bpo.thread_id`
+  wb_vpu_dcache_resp.thread_id = `wb_vpu_dcache_resp__bpo.thread_id`
+  wb_vpu_dcache_resp.gdst = `wb_vpu_dcache_resp__bpo.gdst`
+  wb_vpu_dcache_resp.typ = `wb_vpu_dcache_resp__bpo.typ`
   wb_vpu_dcache_resp.addr = `wb_vpu_dcache_resp__bpo.addr`
   wb_vpu_dcache_resp.data = `wb_vpu_dcache_resp__bpo.data`
-  wb_vpu_dcache_resp.gdst = `wb_vpu_dcache_resp__bpo.gdst`
   wb_vpu_dcache_resp.ps_mask = `wb_vpu_dcache_resp__bpo.ps_mask`
-  wb_vpu_dcache_resp.thread_id = `wb_vpu_dcache_resp__bpo.thread_id`
-  wb_vpu_dcache_resp.typ = `wb_vpu_dcache_resp__bpo.typ`
+  TE_wb_reg_cause_ie.interrupt_x = csr_file.TE_wb_reg_cause_ie.interrupt_x
+  TE_wb_reg_cause_ie.reserved1 = csr_file.TE_wb_reg_cause_ie.reserved1
+  TE_wb_reg_cause_ie.cause = csr_file.TE_wb_reg_cause_ie.cause
+  debug_monitor_out.id_thread_id = `debug_monitor_out__bpo.id_thread_id`
+  debug_monitor_out.id_pc = `debug_monitor_out__bpo.id_pc`
+  debug_monitor_out.id_valid = `debug_monitor_out__bpo.id_valid`
+  debug_monitor_out.id_valid_qual = `debug_monitor_out__bpo.id_valid_qual`
+  debug_monitor_out.id_inst_replay = `debug_monitor_out__bpo.id_inst_replay`
+  debug_monitor_out.id_take_pc = `debug_monitor_out__bpo.id_take_pc`
+  debug_monitor_out.id_csr_interrupt = `debug_monitor_out__bpo.id_csr_interrupt`
+  debug_monitor_out.excl_mode_stall = `debug_monitor_out__bpo.excl_mode_stall`
+  debug_monitor_out.ex_valid_qual = `debug_monitor_out__bpo.ex_valid_qual`
+  debug_monitor_out.tag_valid_qual = `debug_monitor_out__bpo.tag_valid_qual`
+  debug_monitor_out.mem_valid_qual = `debug_monitor_out__bpo.mem_valid_qual`
+  debug_monitor_out.wb_valid = `debug_monitor_out__bpo.wb_valid`
+  debug_monitor_out.gsc_reg_gsc_cnt = `debug_monitor_out__bpo.gsc_reg_gsc_cnt`
+  debug_monitor_out.tag_take_pc = `debug_monitor_out__bpo.tag_take_pc`
+  debug_monitor_out.ipi_with_pc = `debug_monitor_out__bpo.ipi_with_pc`
+  debug_monitor_out.wb_take_pc = `debug_monitor_out__bpo.wb_take_pc`
+  debug_monitor_out.id_xcpt = `debug_monitor_out__bpo.id_xcpt`
+  debug_monitor_out.wb_xcpt = `debug_monitor_out__bpo.wb_xcpt`
+  debug_monitor_out.id_stall_fp2int = `debug_monitor_out__bpo.id_stall_fp2int`
+  debug_monitor_out.ex_gsc_busy = `debug_monitor_out__bpo.ex_gsc_busy`
+  debug_monitor_out.csr_fe_stall = `debug_monitor_out__bpo.csr_fe_stall`
+  debug_monitor_out.id_ctrl_stall_csr = `debug_monitor_out__bpo.id_ctrl_stall_csr`
+  debug_monitor_out.id_ctrl_stall_dcache = `debug_monitor_out__bpo.id_ctrl_stall_dcache`
+  debug_monitor_out.id_do_fence = `debug_monitor_out__bpo.id_do_fence`
+  debug_monitor_out.id_ctrl_stall_trans = `debug_monitor_out__bpo.id_ctrl_stall_trans`
+  debug_monitor_out.id_ctrl_stall_div = `debug_monitor_out__bpo.id_ctrl_stall_div`
+  debug_monitor_out.id_int_sboard_hazard = `debug_monitor_out__bpo.id_int_sboard_hazard`
+  debug_monitor_out.id_ctrl_stall_hazard_vpu = `debug_monitor_out__bpo.id_ctrl_stall_hazard_vpu`
+  debug_monitor_out.id_ctrl_stall_hazard = `debug_monitor_out__bpo.id_ctrl_stall_hazard`
+  id_fe_req = id_fe_req__w6
+  id_fe_resp_ready = id_valid_qual__wtmp
+  icache_invalidate = csr_file.icache_invalidate
+  id_dcache_alloc_rq_pre = unsigned(((id_valid__w1 != 0) and (id_ctrl.mem != 0)) or (id_keepgsc__w1 != 0))
+  id_dcache_gsc = unsigned((id_ctrl.gsc != 0) or (id_keepgsc__w1 != 0))
+  ex_dcache_gsc = ex_valid_qual_to_gsc__w1
+  tag_dcache_kill = unsigned((tag_reg_valid == 0) or (tag_kill_common__w1 != 0) or (tag_dcache_bp_triggered != 0) or (tag_thread_disabled__w1 != 0))
+  mem_dcache_kill = mem_ctrl_kill__wtmp
+  wb_dcache_x31 = wb_dcache_x31__w1
+  wb_dcache_invalidate_lr = wb_xcpt__wtmp
+  satp_info_en = csr_file.io_satp_en
+  matp_info_en = csr_file.io_matp_en
+  vm_status = (((`compose_vm_status.prv` << 6) | (`compose_vm_status.mprv` << 5) | (`compose_vm_status.mpp` << 3) | (`compose_vm_status.sum` << 2) | (`compose_vm_status.mxr` << 1) | `compose_vm_status.debug`)#[0..=7] << 8) | ((`compose_vm_status.prv__w1` << 6) | (`compose_vm_status.mprv__w1` << 5) | (`compose_vm_status.mpp__w1` << 3) | (`compose_vm_status.sum__w1` << 2) | (`compose_vm_status.mxr__w1` << 1) | `compose_vm_status.debug__w1`)#[0..=7]
+  tlb_invalidate = csr_file.tlb_invalidate
+  tag_vpu_kill = unsigned((tag_reg_valid == 0) or (tag_kill_common__w1 != 0) or (tag_thread_disabled__w1 != 0))
+  mem_vpu_kill = mem_ctrl_kill__wtmp
+  wb_vpu_kill = 0
   wb_vpu_dcache_resp_valid = unsigned((wb_dcache_resp_valid != 0) and (wb_dcache_resp.dest.fp != 0))
-  wb_waddr = wb_waddr__wtmp
-  wb_wen = wb_wen__wtmp
-  wb_xcpt = wb_xcpt__wtmp
+  flb_neigh_req_valid = csr_file.flb_neigh_req_valid
+  flb_neigh_req_data = csr_file.flb_neigh_req_data
+  TE_wb_reg_inst = wb_reg_inst
+  TE_wb_reg_context = 0
+  TE_tval = csr_file.TE_tval
+  TE_prv = csr_file.TE_prv
+  TE_exception = csr_file.TE_exception
+  update_ddata0 = csr_file.update_ddata0
+  ddata0_wdata = csr_file.ddata0_wdata
+  in_debug_mode = csr_file.io_debug
+  debug_busy = csr_file.busy
+  debug_exception = csr_file.debug_out_exception
+  pmu_count_up = csr_file.pmu_count_up
+  pmu_read_sel = csr_file.pmu_read_sel
+  pmu_write_en = csr_file.pmu_write_en
+  pmu_write_data = csr_file.pmu_write_data
+  pmu_neigh_event_sel = csr_file.pmu_neigh_event_sel
 }

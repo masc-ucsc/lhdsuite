@@ -17,6 +17,8 @@ pub mod minion_dcache_miss_handler_unit::[timecheck=false](clk_i:u1, rst_ni:u1, 
   mut `writeback_req_o__bpo.is_tbox` = 0
   mut `writeback_req_o__bpo.mem_idx` = 0
   mut `writeback_req_o__bpo.addr_low` = 0
+  mut `fence_rdy_o__bpo.e1` = 0
+  mut `fence_rdy_o__bpo.e0` = 0
   mut mh_fence_rdy__wtmp:u4 = 0sb?
   wire mh_fence_rdy:u4
   mut mh_probe_rdy__wtmp:u2 = 0sb?
@@ -73,15 +75,15 @@ pub mod minion_dcache_miss_handler_unit::[timecheck=false](clk_i:u1, rst_ni:u1, 
   mut gen_handlers_0_mh_force_ba_rptr_qual:u2 = 0
   mut gen_handlers_0_mh_ba_rptr:u6 = 0
   mut gen_handlers_0_mh_ba_is_amo:u2 = 0
+  req_ready_o = 0ub?
+  req_assigned_o = 0sb?
+  req_accepted_o = 0sb?
   ba_wptr_o = 0sb?
   bus_err_addr_o = 0sb?
   csr_debug_signals_o = 0sb?
-  req_accepted_o = 0sb?
-  req_assigned_o = 0sb?
-  req_ready_o = 0ub?
-  sm_data_debug_signals_o = 0sb?
-  sm_filter_debug_signals_o = 0sb?
   sm_match_debug_signals_o = 0sb?
+  sm_filter_debug_signals_o = 0sb?
+  sm_data_debug_signals_o = 0sb?
   mut u_l2_evict_arb = prim_arb_lru::[name=u_l2_evict_arb](clk_i = clk_i, rst_ni = rst_ni, `bid_i.e1` = (mh_l2_evict_valid >> 1) & 1, `bid_i.e0` = mh_l2_evict_valid & 1, stall_i = unsigned(l2_evict_ready_i == 0))
   mut u_l2_miss_arb = prim_arb_lru::[name=u_l2_miss_arb](clk_i = clk_i, rst_ni = rst_ni, `bid_i.e1` = (mh_l2_miss_valid >> 1) & 1, `bid_i.e0` = mh_l2_miss_valid & 1, stall_i = unsigned(l2_miss_ready_i == 0))
   mut csr_debug_signals_o__w1 = csr_debug_signals_o
@@ -89,7 +91,7 @@ pub mod minion_dcache_miss_handler_unit::[timecheck=false](clk_i:u1, rst_ni:u1, 
   mut csr_debug_signals_o__w2 = csr_debug_signals_o__w1
   csr_debug_signals_o__w2#[4..=7] = mh_debug_signals#[4..=7]
   mut u_meta_write_arb = prim_arb_lru::[name=u_meta_write_arb](clk_i = clk_i, rst_ni = rst_ni, `bid_i.e1` = (mh_meta_write_valid >> 1) & 1, `bid_i.e0` = mh_meta_write_valid & 1, stall_i = unsigned(meta_write_ready_i == 0))
-  const mw_arb_grant__w1 = (u_meta_write_arb["grant_o.e1"] << 1) | u_meta_write_arb["grant_o.e0"]
+  const mw_arb_grant__w1 = (u_meta_write_arb.grant_o.e1 << 1) | u_meta_write_arb.grant_o.e0
   const req_sec_val__w1 = unsigned((req_valid_i != 0) and (mh_tag_match != 0))
   if mh_tag_match != 0 {
     req_ready_o = unsigned((mh_tag_match & mh_req_sec_rdy) != 0)
@@ -97,12 +99,11 @@ pub mod minion_dcache_miss_handler_unit::[timecheck=false](clk_i:u1, rst_ni:u1, 
     req_ready_o = unsigned(mh_req_pri_rdy != 0)
   }
   const probe_rdy_o__w1 = mh_probe_rdy
+  const metaw_rdy_o__w1 = mh_metaw_rdy
   const `fence_rdy_o__bpo.e0__w1` = 1 & mh_fence_rdy#[0..=1] & 1 & 1
   const `fence_rdy_o__bpo.e0__w2` = `fence_rdy_o__bpo.e0__w1` & mh_fence_rdy#[2..=3] & 1 & 1
   const `fence_rdy_o__bpo.e1__w1` = 1 & (mh_fence_rdy#[0..=1] >> 1) & 1 & 1
   const `fence_rdy_o__bpo.e1__w2` = `fence_rdy_o__bpo.e1__w1` & (mh_fence_rdy#[2..=3] >> 1) & 1 & 1
-  mut `fence_rdy_o__bpo.e0` = 1
-  mut `fence_rdy_o__bpo.e1` = 1
   mut req_assigned_o__w1 = req_assigned_o
   req_assigned_o__w1#[0] = unsigned((((mh_req_pri_val & 1) != 0) and ((mh_req_pri_rdy & 1) != 0)) or ((req_sec_val__w1 != 0) and ((mh_req_sec_rdy & 1) != 0)) or ((mh_tag_match & 1) != 0) or ((mh_evict_match & 1) != 0) or ((req_info_i.thread_id == 0) and (req_info_i.cacheable == 0))) & 1
   mut req_accepted_o__w1 = req_accepted_o
@@ -111,60 +112,55 @@ pub mod minion_dcache_miss_handler_unit::[timecheck=false](clk_i:u1, rst_ni:u1, 
   req_assigned_o__w2#[1] = unsigned(((((mh_req_pri_val >> 1) & 1) != 0) and (((mh_req_pri_rdy >> 1) & 1) != 0)) or ((req_sec_val__w1 != 0) and (((mh_req_sec_rdy >> 1) & 1) != 0)) or (((mh_tag_match >> 1) & 1) != 0) or (((mh_evict_match >> 1) & 1) != 0) or ((req_info_i.thread_id == 1) and (req_info_i.cacheable == 0))) & 1
   mut req_accepted_o__w2 = req_accepted_o__w1
   req_accepted_o__w2#[1] = unsigned(((((mh_req_pri_val >> 1) & 1) != 0) and (((mh_req_pri_rdy >> 1) & 1) != 0)) or ((req_sec_val__w1 != 0) and (((mh_req_sec_rdy >> 1) & 1) != 0))) & 1
-  const mh_l2_evict_ready__w1 = (u_l2_evict_arb["grant_o.e1"] << 1) | u_l2_evict_arb["grant_o.e0"]
-  const mh_l2_miss_ready__w1 = (u_l2_miss_arb["grant_o.e1"] << 1) | u_l2_miss_arb["grant_o.e0"]
+  const l2_evict_valid_o__w1 = ((mh_l2_evict_valid << 1) >> (u_l2_evict_arb.winner_o + 1)) & 1
+  mut `l2_evict_req_o__bpo.id` = ((mh_l2_evict_req__wnet << 0x142) >> ((u_l2_evict_arb.winner_o * 0x142)#[0..=10] + 0x142))#[0..=321]#[317..=321]
+  mut `l2_evict_req_o__bpo.source` = (((mh_l2_evict_req__wnet << 0x142) >> ((u_l2_evict_arb.winner_o * 0x142)#[0..=10] + 0x142))#[0..=321] >> 0x13c) & 1
+  mut `l2_evict_req_o__bpo.wdata` = (((mh_l2_evict_req__wnet << 0x142) >> ((u_l2_evict_arb.winner_o * 0x142)#[0..=10] + 0x142))#[0..=321] >> 0x13b) & 1
+  mut `l2_evict_req_o__bpo.opcode` = ((mh_l2_evict_req__wnet << 0x142) >> ((u_l2_evict_arb.winner_o * 0x142)#[0..=10] + 0x142))#[0..=321]#[310..=314]
   mut `l2_evict_req_o__bpo.address` = ((mh_l2_evict_req__wnet << 0x142) >> ((u_l2_evict_arb.winner_o * 0x142)#[0..=10] + 0x142))#[0..=321]#[270..=309]
   mut `l2_evict_req_o__bpo.data` = ((mh_l2_evict_req__wnet << 0x142) >> ((u_l2_evict_arb.winner_o * 0x142)#[0..=10] + 0x142))#[0..=321]#[14..=269]
-  mut `l2_evict_req_o__bpo.id` = ((mh_l2_evict_req__wnet << 0x142) >> ((u_l2_evict_arb.winner_o * 0x142)#[0..=10] + 0x142))#[0..=321]#[317..=321]
-  mut `l2_evict_req_o__bpo.opcode` = ((mh_l2_evict_req__wnet << 0x142) >> ((u_l2_evict_arb.winner_o * 0x142)#[0..=10] + 0x142))#[0..=321]#[310..=314]
-  mut `l2_evict_req_o__bpo.qwen` = ((mh_l2_evict_req__wnet << 0x142) >> ((u_l2_evict_arb.winner_o * 0x142)#[0..=10] + 0x142))#[0..=321]#[7..=10]
   mut `l2_evict_req_o__bpo.size` = ((mh_l2_evict_req__wnet << 0x142) >> ((u_l2_evict_arb.winner_o * 0x142)#[0..=10] + 0x142))#[0..=321]#[11..=13]
-  mut `l2_evict_req_o__bpo.source` = (((mh_l2_evict_req__wnet << 0x142) >> ((u_l2_evict_arb.winner_o * 0x142)#[0..=10] + 0x142))#[0..=321] >> 0x13c) & 1
+  mut `l2_evict_req_o__bpo.qwen` = ((mh_l2_evict_req__wnet << 0x142) >> ((u_l2_evict_arb.winner_o * 0x142)#[0..=10] + 0x142))#[0..=321]#[7..=10]
   mut `l2_evict_req_o__bpo.subopcode` = ((mh_l2_evict_req__wnet << 0x142) >> ((u_l2_evict_arb.winner_o * 0x142)#[0..=10] + 0x142))#[0..=321]#[0..=6]
-  mut `l2_evict_req_o__bpo.wdata` = (((mh_l2_evict_req__wnet << 0x142) >> ((u_l2_evict_arb.winner_o * 0x142)#[0..=10] + 0x142))#[0..=321] >> 0x13b) & 1
+  const mh_l2_evict_ready__w1 = (u_l2_evict_arb.grant_o.e1 << 1) | u_l2_evict_arb.grant_o.e0
+  const l2_miss_valid_o__w1 = ((mh_l2_miss_valid << 1) >> (u_l2_miss_arb.winner_o + 1)) & 1
+  mut `l2_miss_req_o__bpo.id` = ((mh_l2_miss_req__wnet << 0x56) >> ((u_l2_miss_arb.winner_o * 0x56)#[0..=9] + 0x56))#[0..=85]#[81..=85]
+  mut `l2_miss_req_o__bpo.source` = (((mh_l2_miss_req__wnet << 0x56) >> ((u_l2_miss_arb.winner_o * 0x56)#[0..=9] + 0x56))#[0..=85] >> 0x50) & 1
+  mut `l2_miss_req_o__bpo.wdata` = (((mh_l2_miss_req__wnet << 0x56) >> ((u_l2_miss_arb.winner_o * 0x56)#[0..=9] + 0x56))#[0..=85] >> 0x4f) & 1
+  mut `l2_miss_req_o__bpo.opcode` = ((mh_l2_miss_req__wnet << 0x56) >> ((u_l2_miss_arb.winner_o * 0x56)#[0..=9] + 0x56))#[0..=85]#[74..=78]
   mut `l2_miss_req_o__bpo.address` = ((mh_l2_miss_req__wnet << 0x56) >> ((u_l2_miss_arb.winner_o * 0x56)#[0..=9] + 0x56))#[0..=85]#[34..=73]
   mut `l2_miss_req_o__bpo.data` = ((mh_l2_miss_req__wnet << 0x56) >> ((u_l2_miss_arb.winner_o * 0x56)#[0..=9] + 0x56))#[0..=85]#[14..=33]
-  mut `l2_miss_req_o__bpo.id` = ((mh_l2_miss_req__wnet << 0x56) >> ((u_l2_miss_arb.winner_o * 0x56)#[0..=9] + 0x56))#[0..=85]#[81..=85]
-  mut `l2_miss_req_o__bpo.opcode` = ((mh_l2_miss_req__wnet << 0x56) >> ((u_l2_miss_arb.winner_o * 0x56)#[0..=9] + 0x56))#[0..=85]#[74..=78]
-  mut `l2_miss_req_o__bpo.qwen` = ((mh_l2_miss_req__wnet << 0x56) >> ((u_l2_miss_arb.winner_o * 0x56)#[0..=9] + 0x56))#[0..=85]#[7..=10]
   mut `l2_miss_req_o__bpo.size` = ((mh_l2_miss_req__wnet << 0x56) >> ((u_l2_miss_arb.winner_o * 0x56)#[0..=9] + 0x56))#[0..=85]#[11..=13]
-  mut `l2_miss_req_o__bpo.source` = (((mh_l2_miss_req__wnet << 0x56) >> ((u_l2_miss_arb.winner_o * 0x56)#[0..=9] + 0x56))#[0..=85] >> 0x50) & 1
+  mut `l2_miss_req_o__bpo.qwen` = ((mh_l2_miss_req__wnet << 0x56) >> ((u_l2_miss_arb.winner_o * 0x56)#[0..=9] + 0x56))#[0..=85]#[7..=10]
   mut `l2_miss_req_o__bpo.subopcode` = ((mh_l2_miss_req__wnet << 0x56) >> ((u_l2_miss_arb.winner_o * 0x56)#[0..=9] + 0x56))#[0..=85]#[0..=6]
-  mut `l2_miss_req_o__bpo.wdata` = (((mh_l2_miss_req__wnet << 0x56) >> ((u_l2_miss_arb.winner_o * 0x56)#[0..=9] + 0x56))#[0..=85] >> 0x4f) & 1
-  mut `meta_write_req_o__bpo.data.coh_state` = ((mh_meta_write_req__wnet << 43) >> ((u_meta_write_arb.winner_o * 43)#[0..=8] + 43))#[0..=42]#[33..=34]
-  mut `meta_write_req_o__bpo.data.tag` = ((mh_meta_write_req__wnet << 43) >> ((u_meta_write_arb.winner_o * 43)#[0..=8] + 43))#[0..=42]#[0..=32]
+  const mh_l2_miss_ready__w1 = (u_l2_miss_arb.grant_o.e1 << 1) | u_l2_miss_arb.grant_o.e0
+  const meta_write_clear_slock_o__w1 = ((mh_meta_write_clear_slock << 1) >> (u_meta_write_arb.winner_o + 1)) & 1
   mut `meta_write_req_o__bpo.set_idx` = ((mh_meta_write_req__wnet << 43) >> ((u_meta_write_arb.winner_o * 43)#[0..=8] + 43))#[0..=42]#[39..=42]
   mut `meta_write_req_o__bpo.way_en` = ((mh_meta_write_req__wnet << 43) >> ((u_meta_write_arb.winner_o * 43)#[0..=8] + 43))#[0..=42]#[35..=38]
-  `writeback_req_o__bpo.addr_low` = 0
-  `writeback_req_o__bpo.is_tbox` = 0
-  `writeback_req_o__bpo.mem_idx` = 0
-  `writeback_req_o__bpo.set` = 0
-  `writeback_req_o__bpo.tag` = 0
-  `writeback_req_o__bpo.way_en` = 0
+  mut `meta_write_req_o__bpo.data.coh_state` = ((mh_meta_write_req__wnet << 43) >> ((u_meta_write_arb.winner_o * 43)#[0..=8] + 43))#[0..=42]#[33..=34]
+  mut `meta_write_req_o__bpo.data.tag` = ((mh_meta_write_req__wnet << 43) >> ((u_meta_write_arb.winner_o * 43)#[0..=8] + 43))#[0..=42]#[0..=32]
   if (mh_wb_valid & 1) != 0 {
-    `writeback_req_o__bpo.addr_low` = (0 | mh_wb_req__wnet#[0..=49])#[0..=6]
+    `writeback_req_o__bpo.tag` = (0 | mh_wb_req__wnet#[0..=49])#[17..=49]
+    `writeback_req_o__bpo.set` = (0 | mh_wb_req__wnet#[0..=49])#[13..=16]
+    `writeback_req_o__bpo.way_en` = (0 | mh_wb_req__wnet#[0..=49])#[9..=12]
     `writeback_req_o__bpo.is_tbox` = ((0 | mh_wb_req__wnet#[0..=49]) >> 8) & 1
     `writeback_req_o__bpo.mem_idx` = ((0 | mh_wb_req__wnet#[0..=49]) >> 7) & 1
-    `writeback_req_o__bpo.set` = (0 | mh_wb_req__wnet#[0..=49])#[13..=16]
-    `writeback_req_o__bpo.tag` = (0 | mh_wb_req__wnet#[0..=49])#[17..=49]
-    `writeback_req_o__bpo.way_en` = (0 | mh_wb_req__wnet#[0..=49])#[9..=12]
+    `writeback_req_o__bpo.addr_low` = (0 | mh_wb_req__wnet#[0..=49])#[0..=6]
   }
   if ((mh_wb_valid >> 1) & 1) != 0 {
-    const t297 = ((`writeback_req_o__bpo.tag` << 17) | (`writeback_req_o__bpo.set` << 13) | (`writeback_req_o__bpo.way_en` << 9) | (`writeback_req_o__bpo.is_tbox` << 8) | (`writeback_req_o__bpo.mem_idx` << 7) | `writeback_req_o__bpo.addr_low` | mh_wb_req__wnet#[50..=99])#[0..=49]#[17..=49]
-    const t298 = ((`writeback_req_o__bpo.tag` << 17) | (`writeback_req_o__bpo.set` << 13) | (`writeback_req_o__bpo.way_en` << 9) | (`writeback_req_o__bpo.is_tbox` << 8) | (`writeback_req_o__bpo.mem_idx` << 7) | `writeback_req_o__bpo.addr_low` | mh_wb_req__wnet#[50..=99])#[0..=49]#[13..=16]
-    const t299 = ((`writeback_req_o__bpo.tag` << 17) | (`writeback_req_o__bpo.set` << 13) | (`writeback_req_o__bpo.way_en` << 9) | (`writeback_req_o__bpo.is_tbox` << 8) | (`writeback_req_o__bpo.mem_idx` << 7) | `writeback_req_o__bpo.addr_low` | mh_wb_req__wnet#[50..=99])#[0..=49]#[9..=12]
-    const t301 = (((`writeback_req_o__bpo.tag` << 17) | (`writeback_req_o__bpo.set` << 13) | (`writeback_req_o__bpo.way_en` << 9) | (`writeback_req_o__bpo.is_tbox` << 8) | (`writeback_req_o__bpo.mem_idx` << 7) | `writeback_req_o__bpo.addr_low` | mh_wb_req__wnet#[50..=99])#[0..=49] >> 8) & 1
-    const t303 = (((`writeback_req_o__bpo.tag` << 17) | (`writeback_req_o__bpo.set` << 13) | (`writeback_req_o__bpo.way_en` << 9) | (`writeback_req_o__bpo.is_tbox` << 8) | (`writeback_req_o__bpo.mem_idx` << 7) | `writeback_req_o__bpo.addr_low` | mh_wb_req__wnet#[50..=99])#[0..=49] >> 7) & 1
-    `writeback_req_o__bpo.addr_low` = ((`writeback_req_o__bpo.tag` << 17) | (`writeback_req_o__bpo.set` << 13) | (`writeback_req_o__bpo.way_en` << 9) | (`writeback_req_o__bpo.is_tbox` << 8) | (`writeback_req_o__bpo.mem_idx` << 7) | `writeback_req_o__bpo.addr_low` | mh_wb_req__wnet#[50..=99])#[0..=49]#[0..=6]
-    `writeback_req_o__bpo.is_tbox` = t301
-    `writeback_req_o__bpo.mem_idx` = t303
-    `writeback_req_o__bpo.set` = t298
-    `writeback_req_o__bpo.tag` = t297
-    `writeback_req_o__bpo.way_en` = t299
+    const t296 = ((`writeback_req_o__bpo.tag` << 17) | (`writeback_req_o__bpo.set` << 13) | (`writeback_req_o__bpo.way_en` << 9) | (`writeback_req_o__bpo.is_tbox` << 8) | (`writeback_req_o__bpo.mem_idx` << 7) | `writeback_req_o__bpo.addr_low` | mh_wb_req__wnet#[50..=99])#[0..=49]
+    `writeback_req_o__bpo.tag` = t296#[17..=49]
+    `writeback_req_o__bpo.set` = t296#[13..=16]
+    `writeback_req_o__bpo.way_en` = t296#[9..=12]
+    `writeback_req_o__bpo.is_tbox` = (t296 >> 8) & 1
+    `writeback_req_o__bpo.mem_idx` = (t296 >> 7) & 1
+    `writeback_req_o__bpo.addr_low` = t296#[0..=6]
   }
   const refill_way_o__w1 = ((mh_refill_way << 2) >> (((l2_resp_data_i.id & 1) * 2) + 2))#[0..=1]
   const refill_addr_o__w1 = ((mh_refill_addr << 10) >> (((l2_resp_data_i.id & 1) * 10) + 10))#[0..=9]
+  const bus_err_o__w2 = mh_bus_err#[0..=1] | mh_bus_err#[2..=3]
   bus_err_addr_o = if mh_bus_err#[2..=3] != 0 { mh_bus_err_addr#[40..=79] } else { mh_bus_err_addr#[0..=39] }
+  const going_to_uc_store_o__w2 = ((mh_going_to_uc_store & 1) | ((mh_going_to_uc_store >> 1) & 1)) & 1
   gen_handlers_0_mh_req_pri_rdy_sel = 0sb?
   mut gen_handlers_0_mh_req_pri_rdy_sel__w1 = gen_handlers_0_mh_req_pri_rdy_sel
   gen_handlers_0_mh_req_pri_rdy_sel__w1#[0] = mh_req_pri_rdy & 1
@@ -317,94 +313,94 @@ pub mod minion_dcache_miss_handler_unit::[timecheck=false](clk_i:u1, rst_ni:u1, 
     force_ba_rptr_o = unsigned(gen_handlers_0_mh_force_ba_rptr_next__w2 != 0)
   }
   ba_wptr_o = if ((gen_handlers_0_mh_have_l2_to_ba_resp__w2 >> 1) & 1) != 0 { gen_handlers_0_mh_ba_rptr__w2#[3..=5] } else { gen_handlers_0_mh_ba_rptr__w2#[0..=2] }
-  ba_is_amo_o = ((gen_handlers_0_mh_ba_is_amo__w2 << 1) >> (u_l2_evict_arb.winner_o + 1)) & 1
-  ba_rptr_o = ((gen_handlers_0_mh_ba_rptr__w2 << 3) >> ((u_l2_evict_arb.winner_o * 3) + 3))#[0..=2]
-  bus_err_o = mh_bus_err#[0..=1] | mh_bus_err#[2..=3]
-  can_accept_uc_o = unsigned(mh_can_accept_uc != 0)
-  csr_debug_signals_o = csr_debug_signals_o__w2
-  fence_rdy_o.e0 = `fence_rdy_o__bpo.e0__w2`
-  fence_rdy_o.e1 = `fence_rdy_o__bpo.e1__w2`
-  force_ba_rptr_qual_o = unsigned(gen_handlers_0_mh_force_ba_rptr_qual__w2 != 0)
-  going_to_uc_store_o = ((mh_going_to_uc_store & 1) | ((mh_going_to_uc_store >> 1) & 1)) & 1
-  handler_fill_bus_error_o.e0 = `handler_fill_bus_error_o__bpo.e0`
-  handler_fill_bus_error_o.e1 = `handler_fill_bus_error_o__bpo.e1`
-  handler_ready_o.e0 = `handler_ready_o__bpo.e0`
-  handler_ready_o.e1 = `handler_ready_o__bpo.e1`
-  handler_uc_load_bus_error_o.e0 = `handler_uc_load_bus_error_o__bpo.e0`
-  handler_uc_load_bus_error_o.e1 = `handler_uc_load_bus_error_o__bpo.e1`
-  idle_o = unsigned(mh_idle == 3)
-  l2_evict_req_o.address = `l2_evict_req_o__bpo.address`
-  l2_evict_req_o.data = `l2_evict_req_o__bpo.data`
-  l2_evict_req_o.id = `l2_evict_req_o__bpo.id`
-  l2_evict_req_o.opcode = `l2_evict_req_o__bpo.opcode`
-  l2_evict_req_o.qwen = `l2_evict_req_o__bpo.qwen`
-  l2_evict_req_o.size = `l2_evict_req_o__bpo.size`
-  l2_evict_req_o.source = `l2_evict_req_o__bpo.source`
-  l2_evict_req_o.subopcode = `l2_evict_req_o__bpo.subopcode`
-  l2_evict_req_o.wdata = `l2_evict_req_o__bpo.wdata`
-  l2_evict_valid_o = ((mh_l2_evict_valid << 1) >> (u_l2_evict_arb.winner_o + 1)) & 1
-  l2_miss_req_o.address = `l2_miss_req_o__bpo.address`
-  l2_miss_req_o.data = `l2_miss_req_o__bpo.data`
-  l2_miss_req_o.id = `l2_miss_req_o__bpo.id`
-  l2_miss_req_o.opcode = `l2_miss_req_o__bpo.opcode`
-  l2_miss_req_o.qwen = `l2_miss_req_o__bpo.qwen`
-  l2_miss_req_o.size = `l2_miss_req_o__bpo.size`
-  l2_miss_req_o.source = `l2_miss_req_o__bpo.source`
-  l2_miss_req_o.subopcode = `l2_miss_req_o__bpo.subopcode`
-  l2_miss_req_o.wdata = `l2_miss_req_o__bpo.wdata`
-  l2_miss_valid_o = ((mh_l2_miss_valid << 1) >> (u_l2_miss_arb.winner_o + 1)) & 1
-  l2_resp_stall_o.e0 = `l2_resp_stall_o__bpo.e0`
-  l2_resp_stall_o.e1 = `l2_resp_stall_o__bpo.e1`
-  match_miss_line_o = unsigned((mh_tag_match != 0) or (mh_evict_match != 0))
-  meta_write_clear_slock_o = ((mh_meta_write_clear_slock << 1) >> (u_meta_write_arb.winner_o + 1)) & 1
-  meta_write_req_o.data.coh_state = `meta_write_req_o__bpo.data.coh_state`
-  meta_write_req_o.data.tag = `meta_write_req_o__bpo.data.tag`
-  meta_write_req_o.set_idx = `meta_write_req_o__bpo.set_idx`
-  meta_write_req_o.way_en = `meta_write_req_o__bpo.way_en`
-  meta_write_valid_next_o = unsigned(mh_meta_write_valid_next != 0)
-  meta_write_valid_o = unsigned(mh_meta_write_valid != 0)
-  metaw_rdy_o = mh_metaw_rdy
-  mh_bus_err = mh_bus_err__wtmp__w1
-  mh_bus_err_addr = mh_bus_err_addr__wtmp__w1
-  mh_can_accept_uc = mh_can_accept_uc__wtmp__w1
-  mh_debug_signals = mh_debug_signals__wtmp__w1
-  mh_evict_match = mh_evict_match__wtmp__w1
   mh_fence_rdy = mh_fence_rdy__wtmp__w1
-  mh_going_to_uc_store = mh_going_to_uc_store__wtmp__w1
+  mh_probe_rdy = mh_probe_rdy__wtmp__w1
+  mh_metaw_rdy = mh_metaw_rdy__wtmp__w1
+  mh_req_pri_val = mh_req_pri_val__wtmp__w1
+  mh_req_pri_rdy = mh_req_pri_rdy__wtmp__w1
+  mh_tag_match = mh_tag_match__wtmp__w1
+  mh_evict_match = mh_evict_match__wtmp__w1
+  mh_req_sec_rdy = mh_req_sec_rdy__wtmp__w1
+  mh_can_accept_uc = mh_can_accept_uc__wtmp__w1
   mh_idle = mh_idle__wtmp__w1
-  mh_l2_evict_req__wnet = mh_l2_evict_req__w1
+  mh_wait_l2_to_ba_resp = mh_wait_l2_to_ba_resp__wtmp__w1
   mh_l2_evict_valid = mh_l2_evict_valid__wtmp__w1
-  mh_l2_miss_req__wnet = mh_l2_miss_req__w1
+  mh_l2_evict_req__wnet = mh_l2_evict_req__w1
   mh_l2_miss_valid = mh_l2_miss_valid__wtmp__w1
-  mh_meta_write_clear_slock = mh_meta_write_clear_slock__wtmp__w1
+  mh_l2_miss_req__wnet = mh_l2_miss_req__w1
   mh_meta_write_req__wnet = mh_meta_write_req__w1
   mh_meta_write_valid = mh_meta_write_valid__wtmp__w1
   mh_meta_write_valid_next = mh_meta_write_valid_next__wtmp__w1
-  mh_metaw_rdy = mh_metaw_rdy__wtmp__w1
-  mh_probe_rdy = mh_probe_rdy__wtmp__w1
-  mh_refill_addr = mh_refill_addr__wtmp__w1
-  mh_refill_way = mh_refill_way__wtmp__w1
-  mh_req_pri_rdy = mh_req_pri_rdy__wtmp__w1
-  mh_req_pri_val = mh_req_pri_val__wtmp__w1
-  mh_req_sec_rdy = mh_req_sec_rdy__wtmp__w1
-  mh_tag_match = mh_tag_match__wtmp__w1
-  mh_wait_l2_to_ba_resp = mh_wait_l2_to_ba_resp__wtmp__w1
+  mh_meta_write_clear_slock = mh_meta_write_clear_slock__wtmp__w1
   mh_wb_req__wnet = mh_wb_req__w1
   mh_wb_valid = mh_wb_valid__wtmp__w1
-  probe_rdy_o = probe_rdy_o__w1
-  refill_addr_o = refill_addr_o__w1
-  refill_way_o = refill_way_o__w1
-  req_accepted_o = req_accepted_o__w2
-  req_assigned_o = req_assigned_o__w2
-  sm_data_debug_signals_o = sm_data_debug_signals_o__w2
-  sm_filter_debug_signals_o = sm_filter_debug_signals_o__w2
-  sm_match_debug_signals_o = sm_match_debug_signals_o__w2
-  wait_l2_to_ba_resp_o = unsigned(mh_wait_l2_to_ba_resp != 0)
-  writeback_req_o.addr_low = `writeback_req_o__bpo.addr_low`
+  mh_refill_way = mh_refill_way__wtmp__w1
+  mh_refill_addr = mh_refill_addr__wtmp__w1
+  mh_bus_err = mh_bus_err__wtmp__w1
+  mh_bus_err_addr = mh_bus_err_addr__wtmp__w1
+  mh_going_to_uc_store = mh_going_to_uc_store__wtmp__w1
+  mh_debug_signals = mh_debug_signals__wtmp__w1
+  l2_evict_req_o.id = `l2_evict_req_o__bpo.id`
+  l2_evict_req_o.source = `l2_evict_req_o__bpo.source`
+  l2_evict_req_o.wdata = `l2_evict_req_o__bpo.wdata`
+  l2_evict_req_o.opcode = `l2_evict_req_o__bpo.opcode`
+  l2_evict_req_o.address = `l2_evict_req_o__bpo.address`
+  l2_evict_req_o.data = `l2_evict_req_o__bpo.data`
+  l2_evict_req_o.size = `l2_evict_req_o__bpo.size`
+  l2_evict_req_o.qwen = `l2_evict_req_o__bpo.qwen`
+  l2_evict_req_o.subopcode = `l2_evict_req_o__bpo.subopcode`
+  l2_miss_req_o.id = `l2_miss_req_o__bpo.id`
+  l2_miss_req_o.source = `l2_miss_req_o__bpo.source`
+  l2_miss_req_o.wdata = `l2_miss_req_o__bpo.wdata`
+  l2_miss_req_o.opcode = `l2_miss_req_o__bpo.opcode`
+  l2_miss_req_o.address = `l2_miss_req_o__bpo.address`
+  l2_miss_req_o.data = `l2_miss_req_o__bpo.data`
+  l2_miss_req_o.size = `l2_miss_req_o__bpo.size`
+  l2_miss_req_o.qwen = `l2_miss_req_o__bpo.qwen`
+  l2_miss_req_o.subopcode = `l2_miss_req_o__bpo.subopcode`
+  l2_resp_stall_o.e1 = `l2_resp_stall_o__bpo.e1`
+  l2_resp_stall_o.e0 = `l2_resp_stall_o__bpo.e0`
+  meta_write_req_o.set_idx = `meta_write_req_o__bpo.set_idx`
+  meta_write_req_o.way_en = `meta_write_req_o__bpo.way_en`
+  meta_write_req_o.data.coh_state = `meta_write_req_o__bpo.data.coh_state`
+  meta_write_req_o.data.tag = `meta_write_req_o__bpo.data.tag`
+  writeback_req_o.tag = `writeback_req_o__bpo.tag`
+  writeback_req_o.set = `writeback_req_o__bpo.set`
+  writeback_req_o.way_en = `writeback_req_o__bpo.way_en`
   writeback_req_o.is_tbox = `writeback_req_o__bpo.is_tbox`
   writeback_req_o.mem_idx = `writeback_req_o__bpo.mem_idx`
-  writeback_req_o.set = `writeback_req_o__bpo.set`
-  writeback_req_o.tag = `writeback_req_o__bpo.tag`
-  writeback_req_o.way_en = `writeback_req_o__bpo.way_en`
+  writeback_req_o.addr_low = `writeback_req_o__bpo.addr_low`
+  fence_rdy_o.e1 = `fence_rdy_o__bpo.e1__w2`
+  fence_rdy_o.e0 = `fence_rdy_o__bpo.e0__w2`
+  handler_ready_o.e1 = `handler_ready_o__bpo.e1`
+  handler_ready_o.e0 = `handler_ready_o__bpo.e0`
+  handler_fill_bus_error_o.e1 = `handler_fill_bus_error_o__bpo.e1`
+  handler_fill_bus_error_o.e0 = `handler_fill_bus_error_o__bpo.e0`
+  handler_uc_load_bus_error_o.e1 = `handler_uc_load_bus_error_o__bpo.e1`
+  handler_uc_load_bus_error_o.e0 = `handler_uc_load_bus_error_o__bpo.e0`
+  req_assigned_o = req_assigned_o__w2
+  req_accepted_o = req_accepted_o__w2
+  can_accept_uc_o = unsigned(mh_can_accept_uc != 0)
+  wait_l2_to_ba_resp_o = unsigned(mh_wait_l2_to_ba_resp != 0)
+  going_to_uc_store_o = going_to_uc_store_o__w2
+  l2_evict_valid_o = l2_evict_valid_o__w1
+  l2_miss_valid_o = l2_miss_valid_o__w1
+  refill_way_o = refill_way_o__w1
+  refill_addr_o = refill_addr_o__w1
+  meta_write_valid_next_o = unsigned(mh_meta_write_valid_next != 0)
+  meta_write_valid_o = unsigned(mh_meta_write_valid != 0)
+  meta_write_clear_slock_o = meta_write_clear_slock_o__w1
   writeback_valid_o = unsigned(mh_wb_valid != 0)
+  force_ba_rptr_qual_o = unsigned(gen_handlers_0_mh_force_ba_rptr_qual__w2 != 0)
+  ba_rptr_o = ((gen_handlers_0_mh_ba_rptr__w2 << 3) >> ((u_l2_evict_arb.winner_o * 3) + 3))#[0..=2]
+  ba_is_amo_o = ((gen_handlers_0_mh_ba_is_amo__w2 << 1) >> (u_l2_evict_arb.winner_o + 1)) & 1
+  idle_o = unsigned(mh_idle == 3)
+  probe_rdy_o = probe_rdy_o__w1
+  metaw_rdy_o = metaw_rdy_o__w1
+  match_miss_line_o = unsigned((mh_tag_match != 0) or (mh_evict_match != 0))
+  bus_err_o = bus_err_o__w2
+  csr_debug_signals_o = csr_debug_signals_o__w2
+  sm_match_debug_signals_o = sm_match_debug_signals_o__w2
+  sm_filter_debug_signals_o = sm_filter_debug_signals_o__w2
+  sm_data_debug_signals_o = sm_data_debug_signals_o__w2
 }

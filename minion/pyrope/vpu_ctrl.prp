@@ -206,6 +206,30 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   wire f8_regmask_store:u8
   wire f8_trans_wen_ctrl_en:u1
   wire f8_trans_fcsr_en:u1
+  mut `id_core_ctrl__bpo.m0ren` = 0
+  mut `id_core_ctrl__bpo.mallren` = 0
+  mut `id_core_ctrl__bpo.mren1` = 0
+  mut `id_core_ctrl__bpo.mren2` = 0
+  mut `id_core_ctrl__bpo.wen` = 0
+  mut `id_core_ctrl__bpo.ren1` = 0
+  mut `id_core_ctrl__bpo.ren2` = 0
+  mut `id_core_ctrl__bpo.ren3` = 0
+  mut `id_core_ctrl__bpo.rend` = 0
+  mut `id_core_ctrl__bpo.is_trans` = 0
+  mut `id_core_ctrl__bpo.trans_busy` = 0
+  mut `id_core_ctrl__bpo.id_trans_insert` = 0
+  mut `id_core_ctrl__bpo.scoreboard.fp_valid` = 0
+  mut `id_core_ctrl__bpo.scoreboard.fp_dest` = 0
+  mut `id_core_ctrl__bpo.scoreboard.toint_valid` = 0
+  mut `id_core_ctrl__bpo.scoreboard.toint_dest` = 0
+  mut `id_core_ctrl__bpo.scoreboard.mask_valid` = 0
+  mut `id_core_ctrl__bpo.scoreboard.mask_dest` = 0
+  mut `id_core_ctrl__bpo.tfma_enabled` = 0
+  mut `id_core_ctrl__bpo.tfma_wrrf_enabled` = 0
+  mut `id_core_ctrl__bpo.tquant_enabled` = 0
+  mut `id_core_ctrl__bpo.reduce_enabled` = 0
+  mut `id_core_ctrl__bpo.fflags_stall` = 0
+  mut `id_core_ctrl__bpo.fromint` = 0
   mut `ex_req__bpo.use_prev_sigs` = 0
   mut `ex_req__bpo.sigs.cmd` = 0
   mut `ex_req__bpo.sigs.txfma` = 0
@@ -250,6 +274,17 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   mut `ex_req__bpo.in2` = 0
   mut `ex_req__bpo.in3` = 0
   mut `wb_core_ctrl__bpo.toint_data` = 0
+  mut `io_events__bpo.e10` = 0
+  mut `io_events__bpo.e9` = 0
+  mut `io_events__bpo.e8` = 0
+  mut `io_events__bpo.e7` = 0
+  mut `io_events__bpo.e6` = 0
+  mut `io_events__bpo.e5` = 0
+  mut `io_events__bpo.e4` = 0
+  mut `io_events__bpo.e3` = 0
+  mut `io_events__bpo.e2` = 0
+  mut `io_events__bpo.e1` = 0
+  mut `io_events__bpo.e0` = 0
   mut id_core_inst_next__wtmp:u32 = 0sb?
   wire id_core_inst_next:u32
   mut id_core_inst_en__wtmp:u1 = 0sb?
@@ -271,15 +306,15 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   mut f6_thread_id_to_f7:u1 = 0
   mut f6_regfile_wmask_to_f7:u8 = 0
   mut EnableExtraTrans = vpu_pkg.EnableExtraTransDefault
-  ex_bypass_force_ctrl.shsw_in1 = (ex_bypass_force_ctrl_q >> 1) & 1
-  ex_bypass_force_ctrl.shsw_in2 = ex_bypass_force_ctrl_q & 1
   ex_bypass_force_ctrl.txfma_in0 = (ex_bypass_force_ctrl_q >> 4) & 1
   ex_bypass_force_ctrl.txfma_in1 = (ex_bypass_force_ctrl_q >> 3) & 1
   ex_bypass_force_ctrl.txfma_in2 = (ex_bypass_force_ctrl_q >> 2) & 1
-  id_scoreboard = 0sb?
+  ex_bypass_force_ctrl.shsw_in1 = (ex_bypass_force_ctrl_q >> 1) & 1
+  ex_bypass_force_ctrl.shsw_in2 = ex_bypass_force_ctrl_q & 1
   id_vpu_ctrl = 0sb?
-  ex_tena_rf_rdata = 0sb?
+  id_scoreboard = 0sb?
   ex_tima_valid = 0sb?
+  ex_tena_rf_rdata = 0sb?
   f2_fswizz_rdata1 = 0sb?
   f2_fswizz_rdata2 = 0sb?
   f2_fswizz_rdata3 = 0sb?
@@ -288,13 +323,14 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   id_core_valid_int = 0ub?
   mut _mux_1:u32 = if id_inst_from_core != 0 { id_core_inst_bits } else { id_core_inst }
   const id_core_inst_int__w1 = _mux_1
-  id_core_thread_id_int = id_core_thread_id
+  id_core_thread_id_int = 0ub?
   id_core_valid_int = id_core_valid
+  id_core_thread_id_int = id_core_thread_id
   if id_ml_inst_en != 0 {
     id_core_valid_int = 1
   } elif id_trans_insert_en != 0 {
-    id_core_thread_id_int = id_trans_thread_id
     id_core_valid_int = 1
+    id_core_thread_id_int = id_trans_thread_id
   }
   mut id_scoreboard__w1 = id_scoreboard
   id_scoreboard__w1#[150] = (id_trans_scoreboard_slots__wnet#[0..=15] >> 15) & 1
@@ -399,11 +435,11 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   mut id_scoreboard__w48 = id_scoreboard__w47
   id_scoreboard__w48#[41] = f8_thread_id & 1
   if reset != 0 {
-    ex_ctrl_valid = 0
     ex_ml_inst_val = 0
+    ex_ctrl_valid = 0
   } elif ex_core_gscing == 0 {
-    ex_ctrl_valid = id_core_valid_int
     ex_ml_inst_val = id_ml_inst_en
+    ex_ctrl_valid = id_core_valid_int
   }
   if reset != 0 {
     f3_tenb_pass = 0
@@ -452,6 +488,7 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   f2_ml_inst_val = ex_ml_inst_val
   f2_mova_mx = ex_mova_mx
   const f2_mask_wen__w1 = f2_wen & unsigned(((f2_req#[121..=165] >> 7) & 1) == 0) & 1
+  f2_regfile_wmask = 0sb?
   f2_regfile_wmask = 0
   if (f2_wen != 0) and (((f2_req#[121..=165] >> 27) & 1) == 0) and (((f2_req#[121..=165] >> 29) & 1) == 0) and (((f2_req#[121..=165] >> 7) & 1) == 0) {
     if ((f2_ctrl_valid_qual != 0) and (((f2_req#[121..=165] >> 13) & 1) == 0)) or (f2_req#[121..=165]#[38..=44] == vpu_defs_pkg.VPU_FCMD_FCMOVM) {
@@ -576,12 +613,12 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   mut f2_fswizz_rdata3__w8 = f2_fswizz_rdata3__w7
   f2_fswizz_rdata3__w8#[224..=255] = f2_fswizz_rdata#[192..=223]
   mut `f2_core_ctrl__bpo.fma` = (f2_req#[121..=165] >> 37) & 1
-  mut `f2_core_ctrl__bpo.scatter_data` = f2_store_data_lane[f2_gsc_src]
   mut `f2_core_ctrl__bpo.store_data` = f2_store_data_lane
+  mut `f2_core_ctrl__bpo.scatter_data` = f2_store_data_lane[f2_gsc_src]
   mut `f2_core_ctrl__bpo.tointm` = (f2_req#[121..=165] >> 29) & 1 & unsigned(((f2_req#[121..=165] >> 36) & 1) == 0) & 1
   if f2_ctrl_valid_qual != 0 {
-    f3_lane_idx = f2_lane_idx
     f3_ml_use_prev_sigs = f2_ml_use_prev_sigs
+    f3_lane_idx = f2_lane_idx
   }
   if f2_ctrl_valid != 0 {
     f3_regfile_waddr = f2_regfile_waddr
@@ -591,55 +628,55 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   } elif (f2_ctrl_valid != 0) and (f2_ml_use_prev_sigs == 0) {
     f3_ctrl_sigs = f2_req#[121..=165]
   }
-  const `f3_ctrl_sigs_to_f4.vector__w1` = (f3_ctrl_sigs >> 13) & 1
-  mut `f3_ctrl_sigs_to_f4.add` = (f3_ctrl_sigs >> 4) & 1
   mut `f3_ctrl_sigs_to_f4.cmd` = f3_ctrl_sigs#[38..=44]
+  mut `f3_ctrl_sigs_to_f4.txfma` = (f3_ctrl_sigs >> 37) & 1
+  mut `f3_ctrl_sigs_to_f4.shsw` = (f3_ctrl_sigs >> 36) & 1
+  mut `f3_ctrl_sigs_to_f4.rom` = (f3_ctrl_sigs >> 35) & 1
+  mut `f3_ctrl_sigs_to_f4.scatter` = (f3_ctrl_sigs >> 34) & 1
   mut `f3_ctrl_sigs_to_f4.cvt` = (f3_ctrl_sigs >> 33) & 1
-  mut `f3_ctrl_sigs_to_f4.dtype` = f3_ctrl_sigs#[9..=12]
-  mut `f3_ctrl_sigs_to_f4.fma` = (f3_ctrl_sigs >> 6) & 1
-  mut `f3_ctrl_sigs_to_f4.fms` = (f3_ctrl_sigs >> 5) & 1
-  mut `f3_ctrl_sigs_to_f4.fromint` = (f3_ctrl_sigs >> 8) & 1
-  mut `f3_ctrl_sigs_to_f4.fromintf` = (f3_ctrl_sigs >> 30) & 1
+  mut `f3_ctrl_sigs_to_f4.trans` = (f3_ctrl_sigs >> 32) & 1
   mut `f3_ctrl_sigs_to_f4.gcvt` = (f3_ctrl_sigs >> 31) & 1
+  mut `f3_ctrl_sigs_to_f4.fromintf` = (f3_ctrl_sigs >> 30) & 1
+  mut `f3_ctrl_sigs_to_f4.tointm` = (f3_ctrl_sigs >> 29) & 1
+  mut `f3_ctrl_sigs_to_f4.tointf` = (f3_ctrl_sigs >> 28) & 1
+  mut `f3_ctrl_sigs_to_f4.maskop` = (f3_ctrl_sigs >> 27) & 1
   mut `f3_ctrl_sigs_to_f4.ldst` = (f3_ctrl_sigs >> 26) & 1
   mut `f3_ctrl_sigs_to_f4.m0ren` = (f3_ctrl_sigs >> 25) & 1
   mut `f3_ctrl_sigs_to_f4.mallren` = (f3_ctrl_sigs >> 24) & 1
-  mut `f3_ctrl_sigs_to_f4.maskop` = (f3_ctrl_sigs >> 27) & 1
   mut `f3_ctrl_sigs_to_f4.mren1` = (f3_ctrl_sigs >> 23) & 1
   mut `f3_ctrl_sigs_to_f4.mren2` = (f3_ctrl_sigs >> 22) & 1
-  mut `f3_ctrl_sigs_to_f4.mul` = (f3_ctrl_sigs >> 2) & 1
+  mut `f3_ctrl_sigs_to_f4.wen` = (f3_ctrl_sigs >> 21) & 1
   mut `f3_ctrl_sigs_to_f4.ren1` = (f3_ctrl_sigs >> 20) & 1
   mut `f3_ctrl_sigs_to_f4.ren2` = (f3_ctrl_sigs >> 19) & 1
   mut `f3_ctrl_sigs_to_f4.ren3` = (f3_ctrl_sigs >> 18) & 1
   mut `f3_ctrl_sigs_to_f4.rend` = (f3_ctrl_sigs >> 17) & 1
-  mut `f3_ctrl_sigs_to_f4.rom` = (f3_ctrl_sigs >> 35) & 1
-  mut `f3_ctrl_sigs_to_f4.round` = (f3_ctrl_sigs >> 1) & 1
-  mut `f3_ctrl_sigs_to_f4.scatter` = (f3_ctrl_sigs >> 34) & 1
-  mut `f3_ctrl_sigs_to_f4.shsw` = (f3_ctrl_sigs >> 36) & 1
-  mut `f3_ctrl_sigs_to_f4.sub` = (f3_ctrl_sigs >> 3) & 1
   mut `f3_ctrl_sigs_to_f4.swap12` = (f3_ctrl_sigs >> 16) & 1
-  mut `f3_ctrl_sigs_to_f4.swap13` = (f3_ctrl_sigs >> 14) & 1
   mut `f3_ctrl_sigs_to_f4.swap23` = (f3_ctrl_sigs >> 15) & 1
-  mut `f3_ctrl_sigs_to_f4.toint` = (f3_ctrl_sigs >> 7) & 1
-  mut `f3_ctrl_sigs_to_f4.tointf` = (f3_ctrl_sigs >> 28) & 1
-  mut `f3_ctrl_sigs_to_f4.tointm` = (f3_ctrl_sigs >> 29) & 1
-  mut `f3_ctrl_sigs_to_f4.trans` = (f3_ctrl_sigs >> 32) & 1
-  mut `f3_ctrl_sigs_to_f4.txfma` = (f3_ctrl_sigs >> 37) & 1
+  mut `f3_ctrl_sigs_to_f4.swap13` = (f3_ctrl_sigs >> 14) & 1
   mut `f3_ctrl_sigs_to_f4.vector` = (f3_ctrl_sigs >> 13) & 1
-  mut `f3_ctrl_sigs_to_f4.wen` = (f3_ctrl_sigs >> 21) & 1
+  mut `f3_ctrl_sigs_to_f4.dtype` = f3_ctrl_sigs#[9..=12]
+  mut `f3_ctrl_sigs_to_f4.fromint` = (f3_ctrl_sigs >> 8) & 1
+  mut `f3_ctrl_sigs_to_f4.toint` = (f3_ctrl_sigs >> 7) & 1
+  mut `f3_ctrl_sigs_to_f4.fma` = (f3_ctrl_sigs >> 6) & 1
+  mut `f3_ctrl_sigs_to_f4.fms` = (f3_ctrl_sigs >> 5) & 1
+  mut `f3_ctrl_sigs_to_f4.add` = (f3_ctrl_sigs >> 4) & 1
+  mut `f3_ctrl_sigs_to_f4.sub` = (f3_ctrl_sigs >> 3) & 1
+  mut `f3_ctrl_sigs_to_f4.mul` = (f3_ctrl_sigs >> 2) & 1
+  mut `f3_ctrl_sigs_to_f4.round` = (f3_ctrl_sigs >> 1) & 1
   mut `f3_ctrl_sigs_to_f4.wflags` = f3_ctrl_sigs & 1
+  const `f3_ctrl_sigs_to_f4.vector__w1` = (f3_ctrl_sigs >> 13) & 1
   const f3_bypass_clk_en__w1 = ((((((f3_wen & unsigned(((f3_ctrl_sigs >> 37) & 1) == 0) & 1) | ((f3_ctrl_sigs >> 32) & 1)) & 1) | unsigned(f2_req#[121..=165]#[38..=44] == vpu_defs_pkg.VPU_FCMD_MVS_FX)) & 1) | unsigned(f2_req#[121..=165]#[38..=44] == vpu_defs_pkg.VPU_FCMD_MVZ_FX)) & 1
   mut `f3_core_ctrl__bpo.fma` = (f3_ctrl_sigs >> 37) & 1
   mut `f3_core_ctrl__bpo.tointm` = (f3_ctrl_sigs >> 29) & 1 & unsigned(((f3_ctrl_sigs >> 36) & 1) == 0) & 1
   mut _rep_18:u8 = if (f3_ctrl_valid_qual & unsigned(unsigned((f3_core_kill != 0) and (((f3_ctrl_sigs >> 32) & 1) == 0) and (f3_ml_inst_val == 0)) == 0) & 1) != 0 { 0xff } else { 0 }
   const f3_regfile_wmask_to_f4__w1 = f3_regfile_wmask & _rep_18
   if reset != 0 {
-    f4_ctrl_killed_prev = 0
     f4_ctrl_sigs = 0
-    f4_ctrl_valid = 0
     f4_ctrl_valid_qual = 0
-    f4_ml_inst_val = 0
     f4_wen = 0
+    f4_ctrl_killed_prev = 0
+    f4_ctrl_valid = 0
+    f4_ml_inst_val = 0
   } else {
     if (f3_ctrl_valid != 0) and (f3_ml_use_prev_sigs == 0) {
       const t867 = (`f3_ctrl_sigs_to_f4.cmd` << 38) | (`f3_ctrl_sigs_to_f4.txfma` << 37) | (`f3_ctrl_sigs_to_f4.shsw` << 36) | (`f3_ctrl_sigs_to_f4.rom` << 35) | (`f3_ctrl_sigs_to_f4.scatter` << 34) | (`f3_ctrl_sigs_to_f4.cvt` << 33) | (`f3_ctrl_sigs_to_f4.trans` << 32) | (`f3_ctrl_sigs_to_f4.gcvt` << 31) | (`f3_ctrl_sigs_to_f4.fromintf` << 30) | (`f3_ctrl_sigs_to_f4.tointm` << 29) | (`f3_ctrl_sigs_to_f4.tointf` << 28) | (`f3_ctrl_sigs_to_f4.maskop` << 27) | (`f3_ctrl_sigs_to_f4.ldst` << 26) | (`f3_ctrl_sigs_to_f4.m0ren` << 25) | (`f3_ctrl_sigs_to_f4.mallren` << 24) | (`f3_ctrl_sigs_to_f4.mren1` << 23) | (`f3_ctrl_sigs_to_f4.mren2` << 22) | (`f3_ctrl_sigs_to_f4.wen` << 21) | (`f3_ctrl_sigs_to_f4.ren1` << 20) | (`f3_ctrl_sigs_to_f4.ren2` << 19) | (`f3_ctrl_sigs_to_f4.ren3` << 18) | (`f3_ctrl_sigs_to_f4.rend` << 17) | (`f3_ctrl_sigs_to_f4.swap12` << 16) | (`f3_ctrl_sigs_to_f4.swap23` << 15) | (`f3_ctrl_sigs_to_f4.swap13` << 14) | (`f3_ctrl_sigs_to_f4.vector__w1` << 13) | (`f3_ctrl_sigs_to_f4.dtype` << 9) | (`f3_ctrl_sigs_to_f4.fromint` << 8) | (`f3_ctrl_sigs_to_f4.toint` << 7) | (`f3_ctrl_sigs_to_f4.fma` << 6) | (`f3_ctrl_sigs_to_f4.fms` << 5) | (`f3_ctrl_sigs_to_f4.add` << 4) | (`f3_ctrl_sigs_to_f4.sub` << 3)
@@ -649,49 +686,49 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
       f4_ctrl_sigs = t875
     }
     f4_ctrl_valid_qual = f3_ctrl_valid_qual & (((unsigned(f3_core_kill == 0) | f3_ml_inst_val) & 1) | `f3_ctrl_sigs_to_f4.trans`) & 1 & 1
+    f4_wen = f3_wen & (((unsigned(f3_core_kill == 0) | f3_ml_inst_val) & 1) | `f3_ctrl_sigs_to_f4.trans`) & 1 & 1
     f4_ctrl_killed_prev = ((f3_core_kill & unsigned(((f3_ctrl_sigs >> 32) & 1) == 0) & 1) | f3_ctrl_killed_prev) & 1
     f4_ctrl_valid = f3_ctrl_valid
     f4_ml_inst_val = f3_ml_inst_val
-    f4_wen = f3_wen & (((unsigned(f3_core_kill == 0) | f3_ml_inst_val) & 1) | `f3_ctrl_sigs_to_f4.trans`) & 1 & 1
   }
   mut _rep_27:u8 = if (f4_ctrl_valid_qual & unsigned(unsigned((f4_core_kill != 0) and (((f4_ctrl_sigs >> 32) & 1) == 0) and (f4_ml_inst_val == 0)) == 0) & 1) != 0 { 0xff } else { 0 }
   if reset != 0 {
-    f5_ctrl_killed = 0
-    f5_ctrl_sigs = 0
     f5_ctrl_valid_qual = 0
-    f5_ml_inst_val = 0
+    f5_ctrl_killed = 0
     f5_wen = 0
+    f5_ml_inst_val = 0
+    f5_ctrl_sigs = 0
   } else {
-    f5_ctrl_killed = ((f4_core_kill & unsigned(((f4_ctrl_sigs >> 32) & 1) == 0) & 1) | f4_ctrl_killed_prev) & 1
     f5_ctrl_valid_qual = f4_ctrl_valid_qual
-    f5_ml_inst_val = f4_ml_inst_val
+    f5_ctrl_killed = ((f4_core_kill & unsigned(((f4_ctrl_sigs >> 32) & 1) == 0) & 1) | f4_ctrl_killed_prev) & 1
     f5_wen = f4_wen & (((unsigned(f4_core_kill == 0) | f4_ml_inst_val) & 1) | ((f4_ctrl_sigs >> 32) & 1)) & 1 & 1
+    f5_ml_inst_val = f4_ml_inst_val
     if (f4_ctrl_valid_qual != 0) and (f4_ml_use_prev_sigs == 0) {
       f5_ctrl_sigs = f4_ctrl_sigs
     }
   }
-  f5_mova_mx = f4_mova_mx
   f5_regfile_wmask = f4_regfile_wmask & _rep_27
   f5_thread_id = f4_thread_id
+  f5_mova_mx = f4_mova_mx
   if f4_ctrl_valid_qual != 0 {
-    f5_core_kill = f4_core_kill
-    f5_lane_idx = f4_lane_idx
     f5_ml_use_prev_sigs = f4_ml_use_prev_sigs
+    f5_lane_idx = f4_lane_idx
+    f5_core_kill = f4_core_kill
   }
   if f4_wen != 0 {
     f5_regfile_waddr = f4_regfile_waddr
   }
   if reset != 0 {
-    f6_ctrl_killed = 0
-    f6_ctrl_sigs = 0
     f6_ctrl_valid_qual = 0
-    f6_ml_inst_val = 0
+    f6_ctrl_killed = 0
     f6_wen = 0
+    f6_ml_inst_val = 0
+    f6_ctrl_sigs = 0
   } else {
-    f6_ctrl_killed = f5_ctrl_killed
     f6_ctrl_valid_qual = f5_ctrl_valid_qual
-    f6_ml_inst_val = f5_ml_inst_val
+    f6_ctrl_killed = f5_ctrl_killed
     f6_wen = f5_wen & (((unsigned(f5_core_kill == 0) | f5_ml_inst_val) & 1) | ((f5_ctrl_sigs >> 32) & 1)) & 1 & 1
+    f6_ml_inst_val = f5_ml_inst_val
     if (f5_ctrl_valid_qual != 0) and (f5_ml_use_prev_sigs == 0) {
       f6_ctrl_sigs = f5_ctrl_sigs
     }
@@ -699,21 +736,21 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   f6_regfile_wmask = f5_regfile_wmask
   f6_thread_id = f5_thread_id
   if f5_ctrl_valid_qual != 0 {
+    f6_ml_use_prev_sigs = f5_ml_use_prev_sigs
     f6_core_kill = f5_core_kill
     f6_lane_idx = f5_lane_idx
-    f6_ml_use_prev_sigs = f5_ml_use_prev_sigs
   }
   if f5_wen != 0 {
     f6_regfile_waddr = f5_regfile_waddr
   }
   if reset != 0 {
-    f7_ctrl_killed = 0
-    f7_ctrl_sigs = 0
     f7_ctrl_valid_qual = 0
+    f7_ctrl_killed = 0
     f7_wen = 0
+    f7_ctrl_sigs = 0
   } else {
-    f7_ctrl_killed = f6_ctrl_killed
     f7_ctrl_valid_qual = f6_ctrl_valid_qual
+    f7_ctrl_killed = f6_ctrl_killed
     f7_wen = f6_wen & (((unsigned(f6_core_kill == 0) | f6_ml_inst_val) & 1) | ((f6_ctrl_sigs >> 32) & 1)) & 1 & 1
     if (f6_ctrl_valid_qual != 0) and (f6_ml_use_prev_sigs == 0) {
       f7_ctrl_sigs = f6_ctrl_sigs
@@ -723,25 +760,25 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   const f7_regfile_wen_orig__w1 = f7_regfile_wmask & _rep_37
   const f7_regfile_wen__w1 = f7_regfile_wen_orig__w1
   if reset != 0 {
-    f8_ctrl_killed = 0
     f8_ctrl_sigs = 0
     f8_ctrl_valid_qual = 0
+    f8_ctrl_killed = 0
+    f8_wen = 0
     f8_regfile_wmask = 0
     f8_thread_id = 0
-    f8_wen = 0
   } else {
     if (f7_ctrl_valid_qual != 0) and (f7_ml_use_prev_sigs == 0) {
       f8_ctrl_sigs = f7_ctrl_sigs
     }
-    f8_ctrl_killed = f7_ctrl_killed
     f8_ctrl_valid_qual = f7_ctrl_valid_qual
+    f8_ctrl_killed = f7_ctrl_killed
+    f8_wen = f7_wen
     f8_regfile_wmask = f7_regfile_wen_orig__w1
     f8_thread_id = f7_thread_id
-    f8_wen = f7_wen
   }
   if f7_ctrl_valid_qual != 0 {
-    f8_lane_idx = f7_lane_idx
     f8_regfile_waddr = f7_regfile_waddr
+    f8_lane_idx = f7_lane_idx
   }
   const f8_regmask_from_txfma__w1 = (f8_ctrl_sigs >> 29) & 1 & (f8_ctrl_sigs >> 37) & 1 & 1
   f8_regmask_comp_res = 0sb?
@@ -772,19 +809,20 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   mut _mux_57:u6 = if ((f8_ctrl_sigs >> 13) & 1) == 0 { f8_wflags#[0..=5] } else { (((((((0 | (f8_wflags#[0..=5] & _rep_42)) | (f8_wflags#[6..=11] & _rep_44)) | (f8_wflags#[12..=17] & _rep_46)) | (f8_wflags#[18..=23] & _rep_48)) | (f8_wflags#[24..=29] & _rep_50)) | (f8_wflags#[30..=35] & _rep_52)) | (f8_wflags#[36..=41] & _rep_54)) | (f8_wflags#[42..=47] & _rep_56) }
   const typ__w1 = wb_dmem_resp.typ
   const wb_regfile_dtype_l__w1 = (((wb_dmem_resp.typ >> 3) & 1) << 1) | (unsigned(((wb_dmem_resp.typ & 1) != 0) and (((wb_dmem_resp.typ >> 3) & 1) == 0)) & 1)
-  mut f8_toint_data:u32 = if f8_lane_idx == 0 { f8_wdata_lane0 } else { ((f8_sh_sw_wdata << 32) >> ((f8_lane_idx * vpu_defs_pkg.VPU_DATA_S_SZ) + 32))#[0..=31] }
-  mut `wb_core_ctrl__bpo.fcsr_flags` = _mux_57
-  mut `wb_core_ctrl__bpo.fma` = (f4_ctrl_sigs >> 37) & 1
-  mut `wb_core_ctrl__bpo.mova_mx` = f5_mova_mx
-  mut `wb_core_ctrl__bpo.thread_id` = f8_thread_id
+  mut f8_toint_data:u32 = 0sb?
+  f8_toint_data = if f8_lane_idx == 0 { f8_wdata_lane0 } else { ((f8_sh_sw_wdata << 32) >> ((f8_lane_idx * vpu_defs_pkg.VPU_DATA_S_SZ) + 32))#[0..=31] }
   mut `wb_core_ctrl__bpo.tointm` = (f4_ctrl_sigs >> 29) & 1 & unsigned(((f4_ctrl_sigs >> 36) & 1) == 0) & 1
+  mut `wb_core_ctrl__bpo.fma` = (f4_ctrl_sigs >> 37) & 1
+  mut `wb_core_ctrl__bpo.fcsr_flags` = _mux_57
+  mut `wb_core_ctrl__bpo.thread_id` = f8_thread_id
+  mut `wb_core_ctrl__bpo.mova_mx` = f5_mova_mx
   mut ml = vpu_ml::[name=ml](clock = clock_sec, reset = reset, f0_core_ctrl.tensorfma_start = f0_core_ctrl.tensorfma_start, f0_core_ctrl.tensorfma_ctrl.is_conv = f0_core_ctrl.tensorfma_ctrl.is_conv, f0_core_ctrl.tensorfma_ctrl.padding3 = f0_core_ctrl.tensorfma_ctrl.padding3, f0_core_ctrl.tensorfma_ctrl.cols_b = f0_core_ctrl.tensorfma_ctrl.cols_b, f0_core_ctrl.tensorfma_ctrl.rows_a = f0_core_ctrl.tensorfma_ctrl.rows_a, f0_core_ctrl.tensorfma_ctrl.cols_a = f0_core_ctrl.tensorfma_ctrl.cols_a, f0_core_ctrl.tensorfma_ctrl.start_a = f0_core_ctrl.tensorfma_ctrl.start_a, f0_core_ctrl.tensorfma_ctrl.padding2 = f0_core_ctrl.tensorfma_ctrl.padding2, f0_core_ctrl.tensorfma_ctrl.to_vrf = f0_core_ctrl.tensorfma_ctrl.to_vrf, f0_core_ctrl.tensorfma_ctrl.u_b = f0_core_ctrl.tensorfma_ctrl.u_b, f0_core_ctrl.tensorfma_ctrl.u_a = f0_core_ctrl.tensorfma_ctrl.u_a, f0_core_ctrl.tensorfma_ctrl.ten_b = f0_core_ctrl.tensorfma_ctrl.ten_b, f0_core_ctrl.tensorfma_ctrl.padding1 = f0_core_ctrl.tensorfma_ctrl.padding1, f0_core_ctrl.tensorfma_ctrl.scp_b = f0_core_ctrl.tensorfma_ctrl.scp_b, f0_core_ctrl.tensorfma_ctrl.padding0 = f0_core_ctrl.tensorfma_ctrl.padding0, f0_core_ctrl.tensorfma_ctrl.scp_a = f0_core_ctrl.tensorfma_ctrl.scp_a, f0_core_ctrl.tensorfma_ctrl.mode = f0_core_ctrl.tensorfma_ctrl.mode, f0_core_ctrl.tensorfma_ctrl.first_pass = f0_core_ctrl.tensorfma_ctrl.first_pass, f0_core_ctrl.tensorfma_conv_bits_ready = f0_core_ctrl.tensorfma_conv_bits_ready, f0_core_ctrl.tensorfma_conv_bits = f0_core_ctrl.tensorfma_conv_bits, f0_core_ctrl.reduce_start = f0_core_ctrl.reduce_start, f0_core_ctrl.tensorstore_start = f0_core_ctrl.tensorstore_start, f0_core_ctrl.reduce_ctrl = f0_core_ctrl.reduce_ctrl, f0_core_ctrl.tensorquant_start = f0_core_ctrl.tensorquant_start, f0_core_ctrl.tensorquant_ctrl.padding2 = f0_core_ctrl.tensorquant_ctrl.padding2, f0_core_ctrl.tensorquant_ctrl.start_reg = f0_core_ctrl.tensorquant_ctrl.start_reg, f0_core_ctrl.tensorquant_ctrl.cols = f0_core_ctrl.tensorquant_ctrl.cols, f0_core_ctrl.tensorquant_ctrl.rows = f0_core_ctrl.tensorquant_ctrl.rows, f0_core_ctrl.tensorquant_ctrl.scp_src = f0_core_ctrl.tensorquant_ctrl.scp_src, f0_core_ctrl.tensorquant_ctrl.padding = f0_core_ctrl.tensorquant_ctrl.padding, f0_core_ctrl.tensorquant_ctrl.trans = f0_core_ctrl.tensorquant_ctrl.trans, f0_core_ctrl.pending_scoreboard_t0 = f0_core_ctrl.pending_scoreboard_t0, dcache_scp_resp.fill_is_tenb_early = dcache_scp_resp.fill_is_tenb_early, dcache_scp_resp.fill_is_tenb = dcache_scp_resp.fill_is_tenb, dcache_scp_resp.tenb_flush = dcache_scp_resp.tenb_flush, dcache_scp_resp.tenb_line = dcache_scp_resp.tenb_line, dcache_scp_data = dcache_scp_data, dcache_reduce_ctrl.send_reg = dcache_reduce_ctrl.send_reg, dcache_reduce_ctrl.exec_op = dcache_reduce_ctrl.exec_op, dcache_reduce_ctrl.nothing = dcache_reduce_ctrl.nothing, id_inst = id_core_inst_int__w1)
-  mut `id_reduce_load_ctrl.broadcast_sel` = ml["reduce_load_ctrl.broadcast_sel"]
-  mut `id_tensorfma_load_ctrl.thread_id` = ml["tensorfma_load_ctrl.thread_id"]
+  mut `id_reduce_load_ctrl.broadcast_sel` = ml.reduce_load_ctrl.broadcast_sel
+  mut `id_tensorfma_load_ctrl.thread_id` = ml.tensorfma_load_ctrl.thread_id
   id_ml_inst_en = ml.id_inst_en
   mut _mux_62:u1 = if ml.ex_tima_valid != 0 { ml.ex_tima_tena_raddr & 1 } else { ex_regfile_raddr1__w1 & 1 }
   mut _mux_63:u1 = if ml.ex_tima_valid != 0 { ml.ex_tima_tena_raddr & 1 } else { (ex_ra1 & 1) & 1 }
-  mut _mux_64:u8 = if ml.ex_tentmp_ren != 0 { ex_tensortmp_zero_mask[ml.ex_tentmp_raddr]#[0..=7] } else { ex_tensora_zero_mask[_mux_63]#[0..=7] }
+  mut _mux_64:u8 = if ml.ex_tentmp_ren != 0 { ex_tensortmp_zero_mask[ml.ex_tentmp_raddr] } else { ex_tensora_zero_mask[_mux_63] }
   mut _mux_65:u3 = if ml.ex_tima_valid != 0 { ml.ex_tima_tenb_raddr#[0..=2] } else { ex_ra2_ten__w1 }
   mut _mux_66:u32 = if ml.ex_tima_valid != 0 { (ml.ex_tima_tenb_raddr | 1)#[0..=31] } else { ex_ra2_ten__w1 }
   const ex_tensorb_zero_mask_tima1__w1 = ex_tensorb_zero_mask[_mux_66]
@@ -798,271 +836,391 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   ex_tensorb_zero_mask_tima1__w5#[3] = (((ex_tensorb_zero_mask_tima1__w4 >> 3) & 1) | ((~((ml.ex_tima_mask#[6..=7] >> 1) & 1)) & 1)) & 1
   mut ex_tensorb_zero_mask_tima1__w6 = ex_tensorb_zero_mask_tima1__w5
   ex_tensorb_zero_mask_tima1__w6#[4] = (((ex_tensorb_zero_mask_tima1__w5 >> 4) & 1) | ((~((ml.ex_tima_mask#[8..=9] >> 1) & 1)) & 1)) & 1
+  const t1441 = (((ex_tensorb_zero_mask_tima1__w6 >> 5) & 1) | ((~((ml.ex_tima_mask#[10..=11] >> 1) & 1)) & 1)) & 1
   mut ex_tensorb_zero_mask_tima1__w7 = ex_tensorb_zero_mask_tima1__w6
-  ex_tensorb_zero_mask_tima1__w7#[5] = (((ex_tensorb_zero_mask_tima1__w6 >> 5) & 1) | ((~((ml.ex_tima_mask#[10..=11] >> 1) & 1)) & 1)) & 1
+  ex_tensorb_zero_mask_tima1__w7#[5] = t1441
+  const t1442 = ex_tensorb_zero_mask_tima1__w7 >> 6
+  const t1443 = t1442 & 1
+  const t1449 = t1443 | ((~((ml.ex_tima_mask#[12..=13] >> 1) & 1)) & 1)
+  const t1450 = t1449 & 1
   mut ex_tensorb_zero_mask_tima1__w8 = ex_tensorb_zero_mask_tima1__w7
-  ex_tensorb_zero_mask_tima1__w8#[6] = (((ex_tensorb_zero_mask_tima1__w7 >> 6) & 1) | ((~((ml.ex_tima_mask#[12..=13] >> 1) & 1)) & 1)) & 1
+  ex_tensorb_zero_mask_tima1__w8#[6] = t1450
+  const t1451 = ex_tensorb_zero_mask_tima1__w8 >> 7
+  const t1452 = t1451 & 1
+  const t1458 = t1452 | ((~((ml.ex_tima_mask#[14..=15] >> 1) & 1)) & 1)
+  const t1459 = t1458 & 1
   mut ex_tensorb_zero_mask_tima1__w9 = ex_tensorb_zero_mask_tima1__w8
-  ex_tensorb_zero_mask_tima1__w9#[7] = (((ex_tensorb_zero_mask_tima1__w8 >> 7) & 1) | ((~((ml.ex_tima_mask#[14..=15] >> 1) & 1)) & 1)) & 1
-  const ex_tensor_zero_mask__w1 = _mux_64 | (ex_tensorb_zero_mask[_mux_65] & ex_tensorb_zero_mask_tima1__w9)#[0..=7]
+  ex_tensorb_zero_mask_tima1__w9#[7] = t1459
+  const t1460 = ex_tensorb_zero_mask[_mux_65] & ex_tensorb_zero_mask_tima1__w9
+  const t1461 = t1460#[0..=7]
+  const t1462 = _mux_64 | t1461
+  const t1463 = t1462
+  const ex_tensor_zero_mask__w1 = t1463
+  const t1464 = ex_tensor_zero_mask__w1 >> 0
+  const t1465 = t1464 & 1
+  const t1466 = t1465
+  const t1472 = t1466 & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))
+  const t1473 = t1472
+  const t1474 = t1473 & 1
   ex_tensor_zero_mask_ext = 0sb?
   mut ex_tensor_zero_mask_ext__w1 = ex_tensor_zero_mask_ext
-  ex_tensor_zero_mask_ext__w1#[0] = (((ex_tensor_zero_mask__w1 >> 0) & 1) & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))) & 1
-  const t1480 = ml.ex_tima_valid & (~(ex_tensor_zero_mask_ext__w1#[0..=1] & 1)) & 1
-  const t1481 = t1480 & 1
-  const t1484 = t1481 & ml.ex_tima_mask#[0..=1] & 1
-  const t1485 = t1484 & 1
+  ex_tensor_zero_mask_ext__w1#[0] = t1474
+  const t1475 = ex_tensor_zero_mask_ext__w1#[0..=1]
+  const t1476 = t1475 & 1
+  const t1477 = ~t1476
+  const t1478 = t1477 & 1
+  const t1479 = ml.ex_tima_valid & t1478
+  const t1480 = t1479 & 1
+  const t1483 = t1480 & ml.ex_tima_mask#[0..=1] & 1
+  const t1484 = t1483 & 1
   mut ex_tima_valid__w1 = ex_tima_valid
-  ex_tima_valid__w1#[0] = t1485
+  ex_tima_valid__w1#[0] = t1484
+  const t1485 = ex_tensor_zero_mask__w1 >> 0
+  const t1486 = t1485 & 1
+  const t1487 = t1486
+  const t1493 = t1487 & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))
+  const t1494 = t1493
+  const t1495 = t1494 & 1
   mut ex_tensor_zero_mask_ext__w2 = ex_tensor_zero_mask_ext__w1
-  ex_tensor_zero_mask_ext__w2#[1] = (((ex_tensor_zero_mask__w1 >> 0) & 1) & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))) & 1
-  const t1500 = ~((ex_tensor_zero_mask_ext__w2#[0..=1] >> 1) & 1)
-  const t1501 = t1500 & 1
-  const t1502 = ml.ex_tima_valid & t1501
-  const t1503 = t1502 & 1
-  const t1507 = t1503 & (ml.ex_tima_mask#[0..=1] >> 1) & 1
-  const t1508 = t1507 & 1
+  ex_tensor_zero_mask_ext__w2#[1] = t1495
+  const t1496 = ex_tensor_zero_mask_ext__w2#[0..=1]
+  const t1497 = t1496 >> 1
+  const t1498 = t1497 & 1
+  const t1499 = ~t1498
+  const t1500 = t1499 & 1
+  const t1501 = ml.ex_tima_valid & t1500
+  const t1502 = t1501 & 1
+  const t1506 = t1502 & (ml.ex_tima_mask#[0..=1] >> 1) & 1
+  const t1507 = t1506 & 1
   mut ex_tima_valid__w2 = ex_tima_valid__w1
-  ex_tima_valid__w2#[1] = t1508
+  ex_tima_valid__w2#[1] = t1507
+  const t1508 = ex_tensor_zero_mask__w1 >> 1
+  const t1509 = t1508 & 1
+  const t1510 = t1509
+  const t1516 = t1510 & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))
+  const t1517 = t1516
+  const t1518 = t1517 & 1
   mut ex_tensor_zero_mask_ext__w3 = ex_tensor_zero_mask_ext__w2
-  ex_tensor_zero_mask_ext__w3#[2] = (((ex_tensor_zero_mask__w1 >> 1) & 1) & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))) & 1
-  const t1522 = ~(ex_tensor_zero_mask_ext__w3#[2..=3] & 1)
-  const t1523 = t1522 & 1
-  const t1524 = ml.ex_tima_valid & t1523
-  const t1525 = t1524 & 1
-  const t1528 = t1525 & ml.ex_tima_mask#[2..=3] & 1
-  const t1529 = t1528 & 1
+  ex_tensor_zero_mask_ext__w3#[2] = t1518
+  const t1519 = ex_tensor_zero_mask_ext__w3#[2..=3]
+  const t1520 = t1519 & 1
+  const t1521 = ~t1520
+  const t1522 = t1521 & 1
+  const t1523 = ml.ex_tima_valid & t1522
+  const t1524 = t1523 & 1
+  const t1527 = t1524 & ml.ex_tima_mask#[2..=3] & 1
+  const t1528 = t1527 & 1
   mut ex_tima_valid__w3 = ex_tima_valid__w2
-  ex_tima_valid__w3#[2] = t1529
+  ex_tima_valid__w3#[2] = t1528
+  const t1529 = ex_tensor_zero_mask__w1 >> 1
+  const t1530 = t1529 & 1
+  const t1531 = t1530
+  const t1537 = t1531 & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))
+  const t1538 = t1537
+  const t1539 = t1538 & 1
   mut ex_tensor_zero_mask_ext__w4 = ex_tensor_zero_mask_ext__w3
-  ex_tensor_zero_mask_ext__w4#[3] = (((ex_tensor_zero_mask__w1 >> 1) & 1) & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))) & 1
-  const t1542 = ex_tensor_zero_mask_ext__w4#[2..=3] >> 1
-  const t1543 = t1542 & 1
-  const t1544 = ~t1543
-  const t1545 = t1544 & 1
-  const t1546 = ml.ex_tima_valid & t1545
-  const t1547 = t1546 & 1
-  const t1551 = t1547 & (ml.ex_tima_mask#[2..=3] >> 1) & 1
-  const t1552 = t1551 & 1
+  ex_tensor_zero_mask_ext__w4#[3] = t1539
+  const t1540 = ex_tensor_zero_mask_ext__w4#[2..=3]
+  const t1541 = t1540 >> 1
+  const t1542 = t1541 & 1
+  const t1543 = ~t1542
+  const t1544 = t1543 & 1
+  const t1545 = ml.ex_tima_valid & t1544
+  const t1546 = t1545 & 1
+  const t1550 = t1546 & (ml.ex_tima_mask#[2..=3] >> 1) & 1
+  const t1551 = t1550 & 1
   mut ex_tima_valid__w4 = ex_tima_valid__w3
-  ex_tima_valid__w4#[3] = t1552
+  ex_tima_valid__w4#[3] = t1551
+  const t1552 = ex_tensor_zero_mask__w1 >> 2
+  const t1553 = t1552 & 1
+  const t1554 = t1553
+  const t1560 = t1554 & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))
+  const t1561 = t1560
+  const t1562 = t1561 & 1
   mut ex_tensor_zero_mask_ext__w5 = ex_tensor_zero_mask_ext__w4
-  ex_tensor_zero_mask_ext__w5#[4] = (((ex_tensor_zero_mask__w1 >> 2) & 1) & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))) & 1
-  const t1564 = ex_tensor_zero_mask_ext__w5#[4..=5]
-  const t1565 = t1564 & 1
-  const t1566 = ~t1565
-  const t1567 = t1566 & 1
-  const t1568 = ml.ex_tima_valid & t1567
-  const t1569 = t1568 & 1
-  const t1572 = t1569 & ml.ex_tima_mask#[4..=5] & 1
-  const t1573 = t1572 & 1
+  ex_tensor_zero_mask_ext__w5#[4] = t1562
+  const t1563 = ex_tensor_zero_mask_ext__w5#[4..=5]
+  const t1564 = t1563 & 1
+  const t1565 = ~t1564
+  const t1566 = t1565 & 1
+  const t1567 = ml.ex_tima_valid & t1566
+  const t1568 = t1567 & 1
+  const t1571 = t1568 & ml.ex_tima_mask#[4..=5] & 1
+  const t1572 = t1571 & 1
   mut ex_tima_valid__w5 = ex_tima_valid__w4
-  ex_tima_valid__w5#[4] = t1573
+  ex_tima_valid__w5#[4] = t1572
+  const t1573 = ex_tensor_zero_mask__w1 >> 2
+  const t1574 = t1573 & 1
+  const t1575 = t1574
+  const t1581 = t1575 & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))
+  const t1582 = t1581
+  const t1583 = t1582 & 1
   mut ex_tensor_zero_mask_ext__w6 = ex_tensor_zero_mask_ext__w5
-  ex_tensor_zero_mask_ext__w6#[5] = (((ex_tensor_zero_mask__w1 >> 2) & 1) & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))) & 1
-  const t1585 = ex_tensor_zero_mask_ext__w6#[4..=5]
-  const t1586 = t1585 >> 1
-  const t1587 = t1586 & 1
-  const t1588 = ~t1587
-  const t1589 = t1588 & 1
-  const t1590 = ml.ex_tima_valid & t1589
-  const t1591 = t1590 & 1
-  const t1595 = t1591 & (ml.ex_tima_mask#[4..=5] >> 1) & 1
-  const t1596 = t1595 & 1
+  ex_tensor_zero_mask_ext__w6#[5] = t1583
+  const t1584 = ex_tensor_zero_mask_ext__w6#[4..=5]
+  const t1585 = t1584 >> 1
+  const t1586 = t1585 & 1
+  const t1587 = ~t1586
+  const t1588 = t1587 & 1
+  const t1589 = ml.ex_tima_valid & t1588
+  const t1590 = t1589 & 1
+  const t1594 = t1590 & (ml.ex_tima_mask#[4..=5] >> 1) & 1
+  const t1595 = t1594 & 1
   mut ex_tima_valid__w6 = ex_tima_valid__w5
-  ex_tima_valid__w6#[5] = t1596
+  ex_tima_valid__w6#[5] = t1595
+  const t1596 = ex_tensor_zero_mask__w1 >> 3
+  const t1597 = t1596 & 1
+  const t1598 = t1597
+  const t1604 = t1598 & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))
+  const t1605 = t1604
+  const t1606 = t1605 & 1
   mut ex_tensor_zero_mask_ext__w7 = ex_tensor_zero_mask_ext__w6
-  ex_tensor_zero_mask_ext__w7#[6] = (((ex_tensor_zero_mask__w1 >> 3) & 1) & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))) & 1
-  const t1608 = ex_tensor_zero_mask_ext__w7#[6..=7]
-  const t1609 = t1608 & 1
-  const t1610 = ~t1609
-  const t1611 = t1610 & 1
-  const t1612 = ml.ex_tima_valid & t1611
-  const t1613 = t1612 & 1
-  const t1616 = t1613 & ml.ex_tima_mask#[6..=7] & 1
-  const t1617 = t1616 & 1
+  ex_tensor_zero_mask_ext__w7#[6] = t1606
+  const t1607 = ex_tensor_zero_mask_ext__w7#[6..=7]
+  const t1608 = t1607 & 1
+  const t1609 = ~t1608
+  const t1610 = t1609 & 1
+  const t1611 = ml.ex_tima_valid & t1610
+  const t1612 = t1611 & 1
+  const t1615 = t1612 & ml.ex_tima_mask#[6..=7] & 1
+  const t1616 = t1615 & 1
   mut ex_tima_valid__w7 = ex_tima_valid__w6
-  ex_tima_valid__w7#[6] = t1617
+  ex_tima_valid__w7#[6] = t1616
+  const t1617 = ex_tensor_zero_mask__w1 >> 3
+  const t1618 = t1617 & 1
+  const t1619 = t1618
+  const t1625 = t1619 & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))
+  const t1626 = t1625
+  const t1627 = t1626 & 1
   mut ex_tensor_zero_mask_ext__w8 = ex_tensor_zero_mask_ext__w7
-  ex_tensor_zero_mask_ext__w8#[7] = (((ex_tensor_zero_mask__w1 >> 3) & 1) & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))) & 1
-  const t1629 = ex_tensor_zero_mask_ext__w8#[6..=7]
-  const t1630 = t1629 >> 1
-  const t1631 = t1630 & 1
-  const t1632 = ~t1631
-  const t1633 = t1632 & 1
-  const t1634 = ml.ex_tima_valid & t1633
-  const t1635 = t1634 & 1
-  const t1639 = t1635 & (ml.ex_tima_mask#[6..=7] >> 1) & 1
-  const t1640 = t1639 & 1
+  ex_tensor_zero_mask_ext__w8#[7] = t1627
+  const t1628 = ex_tensor_zero_mask_ext__w8#[6..=7]
+  const t1629 = t1628 >> 1
+  const t1630 = t1629 & 1
+  const t1631 = ~t1630
+  const t1632 = t1631 & 1
+  const t1633 = ml.ex_tima_valid & t1632
+  const t1634 = t1633 & 1
+  const t1638 = t1634 & (ml.ex_tima_mask#[6..=7] >> 1) & 1
+  const t1639 = t1638 & 1
   mut ex_tima_valid__w8 = ex_tima_valid__w7
-  ex_tima_valid__w8#[7] = t1640
+  ex_tima_valid__w8#[7] = t1639
+  const t1640 = ex_tensor_zero_mask__w1 >> 4
+  const t1641 = t1640 & 1
+  const t1642 = t1641
+  const t1648 = t1642 & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))
+  const t1649 = t1648
+  const t1650 = t1649 & 1
   mut ex_tensor_zero_mask_ext__w9 = ex_tensor_zero_mask_ext__w8
-  ex_tensor_zero_mask_ext__w9#[8] = (((ex_tensor_zero_mask__w1 >> 4) & 1) & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))) & 1
-  const t1652 = ex_tensor_zero_mask_ext__w9#[8..=9]
-  const t1653 = t1652 & 1
-  const t1654 = ~t1653
-  const t1655 = t1654 & 1
-  const t1656 = ml.ex_tima_valid & t1655
-  const t1657 = t1656 & 1
-  const t1660 = t1657 & ml.ex_tima_mask#[8..=9] & 1
-  const t1661 = t1660 & 1
+  ex_tensor_zero_mask_ext__w9#[8] = t1650
+  const t1651 = ex_tensor_zero_mask_ext__w9#[8..=9]
+  const t1652 = t1651 & 1
+  const t1653 = ~t1652
+  const t1654 = t1653 & 1
+  const t1655 = ml.ex_tima_valid & t1654
+  const t1656 = t1655 & 1
+  const t1659 = t1656 & ml.ex_tima_mask#[8..=9] & 1
+  const t1660 = t1659 & 1
   mut ex_tima_valid__w9 = ex_tima_valid__w8
-  ex_tima_valid__w9#[8] = t1661
+  ex_tima_valid__w9#[8] = t1660
+  const t1661 = ex_tensor_zero_mask__w1 >> 4
+  const t1662 = t1661 & 1
+  const t1663 = t1662
+  const t1669 = t1663 & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))
+  const t1670 = t1669
+  const t1671 = t1670 & 1
   mut ex_tensor_zero_mask_ext__w10 = ex_tensor_zero_mask_ext__w9
-  ex_tensor_zero_mask_ext__w10#[9] = (((ex_tensor_zero_mask__w1 >> 4) & 1) & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))) & 1
-  const t1673 = ex_tensor_zero_mask_ext__w10#[8..=9]
-  const t1674 = t1673 >> 1
-  const t1675 = t1674 & 1
-  const t1676 = ~t1675
-  const t1677 = t1676 & 1
-  const t1678 = ml.ex_tima_valid & t1677
-  const t1679 = t1678 & 1
-  const t1683 = t1679 & (ml.ex_tima_mask#[8..=9] >> 1) & 1
-  const t1684 = t1683 & 1
+  ex_tensor_zero_mask_ext__w10#[9] = t1671
+  const t1672 = ex_tensor_zero_mask_ext__w10#[8..=9]
+  const t1673 = t1672 >> 1
+  const t1674 = t1673 & 1
+  const t1675 = ~t1674
+  const t1676 = t1675 & 1
+  const t1677 = ml.ex_tima_valid & t1676
+  const t1678 = t1677 & 1
+  const t1682 = t1678 & (ml.ex_tima_mask#[8..=9] >> 1) & 1
+  const t1683 = t1682 & 1
   mut ex_tima_valid__w10 = ex_tima_valid__w9
-  ex_tima_valid__w10#[9] = t1684
+  ex_tima_valid__w10#[9] = t1683
+  const t1684 = ex_tensor_zero_mask__w1 >> 5
+  const t1685 = t1684 & 1
+  const t1686 = t1685
+  const t1692 = t1686 & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))
+  const t1693 = t1692
+  const t1694 = t1693 & 1
   mut ex_tensor_zero_mask_ext__w11 = ex_tensor_zero_mask_ext__w10
-  ex_tensor_zero_mask_ext__w11#[10] = (((ex_tensor_zero_mask__w1 >> 5) & 1) & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))) & 1
-  const t1696 = ex_tensor_zero_mask_ext__w11#[10..=11]
-  const t1697 = t1696 & 1
-  const t1698 = ~t1697
-  const t1699 = t1698 & 1
-  const t1700 = ml.ex_tima_valid & t1699
-  const t1701 = t1700 & 1
-  const t1704 = t1701 & ml.ex_tima_mask#[10..=11] & 1
-  const t1705 = t1704 & 1
+  ex_tensor_zero_mask_ext__w11#[10] = t1694
+  const t1695 = ex_tensor_zero_mask_ext__w11#[10..=11]
+  const t1696 = t1695 & 1
+  const t1697 = ~t1696
+  const t1698 = t1697 & 1
+  const t1699 = ml.ex_tima_valid & t1698
+  const t1700 = t1699 & 1
+  const t1703 = t1700 & ml.ex_tima_mask#[10..=11] & 1
+  const t1704 = t1703 & 1
   mut ex_tima_valid__w11 = ex_tima_valid__w10
-  ex_tima_valid__w11#[10] = t1705
+  ex_tima_valid__w11#[10] = t1704
+  const t1705 = ex_tensor_zero_mask__w1 >> 5
+  const t1706 = t1705 & 1
+  const t1707 = t1706
+  const t1713 = t1707 & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))
+  const t1714 = t1713
+  const t1715 = t1714 & 1
   mut ex_tensor_zero_mask_ext__w12 = ex_tensor_zero_mask_ext__w11
-  ex_tensor_zero_mask_ext__w12#[11] = (((ex_tensor_zero_mask__w1 >> 5) & 1) & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))) & 1
-  const t1717 = ex_tensor_zero_mask_ext__w12#[10..=11]
-  const t1718 = t1717 >> 1
-  const t1719 = t1718 & 1
-  const t1720 = ~t1719
-  const t1721 = t1720 & 1
-  const t1722 = ml.ex_tima_valid & t1721
-  const t1723 = t1722 & 1
-  const t1727 = t1723 & (ml.ex_tima_mask#[10..=11] >> 1) & 1
-  const t1728 = t1727 & 1
+  ex_tensor_zero_mask_ext__w12#[11] = t1715
+  const t1716 = ex_tensor_zero_mask_ext__w12#[10..=11]
+  const t1717 = t1716 >> 1
+  const t1718 = t1717 & 1
+  const t1719 = ~t1718
+  const t1720 = t1719 & 1
+  const t1721 = ml.ex_tima_valid & t1720
+  const t1722 = t1721 & 1
+  const t1726 = t1722 & (ml.ex_tima_mask#[10..=11] >> 1) & 1
+  const t1727 = t1726 & 1
   mut ex_tima_valid__w12 = ex_tima_valid__w11
-  ex_tima_valid__w12#[11] = t1728
+  ex_tima_valid__w12#[11] = t1727
+  const t1728 = ex_tensor_zero_mask__w1 >> 6
+  const t1729 = t1728 & 1
+  const t1730 = t1729
+  const t1736 = t1730 & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))
+  const t1737 = t1736
+  const t1738 = t1737 & 1
   mut ex_tensor_zero_mask_ext__w13 = ex_tensor_zero_mask_ext__w12
-  ex_tensor_zero_mask_ext__w13#[12] = (((ex_tensor_zero_mask__w1 >> 6) & 1) & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))) & 1
-  const t1740 = ex_tensor_zero_mask_ext__w13#[12..=13]
-  const t1741 = t1740 & 1
-  const t1742 = ~t1741
-  const t1743 = t1742 & 1
-  const t1744 = ml.ex_tima_valid & t1743
-  const t1745 = t1744 & 1
-  const t1748 = t1745 & ml.ex_tima_mask#[12..=13] & 1
-  const t1749 = t1748 & 1
+  ex_tensor_zero_mask_ext__w13#[12] = t1738
+  const t1739 = ex_tensor_zero_mask_ext__w13#[12..=13]
+  const t1740 = t1739 & 1
+  const t1741 = ~t1740
+  const t1742 = t1741 & 1
+  const t1743 = ml.ex_tima_valid & t1742
+  const t1744 = t1743 & 1
+  const t1747 = t1744 & ml.ex_tima_mask#[12..=13] & 1
+  const t1748 = t1747 & 1
   mut ex_tima_valid__w13 = ex_tima_valid__w12
-  ex_tima_valid__w13#[12] = t1749
+  ex_tima_valid__w13#[12] = t1748
+  const t1749 = ex_tensor_zero_mask__w1 >> 6
+  const t1750 = t1749 & 1
+  const t1751 = t1750
+  const t1757 = t1751 & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))
+  const t1758 = t1757
+  const t1759 = t1758 & 1
   mut ex_tensor_zero_mask_ext__w14 = ex_tensor_zero_mask_ext__w13
-  ex_tensor_zero_mask_ext__w14#[13] = (((ex_tensor_zero_mask__w1 >> 6) & 1) & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))) & 1
-  const t1761 = ex_tensor_zero_mask_ext__w14#[12..=13]
-  const t1762 = t1761 >> 1
-  const t1763 = t1762 & 1
-  const t1764 = ~t1763
-  const t1765 = t1764 & 1
-  const t1766 = ml.ex_tima_valid & t1765
-  const t1767 = t1766 & 1
-  const t1771 = t1767 & (ml.ex_tima_mask#[12..=13] >> 1) & 1
-  const t1772 = t1771 & 1
+  ex_tensor_zero_mask_ext__w14#[13] = t1759
+  const t1760 = ex_tensor_zero_mask_ext__w14#[12..=13]
+  const t1761 = t1760 >> 1
+  const t1762 = t1761 & 1
+  const t1763 = ~t1762
+  const t1764 = t1763 & 1
+  const t1765 = ml.ex_tima_valid & t1764
+  const t1766 = t1765 & 1
+  const t1770 = t1766 & (ml.ex_tima_mask#[12..=13] >> 1) & 1
+  const t1771 = t1770 & 1
   mut ex_tima_valid__w14 = ex_tima_valid__w13
-  ex_tima_valid__w14#[13] = t1772
+  ex_tima_valid__w14#[13] = t1771
+  const t1772 = ex_tensor_zero_mask__w1 >> 7
+  const t1773 = t1772 & 1
+  const t1774 = t1773
+  const t1780 = t1774 & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))
+  const t1781 = t1780
+  const t1782 = t1781 & 1
   mut ex_tensor_zero_mask_ext__w15 = ex_tensor_zero_mask_ext__w14
-  ex_tensor_zero_mask_ext__w15#[14] = (((ex_tensor_zero_mask__w1 >> 7) & 1) & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))) & 1
-  const t1784 = ex_tensor_zero_mask_ext__w15#[14..=15]
-  const t1785 = t1784 & 1
-  const t1786 = ~t1785
-  const t1787 = t1786 & 1
-  const t1788 = ml.ex_tima_valid & t1787
-  const t1789 = t1788 & 1
-  const t1792 = t1789 & ml.ex_tima_mask#[14..=15] & 1
-  const t1793 = t1792 & 1
+  ex_tensor_zero_mask_ext__w15#[14] = t1782
+  const t1783 = ex_tensor_zero_mask_ext__w15#[14..=15]
+  const t1784 = t1783 & 1
+  const t1785 = ~t1784
+  const t1786 = t1785 & 1
+  const t1787 = ml.ex_tima_valid & t1786
+  const t1788 = t1787 & 1
+  const t1791 = t1788 & ml.ex_tima_mask#[14..=15] & 1
+  const t1792 = t1791 & 1
   mut ex_tima_valid__w15 = ex_tima_valid__w14
-  ex_tima_valid__w15#[14] = t1793
+  ex_tima_valid__w15#[14] = t1792
+  const t1793 = ex_tensor_zero_mask__w1 >> 7
+  const t1794 = t1793 & 1
+  const t1795 = t1794
+  const t1801 = t1795 & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))
+  const t1802 = t1801
+  const t1803 = t1802 & 1
   mut ex_tensor_zero_mask_ext__w16 = ex_tensor_zero_mask_ext__w15
-  ex_tensor_zero_mask_ext__w16#[15] = (((ex_tensor_zero_mask__w1 >> 7) & 1) & unsigned((ml.ex_tima_ren3 != 0) and (((~ml.ex_tima_last_pass) & 1) != 0))) & 1
-  const t1805 = ex_tensor_zero_mask_ext__w16#[14..=15]
-  const t1806 = t1805 >> 1
-  const t1807 = t1806 & 1
-  const t1808 = ~t1807
-  const t1809 = t1808 & 1
-  const t1810 = ml.ex_tima_valid & t1809
-  const t1811 = t1810 & 1
-  const t1815 = t1811 & (ml.ex_tima_mask#[14..=15] >> 1) & 1
-  const t1816 = t1815 & 1
+  ex_tensor_zero_mask_ext__w16#[15] = t1803
+  const t1804 = ex_tensor_zero_mask_ext__w16#[14..=15]
+  const t1805 = t1804 >> 1
+  const t1806 = t1805 & 1
+  const t1807 = ~t1806
+  const t1808 = t1807 & 1
+  const t1809 = ml.ex_tima_valid & t1808
+  const t1810 = t1809 & 1
+  const t1814 = t1810 & (ml.ex_tima_mask#[14..=15] >> 1) & 1
+  const t1815 = t1814 & 1
   mut ex_tima_valid__w16 = ex_tima_valid__w15
-  ex_tima_valid__w16#[15] = t1816
+  ex_tima_valid__w16#[15] = t1815
   if ex_core_gscing != 0 {
     ex_gsc_fs = ex_gsc_fs_next__w8
   }
   const f2_kill__w1 = unsigned((f2_core_kill != 0) and (((f2_req#[121..=165] >> 32) & 1) == 0) and (f2_ml_inst_val == 0))
   mut _rep_85:u8 = if (f2_ctrl_valid_qual & unsigned(f2_kill__w1 == 0) & 1) != 0 { 0xff } else { 0 }
   if reset != 0 {
-    f3_ctrl_killed_prev = 0
-    f3_ctrl_valid = 0
     f3_ctrl_valid_qual = 0
+    f3_ctrl_valid = 0
+    f3_ctrl_killed_prev = 0
     f3_ml_inst_val = 0
     f3_wen = 0
   } else {
-    f3_ctrl_killed_prev = (f2_kill__w1 | f2_ctrl_killed_prev) & 1
-    f3_ctrl_valid = f2_ctrl_valid
     f3_ctrl_valid_qual = f2_ctrl_valid_qual & unsigned(f2_kill__w1 == 0) & 1
+    f3_ctrl_valid = f2_ctrl_valid
+    f3_ctrl_killed_prev = (f2_kill__w1 | f2_ctrl_killed_prev) & 1
     f3_ml_inst_val = f2_ml_inst_val
     f3_wen = f2_wen & unsigned(f2_kill__w1 == 0) & 1
   }
+  f3_thread_id = f2_thread_id
   f3_mova_mx = f2_mova_mx
   f3_regfile_wmask = f2_regfile_wmask & _rep_85
-  f3_thread_id = f2_thread_id
   f3_regfile_wmask_l = 0sb?
-  mut _mux_88:u1 = if ml["reduce_load_ctrl.wen"] != 0 { ml["reduce_load_ctrl.thread_id"] & 1 } else { wb_dmem_resp.thread_id & 1 }
-  mut _mux_89:u5 = if ml["reduce_load_ctrl.wen"] != 0 { ml["reduce_load_ctrl.waddr"]#[0..=4] } else { wb_dmem_resp.addr#[0..=4] }
+  mut _mux_88:u1 = if ml.reduce_load_ctrl.wen != 0 { ml.reduce_load_ctrl.thread_id & 1 } else { wb_dmem_resp.thread_id & 1 }
+  mut _mux_89:u5 = if ml.reduce_load_ctrl.wen != 0 { ml.reduce_load_ctrl.waddr#[0..=4] } else { wb_dmem_resp.addr#[0..=4] }
+  f3_regfile_wdata_l = 0sb?
   f3_regfile_wdata_l = 0
   f3_regfile_wmask_l = 0
   if unsigned((wb_dmem_resp_val != 0) and ((wb_dmem_resp.ps_mask != 0) or (((wb_dmem_resp.typ >> 3) & 1) == 0))) != 0 {
     if unsigned((typ__w1 == minion_dcache_pkg.DcTypePsGs8) or (typ__w1 == minion_dcache_pkg.DcTypePsGs16) or (typ__w1 == minion_dcache_pkg.DcTypePsGs32)) != 0 {
-      const t1871 = wb_dmem_resp.gdst * 2
-      const t1881 = wb_dmem_resp.gdst * vpu_defs_pkg.VPU_DATA_S_SZ
-      f3_regfile_wdata_l = ((0 & (~(0xffffffff << t1881))) | (wb_dmem_resp.data#[0..=31] << t1881))#[0..=255]
-      f3_regfile_wmask_l = ((0 & (~(3 << t1871))) | (3 << t1871))#[0..=15]
+      const t1870 = wb_dmem_resp.gdst * 2
+      f3_regfile_wmask_l = ((0 & (~(3 << t1870))) | (3 << t1870))#[0..=15]
+      const t1880 = wb_dmem_resp.gdst * vpu_defs_pkg.VPU_DATA_S_SZ
+      f3_regfile_wdata_l = ((0 & (~(0xffffffff << t1880))) | (wb_dmem_resp.data#[0..=31] << t1880))#[0..=255]
     } else {
       _rep_90 = if (wb_dmem_resp.ps_mask & 1) != 0 { 3 } else { 0 }
       _mux_91 = if wb_regfile_dtype_l__w1 == vpu_defs_pkg.VPU_LOAD_DTYPE_PS { _rep_90 } else { 3 }
-      _mux_92 = if ml["reduce_load_ctrl.wen"] != 0 { 1 } else { _mux_91 }
+      _mux_92 = if ml.reduce_load_ctrl.wen != 0 { 1 } else { _mux_91 }
       f3_regfile_wmask_l#[0..=1] = _mux_92
       _rep_93 = if ((wb_dmem_resp.ps_mask >> 1) & 1) != 0 { 3 } else { 0 }
       _mux_94 = if wb_regfile_dtype_l__w1 == vpu_defs_pkg.VPU_LOAD_DTYPE_PS { _rep_93 } else { 3 }
-      _mux_95 = if ml["reduce_load_ctrl.wen"] != 0 { 1 } else { _mux_94 }
+      _mux_95 = if ml.reduce_load_ctrl.wen != 0 { 1 } else { _mux_94 }
       f3_regfile_wmask_l#[2..=3] = _mux_95
       _rep_96 = if ((wb_dmem_resp.ps_mask >> 2) & 1) != 0 { 3 } else { 0 }
       _mux_97 = if wb_regfile_dtype_l__w1 == vpu_defs_pkg.VPU_LOAD_DTYPE_PS { _rep_96 } else { 3 }
-      _mux_98 = if ml["reduce_load_ctrl.wen"] != 0 { 1 } else { _mux_97 }
+      _mux_98 = if ml.reduce_load_ctrl.wen != 0 { 1 } else { _mux_97 }
       f3_regfile_wmask_l#[4..=5] = _mux_98
       _rep_99 = if ((wb_dmem_resp.ps_mask >> 3) & 1) != 0 { 3 } else { 0 }
       _mux_100 = if wb_regfile_dtype_l__w1 == vpu_defs_pkg.VPU_LOAD_DTYPE_PS { _rep_99 } else { 3 }
-      _mux_101 = if ml["reduce_load_ctrl.wen"] != 0 { 1 } else { _mux_100 }
+      _mux_101 = if ml.reduce_load_ctrl.wen != 0 { 1 } else { _mux_100 }
       f3_regfile_wmask_l#[6..=7] = _mux_101
       _rep_102 = if ((wb_dmem_resp.ps_mask >> 4) & 1) != 0 { 3 } else { 0 }
       _mux_103 = if wb_regfile_dtype_l__w1 == vpu_defs_pkg.VPU_LOAD_DTYPE_PS { _rep_102 } else { 3 }
-      _mux_104 = if ml["reduce_load_ctrl.wen"] != 0 { 1 } else { _mux_103 }
+      _mux_104 = if ml.reduce_load_ctrl.wen != 0 { 1 } else { _mux_103 }
       f3_regfile_wmask_l#[8..=9] = _mux_104
       _rep_105 = if ((wb_dmem_resp.ps_mask >> 5) & 1) != 0 { 3 } else { 0 }
       _mux_106 = if wb_regfile_dtype_l__w1 == vpu_defs_pkg.VPU_LOAD_DTYPE_PS { _rep_105 } else { 3 }
-      _mux_107 = if ml["reduce_load_ctrl.wen"] != 0 { 1 } else { _mux_106 }
+      _mux_107 = if ml.reduce_load_ctrl.wen != 0 { 1 } else { _mux_106 }
       f3_regfile_wmask_l#[10..=11] = _mux_107
       _rep_108 = if ((wb_dmem_resp.ps_mask >> 6) & 1) != 0 { 3 } else { 0 }
       _mux_109 = if wb_regfile_dtype_l__w1 == vpu_defs_pkg.VPU_LOAD_DTYPE_PS { _rep_108 } else { 3 }
-      _mux_110 = if ml["reduce_load_ctrl.wen"] != 0 { 1 } else { _mux_109 }
+      _mux_110 = if ml.reduce_load_ctrl.wen != 0 { 1 } else { _mux_109 }
       f3_regfile_wmask_l#[12..=13] = _mux_110
       _rep_111 = if ((wb_dmem_resp.ps_mask >> 7) & 1) != 0 { 3 } else { 0 }
       _mux_112 = if wb_regfile_dtype_l__w1 == vpu_defs_pkg.VPU_LOAD_DTYPE_PS { _rep_111 } else { 3 }
-      _mux_113 = if ml["reduce_load_ctrl.wen"] != 0 { 1 } else { _mux_112 }
-      const t1979 = wb_dmem_resp.data#[0..=31]
+      _mux_113 = if ml.reduce_load_ctrl.wen != 0 { 1 } else { _mux_112 }
       f3_regfile_wmask_l#[14..=15] = _mux_113
-      _mux_114 = if wb_dmem_resp.typ == minion_pkg.DcTypePsBr { (t1979 | (t1979 << 32) | (t1979 << 0x40) | (t1979 << 0x60) | (t1979 << 0x80) | (t1979 << 0xa0) | (t1979 << 0xc0) | (t1979 << 0xe0))#[0..=255] } else { wb_dmem_resp.data#[0..=255] }
+      const t1978 = wb_dmem_resp.data#[0..=31]
+      _mux_114 = if wb_dmem_resp.typ == minion_pkg.DcTypePsBr { (t1978 | (t1978 << 32) | (t1978 << 0x40) | (t1978 << 0x60) | (t1978 << 0x80) | (t1978 << 0xa0) | (t1978 << 0xc0) | (t1978 << 0xe0))#[0..=255] } else { wb_dmem_resp.data#[0..=255] }
       f3_regfile_wdata_l = _mux_114
     }
     if (wb_regfile_dtype_l__w1 == vpu_defs_pkg.VPU_LOAD_DTYPE_S) or (wb_regfile_dtype_l__w1 == vpu_defs_pkg.VPU_LOAD_DTYPE_D) {
@@ -1070,12 +1228,13 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
     }
   }
   const f3_regfile_wen_l__w1 = unsigned(f3_regfile_wmask_l != 0)
-  const f3_tena_regfile_wen_l__w1 = ml["tensorfma_load_ctrl.wen"] & (~((ml["tensorfma_load_ctrl.waddr"] >> 3) & 1)) & 1 & 1
-  const f3_tenb_regfile_wen_l__w1 = ml["tensorfma_load_ctrl.wen"] & (ml["tensorfma_load_ctrl.waddr"] >> 3) & 1 & 1
-  mut f3_tena_regfile_waddr_l:u1 = if f3_tena_regfile_wen_l__w1 != 0 { ml["tensorfma_load_ctrl.waddr"] & 1 } else { 0 }
-  f3_tenb_regfile_waddr_l = if f3_tenb_regfile_wen_l__w1 != 0 { ml["tensorfma_load_ctrl.waddr"]#[0..=2] } else { 0 }
-  const f3_tena_regfile_wdata_l__w1 = ((dcache_scp_data << 32) >> ((vpu_defs_pkg.VPU_DATA_S_SZ * ml["tensorfma_load_ctrl.broadcast_sel"]) + 32))#[0..=31]
-  const f3_tentmp_msb_regfile_wdata_l__w1 = ((dcache_scp_data << 0x40) >> ((vpu_defs_pkg.VPU_DATA_S_SZ * 2 * (ml["tensorfma_load_ctrl.broadcast_sel"] >> 1))#[0..=31] + 0x40))#[0..=63]#[32..=63]
+  mut f3_tena_regfile_waddr_l = 0ub?
+  const f3_tena_regfile_wen_l__w1 = ml.tensorfma_load_ctrl.wen & (~((ml.tensorfma_load_ctrl.waddr >> 3) & 1)) & 1 & 1
+  const f3_tenb_regfile_wen_l__w1 = ml.tensorfma_load_ctrl.wen & (ml.tensorfma_load_ctrl.waddr >> 3) & 1 & 1
+  f3_tena_regfile_waddr_l = if f3_tena_regfile_wen_l__w1 != 0 { ml.tensorfma_load_ctrl.waddr & 1 } else { 0 }
+  f3_tenb_regfile_waddr_l = if f3_tenb_regfile_wen_l__w1 != 0 { ml.tensorfma_load_ctrl.waddr#[0..=2] } else { 0 }
+  const f3_tena_regfile_wdata_l__w1 = ((dcache_scp_data << 32) >> ((vpu_defs_pkg.VPU_DATA_S_SZ * ml.tensorfma_load_ctrl.broadcast_sel) + 32))#[0..=31]
+  const f3_tentmp_msb_regfile_wdata_l__w1 = ((dcache_scp_data << 0x40) >> ((vpu_defs_pkg.VPU_DATA_S_SZ * 2 * (ml.tensorfma_load_ctrl.broadcast_sel >> 1))#[0..=31] + 0x40))#[0..=63]#[32..=63]
   mut _mux_117:u256 = if dcache_scp_resp.fill_is_tenb != 0 { dcache_tenb_data } else { dcache_scp_data }
   const f3_tenb_regfile_wdata_l__w1 = _mux_117
   mut _rep_119:u8 = if (unsigned(f3_tena_regfile_wdata_l__w1 == 0) & 1) != 0 { 0xff } else { 0 }
@@ -1098,8 +1257,8 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   mut f3_zero_data_b__w8 = f3_zero_data_b__w7
   f3_zero_data_b__w8#[7] = unsigned((f3_tenb_regfile_wdata_l__w1 >> (vpu_defs_pkg.VPU_DATA_S_SZ * 7)#[0..=31])#[0..=31] == 0) & 1
   if f3_ctrl_valid_qual != 0 {
-    f4_lane_idx = f3_lane_idx
     f4_ml_use_prev_sigs = f3_ml_use_prev_sigs
+    f4_lane_idx = f3_lane_idx
   }
   if f3_wen != 0 {
     f4_regfile_waddr = f3_regfile_waddr
@@ -1109,11 +1268,11 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
     f4_regfile_waddr_l = _mux_89
     f4_regfile_wdata_l = f3_regfile_wdata_l
   }
-  f4_mova_mx = f3_mova_mx
   f4_regfile_wen_l = f3_regfile_wen_l__w1
-  f4_regfile_wmask = f3_regfile_wmask_to_f4__w1
   f4_regfile_wmask_l = f3_regfile_wmask_l
+  f4_regfile_wmask = f3_regfile_wmask_to_f4__w1
   f4_thread_id = f3_thread_id
+  f4_mova_mx = f3_mova_mx
   mut tena_rf = vpu_tensora_rf::[name=tena_rf](clk_i = clock_sec, rd_addr_i = _mux_62, wr_en_i = f3_tena_regfile_wen_l__w1, wr_en_early_i = ml.load_ctrl_pre_tena_wen, wr_addr_i = f3_tena_regfile_waddr_l, wr_data_i = f3_tena_regfile_wdata_l__w1)
   mut tentmp_rf = vpu_tensortmp_rf::[name=tentmp_rf](clk_i = clock_sec, rd_addr_i = ml.ex_tentmp_raddr, wr_en_i = ml.f3_tentmp_wen, wr_en_early_i = ml.f2_tentmp_wen_early, wr_addr_i = ml.f3_tentmp_waddr, wr_data_i = f3_tentmp_msb_regfile_wdata_l__w1)
   mut _mux_130:u32 = if ml.ex_tentmp_ren != 0 { tentmp_rf#[0..=31] } else { tena_rf#[0..=31] }
@@ -1143,18 +1302,18 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   mut ex_tena_rf_rdata__w8 = ex_tena_rf_rdata__w7
   ex_tena_rf_rdata__w8#[224..=255] = _mux_138
   mut _rep_139:u32 = if (ml.ex_tena_rdata_mask & 1) != 0 { 0xffffffff } else { 0 }
-  const t2141 = f3_tena_regfile_waddr_l * 8
-  const t2149 = ml.f3_tentmp_waddr * 8
+  const t2140 = f3_tena_regfile_waddr_l * 8
+  const t2148 = ml.f3_tentmp_waddr * 8
   mut _mux_140:u3 = if dcache_scp_resp.fill_is_tenb != 0 { (dcache_scp_resp.tenb_line#[0..=1] << 1) | (f3_tenb_pass & 1) } else { f3_tenb_regfile_waddr_l }
-  const t2164 = _mux_140 * 8
+  const t2163 = _mux_140 * 8
   if f3_tena_regfile_wen_l__w1 != 0 {
-    ex_tensora_zero_mask = ((ex_tensora_zero_mask & (~(0xff << t2141))) | (_rep_119 << t2141))#[0..=15]
+    ex_tensora_zero_mask = ((ex_tensora_zero_mask & (~(0xff << t2140))) | (_rep_119 << t2140))#[0..=15]
   }
   if ml.f3_tentmp_wen != 0 {
-    ex_tensortmp_zero_mask = ((ex_tensortmp_zero_mask & (~(0xff << t2149))) | (_rep_121 << t2149))#[0..=63]
+    ex_tensortmp_zero_mask = ((ex_tensortmp_zero_mask & (~(0xff << t2148))) | (_rep_121 << t2148))#[0..=63]
   }
   if ((f3_tenb_regfile_wen_l__w1 | dcache_scp_resp.fill_is_tenb) & 1) != 0 {
-    ex_tensorb_zero_mask = ((ex_tensorb_zero_mask & (~(0xff << t2164))) | (f3_zero_data_b__w8#[0..=7] << t2164))#[0..=63]
+    ex_tensorb_zero_mask = ((ex_tensorb_zero_mask & (~(0xff << t2163))) | (f3_zero_data_b__w8#[0..=7] << t2163))#[0..=63]
   }
   if id_core_inst_en != 0 {
     id_core_inst = id_core_inst_next
@@ -1170,163 +1329,166 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   }
   id_core_inst_en__wtmp = unsigned((ml.id_inst_en_next != 0) or (id_trans_insert_en_next != 0))
   if id_inst_from_core != 0 {
-    const t2286 = (id_decoder_sigs.cmd << 38) | (id_decoder_sigs.txfma << 37) | (id_decoder_sigs.shsw << 36) | (id_decoder_sigs.rom << 35) | (id_decoder_sigs.scatter << 34) | (id_decoder_sigs.cvt << 33) | (id_decoder_sigs.trans << 32) | (id_decoder_sigs.gcvt << 31) | (id_decoder_sigs.fromintf << 30) | (id_decoder_sigs.tointm << 29) | (id_decoder_sigs.tointf << 28) | (id_decoder_sigs.maskop << 27) | (id_decoder_sigs.ldst << 26) | (id_decoder_sigs.m0ren << 25) | (id_decoder_sigs.mallren << 24) | (id_decoder_sigs.mren1 << 23) | (id_decoder_sigs.mren2 << 22) | (id_decoder_sigs.wen << 21) | (id_decoder_sigs.ren1 << 20) | (id_decoder_sigs.ren2 << 19) | (id_decoder_sigs.ren3 << 18) | (id_decoder_sigs.rend << 17) | (id_decoder_sigs.swap12 << 16) | (id_decoder_sigs.swap23 << 15) | (id_decoder_sigs.swap13 << 14) | (id_decoder_sigs.vector << 13) | (id_decoder_sigs.dtype << 9) | (id_decoder_sigs.fromint << 8) | (id_decoder_sigs.toint << 7) | (id_decoder_sigs.fma << 6) | (id_decoder_sigs.fms << 5) | (id_decoder_sigs.add << 4) | (id_decoder_sigs.sub << 3)
-    const t2289 = t2286 | (id_decoder_sigs.mul << 2)
-    const t2292 = t2289 | (id_decoder_sigs.round << 1)
-    const t2294 = t2292 | id_decoder_sigs.wflags
-    const t2295 = t2294#[38..=44]
-    const t2296 = t2294 >> 37
-    const t2297 = t2296 & 1
-    const t2298 = t2294 >> 36
-    const t2299 = t2298 & 1
-    const t2300 = t2294 >> 35
-    const t2301 = t2300 & 1
-    const t2302 = t2294 >> 34
-    const t2303 = t2302 & 1
-    const t2304 = t2294 >> 33
-    const t2305 = t2304 & 1
-    const t2306 = t2294 >> 32
-    const t2307 = t2306 & 1
-    const t2308 = t2294 >> 31
-    const t2309 = t2308 & 1
-    const t2310 = t2294 >> 30
-    const t2311 = t2310 & 1
-    const t2312 = t2294 >> 29
-    const t2313 = t2312 & 1
-    const t2314 = t2294 >> 28
-    const t2315 = t2314 & 1
-    const t2316 = t2294 >> 27
-    const t2317 = t2316 & 1
-    const t2318 = t2294 >> 26
-    const t2319 = t2318 & 1
-    const t2320 = t2294 >> 25
-    const t2321 = t2320 & 1
-    const t2322 = t2294 >> 24
-    const t2323 = t2322 & 1
-    const t2324 = t2294 >> 23
-    const t2325 = t2324 & 1
-    const t2326 = t2294 >> 22
-    const t2327 = t2326 & 1
-    const t2328 = t2294 >> 21
-    const t2329 = t2328 & 1
-    const t2330 = t2294 >> 20
-    const t2331 = t2330 & 1
-    const t2332 = t2294 >> 19
-    const t2333 = t2332 & 1
-    const t2334 = t2294 >> 18
-    const t2335 = t2334 & 1
-    const t2336 = t2294 >> 17
-    const t2337 = t2336 & 1
-    const t2338 = t2294 >> 16
-    const t2339 = t2338 & 1
-    const t2340 = t2294 >> 15
-    const t2341 = t2340 & 1
-    const t2342 = t2294 >> 14
-    const t2343 = t2342 & 1
-    const t2344 = t2294 >> 13
-    const t2345 = t2344 & 1
-    const t2346 = t2294#[9..=12]
-    const t2347 = t2294 >> 8
-    const t2348 = t2347 & 1
-    const t2349 = t2294 >> 7
-    const t2350 = t2349 & 1
-    const t2351 = t2294 >> 6
-    const t2352 = t2351 & 1
-    const t2353 = t2294 >> 5
-    const t2354 = t2353 & 1
-    const t2355 = t2294 >> 4
-    const t2356 = t2355 & 1
-    const t2357 = t2294 >> 3
-    const t2358 = t2357 & 1
-    const t2359 = t2294 >> 2
-    const t2360 = t2359 & 1
-    const t2361 = t2294 >> 1
-    const t2362 = t2361 & 1
-    const t2363 = t2294 & 1
-    `id_decoder_sigs_sel.add` = t2356
-    `id_decoder_sigs_sel.cmd` = t2295
-    `id_decoder_sigs_sel.cvt` = t2305
-    `id_decoder_sigs_sel.dtype` = t2346
-    `id_decoder_sigs_sel.fma` = t2352
-    `id_decoder_sigs_sel.fms` = t2354
-    `id_decoder_sigs_sel.fromint` = t2348
-    `id_decoder_sigs_sel.fromintf` = t2311
-    `id_decoder_sigs_sel.gcvt` = t2309
-    `id_decoder_sigs_sel.ldst` = t2319
-    `id_decoder_sigs_sel.m0ren` = t2321
-    `id_decoder_sigs_sel.mallren` = t2323
-    `id_decoder_sigs_sel.maskop` = t2317
-    `id_decoder_sigs_sel.mren1` = t2325
-    `id_decoder_sigs_sel.mren2` = t2327
-    `id_decoder_sigs_sel.mul` = t2360
-    `id_decoder_sigs_sel.ren1` = t2331
-    `id_decoder_sigs_sel.ren2` = t2333
-    `id_decoder_sigs_sel.ren3` = t2335
-    `id_decoder_sigs_sel.rend` = t2337
-    `id_decoder_sigs_sel.rom` = t2301
-    `id_decoder_sigs_sel.round` = t2362
-    `id_decoder_sigs_sel.scatter` = t2303
-    `id_decoder_sigs_sel.shsw` = t2299
-    `id_decoder_sigs_sel.sub` = t2358
-    `id_decoder_sigs_sel.swap12` = t2339
-    `id_decoder_sigs_sel.swap13` = t2343
-    `id_decoder_sigs_sel.swap23` = t2341
-    `id_decoder_sigs_sel.toint` = t2350
-    `id_decoder_sigs_sel.tointf` = t2315
-    `id_decoder_sigs_sel.tointm` = t2313
-    `id_decoder_sigs_sel.trans` = t2307
-    `id_decoder_sigs_sel.txfma` = t2297
-    `id_decoder_sigs_sel.vector` = t2345
-    `id_decoder_sigs_sel.wen` = t2329
-    `id_decoder_sigs_sel.wflags` = t2363
+    const t2285 = (id_decoder_sigs.cmd << 38) | (id_decoder_sigs.txfma << 37) | (id_decoder_sigs.shsw << 36) | (id_decoder_sigs.rom << 35) | (id_decoder_sigs.scatter << 34) | (id_decoder_sigs.cvt << 33) | (id_decoder_sigs.trans << 32) | (id_decoder_sigs.gcvt << 31) | (id_decoder_sigs.fromintf << 30) | (id_decoder_sigs.tointm << 29) | (id_decoder_sigs.tointf << 28) | (id_decoder_sigs.maskop << 27) | (id_decoder_sigs.ldst << 26) | (id_decoder_sigs.m0ren << 25) | (id_decoder_sigs.mallren << 24) | (id_decoder_sigs.mren1 << 23) | (id_decoder_sigs.mren2 << 22) | (id_decoder_sigs.wen << 21) | (id_decoder_sigs.ren1 << 20) | (id_decoder_sigs.ren2 << 19) | (id_decoder_sigs.ren3 << 18) | (id_decoder_sigs.rend << 17) | (id_decoder_sigs.swap12 << 16) | (id_decoder_sigs.swap23 << 15) | (id_decoder_sigs.swap13 << 14) | (id_decoder_sigs.vector << 13) | (id_decoder_sigs.dtype << 9) | (id_decoder_sigs.fromint << 8) | (id_decoder_sigs.toint << 7) | (id_decoder_sigs.fma << 6) | (id_decoder_sigs.fms << 5) | (id_decoder_sigs.add << 4) | (id_decoder_sigs.sub << 3)
+    const t2288 = t2285 | (id_decoder_sigs.mul << 2)
+    const t2291 = t2288 | (id_decoder_sigs.round << 1)
+    const t2293 = t2291 | id_decoder_sigs.wflags
+    const t2294 = t2293#[38..=44]
+    `id_decoder_sigs_sel.cmd` = t2294
+    const t2295 = t2293 >> 37
+    const t2296 = t2295 & 1
+    `id_decoder_sigs_sel.txfma` = t2296
+    const t2297 = t2293 >> 36
+    const t2298 = t2297 & 1
+    `id_decoder_sigs_sel.shsw` = t2298
+    const t2299 = t2293 >> 35
+    const t2300 = t2299 & 1
+    `id_decoder_sigs_sel.rom` = t2300
+    const t2301 = t2293 >> 34
+    const t2302 = t2301 & 1
+    `id_decoder_sigs_sel.scatter` = t2302
+    const t2303 = t2293 >> 33
+    const t2304 = t2303 & 1
+    `id_decoder_sigs_sel.cvt` = t2304
+    const t2305 = t2293 >> 32
+    const t2306 = t2305 & 1
+    `id_decoder_sigs_sel.trans` = t2306
+    const t2307 = t2293 >> 31
+    const t2308 = t2307 & 1
+    `id_decoder_sigs_sel.gcvt` = t2308
+    const t2309 = t2293 >> 30
+    const t2310 = t2309 & 1
+    `id_decoder_sigs_sel.fromintf` = t2310
+    const t2311 = t2293 >> 29
+    const t2312 = t2311 & 1
+    `id_decoder_sigs_sel.tointm` = t2312
+    const t2313 = t2293 >> 28
+    const t2314 = t2313 & 1
+    `id_decoder_sigs_sel.tointf` = t2314
+    const t2315 = t2293 >> 27
+    const t2316 = t2315 & 1
+    `id_decoder_sigs_sel.maskop` = t2316
+    const t2317 = t2293 >> 26
+    const t2318 = t2317 & 1
+    `id_decoder_sigs_sel.ldst` = t2318
+    const t2319 = t2293 >> 25
+    const t2320 = t2319 & 1
+    `id_decoder_sigs_sel.m0ren` = t2320
+    const t2321 = t2293 >> 24
+    const t2322 = t2321 & 1
+    `id_decoder_sigs_sel.mallren` = t2322
+    const t2323 = t2293 >> 23
+    const t2324 = t2323 & 1
+    `id_decoder_sigs_sel.mren1` = t2324
+    const t2325 = t2293 >> 22
+    const t2326 = t2325 & 1
+    `id_decoder_sigs_sel.mren2` = t2326
+    const t2327 = t2293 >> 21
+    const t2328 = t2327 & 1
+    `id_decoder_sigs_sel.wen` = t2328
+    const t2329 = t2293 >> 20
+    const t2330 = t2329 & 1
+    `id_decoder_sigs_sel.ren1` = t2330
+    const t2331 = t2293 >> 19
+    const t2332 = t2331 & 1
+    `id_decoder_sigs_sel.ren2` = t2332
+    const t2333 = t2293 >> 18
+    const t2334 = t2333 & 1
+    `id_decoder_sigs_sel.ren3` = t2334
+    const t2335 = t2293 >> 17
+    const t2336 = t2335 & 1
+    `id_decoder_sigs_sel.rend` = t2336
+    const t2337 = t2293 >> 16
+    const t2338 = t2337 & 1
+    `id_decoder_sigs_sel.swap12` = t2338
+    const t2339 = t2293 >> 15
+    const t2340 = t2339 & 1
+    `id_decoder_sigs_sel.swap23` = t2340
+    const t2341 = t2293 >> 14
+    const t2342 = t2341 & 1
+    `id_decoder_sigs_sel.swap13` = t2342
+    const t2343 = t2293 >> 13
+    const t2344 = t2343 & 1
+    `id_decoder_sigs_sel.vector` = t2344
+    const t2345 = t2293#[9..=12]
+    `id_decoder_sigs_sel.dtype` = t2345
+    const t2346 = t2293 >> 8
+    const t2347 = t2346 & 1
+    `id_decoder_sigs_sel.fromint` = t2347
+    const t2348 = t2293 >> 7
+    const t2349 = t2348 & 1
+    `id_decoder_sigs_sel.toint` = t2349
+    const t2350 = t2293 >> 6
+    const t2351 = t2350 & 1
+    `id_decoder_sigs_sel.fma` = t2351
+    const t2352 = t2293 >> 5
+    const t2353 = t2352 & 1
+    `id_decoder_sigs_sel.fms` = t2353
+    const t2354 = t2293 >> 4
+    const t2355 = t2354 & 1
+    `id_decoder_sigs_sel.add` = t2355
+    const t2356 = t2293 >> 3
+    const t2357 = t2356 & 1
+    `id_decoder_sigs_sel.sub` = t2357
+    const t2358 = t2293 >> 2
+    const t2359 = t2358 & 1
+    `id_decoder_sigs_sel.mul` = t2359
+    const t2360 = t2293 >> 1
+    const t2361 = t2360 & 1
+    `id_decoder_sigs_sel.round` = t2361
+    const t2362 = t2293 & 1
+    `id_decoder_sigs_sel.wflags` = t2362
   } else {
-    `id_decoder_sigs_sel.add` = uinst_decoder["id_sigs_o.add"]
-    `id_decoder_sigs_sel.cmd` = uinst_decoder["id_sigs_o.cmd"]
-    `id_decoder_sigs_sel.cvt` = uinst_decoder["id_sigs_o.cvt"]
-    `id_decoder_sigs_sel.dtype` = uinst_decoder["id_sigs_o.dtype"]
-    `id_decoder_sigs_sel.fma` = uinst_decoder["id_sigs_o.fma"]
-    `id_decoder_sigs_sel.fms` = uinst_decoder["id_sigs_o.fms"]
-    `id_decoder_sigs_sel.fromint` = uinst_decoder["id_sigs_o.fromint"]
-    `id_decoder_sigs_sel.fromintf` = uinst_decoder["id_sigs_o.fromintf"]
-    `id_decoder_sigs_sel.gcvt` = uinst_decoder["id_sigs_o.gcvt"]
-    `id_decoder_sigs_sel.ldst` = uinst_decoder["id_sigs_o.ldst"]
-    `id_decoder_sigs_sel.m0ren` = uinst_decoder["id_sigs_o.m0ren"]
-    `id_decoder_sigs_sel.mallren` = uinst_decoder["id_sigs_o.mallren"]
-    `id_decoder_sigs_sel.maskop` = uinst_decoder["id_sigs_o.maskop"]
-    `id_decoder_sigs_sel.mren1` = uinst_decoder["id_sigs_o.mren1"]
-    `id_decoder_sigs_sel.mren2` = uinst_decoder["id_sigs_o.mren2"]
-    `id_decoder_sigs_sel.mul` = uinst_decoder["id_sigs_o.mul"]
-    `id_decoder_sigs_sel.ren1` = uinst_decoder["id_sigs_o.ren1"]
-    `id_decoder_sigs_sel.ren2` = uinst_decoder["id_sigs_o.ren2"]
-    `id_decoder_sigs_sel.ren3` = uinst_decoder["id_sigs_o.ren3"]
-    `id_decoder_sigs_sel.rend` = uinst_decoder["id_sigs_o.rend"]
-    `id_decoder_sigs_sel.rom` = uinst_decoder["id_sigs_o.rom"]
-    `id_decoder_sigs_sel.round` = uinst_decoder["id_sigs_o.round"]
-    `id_decoder_sigs_sel.scatter` = uinst_decoder["id_sigs_o.scatter"]
-    `id_decoder_sigs_sel.shsw` = uinst_decoder["id_sigs_o.shsw"]
-    `id_decoder_sigs_sel.sub` = uinst_decoder["id_sigs_o.sub"]
-    `id_decoder_sigs_sel.swap12` = uinst_decoder["id_sigs_o.swap12"]
-    `id_decoder_sigs_sel.swap13` = uinst_decoder["id_sigs_o.swap13"]
-    `id_decoder_sigs_sel.swap23` = uinst_decoder["id_sigs_o.swap23"]
-    `id_decoder_sigs_sel.toint` = uinst_decoder["id_sigs_o.toint"]
-    `id_decoder_sigs_sel.tointf` = uinst_decoder["id_sigs_o.tointf"]
-    `id_decoder_sigs_sel.tointm` = uinst_decoder["id_sigs_o.tointm"]
-    `id_decoder_sigs_sel.trans` = uinst_decoder["id_sigs_o.trans"]
-    `id_decoder_sigs_sel.txfma` = uinst_decoder["id_sigs_o.txfma"]
-    `id_decoder_sigs_sel.vector` = uinst_decoder["id_sigs_o.vector"]
-    `id_decoder_sigs_sel.wen` = uinst_decoder["id_sigs_o.wen"]
-    `id_decoder_sigs_sel.wflags` = uinst_decoder["id_sigs_o.wflags"]
+    `id_decoder_sigs_sel.cmd` = uinst_decoder.id_sigs_o.cmd
+    `id_decoder_sigs_sel.txfma` = uinst_decoder.id_sigs_o.txfma
+    `id_decoder_sigs_sel.shsw` = uinst_decoder.id_sigs_o.shsw
+    `id_decoder_sigs_sel.rom` = uinst_decoder.id_sigs_o.rom
+    `id_decoder_sigs_sel.scatter` = uinst_decoder.id_sigs_o.scatter
+    `id_decoder_sigs_sel.cvt` = uinst_decoder.id_sigs_o.cvt
+    `id_decoder_sigs_sel.trans` = uinst_decoder.id_sigs_o.trans
+    `id_decoder_sigs_sel.gcvt` = uinst_decoder.id_sigs_o.gcvt
+    `id_decoder_sigs_sel.fromintf` = uinst_decoder.id_sigs_o.fromintf
+    `id_decoder_sigs_sel.tointm` = uinst_decoder.id_sigs_o.tointm
+    `id_decoder_sigs_sel.tointf` = uinst_decoder.id_sigs_o.tointf
+    `id_decoder_sigs_sel.maskop` = uinst_decoder.id_sigs_o.maskop
+    `id_decoder_sigs_sel.ldst` = uinst_decoder.id_sigs_o.ldst
+    `id_decoder_sigs_sel.m0ren` = uinst_decoder.id_sigs_o.m0ren
+    `id_decoder_sigs_sel.mallren` = uinst_decoder.id_sigs_o.mallren
+    `id_decoder_sigs_sel.mren1` = uinst_decoder.id_sigs_o.mren1
+    `id_decoder_sigs_sel.mren2` = uinst_decoder.id_sigs_o.mren2
+    `id_decoder_sigs_sel.wen` = uinst_decoder.id_sigs_o.wen
+    `id_decoder_sigs_sel.ren1` = uinst_decoder.id_sigs_o.ren1
+    `id_decoder_sigs_sel.ren2` = uinst_decoder.id_sigs_o.ren2
+    `id_decoder_sigs_sel.ren3` = uinst_decoder.id_sigs_o.ren3
+    `id_decoder_sigs_sel.rend` = uinst_decoder.id_sigs_o.rend
+    `id_decoder_sigs_sel.swap12` = uinst_decoder.id_sigs_o.swap12
+    `id_decoder_sigs_sel.swap23` = uinst_decoder.id_sigs_o.swap23
+    `id_decoder_sigs_sel.swap13` = uinst_decoder.id_sigs_o.swap13
+    `id_decoder_sigs_sel.vector` = uinst_decoder.id_sigs_o.vector
+    `id_decoder_sigs_sel.dtype` = uinst_decoder.id_sigs_o.dtype
+    `id_decoder_sigs_sel.fromint` = uinst_decoder.id_sigs_o.fromint
+    `id_decoder_sigs_sel.toint` = uinst_decoder.id_sigs_o.toint
+    `id_decoder_sigs_sel.fma` = uinst_decoder.id_sigs_o.fma
+    `id_decoder_sigs_sel.fms` = uinst_decoder.id_sigs_o.fms
+    `id_decoder_sigs_sel.add` = uinst_decoder.id_sigs_o.add
+    `id_decoder_sigs_sel.sub` = uinst_decoder.id_sigs_o.sub
+    `id_decoder_sigs_sel.mul` = uinst_decoder.id_sigs_o.mul
+    `id_decoder_sigs_sel.round` = uinst_decoder.id_sigs_o.round
+    `id_decoder_sigs_sel.wflags` = uinst_decoder.id_sigs_o.wflags
   }
-  const t2497 = (`id_decoder_sigs_sel.cmd` << 38) | (`id_decoder_sigs_sel.txfma` << 37) | (`id_decoder_sigs_sel.shsw` << 36) | (`id_decoder_sigs_sel.rom` << 35) | (`id_decoder_sigs_sel.scatter` << 34) | (`id_decoder_sigs_sel.cvt` << 33) | (`id_decoder_sigs_sel.trans` << 32) | (`id_decoder_sigs_sel.gcvt` << 31) | (`id_decoder_sigs_sel.fromintf` << 30) | (`id_decoder_sigs_sel.tointm` << 29) | (`id_decoder_sigs_sel.tointf` << 28) | (`id_decoder_sigs_sel.maskop` << 27) | (`id_decoder_sigs_sel.ldst` << 26) | (`id_decoder_sigs_sel.m0ren` << 25) | (`id_decoder_sigs_sel.mallren` << 24) | (`id_decoder_sigs_sel.mren1` << 23) | (`id_decoder_sigs_sel.mren2` << 22) | (`id_decoder_sigs_sel.wen` << 21) | (`id_decoder_sigs_sel.ren1` << 20) | (`id_decoder_sigs_sel.ren2` << 19) | (`id_decoder_sigs_sel.ren3` << 18) | (`id_decoder_sigs_sel.rend` << 17) | (`id_decoder_sigs_sel.swap12` << 16) | (`id_decoder_sigs_sel.swap23` << 15) | (`id_decoder_sigs_sel.swap13` << 14) | (`id_decoder_sigs_sel.vector` << 13) | (`id_decoder_sigs_sel.dtype` << 9) | (`id_decoder_sigs_sel.fromint` << 8) | (`id_decoder_sigs_sel.toint` << 7) | (`id_decoder_sigs_sel.fma` << 6) | (`id_decoder_sigs_sel.fms` << 5) | (`id_decoder_sigs_sel.add` << 4) | (`id_decoder_sigs_sel.sub` << 3)
-  const t2500 = t2497 | (`id_decoder_sigs_sel.mul` << 2)
-  const t2503 = t2500 | (`id_decoder_sigs_sel.round` << 1)
-  const t2505 = t2503 | `id_decoder_sigs_sel.wflags`
-  const t2506 = t2505#[0..=44]
+  const t2496 = (`id_decoder_sigs_sel.cmd` << 38) | (`id_decoder_sigs_sel.txfma` << 37) | (`id_decoder_sigs_sel.shsw` << 36) | (`id_decoder_sigs_sel.rom` << 35) | (`id_decoder_sigs_sel.scatter` << 34) | (`id_decoder_sigs_sel.cvt` << 33) | (`id_decoder_sigs_sel.trans` << 32) | (`id_decoder_sigs_sel.gcvt` << 31) | (`id_decoder_sigs_sel.fromintf` << 30) | (`id_decoder_sigs_sel.tointm` << 29) | (`id_decoder_sigs_sel.tointf` << 28) | (`id_decoder_sigs_sel.maskop` << 27) | (`id_decoder_sigs_sel.ldst` << 26) | (`id_decoder_sigs_sel.m0ren` << 25) | (`id_decoder_sigs_sel.mallren` << 24) | (`id_decoder_sigs_sel.mren1` << 23) | (`id_decoder_sigs_sel.mren2` << 22) | (`id_decoder_sigs_sel.wen` << 21) | (`id_decoder_sigs_sel.ren1` << 20) | (`id_decoder_sigs_sel.ren2` << 19) | (`id_decoder_sigs_sel.ren3` << 18) | (`id_decoder_sigs_sel.rend` << 17) | (`id_decoder_sigs_sel.swap12` << 16) | (`id_decoder_sigs_sel.swap23` << 15) | (`id_decoder_sigs_sel.swap13` << 14) | (`id_decoder_sigs_sel.vector` << 13) | (`id_decoder_sigs_sel.dtype` << 9) | (`id_decoder_sigs_sel.fromint` << 8) | (`id_decoder_sigs_sel.toint` << 7) | (`id_decoder_sigs_sel.fma` << 6) | (`id_decoder_sigs_sel.fms` << 5) | (`id_decoder_sigs_sel.add` << 4) | (`id_decoder_sigs_sel.sub` << 3)
+  const t2499 = t2496 | (`id_decoder_sigs_sel.mul` << 2)
+  const t2502 = t2499 | (`id_decoder_sigs_sel.round` << 1)
+  const t2504 = t2502 | `id_decoder_sigs_sel.wflags`
+  const t2505 = t2504#[0..=44]
   mut id_vpu_ctrl__w2 = 0
-  id_vpu_ctrl__w2#[121..=165] = t2506
-  id_ra1 = ex_ra1
-  id_ra2 = ex_ra2
+  id_vpu_ctrl__w2#[121..=165] = t2505
+  id_ra1 = 0sb?
+  id_ra2 = 0sb?
+  id_ra3 = 0sb?
   id_ra3 = ex_ra3
+  id_ra2 = ex_ra2
+  id_ra1 = ex_ra1
   id_vpu_ctrl = id_vpu_ctrl__w2
   if ex_core_gscing == 0 {
     if `id_decoder_sigs_sel.ren1` != 0 {
@@ -1334,8 +1496,8 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
         id_ra1 = id_core_inst_int__w1#[15..=19]
       }
       if `id_decoder_sigs_sel.swap12` != 0 {
-        id_vpu_ctrl#[141] = 0
         id_ra2 = id_core_inst_int__w1#[15..=19]
+        id_vpu_ctrl#[141] = 0
         id_vpu_ctrl#[140] = 1
       }
       if `id_decoder_sigs_sel.swap13` != 0 {
@@ -1346,13 +1508,13 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
     }
     if `id_decoder_sigs_sel.ren2` != 0 {
       if `id_decoder_sigs_sel.swap12` != 0 {
-        id_vpu_ctrl#[141] = 1
         id_ra1 = id_core_inst_int__w1#[20..=24]
+        id_vpu_ctrl#[141] = 1
         id_vpu_ctrl#[140] = 0
       }
       if `id_decoder_sigs_sel.swap23` != 0 {
-        id_vpu_ctrl#[140] = 0
         id_ra3 = id_core_inst_int__w1#[20..=24]
+        id_vpu_ctrl#[140] = 0
         id_vpu_ctrl#[139] = 1
       }
       if (`id_decoder_sigs_sel.swap12` == 0) and (`id_decoder_sigs_sel.swap23` == 0) {
@@ -1404,19 +1566,20 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   mut _mux_162:u3 = if id_ml_inst_en != 0 { 0 } else { _mux_161 }
   mut _mux_163:u3 = if ml.id_inst_fma_en != 0 { 0 } else { _mux_162 }
   const id_regfile_thread_id__w1 = _mux_163
-  const t2775 = (`ex_req__bpo.use_prev_sigs` << 0xa6) | (`ex_req__bpo.sigs.cmd` << 0x9f) | (`ex_req__bpo.sigs.txfma` << 0x9e) | (`ex_req__bpo.sigs.shsw` << 0x9d) | (`ex_req__bpo.sigs.rom` << 0x9c) | (`ex_req__bpo.sigs.scatter` << 0x9b) | (`ex_req__bpo.sigs.cvt` << 0x9a) | (`ex_req__bpo.sigs.trans` << 0x99) | (`ex_req__bpo.sigs.gcvt` << 0x98) | (`ex_req__bpo.sigs.fromintf` << 0x97) | (`ex_req__bpo.sigs.tointm` << 0x96) | (`ex_req__bpo.sigs.tointf` << 0x95) | (`ex_req__bpo.sigs.maskop` << 0x94) | (`ex_req__bpo.sigs.ldst` << 0x93) | (`ex_req__bpo.sigs.m0ren` << 0x92) | (`ex_req__bpo.sigs.mallren` << 0x91) | (`ex_req__bpo.sigs.mren1` << 0x90) | (`ex_req__bpo.sigs.mren2` << 0x8f) | (`ex_req__bpo.sigs.wen` << 0x8e) | (`ex_req__bpo.sigs.ren1` << 0x8d) | (`ex_req__bpo.sigs.ren2` << 0x8c) | (`ex_req__bpo.sigs.ren3` << 0x8b) | (`ex_req__bpo.sigs.rend` << 0x8a) | (`ex_req__bpo.sigs.swap12` << 0x89) | (`ex_req__bpo.sigs.swap23` << 0x88) | (`ex_req__bpo.sigs.swap13` << 0x87) | (`ex_req__bpo.sigs.vector` << 0x86) | (`ex_req__bpo.sigs.dtype` << 0x82) | (`ex_req__bpo.sigs.fromint` << 0x81) | (`ex_req__bpo.sigs.toint` << 0x80) | (`ex_req__bpo.sigs.fma` << 0x7f) | (`ex_req__bpo.sigs.fms` << 0x7e) | (`ex_req__bpo.sigs.add` << 0x7d)
-  const t2778 = t2775 | (`ex_req__bpo.sigs.sub` << 0x7c)
-  const t2781 = t2778 | (`ex_req__bpo.sigs.mul` << 0x7b)
-  const t2784 = t2781 | (`ex_req__bpo.sigs.round` << 0x7a)
-  const t2787 = t2784 | (`ex_req__bpo.sigs.wflags` << 0x79)
-  const t2790 = t2787 | (`ex_req__bpo.imm` << 0x65)
-  const t2793 = t2790 | (`ex_req__bpo.rm` << 0x62)
-  const t2796 = t2793 | (`ex_req__bpo.typ` << 0x60)
-  const t2799 = t2796 | (`ex_req__bpo.in1` << 0x40)
-  const t2802 = t2799 | (`ex_req__bpo.in2` << 32)
-  const t2804 = t2802 | `ex_req__bpo.in3`
-  const t2805 = t2804#[121..=165]
-  const t2806 = id_vpu_ctrl__w5#[121..=165] == t2805
+  const t2774 = (`ex_req__bpo.use_prev_sigs` << 0xa6) | (`ex_req__bpo.sigs.cmd` << 0x9f) | (`ex_req__bpo.sigs.txfma` << 0x9e) | (`ex_req__bpo.sigs.shsw` << 0x9d) | (`ex_req__bpo.sigs.rom` << 0x9c) | (`ex_req__bpo.sigs.scatter` << 0x9b) | (`ex_req__bpo.sigs.cvt` << 0x9a) | (`ex_req__bpo.sigs.trans` << 0x99) | (`ex_req__bpo.sigs.gcvt` << 0x98) | (`ex_req__bpo.sigs.fromintf` << 0x97) | (`ex_req__bpo.sigs.tointm` << 0x96) | (`ex_req__bpo.sigs.tointf` << 0x95) | (`ex_req__bpo.sigs.maskop` << 0x94) | (`ex_req__bpo.sigs.ldst` << 0x93) | (`ex_req__bpo.sigs.m0ren` << 0x92) | (`ex_req__bpo.sigs.mallren` << 0x91) | (`ex_req__bpo.sigs.mren1` << 0x90) | (`ex_req__bpo.sigs.mren2` << 0x8f) | (`ex_req__bpo.sigs.wen` << 0x8e) | (`ex_req__bpo.sigs.ren1` << 0x8d) | (`ex_req__bpo.sigs.ren2` << 0x8c) | (`ex_req__bpo.sigs.ren3` << 0x8b) | (`ex_req__bpo.sigs.rend` << 0x8a) | (`ex_req__bpo.sigs.swap12` << 0x89) | (`ex_req__bpo.sigs.swap23` << 0x88) | (`ex_req__bpo.sigs.swap13` << 0x87) | (`ex_req__bpo.sigs.vector` << 0x86) | (`ex_req__bpo.sigs.dtype` << 0x82) | (`ex_req__bpo.sigs.fromint` << 0x81) | (`ex_req__bpo.sigs.toint` << 0x80) | (`ex_req__bpo.sigs.fma` << 0x7f) | (`ex_req__bpo.sigs.fms` << 0x7e) | (`ex_req__bpo.sigs.add` << 0x7d)
+  const t2777 = t2774 | (`ex_req__bpo.sigs.sub` << 0x7c)
+  const t2780 = t2777 | (`ex_req__bpo.sigs.mul` << 0x7b)
+  const t2783 = t2780 | (`ex_req__bpo.sigs.round` << 0x7a)
+  const t2786 = t2783 | (`ex_req__bpo.sigs.wflags` << 0x79)
+  const t2789 = t2786 | (`ex_req__bpo.imm` << 0x65)
+  const t2792 = t2789 | (`ex_req__bpo.rm` << 0x62)
+  const t2795 = t2792 | (`ex_req__bpo.typ` << 0x60)
+  const t2798 = t2795 | (`ex_req__bpo.in1` << 0x40)
+  const t2801 = t2798 | (`ex_req__bpo.in2` << 32)
+  const t2803 = t2801 | `ex_req__bpo.in3`
+  const t2804 = t2803#[121..=165]
+  const t2805 = id_vpu_ctrl__w5#[121..=165] == t2804
+  id_use_prev_sigs = unsigned(((ml.id_inst_fma_en & unsigned(t2805) & 1) != 0) and (`ex_req__bpo.rm` == id_vpu_ctrl__w5#[98..=100]))
   mut id_scoreboard__w49 = id_scoreboard__w48
   id_scoreboard__w49#[16..=19] = id_scoreboard_mask_valid
   mut id_scoreboard__w50 = id_scoreboard__w49
@@ -1427,232 +1590,207 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   const `id_core_ctrl__bpo.reduce_enabled__w1` = ml.tstore_reduce_enabled
   const `id_core_ctrl__bpo.trans_busy__w1` = id_trans_busy
   const `id_core_ctrl__bpo.id_trans_insert__w1` = id_trans_insert_en
-  const t2856 = id_scoreboard__w50 >> 0x96
-  const t2857 = t2856#[0..=13]
-  const `id_core_ctrl__bpo.scoreboard.fp_valid__w1` = t2857
-  const t2858 = id_scoreboard__w50 >> 52
-  const t2859 = t2858#[0..=97]
-  const `id_core_ctrl__bpo.scoreboard.fp_dest__w1` = t2859
-  const t2860 = id_scoreboard__w50 >> 48
-  const t2861 = t2860#[0..=3]
-  const `id_core_ctrl__bpo.scoreboard.toint_valid__w1` = t2861
-  const t2862 = id_scoreboard__w50 >> 20
-  const t2863 = t2862#[0..=27]
-  const `id_core_ctrl__bpo.scoreboard.toint_dest__w1` = t2863
-  const t2864 = id_scoreboard__w50 >> 16
-  const t2865 = t2864#[0..=3]
-  const `id_core_ctrl__bpo.scoreboard.mask_valid__w1` = t2865
-  const t2866 = id_scoreboard__w50#[0..=15]
-  const `id_core_ctrl__bpo.scoreboard.mask_dest__w1` = t2866
+  const t2855 = id_scoreboard__w50 >> 0x96
+  const t2856 = t2855#[0..=13]
+  const `id_core_ctrl__bpo.scoreboard.fp_valid__w1` = t2856
+  const t2857 = id_scoreboard__w50 >> 52
+  const t2858 = t2857#[0..=97]
+  const `id_core_ctrl__bpo.scoreboard.fp_dest__w1` = t2858
+  const t2859 = id_scoreboard__w50 >> 48
+  const t2860 = t2859#[0..=3]
+  const `id_core_ctrl__bpo.scoreboard.toint_valid__w1` = t2860
+  const t2861 = id_scoreboard__w50 >> 20
+  const t2862 = t2861#[0..=27]
+  const `id_core_ctrl__bpo.scoreboard.toint_dest__w1` = t2862
+  const t2863 = id_scoreboard__w50 >> 16
+  const t2864 = t2863#[0..=3]
+  const `id_core_ctrl__bpo.scoreboard.mask_valid__w1` = t2864
+  const t2865 = id_scoreboard__w50#[0..=15]
+  const `id_core_ctrl__bpo.scoreboard.mask_dest__w1` = t2865
   const `id_core_ctrl__bpo.fflags_stall__w1` = (((f2_ctrl_valid | f3_ctrl_valid) & 1) | f4_ctrl_valid) & 1
-  mut `id_core_ctrl__bpo.fflags_stall` = 0
-  mut `id_core_ctrl__bpo.fromint` = 0
-  mut `id_core_ctrl__bpo.id_trans_insert` = 0
-  mut `id_core_ctrl__bpo.is_trans` = 0
-  mut `id_core_ctrl__bpo.m0ren` = 0
-  mut `id_core_ctrl__bpo.mallren` = 0
-  mut `id_core_ctrl__bpo.mren1` = 0
-  mut `id_core_ctrl__bpo.mren2` = 0
-  mut `id_core_ctrl__bpo.reduce_enabled` = 0
-  mut `id_core_ctrl__bpo.ren1` = 0
-  mut `id_core_ctrl__bpo.ren2` = 0
-  mut `id_core_ctrl__bpo.ren3` = 0
-  mut `id_core_ctrl__bpo.rend` = 0
-  mut `id_core_ctrl__bpo.scoreboard.fp_dest` = 0
-  mut `id_core_ctrl__bpo.scoreboard.fp_valid` = 0
-  mut `id_core_ctrl__bpo.scoreboard.mask_dest` = 0
-  mut `id_core_ctrl__bpo.scoreboard.mask_valid` = 0
-  mut `id_core_ctrl__bpo.scoreboard.toint_dest` = 0
-  mut `id_core_ctrl__bpo.scoreboard.toint_valid` = 0
-  mut `id_core_ctrl__bpo.tfma_enabled` = 0
-  mut `id_core_ctrl__bpo.tfma_wrrf_enabled` = 0
-  mut `id_core_ctrl__bpo.tquant_enabled` = 0
-  mut `id_core_ctrl__bpo.trans_busy` = 0
-  mut `id_core_ctrl__bpo.wen` = 0
-  id_use_prev_sigs = unsigned(((ml.id_inst_fma_en & unsigned(t2806) & 1) != 0) and (`ex_req__bpo.rm` == id_vpu_ctrl__w5#[98..=100]))
   match id_vpu_ctrl__w5#[121..=165]#[38..=44] {
     == vpu_defs_pkg.VPU_TRANS_RCP_FMA2 {
-      const t2886 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
-      `id_bypass_force_ctrl.shsw_in1` = (t2886 >> 1) & 1
-      `id_bypass_force_ctrl.shsw_in2` = t2886 & 1
-      `id_bypass_force_ctrl.txfma_in0` = (t2886 >> 4) & 1
-      `id_bypass_force_ctrl.txfma_in1` = (t2886 >> 3) & 1
-      `id_bypass_force_ctrl.txfma_in2` = (t2886 >> 2) & 1
+      const t2885 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
+      `id_bypass_force_ctrl.txfma_in0` = (t2885 >> 4) & 1
+      `id_bypass_force_ctrl.txfma_in1` = (t2885 >> 3) & 1
+      `id_bypass_force_ctrl.txfma_in2` = (t2885 >> 2) & 1
+      `id_bypass_force_ctrl.shsw_in1` = (t2885 >> 1) & 1
+      `id_bypass_force_ctrl.shsw_in2` = t2885 & 1
     }
     == vpu_defs_pkg.VPU_TRANS_LOG_FMA1 {
-      const t2901 = ((vpu_defs_pkg.N & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.Y & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
-      `id_bypass_force_ctrl.shsw_in1` = (t2901 >> 1) & 1
-      `id_bypass_force_ctrl.shsw_in2` = t2901 & 1
-      `id_bypass_force_ctrl.txfma_in0` = (t2901 >> 4) & 1
-      `id_bypass_force_ctrl.txfma_in1` = (t2901 >> 3) & 1
-      `id_bypass_force_ctrl.txfma_in2` = (t2901 >> 2) & 1
+      const t2900 = ((vpu_defs_pkg.N & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.Y & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
+      `id_bypass_force_ctrl.txfma_in0` = (t2900 >> 4) & 1
+      `id_bypass_force_ctrl.txfma_in1` = (t2900 >> 3) & 1
+      `id_bypass_force_ctrl.txfma_in2` = (t2900 >> 2) & 1
+      `id_bypass_force_ctrl.shsw_in1` = (t2900 >> 1) & 1
+      `id_bypass_force_ctrl.shsw_in2` = t2900 & 1
     }
     == vpu_defs_pkg.VPU_TRANS_LOG_FMA2 {
-      const t2916 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.Y & 1)
-      `id_bypass_force_ctrl.shsw_in1` = (t2916 >> 1) & 1
-      `id_bypass_force_ctrl.shsw_in2` = t2916 & 1
-      `id_bypass_force_ctrl.txfma_in0` = (t2916 >> 4) & 1
-      `id_bypass_force_ctrl.txfma_in1` = (t2916 >> 3) & 1
-      `id_bypass_force_ctrl.txfma_in2` = (t2916 >> 2) & 1
+      const t2915 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.Y & 1)
+      `id_bypass_force_ctrl.txfma_in0` = (t2915 >> 4) & 1
+      `id_bypass_force_ctrl.txfma_in1` = (t2915 >> 3) & 1
+      `id_bypass_force_ctrl.txfma_in2` = (t2915 >> 2) & 1
+      `id_bypass_force_ctrl.shsw_in1` = (t2915 >> 1) & 1
+      `id_bypass_force_ctrl.shsw_in2` = t2915 & 1
     }
     == vpu_defs_pkg.VPU_TRANS_LOG_MUL {
-      const t2931 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.Y & 1) << 1) | (vpu_defs_pkg.N & 1)
-      `id_bypass_force_ctrl.shsw_in1` = (t2931 >> 1) & 1
-      `id_bypass_force_ctrl.shsw_in2` = t2931 & 1
-      `id_bypass_force_ctrl.txfma_in0` = (t2931 >> 4) & 1
-      `id_bypass_force_ctrl.txfma_in1` = (t2931 >> 3) & 1
-      `id_bypass_force_ctrl.txfma_in2` = (t2931 >> 2) & 1
+      const t2930 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.Y & 1) << 1) | (vpu_defs_pkg.N & 1)
+      `id_bypass_force_ctrl.txfma_in0` = (t2930 >> 4) & 1
+      `id_bypass_force_ctrl.txfma_in1` = (t2930 >> 3) & 1
+      `id_bypass_force_ctrl.txfma_in2` = (t2930 >> 2) & 1
+      `id_bypass_force_ctrl.shsw_in1` = (t2930 >> 1) & 1
+      `id_bypass_force_ctrl.shsw_in2` = t2930 & 1
     }
     == vpu_defs_pkg.VPU_TRANS_EXP_RR {
-      const t2946 = ((vpu_defs_pkg.N & 1) << 4) | ((vpu_defs_pkg.Y & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
-      `id_bypass_force_ctrl.shsw_in1` = (t2946 >> 1) & 1
-      `id_bypass_force_ctrl.shsw_in2` = t2946 & 1
-      `id_bypass_force_ctrl.txfma_in0` = (t2946 >> 4) & 1
-      `id_bypass_force_ctrl.txfma_in1` = (t2946 >> 3) & 1
-      `id_bypass_force_ctrl.txfma_in2` = (t2946 >> 2) & 1
+      const t2945 = ((vpu_defs_pkg.N & 1) << 4) | ((vpu_defs_pkg.Y & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
+      `id_bypass_force_ctrl.txfma_in0` = (t2945 >> 4) & 1
+      `id_bypass_force_ctrl.txfma_in1` = (t2945 >> 3) & 1
+      `id_bypass_force_ctrl.txfma_in2` = (t2945 >> 2) & 1
+      `id_bypass_force_ctrl.shsw_in1` = (t2945 >> 1) & 1
+      `id_bypass_force_ctrl.shsw_in2` = t2945 & 1
     }
     == vpu_defs_pkg.VPU_TRANS_EXP_FMA1 {
-      const t2961 = if (vpu_defs_pkg.N & 1) != 0 { 31 } else { 0 }
-      `id_bypass_force_ctrl.shsw_in1` = (t2961 >> 1) & 1
-      `id_bypass_force_ctrl.shsw_in2` = t2961 & 1
-      `id_bypass_force_ctrl.txfma_in0` = (t2961 >> 4) & 1
-      `id_bypass_force_ctrl.txfma_in1` = (t2961 >> 3) & 1
-      `id_bypass_force_ctrl.txfma_in2` = (t2961 >> 2) & 1
+      const t2960 = if (vpu_defs_pkg.N & 1) != 0 { 31 } else { 0 }
+      `id_bypass_force_ctrl.txfma_in0` = (t2960 >> 4) & 1
+      `id_bypass_force_ctrl.txfma_in1` = (t2960 >> 3) & 1
+      `id_bypass_force_ctrl.txfma_in2` = (t2960 >> 2) & 1
+      `id_bypass_force_ctrl.shsw_in1` = (t2960 >> 1) & 1
+      `id_bypass_force_ctrl.shsw_in2` = t2960 & 1
     }
     == vpu_defs_pkg.VPU_TRANS_EXP_FMA2 {
-      const t2976 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
-      `id_bypass_force_ctrl.shsw_in1` = (t2976 >> 1) & 1
-      `id_bypass_force_ctrl.shsw_in2` = t2976 & 1
-      `id_bypass_force_ctrl.txfma_in0` = (t2976 >> 4) & 1
-      `id_bypass_force_ctrl.txfma_in1` = (t2976 >> 3) & 1
-      `id_bypass_force_ctrl.txfma_in2` = (t2976 >> 2) & 1
+      const t2975 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
+      `id_bypass_force_ctrl.txfma_in0` = (t2975 >> 4) & 1
+      `id_bypass_force_ctrl.txfma_in1` = (t2975 >> 3) & 1
+      `id_bypass_force_ctrl.txfma_in2` = (t2975 >> 2) & 1
+      `id_bypass_force_ctrl.shsw_in1` = (t2975 >> 1) & 1
+      `id_bypass_force_ctrl.shsw_in2` = t2975 & 1
     }
     == vpu_defs_pkg.VPU_FCMD_NR2_FRCPFXP {
-      const t2991 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
-      `id_bypass_force_ctrl.shsw_in1` = (t2991 >> 1) & 1
-      `id_bypass_force_ctrl.shsw_in2` = t2991 & 1
-      `id_bypass_force_ctrl.txfma_in0` = (t2991 >> 4) & 1
-      `id_bypass_force_ctrl.txfma_in1` = (t2991 >> 3) & 1
-      `id_bypass_force_ctrl.txfma_in2` = (t2991 >> 2) & 1
+      const t2990 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
+      `id_bypass_force_ctrl.txfma_in0` = (t2990 >> 4) & 1
+      `id_bypass_force_ctrl.txfma_in1` = (t2990 >> 3) & 1
+      `id_bypass_force_ctrl.txfma_in2` = (t2990 >> 2) & 1
+      `id_bypass_force_ctrl.shsw_in1` = (t2990 >> 1) & 1
+      `id_bypass_force_ctrl.shsw_in2` = t2990 & 1
     }
     else {
-      const t3006 = if (vpu_defs_pkg.N & 1) != 0 { 31 } else { 0 }
-      `id_bypass_force_ctrl.shsw_in1` = (t3006 >> 1) & 1
-      `id_bypass_force_ctrl.shsw_in2` = t3006 & 1
-      `id_bypass_force_ctrl.txfma_in0` = (t3006 >> 4) & 1
-      `id_bypass_force_ctrl.txfma_in1` = (t3006 >> 3) & 1
-      `id_bypass_force_ctrl.txfma_in2` = (t3006 >> 2) & 1
+      const t3005 = if (vpu_defs_pkg.N & 1) != 0 { 31 } else { 0 }
+      `id_bypass_force_ctrl.txfma_in0` = (t3005 >> 4) & 1
+      `id_bypass_force_ctrl.txfma_in1` = (t3005 >> 3) & 1
+      `id_bypass_force_ctrl.txfma_in2` = (t3005 >> 2) & 1
+      `id_bypass_force_ctrl.shsw_in1` = (t3005 >> 1) & 1
+      `id_bypass_force_ctrl.shsw_in2` = t3005 & 1
     }
   }
   if EnableExtraTrans != 0 {
     match id_vpu_ctrl__w5#[121..=165]#[38..=44] {
       == vpu_defs_pkg.VPU_TRANS_RSQRT_FMA2 {
-        const t3029 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
-        `id_bypass_force_ctrl.shsw_in1` = (t3029 >> 1) & 1
-        `id_bypass_force_ctrl.shsw_in2` = t3029 & 1
-        `id_bypass_force_ctrl.txfma_in0` = (t3029 >> 4) & 1
-        `id_bypass_force_ctrl.txfma_in1` = (t3029 >> 3) & 1
-        `id_bypass_force_ctrl.txfma_in2` = (t3029 >> 2) & 1
+        const t3028 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
+        `id_bypass_force_ctrl.txfma_in0` = (t3028 >> 4) & 1
+        `id_bypass_force_ctrl.txfma_in1` = (t3028 >> 3) & 1
+        `id_bypass_force_ctrl.txfma_in2` = (t3028 >> 2) & 1
+        `id_bypass_force_ctrl.shsw_in1` = (t3028 >> 1) & 1
+        `id_bypass_force_ctrl.shsw_in2` = t3028 & 1
       }
       == vpu_defs_pkg.VPU_TRANS_SIN_TRANSFORM {
-        const t3044 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.Y & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
-        `id_bypass_force_ctrl.shsw_in1` = (t3044 >> 1) & 1
-        `id_bypass_force_ctrl.shsw_in2` = t3044 & 1
-        `id_bypass_force_ctrl.txfma_in0` = (t3044 >> 4) & 1
-        `id_bypass_force_ctrl.txfma_in1` = (t3044 >> 3) & 1
-        `id_bypass_force_ctrl.txfma_in2` = (t3044 >> 2) & 1
+        const t3043 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.Y & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
+        `id_bypass_force_ctrl.txfma_in0` = (t3043 >> 4) & 1
+        `id_bypass_force_ctrl.txfma_in1` = (t3043 >> 3) & 1
+        `id_bypass_force_ctrl.txfma_in2` = (t3043 >> 2) & 1
+        `id_bypass_force_ctrl.shsw_in1` = (t3043 >> 1) & 1
+        `id_bypass_force_ctrl.shsw_in2` = t3043 & 1
       }
       == vpu_defs_pkg.VPU_TRANS_SIN_RR {
-        const t3059 = ((vpu_defs_pkg.N & 1) << 4) | ((vpu_defs_pkg.Y & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
-        `id_bypass_force_ctrl.shsw_in1` = (t3059 >> 1) & 1
-        `id_bypass_force_ctrl.shsw_in2` = t3059 & 1
-        `id_bypass_force_ctrl.txfma_in0` = (t3059 >> 4) & 1
-        `id_bypass_force_ctrl.txfma_in1` = (t3059 >> 3) & 1
-        `id_bypass_force_ctrl.txfma_in2` = (t3059 >> 2) & 1
+        const t3058 = ((vpu_defs_pkg.N & 1) << 4) | ((vpu_defs_pkg.Y & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
+        `id_bypass_force_ctrl.txfma_in0` = (t3058 >> 4) & 1
+        `id_bypass_force_ctrl.txfma_in1` = (t3058 >> 3) & 1
+        `id_bypass_force_ctrl.txfma_in2` = (t3058 >> 2) & 1
+        `id_bypass_force_ctrl.shsw_in1` = (t3058 >> 1) & 1
+        `id_bypass_force_ctrl.shsw_in2` = t3058 & 1
       }
       == vpu_defs_pkg.VPU_TRANS_SIN_P2 {
-        const t3074 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
-        `id_bypass_force_ctrl.shsw_in1` = (t3074 >> 1) & 1
-        `id_bypass_force_ctrl.shsw_in2` = t3074 & 1
-        `id_bypass_force_ctrl.txfma_in0` = (t3074 >> 4) & 1
-        `id_bypass_force_ctrl.txfma_in1` = (t3074 >> 3) & 1
-        `id_bypass_force_ctrl.txfma_in2` = (t3074 >> 2) & 1
+        const t3073 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
+        `id_bypass_force_ctrl.txfma_in0` = (t3073 >> 4) & 1
+        `id_bypass_force_ctrl.txfma_in1` = (t3073 >> 3) & 1
+        `id_bypass_force_ctrl.txfma_in2` = (t3073 >> 2) & 1
+        `id_bypass_force_ctrl.shsw_in1` = (t3073 >> 1) & 1
+        `id_bypass_force_ctrl.shsw_in2` = t3073 & 1
       }
       == vpu_defs_pkg.VPU_TRANS_SIN_P3 {
-        const t3089 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
-        `id_bypass_force_ctrl.shsw_in1` = (t3089 >> 1) & 1
-        `id_bypass_force_ctrl.shsw_in2` = t3089 & 1
-        `id_bypass_force_ctrl.txfma_in0` = (t3089 >> 4) & 1
-        `id_bypass_force_ctrl.txfma_in1` = (t3089 >> 3) & 1
-        `id_bypass_force_ctrl.txfma_in2` = (t3089 >> 2) & 1
+        const t3088 = ((vpu_defs_pkg.Y & 1) << 4) | ((vpu_defs_pkg.N & 1) << 3) | ((vpu_defs_pkg.N & 1) << 2) | ((vpu_defs_pkg.N & 1) << 1) | (vpu_defs_pkg.N & 1)
+        `id_bypass_force_ctrl.txfma_in0` = (t3088 >> 4) & 1
+        `id_bypass_force_ctrl.txfma_in1` = (t3088 >> 3) & 1
+        `id_bypass_force_ctrl.txfma_in2` = (t3088 >> 2) & 1
+        `id_bypass_force_ctrl.shsw_in1` = (t3088 >> 1) & 1
+        `id_bypass_force_ctrl.shsw_in2` = t3088 & 1
       }
       else {
       }
     }
   }
   if id_core_valid_int != 0 {
-    ex_core_inst = id_core_inst_int__w1
-    ex_ml_mask = id_ml_mask
     ex_ra1 = id_ra1
     ex_ra2 = id_ra2
     ex_ra3 = id_ra3
+    ex_core_inst = id_core_inst_int__w1
+    ex_ml_mask = id_ml_mask
+    ex_tensorfma_en = ml.id_inst_fma_en
     ex_tena_regfile_bypass_en = id_tena_regfile_bypass_en__w1
     ex_tenb_regfile_bypass_en = id_tenb_regfile_bypass_en__w1
-    ex_tensorfma_en = ml.id_inst_fma_en
   }
   if reset != 0 {
-    ex_bypass_force_ctrl_q = 0
     ex_vpu_ctrl = 0
+    ex_bypass_force_ctrl_q = 0
   } elif (id_core_valid_int != 0) and (id_use_prev_sigs == 0) {
-    ex_bypass_force_ctrl_q = (`id_bypass_force_ctrl.txfma_in0` << 4) | (`id_bypass_force_ctrl.txfma_in1` << 3) | (`id_bypass_force_ctrl.txfma_in2` << 2) | (`id_bypass_force_ctrl.shsw_in1` << 1) | `id_bypass_force_ctrl.shsw_in2`
     ex_vpu_ctrl = id_vpu_ctrl__w5
+    ex_bypass_force_ctrl_q = (`id_bypass_force_ctrl.txfma_in0` << 4) | (`id_bypass_force_ctrl.txfma_in1` << 3) | (`id_bypass_force_ctrl.txfma_in2` << 2) | (`id_bypass_force_ctrl.shsw_in1` << 1) | `id_bypass_force_ctrl.shsw_in2`
   }
   ex_regfile_thread_id = id_regfile_thread_id__w1
   ex_mova_mx = unsigned((id_core_valid_int != 0) and (id_vpu_ctrl__w5#[121..=165]#[38..=44] == vpu_defs_pkg.VPU_FCMD_MOVA_M_X))
-  const `ex_req__bpo.use_prev_sigs__w1` = ex_use_prev_sigs
-  `ex_req__bpo.imm` = ex_vpu_ctrl#[101..=120]
-  `ex_req__bpo.in1` = ex_vpu_ctrl#[64..=95]
-  `ex_req__bpo.in2` = ex_vpu_ctrl#[32..=63]
-  `ex_req__bpo.in3` = ex_vpu_ctrl#[0..=31]
-  `ex_req__bpo.rm` = ex_vpu_ctrl#[98..=100]
-  `ex_req__bpo.sigs.add` = (ex_vpu_ctrl >> 0x7d) & 1
+  `ex_req__bpo.use_prev_sigs` = (ex_vpu_ctrl >> 0xa6) & 1
   `ex_req__bpo.sigs.cmd` = ex_vpu_ctrl#[159..=165]
+  `ex_req__bpo.sigs.txfma` = (ex_vpu_ctrl >> 0x9e) & 1
+  `ex_req__bpo.sigs.shsw` = (ex_vpu_ctrl >> 0x9d) & 1
+  `ex_req__bpo.sigs.rom` = (ex_vpu_ctrl >> 0x9c) & 1
+  `ex_req__bpo.sigs.scatter` = (ex_vpu_ctrl >> 0x9b) & 1
   `ex_req__bpo.sigs.cvt` = (ex_vpu_ctrl >> 0x9a) & 1
-  `ex_req__bpo.sigs.dtype` = ex_vpu_ctrl#[130..=133]
-  `ex_req__bpo.sigs.fma` = (ex_vpu_ctrl >> 0x7f) & 1
-  `ex_req__bpo.sigs.fms` = (ex_vpu_ctrl >> 0x7e) & 1
-  `ex_req__bpo.sigs.fromint` = (ex_vpu_ctrl >> 0x81) & 1
-  `ex_req__bpo.sigs.fromintf` = (ex_vpu_ctrl >> 0x97) & 1
+  `ex_req__bpo.sigs.trans` = (ex_vpu_ctrl >> 0x99) & 1
   `ex_req__bpo.sigs.gcvt` = (ex_vpu_ctrl >> 0x98) & 1
+  `ex_req__bpo.sigs.fromintf` = (ex_vpu_ctrl >> 0x97) & 1
+  `ex_req__bpo.sigs.tointm` = (ex_vpu_ctrl >> 0x96) & 1
+  `ex_req__bpo.sigs.tointf` = (ex_vpu_ctrl >> 0x95) & 1
+  `ex_req__bpo.sigs.maskop` = (ex_vpu_ctrl >> 0x94) & 1
   `ex_req__bpo.sigs.ldst` = (ex_vpu_ctrl >> 0x93) & 1
   `ex_req__bpo.sigs.m0ren` = (ex_vpu_ctrl >> 0x92) & 1
   `ex_req__bpo.sigs.mallren` = (ex_vpu_ctrl >> 0x91) & 1
-  `ex_req__bpo.sigs.maskop` = (ex_vpu_ctrl >> 0x94) & 1
   `ex_req__bpo.sigs.mren1` = (ex_vpu_ctrl >> 0x90) & 1
   `ex_req__bpo.sigs.mren2` = (ex_vpu_ctrl >> 0x8f) & 1
-  `ex_req__bpo.sigs.mul` = (ex_vpu_ctrl >> 0x7b) & 1
+  `ex_req__bpo.sigs.wen` = (ex_vpu_ctrl >> 0x8e) & 1
   `ex_req__bpo.sigs.ren1` = (ex_vpu_ctrl >> 0x8d) & 1
   `ex_req__bpo.sigs.ren2` = (ex_vpu_ctrl >> 0x8c) & 1
   `ex_req__bpo.sigs.ren3` = (ex_vpu_ctrl >> 0x8b) & 1
   `ex_req__bpo.sigs.rend` = (ex_vpu_ctrl >> 0x8a) & 1
-  `ex_req__bpo.sigs.rom` = (ex_vpu_ctrl >> 0x9c) & 1
-  `ex_req__bpo.sigs.round` = (ex_vpu_ctrl >> 0x7a) & 1
-  `ex_req__bpo.sigs.scatter` = (ex_vpu_ctrl >> 0x9b) & 1
-  `ex_req__bpo.sigs.shsw` = (ex_vpu_ctrl >> 0x9d) & 1
-  `ex_req__bpo.sigs.sub` = (ex_vpu_ctrl >> 0x7c) & 1
   `ex_req__bpo.sigs.swap12` = (ex_vpu_ctrl >> 0x89) & 1
-  `ex_req__bpo.sigs.swap13` = (ex_vpu_ctrl >> 0x87) & 1
   `ex_req__bpo.sigs.swap23` = (ex_vpu_ctrl >> 0x88) & 1
-  `ex_req__bpo.sigs.toint` = (ex_vpu_ctrl >> 0x80) & 1
-  `ex_req__bpo.sigs.tointf` = (ex_vpu_ctrl >> 0x95) & 1
-  `ex_req__bpo.sigs.tointm` = (ex_vpu_ctrl >> 0x96) & 1
-  `ex_req__bpo.sigs.trans` = (ex_vpu_ctrl >> 0x99) & 1
-  `ex_req__bpo.sigs.txfma` = (ex_vpu_ctrl >> 0x9e) & 1
+  `ex_req__bpo.sigs.swap13` = (ex_vpu_ctrl >> 0x87) & 1
   `ex_req__bpo.sigs.vector` = (ex_vpu_ctrl >> 0x86) & 1
-  `ex_req__bpo.sigs.wen` = (ex_vpu_ctrl >> 0x8e) & 1
+  `ex_req__bpo.sigs.dtype` = ex_vpu_ctrl#[130..=133]
+  `ex_req__bpo.sigs.fromint` = (ex_vpu_ctrl >> 0x81) & 1
+  `ex_req__bpo.sigs.toint` = (ex_vpu_ctrl >> 0x80) & 1
+  `ex_req__bpo.sigs.fma` = (ex_vpu_ctrl >> 0x7f) & 1
+  `ex_req__bpo.sigs.fms` = (ex_vpu_ctrl >> 0x7e) & 1
+  `ex_req__bpo.sigs.add` = (ex_vpu_ctrl >> 0x7d) & 1
+  `ex_req__bpo.sigs.sub` = (ex_vpu_ctrl >> 0x7c) & 1
+  `ex_req__bpo.sigs.mul` = (ex_vpu_ctrl >> 0x7b) & 1
+  `ex_req__bpo.sigs.round` = (ex_vpu_ctrl >> 0x7a) & 1
   `ex_req__bpo.sigs.wflags` = (ex_vpu_ctrl >> 0x79) & 1
+  `ex_req__bpo.imm` = ex_vpu_ctrl#[101..=120]
+  `ex_req__bpo.rm` = ex_vpu_ctrl#[98..=100]
   `ex_req__bpo.typ` = ex_vpu_ctrl#[96..=97]
-  `ex_req__bpo.use_prev_sigs` = (ex_vpu_ctrl >> 0xa6) & 1
+  `ex_req__bpo.in1` = ex_vpu_ctrl#[64..=95]
+  `ex_req__bpo.in2` = ex_vpu_ctrl#[32..=63]
+  `ex_req__bpo.in3` = ex_vpu_ctrl#[0..=31]
+  const `ex_req__bpo.use_prev_sigs__w1` = ex_use_prev_sigs
   if ((ex_vpu_ctrl#[121..=165] >> 8) & 1) != 0 {
     `ex_req__bpo.sigs.ren2` = (ex_vpu_ctrl#[121..=165] >> 16) & 1
     `ex_req__bpo.sigs.ren3` = (ex_vpu_ctrl#[121..=165] >> 14) & 1
@@ -1660,109 +1798,125 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   const ex_ctrl_valid_qual__w1 = unsigned((ex_ctrl_valid != 0) and ((`ex_req__bpo.sigs.vector` == 0) or (`ex_req__bpo.sigs.maskop` != 0) or (ex_ml_inst_val != 0) or (`ex_req__bpo.sigs.cmd` == vpu_defs_pkg.VPU_FCMD_MVZ_FX) or (`ex_req__bpo.sigs.cmd` == vpu_defs_pkg.VPU_FCMD_MVS_FX) or (`ex_req__bpo.sigs.cmd` == vpu_defs_pkg.VPU_FCMD_FCMOVM) or ((`ex_req__bpo.sigs.vector` != 0) and (((unsigned(ex_mask_rf0 != 0) | `ex_req__bpo.sigs.trans`) & 1) != 0))))
   mut _mux_169:u3 = if `ex_req__bpo.sigs.vector` != 0 { ex_core_inst#[20..=22] } else { 0 }
   mut _rep_173:u8 = if (unsigned((`ex_req__bpo.sigs.cmd` == vpu_defs_pkg.VPU_FCMD_MADD) and (ex_tensorfma_en != 0)) & 1) != 0 { 0xff } else { 0 }
-  const ex_fma_gate_mask__w1 = ex_tensor_zero_mask__w1 & _rep_173
+  const t3258 = ex_tensor_zero_mask__w1 & _rep_173
+  const t3259 = t3258
+  const ex_fma_gate_mask__w1 = t3259
   {
   }
   mut _mux_175:u8 = if ex_ml_inst_val != 0 { ex_ml_mask } else { 0xff }
   mut _rep_176:u8 = if (ex_txfma_valid_all & 1) != 0 { 0xff } else { 0 }
-  const ex_txfma_valid__w1 = (_rep_176 & (~ex_fma_gate_mask__w1)#[0..=7]) & _mux_175
-  mut _mux_178:u8 = if ex_txfma_valid_all != 0 { (~ex_fma_gate_mask__w1)#[0..=7] & ex_ml_mask } else { ex_ml_mask }
-  const t3381 = (`ex_req__bpo.use_prev_sigs__w1` << 0xa6) | (`ex_req__bpo.sigs.cmd` << 0x9f) | (`ex_req__bpo.sigs.txfma` << 0x9e) | (`ex_req__bpo.sigs.shsw` << 0x9d) | (`ex_req__bpo.sigs.rom` << 0x9c) | (`ex_req__bpo.sigs.scatter` << 0x9b) | (`ex_req__bpo.sigs.cvt` << 0x9a) | (`ex_req__bpo.sigs.trans` << 0x99) | (`ex_req__bpo.sigs.gcvt` << 0x98) | (`ex_req__bpo.sigs.fromintf` << 0x97) | (`ex_req__bpo.sigs.tointm` << 0x96) | (`ex_req__bpo.sigs.tointf` << 0x95) | (`ex_req__bpo.sigs.maskop` << 0x94) | (`ex_req__bpo.sigs.ldst` << 0x93) | (`ex_req__bpo.sigs.m0ren` << 0x92) | (`ex_req__bpo.sigs.mallren` << 0x91) | (`ex_req__bpo.sigs.mren1` << 0x90) | (`ex_req__bpo.sigs.mren2` << 0x8f) | (`ex_req__bpo.sigs.wen` << 0x8e) | (`ex_req__bpo.sigs.ren1` << 0x8d) | (`ex_req__bpo.sigs.ren2` << 0x8c) | (`ex_req__bpo.sigs.ren3` << 0x8b) | (`ex_req__bpo.sigs.rend` << 0x8a) | (`ex_req__bpo.sigs.swap12` << 0x89) | (`ex_req__bpo.sigs.swap23` << 0x88) | (`ex_req__bpo.sigs.swap13` << 0x87) | (`ex_req__bpo.sigs.vector` << 0x86) | (`ex_req__bpo.sigs.dtype` << 0x82) | (`ex_req__bpo.sigs.fromint` << 0x81) | (`ex_req__bpo.sigs.toint` << 0x80) | (`ex_req__bpo.sigs.fma` << 0x7f) | (`ex_req__bpo.sigs.fms` << 0x7e)
-  const t3384 = t3381 | (`ex_req__bpo.sigs.add` << 0x7d)
-  const t3387 = t3384 | (`ex_req__bpo.sigs.sub` << 0x7c)
-  const t3390 = t3387 | (`ex_req__bpo.sigs.mul` << 0x7b)
-  const t3393 = t3390 | (`ex_req__bpo.sigs.round` << 0x7a)
-  const t3396 = t3393 | (`ex_req__bpo.sigs.wflags` << 0x79)
-  const t3399 = t3396 | (`ex_req__bpo.imm` << 0x65)
-  const t3402 = t3399 | (`ex_req__bpo.rm` << 0x62)
-  const t3405 = t3402 | (`ex_req__bpo.typ` << 0x60)
-  const t3408 = t3405 | (`ex_req__bpo.in1` << 0x40)
-  const t3411 = t3408 | (`ex_req__bpo.in2` << 32)
-  const t3413 = t3411 | `ex_req__bpo.in3`
-  const t3414 = t3413#[121..=165]
-  const t3416 = t3414 != f2_req#[121..=165]
-  const t3417 = (ex_tensorfma_en != 0) and t3416
-  const t3418 = (f0_core_ctrl.tensorfma_start != 0) or t3417
-  mut ex_txfma_valid_all_en:u1 = if t3418 { 0 } else { f2_txfma_valid_all_en }
-  const t3421 = (ex_tensorfma_en != 0) and (ex_txfma_valid__w1 == 0xff)
-  if t3421 {
+  const t3267 = ~ex_fma_gate_mask__w1
+  const t3268 = t3267#[0..=7]
+  const t3269 = _rep_176 & t3268
+  const t3270 = t3269
+  const t3271 = t3270 & _mux_175
+  const t3272 = t3271
+  const ex_txfma_valid__w1 = t3272
+  const t3278 = ~ex_fma_gate_mask__w1
+  const t3279 = t3278#[0..=7]
+  const t3280 = t3279 & ex_ml_mask
+  const t3281 = t3280
+  mut _mux_178:u8 = if ex_txfma_valid_all != 0 { t3281 } else { ex_ml_mask }
+  mut ex_txfma_valid_all_en = 0ub?
+  const t3380 = (`ex_req__bpo.use_prev_sigs__w1` << 0xa6) | (`ex_req__bpo.sigs.cmd` << 0x9f) | (`ex_req__bpo.sigs.txfma` << 0x9e) | (`ex_req__bpo.sigs.shsw` << 0x9d) | (`ex_req__bpo.sigs.rom` << 0x9c) | (`ex_req__bpo.sigs.scatter` << 0x9b) | (`ex_req__bpo.sigs.cvt` << 0x9a) | (`ex_req__bpo.sigs.trans` << 0x99) | (`ex_req__bpo.sigs.gcvt` << 0x98) | (`ex_req__bpo.sigs.fromintf` << 0x97) | (`ex_req__bpo.sigs.tointm` << 0x96) | (`ex_req__bpo.sigs.tointf` << 0x95) | (`ex_req__bpo.sigs.maskop` << 0x94) | (`ex_req__bpo.sigs.ldst` << 0x93) | (`ex_req__bpo.sigs.m0ren` << 0x92) | (`ex_req__bpo.sigs.mallren` << 0x91) | (`ex_req__bpo.sigs.mren1` << 0x90) | (`ex_req__bpo.sigs.mren2` << 0x8f) | (`ex_req__bpo.sigs.wen` << 0x8e) | (`ex_req__bpo.sigs.ren1` << 0x8d) | (`ex_req__bpo.sigs.ren2` << 0x8c) | (`ex_req__bpo.sigs.ren3` << 0x8b) | (`ex_req__bpo.sigs.rend` << 0x8a) | (`ex_req__bpo.sigs.swap12` << 0x89) | (`ex_req__bpo.sigs.swap23` << 0x88) | (`ex_req__bpo.sigs.swap13` << 0x87) | (`ex_req__bpo.sigs.vector` << 0x86) | (`ex_req__bpo.sigs.dtype` << 0x82) | (`ex_req__bpo.sigs.fromint` << 0x81) | (`ex_req__bpo.sigs.toint` << 0x80) | (`ex_req__bpo.sigs.fma` << 0x7f) | (`ex_req__bpo.sigs.fms` << 0x7e)
+  const t3383 = t3380 | (`ex_req__bpo.sigs.add` << 0x7d)
+  const t3386 = t3383 | (`ex_req__bpo.sigs.sub` << 0x7c)
+  const t3389 = t3386 | (`ex_req__bpo.sigs.mul` << 0x7b)
+  const t3392 = t3389 | (`ex_req__bpo.sigs.round` << 0x7a)
+  const t3395 = t3392 | (`ex_req__bpo.sigs.wflags` << 0x79)
+  const t3398 = t3395 | (`ex_req__bpo.imm` << 0x65)
+  const t3401 = t3398 | (`ex_req__bpo.rm` << 0x62)
+  const t3404 = t3401 | (`ex_req__bpo.typ` << 0x60)
+  const t3407 = t3404 | (`ex_req__bpo.in1` << 0x40)
+  const t3410 = t3407 | (`ex_req__bpo.in2` << 32)
+  const t3412 = t3410 | `ex_req__bpo.in3`
+  const t3413 = t3412#[121..=165]
+  const t3415 = t3413 != f2_req#[121..=165]
+  const t3416 = (ex_tensorfma_en != 0) and t3415
+  const t3417 = (f0_core_ctrl.tensorfma_start != 0) or t3416
+  ex_txfma_valid_all_en = if t3417 { 0 } else { f2_txfma_valid_all_en }
+  const t3419 = ex_txfma_valid__w1 == 0xff
+  const t3420 = (ex_tensorfma_en != 0) and t3419
+  if t3420 {
     ex_txfma_valid_all_en = 1
   }
-  const t3516 = (`ex_req__bpo.use_prev_sigs__w1` << 0xa6) | (`ex_req__bpo.sigs.cmd` << 0x9f) | (`ex_req__bpo.sigs.txfma` << 0x9e) | (`ex_req__bpo.sigs.shsw` << 0x9d) | (`ex_req__bpo.sigs.rom` << 0x9c) | (`ex_req__bpo.sigs.scatter` << 0x9b) | (`ex_req__bpo.sigs.cvt` << 0x9a) | (`ex_req__bpo.sigs.trans` << 0x99) | (`ex_req__bpo.sigs.gcvt` << 0x98) | (`ex_req__bpo.sigs.fromintf` << 0x97) | (`ex_req__bpo.sigs.tointm` << 0x96) | (`ex_req__bpo.sigs.tointf` << 0x95) | (`ex_req__bpo.sigs.maskop` << 0x94) | (`ex_req__bpo.sigs.ldst` << 0x93) | (`ex_req__bpo.sigs.m0ren` << 0x92) | (`ex_req__bpo.sigs.mallren` << 0x91) | (`ex_req__bpo.sigs.mren1` << 0x90) | (`ex_req__bpo.sigs.mren2` << 0x8f) | (`ex_req__bpo.sigs.wen` << 0x8e) | (`ex_req__bpo.sigs.ren1` << 0x8d) | (`ex_req__bpo.sigs.ren2` << 0x8c) | (`ex_req__bpo.sigs.ren3` << 0x8b) | (`ex_req__bpo.sigs.rend` << 0x8a) | (`ex_req__bpo.sigs.swap12` << 0x89) | (`ex_req__bpo.sigs.swap23` << 0x88) | (`ex_req__bpo.sigs.swap13` << 0x87) | (`ex_req__bpo.sigs.vector` << 0x86) | (`ex_req__bpo.sigs.dtype` << 0x82) | (`ex_req__bpo.sigs.fromint` << 0x81) | (`ex_req__bpo.sigs.toint` << 0x80) | (`ex_req__bpo.sigs.fma` << 0x7f) | (`ex_req__bpo.sigs.fms` << 0x7e)
-  const t3519 = t3516 | (`ex_req__bpo.sigs.add` << 0x7d)
-  const t3522 = t3519 | (`ex_req__bpo.sigs.sub` << 0x7c)
-  const t3525 = t3522 | (`ex_req__bpo.sigs.mul` << 0x7b)
-  const t3528 = t3525 | (`ex_req__bpo.sigs.round` << 0x7a)
-  const t3531 = t3528 | (`ex_req__bpo.sigs.wflags` << 0x79)
-  const t3534 = t3531 | (`ex_req__bpo.imm` << 0x65)
-  const t3537 = t3534 | (`ex_req__bpo.rm` << 0x62)
-  const t3540 = t3537 | (`ex_req__bpo.typ` << 0x60)
-  const t3543 = t3540 | (`ex_req__bpo.in1` << 0x40)
-  const t3546 = t3543 | (`ex_req__bpo.in2` << 32)
-  const t3548 = t3546 | `ex_req__bpo.in3`
-  const t3549 = t3548#[121..=165]
-  const t3551 = t3549 == f2_req#[121..=165]
-  ex_use_prev_sigs = ex_tensorfma_en & unsigned(t3551) & 1 & f2_txfma_valid_all_en & 1
+  const t3515 = (`ex_req__bpo.use_prev_sigs__w1` << 0xa6) | (`ex_req__bpo.sigs.cmd` << 0x9f) | (`ex_req__bpo.sigs.txfma` << 0x9e) | (`ex_req__bpo.sigs.shsw` << 0x9d) | (`ex_req__bpo.sigs.rom` << 0x9c) | (`ex_req__bpo.sigs.scatter` << 0x9b) | (`ex_req__bpo.sigs.cvt` << 0x9a) | (`ex_req__bpo.sigs.trans` << 0x99) | (`ex_req__bpo.sigs.gcvt` << 0x98) | (`ex_req__bpo.sigs.fromintf` << 0x97) | (`ex_req__bpo.sigs.tointm` << 0x96) | (`ex_req__bpo.sigs.tointf` << 0x95) | (`ex_req__bpo.sigs.maskop` << 0x94) | (`ex_req__bpo.sigs.ldst` << 0x93) | (`ex_req__bpo.sigs.m0ren` << 0x92) | (`ex_req__bpo.sigs.mallren` << 0x91) | (`ex_req__bpo.sigs.mren1` << 0x90) | (`ex_req__bpo.sigs.mren2` << 0x8f) | (`ex_req__bpo.sigs.wen` << 0x8e) | (`ex_req__bpo.sigs.ren1` << 0x8d) | (`ex_req__bpo.sigs.ren2` << 0x8c) | (`ex_req__bpo.sigs.ren3` << 0x8b) | (`ex_req__bpo.sigs.rend` << 0x8a) | (`ex_req__bpo.sigs.swap12` << 0x89) | (`ex_req__bpo.sigs.swap23` << 0x88) | (`ex_req__bpo.sigs.swap13` << 0x87) | (`ex_req__bpo.sigs.vector` << 0x86) | (`ex_req__bpo.sigs.dtype` << 0x82) | (`ex_req__bpo.sigs.fromint` << 0x81) | (`ex_req__bpo.sigs.toint` << 0x80) | (`ex_req__bpo.sigs.fma` << 0x7f) | (`ex_req__bpo.sigs.fms` << 0x7e)
+  const t3518 = t3515 | (`ex_req__bpo.sigs.add` << 0x7d)
+  const t3521 = t3518 | (`ex_req__bpo.sigs.sub` << 0x7c)
+  const t3524 = t3521 | (`ex_req__bpo.sigs.mul` << 0x7b)
+  const t3527 = t3524 | (`ex_req__bpo.sigs.round` << 0x7a)
+  const t3530 = t3527 | (`ex_req__bpo.sigs.wflags` << 0x79)
+  const t3533 = t3530 | (`ex_req__bpo.imm` << 0x65)
+  const t3536 = t3533 | (`ex_req__bpo.rm` << 0x62)
+  const t3539 = t3536 | (`ex_req__bpo.typ` << 0x60)
+  const t3542 = t3539 | (`ex_req__bpo.in1` << 0x40)
+  const t3545 = t3542 | (`ex_req__bpo.in2` << 32)
+  const t3547 = t3545 | `ex_req__bpo.in3`
+  const t3548 = t3547#[121..=165]
+  const t3550 = t3548 == f2_req#[121..=165]
+  ex_use_prev_sigs = ex_tensorfma_en & unsigned(t3550) & 1 & f2_txfma_valid_all_en & 1
   const ex_ctrl_valid_kill__w1 = unsigned((ex_ctrl_valid != 0) and (((((unsigned(ex_core_kill == 0) | ex_ml_inst_val) & 1) | `ex_req__bpo.sigs.trans`) & 1) != 0))
   mut _mux_185:u1 = if `ex_req__bpo.sigs.trans` != 0 { ex_trans_thread_id & 1 } else { ex_thread_id & 1 }
   ex_thread_id_int = _mux_185
   const ex_rom_valid__w1 = unsigned((ex_ctrl_valid_qual__w1 != 0) and (`ex_req__bpo.sigs.rom` != 0))
   ex_txfma_valid_all = unsigned((ex_ctrl_valid_qual__w1 != 0) and (`ex_req__bpo.sigs.txfma` != 0))
-  mut `ex_core_ctrl__bpo.illegal_rm` = unsigned((`ex_req__bpo.rm` >= 5) and (`ex_req__bpo.sigs.round` != 0))
-  mut `ex_core_ctrl__bpo.ps_mask` = ex_mask_rf0
   mut `ex_core_ctrl__bpo.tointm` = `ex_req__bpo.sigs.tointm` & unsigned(`ex_req__bpo.sigs.shsw` == 0) & 1
+  mut `ex_core_ctrl__bpo.ps_mask` = ex_mask_rf0
+  mut `ex_core_ctrl__bpo.illegal_rm` = unsigned((`ex_req__bpo.rm` >= 5) and (`ex_req__bpo.sigs.round` != 0))
   if reset != 0 {
-    f2_ctrl_killed_prev = 0
-    f2_ctrl_valid = 0
     f2_ctrl_valid_qual = 0
+    f2_ctrl_valid = 0
+    f2_ctrl_killed_prev = 0
     f2_txfma_valid_all_en = 0
     f2_wen = 0
   } else {
-    f2_ctrl_killed_prev = unsigned((ex_ctrl_valid != 0) and (ex_core_kill != 0) and (ex_ml_inst_val == 0) and (`ex_req__bpo.sigs.trans` == 0))
-    f2_ctrl_valid = ex_ctrl_valid_kill__w1
     f2_ctrl_valid_qual = unsigned((ex_ctrl_valid_qual__w1 != 0) and ((ex_core_kill == 0) or (ex_ml_inst_val != 0) or (`ex_req__bpo.sigs.trans` != 0)))
+    f2_ctrl_valid = ex_ctrl_valid_kill__w1
+    f2_ctrl_killed_prev = unsigned((ex_ctrl_valid != 0) and (ex_core_kill != 0) and (ex_ml_inst_val == 0) and (`ex_req__bpo.sigs.trans` == 0))
     f2_txfma_valid_all_en = ex_txfma_valid_all_en
     f2_wen = unsigned(((ex_ctrl_valid_qual__w1 & `ex_req__bpo.sigs.wen` & 1 & unsigned(`ex_req__bpo.sigs.ldst` == 0) & 1) != 0) and ((ex_core_kill == 0) or (ex_ml_inst_val != 0) or (`ex_req__bpo.sigs.trans` != 0)))
   }
   if ex_ctrl_valid_kill__w1 != 0 {
-    f2_ml_mask = _mux_178
     f2_regfile_waddr = ex_core_inst#[7..=11]
-    f2_lane_idx = _mux_169
-    f2_ml_use_prev_sigs = ex_use_prev_sigs
+    f2_ml_mask = _mux_178
     f2_thread_id = unsigned((ex_thread_id_int != 0) and (ex_ml_inst_val == 0))
+    f2_ml_use_prev_sigs = ex_use_prev_sigs
+    f2_lane_idx = _mux_169
   }
   if reset != 0 {
     f2_req = 0
   } elif (ex_ctrl_valid_kill__w1 != 0) and (ex_use_prev_sigs == 0) {
-    const t3737 = (`ex_req__bpo.use_prev_sigs__w1` << 0xa6) | (`ex_req__bpo.sigs.cmd` << 0x9f) | (`ex_req__bpo.sigs.txfma` << 0x9e) | (`ex_req__bpo.sigs.shsw` << 0x9d) | (`ex_req__bpo.sigs.rom` << 0x9c) | (`ex_req__bpo.sigs.scatter` << 0x9b) | (`ex_req__bpo.sigs.cvt` << 0x9a) | (`ex_req__bpo.sigs.trans` << 0x99) | (`ex_req__bpo.sigs.gcvt` << 0x98) | (`ex_req__bpo.sigs.fromintf` << 0x97) | (`ex_req__bpo.sigs.tointm` << 0x96) | (`ex_req__bpo.sigs.tointf` << 0x95) | (`ex_req__bpo.sigs.maskop` << 0x94) | (`ex_req__bpo.sigs.ldst` << 0x93) | (`ex_req__bpo.sigs.m0ren` << 0x92) | (`ex_req__bpo.sigs.mallren` << 0x91) | (`ex_req__bpo.sigs.mren1` << 0x90) | (`ex_req__bpo.sigs.mren2` << 0x8f) | (`ex_req__bpo.sigs.wen` << 0x8e) | (`ex_req__bpo.sigs.ren1` << 0x8d) | (`ex_req__bpo.sigs.ren2` << 0x8c) | (`ex_req__bpo.sigs.ren3` << 0x8b) | (`ex_req__bpo.sigs.rend` << 0x8a) | (`ex_req__bpo.sigs.swap12` << 0x89) | (`ex_req__bpo.sigs.swap23` << 0x88) | (`ex_req__bpo.sigs.swap13` << 0x87) | (`ex_req__bpo.sigs.vector` << 0x86) | (`ex_req__bpo.sigs.dtype` << 0x82) | (`ex_req__bpo.sigs.fromint` << 0x81) | (`ex_req__bpo.sigs.toint` << 0x80) | (`ex_req__bpo.sigs.fma` << 0x7f) | (`ex_req__bpo.sigs.fms` << 0x7e)
-    const t3740 = t3737 | (`ex_req__bpo.sigs.add` << 0x7d)
-    const t3743 = t3740 | (`ex_req__bpo.sigs.sub` << 0x7c)
-    const t3746 = t3743 | (`ex_req__bpo.sigs.mul` << 0x7b)
-    const t3749 = t3746 | (`ex_req__bpo.sigs.round` << 0x7a)
-    const t3752 = t3749 | (`ex_req__bpo.sigs.wflags` << 0x79)
-    const t3755 = t3752 | (`ex_req__bpo.imm` << 0x65)
-    const t3758 = t3755 | (`ex_req__bpo.rm` << 0x62)
-    const t3761 = t3758 | (`ex_req__bpo.typ` << 0x60)
-    const t3764 = t3761 | (`ex_req__bpo.in1` << 0x40)
-    const t3767 = t3764 | (`ex_req__bpo.in2` << 32)
-    const t3769 = t3767 | `ex_req__bpo.in3`
-    f2_req = t3769
+    const t3736 = (`ex_req__bpo.use_prev_sigs__w1` << 0xa6) | (`ex_req__bpo.sigs.cmd` << 0x9f) | (`ex_req__bpo.sigs.txfma` << 0x9e) | (`ex_req__bpo.sigs.shsw` << 0x9d) | (`ex_req__bpo.sigs.rom` << 0x9c) | (`ex_req__bpo.sigs.scatter` << 0x9b) | (`ex_req__bpo.sigs.cvt` << 0x9a) | (`ex_req__bpo.sigs.trans` << 0x99) | (`ex_req__bpo.sigs.gcvt` << 0x98) | (`ex_req__bpo.sigs.fromintf` << 0x97) | (`ex_req__bpo.sigs.tointm` << 0x96) | (`ex_req__bpo.sigs.tointf` << 0x95) | (`ex_req__bpo.sigs.maskop` << 0x94) | (`ex_req__bpo.sigs.ldst` << 0x93) | (`ex_req__bpo.sigs.m0ren` << 0x92) | (`ex_req__bpo.sigs.mallren` << 0x91) | (`ex_req__bpo.sigs.mren1` << 0x90) | (`ex_req__bpo.sigs.mren2` << 0x8f) | (`ex_req__bpo.sigs.wen` << 0x8e) | (`ex_req__bpo.sigs.ren1` << 0x8d) | (`ex_req__bpo.sigs.ren2` << 0x8c) | (`ex_req__bpo.sigs.ren3` << 0x8b) | (`ex_req__bpo.sigs.rend` << 0x8a) | (`ex_req__bpo.sigs.swap12` << 0x89) | (`ex_req__bpo.sigs.swap23` << 0x88) | (`ex_req__bpo.sigs.swap13` << 0x87) | (`ex_req__bpo.sigs.vector` << 0x86) | (`ex_req__bpo.sigs.dtype` << 0x82) | (`ex_req__bpo.sigs.fromint` << 0x81) | (`ex_req__bpo.sigs.toint` << 0x80) | (`ex_req__bpo.sigs.fma` << 0x7f) | (`ex_req__bpo.sigs.fms` << 0x7e)
+    const t3739 = t3736 | (`ex_req__bpo.sigs.add` << 0x7d)
+    const t3742 = t3739 | (`ex_req__bpo.sigs.sub` << 0x7c)
+    const t3745 = t3742 | (`ex_req__bpo.sigs.mul` << 0x7b)
+    const t3748 = t3745 | (`ex_req__bpo.sigs.round` << 0x7a)
+    const t3751 = t3748 | (`ex_req__bpo.sigs.wflags` << 0x79)
+    const t3754 = t3751 | (`ex_req__bpo.imm` << 0x65)
+    const t3757 = t3754 | (`ex_req__bpo.rm` << 0x62)
+    const t3760 = t3757 | (`ex_req__bpo.typ` << 0x60)
+    const t3763 = t3760 | (`ex_req__bpo.in1` << 0x40)
+    const t3766 = t3763 | (`ex_req__bpo.in2` << 32)
+    const t3768 = t3766 | `ex_req__bpo.in3`
+    f2_req = t3768
   }
   if (ex_ctrl_valid_kill__w1 != 0) and (ex_use_prev_sigs == 0) and (((((unsigned(`ex_req__bpo.sigs.cmd` == vpu_defs_pkg.VPU_FCMD_MVZ_FX) | unsigned(`ex_req__bpo.sigs.cmd` == vpu_defs_pkg.VPU_FCMD_MVS_FX)) & 1) | `ex_req__bpo.sigs.ldst`) & 1 & ex_ctrl_valid_qual__w1 & 1) != 0) {
     f2_gsc_src = ex_core_gsc_src
     f2_store_data_lane = ex_store_data_lane__w8
   }
+  f6_thread_id_to_f7 = 0ub?
+  f6_regfile_wmask_to_f7 = 0sb?
   f6_regfile_wmask_to_f7 = f6_regfile_wmask
   f6_thread_id_to_f7 = f6_thread_id
   if f6_trans_wen_ctrl_en != 0 {
-    f6_regfile_wmask_to_f7 = f6_trans_wmask
     f6_thread_id_to_f7 = f6_trans_thread_id
+    f6_regfile_wmask_to_f7 = f6_trans_wmask
   }
   f7_regfile_wmask = f6_regfile_wmask_to_f7
   f7_thread_id = f6_thread_id_to_f7
   if f6_ctrl_valid_qual != 0 {
-    f7_lane_idx = f6_lane_idx
     f7_ml_use_prev_sigs = f6_ml_use_prev_sigs
+    f7_lane_idx = f6_lane_idx
   }
   if f6_wen != 0 {
     f7_regfile_waddr = f6_regfile_waddr
@@ -1779,21 +1933,10 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
     `wb_core_ctrl__bpo.toint_data` = f8_toint_mask_rf
   }
   mut _mux_198:u1 = if f8_trans_wen_ctrl_en != 0 { f8_trans_fcsr_en & 1 } else { unsigned((f8_ctrl_valid_qual != 0) and ((f8_ctrl_sigs & 1) != 0)) & 1 }
-  const `io_events__bpo.e0__w1` = ml.io_events_wait_tenb
-  const t3838 = ex_tima_valid__w16 != 0
-  mut `io_events__bpo.e0` = 0
-  mut `io_events__bpo.e1` = 0
-  mut `io_events__bpo.e10` = 0
-  mut `io_events__bpo.e2` = 0
-  mut `io_events__bpo.e3` = 0
-  mut `io_events__bpo.e4` = 0
-  mut `io_events__bpo.e5` = 0
-  mut `io_events__bpo.e6` = 0
-  mut `io_events__bpo.e7` = 0
-  mut `io_events__bpo.e8` = 0
-  mut `io_events__bpo.e9` = 0
   mut `wb_core_ctrl__bpo.fcsr_flags_valid` = _mux_198
-  const `io_events__bpo.e1__w1` = unsigned(t3838)
+  const `io_events__bpo.e0__w1` = ml.io_events_wait_tenb
+  const t3837 = ex_tima_valid__w16 != 0
+  const `io_events__bpo.e1__w1` = unsigned(t3837)
   const `io_events__bpo.e2__w1` = unsigned((f8_ctrl_valid_qual != 0) and (f8_ctrl_sigs#[9..=12] == vpu_defs_pkg.VPU_DTYPE_F16_F32) and (((f8_ctrl_sigs >> 37) & 1) != 0))
   const `io_events__bpo.e3__w1` = unsigned((f8_ctrl_valid_qual != 0) and (((f8_ctrl_sigs >> 37) & 1) != 0) and (((f8_ctrl_sigs >> 32) & 1) == 0))
   const `io_events__bpo.e4__w1` = unsigned((f8_ctrl_valid_qual != 0) and (f8_ctrl_sigs#[9..=12] == vpu_defs_pkg.VPU_DTYPE_INT) and (((f8_ctrl_sigs >> 37) & 1) != 0))
@@ -1820,7 +1963,8 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   f2_mask_rf0 = mask.f2_mask_rf0_o
   f8_toint_mask_rf = mask.f8_toint_data_o
   f8_regmask_store = mask.f8_regmask_store_o
-  id_scoreboard_mask_valid = (mask["wb_mask_valid_o.e3"] << 3) | (mask["wb_mask_valid_o.e2"] << 2) | (mask["wb_mask_valid_o.e1"] << 1) | mask["wb_mask_valid_o.e0"]
+  id_scoreboard_mask_valid = (mask.wb_mask_valid_o.e3 << 3) | (mask.wb_mask_valid_o.e2 << 2) | (mask.wb_mask_valid_o.e1 << 1) | mask.wb_mask_valid_o.e0
+  id_scoreboard_mask_dest = mask.wb_mask_dest_o
   mut vpu_dbg_match__w2 = 0
   vpu_dbg_match__w2#[0] = `io_events__bpo.e0__w1` & 1
   mut vpu_dbg_match__w3 = vpu_dbg_match__w2
@@ -1900,20 +2044,20 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   mut vpu_dbg_data__w3 = vpu_dbg_data__w2
   vpu_dbg_data__w3#[238..=255] = 0
   mut vpu_dbg_data__w4 = vpu_dbg_data__w3
-  vpu_dbg_data__w4#[128..=237] = (ex_bypass_force_ctrl_q << 105) | (((trans["state_o.id"] << 20) | (trans["state_o.thread_id"] << 19) | (trans["state_o.rs"] << 14) | (trans["state_o.rd"] << 9) | (trans["state_o.mask_valid"] << 8) | trans["state_o.mask"])#[0..=24] << 80) | (txfma_trans_dbg << 64) | ((`id_core_ctrl__bpo.tfma_wrrf_enabled__w1` & 1) << 63) | ((`id_core_ctrl__bpo.tfma_enabled__w1` & 1) << 62) | ((`id_core_ctrl__bpo.tquant_enabled__w1` & 1) << 61) | ((`id_core_ctrl__bpo.reduce_enabled__w1` & 1) << 60) | ((`id_core_ctrl__bpo.trans_busy__w1` & 1) << 58) | ((`id_core_ctrl__bpo.id_trans_insert__w1` & 1) << 57) | (((`ex_core_ctrl__bpo.tointm` << 41) | (`ex_core_ctrl__bpo.illegal_rm` << 40) | (`ex_core_ctrl__bpo.ps_mask` << 32) | `ex_core_ctrl__bpo.gsc_fs`)#[0..=41] << 15) | ((`f2_core_ctrl__bpo.fma` & 1) << 14) | ((`f2_core_ctrl__bpo.tointm` & 1) << 13) | (((`f3_core_ctrl__bpo.fma` << 1) | `f3_core_ctrl__bpo.tointm`)#[0..=1] << 11) | ((`wb_core_ctrl__bpo.tointm` & 1) << 10) | ((`wb_core_ctrl__bpo.fma` & 1) << 9) | (`wb_core_ctrl__bpo.fcsr_flags`#[0..=5] << 3) | ((`wb_core_ctrl__bpo.fcsr_flags_valid` & 1) << 2) | ((`wb_core_ctrl__bpo.thread_id` & 1) << 1) | (`wb_core_ctrl__bpo.mova_mx` & 1)
+  vpu_dbg_data__w4#[128..=237] = (ex_bypass_force_ctrl_q << 105) | (((trans.state_o.id << 20) | (trans.state_o.thread_id << 19) | (trans.state_o.rs << 14) | (trans.state_o.rd << 9) | (trans.state_o.mask_valid << 8) | trans.state_o.mask)#[0..=24] << 80) | (txfma_trans_dbg << 64) | ((`id_core_ctrl__bpo.tfma_wrrf_enabled__w1` & 1) << 63) | ((`id_core_ctrl__bpo.tfma_enabled__w1` & 1) << 62) | ((`id_core_ctrl__bpo.tquant_enabled__w1` & 1) << 61) | ((`id_core_ctrl__bpo.reduce_enabled__w1` & 1) << 60) | ((`id_core_ctrl__bpo.trans_busy__w1` & 1) << 58) | ((`id_core_ctrl__bpo.id_trans_insert__w1` & 1) << 57) | (((`ex_core_ctrl__bpo.tointm` << 41) | (`ex_core_ctrl__bpo.illegal_rm` << 40) | (`ex_core_ctrl__bpo.ps_mask` << 32) | `ex_core_ctrl__bpo.gsc_fs`)#[0..=41] << 15) | ((`f2_core_ctrl__bpo.fma` & 1) << 14) | ((`f2_core_ctrl__bpo.tointm` & 1) << 13) | (((`f3_core_ctrl__bpo.fma` << 1) | `f3_core_ctrl__bpo.tointm`)#[0..=1] << 11) | ((`wb_core_ctrl__bpo.tointm` & 1) << 10) | ((`wb_core_ctrl__bpo.fma` & 1) << 9) | (`wb_core_ctrl__bpo.fcsr_flags`#[0..=5] << 3) | ((`wb_core_ctrl__bpo.fcsr_flags_valid` & 1) << 2) | ((`wb_core_ctrl__bpo.thread_id` & 1) << 1) | (`wb_core_ctrl__bpo.mova_mx` & 1)
   mut vpu_dbg_data__w5 = vpu_dbg_data__w4
   vpu_dbg_data__w5#[383] = 0
-  const t4123 = `id_core_ctrl__bpo.scoreboard.mask_valid__w1`
-  const t4124 = t4123
-  const t4125 = `id_core_ctrl__bpo.scoreboard.toint_valid__w1`
-  const t4126 = t4125
-  const t4127 = `id_core_ctrl__bpo.scoreboard.fp_valid__w1`
-  const t4128 = t4127
-  const t4129 = `id_core_ctrl__bpo.scoreboard.fp_dest__w1`
-  const t4130 = t4129
-  const t4131 = (((dcache_scp_resp.fill_is_tenb_early << 6) | (dcache_scp_resp.fill_is_tenb << 5) | (dcache_scp_resp.tenb_flush << 4) | dcache_scp_resp.tenb_line)#[0..=6] << 120) | (t4124 << 116) | (t4126 << 112) | (t4128 << 98) | t4130
+  const t4122 = `id_core_ctrl__bpo.scoreboard.mask_valid__w1`
+  const t4123 = t4122
+  const t4124 = `id_core_ctrl__bpo.scoreboard.toint_valid__w1`
+  const t4125 = t4124
+  const t4126 = `id_core_ctrl__bpo.scoreboard.fp_valid__w1`
+  const t4127 = t4126
+  const t4128 = `id_core_ctrl__bpo.scoreboard.fp_dest__w1`
+  const t4129 = t4128
+  const t4130 = (((dcache_scp_resp.fill_is_tenb_early << 6) | (dcache_scp_resp.fill_is_tenb << 5) | (dcache_scp_resp.tenb_flush << 4) | dcache_scp_resp.tenb_line)#[0..=6] << 120) | (t4123 << 116) | (t4125 << 112) | (t4127 << 98) | t4129
   mut vpu_dbg_data__w6 = vpu_dbg_data__w5
-  vpu_dbg_data__w6#[256..=382] = t4131
+  vpu_dbg_data__w6#[256..=382] = t4130
   mut vpu_dbg_data__w7 = vpu_dbg_data__w6
   vpu_dbg_data__w7#[496..=511] = 0
   mut vpu_dbg_data__w8 = vpu_dbg_data__w7
@@ -1998,6 +2142,20 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   vpu_dbg_filter__w39#[60] = ml.id_inst_en_next & 1
   mut vpu_dbg_filter__w40 = vpu_dbg_filter__w39
   vpu_dbg_filter__w40#[64..=151] = (`wb_core_ctrl__bpo.fcsr_flags`#[0..=5] << 82) | (f4_regfile_waddr_l << 77) | (f3_regfile_waddr << 72) | (f4_regfile_waddr << 67) | (f5_regfile_waddr << 62) | (f6_regfile_waddr << 57) | (f7_regfile_waddr << 52) | (f8_regfile_waddr << 47) | (ex_regfile_raddr3__w1 << 42) | (ex_regfile_raddr2__w1 << 37) | (ex_regfile_raddr1__w1 << 32) | id_core_inst_bits
+  id_core_inst_next = id_core_inst_next__wtmp
+  id_core_inst_en = id_core_inst_en__wtmp
+  id_trans_scoreboard_slots__wnet = trans.id_trans_scoreboard_o
+  dcache_ctrl.scp_req.read_en = ml.dcache_ctrl.scp_req.read_en
+  dcache_ctrl.scp_req.way = ml.dcache_ctrl.scp_req.way
+  dcache_ctrl.scp_req.addr = ml.dcache_ctrl.scp_req.addr
+  dcache_ctrl.scp_req.size64 = ml.dcache_ctrl.scp_req.size64
+  dcache_ctrl.scp_req.size256 = ml.dcache_ctrl.scp_req.size256
+  dcache_ctrl.scp_req.bid = ml.dcache_ctrl.scp_req.bid
+  dcache_ctrl.tenb_credit = ml.dcache_ctrl.tenb_credit
+  dcache_ctrl.tenb_credit_entry = ml.dcache_ctrl.tenb_credit_entry
+  dcache_ctrl.tfma_enabled = ml.dcache_ctrl.tfma_enabled
+  dcache_ctrl.reduce_wait = ml.dcache_ctrl.reduce_wait
+  dcache_ctrl.tfma_rf_write = ml.dcache_ctrl.tfma_rf_write
   id_core_ctrl.m0ren = 0
   id_core_ctrl.mallren = 0
   id_core_ctrl.mren1 = 0
@@ -2008,160 +2166,145 @@ pub mod vpu_ctrl::[timecheck=false](clock_aon:u1, clock_sec:u1, reset:u1, id_cor
   id_core_ctrl.ren3 = 0
   id_core_ctrl.rend = 0
   id_core_ctrl.is_trans = 0
-  const t4312 = `id_core_ctrl__bpo.scoreboard.fp_valid__w1`
-  const t4313 = `id_core_ctrl__bpo.scoreboard.fp_dest__w1`
-  const t4314 = `id_core_ctrl__bpo.scoreboard.toint_valid__w1`
-  const t4315 = `id_core_ctrl__bpo.scoreboard.toint_dest__w1`
-  const t4316 = `id_core_ctrl__bpo.scoreboard.mask_valid__w1`
-  const t4317 = `id_core_ctrl__bpo.scoreboard.mask_dest__w1`
+  id_core_ctrl.trans_busy = `id_core_ctrl__bpo.trans_busy__w1`
+  id_core_ctrl.id_trans_insert = `id_core_ctrl__bpo.id_trans_insert__w1`
+  const t4311 = `id_core_ctrl__bpo.scoreboard.fp_valid__w1`
+  id_core_ctrl.scoreboard.fp_valid = t4311
+  const t4312 = `id_core_ctrl__bpo.scoreboard.fp_dest__w1`
+  id_core_ctrl.scoreboard.fp_dest = t4312
+  const t4313 = `id_core_ctrl__bpo.scoreboard.toint_valid__w1`
+  id_core_ctrl.scoreboard.toint_valid = t4313
+  const t4314 = `id_core_ctrl__bpo.scoreboard.toint_dest__w1`
+  id_core_ctrl.scoreboard.toint_dest = t4314
+  const t4315 = `id_core_ctrl__bpo.scoreboard.mask_valid__w1`
+  id_core_ctrl.scoreboard.mask_valid = t4315
+  const t4316 = `id_core_ctrl__bpo.scoreboard.mask_dest__w1`
+  id_core_ctrl.scoreboard.mask_dest = t4316
+  id_core_ctrl.tfma_enabled = `id_core_ctrl__bpo.tfma_enabled__w1`
+  id_core_ctrl.tfma_wrrf_enabled = `id_core_ctrl__bpo.tfma_wrrf_enabled__w1`
+  id_core_ctrl.tquant_enabled = `id_core_ctrl__bpo.tquant_enabled__w1`
+  id_core_ctrl.reduce_enabled = `id_core_ctrl__bpo.reduce_enabled__w1`
+  id_core_ctrl.fflags_stall = `id_core_ctrl__bpo.fflags_stall__w1`
   id_core_ctrl.fromint = 0
-  dcache_ctrl.reduce_wait = ml["dcache_ctrl.reduce_wait"]
-  dcache_ctrl.scp_req.addr = ml["dcache_ctrl.scp_req.addr"]
-  dcache_ctrl.scp_req.bid = ml["dcache_ctrl.scp_req.bid"]
-  dcache_ctrl.scp_req.read_en = ml["dcache_ctrl.scp_req.read_en"]
-  dcache_ctrl.scp_req.size256 = ml["dcache_ctrl.scp_req.size256"]
-  dcache_ctrl.scp_req.size64 = ml["dcache_ctrl.scp_req.size64"]
-  dcache_ctrl.scp_req.way = ml["dcache_ctrl.scp_req.way"]
-  dcache_ctrl.tenb_credit = ml["dcache_ctrl.tenb_credit"]
-  dcache_ctrl.tenb_credit_entry = ml["dcache_ctrl.tenb_credit_entry"]
-  dcache_ctrl.tfma_enabled = ml["dcache_ctrl.tfma_enabled"]
-  dcache_ctrl.tfma_rf_write = ml["dcache_ctrl.tfma_rf_write"]
-  ex_core_ctrl.gsc_fs = `ex_core_ctrl__bpo.gsc_fs`
-  ex_core_ctrl.illegal_rm = `ex_core_ctrl__bpo.illegal_rm`
-  ex_core_ctrl.ps_mask = `ex_core_ctrl__bpo.ps_mask`
-  ex_core_ctrl.tointm = `ex_core_ctrl__bpo.tointm`
-  ex_mask_in1 = mask.ex_mask_in1_o
-  ex_regfile_raddr1 = ex_regfile_raddr1__w1
-  ex_regfile_raddr2 = ex_regfile_raddr2__w1
-  ex_regfile_raddr3 = ex_regfile_raddr3__w1
-  ex_req.imm = `ex_req__bpo.imm`
-  ex_req.in1 = `ex_req__bpo.in1`
-  ex_req.in2 = `ex_req__bpo.in2`
-  ex_req.in3 = `ex_req__bpo.in3`
-  ex_req.rm = `ex_req__bpo.rm`
-  ex_req.sigs.add = `ex_req__bpo.sigs.add`
+  id_regfile_ren.e2 = `id_regfile_ren__bpo.e2`
+  id_regfile_ren.e1 = `id_regfile_ren__bpo.e1`
+  id_regfile_ren.e0 = `id_regfile_ren__bpo.e0`
+  ex_req.use_prev_sigs = `ex_req__bpo.use_prev_sigs__w1`
   ex_req.sigs.cmd = `ex_req__bpo.sigs.cmd`
+  ex_req.sigs.txfma = `ex_req__bpo.sigs.txfma`
+  ex_req.sigs.shsw = `ex_req__bpo.sigs.shsw`
+  ex_req.sigs.rom = `ex_req__bpo.sigs.rom`
+  ex_req.sigs.scatter = `ex_req__bpo.sigs.scatter`
   ex_req.sigs.cvt = `ex_req__bpo.sigs.cvt`
-  ex_req.sigs.dtype = `ex_req__bpo.sigs.dtype`
-  ex_req.sigs.fma = `ex_req__bpo.sigs.fma`
-  ex_req.sigs.fms = `ex_req__bpo.sigs.fms`
-  ex_req.sigs.fromint = `ex_req__bpo.sigs.fromint`
-  ex_req.sigs.fromintf = `ex_req__bpo.sigs.fromintf`
+  ex_req.sigs.trans = `ex_req__bpo.sigs.trans`
   ex_req.sigs.gcvt = `ex_req__bpo.sigs.gcvt`
+  ex_req.sigs.fromintf = `ex_req__bpo.sigs.fromintf`
+  ex_req.sigs.tointm = `ex_req__bpo.sigs.tointm`
+  ex_req.sigs.tointf = `ex_req__bpo.sigs.tointf`
+  ex_req.sigs.maskop = `ex_req__bpo.sigs.maskop`
   ex_req.sigs.ldst = `ex_req__bpo.sigs.ldst`
   ex_req.sigs.m0ren = `ex_req__bpo.sigs.m0ren`
   ex_req.sigs.mallren = `ex_req__bpo.sigs.mallren`
-  ex_req.sigs.maskop = `ex_req__bpo.sigs.maskop`
   ex_req.sigs.mren1 = `ex_req__bpo.sigs.mren1`
   ex_req.sigs.mren2 = `ex_req__bpo.sigs.mren2`
-  ex_req.sigs.mul = `ex_req__bpo.sigs.mul`
+  ex_req.sigs.wen = `ex_req__bpo.sigs.wen`
   ex_req.sigs.ren1 = `ex_req__bpo.sigs.ren1`
   ex_req.sigs.ren2 = `ex_req__bpo.sigs.ren2`
   ex_req.sigs.ren3 = `ex_req__bpo.sigs.ren3`
   ex_req.sigs.rend = `ex_req__bpo.sigs.rend`
-  ex_req.sigs.rom = `ex_req__bpo.sigs.rom`
-  ex_req.sigs.round = `ex_req__bpo.sigs.round`
-  ex_req.sigs.scatter = `ex_req__bpo.sigs.scatter`
-  ex_req.sigs.shsw = `ex_req__bpo.sigs.shsw`
-  ex_req.sigs.sub = `ex_req__bpo.sigs.sub`
   ex_req.sigs.swap12 = `ex_req__bpo.sigs.swap12`
-  ex_req.sigs.swap13 = `ex_req__bpo.sigs.swap13`
   ex_req.sigs.swap23 = `ex_req__bpo.sigs.swap23`
-  ex_req.sigs.toint = `ex_req__bpo.sigs.toint`
-  ex_req.sigs.tointf = `ex_req__bpo.sigs.tointf`
-  ex_req.sigs.tointm = `ex_req__bpo.sigs.tointm`
-  ex_req.sigs.trans = `ex_req__bpo.sigs.trans`
-  ex_req.sigs.txfma = `ex_req__bpo.sigs.txfma`
+  ex_req.sigs.swap13 = `ex_req__bpo.sigs.swap13`
   ex_req.sigs.vector = `ex_req__bpo.sigs.vector`
-  ex_req.sigs.wen = `ex_req__bpo.sigs.wen`
+  ex_req.sigs.dtype = `ex_req__bpo.sigs.dtype`
+  ex_req.sigs.fromint = `ex_req__bpo.sigs.fromint`
+  ex_req.sigs.toint = `ex_req__bpo.sigs.toint`
+  ex_req.sigs.fma = `ex_req__bpo.sigs.fma`
+  ex_req.sigs.fms = `ex_req__bpo.sigs.fms`
+  ex_req.sigs.add = `ex_req__bpo.sigs.add`
+  ex_req.sigs.sub = `ex_req__bpo.sigs.sub`
+  ex_req.sigs.mul = `ex_req__bpo.sigs.mul`
+  ex_req.sigs.round = `ex_req__bpo.sigs.round`
   ex_req.sigs.wflags = `ex_req__bpo.sigs.wflags`
+  ex_req.imm = `ex_req__bpo.imm`
+  ex_req.rm = `ex_req__bpo.rm`
   ex_req.typ = `ex_req__bpo.typ`
-  ex_req.use_prev_sigs = `ex_req__bpo.use_prev_sigs__w1`
-  ex_rom_clock_valid = unsigned((ex_ctrl_valid != 0) and (`ex_req__bpo.sigs.rom` != 0))
-  ex_rom_valid = ex_rom_valid__w1
-  ex_sh_sw_clock_valid = unsigned((ex_ctrl_valid != 0) and (`ex_req__bpo.sigs.shsw` != 0))
-  ex_sh_sw_valid = unsigned((ex_ctrl_valid_qual__w1 != 0) and (`ex_req__bpo.sigs.shsw` != 0))
-  ex_tena_rf_rdata = ex_tena_rf_rdata__w8
-  ex_tena_rf_tima_rdata = ex_tena_rf_tima_rdata__w1 & _rep_139
+  ex_req.in1 = `ex_req__bpo.in1`
+  ex_req.in2 = `ex_req__bpo.in2`
+  ex_req.in3 = `ex_req__bpo.in3`
+  ex_core_ctrl.tointm = `ex_core_ctrl__bpo.tointm`
+  ex_core_ctrl.illegal_rm = `ex_core_ctrl__bpo.illegal_rm`
+  ex_core_ctrl.ps_mask = `ex_core_ctrl__bpo.ps_mask`
+  ex_core_ctrl.gsc_fs = `ex_core_ctrl__bpo.gsc_fs`
+  f2_core_ctrl.fma = `f2_core_ctrl__bpo.fma`
+  f2_core_ctrl.store_data = `f2_core_ctrl__bpo.store_data`
+  f2_core_ctrl.scatter_data = `f2_core_ctrl__bpo.scatter_data`
+  f2_core_ctrl.tointm = `f2_core_ctrl__bpo.tointm`
+  f3_core_ctrl.fma = `f3_core_ctrl__bpo.fma`
+  f3_core_ctrl.tointm = `f3_core_ctrl__bpo.tointm`
+  wb_core_ctrl.fma = `wb_core_ctrl__bpo.fma`
+  wb_core_ctrl.toint_data = `wb_core_ctrl__bpo.toint_data`
+  wb_core_ctrl.mova_mx = `wb_core_ctrl__bpo.mova_mx`
+  wb_core_ctrl.fcsr_flags_valid = `wb_core_ctrl__bpo.fcsr_flags_valid`
+  wb_core_ctrl.fcsr_flags = `wb_core_ctrl__bpo.fcsr_flags`
+  wb_core_ctrl.thread_id = `wb_core_ctrl__bpo.thread_id`
+  wb_core_ctrl.tointm = `wb_core_ctrl__bpo.tointm`
+  io_events.e10 = `io_events__bpo.e10__w1`
+  io_events.e9 = `io_events__bpo.e9__w1`
+  io_events.e8 = `io_events__bpo.e8__w1`
+  io_events.e7 = `io_events__bpo.e7__w1`
+  io_events.e6 = `io_events__bpo.e6__w1`
+  io_events.e5 = `io_events__bpo.e5__w1`
+  io_events.e4 = `io_events__bpo.e4__w1`
+  io_events.e3 = `io_events__bpo.e3__w1`
+  io_events.e2 = `io_events__bpo.e2__w1`
+  io_events.e1 = `io_events__bpo.e1__w1`
+  io_events.e0 = `io_events__bpo.e0__w1`
+  id_regfile_raddr1 = id_ra1
+  id_regfile_raddr2 = id_ra2
+  id_regfile_raddr3 = id_ra3
+  id_regfile_thread_id = id_regfile_thread_id__w1
+  ex_regfile_raddr1 = ex_regfile_raddr1__w1
+  ex_regfile_raddr2 = ex_regfile_raddr2__w1
+  ex_regfile_raddr3 = ex_regfile_raddr3__w1
+  ex_mask_in1 = mask.ex_mask_in1_o
+  ex_tima_valid = ex_tima_valid__w16
+  ex_tima_valid_unqual = ml.ex_tima_valid
   ex_tima_sa = ml.ex_tima_sa
   ex_tima_sb = ml.ex_tima_sb
   ex_tima_tenb_raddr = ml.ex_tima_tenb_raddr
-  ex_tima_valid = ex_tima_valid__w16
-  ex_tima_valid_unqual = ml.ex_tima_valid
-  ex_txfma_clock_valid = unsigned((ex_ctrl_valid != 0) and (`ex_req__bpo.sigs.txfma` != 0))
+  ex_tena_rf_rdata = ex_tena_rf_rdata__w8
+  ex_tena_rf_tima_rdata = ex_tena_rf_tima_rdata__w1 & _rep_139
+  ex_sh_sw_valid = unsigned((ex_ctrl_valid_qual__w1 != 0) and (`ex_req__bpo.sigs.shsw` != 0))
+  ex_sh_sw_clock_valid = unsigned((ex_ctrl_valid != 0) and (`ex_req__bpo.sigs.shsw` != 0))
   ex_txfma_valid = ex_txfma_valid__w1
-  f2_core_ctrl.fma = `f2_core_ctrl__bpo.fma`
-  f2_core_ctrl.scatter_data = `f2_core_ctrl__bpo.scatter_data`
-  f2_core_ctrl.store_data = `f2_core_ctrl__bpo.store_data`
-  f2_core_ctrl.tointm = `f2_core_ctrl__bpo.tointm`
-  f2_fswizz_rdata2 = f2_fswizz_rdata2__w8
-  f2_fswizz_rdata3 = f2_fswizz_rdata3__w8
-  f2_tenb_regfile_wen_l = ml.load_ctrl_pre_tenb_wen
+  ex_txfma_clock_valid = unsigned((ex_ctrl_valid != 0) and (`ex_req__bpo.sigs.txfma` != 0))
+  ex_rom_valid = ex_rom_valid__w1
+  ex_rom_clock_valid = unsigned((ex_ctrl_valid != 0) and (`ex_req__bpo.sigs.rom` != 0))
   f2_tima_ren3 = ml.f2_tima_ren3
-  f2_tima_rf_wen = ml.f2_tima_rf_wen
   f2_tima_tenc_raddr = ml.f2_tima_tenc_raddr
   f2_tima_tenc_wen = ml.f2_tima_tenc_wen
-  f3_bypass_clk_en = f3_bypass_clk_en__w1
-  f3_core_ctrl.fma = `f3_core_ctrl__bpo.fma`
-  f3_core_ctrl.tointm = `f3_core_ctrl__bpo.tointm`
-  f3_data_vector = (f3_ctrl_sigs >> 13) & 1
+  f2_tima_rf_wen = ml.f2_tima_rf_wen
+  f2_tenb_regfile_wen_l = ml.load_ctrl_pre_tenb_wen
+  f2_fswizz_rdata2 = f2_fswizz_rdata2__w8
+  f2_fswizz_rdata3 = f2_fswizz_rdata3__w8
   f3_regfile_wen_l = f3_regfile_wen_l__w1
   f3_tenb_regfile_wdata_l = f3_tenb_regfile_wdata_l__w1
   f3_tenb_regfile_wen_l = f3_tenb_regfile_wen_l__w1
-  f3_tima_rf_wen = ml.f3_tima_rf_wen
-  f3_tima_tenc_waddr = ml.f3_tima_tenc_waddr
   f3_tima_tenc_wen = ml.f3_tima_tenc_wen
+  f3_tima_tenc_waddr = ml.f3_tima_tenc_waddr
+  f3_tima_rf_wen = ml.f3_tima_rf_wen
+  f3_bypass_clk_en = f3_bypass_clk_en__w1
+  f3_data_vector = (f3_ctrl_sigs >> 13) & 1
   f4_bypass_clk_en = ((((((f4_wen & unsigned(((f4_ctrl_sigs >> 37) & 1) == 0) & 1) | ((f4_ctrl_sigs >> 32) & 1)) & 1) | unsigned(f4_ctrl_sigs#[38..=44] == vpu_defs_pkg.VPU_FCMD_MVS_FX)) & 1) | unsigned(f4_ctrl_sigs#[38..=44] == vpu_defs_pkg.VPU_FCMD_MVZ_FX)) & 1
   f5_bypass_clk_en = ((((((f5_wen & unsigned(((f5_ctrl_sigs >> 37) & 1) == 0) & 1) | ((f5_ctrl_sigs >> 32) & 1)) & 1) | unsigned(f5_ctrl_sigs#[38..=44] == vpu_defs_pkg.VPU_FCMD_MVS_FX)) & 1) | unsigned(f5_ctrl_sigs#[38..=44] == vpu_defs_pkg.VPU_FCMD_MVZ_FX)) & 1
   f6_bypass_clk_en = ((((((f6_wen & unsigned(((f6_ctrl_sigs >> 37) & 1) == 0) & 1) | ((f6_ctrl_sigs >> 32) & 1)) & 1) | unsigned(f6_ctrl_sigs#[38..=44] == vpu_defs_pkg.VPU_FCMD_MVS_FX)) & 1) | unsigned(f6_ctrl_sigs#[38..=44] == vpu_defs_pkg.VPU_FCMD_MVZ_FX)) & 1
   f7_bypass_clk_en = ((((((f7_wen & unsigned(((f7_ctrl_sigs >> 37) & 1) == 0) & 1) | ((f7_ctrl_sigs >> 32) & 1)) & 1) | unsigned(f7_ctrl_sigs#[38..=44] == vpu_defs_pkg.VPU_FCMD_MVS_FX)) & 1) | unsigned(f7_ctrl_sigs#[38..=44] == vpu_defs_pkg.VPU_FCMD_MVZ_FX)) & 1
   f7_regfile_wen = f7_regfile_wen__w1
-  f8_data_vector = (f8_ctrl_sigs >> 13) & 1
   f8_regfile_wen = f8_regfile_wmask
+  f8_data_vector = (f8_ctrl_sigs >> 13) & 1
   f8_txfma_op = (f8_ctrl_sigs >> 37) & 1
-  id_core_ctrl.fflags_stall = `id_core_ctrl__bpo.fflags_stall__w1`
-  id_core_ctrl.id_trans_insert = `id_core_ctrl__bpo.id_trans_insert__w1`
-  id_core_ctrl.reduce_enabled = `id_core_ctrl__bpo.reduce_enabled__w1`
-  id_core_ctrl.scoreboard.fp_dest = t4313
-  id_core_ctrl.scoreboard.fp_valid = t4312
-  id_core_ctrl.scoreboard.mask_dest = t4317
-  id_core_ctrl.scoreboard.mask_valid = t4316
-  id_core_ctrl.scoreboard.toint_dest = t4315
-  id_core_ctrl.scoreboard.toint_valid = t4314
-  id_core_ctrl.tfma_enabled = `id_core_ctrl__bpo.tfma_enabled__w1`
-  id_core_ctrl.tfma_wrrf_enabled = `id_core_ctrl__bpo.tfma_wrrf_enabled__w1`
-  id_core_ctrl.tquant_enabled = `id_core_ctrl__bpo.tquant_enabled__w1`
-  id_core_ctrl.trans_busy = `id_core_ctrl__bpo.trans_busy__w1`
-  id_core_inst_en = id_core_inst_en__wtmp
-  id_core_inst_next = id_core_inst_next__wtmp
-  id_regfile_raddr1 = id_ra1
-  id_regfile_raddr2 = id_ra2
-  id_regfile_raddr3 = id_ra3
-  id_regfile_ren.e0 = `id_regfile_ren__bpo.e0`
-  id_regfile_ren.e1 = `id_regfile_ren__bpo.e1`
-  id_regfile_ren.e2 = `id_regfile_ren__bpo.e2`
-  id_regfile_thread_id = id_regfile_thread_id__w1
-  id_scoreboard_mask_dest = mask.wb_mask_dest_o
-  id_trans_scoreboard_slots__wnet = trans.id_trans_scoreboard_o
-  io_events.e0 = `io_events__bpo.e0__w1`
-  io_events.e1 = `io_events__bpo.e1__w1`
-  io_events.e10 = `io_events__bpo.e10__w1`
-  io_events.e2 = `io_events__bpo.e2__w1`
-  io_events.e3 = `io_events__bpo.e3__w1`
-  io_events.e4 = `io_events__bpo.e4__w1`
-  io_events.e5 = `io_events__bpo.e5__w1`
-  io_events.e6 = `io_events__bpo.e6__w1`
-  io_events.e7 = `io_events__bpo.e7__w1`
-  io_events.e8 = `io_events__bpo.e8__w1`
-  io_events.e9 = `io_events__bpo.e9__w1`
-  vpu_dbg_data = vpu_dbg_data__w10
-  vpu_dbg_filter = vpu_dbg_filter__w40
   vpu_dbg_match = vpu_dbg_match__w38
-  wb_core_ctrl.fcsr_flags = `wb_core_ctrl__bpo.fcsr_flags`
-  wb_core_ctrl.fcsr_flags_valid = `wb_core_ctrl__bpo.fcsr_flags_valid`
-  wb_core_ctrl.fma = `wb_core_ctrl__bpo.fma`
-  wb_core_ctrl.mova_mx = `wb_core_ctrl__bpo.mova_mx`
-  wb_core_ctrl.thread_id = `wb_core_ctrl__bpo.thread_id`
-  wb_core_ctrl.toint_data = `wb_core_ctrl__bpo.toint_data`
-  wb_core_ctrl.tointm = `wb_core_ctrl__bpo.tointm`
+  vpu_dbg_filter = vpu_dbg_filter__w40
+  vpu_dbg_data = vpu_dbg_data__w10
 }
