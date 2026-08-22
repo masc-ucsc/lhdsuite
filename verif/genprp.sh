@@ -62,8 +62,15 @@ step() { # LABEL cmd... — run, log to step_LABEL.log, report the failing tail
   local label=$1
   shift
   printf 'CMD %s: %s\n' "$label" "${*/#$LHD_BIN/lhd}"
-  if ! "$@" >"step_${label}.log" 2>&1; then
-    local rc=$?
+  # Capture the status with `|| rc=$?`, NOT inside `if ! "$@"; then rc=$?`.
+  # In that form `$?` is the status of the `!` COMPOUND — which is 0 whenever
+  # the branch is taken — so `exit "$rc"` was `exit 0` and a failing step PASSED
+  # the test. It printed "FAIL: step 'lec' exited 0" and then exited clean,
+  # never reaching the verdict gates below. Caught on xiangshan's TraceBuffer:
+  # lec REFUSED it (exit 7) and the target went green.
+  local rc=0
+  "$@" >"step_${label}.log" 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
     echo "FAIL: step '$label' exited $rc" >&2
     tail -25 "step_${label}.log" >&2
     archive
@@ -104,9 +111,18 @@ step lec "$LHD_BIN" lec --impl lg:impl.lg --ref lg:ref.lg --top "$CORE_TOP" --wo
 # A clean exit is necessary but not sufficient. Assert the POSITIVE verdict, so
 # an output-format change can never let a non-proof through, and assert that no
 # refutation was printed (identical designs must not report one).
-if grep -qia "refut" step_lec.log; then
+# Match the REFUTATION ITSELF, not the substring "refut". A real disproof prints
+# `'<mod>' is NOT equivalent; counterexample: ...` under diag code
+# `not-equivalent` (pass/lec/pass_lec.cpp, Verdict::Refuted) and is fatal, so
+# this is a belt-and-braces check on top of the non-zero exit `step` catches.
+# It used to grep for "refut", which ALSO matches lec's own hierarchical
+# progress line `ESCALATE '<mod>' — re-proving with 1 unresolved child(ren)
+# INLINED (0 refuted, 1 inconclusive)` — a line that reports ZERO refutations.
+# Any design whose LEC escalates therefore failed here while PROVING (caught on
+# xiangshan's fpsqrt_r16: exit 0, status pass, 335/335 cones PROVEN, failed).
+if grep -qa '"code":"not-equivalent"' step_lec.log || grep -qa "is NOT equivalent" step_lec.log; then
   echo "FAIL: lec exited 0 but reported a refutation" >&2
-  grep -ia "refut" step_lec.log | head -5 >&2
+  grep -a "is NOT equivalent" step_lec.log | head -5 >&2
   archive
   exit 1
 fi

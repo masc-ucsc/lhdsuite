@@ -51,6 +51,15 @@ Every core shares one shape (`<core>/` = `dino/`, `minion/` or `cva6/`):
   illustrative `BUILD.bazel`) that drives `compile_pyrope_parallel`.
   A new script must be `chmod +x` — bazel refuses to stage a non-executable
   `sh_test` src ("file ... is not executable").
+- `verif/` — correctness checks that are NOT timed benchmarks, all tagged
+  `manual`. `genprp` regenerates a design's Pyrope from its Verilog into the
+  test's scratch dir and LECs the two, which is the only thing that polices
+  `pass.prp_writer` (the checked-in `<core>/pyrope/` trees are never
+  re-derived). Per-core targets come from `CORES`; the xiangshan ones do NOT —
+  `//xiangshan/Backend` is one 1088-module tree, so `verif/BUILD` keeps a plain
+  `_XS_TOPS` list of MODULE names and each target selects its own `--top`. A
+  CORES entry there would spawn the whole bench scenario matrix for something
+  that only needs a top name.
 
 ## Conventions
 
