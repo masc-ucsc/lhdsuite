@@ -1,0 +1,763 @@
+const ariane_regfile = import("ariane_regfile.ariane_regfile")
+const ariane_regfile_p1 = import("ariane_regfile_p1.ariane_regfile_p1")
+const cvxif_issue_register_commit_if_driver = import("cvxif_issue_register_commit_if_driver.cvxif_issue_register_commit_if_driver")
+const raw_checker = import("raw_checker.raw_checker")
+const ariane_pkg = import("ariane_pkg")
+
+pub mod issue_read_operands::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, stall_i:u1, issue_instr_i:u439, issue_instr_i_prev:u439, orig_instr_i:u32, issue_instr_valid_i:u1, fwd_i:(still_issued:u8, issue_pointer:u3, wb:u345, sbe:u3512), flu_ready_i:u1, lsu_ready_i:u1, fpu_ready_i:u1, fpu_early_valid_i:u1, cvxif_ready_i:u1, hart_id_i:u64, x_issue_ready_i:u1, x_issue_resp_i:(accept:u1, writeback:u1, register_read:u2), x_register_ready_i:u1, waddr_i:u10, wdata_i:u128, we_gpr_i:(e1:u1, e0:u1), we_fpr_i:u2) -> (issue_ack_o:u1@[], fu_data_o:u207@[], alu_bypass_o:(rs1_from_rd:u1, rs2_from_rd:u1)@[], rs1_forwarding_o:u64@[], rs2_forwarding_o:u64@[], pc_o:u64@[], is_zcmt_o:u1@[], is_compressed_instr_o:u1@[], alu_valid_o:u1@[], aes_valid_o:u1@[], branch_valid_o:u1@[], tinst_o:u32@[], branch_predict_o:(cf:u3, predict_address:u64)@[], lsu_valid_o:u1@[], mult_valid_o:u1@[], fpu_valid_o:u1@[], fpu_fmt_o:u2@[], fpu_rm_o:u3@[], alu2_valid_o:u1@[], csr_valid_o:u1@[], cvxif_valid_o:u1@[], cvxif_off_instr_o:u32@[], x_issue_valid_o:u1@[], x_issue_req_o:(instr:u32, hartid:u64, id:u3)@[], x_register_valid_o:u1@[], x_register_o:(hartid:u64, id:u3, rs:u128, rs_valid:u2)@[], x_commit_valid_o:u1@[], x_commit_o:(hartid:u64, id:u3, commit_kill:u1)@[], x_transaction_accepted_o:u1@[], x_transaction_rejected_o:u1@[], x_issue_writeback_o:u1@[], x_id_o:u3@[], stall_issue_o:u1@[], rvfi_rs1_o:u64@[], rvfi_rs2_o:u64@[], orig_instr_aes_bits:u6@[]) {
+  mut _mux_32:u1 = 0
+  mut _mux_39:u64 = 0
+  reg pc_o:u64:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg is_zcmt_o:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg is_compressed_instr_o:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg branch_predict_o_q:u67:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg x_transaction_rejected_o:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg orig_instr_aes_bits:u6:[clock_pin=ref clk_i]
+  reg fu_data_q:[1]u207:[ordering="old", init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg alu_valid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg aes_valid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg mult_valid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg fpu_valid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg fpu_fmt_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg fpu_rm_q:u3:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg alu2_valid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg lsu_valid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg csr_valid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg branch_valid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg cvxif_valid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg cvxif_off_instr_q:u32:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg tinst_q:u32:[clock_pin=ref clk_i]
+  reg alu_bypass_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  mut `branch_predict_n.cf` = 0
+  mut `branch_predict_n.predict_address` = 0
+  mut `alu_bypass.rs1_from_rd` = 0
+  mut `alu_bypass.rs2_from_rd` = 0
+  wire rs_valid:u2
+  wire rs:u128
+  mut stall_rs3:u1 = 0
+  mut fu_busy:u1 = 0
+  mut fus_busy:u13 = 0
+  mut issue_ack:u1 = 0
+  mut operand_a_regfile:u64 = 0
+  mut operand_b_regfile:u64 = 0
+  mut operand_c_regfile:u64 = 0
+  mut pc_n:u64 = 0
+  mut is_compressed_instr_n:u1 = 0
+  mut imm_forward_rs3:u64 = 0
+  mut alu_valid_n:u1 = 0
+  mut aes_valid_n:u1 = 0
+  mut mult_valid_n:u1 = 0
+  mut fpu_valid_n:u1 = 0
+  mut fpu_fmt_n:u2 = 0
+  mut fpu_rm_n:u3 = 0
+  mut alu2_valid_n:u1 = 0
+  mut lsu_valid_n:u1 = 0
+  mut csr_valid_n:u1 = 0
+  mut branch_valid_n:u1 = 0
+  mut cvxif_valid_n:u1 = 0
+  mut cvxif_off_instr_n:u32 = 0
+  mut idx_hzd_rs1:u3 = 0
+  mut rs1_raw_check:u1 = 0
+  mut rs1_has_raw:u1 = 0
+  mut rs1_fpr:u1 = 0
+  mut idx_hzd_rs2:u3 = 0
+  mut rs2_raw_check:u1 = 0
+  mut rs2_has_raw:u1 = 0
+  mut rs2_fpr:u1 = 0
+  mut idx_hzd_rs3:u3 = 0
+  mut rs3_raw_check:u1 = 0
+  mut rs3_has_raw:u1 = 0
+  mut rs3_fpr:u1 = 0
+  mut rs3_gpr_cvxif:u1 = 0
+  mut rd_list:u40 = 0
+  mut rd_fpr:u8 = 0
+  mut fwd_res:u512 = 0
+  mut fwd_res_valid:u8 = 0
+  mut rs1_is_not_csr:u8 = 0
+  mut rs2_is_not_csr:u8 = 0
+  mut rs3:u64 = 0
+  mut rs1_valid:u1 = 0
+  mut rs2_valid:u1 = 0
+  mut rs3_valid:u1 = 0
+  mut rs1_res:u64 = 0
+  mut rs2_res:u64 = 0
+  mut rs3_res:u64 = 0
+  mut forward_rs1:u1 = 0
+  mut forward_rs2:u1 = 0
+  mut forward_rs3:u1 = 0
+  mut orig_instr:u32 = 0
+  mut raddr_pack:u10 = 0
+  mut waddr_pack:u10 = 0
+  mut wdata_pack:u128 = 0
+  mut we_pack:u2 = 0
+  mut fp_raddr_pack:u15 = 0
+  mut fp_wdata_pack:u128 = 0
+  mut issue_ack_o__wtmp:u1 = 0sb?
+  wire issue_ack_o:u1
+  mut stall_raw__wtmp:u1 = 0sb?
+  wire stall_raw:u1
+  mut stall_rs1__wtmp:u1 = 0sb?
+  wire stall_rs1:u1
+  mut stall_rs2__wtmp:u1 = 0sb?
+  wire stall_rs2:u1
+  mut fu_data_n__wtmp:u207 = 0sb?
+  wire fu_data_n:u207
+  mut _mux_3:u1 = 0
+  mut _mux_4:u32 = 0
+  mut genblk7_0_op_s2:u8 = 0
+  mut _mux_23:u5 = 0
+  mut _mux_24:u5 = 0
+  mut genblk19_0_operand_c_gpr:u64 = 0
+  mut _mux_28:u64 = 0
+  branch_predict_o.cf = branch_predict_o_q#[64..=66]
+  branch_predict_o.predict_address = branch_predict_o_q#[0..=63]
+  stall_rs3 = 0ub?
+  fu_busy = 0ub?
+  fus_busy = 0sb?
+  issue_ack = 0ub?
+  operand_a_regfile = 0sb?
+  operand_b_regfile = 0sb?
+  operand_c_regfile = 0sb?
+  pc_n = 0sb?
+  is_compressed_instr_n = 0ub?
+  imm_forward_rs3 = 0sb?
+  alu_valid_n = 0ub?
+  aes_valid_n = 0ub?
+  mult_valid_n = 0ub?
+  fpu_valid_n = 0ub?
+  fpu_fmt_n = 0sb?
+  fpu_rm_n = 0sb?
+  alu2_valid_n = 0ub?
+  lsu_valid_n = 0ub?
+  csr_valid_n = 0ub?
+  branch_valid_n = 0ub?
+  cvxif_valid_n = 0ub?
+  cvxif_off_instr_n = 0sb?
+  idx_hzd_rs1 = 0sb?
+  rs1_raw_check = 0ub?
+  rs1_has_raw = 0ub?
+  rs1_fpr = 0ub?
+  idx_hzd_rs2 = 0sb?
+  rs2_raw_check = 0ub?
+  rs2_has_raw = 0ub?
+  rs2_fpr = 0ub?
+  idx_hzd_rs3 = 0sb?
+  rs3_raw_check = 0ub?
+  rs3_has_raw = 0ub?
+  rs3_fpr = 0ub?
+  rs3_gpr_cvxif = 0ub?
+  rd_list = 0sb?
+  rd_fpr = 0sb?
+  fwd_res = 0sb?
+  fwd_res_valid = 0sb?
+  rs1_is_not_csr = 0sb?
+  rs2_is_not_csr = 0sb?
+  rs3 = 0sb?
+  rs1_valid = 0ub?
+  rs2_valid = 0ub?
+  rs3_valid = 0ub?
+  rs1_res = 0sb?
+  rs2_res = 0sb?
+  rs3_res = 0sb?
+  forward_rs1 = 0ub?
+  forward_rs2 = 0ub?
+  forward_rs3 = 0ub?
+  orig_instr = 0sb?
+  mut x_transaction_rejected_n = 0ub?
+  raddr_pack = 0sb?
+  waddr_pack = 0sb?
+  wdata_pack = 0sb?
+  we_pack = 0sb?
+  fp_wdata_pack = 0sb?
+  rs1_forwarding_o = 0sb?
+  rs2_forwarding_o = 0sb?
+  rvfi_rs1_o = 0sb?
+  rvfi_rs2_o = 0sb?
+  mut orig_instr__w1 = orig_instr
+  orig_instr__w1#[0..=31] = orig_instr_i
+  mut `alu_bypass_o__bpo.rs1_from_rd` = (alu_bypass_q >> 1) & 1
+  mut `alu_bypass_o__bpo.rs2_from_rd` = alu_bypass_q & 1
+  const fu_data_o__w1 = fu_data_q
+  const alu_valid_o__w1 = alu_valid_q
+  const aes_valid_o__w1 = aes_valid_q
+  const branch_valid_o__w1 = branch_valid_q
+  const lsu_valid_o__w1 = lsu_valid_q
+  const csr_valid_o__w1 = csr_valid_q
+  const mult_valid_o__w1 = mult_valid_q
+  const fpu_valid_o__w1 = fpu_valid_q
+  const fpu_fmt_o__w1 = fpu_fmt_q
+  const fpu_rm_o__w1 = fpu_rm_q
+  const alu2_valid_o__w1 = alu2_valid_q
+  _mux_3 = 0
+  {
+    _mux_3 = cvxif_valid_q & 1
+  }
+  _mux_4 = 0
+  {
+    _mux_4 = cvxif_off_instr_q
+  }
+  fus_busy = 0
+  if flu_ready_i == 0 {
+    fus_busy = 0x200
+    fus_busy#[9] = 1
+    fus_busy = 0x201
+    fus_busy#[0] = 1
+    fus_busy = 0x281
+    fus_busy#[7] = 1
+    fus_busy = 0x2a1
+    fus_busy#[5] = 1
+    fus_busy = 0x2e1
+    fus_busy#[6] = 1
+  }
+  if mult_valid_q != 0 {
+    fus_busy#[9] = 1
+    fus_busy#[0] = 1
+    fus_busy#[7] = 1
+    fus_busy#[5] = 1
+  }
+  if true and (fpu_ready_i == 0) {
+    fus_busy#[4] = 1
+    fus_busy#[3] = 1
+  }
+  if lsu_ready_i == 0 {
+    fus_busy#[11] = 1
+    fus_busy#[10] = 1
+  }
+  match issue_instr_i#[368..=371] {
+    == ariane_pkg.NONE {
+      fu_busy#[0] = (fus_busy >> 12) & 1
+    }
+    == ariane_pkg.ALU {
+      {
+        fu_busy#[0] = (fus_busy >> 9) & 1
+      }
+    }
+    == ariane_pkg.CTRL_FLOW {
+      fu_busy#[0] = (fus_busy >> 7) & 1
+    }
+    == ariane_pkg.CSR {
+      fu_busy#[0] = (fus_busy >> 5) & 1
+    }
+    == ariane_pkg.MULT {
+      fu_busy#[0] = (fus_busy >> 6) & 1
+    }
+    == ariane_pkg.LOAD {
+      fu_busy#[0] = (fus_busy >> 11) & 1
+    }
+    == ariane_pkg.STORE {
+      fu_busy#[0] = (fus_busy >> 10) & 1
+    }
+    == ariane_pkg.CVXIF {
+      fu_busy#[0] = (fus_busy >> 2) & 1
+    }
+    == ariane_pkg.AES {
+      fu_busy#[0] = fus_busy & 1
+    }
+    else {
+      {
+        match issue_instr_i#[368..=371] {
+          == ariane_pkg.FPU {
+            fu_busy#[0] = (fus_busy >> 4) & 1
+          }
+          == ariane_pkg.FPU_VEC {
+            fu_busy#[0] = (fus_busy >> 3) & 1
+          }
+          else {
+            fu_busy#[0] = 0
+          }
+        }
+      }
+    }
+  }
+  const genblk7_0_op__w1 = issue_instr_i#[360..=367]
+  mut genblk7_0_is_rs1_fpr = 0ub?
+  genblk7_0_is_rs1_fpr = unique if ((genblk7_0_op__w1 >= ariane_pkg.FMUL) and (genblk7_0_op__w1 <= ariane_pkg.FNMADD)) or (genblk7_0_op__w1 == ariane_pkg.FCVT_F2I) or (genblk7_0_op__w1 == ariane_pkg.FCVT_F2F) or (genblk7_0_op__w1 == ariane_pkg.FSGNJ) or (genblk7_0_op__w1 == ariane_pkg.FMV_F2X) or (genblk7_0_op__w1 == ariane_pkg.FCMP) or (genblk7_0_op__w1 == ariane_pkg.FCLASS) or ((genblk7_0_op__w1 >= ariane_pkg.VFMIN) and (genblk7_0_op__w1 <= ariane_pkg.VFCPKCD_D)) or (genblk7_0_op__w1 == ariane_pkg.ACCEL_OP_FS1) { 1 } else { 0 }
+  mut rs1_fpr__w1 = rs1_fpr
+  rs1_fpr__w1#[0] = unsigned(true and (genblk7_0_is_rs1_fpr != 0)) & 1
+  const genblk7_0_op_s1__w1 = issue_instr_i#[360..=367]
+  mut genblk7_0_is_rs2_fpr = 0ub?
+  genblk7_0_is_rs2_fpr = unique if ((genblk7_0_op_s1__w1 >= ariane_pkg.FSD) and (genblk7_0_op_s1__w1 <= ariane_pkg.FSB)) or ((genblk7_0_op_s1__w1 >= ariane_pkg.FADD) and (genblk7_0_op_s1__w1 <= ariane_pkg.FMIN_MAX)) or ((genblk7_0_op_s1__w1 >= ariane_pkg.FMADD) and (genblk7_0_op_s1__w1 <= ariane_pkg.FNMADD)) or (genblk7_0_op_s1__w1 == ariane_pkg.FCVT_F2F) or ((genblk7_0_op_s1__w1 >= ariane_pkg.FSGNJ) and (genblk7_0_op_s1__w1 <= ariane_pkg.FMV_F2X)) or (genblk7_0_op_s1__w1 == ariane_pkg.FCMP) or ((genblk7_0_op_s1__w1 >= ariane_pkg.VFMIN) and (genblk7_0_op_s1__w1 <= ariane_pkg.VFCPKCD_D)) { 1 } else { 0 }
+  mut rs2_fpr__w1 = rs2_fpr
+  rs2_fpr__w1#[0] = unsigned(true and (genblk7_0_is_rs2_fpr != 0)) & 1
+  genblk7_0_op_s2 = 0sb?
+  const genblk7_0_op_s2__w1 = issue_instr_i#[360..=367]
+  mut genblk7_0_is_imm_fpr = 0ub?
+  genblk7_0_is_imm_fpr = unique if ((genblk7_0_op_s2__w1 >= ariane_pkg.FADD) and (genblk7_0_op_s2__w1 <= ariane_pkg.FSUB)) or ((genblk7_0_op_s2__w1 >= ariane_pkg.FMADD) and (genblk7_0_op_s2__w1 <= ariane_pkg.FNMADD)) or ((genblk7_0_op_s2__w1 >= ariane_pkg.VFCPKAB_S) and (genblk7_0_op_s2__w1 <= ariane_pkg.VFCPKCD_D)) { 1 } else { 0 }
+  mut rs3_fpr__w1 = rs3_fpr
+  rs3_fpr__w1#[0] = unsigned(true and (genblk7_0_is_imm_fpr != 0)) & 1
+  mut rs3_gpr_cvxif__w1 = rs3_gpr_cvxif
+  rs3_gpr_cvxif__w1#[0] = unsigned(false and (issue_instr_i#[360..=367] == ariane_pkg.OFFLOAD)) & 1
+  mut rd_list__w1 = rd_list
+  rd_list__w1#[0..=4] = fwd_i.sbe#[0..=438]#[345..=349]
+  const genblk8_0_op__w1 = fwd_i.sbe#[0..=438]#[360..=367]
+  mut genblk8_0_is_rd_fpr = 0ub?
+  genblk8_0_is_rd_fpr = unique if ((genblk8_0_op__w1 >= ariane_pkg.FLD) and (genblk8_0_op__w1 <= ariane_pkg.FLB)) or ((genblk8_0_op__w1 >= ariane_pkg.FADD) and (genblk8_0_op__w1 <= ariane_pkg.FNMADD)) or (genblk8_0_op__w1 == ariane_pkg.FCVT_I2F) or (genblk8_0_op__w1 == ariane_pkg.FCVT_F2F) or (genblk8_0_op__w1 == ariane_pkg.FSGNJ) or (genblk8_0_op__w1 == ariane_pkg.FMV_X2F) or ((genblk8_0_op__w1 >= ariane_pkg.VFMIN) and (genblk8_0_op__w1 <= ariane_pkg.VFSGNJX)) or ((genblk8_0_op__w1 >= ariane_pkg.VFCPKAB_S) and (genblk8_0_op__w1 <= ariane_pkg.VFCPKCD_D)) or (genblk8_0_op__w1 == ariane_pkg.ACCEL_OP_FD) { 1 } else { 0 }
+  mut rd_fpr__w1 = rd_fpr
+  rd_fpr__w1#[0] = unsigned(true and (genblk8_0_is_rd_fpr != 0)) & 1
+  mut rd_list__w2 = rd_list__w1
+  rd_list__w2#[5..=9] = fwd_i.sbe#[439..=877]#[345..=349]
+  const genblk8_0_op__w2 = fwd_i.sbe#[439..=877]#[360..=367]
+  genblk8_0_is_rd_fpr = unique if ((genblk8_0_op__w2 >= ariane_pkg.FLD) and (genblk8_0_op__w2 <= ariane_pkg.FLB)) or ((genblk8_0_op__w2 >= ariane_pkg.FADD) and (genblk8_0_op__w2 <= ariane_pkg.FNMADD)) or (genblk8_0_op__w2 == ariane_pkg.FCVT_I2F) or (genblk8_0_op__w2 == ariane_pkg.FCVT_F2F) or (genblk8_0_op__w2 == ariane_pkg.FSGNJ) or (genblk8_0_op__w2 == ariane_pkg.FMV_X2F) or ((genblk8_0_op__w2 >= ariane_pkg.VFMIN) and (genblk8_0_op__w2 <= ariane_pkg.VFSGNJX)) or ((genblk8_0_op__w2 >= ariane_pkg.VFCPKAB_S) and (genblk8_0_op__w2 <= ariane_pkg.VFCPKCD_D)) or (genblk8_0_op__w2 == ariane_pkg.ACCEL_OP_FD) { 1 } else { 0 }
+  mut rd_fpr__w2 = rd_fpr__w1
+  rd_fpr__w2#[1] = unsigned(true and (genblk8_0_is_rd_fpr != 0)) & 1
+  mut rd_list__w3 = rd_list__w2
+  rd_list__w3#[10..=14] = fwd_i.sbe#[878..=1316]#[345..=349]
+  const genblk8_0_op__w3 = fwd_i.sbe#[878..=1316]#[360..=367]
+  genblk8_0_is_rd_fpr = unique if ((genblk8_0_op__w3 >= ariane_pkg.FLD) and (genblk8_0_op__w3 <= ariane_pkg.FLB)) or ((genblk8_0_op__w3 >= ariane_pkg.FADD) and (genblk8_0_op__w3 <= ariane_pkg.FNMADD)) or (genblk8_0_op__w3 == ariane_pkg.FCVT_I2F) or (genblk8_0_op__w3 == ariane_pkg.FCVT_F2F) or (genblk8_0_op__w3 == ariane_pkg.FSGNJ) or (genblk8_0_op__w3 == ariane_pkg.FMV_X2F) or ((genblk8_0_op__w3 >= ariane_pkg.VFMIN) and (genblk8_0_op__w3 <= ariane_pkg.VFSGNJX)) or ((genblk8_0_op__w3 >= ariane_pkg.VFCPKAB_S) and (genblk8_0_op__w3 <= ariane_pkg.VFCPKCD_D)) or (genblk8_0_op__w3 == ariane_pkg.ACCEL_OP_FD) { 1 } else { 0 }
+  mut rd_fpr__w3 = rd_fpr__w2
+  rd_fpr__w3#[2] = unsigned(true and (genblk8_0_is_rd_fpr != 0)) & 1
+  mut rd_list__w4 = rd_list__w3
+  rd_list__w4#[15..=19] = fwd_i.sbe#[1317..=1755]#[345..=349]
+  const genblk8_0_op__w4 = fwd_i.sbe#[1317..=1755]#[360..=367]
+  genblk8_0_is_rd_fpr = unique if ((genblk8_0_op__w4 >= ariane_pkg.FLD) and (genblk8_0_op__w4 <= ariane_pkg.FLB)) or ((genblk8_0_op__w4 >= ariane_pkg.FADD) and (genblk8_0_op__w4 <= ariane_pkg.FNMADD)) or (genblk8_0_op__w4 == ariane_pkg.FCVT_I2F) or (genblk8_0_op__w4 == ariane_pkg.FCVT_F2F) or (genblk8_0_op__w4 == ariane_pkg.FSGNJ) or (genblk8_0_op__w4 == ariane_pkg.FMV_X2F) or ((genblk8_0_op__w4 >= ariane_pkg.VFMIN) and (genblk8_0_op__w4 <= ariane_pkg.VFSGNJX)) or ((genblk8_0_op__w4 >= ariane_pkg.VFCPKAB_S) and (genblk8_0_op__w4 <= ariane_pkg.VFCPKCD_D)) or (genblk8_0_op__w4 == ariane_pkg.ACCEL_OP_FD) { 1 } else { 0 }
+  mut rd_fpr__w4 = rd_fpr__w3
+  rd_fpr__w4#[3] = unsigned(true and (genblk8_0_is_rd_fpr != 0)) & 1
+  mut rd_list__w5 = rd_list__w4
+  rd_list__w5#[20..=24] = fwd_i.sbe#[1756..=2194]#[345..=349]
+  const genblk8_0_op__w5 = fwd_i.sbe#[1756..=2194]#[360..=367]
+  genblk8_0_is_rd_fpr = unique if ((genblk8_0_op__w5 >= ariane_pkg.FLD) and (genblk8_0_op__w5 <= ariane_pkg.FLB)) or ((genblk8_0_op__w5 >= ariane_pkg.FADD) and (genblk8_0_op__w5 <= ariane_pkg.FNMADD)) or (genblk8_0_op__w5 == ariane_pkg.FCVT_I2F) or (genblk8_0_op__w5 == ariane_pkg.FCVT_F2F) or (genblk8_0_op__w5 == ariane_pkg.FSGNJ) or (genblk8_0_op__w5 == ariane_pkg.FMV_X2F) or ((genblk8_0_op__w5 >= ariane_pkg.VFMIN) and (genblk8_0_op__w5 <= ariane_pkg.VFSGNJX)) or ((genblk8_0_op__w5 >= ariane_pkg.VFCPKAB_S) and (genblk8_0_op__w5 <= ariane_pkg.VFCPKCD_D)) or (genblk8_0_op__w5 == ariane_pkg.ACCEL_OP_FD) { 1 } else { 0 }
+  mut rd_fpr__w5 = rd_fpr__w4
+  rd_fpr__w5#[4] = unsigned(true and (genblk8_0_is_rd_fpr != 0)) & 1
+  mut rd_list__w6 = rd_list__w5
+  rd_list__w6#[25..=29] = fwd_i.sbe#[2195..=2633]#[345..=349]
+  const genblk8_0_op__w6 = fwd_i.sbe#[2195..=2633]#[360..=367]
+  genblk8_0_is_rd_fpr = unique if ((genblk8_0_op__w6 >= ariane_pkg.FLD) and (genblk8_0_op__w6 <= ariane_pkg.FLB)) or ((genblk8_0_op__w6 >= ariane_pkg.FADD) and (genblk8_0_op__w6 <= ariane_pkg.FNMADD)) or (genblk8_0_op__w6 == ariane_pkg.FCVT_I2F) or (genblk8_0_op__w6 == ariane_pkg.FCVT_F2F) or (genblk8_0_op__w6 == ariane_pkg.FSGNJ) or (genblk8_0_op__w6 == ariane_pkg.FMV_X2F) or ((genblk8_0_op__w6 >= ariane_pkg.VFMIN) and (genblk8_0_op__w6 <= ariane_pkg.VFSGNJX)) or ((genblk8_0_op__w6 >= ariane_pkg.VFCPKAB_S) and (genblk8_0_op__w6 <= ariane_pkg.VFCPKCD_D)) or (genblk8_0_op__w6 == ariane_pkg.ACCEL_OP_FD) { 1 } else { 0 }
+  mut rd_fpr__w6 = rd_fpr__w5
+  rd_fpr__w6#[5] = unsigned(true and (genblk8_0_is_rd_fpr != 0)) & 1
+  mut rd_list__w7 = rd_list__w6
+  rd_list__w7#[30..=34] = fwd_i.sbe#[2634..=3072]#[345..=349]
+  const genblk8_0_op__w7 = fwd_i.sbe#[2634..=3072]#[360..=367]
+  genblk8_0_is_rd_fpr = unique if ((genblk8_0_op__w7 >= ariane_pkg.FLD) and (genblk8_0_op__w7 <= ariane_pkg.FLB)) or ((genblk8_0_op__w7 >= ariane_pkg.FADD) and (genblk8_0_op__w7 <= ariane_pkg.FNMADD)) or (genblk8_0_op__w7 == ariane_pkg.FCVT_I2F) or (genblk8_0_op__w7 == ariane_pkg.FCVT_F2F) or (genblk8_0_op__w7 == ariane_pkg.FSGNJ) or (genblk8_0_op__w7 == ariane_pkg.FMV_X2F) or ((genblk8_0_op__w7 >= ariane_pkg.VFMIN) and (genblk8_0_op__w7 <= ariane_pkg.VFSGNJX)) or ((genblk8_0_op__w7 >= ariane_pkg.VFCPKAB_S) and (genblk8_0_op__w7 <= ariane_pkg.VFCPKCD_D)) or (genblk8_0_op__w7 == ariane_pkg.ACCEL_OP_FD) { 1 } else { 0 }
+  mut rd_fpr__w7 = rd_fpr__w6
+  rd_fpr__w7#[6] = unsigned(true and (genblk8_0_is_rd_fpr != 0)) & 1
+  mut rd_list__w8 = rd_list__w7
+  rd_list__w8#[35..=39] = fwd_i.sbe#[3073..=3511]#[345..=349]
+  const genblk8_0_op__w8 = fwd_i.sbe#[3073..=3511]#[360..=367]
+  genblk8_0_is_rd_fpr = unique if ((genblk8_0_op__w8 >= ariane_pkg.FLD) and (genblk8_0_op__w8 <= ariane_pkg.FLB)) or ((genblk8_0_op__w8 >= ariane_pkg.FADD) and (genblk8_0_op__w8 <= ariane_pkg.FNMADD)) or (genblk8_0_op__w8 == ariane_pkg.FCVT_I2F) or (genblk8_0_op__w8 == ariane_pkg.FCVT_F2F) or (genblk8_0_op__w8 == ariane_pkg.FSGNJ) or (genblk8_0_op__w8 == ariane_pkg.FMV_X2F) or ((genblk8_0_op__w8 >= ariane_pkg.VFMIN) and (genblk8_0_op__w8 <= ariane_pkg.VFSGNJX)) or ((genblk8_0_op__w8 >= ariane_pkg.VFCPKAB_S) and (genblk8_0_op__w8 <= ariane_pkg.VFCPKCD_D)) or (genblk8_0_op__w8 == ariane_pkg.ACCEL_OP_FD) { 1 } else { 0 }
+  mut rd_fpr__w8 = rd_fpr__w7
+  rd_fpr__w8#[7] = unsigned(true and (genblk8_0_is_rd_fpr != 0)) & 1
+  const t522 = fwd_i.still_issued
+  mut i_rs1_last_raw = raw_checker::[name=i_rs1_last_raw](clk_i = clk_i, rst_ni = rst_ni, rs_i = issue_instr_i#[355..=359], rs_fpr_i = rs1_fpr__w1 & 1, rd_i = rd_list__w8, `rd_fpr_i.e7` = (rd_fpr__w8 >> 7) & 1, `rd_fpr_i.e6` = (rd_fpr__w8 >> 6) & 1, `rd_fpr_i.e5` = (rd_fpr__w8 >> 5) & 1, `rd_fpr_i.e4` = (rd_fpr__w8 >> 4) & 1, `rd_fpr_i.e3` = (rd_fpr__w8 >> 3) & 1, `rd_fpr_i.e2` = (rd_fpr__w8 >> 2) & 1, `rd_fpr_i.e1` = (rd_fpr__w8 >> 1) & 1, `rd_fpr_i.e0` = rd_fpr__w8 & 1, `still_issued_i.e7` = (t522 >> 7) & 1, `still_issued_i.e6` = (t522 >> 6) & 1, `still_issued_i.e5` = (t522 >> 5) & 1, `still_issued_i.e4` = (t522 >> 4) & 1, `still_issued_i.e3` = (t522 >> 3) & 1, `still_issued_i.e2` = (t522 >> 2) & 1, `still_issued_i.e1` = (t522 >> 1) & 1, `still_issued_i.e0` = t522 & 1, issue_pointer_i = fwd_i.issue_pointer)
+  mut idx_hzd_rs1__w1 = idx_hzd_rs1
+  idx_hzd_rs1__w1#[0..=2] = i_rs1_last_raw.idx_o#[0..=2]
+  mut rs1_raw_check__w1 = rs1_raw_check
+  rs1_raw_check__w1#[0] = i_rs1_last_raw.valid_o & 1
+  mut rs1_has_raw__w1 = rs1_has_raw
+  rs1_has_raw__w1#[0] = unsigned(((rs1_raw_check__w1 & 1) != 0) and (((issue_instr_i >> 0x116) & 1) == 0)) & 1
+  const t569 = fwd_i.still_issued
+  mut i_rs2_last_raw = raw_checker::[name=i_rs2_last_raw](clk_i = clk_i, rst_ni = rst_ni, rs_i = issue_instr_i#[350..=354], rs_fpr_i = rs2_fpr__w1 & 1, rd_i = rd_list__w8, `rd_fpr_i.e7` = (rd_fpr__w8 >> 7) & 1, `rd_fpr_i.e6` = (rd_fpr__w8 >> 6) & 1, `rd_fpr_i.e5` = (rd_fpr__w8 >> 5) & 1, `rd_fpr_i.e4` = (rd_fpr__w8 >> 4) & 1, `rd_fpr_i.e3` = (rd_fpr__w8 >> 3) & 1, `rd_fpr_i.e2` = (rd_fpr__w8 >> 2) & 1, `rd_fpr_i.e1` = (rd_fpr__w8 >> 1) & 1, `rd_fpr_i.e0` = rd_fpr__w8 & 1, `still_issued_i.e7` = (t569 >> 7) & 1, `still_issued_i.e6` = (t569 >> 6) & 1, `still_issued_i.e5` = (t569 >> 5) & 1, `still_issued_i.e4` = (t569 >> 4) & 1, `still_issued_i.e3` = (t569 >> 3) & 1, `still_issued_i.e2` = (t569 >> 2) & 1, `still_issued_i.e1` = (t569 >> 1) & 1, `still_issued_i.e0` = t569 & 1, issue_pointer_i = fwd_i.issue_pointer)
+  mut idx_hzd_rs2__w1 = idx_hzd_rs2
+  idx_hzd_rs2__w1#[0..=2] = i_rs2_last_raw.idx_o#[0..=2]
+  mut rs2_raw_check__w1 = rs2_raw_check
+  rs2_raw_check__w1#[0] = i_rs2_last_raw.valid_o & 1
+  mut rs2_has_raw__w1 = rs2_has_raw
+  rs2_has_raw__w1#[0] = rs2_raw_check__w1 & 1
+  const t610 = fwd_i.still_issued
+  mut i_rs3_last_raw = raw_checker::[name=i_rs3_last_raw](clk_i = clk_i, rst_ni = rst_ni, rs_i = issue_instr_i#[281..=344]#[0..=4], rs_fpr_i = rs3_fpr__w1 & 1, rd_i = rd_list__w8, `rd_fpr_i.e7` = (rd_fpr__w8 >> 7) & 1, `rd_fpr_i.e6` = (rd_fpr__w8 >> 6) & 1, `rd_fpr_i.e5` = (rd_fpr__w8 >> 5) & 1, `rd_fpr_i.e4` = (rd_fpr__w8 >> 4) & 1, `rd_fpr_i.e3` = (rd_fpr__w8 >> 3) & 1, `rd_fpr_i.e2` = (rd_fpr__w8 >> 2) & 1, `rd_fpr_i.e1` = (rd_fpr__w8 >> 1) & 1, `rd_fpr_i.e0` = rd_fpr__w8 & 1, `still_issued_i.e7` = (t610 >> 7) & 1, `still_issued_i.e6` = (t610 >> 6) & 1, `still_issued_i.e5` = (t610 >> 5) & 1, `still_issued_i.e4` = (t610 >> 4) & 1, `still_issued_i.e3` = (t610 >> 3) & 1, `still_issued_i.e2` = (t610 >> 2) & 1, `still_issued_i.e1` = (t610 >> 1) & 1, `still_issued_i.e0` = t610 & 1, issue_pointer_i = fwd_i.issue_pointer)
+  mut idx_hzd_rs3__w1 = idx_hzd_rs3
+  idx_hzd_rs3__w1#[0..=2] = i_rs3_last_raw.idx_o#[0..=2]
+  mut rs3_raw_check__w1 = rs3_raw_check
+  rs3_raw_check__w1#[0] = i_rs3_last_raw.valid_o & 1
+  mut rs3_has_raw__w1 = rs3_has_raw
+  rs3_has_raw__w1#[0] = unsigned(((rs3_raw_check__w1 & 1) != 0) and (((rs3_fpr__w1 & 1) != 0) or ((rs3_gpr_cvxif__w1 & 1) != 0))) & 1
+  mut fwd_res__w1 = fwd_res
+  fwd_res__w1#[0..=63] = fwd_i.sbe#[0..=438]#[281..=344]
+  mut fwd_res_valid__w1 = fwd_res_valid
+  fwd_res_valid__w1#[0] = (fwd_i.sbe#[0..=438] >> 0x118) & 1 & (~((fwd_i.sbe#[0..=438]#[73..=276] >> 1) & 1)) & 1 & 1
+  mut fwd_res__w2 = fwd_res__w1
+  fwd_res__w2#[64..=127] = fwd_i.sbe#[439..=877]#[281..=344]
+  mut fwd_res_valid__w2 = fwd_res_valid__w1
+  fwd_res_valid__w2#[1] = (fwd_i.sbe#[439..=877] >> 0x118) & 1 & (~((fwd_i.sbe#[439..=877]#[73..=276] >> 1) & 1)) & 1 & 1
+  mut fwd_res__w3 = fwd_res__w2
+  fwd_res__w3#[128..=191] = fwd_i.sbe#[878..=1316]#[281..=344]
+  mut fwd_res_valid__w3 = fwd_res_valid__w2
+  fwd_res_valid__w3#[2] = (fwd_i.sbe#[878..=1316] >> 0x118) & 1 & (~((fwd_i.sbe#[878..=1316]#[73..=276] >> 1) & 1)) & 1 & 1
+  mut fwd_res__w4 = fwd_res__w3
+  fwd_res__w4#[192..=255] = fwd_i.sbe#[1317..=1755]#[281..=344]
+  mut fwd_res_valid__w4 = fwd_res_valid__w3
+  fwd_res_valid__w4#[3] = (fwd_i.sbe#[1317..=1755] >> 0x118) & 1 & (~((fwd_i.sbe#[1317..=1755]#[73..=276] >> 1) & 1)) & 1 & 1
+  mut fwd_res__w5 = fwd_res__w4
+  fwd_res__w5#[256..=319] = fwd_i.sbe#[1756..=2194]#[281..=344]
+  mut fwd_res_valid__w5 = fwd_res_valid__w4
+  fwd_res_valid__w5#[4] = (fwd_i.sbe#[1756..=2194] >> 0x118) & 1 & (~((fwd_i.sbe#[1756..=2194]#[73..=276] >> 1) & 1)) & 1 & 1
+  mut fwd_res__w6 = fwd_res__w5
+  fwd_res__w6#[320..=383] = fwd_i.sbe#[2195..=2633]#[281..=344]
+  mut fwd_res_valid__w6 = fwd_res_valid__w5
+  fwd_res_valid__w6#[5] = (fwd_i.sbe#[2195..=2633] >> 0x118) & 1 & (~((fwd_i.sbe#[2195..=2633]#[73..=276] >> 1) & 1)) & 1 & 1
+  mut fwd_res__w7 = fwd_res__w6
+  fwd_res__w7#[384..=447] = fwd_i.sbe#[2634..=3072]#[281..=344]
+  mut fwd_res_valid__w7 = fwd_res_valid__w6
+  fwd_res_valid__w7#[6] = (fwd_i.sbe#[2634..=3072] >> 0x118) & 1 & (~((fwd_i.sbe#[2634..=3072]#[73..=276] >> 1) & 1)) & 1 & 1
+  mut fwd_res__w8 = fwd_res__w7
+  fwd_res__w8#[448..=511] = fwd_i.sbe#[3073..=3511]#[281..=344]
+  mut fwd_res_valid__w8 = fwd_res_valid__w7
+  fwd_res_valid__w8#[7] = (fwd_i.sbe#[3073..=3511] >> 0x118) & 1 & (~((fwd_i.sbe#[3073..=3511]#[73..=276] >> 1) & 1)) & 1 & 1
+  fwd_res = fwd_res__w8
+  fwd_res_valid = fwd_res_valid__w8
+  if (((fwd_i.wb#[0..=68] >> 0x44) & 1) != 0) and (((fwd_i.wb#[0..=68] >> 3) & 1) == 0) {
+    const t785 = fwd_i.wb#[0..=68]#[0..=2] * 0x40
+    fwd_res = ((fwd_res & (~(0xffffffffffffffff << t785))) | (fwd_i.wb#[0..=68]#[4..=67] << t785))#[0..=511]
+    fwd_res_valid = ((fwd_res_valid & (~(1 << fwd_i.wb#[0..=68]#[0..=2]))) | (1 << fwd_i.wb#[0..=68]#[0..=2]))#[0..=7]
+  }
+  if (((fwd_i.wb#[69..=137] >> 0x44) & 1) != 0) and (((fwd_i.wb#[69..=137] >> 3) & 1) == 0) {
+    const t818 = fwd_i.wb#[69..=137]#[0..=2] * 0x40
+    fwd_res = ((fwd_res & (~(0xffffffffffffffff << t818))) | (fwd_i.wb#[69..=137]#[4..=67] << t818))#[0..=511]
+    fwd_res_valid = ((fwd_res_valid & (~(1 << fwd_i.wb#[69..=137]#[0..=2]))) | (1 << fwd_i.wb#[69..=137]#[0..=2]))#[0..=7]
+  }
+  if (((fwd_i.wb#[138..=206] >> 0x44) & 1) != 0) and (((fwd_i.wb#[138..=206] >> 3) & 1) == 0) {
+    const t851 = fwd_i.wb#[138..=206]#[0..=2] * 0x40
+    fwd_res = ((fwd_res & (~(0xffffffffffffffff << t851))) | (fwd_i.wb#[138..=206]#[4..=67] << t851))#[0..=511]
+    fwd_res_valid = ((fwd_res_valid & (~(1 << fwd_i.wb#[138..=206]#[0..=2]))) | (1 << fwd_i.wb#[138..=206]#[0..=2]))#[0..=7]
+  }
+  if (((fwd_i.wb#[207..=275] >> 0x44) & 1) != 0) and (((fwd_i.wb#[207..=275] >> 3) & 1) == 0) {
+    const t884 = fwd_i.wb#[207..=275]#[0..=2] * 0x40
+    fwd_res = ((fwd_res & (~(0xffffffffffffffff << t884))) | (fwd_i.wb#[207..=275]#[4..=67] << t884))#[0..=511]
+    fwd_res_valid = ((fwd_res_valid & (~(1 << fwd_i.wb#[207..=275]#[0..=2]))) | (1 << fwd_i.wb#[207..=275]#[0..=2]))#[0..=7]
+  }
+  if (((fwd_i.wb#[276..=344] >> 0x44) & 1) != 0) and (((fwd_i.wb#[276..=344] >> 3) & 1) == 0) {
+    const t917 = fwd_i.wb#[276..=344]#[0..=2] * 0x40
+    fwd_res = ((fwd_res & (~(0xffffffffffffffff << t917))) | (fwd_i.wb#[276..=344]#[4..=67] << t917))#[0..=511]
+    fwd_res_valid = ((fwd_res_valid & (~(1 << fwd_i.wb#[276..=344]#[0..=2]))) | (1 << fwd_i.wb#[276..=344]#[0..=2]))#[0..=7]
+  }
+  mut rs1_res__w1 = rs1_res
+  rs1_res__w1#[0..=63] = ((fwd_res << 0x40) >> ((idx_hzd_rs1__w1#[0..=2] * 0x40) + 0x40))#[0..=63]
+  mut rs1_is_not_csr__w1 = rs1_is_not_csr
+  rs1_is_not_csr__w1#[0] = unsigned(((rs1_fpr__w1 & 1) != 0) or (((fwd_i.sbe << 0x1b7) >> ((idx_hzd_rs1__w1#[0..=2] * 0x1b7) + 0x1b7))#[0..=438]#[368..=371] != ariane_pkg.CSR) or (true and (issue_instr_i#[360..=367] == ariane_pkg.SFENCE_VMA))) & 1
+  mut rs1_valid__w1 = rs1_valid
+  rs1_valid__w1#[0] = unsigned(((((fwd_res_valid << 1) >> (idx_hzd_rs1__w1#[0..=2] + 1)) & 1) != 0) and ((rs1_is_not_csr__w1 & 1) != 0)) & 1
+  mut rs2_res__w1 = rs2_res
+  rs2_res__w1#[0..=63] = ((fwd_res << 0x40) >> ((idx_hzd_rs2__w1#[0..=2] * 0x40) + 0x40))#[0..=63]
+  mut rs2_is_not_csr__w1 = rs2_is_not_csr
+  rs2_is_not_csr__w1#[0] = unsigned(((rs2_fpr__w1 & 1) != 0) or (((fwd_i.sbe << 0x1b7) >> ((idx_hzd_rs2__w1#[0..=2] * 0x1b7) + 0x1b7))#[0..=438]#[368..=371] != ariane_pkg.CSR) or (true and (issue_instr_i#[360..=367] == ariane_pkg.SFENCE_VMA))) & 1
+  mut rs2_valid__w1 = rs2_valid
+  rs2_valid__w1#[0] = unsigned(((((fwd_res_valid << 1) >> (idx_hzd_rs2__w1#[0..=2] + 1)) & 1) != 0) and ((rs2_is_not_csr__w1 & 1) != 0)) & 1
+  mut rs3__w1 = rs3
+  rs3__w1#[0..=63] = ((fwd_res << 0x40) >> ((idx_hzd_rs3__w1#[0..=2] * 0x40) + 0x40))#[0..=63]
+  mut rs3_valid__w1 = rs3_valid
+  rs3_valid__w1#[0] = ((fwd_res_valid << 1) >> (idx_hzd_rs3__w1#[0..=2] + 1)) & 1
+  mut rs3_res__w1 = rs3_res
+  rs3_res__w1#[0..=63] = rs3__w1#[0..=63]
+  mut imm_forward_rs3__w1 = imm_forward_rs3
+  imm_forward_rs3__w1#[0..=63] = rs3_res__w1#[0..=63]#[0..=63]
+  _mux_23 = issue_instr_i#[355..=359]
+  mut raddr_pack__w1 = raddr_pack
+  raddr_pack__w1#[0..=4] = _mux_23
+  _mux_24 = issue_instr_i#[350..=354]
+  mut raddr_pack__w2 = raddr_pack__w1
+  raddr_pack__w2#[5..=9] = _mux_24
+  mut waddr_pack__w1 = waddr_pack
+  waddr_pack__w1#[0..=4] = waddr_i#[0..=4]
+  mut wdata_pack__w1 = wdata_pack
+  wdata_pack__w1#[0..=63] = wdata_i#[0..=63]
+  mut we_pack__w1 = we_pack
+  we_pack__w1#[0] = we_gpr_i.e0 & 1
+  mut waddr_pack__w2 = waddr_pack__w1
+  waddr_pack__w2#[5..=9] = waddr_i#[5..=9]
+  mut wdata_pack__w2 = wdata_pack__w1
+  wdata_pack__w2#[64..=127] = wdata_i#[64..=127]
+  mut we_pack__w2 = we_pack__w1
+  we_pack__w2#[1] = we_gpr_i.e1 & 1
+  mut i_ariane_regfile = ariane_regfile::[name=i_ariane_regfile](clk_i = clk_i, rst_ni = rst_ni, test_en_i = 0, raddr_i = raddr_pack__w2, waddr_i = waddr_pack__w2, wdata_i = wdata_pack__w2, we_i = we_pack__w2)
+  const rdata__w1 = i_ariane_regfile
+  fp_raddr_pack = (issue_instr_i#[281..=344]#[0..=4] << 10) | (issue_instr_i#[350..=354] << 5) | issue_instr_i#[355..=359]
+  mut fp_wdata_pack__w1 = fp_wdata_pack
+  fp_wdata_pack__w1#[0..=63] = wdata_i#[0..=63]
+  mut fp_wdata_pack__w2 = fp_wdata_pack__w1
+  fp_wdata_pack__w2#[64..=127] = wdata_i#[64..=127]
+  mut i_ariane_fp_regfile = ariane_regfile_p1::[name=i_ariane_fp_regfile](clk_i = clk_i, rst_ni = rst_ni, test_en_i = 0, raddr_i = fp_raddr_pack, waddr_i = waddr_pack__w2, wdata_i = fp_wdata_pack__w2, we_i = we_fpr_i)
+  const fprdata__w1 = i_ariane_fp_regfile
+  const operand_c_fpr__w1 = fprdata__w1#[128..=191]
+  const genblk7_0_op__w2 = issue_instr_i#[360..=367]
+  genblk7_0_is_rs1_fpr = unique if ((genblk7_0_op__w2 >= ariane_pkg.FMUL) and (genblk7_0_op__w2 <= ariane_pkg.FNMADD)) or (genblk7_0_op__w2 == ariane_pkg.FCVT_F2I) or (genblk7_0_op__w2 == ariane_pkg.FCVT_F2F) or (genblk7_0_op__w2 == ariane_pkg.FSGNJ) or (genblk7_0_op__w2 == ariane_pkg.FMV_F2X) or (genblk7_0_op__w2 == ariane_pkg.FCMP) or (genblk7_0_op__w2 == ariane_pkg.FCLASS) or ((genblk7_0_op__w2 >= ariane_pkg.VFMIN) and (genblk7_0_op__w2 <= ariane_pkg.VFCPKCD_D)) or (genblk7_0_op__w2 == ariane_pkg.ACCEL_OP_FS1) { 1 } else { 0 }
+  mut _mux_25:u64 = if true and (genblk7_0_is_rs1_fpr != 0) { fprdata__w1#[0..=63]#[0..=63] } else { rdata__w1#[0..=63] }
+  mut operand_a_regfile__w1 = operand_a_regfile
+  operand_a_regfile__w1#[0..=63] = _mux_25
+  const genblk7_0_op_s1__w2 = issue_instr_i#[360..=367]
+  genblk7_0_is_rs2_fpr = unique if ((genblk7_0_op_s1__w2 >= ariane_pkg.FSD) and (genblk7_0_op_s1__w2 <= ariane_pkg.FSB)) or ((genblk7_0_op_s1__w2 >= ariane_pkg.FADD) and (genblk7_0_op_s1__w2 <= ariane_pkg.FMIN_MAX)) or ((genblk7_0_op_s1__w2 >= ariane_pkg.FMADD) and (genblk7_0_op_s1__w2 <= ariane_pkg.FNMADD)) or (genblk7_0_op_s1__w2 == ariane_pkg.FCVT_F2F) or ((genblk7_0_op_s1__w2 >= ariane_pkg.FSGNJ) and (genblk7_0_op_s1__w2 <= ariane_pkg.FMV_F2X)) or (genblk7_0_op_s1__w2 == ariane_pkg.FCMP) or ((genblk7_0_op_s1__w2 >= ariane_pkg.VFMIN) and (genblk7_0_op_s1__w2 <= ariane_pkg.VFCPKCD_D)) { 1 } else { 0 }
+  mut _mux_26:u64 = if true and (genblk7_0_is_rs2_fpr != 0) { fprdata__w1#[64..=127]#[0..=63] } else { rdata__w1#[64..=127] }
+  mut operand_b_regfile__w1 = operand_b_regfile
+  operand_b_regfile__w1#[0..=63] = _mux_26
+  const genblk7_0_op_s2__w2 = issue_instr_i#[360..=367]
+  genblk7_0_is_imm_fpr = unique if ((genblk7_0_op_s2__w2 >= ariane_pkg.FADD) and (genblk7_0_op_s2__w2 <= ariane_pkg.FSUB)) or ((genblk7_0_op_s2__w2 >= ariane_pkg.FMADD) and (genblk7_0_op_s2__w2 <= ariane_pkg.FNMADD)) or ((genblk7_0_op_s2__w2 >= ariane_pkg.VFCPKAB_S) and (genblk7_0_op_s2__w2 <= ariane_pkg.VFCPKCD_D)) { 1 } else { 0 }
+  genblk19_0_operand_c_gpr = 0sb?
+  mut _mux_27 = if true and (genblk7_0_is_imm_fpr != 0) { operand_c_fpr__w1 } else { genblk19_0_operand_c_gpr }
+  _mux_28 = operand_c_fpr__w1
+  mut operand_c_regfile__w1 = operand_c_regfile
+  operand_c_regfile__w1#[0..=63] = _mux_28
+  mut i_cvxif_issue_register_commit_if_driver = cvxif_issue_register_commit_if_driver::[name=i_cvxif_issue_register_commit_if_driver](clk_i = clk_i, rst_ni = rst_ni, flush_i = flush_i, hart_id_i = hart_id_i, issue_ready_i = x_issue_ready_i, `issue_resp_i.accept` = x_issue_resp_i.accept, `issue_resp_i.writeback` = x_issue_resp_i.writeback, `issue_resp_i.register_read` = x_issue_resp_i.register_read, register_ready_i = x_register_ready_i, valid_i = unsigned((((issue_instr_i#[73..=276] >> 1) & 1) == 0) and ((issue_instr_valid_i & 1) != 0) and (unsigned(issue_instr_i#[368..=371] == ariane_pkg.CVXIF) != 0)), x_off_instr_i = orig_instr_i, x_trans_id_i = issue_instr_i#[372..=374], register_i = rs, rs_valid_i = rs_valid)
+  rs_valid = (((~(stall_rs2 & 1)) & 1) << 1) | ((~(stall_rs1 & 1)) & 1)
+  rs = (fu_data_n#[67..=130] << 64) | fu_data_n#[131..=194]
+  const x_transaction_accepted_o__w1 = unsigned((i_cvxif_issue_register_commit_if_driver.issue_valid_o != 0) and (x_issue_ready_i != 0) and (x_issue_resp_i.accept != 0))
+  const x_transaction_rejected__w1 = unsigned((i_cvxif_issue_register_commit_if_driver.issue_valid_o != 0) and (x_issue_ready_i != 0) and (((~x_issue_resp_i.accept) & 1) != 0))
+  mut rs1_forwarding_o__w1 = rs1_forwarding_o
+  rs1_forwarding_o__w1#[0..=63] = fu_data_n#[131..=194]
+  mut rs2_forwarding_o__w1 = rs2_forwarding_o
+  rs2_forwarding_o__w1#[0..=63] = fu_data_n#[67..=130]
+  mut rvfi_rs1_o__w1 = rvfi_rs1_o
+  rvfi_rs1_o__w1#[0..=63] = fu_data_n#[131..=194]
+  mut rvfi_rs2_o__w1 = rvfi_rs2_o
+  rvfi_rs2_o__w1#[0..=63] = fu_data_n#[67..=130]
+  const stall_issue_o__w1 = stall_raw & 1
+  stall_raw__wtmp = stall_i
+  stall_rs1__wtmp = stall_i
+  stall_rs2__wtmp = stall_i
+  forward_rs1 = 0
+  if (rs1_has_raw__w1 & 1) != 0 {
+    if (rs1_valid__w1 & 1) != 0 {
+      forward_rs1 = 1
+      forward_rs1#[0] = 1
+    } else {
+      stall_raw__wtmp#[0] = 1
+      stall_rs1__wtmp#[0] = 1
+    }
+  }
+  forward_rs2 = 0
+  if (rs2_has_raw__w1 & 1) != 0 {
+    if (rs2_valid__w1 & 1) != 0 {
+      forward_rs2 = 1
+      forward_rs2#[0] = 1
+    } else {
+      stall_raw__wtmp#[0] = 1
+      stall_rs2__wtmp#[0] = 1
+    }
+  }
+  stall_rs3 = stall_i
+  forward_rs3 = 0
+  if (rs3_has_raw__w1 & 1) != 0 {
+    if (rs3_valid__w1 & 1) != 0 {
+      forward_rs3 = 1
+      forward_rs3#[0] = 1
+    } else {
+      stall_raw__wtmp#[0] = 1
+      stall_rs3#[0] = 1
+    }
+  }
+  {
+    if (i_cvxif_issue_register_commit_if_driver.issue_valid_o != 0) and (x_issue_resp_i.accept != 0) {
+      if ((~(x_issue_resp_i.register_read & 1)) & 1) != 0 {
+        forward_rs1#[0] = 0
+        stall_rs1__wtmp#[0] = 0
+      }
+      if ((~((x_issue_resp_i.register_read >> 1) & 1)) & 1) != 0 {
+        forward_rs2#[0] = 0
+        stall_rs2__wtmp#[0] = 0
+      }
+    }
+    _mux_32 = if x_transaction_rejected__w1 != 0 { 0 } else { unsigned(((stall_rs1__wtmp & 1) != 0) or ((stall_rs2__wtmp & 1) != 0) or ((stall_rs3 & 1) != 0)) & 1 }
+    stall_raw__wtmp#[0] = _mux_32 & 1
+  }
+  genblk7_0_op_s2 = genblk7_0_op_s2__w2
+  fu_data_n__wtmp#[131..=194] = operand_a_regfile__w1#[0..=63]
+  mut fu_data_n__wtmp__w1 = fu_data_n__wtmp
+  fu_data_n__wtmp__w1#[67..=130] = operand_b_regfile__w1#[0..=63]
+  fu_data_n__wtmp = fu_data_n__wtmp__w1
+  {
+    genblk7_0_op_s2 = issue_instr_i#[360..=367]
+    genblk7_0_is_imm_fpr = unique if ((genblk7_0_op_s2 >= ariane_pkg.FADD) and (genblk7_0_op_s2 <= ariane_pkg.FSUB)) or ((genblk7_0_op_s2 >= ariane_pkg.FMADD) and (genblk7_0_op_s2 <= ariane_pkg.FNMADD)) or ((genblk7_0_op_s2 >= ariane_pkg.VFCPKAB_S) and (genblk7_0_op_s2 <= ariane_pkg.VFCPKCD_D)) { 1 } else { 0 }
+    _mux_39 = if true and (genblk7_0_is_imm_fpr != 0) { operand_c_regfile__w1#[0..=63]#[0..=63] } else { issue_instr_i#[281..=344] }
+    fu_data_n__wtmp#[3..=66] = _mux_39
+  }
+  mut fu_data_n__wtmp__w2 = fu_data_n__wtmp
+  fu_data_n__wtmp__w2#[0..=2] = issue_instr_i#[372..=374]
+  mut fu_data_n__wtmp__w3 = fu_data_n__wtmp__w2
+  fu_data_n__wtmp__w3#[203..=206] = issue_instr_i#[368..=371]
+  mut fu_data_n__wtmp__w4 = fu_data_n__wtmp__w3
+  fu_data_n__wtmp__w4#[195..=202] = issue_instr_i#[360..=367]
+  fu_data_n__wtmp = fu_data_n__wtmp__w4
+  if (forward_rs1 & 1) != 0 {
+    fu_data_n__wtmp#[131..=194] = rs1_res__w1#[0..=63]
+  }
+  if (forward_rs2 & 1) != 0 {
+    fu_data_n__wtmp#[67..=130] = rs2_res__w1#[0..=63]
+  }
+  if true and ((forward_rs3 & 1) != 0) {
+    fu_data_n__wtmp#[3..=66] = imm_forward_rs3__w1#[0..=63]
+  }
+  if ((issue_instr_i >> 0x115) & 1) != 0 {
+    fu_data_n__wtmp#[131..=194] = issue_instr_i#[375..=438]#[0..=63]
+  }
+  if ((issue_instr_i >> 0x116) & 1) != 0 {
+    fu_data_n__wtmp#[131..=194] = issue_instr_i#[355..=359]
+  }
+  const genblk7_0_op_s1__w3 = issue_instr_i#[360..=367]
+  genblk7_0_is_rs2_fpr = unique if ((genblk7_0_op_s1__w3 >= ariane_pkg.FSD) and (genblk7_0_op_s1__w3 <= ariane_pkg.FSB)) or ((genblk7_0_op_s1__w3 >= ariane_pkg.FADD) and (genblk7_0_op_s1__w3 <= ariane_pkg.FMIN_MAX)) or ((genblk7_0_op_s1__w3 >= ariane_pkg.FMADD) and (genblk7_0_op_s1__w3 <= ariane_pkg.FNMADD)) or (genblk7_0_op_s1__w3 == ariane_pkg.FCVT_F2F) or ((genblk7_0_op_s1__w3 >= ariane_pkg.FSGNJ) and (genblk7_0_op_s1__w3 <= ariane_pkg.FMV_F2X)) or (genblk7_0_op_s1__w3 == ariane_pkg.FCMP) or ((genblk7_0_op_s1__w3 >= ariane_pkg.VFMIN) and (genblk7_0_op_s1__w3 <= ariane_pkg.VFCPKCD_D)) { 1 } else { 0 }
+  if (((issue_instr_i >> 0x117) & 1) != 0) and (issue_instr_i#[368..=371] != ariane_pkg.STORE) and (issue_instr_i#[368..=371] != ariane_pkg.CTRL_FLOW) and (issue_instr_i#[368..=371] != ariane_pkg.ACCEL) and (not (true and (genblk7_0_is_rs2_fpr != 0))) {
+    fu_data_n__wtmp#[67..=130] = issue_instr_i#[281..=344]
+  }
+  branch_valid_n = 0
+  alu2_valid_n = 0
+  fpu_fmt_n = 0
+  lsu_valid_n = 0
+  csr_valid_n = 0
+  mult_valid_n = 0
+  aes_valid_n = 0
+  alu_valid_n = 0
+  fpu_rm_n = 0
+  fpu_valid_n = 0
+  if (((issue_instr_i#[73..=276] >> 1) & 1) == 0) and ((issue_instr_valid_i & 1) != 0) and ((issue_ack_o & 1) != 0) {
+    match issue_instr_i#[368..=371] {
+      == ariane_pkg.ALU {
+        {
+          alu_valid_n = 1
+          alu_valid_n#[0] = 1
+        }
+      }
+      == ariane_pkg.CTRL_FLOW {
+        branch_valid_n = 1
+        branch_valid_n#[0] = 1
+      }
+      == ariane_pkg.MULT {
+        mult_valid_n = 1
+        mult_valid_n#[0] = 1
+      }
+      in (ariane_pkg.LOAD, ariane_pkg.STORE) {
+        lsu_valid_n = 1
+        lsu_valid_n#[0] = 1
+      }
+      == ariane_pkg.CSR {
+        csr_valid_n = 1
+        csr_valid_n#[0] = 1
+      }
+      == ariane_pkg.AES {
+        aes_valid_n = 1
+        aes_valid_n#[0] = 1
+      }
+      else {
+        if (issue_instr_i#[368..=371] == ariane_pkg.FPU) and true {
+          fpu_valid_n = 1
+          fpu_valid_n#[0] = 1
+          fpu_fmt_n = orig_instr__w1#[0..=31]#[25..=26]
+          fpu_rm_n = orig_instr__w1#[0..=31]#[12..=14]
+        } elif (issue_instr_i#[368..=371] == ariane_pkg.FPU_VEC) and true {
+          fpu_valid_n#[0] = 1
+          fpu_fmt_n = orig_instr__w1#[0..=31]#[12..=13]
+          fpu_rm_n = ((orig_instr__w1#[0..=31] >> 14) & 1)
+        }
+      }
+    }
+  }
+  if flush_i != 0 {
+    alu_valid_n = 0
+    aes_valid_n = 0
+    lsu_valid_n = 0
+    mult_valid_n = 0
+    fpu_valid_n = 0
+    alu2_valid_n = 0
+    csr_valid_n = 0
+    branch_valid_n = 0
+  }
+  if rst_ni != 0 {
+    alu_valid_q = alu_valid_n
+    aes_valid_q = aes_valid_n
+    lsu_valid_q = lsu_valid_n
+    mult_valid_q = mult_valid_n
+    fpu_valid_q = fpu_valid_n
+    fpu_fmt_q = fpu_fmt_n
+    fpu_rm_q = fpu_rm_n
+    alu2_valid_q = alu2_valid_n
+    csr_valid_q = csr_valid_n
+    branch_valid_q = branch_valid_n
+  }
+  cvxif_off_instr_n = 0
+  cvxif_valid_n = 0
+  if (((issue_instr_i#[73..=276] >> 1) & 1) == 0) and ((issue_instr_valid_i & 1) != 0) and ((issue_ack_o & 1) != 0) {
+    match issue_instr_i#[368..=371] {
+      == ariane_pkg.CVXIF {
+        cvxif_valid_n = 1
+        cvxif_valid_n#[0] = 1
+        cvxif_off_instr_n = orig_instr_i
+      }
+      else {
+      }
+    }
+  }
+  if flush_i != 0 {
+    cvxif_valid_n = 0
+    cvxif_off_instr_n = 0
+  }
+  if rst_ni != 0 {
+    cvxif_valid_q = cvxif_valid_n
+    cvxif_off_instr_q = cvxif_off_instr_n
+  }
+  issue_ack = 0
+  if ((issue_instr_valid_i & 1) != 0) and ((fu_busy & 1) == 0) {
+    if (stall_raw & 1) == 0 {
+      issue_ack = 1
+      issue_ack#[0] = 1
+    }
+    if ((issue_instr_i#[73..=276] >> 1) & 1) != 0 {
+      issue_ack#[0] = 1
+    }
+  }
+  issue_ack_o__wtmp = issue_ack
+  if (issue_instr_i#[368..=371] == ariane_pkg.CVXIF) and (not ((x_transaction_accepted_o__w1 != 0) or (x_transaction_rejected__w1 != 0))) {
+    issue_ack_o__wtmp#[0] = unsigned((((issue_instr_i#[73..=276] >> 1) & 1) != 0) and ((issue_instr_valid_i & 1) != 0)) & 1
+  }
+  is_compressed_instr_n = 0
+  pc_n = 0
+  if issue_instr_i#[368..=371] == ariane_pkg.CTRL_FLOW {
+    pc_n = issue_instr_i#[375..=438]
+    is_compressed_instr_n = (issue_instr_i >> 5) & 1
+    `branch_predict_n.cf` = issue_instr_i#[6..=72]#[64..=66]
+    `branch_predict_n.predict_address` = issue_instr_i#[6..=72]#[0..=63]
+  }
+  x_transaction_rejected_n = if issue_instr_i#[368..=371] == ariane_pkg.CVXIF { x_transaction_rejected__w1 } else { 0 }
+  mut _mux_41:u2 = if issue_ack_o == 1 { 0 } else { 0 }
+  mut `alu_bypass_n.rs1_from_rd` = (_mux_41 >> 1) & 1
+  mut `alu_bypass_n.rs2_from_rd` = _mux_41 & 1
+  if rst_ni != 0 {
+    fu_data_q = fu_data_n
+    alu_bypass_q = (`alu_bypass_n.rs1_from_rd` << 1) | `alu_bypass_n.rs2_from_rd`
+    pc_o = pc_n
+    is_compressed_instr_o = is_compressed_instr_n
+    branch_predict_o_q = (`branch_predict_n.cf` << 0x40) | `branch_predict_n.predict_address`
+    if issue_instr_i#[368..=371] == ariane_pkg.CTRL_FLOW {
+      {
+        is_zcmt_o = 0
+      }
+    }
+    x_transaction_rejected_o = x_transaction_rejected_n
+  }
+  issue_ack_o = issue_ack_o__wtmp
+  stall_raw = stall_raw__wtmp
+  stall_rs1 = stall_rs1__wtmp
+  stall_rs2 = stall_rs2__wtmp
+  fu_data_n = fu_data_n__wtmp
+  alu_bypass_o.rs1_from_rd = `alu_bypass_o__bpo.rs1_from_rd`
+  alu_bypass_o.rs2_from_rd = `alu_bypass_o__bpo.rs2_from_rd`
+  x_issue_req_o.instr = i_cvxif_issue_register_commit_if_driver.issue_req_o.instr
+  x_issue_req_o.hartid = i_cvxif_issue_register_commit_if_driver.issue_req_o.hartid
+  x_issue_req_o.id = i_cvxif_issue_register_commit_if_driver.issue_req_o.id
+  x_register_o.hartid = i_cvxif_issue_register_commit_if_driver.register_o.hartid
+  x_register_o.id = i_cvxif_issue_register_commit_if_driver.register_o.id
+  x_register_o.rs = i_cvxif_issue_register_commit_if_driver.register_o.rs
+  x_register_o.rs_valid = i_cvxif_issue_register_commit_if_driver.register_o.rs_valid
+  x_commit_o.hartid = i_cvxif_issue_register_commit_if_driver.commit_o.hartid
+  x_commit_o.id = i_cvxif_issue_register_commit_if_driver.commit_o.id
+  x_commit_o.commit_kill = i_cvxif_issue_register_commit_if_driver.commit_o.commit_kill
+  fu_data_o = fu_data_o__w1
+  rs1_forwarding_o = rs1_forwarding_o__w1
+  rs2_forwarding_o = rs2_forwarding_o__w1
+  alu_valid_o = alu_valid_o__w1
+  aes_valid_o = aes_valid_o__w1
+  branch_valid_o = branch_valid_o__w1
+  tinst_o = 0
+  lsu_valid_o = lsu_valid_o__w1
+  mult_valid_o = mult_valid_o__w1
+  fpu_valid_o = fpu_valid_o__w1
+  fpu_fmt_o = fpu_fmt_o__w1
+  fpu_rm_o = fpu_rm_o__w1
+  alu2_valid_o = alu2_valid_o__w1
+  csr_valid_o = csr_valid_o__w1
+  cvxif_valid_o = _mux_3
+  cvxif_off_instr_o = _mux_4
+  x_issue_valid_o = i_cvxif_issue_register_commit_if_driver.issue_valid_o
+  x_register_valid_o = i_cvxif_issue_register_commit_if_driver.register_valid_o
+  x_commit_valid_o = i_cvxif_issue_register_commit_if_driver.commit_valid_o
+  x_transaction_accepted_o = x_transaction_accepted_o__w1
+  x_issue_writeback_o = x_issue_resp_i.writeback
+  x_id_o = i_cvxif_issue_register_commit_if_driver.issue_req_o.id
+  stall_issue_o = stall_issue_o__w1
+  rvfi_rs1_o = rvfi_rs1_o__w1
+  rvfi_rs2_o = rvfi_rs2_o__w1
+}

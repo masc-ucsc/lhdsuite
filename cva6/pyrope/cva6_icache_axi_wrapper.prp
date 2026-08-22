@@ -1,0 +1,107 @@
+const axi_shim = import("axi_shim.axi_shim")
+const cva6_icache = import("cva6_icache.cva6_icache")
+const wt_cache_pkg = import("wt_cache_pkg")
+
+pub mod cva6_icache_axi_wrapper::[timecheck=false](clk_i:u1, rst_ni:u1, priv_lvl_i:u2, flush_i:u1, en_i:u1, areq_i:(fetch_valid:u1, fetch_paddr:u56, fetch_exception:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1)), dreq_i:(req:u1, kill_s1:u1, kill_s2:u1, spec:u1, vaddr:u64), axi_resp_i:(aw_ready:u1, ar_ready:u1, w_ready:u1, b_valid:u1, b:(id:u4, resp:u2, user:u64), r_valid:u1, r:(id:u4, data:u64, resp:u2, last:u1, user:u64))) -> (miss_o:u1@[], areq_o:(fetch_req:u1, fetch_vaddr:u64)@[], dreq_o:(ready:u1, valid:u1, data:u32, user:u64, vaddr:u64, ex:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1))@[], axi_req_o:(aw:(id:u4, addr:u64, len:u8, size:u3, burst:u2, lock:u1, cache:u4, prot:u3, qos:u4, region:u4, atop:u6, user:u64), aw_valid:u1, w:(data:u64, strb:u8, last:u1, user:u64), w_valid:u1, b_ready:u1, ar:(id:u4, addr:u64, len:u8, size:u3, burst:u2, lock:u1, cache:u4, prot:u3, qos:u4, region:u4, user:u64), ar_valid:u1, r_ready:u1)@[]) {
+  wire icache_mem_data:(way:u2, paddr:u56, nc:u1, tid:u2) = nil
+  reg req_valid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg req_data_q:u61:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg first_q:u1:[init=1, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg rd_shift_q:u128:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  mut `icache_mem_rtrn.user` = 0
+  mut `icache_mem_rtrn.inv` = 0
+  wire icache_mem_data_req:u1
+  wire axi_rd_gnt:u1
+  wire axi_rd_last:u1
+  wire axi_rd_valid:u1
+  mut first_d:u1 = 0
+  mut rd_shift_d__wtmp:u128 = 0sb?
+  wire rd_shift_d:u128
+  first_d = 0ub?
+  mut `icache_mem_rtrn.tid` = req_data_q#[0..=1]
+  mut `icache_mem_rtrn.rtype` = wt_cache_pkg.ICACHE_IFILL_ACK & 1
+  const req_valid_d__w1 = (~axi_rd_gnt) & 1 & (icache_mem_data_req | req_valid_q) & 1 & 1
+  mut _mux_1:u61 = if icache_mem_data_req != 0 { ((icache_mem_data.way << 59) | (icache_mem_data.paddr << 3) | (icache_mem_data.nc << 2) | icache_mem_data.tid)#[0..=60] } else { req_data_q }
+  mut `req_data_d.way` = _mux_1#[59..=60]
+  mut `req_data_d.paddr` = _mux_1#[3..=58]
+  mut `req_data_d.nc` = (_mux_1 >> 2) & 1
+  mut `req_data_d.tid` = _mux_1#[0..=1]
+  const axi_rd_req__w1 = (icache_mem_data_req | req_valid_q) & 1
+  mut _mux_2:u32 = if `req_data_d.nc` != 0 { 0 } else { 1 }
+  mut `icache_mem_rtrn.data` = rd_shift_d
+  mut i_cva6_icache = cva6_icache::[name=i_cva6_icache](clk_i = clk_i, rst_ni = rst_ni, flush_i = flush_i, en_i = en_i, areq_i.fetch_valid = areq_i.fetch_valid, areq_i.fetch_paddr = areq_i.fetch_paddr, areq_i.fetch_exception.cause = areq_i.fetch_exception.cause, areq_i.fetch_exception.tval = areq_i.fetch_exception.tval, areq_i.fetch_exception.tval2 = areq_i.fetch_exception.tval2, areq_i.fetch_exception.tinst = areq_i.fetch_exception.tinst, areq_i.fetch_exception.gva = areq_i.fetch_exception.gva, areq_i.fetch_exception.valid = areq_i.fetch_exception.valid, areq_i.fetch_exception.timing = areq_i.fetch_exception.timing, dreq_i.req = dreq_i.req, dreq_i.kill_s1 = dreq_i.kill_s1, dreq_i.kill_s2 = dreq_i.kill_s2, dreq_i.spec = dreq_i.spec, dreq_i.vaddr = dreq_i.vaddr, mem_rtrn_vld_i = axi_rd_valid & axi_rd_last & 1, `mem_rtrn_i.rtype` = `icache_mem_rtrn.rtype`, `mem_rtrn_i.data` = `icache_mem_rtrn.data`, `mem_rtrn_i.user` = `icache_mem_rtrn.user`, `mem_rtrn_i.inv.vld` = 0, `mem_rtrn_i.inv.all` = 0, `mem_rtrn_i.inv.idx` = 0, `mem_rtrn_i.inv.way` = 0, `mem_rtrn_i.tid` = `icache_mem_rtrn.tid`, mem_data_ack_i = icache_mem_data_req)
+  icache_mem_data_req = i_cva6_icache.mem_data_req_o
+  icache_mem_data.way = i_cva6_icache.mem_data_o.way
+  icache_mem_data.paddr = i_cva6_icache.mem_data_o.paddr
+  icache_mem_data.nc = i_cva6_icache.mem_data_o.nc
+  icache_mem_data.tid = i_cva6_icache.mem_data_o.tid
+  mut i_axi_shim = axi_shim::[name=i_axi_shim](clk_i = clk_i, rst_ni = rst_ni, rd_req_i = axi_rd_req__w1, rd_addr_i = `req_data_d.paddr`, rd_blen_i = _mux_2 & 1, rd_size_i = 3, rd_id_i = `req_data_d.tid`, rd_lock_i = 0, rd_rdy_i = 1, wr_req_i = 0, wr_addr_i = 0, wr_data_i = 0, wr_user_i = 0, wr_be_i = 0, wr_blen_i = 0, wr_size_i = 0, wr_id_i = 0, wr_lock_i = 0, wr_atop_i = 0, wr_rdy_i = 0, axi_resp_i.aw_ready = axi_resp_i.aw_ready, axi_resp_i.ar_ready = axi_resp_i.ar_ready, axi_resp_i.w_ready = axi_resp_i.w_ready, axi_resp_i.b_valid = axi_resp_i.b_valid, axi_resp_i.b.id = axi_resp_i.b.id, axi_resp_i.b.resp = axi_resp_i.b.resp, axi_resp_i.b.user = axi_resp_i.b.user, axi_resp_i.r_valid = axi_resp_i.r_valid, axi_resp_i.r.id = axi_resp_i.r.id, axi_resp_i.r.data = axi_resp_i.r.data, axi_resp_i.r.resp = axi_resp_i.r.resp, axi_resp_i.r.last = axi_resp_i.r.last, axi_resp_i.r.user = axi_resp_i.r.user)
+  axi_rd_gnt = i_axi_shim.rd_gnt_o
+  axi_rd_last = i_axi_shim.rd_last_o
+  axi_rd_valid = i_axi_shim.rd_valid_o
+  rd_shift_d__wtmp = rd_shift_q
+  first_d = first_q
+  if axi_rd_valid != 0 {
+    first_d = axi_rd_last
+    {
+      rd_shift_d__wtmp = (i_axi_shim.rd_data_o#[0..=63] << 64) | rd_shift_q#[64..=127]
+    }
+    if first_q != 0 {
+      rd_shift_d__wtmp#[0..=63] = i_axi_shim.rd_data_o#[0..=63]
+    }
+  }
+  if rst_ni != 0 {
+    req_valid_q = req_valid_d__w1
+    req_data_q = (`req_data_d.way` << 59) | (`req_data_d.paddr` << 3) | (`req_data_d.nc` << 2) | `req_data_d.tid`
+    first_q = first_d
+    rd_shift_q = rd_shift_d
+  }
+  rd_shift_d = rd_shift_d__wtmp
+  areq_o.fetch_req = i_cva6_icache.areq_o.fetch_req
+  areq_o.fetch_vaddr = i_cva6_icache.areq_o.fetch_vaddr
+  dreq_o.ready = i_cva6_icache.dreq_o.ready
+  dreq_o.valid = i_cva6_icache.dreq_o.valid
+  dreq_o.data = i_cva6_icache.dreq_o.data
+  dreq_o.user = i_cva6_icache.dreq_o.user
+  dreq_o.vaddr = i_cva6_icache.dreq_o.vaddr
+  dreq_o.ex.cause = i_cva6_icache.dreq_o.ex.cause
+  dreq_o.ex.tval = i_cva6_icache.dreq_o.ex.tval
+  dreq_o.ex.tval2 = i_cva6_icache.dreq_o.ex.tval2
+  dreq_o.ex.tinst = i_cva6_icache.dreq_o.ex.tinst
+  dreq_o.ex.gva = i_cva6_icache.dreq_o.ex.gva
+  dreq_o.ex.valid = i_cva6_icache.dreq_o.ex.valid
+  dreq_o.ex.timing = i_cva6_icache.dreq_o.ex.timing
+  axi_req_o.aw.id = i_axi_shim.axi_req_o.aw.id
+  axi_req_o.aw.addr = i_axi_shim.axi_req_o.aw.addr
+  axi_req_o.aw.len = i_axi_shim.axi_req_o.aw.len
+  axi_req_o.aw.size = i_axi_shim.axi_req_o.aw.size
+  axi_req_o.aw.burst = i_axi_shim.axi_req_o.aw.burst
+  axi_req_o.aw.lock = i_axi_shim.axi_req_o.aw.lock
+  axi_req_o.aw.cache = i_axi_shim.axi_req_o.aw.cache
+  axi_req_o.aw.prot = i_axi_shim.axi_req_o.aw.prot
+  axi_req_o.aw.qos = i_axi_shim.axi_req_o.aw.qos
+  axi_req_o.aw.region = i_axi_shim.axi_req_o.aw.region
+  axi_req_o.aw.atop = i_axi_shim.axi_req_o.aw.atop
+  axi_req_o.aw.user = i_axi_shim.axi_req_o.aw.user
+  axi_req_o.aw_valid = i_axi_shim.axi_req_o.aw_valid
+  axi_req_o.w.data = i_axi_shim.axi_req_o.w.data
+  axi_req_o.w.strb = i_axi_shim.axi_req_o.w.strb
+  axi_req_o.w.last = i_axi_shim.axi_req_o.w.last
+  axi_req_o.w.user = i_axi_shim.axi_req_o.w.user
+  axi_req_o.w_valid = i_axi_shim.axi_req_o.w_valid
+  axi_req_o.b_ready = i_axi_shim.axi_req_o.b_ready
+  axi_req_o.ar.id = i_axi_shim.axi_req_o.ar.id
+  axi_req_o.ar.addr = i_axi_shim.axi_req_o.ar.addr
+  axi_req_o.ar.len = i_axi_shim.axi_req_o.ar.len
+  axi_req_o.ar.size = i_axi_shim.axi_req_o.ar.size
+  axi_req_o.ar.burst = i_axi_shim.axi_req_o.ar.burst
+  axi_req_o.ar.lock = i_axi_shim.axi_req_o.ar.lock
+  axi_req_o.ar.cache = i_axi_shim.axi_req_o.ar.cache
+  axi_req_o.ar.prot = i_axi_shim.axi_req_o.ar.prot
+  axi_req_o.ar.qos = i_axi_shim.axi_req_o.ar.qos
+  axi_req_o.ar.region = i_axi_shim.axi_req_o.ar.region
+  axi_req_o.ar.user = i_axi_shim.axi_req_o.ar.user
+  axi_req_o.ar_valid = i_axi_shim.axi_req_o.ar_valid
+  axi_req_o.r_ready = i_axi_shim.axi_req_o.r_ready
+  miss_o = i_cva6_icache.miss_o
+}

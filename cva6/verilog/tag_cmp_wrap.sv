@@ -16,7 +16,14 @@ module tag_cmp_wrap
   import ariane_pkg::*;
 #(
     parameter config_pkg::cva6_cfg_t CVA6Cfg  = build_config_pkg::build_config(cva6_config_pkg::cva6_cfg),
-    parameter int unsigned           NR_PORTS = 3
+    // 5, not 3: this must be the instantiation std_nbdcache.sv actually
+    // performs, because cva6/pyrope/tag_cmp.prp is emitted from the WHOLE core
+    // and therefore carries that shape (req_i:u40 = 5 ports x 8 ways). With 3
+    // the two languages hold different parameterizations of the same module
+    // and every cross-language scenario compares two different designs. With
+    // 5 the cone-generated tag_cmp and the whole-core one are provably the
+    // same netlist (`lhd lec` — 176 matched nodes, structurally identical).
+    parameter int unsigned           NR_PORTS = 5
 ) (
     input logic clk_i,
     input logic rst_ni,

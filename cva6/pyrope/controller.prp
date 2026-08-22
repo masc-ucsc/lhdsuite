@@ -1,0 +1,105 @@
+pub mod controller::[timecheck=false](clk_i:u1, rst_ni:u1, v_i:u1, flush_dcache_ack_i:u1, halt_csr_i:u1, halt_acc_i:u1, eret_i:u1, ex_valid_i:u1, set_debug_pc_i:u1, resolved_branch_i:(valid:u1, pc:u64, target_address:u64, is_mispredict:u1, is_taken:u1, cf_type:u3), flush_csr_i:u1, fence_i_i:u1, fence_i:u1, sfence_vma_i:u1, hfence_vvma_i:u1, hfence_gvma_i:u1, flush_commit_i:u1, flush_acc_i:u1) -> (set_pc_commit_o:u1@[], flush_if_o:u1@[], flush_unissued_instr_o:u1@[], flush_id_o:u1@[], flush_ex_o:u1@[], flush_bp_o:u1@[], flush_icache_o:u1@[], flush_dcache_o:u1@[], flush_tlb_o:u1@[], flush_tlb_vvma_o:u1@[], flush_tlb_gvma_o:u1@[], halt_frontend_o:u1@[], halt_o:u1@[]) {
+  reg flush_dcache_o:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg fence_active_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg fence_i_active_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  mut fence_active_d:u1 = 0
+  mut flush_dcache:u1 = 0
+  mut fence_i_active_d:u1 = 0
+  fence_active_d = 0ub?
+  flush_dcache = 0ub?
+  fence_i_active_d = 0ub?
+  set_pc_commit_o = 0ub?
+  flush_if_o = 0ub?
+  flush_unissued_instr_o = 0ub?
+  flush_id_o = 0ub?
+  flush_ex_o = 0ub?
+  flush_bp_o = 0ub?
+  flush_icache_o = 0ub?
+  flush_tlb_o = 0ub?
+  flush_if_o = 0
+  flush_unissued_instr_o = 0
+  if resolved_branch_i.is_mispredict != 0 {
+    flush_unissued_instr_o = 1
+    flush_if_o = 1
+  }
+  flush_ex_o = 0
+  fence_active_d = fence_active_q
+  flush_dcache = 0
+  flush_id_o = 0
+  set_pc_commit_o = 0
+  if fence_i != 0 {
+    set_pc_commit_o = 1
+    flush_if_o = 1
+    flush_unissued_instr_o = 1
+    flush_id_o = 1
+    flush_ex_o = 1
+  }
+  fence_i_active_d = fence_i_active_q
+  flush_icache_o = 0
+  if fence_i_i != 0 {
+    set_pc_commit_o = 1
+    flush_if_o = 1
+    flush_unissued_instr_o = 1
+    flush_id_o = 1
+    flush_ex_o = 1
+    flush_icache_o = 1
+    {
+      flush_dcache = 1
+      fence_active_d = 1
+      fence_i_active_d = 1
+    }
+  }
+  {
+    if (flush_dcache_ack_i != 0) and (fence_i_active_q != 0) {
+      fence_i_active_d = 0
+    }
+    if (flush_dcache_ack_i != 0) and (fence_active_q != 0) {
+      fence_active_d = 0
+    } elif fence_active_q != 0 {
+      flush_dcache = 1
+    }
+  }
+  flush_tlb_o = 0
+  flush_tlb_vvma_o = 0
+  if true and (sfence_vma_i != 0) {
+    set_pc_commit_o = 1
+    flush_if_o = 1
+    flush_unissued_instr_o = 1
+    flush_id_o = 1
+    flush_ex_o = 1
+    {
+      flush_tlb_o = 1
+    }
+  }
+  flush_tlb_gvma_o = 0
+  if (flush_csr_i != 0) or (flush_acc_i != 0) {
+    set_pc_commit_o = 1
+    flush_if_o = 1
+    flush_unissued_instr_o = 1
+    flush_id_o = 1
+    flush_ex_o = 1
+  } elif true and (flush_commit_i != 0) {
+    set_pc_commit_o = 1
+    flush_if_o = 1
+    flush_unissued_instr_o = 1
+    flush_id_o = 1
+    flush_ex_o = 1
+  }
+  flush_bp_o = 0
+  if (ex_valid_i != 0) or (eret_i != 0) or (true and (set_debug_pc_i != 0)) {
+    set_pc_commit_o = 0
+    flush_if_o = 1
+    flush_unissued_instr_o = 1
+    flush_id_o = 1
+    flush_ex_o = 1
+    flush_bp_o = 1
+  }
+  const halt_frontend_o__w1 = fence_i_active_q
+  if rst_ni != 0 {
+    fence_active_q = fence_active_d
+    fence_i_active_q = fence_i_active_d
+    flush_dcache_o = flush_dcache
+  }
+  halt_frontend_o = halt_frontend_o__w1
+  halt_o = unsigned((halt_csr_i != 0) or (halt_acc_i != 0) or (true and (fence_active_q != 0)))
+}

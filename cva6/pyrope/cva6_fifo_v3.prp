@@ -1,0 +1,103 @@
+const ariane_pkg = import("ariane_pkg")
+
+pub mod cva6_fifo_v3::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, testmode_i:u1, data_i:(instr:u32, cf:u3, ex:u2, ex_vaddr:u64, ex_gpaddr:u41, ex_tinst:u32, ex_gva:u1), push_i:u1, pop_i:u1) -> (full_o:u1@[], empty_o:u1@[], usage_o:u2@[], data_o:(instr:u32, cf:u3, ex:u2, ex_vaddr:u64, ex_gpaddr:u41, ex_tinst:u32, ex_gva:u1)@[]) {
+  mut _mux_4:u175 = 0
+  reg read_pointer_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg write_pointer_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg status_cnt_q:u3:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg mem_q:[4]u175:[ordering="old", init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg data_ft_q:u175:[clock_pin=ref clk_i]
+  reg first_word_q:u1:[clock_pin=ref clk_i]
+  mut `data_ft_n.instr` = 0
+  mut `data_ft_n.cf` = 0
+  mut `data_ft_n.ex` = 0
+  mut `data_ft_n.ex_vaddr` = 0
+  mut `data_ft_n.ex_gpaddr` = 0
+  mut `data_ft_n.ex_tinst` = 0
+  mut `data_ft_n.ex_gva` = 0
+  mut gate_clock:u1 = 0
+  mut status_cnt_n:u3 = 0
+  mut mem_n:u700 = 0
+  mut `data_o__bpo.instr` = 0
+  mut `data_o__bpo.cf` = 0
+  mut `data_o__bpo.ex` = 0
+  mut `data_o__bpo.ex_vaddr` = 0
+  mut `data_o__bpo.ex_gpaddr` = 0
+  mut `data_o__bpo.ex_tinst` = 0
+  mut `data_o__bpo.ex_gva` = 0
+  gate_clock = 0ub?
+  mut read_pointer_n:u2 = 0sb?
+  mut write_pointer_n:u2 = 0sb?
+  status_cnt_n = 0sb?
+  mem_n = 0sb?
+  const usage_o__w1 = status_cnt_q#[0..=1]
+  const full_o__w1 = unsigned(status_cnt_q == 4)
+  const empty_o__w1 = unsigned(status_cnt_q == 0) & (~(0 & push_i & 1)) & 1 & 1
+  {
+    _mux_4 = mem_q[read_pointer_q]
+    `data_o__bpo.instr` = _mux_4#[143..=174]
+    `data_o__bpo.cf` = _mux_4#[140..=142]
+    `data_o__bpo.ex` = _mux_4#[138..=139]
+    `data_o__bpo.ex_vaddr` = _mux_4#[74..=137]
+    `data_o__bpo.ex_gpaddr` = _mux_4#[33..=73]
+    `data_o__bpo.ex_tinst` = _mux_4#[1..=32]
+    `data_o__bpo.ex_gva` = _mux_4 & 1
+    mem_n = mem_q
+    gate_clock = 1
+  }
+  write_pointer_n = write_pointer_q
+  status_cnt_n = status_cnt_q
+  if (push_i != 0) and (((~full_o__w1) & 1) != 0) {
+    {
+      const t157 = write_pointer_q * 0xaf
+      mem_n = ((mem_n & (~(0x7fffffffffffffffffffffffffffffffffffffffffff << t157))) | (((data_i.instr << 0x8f) | (data_i.cf << 0x8c) | (data_i.ex << 0x8a) | (data_i.ex_vaddr << 0x4a) | (data_i.ex_gpaddr << 33) | (data_i.ex_tinst << 1) | data_i.ex_gva)#[0..=174] << t157))#[0..=699]
+      gate_clock = 0
+    }
+    write_pointer_n = if write_pointer_q == 0xffffffff { 0 } else { (write_pointer_q + 1)#[0..=1] }
+    status_cnt_n = (status_cnt_q + 1)#[0..=2]
+  }
+  read_pointer_n = read_pointer_q
+  if (pop_i != 0) and (((~empty_o__w1) & 1) != 0) {
+    const t193 = (data_i.instr << 0x8f) | (data_i.cf << 0x8c) | (data_i.ex << 0x8a) | (data_i.ex_vaddr << 0x4a) | (data_i.ex_gpaddr << 33) | (data_i.ex_tinst << 1) | data_i.ex_gva
+    `data_ft_n.instr` = t193#[143..=174]
+    `data_ft_n.cf` = t193#[140..=142]
+    `data_ft_n.ex` = t193#[138..=139]
+    `data_ft_n.ex_vaddr` = t193#[74..=137]
+    `data_ft_n.ex_gpaddr` = t193#[33..=73]
+    `data_ft_n.ex_tinst` = t193#[1..=32]
+    `data_ft_n.ex_gva` = t193 & 1
+    read_pointer_n = if read_pointer_n == 0xffffffff { 0 } else { (read_pointer_q + 1)#[0..=1] }
+    status_cnt_n = (status_cnt_q - 1)#[0..=31]#[0..=2]
+  }
+  if (push_i != 0) and (pop_i != 0) and (((~full_o__w1) & 1) != 0) and (((~empty_o__w1) & 1) != 0) {
+    status_cnt_n = status_cnt_q
+  }
+  {
+  }
+  if rst_ni != 0 {
+    if flush_i != 0 {
+      read_pointer_q = 0
+      write_pointer_q = 0
+      status_cnt_q = 0
+    } else {
+      read_pointer_q = read_pointer_n
+      write_pointer_q = write_pointer_n
+      status_cnt_q = status_cnt_n
+    }
+  }
+  if rst_ni != 0 {
+    if gate_clock == 0 {
+      mem_q = mem_n
+    }
+  }
+  data_o.instr = `data_o__bpo.instr`
+  data_o.cf = `data_o__bpo.cf`
+  data_o.ex = `data_o__bpo.ex`
+  data_o.ex_vaddr = `data_o__bpo.ex_vaddr`
+  data_o.ex_gpaddr = `data_o__bpo.ex_gpaddr`
+  data_o.ex_tinst = `data_o__bpo.ex_tinst`
+  data_o.ex_gva = `data_o__bpo.ex_gva`
+  full_o = full_o__w1
+  empty_o = empty_o__w1
+  usage_o = usage_o__w1
+}

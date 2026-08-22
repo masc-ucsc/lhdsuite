@@ -1,0 +1,136 @@
+const compressed_decoder = import("compressed_decoder.compressed_decoder")
+const cvxif_compressed_if_driver = import("cvxif_compressed_if_driver.cvxif_compressed_if_driver")
+const decoder = import("decoder.decoder")
+
+pub mod id_stage::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, debug_req_i:u1, fetch_entry_i:u367, fetch_entry_valid_i:u1, issue_instr_ack_i:u1, priv_lvl_i:u2, v_i:u1, fs_i:u2, vfs_i:u2, frm_i:u3, vs_i:u2, irq_i:u2, irq_ctrl_i:(mie:u64, mip:u64, mideleg:u64, hideleg:u64, sie:u1, global_enable:u1), debug_mode_i:u1, tvm_i:u1, tw_i:u1, vtw_i:u1, tsr_i:u1, hu_i:u1, mcbie_i:u2, scbie_i:u2, hcbie_i:u2, mcbcfe_i:u1, scbcfe_i:u1, hcbcfe_i:u1, hart_id_i:u64, compressed_ready_i:u1, jvt_i:(base:u58, mode:u6), compressed_resp_i:(instr:u32, accept:u1), sdtrig_decoder_action_i:u64, dcache_req_ports_i:(data_gnt:u1, data_rvalid:u1, data_rid:u1, data_rdata:u64, data_ruser:u64)) -> (fetch_entry_ready_o:u1@[], issue_entry_o:u439@[], issue_entry_o_prev:u439@[], orig_instr_o:u32@[], issue_entry_valid_o:u1@[], is_ctrl_flow_o:u1@[], rvfi_is_compressed_o:u1@[], compressed_valid_o:u1@[], compressed_req_o:(instr:u16, hartid:u64)@[], dcache_req_ports_o:(address_index:u12, address_tag:u44, data_wdata:u64, data_wuser:u64, data_req:u1, data_we:u1, data_be:u8, data_size:u2, data_id:u1, kill_req:u1, tag_valid:u1, cbo_op:u8)@[]) {
+  reg issue_q:[1]u473:[ordering="old", init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  mut issue_n:u473 = 0
+  mut stall_instr_fetch:u1 = 0
+  mut is_control_flow_instr:u1 = 0
+  mut decoded_instruction:u439 = 0
+  mut decoded_instruction_valid:u1 = 0
+  mut orig_instr:u32 = 0
+  mut is_illegal_rvc:u1 = 0
+  mut instruction_rvc:u32 = 0
+  mut is_compressed_rvc:u1 = 0
+  mut is_zcmt_instr:u1 = 0
+  mut is_macro_instr:u1 = 0
+  mut is_illegal_deco:u1 = 0
+  mut instruction_deco:u32 = 0
+  mut is_compressed_deco:u1 = 0
+  mut `dcache_req_ports_o__bpo.address_index` = 0
+  mut `dcache_req_ports_o__bpo.address_tag` = 0
+  mut `dcache_req_ports_o__bpo.data_wdata` = 0
+  mut `dcache_req_ports_o__bpo.data_wuser` = 0
+  mut `dcache_req_ports_o__bpo.data_req` = 0
+  mut `dcache_req_ports_o__bpo.data_we` = 0
+  mut `dcache_req_ports_o__bpo.data_be` = 0
+  mut `dcache_req_ports_o__bpo.data_size` = 0
+  mut `dcache_req_ports_o__bpo.data_id` = 0
+  mut `dcache_req_ports_o__bpo.kill_req` = 0
+  mut `dcache_req_ports_o__bpo.tag_valid` = 0
+  mut `dcache_req_ports_o__bpo.cbo_op` = 0
+  issue_n = 0sb?
+  stall_instr_fetch = 0ub?
+  is_control_flow_instr = 0ub?
+  decoded_instruction = 0sb?
+  decoded_instruction_valid = 0ub?
+  orig_instr = 0sb?
+  is_illegal_rvc = 0ub?
+  instruction_rvc = 0sb?
+  is_compressed_rvc = 0ub?
+  is_zcmt_instr = 0ub?
+  is_macro_instr = 0ub?
+  is_illegal_deco = 0ub?
+  instruction_deco = 0sb?
+  is_compressed_deco = 0ub?
+  fetch_entry_ready_o = 0ub?
+  issue_entry_o = 0sb?
+  issue_entry_o_prev = 0sb?
+  orig_instr_o = 0sb?
+  issue_entry_valid_o = 0ub?
+  is_ctrl_flow_o = 0ub?
+  mut compressed_decoder_i = compressed_decoder::[name=compressed_decoder_i](instr_i = fetch_entry_i#[271..=302])
+  mut instruction_rvc__w1 = instruction_rvc
+  instruction_rvc__w1#[0..=31] = compressed_decoder_i.instr_o#[0..=31]
+  mut is_illegal_rvc__w1 = is_illegal_rvc
+  is_illegal_rvc__w1#[0] = compressed_decoder_i.illegal_instr_o & 1
+  mut is_macro_instr__w1 = is_macro_instr
+  is_macro_instr__w1#[0] = compressed_decoder_i.is_macro_instr_o & 1
+  mut is_compressed_rvc__w1 = is_compressed_rvc
+  is_compressed_rvc__w1#[0] = compressed_decoder_i.is_compressed_o & 1
+  mut is_zcmt_instr__w1 = is_zcmt_instr
+  is_zcmt_instr__w1#[0] = compressed_decoder_i.is_zcmt_instr_o & 1
+  const is_illegal_cvxif_i__w1 = is_illegal_rvc__w1
+  mut i_cvxif_compressed_if_driver_i = cvxif_compressed_if_driver::[name=i_cvxif_compressed_if_driver_i](clk_i = clk_i, rst_ni = rst_ni, flush_i = flush_i, hart_id_i = hart_id_i, is_compressed_i = is_compressed_rvc__w1, is_illegal_i = is_illegal_cvxif_i__w1, instruction_i = instruction_rvc__w1, stall_i = 0, compressed_ready_i = compressed_ready_i, compressed_resp_i.instr = compressed_resp_i.instr, compressed_resp_i.accept = compressed_resp_i.accept)
+  mut stall_instr_fetch__w1 = stall_instr_fetch
+  stall_instr_fetch__w1#[0] = i_cvxif_compressed_if_driver_i.stall_o & 1
+  instruction_deco = instruction_rvc__w1
+  is_illegal_deco = is_illegal_rvc__w1
+  is_compressed_deco = is_compressed_rvc__w1
+  {
+    {
+      is_illegal_deco#[0] = i_cvxif_compressed_if_driver_i.is_illegal_o & 1
+      instruction_deco#[0..=31] = i_cvxif_compressed_if_driver_i.instruction_o#[0..=31]
+      is_compressed_deco#[0] = i_cvxif_compressed_if_driver_i.is_compressed_o & 1
+    }
+  }
+  mut decoder_i = decoder::[name=decoder_i](debug_req_i = debug_req_i, pc_i = fetch_entry_i#[303..=366], is_compressed_i = is_compressed_deco & 1, compressed_instr_i = fetch_entry_i#[271..=302]#[0..=15], is_illegal_i = is_illegal_deco & 1, instruction_i = instruction_deco, is_macro_instr_i = is_macro_instr__w1 & 1, is_last_macro_instr_i = 0, is_double_rd_macro_instr_i = 0, is_zcmt_i = is_zcmt_instr__w1 & 1, jump_address_i = 0, `branch_predict_i.cf` = fetch_entry_i#[204..=270]#[64..=66], `branch_predict_i.predict_address` = fetch_entry_i#[204..=270]#[0..=63], `ex_i.cause` = fetch_entry_i#[0..=203]#[140..=203], `ex_i.tval` = fetch_entry_i#[0..=203]#[76..=139], `ex_i.tval2` = fetch_entry_i#[0..=203]#[35..=75], `ex_i.tinst` = fetch_entry_i#[0..=203]#[3..=34], `ex_i.gva` = (fetch_entry_i#[0..=203] >> 2) & 1, `ex_i.valid` = (fetch_entry_i#[0..=203] >> 1) & 1, `ex_i.timing` = fetch_entry_i#[0..=203] & 1, irq_i = irq_i, irq_ctrl_i.mie = irq_ctrl_i.mie, irq_ctrl_i.mip = irq_ctrl_i.mip, irq_ctrl_i.mideleg = irq_ctrl_i.mideleg, irq_ctrl_i.hideleg = irq_ctrl_i.hideleg, irq_ctrl_i.sie = irq_ctrl_i.sie, irq_ctrl_i.global_enable = irq_ctrl_i.global_enable, priv_lvl_i = priv_lvl_i, v_i = v_i, debug_mode_i = debug_mode_i, fs_i = fs_i, vfs_i = vfs_i, frm_i = frm_i, vs_i = vs_i, tvm_i = tvm_i, tw_i = tw_i, vtw_i = vtw_i, tsr_i = tsr_i, hu_i = hu_i, mcbie_i = mcbie_i, scbie_i = scbie_i, hcbie_i = hcbie_i, mcbcfe_i = mcbcfe_i, scbcfe_i = scbcfe_i, hcbcfe_i = hcbcfe_i, sdtrig_decoder_action_i = sdtrig_decoder_action_i)
+  mut decoded_instruction__w1 = decoded_instruction
+  decoded_instruction__w1#[0..=438] = ((decoder_i.instruction_o.pc << 0x177) | (decoder_i.instruction_o.trans_id << 0x174) | (decoder_i.instruction_o.fu << 0x170) | (decoder_i.instruction_o.op << 0x168) | (decoder_i.instruction_o.rs1 << 0x163) | (decoder_i.instruction_o.rs2 << 0x15e) | (decoder_i.instruction_o.rd << 0x159) | (decoder_i.instruction_o.result << 0x119) | (decoder_i.instruction_o.valid << 0x118) | (decoder_i.instruction_o.use_imm << 0x117) | (decoder_i.instruction_o.use_zimm << 0x116) | (decoder_i.instruction_o.use_pc << 0x115) | (decoder_i.instruction_o.ex.cause << 0xd5) | (decoder_i.instruction_o.ex.tval << 0x95) | (decoder_i.instruction_o.ex.tval2 << 0x6c) | (decoder_i.instruction_o.ex.tinst << 0x4c) | (decoder_i.instruction_o.ex.gva << 0x4b) | (decoder_i.instruction_o.ex.valid << 0x4a) | (decoder_i.instruction_o.ex.timing << 0x49) | (decoder_i.instruction_o.bp.cf << 0x46) | (decoder_i.instruction_o.bp.predict_address << 6) | (decoder_i.instruction_o.is_compressed << 5) | (decoder_i.instruction_o.is_macro_instr << 4) | (decoder_i.instruction_o.is_last_macro_instr << 3) | (decoder_i.instruction_o.is_double_rd_macro_instr << 2) | (decoder_i.instruction_o.vfp << 1) | decoder_i.instruction_o.is_zcmt)#[0..=438]
+  mut orig_instr__w1 = orig_instr
+  orig_instr__w1#[0..=31] = decoder_i.orig_instr_o#[0..=31]
+  mut is_control_flow_instr__w1 = is_control_flow_instr
+  is_control_flow_instr__w1#[0] = decoder_i.is_control_flow_instr_o & 1
+  mut issue_entry_o__w1 = issue_entry_o
+  issue_entry_o__w1#[0..=438] = issue_q[0]#[33..=471]
+  mut issue_entry_valid_o__w1 = issue_entry_valid_o
+  issue_entry_valid_o__w1#[0] = (issue_q[0] >> 0x1d8) & 1
+  mut is_ctrl_flow_o__w1 = is_ctrl_flow_o
+  is_ctrl_flow_o__w1#[0] = issue_q[0] & 1
+  mut orig_instr_o__w1 = orig_instr_o
+  orig_instr_o__w1#[0..=31] = issue_q[0]#[1..=32]
+  mut _mux_1:u1 = if false or (true and (is_illegal_cvxif_i__w1 != 0) and true and ((stall_instr_fetch__w1 & 1) != 0)) { 0 } else { 1 }
+  mut decoded_instruction_valid__w1 = decoded_instruction_valid
+  decoded_instruction_valid__w1#[0] = _mux_1 & 1
+  issue_n = issue_q
+  if (issue_instr_ack_i & 1) != 0 {
+    issue_n#[472] = 0
+  }
+  fetch_entry_ready_o = 0
+  if (((issue_n >> 0x1d8) & 1) == 0) and ((fetch_entry_valid_i & 1) != 0) {
+    fetch_entry_ready_o#[0] = (~(stall_instr_fetch__w1 & 1)) & 1
+    const t205 = (is_control_flow_instr__w1 & 1) | (orig_instr__w1#[0..=31] << 1) | (decoded_instruction__w1#[0..=438] << 33) | ((decoded_instruction_valid__w1 & 1) << 0x1d8)
+    const t206 = t205#[0..=472]
+    issue_n#[0..=472] = t206
+  }
+  if flush_i != 0 {
+    issue_n#[472] = 0
+  }
+  if rst_ni != 0 {
+    issue_q = issue_n
+  }
+  mut issue_entry_o_prev__w1 = issue_entry_o_prev
+  issue_entry_o_prev__w1#[0..=438] = 0
+  compressed_req_o.instr = i_cvxif_compressed_if_driver_i.compressed_req_o.instr
+  compressed_req_o.hartid = i_cvxif_compressed_if_driver_i.compressed_req_o.hartid
+  dcache_req_ports_o.address_index = `dcache_req_ports_o__bpo.address_index`
+  dcache_req_ports_o.address_tag = `dcache_req_ports_o__bpo.address_tag`
+  dcache_req_ports_o.data_wdata = `dcache_req_ports_o__bpo.data_wdata`
+  dcache_req_ports_o.data_wuser = `dcache_req_ports_o__bpo.data_wuser`
+  dcache_req_ports_o.data_req = `dcache_req_ports_o__bpo.data_req`
+  dcache_req_ports_o.data_we = `dcache_req_ports_o__bpo.data_we`
+  dcache_req_ports_o.data_be = `dcache_req_ports_o__bpo.data_be`
+  dcache_req_ports_o.data_size = `dcache_req_ports_o__bpo.data_size`
+  dcache_req_ports_o.data_id = `dcache_req_ports_o__bpo.data_id`
+  dcache_req_ports_o.kill_req = `dcache_req_ports_o__bpo.kill_req`
+  dcache_req_ports_o.tag_valid = `dcache_req_ports_o__bpo.tag_valid`
+  dcache_req_ports_o.cbo_op = `dcache_req_ports_o__bpo.cbo_op`
+  issue_entry_o = issue_entry_o__w1
+  issue_entry_o_prev = issue_entry_o_prev__w1
+  orig_instr_o = orig_instr_o__w1
+  issue_entry_valid_o = issue_entry_valid_o__w1
+  is_ctrl_flow_o = is_ctrl_flow_o__w1
+  rvfi_is_compressed_o = is_compressed_rvc__w1
+  compressed_valid_o = i_cvxif_compressed_if_driver_i.compressed_valid_o
+}

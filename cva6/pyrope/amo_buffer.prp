@@ -1,0 +1,20 @@
+const cva6_fifo_v3_p2 = import("cva6_fifo_v3_p2.cva6_fifo_v3_p2")
+
+pub mod amo_buffer::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, valid_i:u1, amo_op_i:u4, paddr_i:u56, data_i:u64, data_size_i:u2, amo_resp_i:(ack:u1, result:u64), amo_valid_commit_i:u1, no_st_pending_i:u1) -> (ready_o:u1@[], amo_req_o:(req:u1, amo_op:u4, size:u2, operand_a:u64, operand_b:u64)@[]) {
+  mut `amo_data_in.op` = amo_op_i
+  mut `amo_data_in.data` = data_i
+  mut `amo_data_in.paddr` = paddr_i
+  mut `amo_data_in.size` = data_size_i
+  mut i_amo_fifo = cva6_fifo_v3_p2::[name=i_amo_fifo](clk_i = clk_i, rst_ni = rst_ni, flush_i = flush_i & unsigned(amo_valid_commit_i == 0) & 1, testmode_i = 0, `data_i.op` = `amo_data_in.op`, `data_i.paddr` = `amo_data_in.paddr`, `data_i.data` = `amo_data_in.data`, `data_i.size` = `amo_data_in.size`, push_i = valid_i, pop_i = amo_resp_i.ack)
+  mut `amo_req_o__bpo.req` = no_st_pending_i & amo_valid_commit_i & 1 & i_amo_fifo.full_o & 1
+  mut `amo_req_o__bpo.amo_op` = i_amo_fifo.data_o.op
+  mut `amo_req_o__bpo.size` = i_amo_fifo.data_o.size
+  mut `amo_req_o__bpo.operand_a` = i_amo_fifo.data_o.paddr#[0..=55]
+  mut `amo_req_o__bpo.operand_b` = i_amo_fifo.data_o.data#[0..=63]
+  amo_req_o.req = `amo_req_o__bpo.req`
+  amo_req_o.amo_op = `amo_req_o__bpo.amo_op`
+  amo_req_o.size = `amo_req_o__bpo.size`
+  amo_req_o.operand_a = `amo_req_o__bpo.operand_a`
+  amo_req_o.operand_b = `amo_req_o__bpo.operand_b`
+  ready_o = i_amo_fifo.empty_o
+}

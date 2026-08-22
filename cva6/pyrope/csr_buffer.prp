@@ -1,0 +1,25 @@
+pub mod csr_buffer::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, fu_data_i:(fu:u4, operation:u8, operand_a:u64, operand_b:u64, imm:u64, trans_id:u3), csr_valid_i:u1, csr_commit_i:u1) -> (csr_ready_o:u1@[], csr_result_o:u64@[], csr_addr_o:u12@[]) {
+  reg csr_reg_q:u13:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  mut `csr_reg_n.csr_address` = 0
+  mut `csr_reg_n.valid` = 0
+  csr_ready_o = 0ub?
+  const csr_addr_o__w1 = csr_reg_q#[1..=12]
+  `csr_reg_n.csr_address` = csr_reg_q#[1..=12]
+  `csr_reg_n.valid` = csr_reg_q & 1
+  csr_ready_o = if (((csr_reg_q & 1) != 0) or (csr_valid_i != 0)) and (((~csr_commit_i) & 1) != 0) { 0 } else { 1 }
+  if csr_valid_i != 0 {
+    `csr_reg_n.csr_address` = fu_data_i.operand_b#[0..=11]
+    `csr_reg_n.valid` = 1
+  }
+  if (csr_commit_i != 0) and (((~csr_valid_i) & 1) != 0) {
+    `csr_reg_n.valid` = 0
+  }
+  if flush_i != 0 {
+    `csr_reg_n.valid` = 0
+  }
+  if rst_ni != 0 {
+    csr_reg_q = (`csr_reg_n.csr_address` << 1) | `csr_reg_n.valid`
+  }
+  csr_result_o = fu_data_i.operand_a
+  csr_addr_o = csr_addr_o__w1
+}

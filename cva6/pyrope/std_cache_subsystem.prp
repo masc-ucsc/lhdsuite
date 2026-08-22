@@ -1,0 +1,170 @@
+const cva6_fifo_v3_p3 = import("cva6_fifo_v3_p3.cva6_fifo_v3_p3")
+const cva6_icache_axi_wrapper = import("cva6_icache_axi_wrapper.cva6_icache_axi_wrapper")
+const std_nbdcache = import("std_nbdcache.std_nbdcache")
+const stream_arbiter = import("stream_arbiter.stream_arbiter")
+const stream_arbiter_p1 = import("stream_arbiter_p1.stream_arbiter_p1")
+const stream_demux = import("stream_demux.stream_demux")
+const stream_mux = import("stream_mux.stream_mux")
+
+pub mod std_cache_subsystem::[timecheck=false](clk_i:u1, rst_ni:u1, priv_lvl_i:u2, icache_en_i:u1, icache_flush_i:u1, icache_areq_i:(fetch_valid:u1, fetch_paddr:u56, fetch_exception:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1)), icache_dreq_i:(req:u1, kill_s1:u1, kill_s2:u1, spec:u1, vaddr:u64), amo_req_i:(req:u1, amo_op:u4, size:u2, operand_a:u64, operand_b:u64), dcache_enable_i:u1, dcache_flush_i:u1, dcache_req_ports_i:u828, axi_resp_i:(aw_ready:u1, ar_ready:u1, w_ready:u1, b_valid:u1, b:(id:u4, resp:u2, user:u64), r_valid:u1, r:(id:u4, data:u64, resp:u2, last:u1, user:u64))) -> (icache_miss_o:u1@[], icache_areq_o:(fetch_req:u1, fetch_vaddr:u64)@[], icache_dreq_o:(ready:u1, valid:u1, data:u32, user:u64, vaddr:u64, ex:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1))@[], amo_resp_o:(ack:u1, result:u64)@[], dcache_flush_ack_o:u1@[], dcache_miss_o:u1@[], wbuffer_empty_o:u1@[], dcache_req_ports_o:u524@[], axi_req_o:(aw:(id:u4, addr:u64, len:u8, size:u3, burst:u2, lock:u1, cache:u4, prot:u3, qos:u4, region:u4, atop:u6, user:u64), aw_valid:u1, w:(data:u64, strb:u8, last:u1, user:u64), w_valid:u1, b_ready:u1, ar:(id:u4, addr:u64, len:u8, size:u3, burst:u2, lock:u1, cache:u4, prot:u3, qos:u4, region:u4, user:u64), ar_valid:u1, r_ready:u1)@[]) {
+  reg aw_lock_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  mut `axi_resp_icache.aw_ready` = 0
+  mut `axi_resp_icache.ar_ready` = 0
+  mut `axi_resp_icache.w_ready` = 0
+  mut `axi_resp_icache.b_valid` = 0
+  mut `axi_resp_icache.r_valid` = 0
+  mut `axi_resp_bypass.aw_ready` = 0
+  mut `axi_resp_bypass.ar_ready` = 0
+  mut `axi_resp_bypass.w_ready` = 0
+  mut `axi_resp_bypass.b_valid` = 0
+  mut `axi_resp_bypass.r_valid` = 0
+  mut `axi_resp_data.aw_ready` = 0
+  mut `axi_resp_data.ar_ready` = 0
+  mut `axi_resp_data.w_ready` = 0
+  mut `axi_resp_data.b_valid` = 0
+  mut `axi_resp_data.r_valid` = 0
+  wire w_fifo_push:u1
+  wire w_fifo_pop:u1
+  wire aw_lock_d:u1
+  mut `axi_req_o__bpo.w.last` = 0
+  mut `axi_req_o__bpo.w_valid` = 0
+  mut w_select:u2 = 0sb?
+  mut r_select:u2 = 0sb?
+  mut b_select:u2 = 0sb?
+  mut `axi_resp_icache.r` = ((axi_resp_i.aw_ready << 0xd1) | (axi_resp_i.ar_ready << 0xd0) | (axi_resp_i.w_ready << 0xcf) | (axi_resp_i.b_valid << 0xce) | (axi_resp_i.b.id << 0xca) | (axi_resp_i.b.resp << 0xc8) | (axi_resp_i.b.user << 0x88) | (axi_resp_i.r_valid << 0x87) | (axi_resp_i.r.id << 0x83) | (axi_resp_i.r.data << 0x43) | (axi_resp_i.r.resp << 0x41) | (axi_resp_i.r.last << 0x40) | axi_resp_i.r.user)#[0..=134]
+  mut `axi_resp_bypass.r` = ((axi_resp_i.aw_ready << 0xd1) | (axi_resp_i.ar_ready << 0xd0) | (axi_resp_i.w_ready << 0xcf) | (axi_resp_i.b_valid << 0xce) | (axi_resp_i.b.id << 0xca) | (axi_resp_i.b.resp << 0xc8) | (axi_resp_i.b.user << 0x88) | (axi_resp_i.r_valid << 0x87) | (axi_resp_i.r.id << 0x83) | (axi_resp_i.r.data << 0x43) | (axi_resp_i.r.resp << 0x41) | (axi_resp_i.r.last << 0x40) | axi_resp_i.r.user)#[0..=134]
+  mut `axi_resp_data.r` = ((axi_resp_i.aw_ready << 0xd1) | (axi_resp_i.ar_ready << 0xd0) | (axi_resp_i.w_ready << 0xcf) | (axi_resp_i.b_valid << 0xce) | (axi_resp_i.b.id << 0xca) | (axi_resp_i.b.resp << 0xc8) | (axi_resp_i.b.user << 0x88) | (axi_resp_i.r_valid << 0x87) | (axi_resp_i.r.id << 0x83) | (axi_resp_i.r.data << 0x43) | (axi_resp_i.r.resp << 0x41) | (axi_resp_i.r.last << 0x40) | axi_resp_i.r.user)#[0..=134]
+  const t208 = axi_resp_i.r.id
+  r_select = unique if t208 == 7 { 0 } elif (t208 & 0xfffffffffffffff8) == 8 { 1 } elif t208 == 0 { 2 } else { 0 }
+  mut `axi_resp_icache.b` = ((axi_resp_i.aw_ready << 0xd1) | (axi_resp_i.ar_ready << 0xd0) | (axi_resp_i.w_ready << 0xcf) | (axi_resp_i.b_valid << 0xce) | (axi_resp_i.b.id << 0xca) | (axi_resp_i.b.resp << 0xc8) | (axi_resp_i.b.user << 0x88) | (axi_resp_i.r_valid << 0x87) | (axi_resp_i.r.id << 0x83) | (axi_resp_i.r.data << 0x43) | (axi_resp_i.r.resp << 0x41) | (axi_resp_i.r.last << 0x40) | axi_resp_i.r.user)#[136..=205]
+  mut `axi_resp_bypass.b` = ((axi_resp_i.aw_ready << 0xd1) | (axi_resp_i.ar_ready << 0xd0) | (axi_resp_i.w_ready << 0xcf) | (axi_resp_i.b_valid << 0xce) | (axi_resp_i.b.id << 0xca) | (axi_resp_i.b.resp << 0xc8) | (axi_resp_i.b.user << 0x88) | (axi_resp_i.r_valid << 0x87) | (axi_resp_i.r.id << 0x83) | (axi_resp_i.r.data << 0x43) | (axi_resp_i.r.resp << 0x41) | (axi_resp_i.r.last << 0x40) | axi_resp_i.r.user)#[136..=205]
+  mut `axi_resp_data.b` = ((axi_resp_i.aw_ready << 0xd1) | (axi_resp_i.ar_ready << 0xd0) | (axi_resp_i.w_ready << 0xcf) | (axi_resp_i.b_valid << 0xce) | (axi_resp_i.b.id << 0xca) | (axi_resp_i.b.resp << 0xc8) | (axi_resp_i.b.user << 0x88) | (axi_resp_i.r_valid << 0x87) | (axi_resp_i.r.id << 0x83) | (axi_resp_i.r.data << 0x43) | (axi_resp_i.r.resp << 0x41) | (axi_resp_i.r.last << 0x40) | axi_resp_i.r.user)#[136..=205]
+  const t327 = axi_resp_i.b.id
+  b_select = unique if t327 == 7 { 0 } elif (t327 & 0xfffffffffffffff8) == 8 { 1 } elif t327 == 0 { 2 } else { 0 }
+  mut i_cva6_icache_axi_wrapper = cva6_icache_axi_wrapper::[name=i_cva6_icache_axi_wrapper](clk_i = clk_i, rst_ni = rst_ni, priv_lvl_i = priv_lvl_i, flush_i = icache_flush_i, en_i = icache_en_i, `areq_i.fetch_valid` = icache_areq_i.fetch_valid, `areq_i.fetch_paddr` = icache_areq_i.fetch_paddr, `areq_i.fetch_exception.cause` = icache_areq_i.fetch_exception.cause, `areq_i.fetch_exception.tval` = icache_areq_i.fetch_exception.tval, `areq_i.fetch_exception.tval2` = icache_areq_i.fetch_exception.tval2, `areq_i.fetch_exception.tinst` = icache_areq_i.fetch_exception.tinst, `areq_i.fetch_exception.gva` = icache_areq_i.fetch_exception.gva, `areq_i.fetch_exception.valid` = icache_areq_i.fetch_exception.valid, `areq_i.fetch_exception.timing` = icache_areq_i.fetch_exception.timing, `dreq_i.req` = icache_dreq_i.req, `dreq_i.kill_s1` = icache_dreq_i.kill_s1, `dreq_i.kill_s2` = icache_dreq_i.kill_s2, `dreq_i.spec` = icache_dreq_i.spec, `dreq_i.vaddr` = icache_dreq_i.vaddr, axi_resp_i.aw_ready = `axi_resp_icache.aw_ready`, axi_resp_i.ar_ready = `axi_resp_icache.ar_ready`, axi_resp_i.w_ready = `axi_resp_icache.w_ready`, axi_resp_i.b_valid = `axi_resp_icache.b_valid`, axi_resp_i.b.id = `axi_resp_icache.b`#[66..=69], axi_resp_i.b.resp = `axi_resp_icache.b`#[64..=65], axi_resp_i.b.user = `axi_resp_icache.b`#[0..=63], axi_resp_i.r_valid = `axi_resp_icache.r_valid`, axi_resp_i.r.id = `axi_resp_icache.r`#[131..=134], axi_resp_i.r.data = `axi_resp_icache.r`#[67..=130], axi_resp_i.r.resp = `axi_resp_icache.r`#[65..=66], axi_resp_i.r.last = (`axi_resp_icache.r` >> 0x40) & 1, axi_resp_i.r.user = `axi_resp_icache.r`#[0..=63])
+  mut `axi_req_icache.aw` = (i_cva6_icache_axi_wrapper.axi_req_o.aw.id << 0xa3) | (i_cva6_icache_axi_wrapper.axi_req_o.aw.addr << 0x63) | (i_cva6_icache_axi_wrapper.axi_req_o.aw.len << 0x5b) | (i_cva6_icache_axi_wrapper.axi_req_o.aw.size << 0x58) | (i_cva6_icache_axi_wrapper.axi_req_o.aw.burst << 0x56) | (i_cva6_icache_axi_wrapper.axi_req_o.aw.lock << 0x55) | (i_cva6_icache_axi_wrapper.axi_req_o.aw.cache << 0x51) | (i_cva6_icache_axi_wrapper.axi_req_o.aw.prot << 0x4e) | (i_cva6_icache_axi_wrapper.axi_req_o.aw.qos << 0x4a) | (i_cva6_icache_axi_wrapper.axi_req_o.aw.region << 0x46) | (i_cva6_icache_axi_wrapper.axi_req_o.aw.atop << 0x40) | i_cva6_icache_axi_wrapper.axi_req_o.aw.user
+  mut `axi_req_icache.w` = (i_cva6_icache_axi_wrapper.axi_req_o.w.data << 0x49) | (i_cva6_icache_axi_wrapper.axi_req_o.w.strb << 0x41) | (i_cva6_icache_axi_wrapper.axi_req_o.w.last << 0x40) | i_cva6_icache_axi_wrapper.axi_req_o.w.user
+  mut `axi_req_icache.ar` = (i_cva6_icache_axi_wrapper.axi_req_o.ar.id << 0x9d) | (i_cva6_icache_axi_wrapper.axi_req_o.ar.addr << 0x5d) | (i_cva6_icache_axi_wrapper.axi_req_o.ar.len << 0x55) | (i_cva6_icache_axi_wrapper.axi_req_o.ar.size << 0x52) | (i_cva6_icache_axi_wrapper.axi_req_o.ar.burst << 0x50) | (i_cva6_icache_axi_wrapper.axi_req_o.ar.lock << 0x4f) | (i_cva6_icache_axi_wrapper.axi_req_o.ar.cache << 0x4b) | (i_cva6_icache_axi_wrapper.axi_req_o.ar.prot << 0x48) | (i_cva6_icache_axi_wrapper.axi_req_o.ar.qos << 0x44) | (i_cva6_icache_axi_wrapper.axi_req_o.ar.region << 0x40) | i_cva6_icache_axi_wrapper.axi_req_o.ar.user
+  mut i_nbdcache = std_nbdcache::[name=i_nbdcache](clk_i = clk_i, rst_ni = rst_ni, enable_i = dcache_enable_i, flush_i = dcache_flush_i, amo_req_i.req = amo_req_i.req, amo_req_i.amo_op = amo_req_i.amo_op, amo_req_i.size = amo_req_i.size, amo_req_i.operand_a = amo_req_i.operand_a, amo_req_i.operand_b = amo_req_i.operand_b, req_ports_i = dcache_req_ports_i, `axi_data_i.aw_ready` = `axi_resp_data.aw_ready`, `axi_data_i.ar_ready` = `axi_resp_data.ar_ready`, `axi_data_i.w_ready` = `axi_resp_data.w_ready`, `axi_data_i.b_valid` = `axi_resp_data.b_valid`, `axi_data_i.b.id` = `axi_resp_data.b`#[66..=69], `axi_data_i.b.resp` = `axi_resp_data.b`#[64..=65], `axi_data_i.b.user` = `axi_resp_data.b`#[0..=63], `axi_data_i.r_valid` = `axi_resp_data.r_valid`, `axi_data_i.r.id` = `axi_resp_data.r`#[131..=134], `axi_data_i.r.data` = `axi_resp_data.r`#[67..=130], `axi_data_i.r.resp` = `axi_resp_data.r`#[65..=66], `axi_data_i.r.last` = (`axi_resp_data.r` >> 0x40) & 1, `axi_data_i.r.user` = `axi_resp_data.r`#[0..=63], `axi_bypass_i.aw_ready` = `axi_resp_bypass.aw_ready`, `axi_bypass_i.ar_ready` = `axi_resp_bypass.ar_ready`, `axi_bypass_i.w_ready` = `axi_resp_bypass.w_ready`, `axi_bypass_i.b_valid` = `axi_resp_bypass.b_valid`, `axi_bypass_i.b.id` = `axi_resp_bypass.b`#[66..=69], `axi_bypass_i.b.resp` = `axi_resp_bypass.b`#[64..=65], `axi_bypass_i.b.user` = `axi_resp_bypass.b`#[0..=63], `axi_bypass_i.r_valid` = `axi_resp_bypass.r_valid`, `axi_bypass_i.r.id` = `axi_resp_bypass.r`#[131..=134], `axi_bypass_i.r.data` = `axi_resp_bypass.r`#[67..=130], `axi_bypass_i.r.resp` = `axi_resp_bypass.r`#[65..=66], `axi_bypass_i.r.last` = (`axi_resp_bypass.r` >> 0x40) & 1, `axi_bypass_i.r.user` = `axi_resp_bypass.r`#[0..=63])
+  mut `axi_req_data.aw` = (i_nbdcache.axi_data_o.aw.id << 0xa3) | (i_nbdcache.axi_data_o.aw.addr << 0x63) | (i_nbdcache.axi_data_o.aw.len << 0x5b) | (i_nbdcache.axi_data_o.aw.size << 0x58) | (i_nbdcache.axi_data_o.aw.burst << 0x56) | (i_nbdcache.axi_data_o.aw.lock << 0x55) | (i_nbdcache.axi_data_o.aw.cache << 0x51) | (i_nbdcache.axi_data_o.aw.prot << 0x4e) | (i_nbdcache.axi_data_o.aw.qos << 0x4a) | (i_nbdcache.axi_data_o.aw.region << 0x46) | (i_nbdcache.axi_data_o.aw.atop << 0x40) | i_nbdcache.axi_data_o.aw.user
+  mut `axi_req_data.w` = (i_nbdcache.axi_data_o.w.data << 0x49) | (i_nbdcache.axi_data_o.w.strb << 0x41) | (i_nbdcache.axi_data_o.w.last << 0x40) | i_nbdcache.axi_data_o.w.user
+  mut `axi_req_data.ar` = (i_nbdcache.axi_data_o.ar.id << 0x9d) | (i_nbdcache.axi_data_o.ar.addr << 0x5d) | (i_nbdcache.axi_data_o.ar.len << 0x55) | (i_nbdcache.axi_data_o.ar.size << 0x52) | (i_nbdcache.axi_data_o.ar.burst << 0x50) | (i_nbdcache.axi_data_o.ar.lock << 0x4f) | (i_nbdcache.axi_data_o.ar.cache << 0x4b) | (i_nbdcache.axi_data_o.ar.prot << 0x48) | (i_nbdcache.axi_data_o.ar.qos << 0x44) | (i_nbdcache.axi_data_o.ar.region << 0x40) | i_nbdcache.axi_data_o.ar.user
+  mut `axi_req_bypass.aw` = (i_nbdcache.axi_bypass_o.aw.id << 0xa3) | (i_nbdcache.axi_bypass_o.aw.addr << 0x63) | (i_nbdcache.axi_bypass_o.aw.len << 0x5b) | (i_nbdcache.axi_bypass_o.aw.size << 0x58) | (i_nbdcache.axi_bypass_o.aw.burst << 0x56) | (i_nbdcache.axi_bypass_o.aw.lock << 0x55) | (i_nbdcache.axi_bypass_o.aw.cache << 0x51) | (i_nbdcache.axi_bypass_o.aw.prot << 0x4e) | (i_nbdcache.axi_bypass_o.aw.qos << 0x4a) | (i_nbdcache.axi_bypass_o.aw.region << 0x46) | (i_nbdcache.axi_bypass_o.aw.atop << 0x40) | i_nbdcache.axi_bypass_o.aw.user
+  mut `axi_req_bypass.w` = (i_nbdcache.axi_bypass_o.w.data << 0x49) | (i_nbdcache.axi_bypass_o.w.strb << 0x41) | (i_nbdcache.axi_bypass_o.w.last << 0x40) | i_nbdcache.axi_bypass_o.w.user
+  mut `axi_req_bypass.ar` = (i_nbdcache.axi_bypass_o.ar.id << 0x9d) | (i_nbdcache.axi_bypass_o.ar.addr << 0x5d) | (i_nbdcache.axi_bypass_o.ar.len << 0x55) | (i_nbdcache.axi_bypass_o.ar.size << 0x52) | (i_nbdcache.axi_bypass_o.ar.burst << 0x50) | (i_nbdcache.axi_bypass_o.ar.lock << 0x4f) | (i_nbdcache.axi_bypass_o.ar.cache << 0x4b) | (i_nbdcache.axi_bypass_o.ar.prot << 0x48) | (i_nbdcache.axi_bypass_o.ar.qos << 0x44) | (i_nbdcache.axi_bypass_o.ar.region << 0x40) | i_nbdcache.axi_bypass_o.ar.user
+  mut i_stream_arbiter_ar = stream_arbiter::[name=i_stream_arbiter_ar](clk_i = clk_i, rst_ni = rst_ni, inp_data_i = (`axi_req_icache.ar`#[0..=160] << 322) | (`axi_req_bypass.ar`#[0..=160] << 161) | `axi_req_data.ar`#[0..=160], inp_valid_i = ((i_cva6_icache_axi_wrapper.axi_req_o.ar_valid & 1) << 2) | ((i_nbdcache.axi_bypass_o.ar_valid & 1) << 1) | (i_nbdcache.axi_data_o.ar_valid & 1), oup_ready_i = axi_resp_i.ar_ready)
+  `axi_resp_data.ar_ready` = i_stream_arbiter_ar.inp_ready_o & 1
+  `axi_resp_bypass.ar_ready` = (i_stream_arbiter_ar.inp_ready_o >> 1) & 1
+  `axi_resp_icache.ar_ready` = (i_stream_arbiter_ar.inp_ready_o >> 2) & 1
+  const t728 = (i_stream_arbiter_ar.oup_data_o.id << 0x9d) | (i_stream_arbiter_ar.oup_data_o.addr << 0x5d) | (i_stream_arbiter_ar.oup_data_o.len << 0x55) | (i_stream_arbiter_ar.oup_data_o.size << 0x52) | (i_stream_arbiter_ar.oup_data_o.burst << 0x50) | (i_stream_arbiter_ar.oup_data_o.lock << 0x4f) | (i_stream_arbiter_ar.oup_data_o.cache << 0x4b) | (i_stream_arbiter_ar.oup_data_o.prot << 0x48) | (i_stream_arbiter_ar.oup_data_o.qos << 0x44) | (i_stream_arbiter_ar.oup_data_o.region << 0x40) | i_stream_arbiter_ar.oup_data_o.user
+  mut `axi_req_o__bpo.ar.id` = (t728 >> 0x9d)#[0..=3]
+  mut `axi_req_o__bpo.ar.addr` = (t728 >> 0x5d)#[0..=63]
+  mut `axi_req_o__bpo.ar.len` = (t728 >> 0x55)#[0..=7]
+  mut `axi_req_o__bpo.ar.size` = (t728 >> 0x52)#[0..=2]
+  mut `axi_req_o__bpo.ar.burst` = (t728 >> 0x50)#[0..=1]
+  mut `axi_req_o__bpo.ar.lock` = (t728 >> 0x4f) & 1
+  mut `axi_req_o__bpo.ar.cache` = (t728 >> 0x4b)#[0..=3]
+  mut `axi_req_o__bpo.ar.prot` = (t728 >> 0x48)#[0..=2]
+  mut `axi_req_o__bpo.ar.qos` = (t728 >> 0x44)#[0..=3]
+  mut `axi_req_o__bpo.ar.region` = (t728 >> 0x40)#[0..=3]
+  mut `axi_req_o__bpo.ar.user` = t728#[0..=63]
+  mut i_stream_arbiter_aw = stream_arbiter_p1::[name=i_stream_arbiter_aw](clk_i = clk_i, rst_ni = rst_ni, inp_data_i = (`axi_req_icache.aw`#[0..=166] << 334) | (`axi_req_bypass.aw`#[0..=166] << 167) | `axi_req_data.aw`#[0..=166], inp_valid_i = ((i_cva6_icache_axi_wrapper.axi_req_o.aw_valid & 1) << 2) | ((i_nbdcache.axi_bypass_o.aw_valid & 1) << 1) | (i_nbdcache.axi_data_o.aw_valid & 1), oup_ready_i = axi_resp_i.aw_ready)
+  `axi_resp_data.aw_ready` = i_stream_arbiter_aw.inp_ready_o & 1
+  `axi_resp_bypass.aw_ready` = (i_stream_arbiter_aw.inp_ready_o >> 1) & 1
+  `axi_resp_icache.aw_ready` = (i_stream_arbiter_aw.inp_ready_o >> 2) & 1
+  const t805 = (i_stream_arbiter_aw.oup_data_o.id << 0xa3) | (i_stream_arbiter_aw.oup_data_o.addr << 0x63) | (i_stream_arbiter_aw.oup_data_o.len << 0x5b) | (i_stream_arbiter_aw.oup_data_o.size << 0x58) | (i_stream_arbiter_aw.oup_data_o.burst << 0x56) | (i_stream_arbiter_aw.oup_data_o.lock << 0x55) | (i_stream_arbiter_aw.oup_data_o.cache << 0x51) | (i_stream_arbiter_aw.oup_data_o.prot << 0x4e) | (i_stream_arbiter_aw.oup_data_o.qos << 0x4a) | (i_stream_arbiter_aw.oup_data_o.region << 0x46) | (i_stream_arbiter_aw.oup_data_o.atop << 0x40) | i_stream_arbiter_aw.oup_data_o.user
+  mut `axi_req_o__bpo.aw.id` = (t805 >> 0xa3)#[0..=3]
+  mut `axi_req_o__bpo.aw.addr` = (t805 >> 0x63)#[0..=63]
+  mut `axi_req_o__bpo.aw.len` = (t805 >> 0x5b)#[0..=7]
+  mut `axi_req_o__bpo.aw.size` = (t805 >> 0x58)#[0..=2]
+  mut `axi_req_o__bpo.aw.burst` = (t805 >> 0x56)#[0..=1]
+  mut `axi_req_o__bpo.aw.lock` = (t805 >> 0x55) & 1
+  mut `axi_req_o__bpo.aw.cache` = (t805 >> 0x51)#[0..=3]
+  mut `axi_req_o__bpo.aw.prot` = (t805 >> 0x4e)#[0..=2]
+  mut `axi_req_o__bpo.aw.qos` = (t805 >> 0x4a)#[0..=3]
+  mut `axi_req_o__bpo.aw.region` = (t805 >> 0x46)#[0..=3]
+  mut `axi_req_o__bpo.aw.atop` = (t805 >> 0x40)#[0..=5]
+  mut `axi_req_o__bpo.aw.user` = t805#[0..=63]
+  const t830 = `axi_req_o__bpo.aw.id`
+  w_select = unique if t830 == 7 { 2 } elif (t830 & 0xfffffffffffffff8) == 8 { 1 } else { 0 }
+  mut i_fifo_w_channel = cva6_fifo_v3_p3::[name=i_fifo_w_channel](clk_i = clk_i, rst_ni = rst_ni, flush_i = 0, testmode_i = 0, data_i = w_select, push_i = w_fifo_push, pop_i = w_fifo_pop)
+  if rst_ni != 0 {
+    aw_lock_q = aw_lock_d
+  }
+  w_fifo_push = (~aw_lock_q) & 1 & i_stream_arbiter_aw.oup_valid_o & 1
+  w_fifo_pop = `axi_req_o__bpo.w_valid` & axi_resp_i.w_ready & 1 & `axi_req_o__bpo.w.last` & 1
+  aw_lock_d = (~axi_resp_i.aw_ready) & 1 & (i_stream_arbiter_aw.oup_valid_o | aw_lock_q) & 1 & 1
+  mut _mux_2:u32 = if i_stream_arbiter_aw.oup_valid_o != 0 { w_select } else { 0 }
+  mut _mux_3:u32 = if unsigned((i_fifo_w_channel.usage_o == 0) and (i_fifo_w_channel.full_o == 0)) != 0 { _mux_2 } else { i_fifo_w_channel.data_o#[0..=31] }
+  mut i_stream_mux_w = stream_mux::[name=i_stream_mux_w](inp_data_i = (`axi_req_data.w`#[0..=136] << 274) | (`axi_req_bypass.w`#[0..=136] << 137) | `axi_req_icache.w`#[0..=136], inp_valid_i = ((i_nbdcache.axi_data_o.w_valid & 1) << 2) | ((i_nbdcache.axi_bypass_o.w_valid & 1) << 1) | (i_cva6_icache_axi_wrapper.axi_req_o.w_valid & 1), inp_sel_i = _mux_3#[0..=1], oup_ready_i = axi_resp_i.w_ready)
+  `axi_resp_icache.w_ready` = i_stream_mux_w.inp_ready_o & 1
+  `axi_resp_bypass.w_ready` = (i_stream_mux_w.inp_ready_o >> 1) & 1
+  `axi_resp_data.w_ready` = (i_stream_mux_w.inp_ready_o >> 2) & 1
+  const t898 = (i_stream_mux_w.oup_data_o.data << 0x49) | (i_stream_mux_w.oup_data_o.strb << 0x41) | (i_stream_mux_w.oup_data_o.last << 0x40) | i_stream_mux_w.oup_data_o.user
+  mut `axi_req_o__bpo.w.data` = (t898 >> 0x49)#[0..=63]
+  mut `axi_req_o__bpo.w.strb` = (t898 >> 0x41)#[0..=7]
+  `axi_req_o__bpo.w.last` = (t898 >> 0x40) & 1
+  mut `axi_req_o__bpo.w.user` = t898#[0..=63]
+  `axi_req_o__bpo.w_valid` = i_stream_mux_w.oup_valid_o
+  mut i_stream_demux_r = stream_demux::[name=i_stream_demux_r](inp_valid_i = axi_resp_i.r_valid, oup_sel_i = r_select, oup_ready_i = ((i_cva6_icache_axi_wrapper.axi_req_o.r_ready & 1) << 2) | ((i_nbdcache.axi_bypass_o.r_ready & 1) << 1) | (i_nbdcache.axi_data_o.r_ready & 1))
+  `axi_resp_data.r_valid` = i_stream_demux_r.oup_valid_o & 1
+  `axi_resp_bypass.r_valid` = (i_stream_demux_r.oup_valid_o >> 1) & 1
+  `axi_resp_icache.r_valid` = (i_stream_demux_r.oup_valid_o >> 2) & 1
+  mut i_stream_demux_b = stream_demux::[name=i_stream_demux_b](inp_valid_i = axi_resp_i.b_valid, oup_sel_i = b_select, oup_ready_i = ((i_cva6_icache_axi_wrapper.axi_req_o.b_ready & 1) << 2) | ((i_nbdcache.axi_bypass_o.b_ready & 1) << 1) | (i_nbdcache.axi_data_o.b_ready & 1))
+  `axi_resp_data.b_valid` = i_stream_demux_b.oup_valid_o & 1
+  `axi_resp_bypass.b_valid` = (i_stream_demux_b.oup_valid_o >> 1) & 1
+  `axi_resp_icache.b_valid` = (i_stream_demux_b.oup_valid_o >> 2) & 1
+  icache_areq_o.fetch_req = i_cva6_icache_axi_wrapper.areq_o.fetch_req
+  icache_areq_o.fetch_vaddr = i_cva6_icache_axi_wrapper.areq_o.fetch_vaddr
+  icache_dreq_o.ready = i_cva6_icache_axi_wrapper.dreq_o.ready
+  icache_dreq_o.valid = i_cva6_icache_axi_wrapper.dreq_o.valid
+  icache_dreq_o.data = i_cva6_icache_axi_wrapper.dreq_o.data
+  icache_dreq_o.user = i_cva6_icache_axi_wrapper.dreq_o.user
+  icache_dreq_o.vaddr = i_cva6_icache_axi_wrapper.dreq_o.vaddr
+  icache_dreq_o.ex.cause = i_cva6_icache_axi_wrapper.dreq_o.ex.cause
+  icache_dreq_o.ex.tval = i_cva6_icache_axi_wrapper.dreq_o.ex.tval
+  icache_dreq_o.ex.tval2 = i_cva6_icache_axi_wrapper.dreq_o.ex.tval2
+  icache_dreq_o.ex.tinst = i_cva6_icache_axi_wrapper.dreq_o.ex.tinst
+  icache_dreq_o.ex.gva = i_cva6_icache_axi_wrapper.dreq_o.ex.gva
+  icache_dreq_o.ex.valid = i_cva6_icache_axi_wrapper.dreq_o.ex.valid
+  icache_dreq_o.ex.timing = i_cva6_icache_axi_wrapper.dreq_o.ex.timing
+  amo_resp_o.ack = i_nbdcache.amo_resp_o.ack
+  amo_resp_o.result = i_nbdcache.amo_resp_o.result
+  axi_req_o.aw.id = `axi_req_o__bpo.aw.id`
+  axi_req_o.aw.addr = `axi_req_o__bpo.aw.addr`
+  axi_req_o.aw.len = `axi_req_o__bpo.aw.len`
+  axi_req_o.aw.size = `axi_req_o__bpo.aw.size`
+  axi_req_o.aw.burst = `axi_req_o__bpo.aw.burst`
+  axi_req_o.aw.lock = `axi_req_o__bpo.aw.lock`
+  axi_req_o.aw.cache = `axi_req_o__bpo.aw.cache`
+  axi_req_o.aw.prot = `axi_req_o__bpo.aw.prot`
+  axi_req_o.aw.qos = `axi_req_o__bpo.aw.qos`
+  axi_req_o.aw.region = `axi_req_o__bpo.aw.region`
+  axi_req_o.aw.atop = `axi_req_o__bpo.aw.atop`
+  axi_req_o.aw.user = `axi_req_o__bpo.aw.user`
+  axi_req_o.aw_valid = i_stream_arbiter_aw.oup_valid_o
+  axi_req_o.w.data = `axi_req_o__bpo.w.data`
+  axi_req_o.w.strb = `axi_req_o__bpo.w.strb`
+  axi_req_o.w.last = `axi_req_o__bpo.w.last`
+  axi_req_o.w.user = `axi_req_o__bpo.w.user`
+  axi_req_o.w_valid = `axi_req_o__bpo.w_valid`
+  axi_req_o.b_ready = i_stream_demux_b.inp_ready_o
+  axi_req_o.ar.id = `axi_req_o__bpo.ar.id`
+  axi_req_o.ar.addr = `axi_req_o__bpo.ar.addr`
+  axi_req_o.ar.len = `axi_req_o__bpo.ar.len`
+  axi_req_o.ar.size = `axi_req_o__bpo.ar.size`
+  axi_req_o.ar.burst = `axi_req_o__bpo.ar.burst`
+  axi_req_o.ar.lock = `axi_req_o__bpo.ar.lock`
+  axi_req_o.ar.cache = `axi_req_o__bpo.ar.cache`
+  axi_req_o.ar.prot = `axi_req_o__bpo.ar.prot`
+  axi_req_o.ar.qos = `axi_req_o__bpo.ar.qos`
+  axi_req_o.ar.region = `axi_req_o__bpo.ar.region`
+  axi_req_o.ar.user = `axi_req_o__bpo.ar.user`
+  axi_req_o.ar_valid = i_stream_arbiter_ar.oup_valid_o
+  axi_req_o.r_ready = i_stream_demux_r.inp_ready_o
+  icache_miss_o = i_cva6_icache_axi_wrapper.miss_o
+  dcache_flush_ack_o = i_nbdcache.flush_ack_o
+  dcache_miss_o = i_nbdcache.miss_o
+  wbuffer_empty_o = 1
+  dcache_req_ports_o = i_nbdcache.req_ports_o
+}

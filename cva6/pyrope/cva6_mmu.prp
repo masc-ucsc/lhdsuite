@@ -1,0 +1,339 @@
+const cva6_ptw = import("cva6_ptw.cva6_ptw")
+const cva6_shared_tlb = import("cva6_shared_tlb.cva6_shared_tlb")
+const cva6_tlb = import("cva6_tlb.cva6_tlb")
+const riscv = import("riscv")
+
+pub mod cva6_mmu::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, enable_translation_i:u1, enable_g_translation_i:u1, en_ld_st_translation_i:u1, en_ld_st_g_translation_i:u1, icache_areq_i:(fetch_req:u1, fetch_vaddr:u64), misaligned_ex_i:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1), lsu_req_i:u1, lsu_vaddr_i:u64, lsu_tinst_i:u32, lsu_is_store_i:u1, priv_lvl_i:u2, v_i:u1, ld_st_priv_lvl_i:u2, ld_st_v_i:u1, sum_i:u1, vs_sum_i:u1, mxr_i:u1, vmxr_i:u1, mbe_i:u1, hlvx_inst_i:u1, hs_ld_st_inst_i:u1, satp_ppn_i:u44, vsatp_ppn_i:u44, hgatp_ppn_i:u44, asid_i:u16, vs_asid_i:u16, asid_to_be_flushed_i:u16, vmid_i:u14, vmid_to_be_flushed_i:u14, vaddr_to_be_flushed_i:u64, gpaddr_to_be_flushed_i:u41, flush_tlb_i:u1, flush_tlb_vvma_i:u1, flush_tlb_gvma_i:u1, req_port_i:(data_gnt:u1, data_rvalid:u1, data_rid:u1, data_rdata:u64, data_ruser:u64), pmpcfg_i:u64, pmpaddr_i:u432) -> (icache_areq_o:(fetch_valid:u1, fetch_paddr:u56, fetch_exception:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1))@[], csr_hs_ld_st_inst_o:u1@[], lsu_dtlb_hit_o:u1@[], lsu_dtlb_ppn_o:u44@[], lsu_valid_o:u1@[], lsu_paddr_o:u56@[], lsu_exception_o:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1)@[], shared_tlb_flush_busy_o:u1@[], itlb_miss_o:u1@[], dtlb_miss_o:u1@[], req_port_o:(address_index:u12, address_tag:u44, data_wdata:u64, data_wuser:u64, data_req:u1, data_we:u1, data_be:u8, data_size:u2, data_id:u1, kill_req:u1, tag_valid:u1, cbo_op:u8)@[]) {
+  wire update_itlb:(valid:u1, is_napot_64k:u1, is_page:u2, vpn:u27, asid:u16, vmid:u14, v_st_enbl:u1, content:u64, g_content:u64) = nil
+  wire update_dtlb:(valid:u1, is_napot_64k:u1, is_page:u2, vpn:u27, asid:u16, vmid:u14, v_st_enbl:u1, content:u64, g_content:u64) = nil
+  wire update_shared_tlb:(valid:u1, is_napot_64k:u1, is_page:u2, vpn:u27, asid:u16, vmid:u14, v_st_enbl:u1, content:u64, g_content:u64) = nil
+  mut _mux_22:u44 = 0
+  mut _mux_23:u44 = 0
+  mut _mux_9:u44 = 0
+  reg lsu_vaddr_q:u64:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg lsu_gpaddr_q:u41:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg lsu_tinst_q:u32:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg hs_ld_st_inst_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg dtlb_pte_q:u64:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg dtlb_gpte_q:u64:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg lsu_req_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg lsu_is_store_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg dtlb_hit_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg dtlb_is_page_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg misaligned_ex_q:u204:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  mut `dtlb_gpte_n.n` = 0
+  mut `dtlb_gpte_n.reserved` = 0
+  mut `dtlb_gpte_n.ppn` = 0
+  mut `dtlb_gpte_n.rsw` = 0
+  mut `dtlb_gpte_n.d` = 0
+  mut `dtlb_gpte_n.a` = 0
+  mut `dtlb_gpte_n.g` = 0
+  mut `dtlb_gpte_n.u` = 0
+  mut `dtlb_gpte_n.x` = 0
+  mut `dtlb_gpte_n.w` = 0
+  mut `dtlb_gpte_n.r` = 0
+  mut `dtlb_gpte_n.v` = 0
+  wire iaccess_err:u1
+  wire daccess_err:u1
+  wire canonical_addr_check:u1
+  wire shared_tlb_miss:u1
+  wire lsu_vaddr_n:u64
+  wire dtlb_is_page_n:u2
+  mut final_fetch_ppn:u44 = 0
+  mut `icache_areq_o__bpo.fetch_valid` = 0
+  mut `icache_areq_o__bpo.fetch_paddr` = 0
+  mut `icache_areq_o__bpo.fetch_exception.cause` = 0
+  mut `icache_areq_o__bpo.fetch_exception.tval` = 0
+  mut `icache_areq_o__bpo.fetch_exception.tval2` = 0
+  mut `icache_areq_o__bpo.fetch_exception.tinst` = 0
+  mut `icache_areq_o__bpo.fetch_exception.gva` = 0
+  mut `icache_areq_o__bpo.fetch_exception.valid` = 0
+  mut `icache_areq_o__bpo.fetch_exception.timing` = 0
+  mut `lsu_exception_o__bpo.cause` = 0
+  mut `lsu_exception_o__bpo.tval` = 0
+  mut `lsu_exception_o__bpo.valid` = 0
+  final_fetch_ppn = 0sb?
+  csr_hs_ld_st_inst_o = 0ub?
+  lsu_dtlb_ppn_o = 0sb?
+  lsu_valid_o = 0ub?
+  lsu_paddr_o = 0sb?
+  const itlb_lu_access__w1 = icache_areq_i.fetch_req
+  const dtlb_lu_access__w1 = lsu_req_i & unsigned(misaligned_ex_i.valid == 0) & 1
+  mut _mux_2:u16 = if v_i != 0 { vs_asid_i } else { asid_i }
+  const itlb_lu_asid__w1 = _mux_2
+  mut _mux_3:u16 = if (ld_st_v_i != 0) or (flush_tlb_vvma_i != 0) { vs_asid_i } else { asid_i }
+  const dtlb_lu_asid__w1 = _mux_3
+  mut i_itlb = cva6_tlb::[name=i_itlb](clk_i = clk_i, rst_ni = rst_ni, flush_i = flush_tlb_i, flush_vvma_i = flush_tlb_vvma_i, flush_gvma_i = flush_tlb_gvma_i, s_st_enbl_i = enable_translation_i, g_st_enbl_i = enable_g_translation_i, v_i = v_i, `update_i.valid` = update_itlb.valid, `update_i.is_napot_64k` = update_itlb.is_napot_64k, `update_i.is_page` = update_itlb.is_page, `update_i.vpn` = update_itlb.vpn, `update_i.asid` = update_itlb.asid, `update_i.vmid` = update_itlb.vmid, `update_i.v_st_enbl` = update_itlb.v_st_enbl, `update_i.content.n` = (update_itlb.content >> 63) & 1, `update_i.content.reserved` = update_itlb.content#[54..=62], `update_i.content.ppn` = update_itlb.content#[10..=53], `update_i.content.rsw` = update_itlb.content#[8..=9], `update_i.content.d` = (update_itlb.content >> 7) & 1, `update_i.content.a` = (update_itlb.content >> 6) & 1, `update_i.content.g` = (update_itlb.content >> 5) & 1, `update_i.content.u` = (update_itlb.content >> 4) & 1, `update_i.content.x` = (update_itlb.content >> 3) & 1, `update_i.content.w` = (update_itlb.content >> 2) & 1, `update_i.content.r` = (update_itlb.content >> 1) & 1, `update_i.content.v` = update_itlb.content & 1, `update_i.g_content.n` = (update_itlb.g_content >> 63) & 1, `update_i.g_content.reserved` = update_itlb.g_content#[54..=62], `update_i.g_content.ppn` = update_itlb.g_content#[10..=53], `update_i.g_content.rsw` = update_itlb.g_content#[8..=9], `update_i.g_content.d` = (update_itlb.g_content >> 7) & 1, `update_i.g_content.a` = (update_itlb.g_content >> 6) & 1, `update_i.g_content.g` = (update_itlb.g_content >> 5) & 1, `update_i.g_content.u` = (update_itlb.g_content >> 4) & 1, `update_i.g_content.x` = (update_itlb.g_content >> 3) & 1, `update_i.g_content.w` = (update_itlb.g_content >> 2) & 1, `update_i.g_content.r` = (update_itlb.g_content >> 1) & 1, `update_i.g_content.v` = update_itlb.g_content & 1, lu_access_i = itlb_lu_access__w1, lu_asid_i = itlb_lu_asid__w1, lu_vmid_i = vmid_i, lu_vaddr_i = icache_areq_i.fetch_vaddr, asid_to_be_flushed_i = asid_to_be_flushed_i, vmid_to_be_flushed_i = vmid_to_be_flushed_i, vaddr_to_be_flushed_i = vaddr_to_be_flushed_i, gpaddr_to_be_flushed_i = gpaddr_to_be_flushed_i)
+  mut `itlb_content.n` = i_itlb.lu_content_o.n
+  mut `itlb_content.reserved` = i_itlb.lu_content_o.reserved
+  mut `itlb_content.rsw` = i_itlb.lu_content_o.rsw
+  mut `itlb_content.d` = i_itlb.lu_content_o.d
+  mut `itlb_content.a` = i_itlb.lu_content_o.a
+  mut `itlb_content.g` = i_itlb.lu_content_o.g
+  mut `itlb_content.x` = i_itlb.lu_content_o.x
+  mut `itlb_content.w` = i_itlb.lu_content_o.w
+  mut `itlb_content.r` = i_itlb.lu_content_o.r
+  mut `itlb_content.v` = i_itlb.lu_content_o.v
+  mut `itlb_g_content.n` = i_itlb.lu_g_content_o.n
+  mut `itlb_g_content.reserved` = i_itlb.lu_g_content_o.reserved
+  mut `itlb_g_content.rsw` = i_itlb.lu_g_content_o.rsw
+  mut `itlb_g_content.d` = i_itlb.lu_g_content_o.d
+  mut `itlb_g_content.a` = i_itlb.lu_g_content_o.a
+  mut `itlb_g_content.g` = i_itlb.lu_g_content_o.g
+  mut `itlb_g_content.u` = i_itlb.lu_g_content_o.u
+  mut `itlb_g_content.x` = i_itlb.lu_g_content_o.x
+  mut `itlb_g_content.w` = i_itlb.lu_g_content_o.w
+  mut `itlb_g_content.r` = i_itlb.lu_g_content_o.r
+  mut `itlb_g_content.v` = i_itlb.lu_g_content_o.v
+  mut i_dtlb = cva6_tlb::[name=i_dtlb](clk_i = clk_i, rst_ni = rst_ni, flush_i = flush_tlb_i, flush_vvma_i = flush_tlb_vvma_i, flush_gvma_i = flush_tlb_gvma_i, s_st_enbl_i = en_ld_st_translation_i, g_st_enbl_i = en_ld_st_g_translation_i, v_i = ld_st_v_i, `update_i.valid` = update_dtlb.valid, `update_i.is_napot_64k` = update_dtlb.is_napot_64k, `update_i.is_page` = update_dtlb.is_page, `update_i.vpn` = update_dtlb.vpn, `update_i.asid` = update_dtlb.asid, `update_i.vmid` = update_dtlb.vmid, `update_i.v_st_enbl` = update_dtlb.v_st_enbl, `update_i.content.n` = (update_dtlb.content >> 63) & 1, `update_i.content.reserved` = update_dtlb.content#[54..=62], `update_i.content.ppn` = update_dtlb.content#[10..=53], `update_i.content.rsw` = update_dtlb.content#[8..=9], `update_i.content.d` = (update_dtlb.content >> 7) & 1, `update_i.content.a` = (update_dtlb.content >> 6) & 1, `update_i.content.g` = (update_dtlb.content >> 5) & 1, `update_i.content.u` = (update_dtlb.content >> 4) & 1, `update_i.content.x` = (update_dtlb.content >> 3) & 1, `update_i.content.w` = (update_dtlb.content >> 2) & 1, `update_i.content.r` = (update_dtlb.content >> 1) & 1, `update_i.content.v` = update_dtlb.content & 1, `update_i.g_content.n` = (update_dtlb.g_content >> 63) & 1, `update_i.g_content.reserved` = update_dtlb.g_content#[54..=62], `update_i.g_content.ppn` = update_dtlb.g_content#[10..=53], `update_i.g_content.rsw` = update_dtlb.g_content#[8..=9], `update_i.g_content.d` = (update_dtlb.g_content >> 7) & 1, `update_i.g_content.a` = (update_dtlb.g_content >> 6) & 1, `update_i.g_content.g` = (update_dtlb.g_content >> 5) & 1, `update_i.g_content.u` = (update_dtlb.g_content >> 4) & 1, `update_i.g_content.x` = (update_dtlb.g_content >> 3) & 1, `update_i.g_content.w` = (update_dtlb.g_content >> 2) & 1, `update_i.g_content.r` = (update_dtlb.g_content >> 1) & 1, `update_i.g_content.v` = update_dtlb.g_content & 1, lu_access_i = dtlb_lu_access__w1, lu_asid_i = dtlb_lu_asid__w1, lu_vmid_i = vmid_i, lu_vaddr_i = lsu_vaddr_i, asid_to_be_flushed_i = asid_to_be_flushed_i, vmid_to_be_flushed_i = vmid_to_be_flushed_i, vaddr_to_be_flushed_i = vaddr_to_be_flushed_i, gpaddr_to_be_flushed_i = gpaddr_to_be_flushed_i)
+  mut `dtlb_g_content.n` = i_dtlb.lu_g_content_o.n
+  mut `dtlb_g_content.reserved` = i_dtlb.lu_g_content_o.reserved
+  mut `dtlb_g_content.rsw` = i_dtlb.lu_g_content_o.rsw
+  mut `dtlb_g_content.d` = i_dtlb.lu_g_content_o.d
+  mut `dtlb_g_content.a` = i_dtlb.lu_g_content_o.a
+  mut `dtlb_g_content.g` = i_dtlb.lu_g_content_o.g
+  mut `dtlb_g_content.u` = i_dtlb.lu_g_content_o.u
+  mut `dtlb_g_content.x` = i_dtlb.lu_g_content_o.x
+  mut `dtlb_g_content.w` = i_dtlb.lu_g_content_o.w
+  mut `dtlb_g_content.r` = i_dtlb.lu_g_content_o.r
+  mut `dtlb_g_content.v` = i_dtlb.lu_g_content_o.v
+  mut i_shared_tlb = cva6_shared_tlb::[name=i_shared_tlb](clk_i = clk_i, rst_ni = rst_ni, flush_i = flush_tlb_i, flush_vvma_i = flush_tlb_vvma_i, flush_gvma_i = flush_tlb_gvma_i, s_st_enbl_i = enable_translation_i, g_st_enbl_i = enable_g_translation_i, v_i = v_i, s_ld_st_enbl_i = en_ld_st_translation_i, g_ld_st_enbl_i = en_ld_st_g_translation_i, ld_st_v_i = ld_st_v_i, dtlb_asid_i = dtlb_lu_asid__w1, itlb_asid_i = itlb_lu_asid__w1, lu_vmid_i = vmid_i, itlb_access_i = itlb_lu_access__w1, itlb_hit_i = i_itlb.lu_hit_o, itlb_vaddr_i = icache_areq_i.fetch_vaddr, dtlb_access_i = dtlb_lu_access__w1, dtlb_hit_i = i_dtlb.lu_hit_o, dtlb_vaddr_i = lsu_vaddr_i, shared_tlb_miss_i = shared_tlb_miss, asid_to_be_flushed_i = asid_to_be_flushed_i, vaddr_to_be_flushed_i = vaddr_to_be_flushed_i, vmid_to_be_flushed_i = vmid_to_be_flushed_i, gpaddr_to_be_flushed_i = gpaddr_to_be_flushed_i, `shared_tlb_update_i.valid` = update_shared_tlb.valid, `shared_tlb_update_i.is_napot_64k` = update_shared_tlb.is_napot_64k, `shared_tlb_update_i.is_page` = update_shared_tlb.is_page, `shared_tlb_update_i.vpn` = update_shared_tlb.vpn, `shared_tlb_update_i.asid` = update_shared_tlb.asid, `shared_tlb_update_i.vmid` = update_shared_tlb.vmid, `shared_tlb_update_i.v_st_enbl` = update_shared_tlb.v_st_enbl, `shared_tlb_update_i.content.n` = (update_shared_tlb.content >> 63) & 1, `shared_tlb_update_i.content.reserved` = update_shared_tlb.content#[54..=62], `shared_tlb_update_i.content.ppn` = update_shared_tlb.content#[10..=53], `shared_tlb_update_i.content.rsw` = update_shared_tlb.content#[8..=9], `shared_tlb_update_i.content.d` = (update_shared_tlb.content >> 7) & 1, `shared_tlb_update_i.content.a` = (update_shared_tlb.content >> 6) & 1, `shared_tlb_update_i.content.g` = (update_shared_tlb.content >> 5) & 1, `shared_tlb_update_i.content.u` = (update_shared_tlb.content >> 4) & 1, `shared_tlb_update_i.content.x` = (update_shared_tlb.content >> 3) & 1, `shared_tlb_update_i.content.w` = (update_shared_tlb.content >> 2) & 1, `shared_tlb_update_i.content.r` = (update_shared_tlb.content >> 1) & 1, `shared_tlb_update_i.content.v` = update_shared_tlb.content & 1, `shared_tlb_update_i.g_content.n` = (update_shared_tlb.g_content >> 63) & 1, `shared_tlb_update_i.g_content.reserved` = update_shared_tlb.g_content#[54..=62], `shared_tlb_update_i.g_content.ppn` = update_shared_tlb.g_content#[10..=53], `shared_tlb_update_i.g_content.rsw` = update_shared_tlb.g_content#[8..=9], `shared_tlb_update_i.g_content.d` = (update_shared_tlb.g_content >> 7) & 1, `shared_tlb_update_i.g_content.a` = (update_shared_tlb.g_content >> 6) & 1, `shared_tlb_update_i.g_content.g` = (update_shared_tlb.g_content >> 5) & 1, `shared_tlb_update_i.g_content.u` = (update_shared_tlb.g_content >> 4) & 1, `shared_tlb_update_i.g_content.x` = (update_shared_tlb.g_content >> 3) & 1, `shared_tlb_update_i.g_content.w` = (update_shared_tlb.g_content >> 2) & 1, `shared_tlb_update_i.g_content.r` = (update_shared_tlb.g_content >> 1) & 1, `shared_tlb_update_i.g_content.v` = update_shared_tlb.g_content & 1)
+  update_itlb.valid = i_shared_tlb.itlb_update_o.valid
+  update_itlb.is_napot_64k = i_shared_tlb.itlb_update_o.is_napot_64k
+  update_itlb.is_page = i_shared_tlb.itlb_update_o.is_page
+  update_itlb.vpn = i_shared_tlb.itlb_update_o.vpn
+  update_itlb.asid = i_shared_tlb.itlb_update_o.asid
+  update_itlb.vmid = i_shared_tlb.itlb_update_o.vmid
+  update_itlb.v_st_enbl = i_shared_tlb.itlb_update_o.v_st_enbl
+  update_itlb.content = (i_shared_tlb.itlb_update_o.content.n << 63) | (i_shared_tlb.itlb_update_o.content.reserved << 54) | (i_shared_tlb.itlb_update_o.content.ppn << 10) | (i_shared_tlb.itlb_update_o.content.rsw << 8) | (i_shared_tlb.itlb_update_o.content.d << 7) | (i_shared_tlb.itlb_update_o.content.a << 6) | (i_shared_tlb.itlb_update_o.content.g << 5) | (i_shared_tlb.itlb_update_o.content.u << 4) | (i_shared_tlb.itlb_update_o.content.x << 3) | (i_shared_tlb.itlb_update_o.content.w << 2) | (i_shared_tlb.itlb_update_o.content.r << 1) | i_shared_tlb.itlb_update_o.content.v
+  update_itlb.g_content = (i_shared_tlb.itlb_update_o.g_content.n << 63) | (i_shared_tlb.itlb_update_o.g_content.reserved << 54) | (i_shared_tlb.itlb_update_o.g_content.ppn << 10) | (i_shared_tlb.itlb_update_o.g_content.rsw << 8) | (i_shared_tlb.itlb_update_o.g_content.d << 7) | (i_shared_tlb.itlb_update_o.g_content.a << 6) | (i_shared_tlb.itlb_update_o.g_content.g << 5) | (i_shared_tlb.itlb_update_o.g_content.u << 4) | (i_shared_tlb.itlb_update_o.g_content.x << 3) | (i_shared_tlb.itlb_update_o.g_content.w << 2) | (i_shared_tlb.itlb_update_o.g_content.r << 1) | i_shared_tlb.itlb_update_o.g_content.v
+  update_dtlb.valid = i_shared_tlb.dtlb_update_o.valid
+  update_dtlb.is_napot_64k = i_shared_tlb.dtlb_update_o.is_napot_64k
+  update_dtlb.is_page = i_shared_tlb.dtlb_update_o.is_page
+  update_dtlb.vpn = i_shared_tlb.dtlb_update_o.vpn
+  update_dtlb.asid = i_shared_tlb.dtlb_update_o.asid
+  update_dtlb.vmid = i_shared_tlb.dtlb_update_o.vmid
+  update_dtlb.v_st_enbl = i_shared_tlb.dtlb_update_o.v_st_enbl
+  update_dtlb.content = (i_shared_tlb.dtlb_update_o.content.n << 63) | (i_shared_tlb.dtlb_update_o.content.reserved << 54) | (i_shared_tlb.dtlb_update_o.content.ppn << 10) | (i_shared_tlb.dtlb_update_o.content.rsw << 8) | (i_shared_tlb.dtlb_update_o.content.d << 7) | (i_shared_tlb.dtlb_update_o.content.a << 6) | (i_shared_tlb.dtlb_update_o.content.g << 5) | (i_shared_tlb.dtlb_update_o.content.u << 4) | (i_shared_tlb.dtlb_update_o.content.x << 3) | (i_shared_tlb.dtlb_update_o.content.w << 2) | (i_shared_tlb.dtlb_update_o.content.r << 1) | i_shared_tlb.dtlb_update_o.content.v
+  update_dtlb.g_content = (i_shared_tlb.dtlb_update_o.g_content.n << 63) | (i_shared_tlb.dtlb_update_o.g_content.reserved << 54) | (i_shared_tlb.dtlb_update_o.g_content.ppn << 10) | (i_shared_tlb.dtlb_update_o.g_content.rsw << 8) | (i_shared_tlb.dtlb_update_o.g_content.d << 7) | (i_shared_tlb.dtlb_update_o.g_content.a << 6) | (i_shared_tlb.dtlb_update_o.g_content.g << 5) | (i_shared_tlb.dtlb_update_o.g_content.u << 4) | (i_shared_tlb.dtlb_update_o.g_content.x << 3) | (i_shared_tlb.dtlb_update_o.g_content.w << 2) | (i_shared_tlb.dtlb_update_o.g_content.r << 1) | i_shared_tlb.dtlb_update_o.g_content.v
+  mut i_ptw = cva6_ptw::[name=i_ptw](clk_i = clk_i, rst_ni = rst_ni, flush_i = flush_i, enable_translation_i = enable_translation_i, enable_g_translation_i = enable_g_translation_i, en_ld_st_translation_i = en_ld_st_translation_i, en_ld_st_g_translation_i = en_ld_st_g_translation_i, v_i = v_i, ld_st_v_i = ld_st_v_i, hlvx_inst_i = hlvx_inst_i, lsu_is_store_i = lsu_is_store_i, req_port_i.data_gnt = req_port_i.data_gnt, req_port_i.data_rvalid = req_port_i.data_rvalid, req_port_i.data_rid = req_port_i.data_rid, req_port_i.data_rdata = req_port_i.data_rdata, req_port_i.data_ruser = req_port_i.data_ruser, asid_i = asid_i, vs_asid_i = vs_asid_i, vmid_i = vmid_i, shared_tlb_access_i = i_shared_tlb.shared_tlb_access_o, shared_tlb_hit_i = i_shared_tlb.shared_tlb_hit_o, shared_tlb_vaddr_i = i_shared_tlb.shared_tlb_vaddr_o, itlb_req_i = i_shared_tlb.itlb_req_o, satp_ppn_i = satp_ppn_i, vsatp_ppn_i = vsatp_ppn_i, hgatp_ppn_i = hgatp_ppn_i, mxr_i = mxr_i, vmxr_i = vmxr_i, mbe_i = mbe_i, pmpcfg_i = pmpcfg_i, pmpaddr_i = pmpaddr_i)
+  update_shared_tlb.valid = i_ptw.shared_tlb_update_o.valid
+  update_shared_tlb.is_napot_64k = i_ptw.shared_tlb_update_o.is_napot_64k
+  update_shared_tlb.is_page = i_ptw.shared_tlb_update_o.is_page
+  update_shared_tlb.vpn = i_ptw.shared_tlb_update_o.vpn
+  update_shared_tlb.asid = i_ptw.shared_tlb_update_o.asid
+  update_shared_tlb.vmid = i_ptw.shared_tlb_update_o.vmid
+  update_shared_tlb.v_st_enbl = i_ptw.shared_tlb_update_o.v_st_enbl
+  update_shared_tlb.content = (i_ptw.shared_tlb_update_o.content.n << 63) | (i_ptw.shared_tlb_update_o.content.reserved << 54) | (i_ptw.shared_tlb_update_o.content.ppn << 10) | (i_ptw.shared_tlb_update_o.content.rsw << 8) | (i_ptw.shared_tlb_update_o.content.d << 7) | (i_ptw.shared_tlb_update_o.content.a << 6) | (i_ptw.shared_tlb_update_o.content.g << 5) | (i_ptw.shared_tlb_update_o.content.u << 4) | (i_ptw.shared_tlb_update_o.content.x << 3) | (i_ptw.shared_tlb_update_o.content.w << 2) | (i_ptw.shared_tlb_update_o.content.r << 1) | i_ptw.shared_tlb_update_o.content.v
+  update_shared_tlb.g_content = (i_ptw.shared_tlb_update_o.g_content.n << 63) | (i_ptw.shared_tlb_update_o.g_content.reserved << 54) | (i_ptw.shared_tlb_update_o.g_content.ppn << 10) | (i_ptw.shared_tlb_update_o.g_content.rsw << 8) | (i_ptw.shared_tlb_update_o.g_content.d << 7) | (i_ptw.shared_tlb_update_o.g_content.a << 6) | (i_ptw.shared_tlb_update_o.g_content.g << 5) | (i_ptw.shared_tlb_update_o.g_content.u << 4) | (i_ptw.shared_tlb_update_o.g_content.x << 3) | (i_ptw.shared_tlb_update_o.g_content.w << 2) | (i_ptw.shared_tlb_update_o.g_content.r << 1) | i_ptw.shared_tlb_update_o.g_content.v
+  shared_tlb_miss = i_ptw.shared_tlb_miss_o
+  `icache_areq_o__bpo.fetch_valid` = icache_areq_i.fetch_req
+  `icache_areq_o__bpo.fetch_paddr` = icache_areq_i.fetch_vaddr#[0..=55]
+  iaccess_err = unsigned((icache_areq_i.fetch_req != 0) and (enable_translation_i != 0) and (((priv_lvl_i == riscv.PRIV_LVL_U) and (((~i_itlb.lu_content_o.u) & 1) != 0)) or ((priv_lvl_i == riscv.PRIV_LVL_S) and (i_itlb.lu_content_o.u != 0))))
+  if (enable_translation_i != 0) or (enable_g_translation_i != 0) {
+    if ((enable_translation_i != 0) and (icache_areq_i.fetch_req != 0) and (not ((unsigned(icache_areq_i.fetch_vaddr#[38..=63] == 0x3ffffff) == 1) or (unsigned(icache_areq_i.fetch_vaddr#[38..=63] != 0) == 0)))) or ((enable_g_translation_i != 0) and (enable_translation_i == 0) and true and (unsigned(icache_areq_i.fetch_vaddr#[41..=63] != 0) != 0)) {
+      `icache_areq_o__bpo.fetch_exception.cause` = riscv.INSTR_PAGE_FAULT
+      `icache_areq_o__bpo.fetch_exception.valid` = 1
+      {
+        `icache_areq_o__bpo.fetch_exception.tval` = icache_areq_i.fetch_vaddr
+      }
+    }
+    `icache_areq_o__bpo.fetch_valid` = 0
+    _mux_9 = if (enable_g_translation_i != 0) and false { i_itlb.lu_g_content_o.ppn#[0..=43] } else { i_itlb.lu_content_o.ppn#[0..=43] }
+    final_fetch_ppn = _mux_9
+    `icache_areq_o__bpo.fetch_paddr` = (final_fetch_ppn << 12) | icache_areq_i.fetch_vaddr#[0..=11]
+    if true and (((i_itlb.lu_is_page_o >> 1) & 1) != 0) {
+      `icache_areq_o__bpo.fetch_paddr`#[12..=20] = icache_areq_i.fetch_vaddr#[12..=20]
+    }
+    if (i_itlb.lu_is_page_o & 1) != 0 {
+      `icache_areq_o__bpo.fetch_paddr`#[12..=29] = icache_areq_i.fetch_vaddr#[12..=29]
+    }
+    if i_itlb.lu_hit_o != 0 {
+      `icache_areq_o__bpo.fetch_valid` = icache_areq_i.fetch_req
+      {
+        if iaccess_err != 0 {
+          `icache_areq_o__bpo.fetch_exception.cause` = riscv.INSTR_PAGE_FAULT
+          `icache_areq_o__bpo.fetch_exception.valid` = 1
+          {
+            `icache_areq_o__bpo.fetch_exception.tval` = icache_areq_i.fetch_vaddr
+          }
+        }
+      }
+    } elif (i_ptw.ptw_active_o != 0) and (i_ptw.walking_instr_o != 0) {
+      `icache_areq_o__bpo.fetch_valid` = (i_ptw.ptw_error_o | i_ptw.ptw_access_exception_o) & 1
+      if i_ptw.ptw_error_o != 0 {
+        {
+          `icache_areq_o__bpo.fetch_exception.cause` = riscv.INSTR_PAGE_FAULT
+          `icache_areq_o__bpo.fetch_exception.valid` = 1
+          {
+            `icache_areq_o__bpo.fetch_exception.tval` = i_ptw.update_vaddr_o
+          }
+        }
+      } else {
+        `icache_areq_o__bpo.fetch_exception.cause` = riscv.INSTR_ACCESS_FAULT
+        `icache_areq_o__bpo.fetch_exception.valid` = 1
+        {
+          `icache_areq_o__bpo.fetch_exception.tval` = i_ptw.update_vaddr_o
+        }
+      }
+    }
+  }
+  mut _mux_12:u1 = if (en_ld_st_translation_i != 0) or (en_ld_st_g_translation_i != 0) { i_dtlb.lu_hit_o & 1 } else { 1 }
+  lsu_vaddr_n = lsu_vaddr_i
+  mut `dtlb_pte_n.n` = i_dtlb.lu_content_o.n
+  mut `dtlb_pte_n.reserved` = i_dtlb.lu_content_o.reserved
+  mut `dtlb_pte_n.ppn` = i_dtlb.lu_content_o.ppn
+  mut `dtlb_pte_n.rsw` = i_dtlb.lu_content_o.rsw
+  mut `dtlb_pte_n.d` = i_dtlb.lu_content_o.d
+  mut `dtlb_pte_n.a` = i_dtlb.lu_content_o.a
+  mut `dtlb_pte_n.g` = i_dtlb.lu_content_o.g
+  mut `dtlb_pte_n.u` = i_dtlb.lu_content_o.u
+  mut `dtlb_pte_n.x` = i_dtlb.lu_content_o.x
+  mut `dtlb_pte_n.w` = i_dtlb.lu_content_o.w
+  mut `dtlb_pte_n.r` = i_dtlb.lu_content_o.r
+  mut `dtlb_pte_n.v` = i_dtlb.lu_content_o.v
+  dtlb_is_page_n = i_dtlb.lu_is_page_o
+  const t806 = (misaligned_ex_i.cause << 0x8c) | (misaligned_ex_i.tval << 0x4c) | (misaligned_ex_i.tval2 << 35) | (misaligned_ex_i.tinst << 3) | (misaligned_ex_i.gva << 2) | (misaligned_ex_i.valid << 1) | misaligned_ex_i.timing
+  mut `misaligned_ex_n.cause` = t806#[140..=203]
+  mut `misaligned_ex_n.tval` = t806#[76..=139]
+  mut `misaligned_ex_n.tval2` = t806#[35..=75]
+  mut `misaligned_ex_n.tinst` = t806#[3..=34]
+  mut `misaligned_ex_n.gva` = (t806 >> 2) & 1
+  mut `misaligned_ex_n.valid` = (t806 >> 1) & 1
+  mut `misaligned_ex_n.timing` = t806 & 1
+  `lsu_exception_o__bpo.cause` = misaligned_ex_q#[140..=203]
+  `lsu_exception_o__bpo.tval` = misaligned_ex_q#[76..=139]
+  mut `lsu_exception_o__bpo.tval2` = misaligned_ex_q#[35..=75]
+  mut `lsu_exception_o__bpo.tinst` = misaligned_ex_q#[3..=34]
+  mut `lsu_exception_o__bpo.gva` = (misaligned_ex_q >> 2) & 1
+  `lsu_exception_o__bpo.valid` = (misaligned_ex_q >> 1) & 1
+  mut `lsu_exception_o__bpo.timing` = misaligned_ex_q & 1
+  const `misaligned_ex_n.valid__w1` = misaligned_ex_i.valid & lsu_req_i & 1
+  canonical_addr_check = unsigned((lsu_req_i != 0) and (en_ld_st_translation_i != 0) and (not ((unsigned(lsu_vaddr_i#[38..=63] == 0x3ffffff) == 1) or (unsigned(lsu_vaddr_i#[38..=63] != 0) == 0))))
+  mut _mux_18:u1 = if ld_st_v_i != 0 { unsigned(vs_sum_i == 0) & 1 } else { unsigned(sum_i == 0) & 1 }
+  daccess_err = unsigned((en_ld_st_translation_i != 0) and (((ld_st_priv_lvl_i == riscv.PRIV_LVL_S) and (_mux_18 != 0) and (((dtlb_pte_q >> 4) & 1) != 0)) or ((ld_st_priv_lvl_i == riscv.PRIV_LVL_U) and (((dtlb_pte_q >> 4) & 1) == 0))))
+  lsu_dtlb_ppn_o = lsu_vaddr_n#[12..=55]
+  lsu_paddr_o = lsu_vaddr_q#[0..=55]
+  lsu_valid_o = lsu_req_q
+  if ((en_ld_st_translation_i != 0) or (en_ld_st_g_translation_i != 0)) and (((misaligned_ex_q >> 1) & 1) == 0) {
+    lsu_valid_o = 0
+    _mux_22 = if (en_ld_st_g_translation_i != 0) and false { i_dtlb.lu_g_content_o.ppn#[0..=43] } else { i_dtlb.lu_content_o.ppn#[0..=43] }
+    lsu_dtlb_ppn_o = _mux_22
+    _mux_23 = if (en_ld_st_g_translation_i != 0) and false { dtlb_gpte_q#[10..=53] } else { dtlb_pte_q#[10..=53] }
+    lsu_paddr_o = (_mux_23 << 12) | lsu_vaddr_q#[0..=11]
+    if true and (((dtlb_is_page_q >> 1) & 1) != 0) {
+      lsu_paddr_o#[12..=20] = lsu_vaddr_q#[12..=20]
+    }
+    if true and (((dtlb_is_page_n >> 1) & 1) != 0) {
+      lsu_dtlb_ppn_o#[0..=8] = lsu_vaddr_n#[12..=20]
+    }
+    if (dtlb_is_page_q & 1) != 0 {
+      lsu_paddr_o#[12..=29] = lsu_vaddr_q#[12..=29]
+    }
+    if (dtlb_is_page_n & 1) != 0 {
+      lsu_dtlb_ppn_o#[0..=17] = lsu_vaddr_n#[12..=29]
+    }
+    if (dtlb_hit_q != 0) and (lsu_req_q != 0) {
+      lsu_valid_o = 1
+      if lsu_is_store_q != 0 {
+        {
+          if ((en_ld_st_translation_i != 0) or true) and ((((dtlb_pte_q >> 2) & 1) == 0) or (daccess_err != 0) or (canonical_addr_check != 0) or (((dtlb_pte_q >> 7) & 1) == 0)) {
+            `lsu_exception_o__bpo.cause` = riscv.STORE_PAGE_FAULT
+            `lsu_exception_o__bpo.valid` = 1
+            {
+              `lsu_exception_o__bpo.tval` = lsu_vaddr_q
+            }
+          }
+        }
+      } else {
+        {
+          if (daccess_err != 0) or (canonical_addr_check != 0) {
+            `lsu_exception_o__bpo.cause` = riscv.LOAD_PAGE_FAULT
+            `lsu_exception_o__bpo.valid` = 1
+            {
+              `lsu_exception_o__bpo.tval` = lsu_vaddr_q
+            }
+          }
+        }
+      }
+    } elif (i_ptw.ptw_active_o != 0) and (i_ptw.walking_instr_o == 0) {
+      if i_ptw.ptw_error_o != 0 {
+        lsu_valid_o = 1
+        if lsu_is_store_q != 0 {
+          {
+            `lsu_exception_o__bpo.cause` = riscv.STORE_PAGE_FAULT
+            `lsu_exception_o__bpo.valid` = 1
+            {
+              `lsu_exception_o__bpo.tval` = i_ptw.update_vaddr_o#[0..=63]
+            }
+          }
+        } else {
+          {
+            `lsu_exception_o__bpo.cause` = riscv.LOAD_PAGE_FAULT
+            `lsu_exception_o__bpo.valid` = 1
+            {
+              `lsu_exception_o__bpo.tval` = i_ptw.update_vaddr_o#[0..=63]
+            }
+          }
+        }
+      }
+      if i_ptw.ptw_access_exception_o != 0 {
+        lsu_valid_o = 1
+        if (lsu_is_store_q != 0) and true and true {
+          `lsu_exception_o__bpo.cause` = riscv.ST_ACCESS_FAULT
+          `lsu_exception_o__bpo.valid` = 1
+          {
+            `lsu_exception_o__bpo.tval` = i_ptw.update_vaddr_o#[0..=63]
+          }
+        } else {
+          `lsu_exception_o__bpo.cause` = riscv.LD_ACCESS_FAULT
+          `lsu_exception_o__bpo.valid` = 1
+          {
+            `lsu_exception_o__bpo.tval` = i_ptw.update_vaddr_o#[0..=63]
+          }
+        }
+      }
+    }
+  }
+  if rst_ni != 0 {
+    lsu_vaddr_q = lsu_vaddr_n
+    lsu_req_q = lsu_req_i
+    dtlb_pte_q = (`dtlb_pte_n.n` << 63) | (`dtlb_pte_n.reserved` << 54) | (`dtlb_pte_n.ppn` << 10) | (`dtlb_pte_n.rsw` << 8) | (`dtlb_pte_n.d` << 7) | (`dtlb_pte_n.a` << 6) | (`dtlb_pte_n.g` << 5) | (`dtlb_pte_n.u` << 4) | (`dtlb_pte_n.x` << 3) | (`dtlb_pte_n.w` << 2) | (`dtlb_pte_n.r` << 1) | `dtlb_pte_n.v`
+    dtlb_hit_q = i_dtlb.lu_hit_o
+    lsu_is_store_q = lsu_is_store_i
+    dtlb_is_page_q = dtlb_is_page_n
+    misaligned_ex_q = (`misaligned_ex_n.cause` << 0x8c) | (`misaligned_ex_n.tval` << 0x4c) | (`misaligned_ex_n.tval2` << 35) | (`misaligned_ex_n.tinst` << 3) | (`misaligned_ex_n.gva` << 2) | (`misaligned_ex_n.valid__w1` << 1) | `misaligned_ex_n.timing`
+  }
+  icache_areq_o.fetch_valid = `icache_areq_o__bpo.fetch_valid`
+  icache_areq_o.fetch_paddr = `icache_areq_o__bpo.fetch_paddr`
+  icache_areq_o.fetch_exception.cause = `icache_areq_o__bpo.fetch_exception.cause`
+  icache_areq_o.fetch_exception.tval = `icache_areq_o__bpo.fetch_exception.tval`
+  icache_areq_o.fetch_exception.tval2 = 0
+  icache_areq_o.fetch_exception.tinst = 0
+  icache_areq_o.fetch_exception.gva = 0
+  icache_areq_o.fetch_exception.valid = `icache_areq_o__bpo.fetch_exception.valid`
+  icache_areq_o.fetch_exception.timing = 0
+  lsu_exception_o.cause = `lsu_exception_o__bpo.cause`
+  lsu_exception_o.tval = `lsu_exception_o__bpo.tval`
+  lsu_exception_o.tval2 = `lsu_exception_o__bpo.tval2`
+  lsu_exception_o.tinst = `lsu_exception_o__bpo.tinst`
+  lsu_exception_o.gva = `lsu_exception_o__bpo.gva`
+  lsu_exception_o.valid = `lsu_exception_o__bpo.valid`
+  lsu_exception_o.timing = `lsu_exception_o__bpo.timing`
+  req_port_o.address_index = i_ptw.req_port_o.address_index
+  req_port_o.address_tag = i_ptw.req_port_o.address_tag
+  req_port_o.data_wdata = i_ptw.req_port_o.data_wdata
+  req_port_o.data_wuser = i_ptw.req_port_o.data_wuser
+  req_port_o.data_req = i_ptw.req_port_o.data_req
+  req_port_o.data_we = i_ptw.req_port_o.data_we
+  req_port_o.data_be = i_ptw.req_port_o.data_be
+  req_port_o.data_size = i_ptw.req_port_o.data_size
+  req_port_o.data_id = i_ptw.req_port_o.data_id
+  req_port_o.kill_req = i_ptw.req_port_o.kill_req
+  req_port_o.tag_valid = i_ptw.req_port_o.tag_valid
+  req_port_o.cbo_op = i_ptw.req_port_o.cbo_op
+  lsu_dtlb_hit_o = _mux_12
+  shared_tlb_flush_busy_o = i_shared_tlb.flush_busy_o
+  itlb_miss_o = i_shared_tlb.itlb_miss_o
+  dtlb_miss_o = i_shared_tlb.dtlb_miss_o
+}

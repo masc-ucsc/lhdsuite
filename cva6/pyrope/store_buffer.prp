@@ -1,0 +1,327 @@
+const ariane_pkg = import("ariane_pkg")
+
+pub mod store_buffer::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, stall_st_pending_i:u1, page_offset_i:u12, commit_i:u1, valid_i:u1, valid_without_flush_i:u1, paddr_i:u56, data_i:u64, be_i:u8, data_size_i:u2, cbo_op_i:u8, req_port_i:(data_gnt:u1, data_rvalid:u1, data_rid:u1, data_rdata:u64, data_ruser:u64)) -> (no_st_pending_o:u1@[], store_buffer_empty_o:u1@[], page_offset_matches_o:u1@[], commit_ready_o:u1@[], ready_o:u1@[], rvfi_mem_paddr_o:u56@[], req_port_o:(address_index:u12, address_tag:u44, data_wdata:u64, data_wuser:u64, data_req:u1, data_we:u1, data_be:u8, data_size:u2, data_id:u1, kill_req:u1, tag_valid:u1, cbo_op:u8)@[]) {
+  reg `speculative_queue_q.address`:[4]u56:[ordering="old", clock_pin=ref clk_i]
+  reg `speculative_queue_q.data`:[4]u64:[ordering="old", clock_pin=ref clk_i]
+  reg `speculative_queue_q.be`:[4]u8:[ordering="old", clock_pin=ref clk_i]
+  reg `speculative_queue_q.data_size`:[4]u2:[ordering="old", clock_pin=ref clk_i]
+  reg `speculative_queue_q.cbo_op`:[4]u8:[ordering="old", clock_pin=ref clk_i]
+  reg `speculative_queue_q.valid`:[4]u1:[ordering="old", clock_pin=ref clk_i]
+  reg `speculative_queue_q.wait_rvalid`:[4]u1:[ordering="old", clock_pin=ref clk_i]
+  reg `commit_queue_q.address`:[4]u56:[ordering="old", clock_pin=ref clk_i]
+  reg `commit_queue_q.data`:[4]u64:[ordering="old", clock_pin=ref clk_i]
+  reg `commit_queue_q.be`:[4]u8:[ordering="old", clock_pin=ref clk_i]
+  reg `commit_queue_q.data_size`:[4]u2:[ordering="old", clock_pin=ref clk_i]
+  reg `commit_queue_q.cbo_op`:[4]u8:[ordering="old", clock_pin=ref clk_i]
+  reg `commit_queue_q.valid`:[4]u1:[ordering="old", clock_pin=ref clk_i]
+  reg `commit_queue_q.wait_rvalid`:[4]u1:[ordering="old", clock_pin=ref clk_i]
+  reg speculative_status_cnt_q:u3:[clock_pin=ref clk_i]
+  reg commit_status_cnt_q:u3:[clock_pin=ref clk_i]
+  reg speculative_read_pointer_q:u2:[clock_pin=ref clk_i]
+  reg speculative_write_pointer_q:u2:[clock_pin=ref clk_i]
+  reg commit_read_pointer_q:u2:[clock_pin=ref clk_i]
+  reg commit_write_pointer_q:u2:[clock_pin=ref clk_i]
+  mut speculative_queue_n:u560 = 0sb?
+  mut commit_queue_n:u560 = 0sb?
+  mut speculative_status_cnt_n:u3 = 0
+  mut speculative_read_pointer_n:u2 = 0
+  mut speculative_write_pointer_n:u2 = 0
+  mut commit_read_pointer_n:u2 = 0
+  mut commit_write_pointer_n:u2 = 0
+  mut `req_port_o__bpo.data_wuser` = 0
+  mut `req_port_o__bpo.data_req` = 0
+  mut `req_port_o__bpo.data_we` = 0
+  mut `req_port_o__bpo.data_id` = 0
+  mut `req_port_o__bpo.kill_req` = 0
+  mut `req_port_o__bpo.tag_valid` = 0
+  mut speculative_status_cnt:u3 = 0
+  mut commit_status_cnt:u3 = 0
+  mut _brk_4 = 0
+  mut _brk_5 = 0
+  speculative_status_cnt_n = 0sb?
+  speculative_read_pointer_n = 0sb?
+  speculative_write_pointer_n = 0sb?
+  commit_read_pointer_n = 0sb?
+  commit_write_pointer_n = 0sb?
+  page_offset_matches_o = 0ub?
+  speculative_status_cnt = 0sb?
+  speculative_queue_n = (`speculative_queue_q.address`[0] << 0x54) | (`speculative_queue_q.data`[0] << 20) | (`speculative_queue_q.be`[0] << 12) | (`speculative_queue_q.data_size`[0] << 10) | (`speculative_queue_q.cbo_op`[0] << 2) | (`speculative_queue_q.valid`[0] << 1) | `speculative_queue_q.wait_rvalid`[0] | (`speculative_queue_q.address`[1] << 0xe0) | (`speculative_queue_q.data`[1] << 0xa0) | (`speculative_queue_q.be`[1] << 0x98) | (`speculative_queue_q.data_size`[1] << 0x96) | (`speculative_queue_q.cbo_op`[1] << 0x8e) | (`speculative_queue_q.valid`[1] << 0x8d) | (`speculative_queue_q.wait_rvalid`[1] << 0x8c) | (`speculative_queue_q.address`[2] << 0x16c) | (`speculative_queue_q.data`[2] << 0x12c) | (`speculative_queue_q.be`[2] << 0x124) | (`speculative_queue_q.data_size`[2] << 0x122) | (`speculative_queue_q.cbo_op`[2] << 0x11a) | (`speculative_queue_q.valid`[2] << 0x119) | (`speculative_queue_q.wait_rvalid`[2] << 0x118) | (`speculative_queue_q.address`[3] << 0x1f8) | (`speculative_queue_q.data`[3] << 0x1b8) | (`speculative_queue_q.be`[3] << 0x1b0) | (`speculative_queue_q.data_size`[3] << 0x1ae) | (`speculative_queue_q.cbo_op`[3] << 0x1a6) | (`speculative_queue_q.valid`[3] << 0x1a5) | (`speculative_queue_q.wait_rvalid`[3] << 0x1a4)
+  speculative_status_cnt = speculative_status_cnt_q
+  speculative_write_pointer_n = speculative_write_pointer_q
+  if valid_i != 0 {
+    const t128 = (speculative_write_pointer_q * 0x8c) + 0x54
+    speculative_queue_n = ((speculative_queue_n & (~(0xffffffffffffff << t128))) | (paddr_i << t128)) & 1
+    const t137 = (speculative_write_pointer_q * 0x8c) + 20
+    speculative_queue_n = ((speculative_queue_n & (~(0xffffffffffffffff << t137))) | (data_i << t137)) & 1
+    const t146 = (speculative_write_pointer_q * 0x8c) + 12
+    speculative_queue_n = ((speculative_queue_n & (~(0xff << t146))) | (be_i << t146)) & 1
+    const t155 = (speculative_write_pointer_q * 0x8c) + 10
+    speculative_queue_n = ((speculative_queue_n & (~(3 << t155))) | (data_size_i << t155)) & 1
+    const t163 = (speculative_write_pointer_q * 0x8c) + 1
+    speculative_queue_n = ((speculative_queue_n & (~(1 << t163))) | (1 << t163)) & 1
+    const t172 = (speculative_write_pointer_q * 0x8c) + 2
+    speculative_queue_n = ((speculative_queue_n & (~(0xff << t172))) | (cbo_op_i << t172)) & 1
+    const t179 = speculative_write_pointer_q * 0x8c
+    speculative_queue_n = ((speculative_queue_n & (~(1 << t179))) | (0 << t179)) & 1
+    speculative_write_pointer_n = (speculative_write_pointer_q + 1)#[0..=1]
+    speculative_status_cnt = (speculative_status_cnt + 1)#[0..=2]
+  }
+  speculative_read_pointer_n = speculative_read_pointer_q
+  if commit_i != 0 {
+    const t193 = (speculative_read_pointer_q * 0x8c) + 1
+    speculative_queue_n = ((speculative_queue_n & (~(1 << t193))) | (0 << t193)) & 1
+    speculative_read_pointer_n = (speculative_read_pointer_q + 1)#[0..=1]
+    speculative_status_cnt = (speculative_status_cnt - 1)#[0..=2]
+  }
+  speculative_status_cnt_n = speculative_status_cnt
+  if flush_i != 0 {
+    speculative_queue_n#[1] = 0
+    speculative_queue_n#[141] = 0
+    speculative_queue_n#[281] = 0
+    speculative_queue_n#[421] = 0
+    speculative_write_pointer_n = speculative_read_pointer_q
+    speculative_status_cnt_n = 0
+  }
+  mut `req_port_o__bpo.address_index` = `commit_queue_q.address`[commit_read_pointer_q]#[0..=11]
+  mut `req_port_o__bpo.address_tag` = `commit_queue_q.address`[commit_read_pointer_q]#[12..=55]
+  mut `req_port_o__bpo.data_wdata` = `commit_queue_q.data`[commit_read_pointer_q]
+  mut `req_port_o__bpo.data_be` = `commit_queue_q.be`[commit_read_pointer_q]
+  mut `req_port_o__bpo.data_size` = `commit_queue_q.data_size`[commit_read_pointer_q]
+  const rvfi_mem_paddr_o__w1 = `speculative_queue_q.address`[speculative_read_pointer_q]
+  commit_status_cnt = 0sb?
+  const no_st_pending_o__w1 = unsigned(commit_status_cnt_q == 0)
+  commit_queue_n = (`commit_queue_q.address`[0] << 0x54) | (`commit_queue_q.data`[0] << 20) | (`commit_queue_q.be`[0] << 12) | (`commit_queue_q.data_size`[0] << 10) | (`commit_queue_q.cbo_op`[0] << 2) | (`commit_queue_q.valid`[0] << 1) | `commit_queue_q.wait_rvalid`[0] | (`commit_queue_q.address`[1] << 0xe0) | (`commit_queue_q.data`[1] << 0xa0) | (`commit_queue_q.be`[1] << 0x98) | (`commit_queue_q.data_size`[1] << 0x96) | (`commit_queue_q.cbo_op`[1] << 0x8e) | (`commit_queue_q.valid`[1] << 0x8d) | (`commit_queue_q.wait_rvalid`[1] << 0x8c) | (`commit_queue_q.address`[2] << 0x16c) | (`commit_queue_q.data`[2] << 0x12c) | (`commit_queue_q.be`[2] << 0x124) | (`commit_queue_q.data_size`[2] << 0x122) | (`commit_queue_q.cbo_op`[2] << 0x11a) | (`commit_queue_q.valid`[2] << 0x119) | (`commit_queue_q.wait_rvalid`[2] << 0x118) | (`commit_queue_q.address`[3] << 0x1f8) | (`commit_queue_q.data`[3] << 0x1b8) | (`commit_queue_q.be`[3] << 0x1b0) | (`commit_queue_q.data_size`[3] << 0x1ae) | (`commit_queue_q.cbo_op`[3] << 0x1a6) | (`commit_queue_q.valid`[3] << 0x1a5) | (`commit_queue_q.wait_rvalid`[3] << 0x1a4)
+  mut `req_port_o__bpo.cbo_op` = `commit_queue_q.cbo_op`[commit_read_pointer_q]
+  commit_read_pointer_n = commit_read_pointer_q
+  commit_status_cnt = commit_status_cnt_q
+  if (`commit_queue_q.valid`[commit_read_pointer_q] != 0) and (stall_st_pending_i == 0) and (`commit_queue_q.wait_rvalid`[commit_read_pointer_q] == 0) {
+    `req_port_o__bpo.data_req` = 1
+    if req_port_i.data_gnt != 0 {
+      if (`commit_queue_q.cbo_op`[commit_read_pointer_q] == ariane_pkg.CBO_NONE) or (req_port_i.data_rvalid != 0) {
+        const t355 = (commit_read_pointer_q * 0x8c) + 1
+        commit_queue_n = ((commit_queue_n & (~(1 << t355))) | (0 << t355)) & 1
+        commit_read_pointer_n = (commit_read_pointer_q + 1)#[0..=1]
+        commit_status_cnt = (commit_status_cnt - 1)#[0..=2]
+      } elif `commit_queue_q.cbo_op`[commit_read_pointer_q] != ariane_pkg.CBO_NONE {
+        const t370 = commit_read_pointer_q * 0x8c
+        commit_queue_n = ((commit_queue_n & (~(1 << t370))) | (1 << t370)) & 1
+      }
+    }
+  }
+  if (`commit_queue_q.valid`[commit_read_pointer_q] != 0) and (`commit_queue_q.wait_rvalid`[commit_read_pointer_q] != 0) {
+    if req_port_i.data_rvalid != 0 {
+      const t387 = (commit_read_pointer_q * 0x8c) + 1
+      commit_queue_n = ((commit_queue_n & (~(1 << t387))) | (0 << t387)) & 1
+      commit_read_pointer_n = (commit_read_pointer_q + 1)#[0..=1]
+      commit_status_cnt = (commit_status_cnt - 1)#[0..=2]
+    }
+  }
+  commit_write_pointer_n = commit_write_pointer_q
+  if commit_i != 0 {
+    const t426 = commit_write_pointer_q * 0x8c
+    commit_queue_n = ((commit_queue_n & (~(0xfffffffffffffffffffffffffffffffffff << t426))) | (((`speculative_queue_q.address`[speculative_read_pointer_q] << 0x54) | (`speculative_queue_q.data`[speculative_read_pointer_q] << 20) | (`speculative_queue_q.be`[speculative_read_pointer_q] << 12) | (`speculative_queue_q.data_size`[speculative_read_pointer_q] << 10) | (`speculative_queue_q.cbo_op`[speculative_read_pointer_q] << 2) | (`speculative_queue_q.valid`[speculative_read_pointer_q] << 1) | `speculative_queue_q.wait_rvalid`[speculative_read_pointer_q]) << t426))#[0..=559]
+    commit_write_pointer_n = (commit_write_pointer_n + 1)#[0..=1]
+    commit_status_cnt = (commit_status_cnt + 1)#[0..=2]
+  }
+  _brk_4 = 0
+  page_offset_matches_o = 0
+  {
+    if (page_offset_i#[3..=11] == `commit_queue_q.address`[0]#[3..=11]) and (`commit_queue_q.valid`[0] != 0) {
+      page_offset_matches_o = 1
+      _brk_4 = 1
+    }
+  }
+  if _brk_4 == 0 {
+    if (page_offset_i#[3..=11] == `commit_queue_q.address`[1]#[3..=11]) and (`commit_queue_q.valid`[1] != 0) {
+      page_offset_matches_o = 1
+      _brk_4 = 1
+    }
+  }
+  if _brk_4 == 0 {
+    if (page_offset_i#[3..=11] == `commit_queue_q.address`[2]#[3..=11]) and (`commit_queue_q.valid`[2] != 0) {
+      page_offset_matches_o = 1
+      _brk_4 = 1
+    }
+  }
+  if _brk_4 == 0 {
+    if (page_offset_i#[3..=11] == `commit_queue_q.address`[3]#[3..=11]) and (`commit_queue_q.valid`[3] != 0) {
+      page_offset_matches_o = 1
+      _brk_4 = 1
+    }
+  }
+  _brk_5 = 0
+  {
+    if (page_offset_i#[3..=11] == `speculative_queue_q.address`[0]#[3..=11]) and (`speculative_queue_q.valid`[0] != 0) {
+      page_offset_matches_o = 1
+      _brk_5 = 1
+    }
+  }
+  if _brk_5 == 0 {
+    if (page_offset_i#[3..=11] == `speculative_queue_q.address`[1]#[3..=11]) and (`speculative_queue_q.valid`[1] != 0) {
+      page_offset_matches_o = 1
+      _brk_5 = 1
+    }
+  }
+  if _brk_5 == 0 {
+    if (page_offset_i#[3..=11] == `speculative_queue_q.address`[2]#[3..=11]) and (`speculative_queue_q.valid`[2] != 0) {
+      page_offset_matches_o = 1
+      _brk_5 = 1
+    }
+  }
+  if _brk_5 == 0 {
+    if (page_offset_i#[3..=11] == `speculative_queue_q.address`[3]#[3..=11]) and (`speculative_queue_q.valid`[3] != 0) {
+      page_offset_matches_o = 1
+      _brk_5 = 1
+    }
+  }
+  if (page_offset_i#[3..=11] == paddr_i#[3..=11]) and (valid_without_flush_i != 0) {
+    page_offset_matches_o = 1
+  }
+  if ((~rst_ni) & 1) != 0 {
+    `speculative_queue_q.address`[0] = 0
+    `speculative_queue_q.data`[0] = 0
+    `speculative_queue_q.be`[0] = 0
+    `speculative_queue_q.data_size`[0] = 0
+    `speculative_queue_q.cbo_op`[0] = 0
+    `speculative_queue_q.valid`[0] = 0
+    `speculative_queue_q.wait_rvalid`[0] = 0
+    `speculative_queue_q.address`[1] = 0
+    `speculative_queue_q.data`[1] = 0
+    `speculative_queue_q.be`[1] = 0
+    `speculative_queue_q.data_size`[1] = 0
+    `speculative_queue_q.cbo_op`[1] = 0
+    `speculative_queue_q.valid`[1] = 0
+    `speculative_queue_q.wait_rvalid`[1] = 0
+    `speculative_queue_q.address`[2] = 0
+    `speculative_queue_q.data`[2] = 0
+    `speculative_queue_q.be`[2] = 0
+    `speculative_queue_q.data_size`[2] = 0
+    `speculative_queue_q.cbo_op`[2] = 0
+    `speculative_queue_q.valid`[2] = 0
+    `speculative_queue_q.wait_rvalid`[2] = 0
+    `speculative_queue_q.address`[3] = 0
+    `speculative_queue_q.data`[3] = 0
+    `speculative_queue_q.be`[3] = 0
+    `speculative_queue_q.data_size`[3] = 0
+    `speculative_queue_q.cbo_op`[3] = 0
+    `speculative_queue_q.valid`[3] = 0
+    `speculative_queue_q.wait_rvalid`[3] = 0
+    speculative_read_pointer_q = 0
+    speculative_write_pointer_q = 0
+    speculative_status_cnt_q = 0
+  } else {
+    `speculative_queue_q.address`[0] = speculative_queue_n#[84..=139]
+    `speculative_queue_q.data`[0] = speculative_queue_n#[20..=83]
+    `speculative_queue_q.be`[0] = speculative_queue_n#[12..=19]
+    `speculative_queue_q.data_size`[0] = speculative_queue_n#[10..=11]
+    `speculative_queue_q.cbo_op`[0] = speculative_queue_n#[2..=9]
+    `speculative_queue_q.valid`[0] = (speculative_queue_n >> 1) & 1
+    `speculative_queue_q.wait_rvalid`[0] = speculative_queue_n & 1
+    `speculative_queue_q.address`[1] = speculative_queue_n#[224..=279]
+    `speculative_queue_q.data`[1] = speculative_queue_n#[160..=223]
+    `speculative_queue_q.be`[1] = speculative_queue_n#[152..=159]
+    `speculative_queue_q.data_size`[1] = speculative_queue_n#[150..=151]
+    `speculative_queue_q.cbo_op`[1] = speculative_queue_n#[142..=149]
+    `speculative_queue_q.valid`[1] = (speculative_queue_n >> 0x8d) & 1
+    `speculative_queue_q.wait_rvalid`[1] = (speculative_queue_n >> 0x8c) & 1
+    `speculative_queue_q.address`[2] = speculative_queue_n#[364..=419]
+    `speculative_queue_q.data`[2] = speculative_queue_n#[300..=363]
+    `speculative_queue_q.be`[2] = speculative_queue_n#[292..=299]
+    `speculative_queue_q.data_size`[2] = speculative_queue_n#[290..=291]
+    `speculative_queue_q.cbo_op`[2] = speculative_queue_n#[282..=289]
+    `speculative_queue_q.valid`[2] = (speculative_queue_n >> 0x119) & 1
+    `speculative_queue_q.wait_rvalid`[2] = (speculative_queue_n >> 0x118) & 1
+    `speculative_queue_q.address`[3] = speculative_queue_n#[504..=559]
+    `speculative_queue_q.data`[3] = speculative_queue_n#[440..=503]
+    `speculative_queue_q.be`[3] = speculative_queue_n#[432..=439]
+    `speculative_queue_q.data_size`[3] = speculative_queue_n#[430..=431]
+    `speculative_queue_q.cbo_op`[3] = speculative_queue_n#[422..=429]
+    `speculative_queue_q.valid`[3] = (speculative_queue_n >> 0x1a5) & 1
+    `speculative_queue_q.wait_rvalid`[3] = (speculative_queue_n >> 0x1a4) & 1
+    speculative_read_pointer_q = speculative_read_pointer_n
+    speculative_write_pointer_q = speculative_write_pointer_n
+    speculative_status_cnt_q = speculative_status_cnt_n
+  }
+  if ((~rst_ni) & 1) != 0 {
+    `commit_queue_q.address`[0] = 0
+    `commit_queue_q.data`[0] = 0
+    `commit_queue_q.be`[0] = 0
+    `commit_queue_q.data_size`[0] = 0
+    `commit_queue_q.cbo_op`[0] = 0
+    `commit_queue_q.valid`[0] = 0
+    `commit_queue_q.wait_rvalid`[0] = 0
+    `commit_queue_q.address`[1] = 0
+    `commit_queue_q.data`[1] = 0
+    `commit_queue_q.be`[1] = 0
+    `commit_queue_q.data_size`[1] = 0
+    `commit_queue_q.cbo_op`[1] = 0
+    `commit_queue_q.valid`[1] = 0
+    `commit_queue_q.wait_rvalid`[1] = 0
+    `commit_queue_q.address`[2] = 0
+    `commit_queue_q.data`[2] = 0
+    `commit_queue_q.be`[2] = 0
+    `commit_queue_q.data_size`[2] = 0
+    `commit_queue_q.cbo_op`[2] = 0
+    `commit_queue_q.valid`[2] = 0
+    `commit_queue_q.wait_rvalid`[2] = 0
+    `commit_queue_q.address`[3] = 0
+    `commit_queue_q.data`[3] = 0
+    `commit_queue_q.be`[3] = 0
+    `commit_queue_q.data_size`[3] = 0
+    `commit_queue_q.cbo_op`[3] = 0
+    `commit_queue_q.valid`[3] = 0
+    `commit_queue_q.wait_rvalid`[3] = 0
+    commit_read_pointer_q = 0
+    commit_write_pointer_q = 0
+    commit_status_cnt_q = 0
+  } else {
+    `commit_queue_q.address`[0] = commit_queue_n#[84..=139]
+    `commit_queue_q.data`[0] = commit_queue_n#[20..=83]
+    `commit_queue_q.be`[0] = commit_queue_n#[12..=19]
+    `commit_queue_q.data_size`[0] = commit_queue_n#[10..=11]
+    `commit_queue_q.cbo_op`[0] = commit_queue_n#[2..=9]
+    `commit_queue_q.valid`[0] = (commit_queue_n >> 1) & 1
+    `commit_queue_q.wait_rvalid`[0] = commit_queue_n & 1
+    `commit_queue_q.address`[1] = commit_queue_n#[224..=279]
+    `commit_queue_q.data`[1] = commit_queue_n#[160..=223]
+    `commit_queue_q.be`[1] = commit_queue_n#[152..=159]
+    `commit_queue_q.data_size`[1] = commit_queue_n#[150..=151]
+    `commit_queue_q.cbo_op`[1] = commit_queue_n#[142..=149]
+    `commit_queue_q.valid`[1] = (commit_queue_n >> 0x8d) & 1
+    `commit_queue_q.wait_rvalid`[1] = (commit_queue_n >> 0x8c) & 1
+    `commit_queue_q.address`[2] = commit_queue_n#[364..=419]
+    `commit_queue_q.data`[2] = commit_queue_n#[300..=363]
+    `commit_queue_q.be`[2] = commit_queue_n#[292..=299]
+    `commit_queue_q.data_size`[2] = commit_queue_n#[290..=291]
+    `commit_queue_q.cbo_op`[2] = commit_queue_n#[282..=289]
+    `commit_queue_q.valid`[2] = (commit_queue_n >> 0x119) & 1
+    `commit_queue_q.wait_rvalid`[2] = (commit_queue_n >> 0x118) & 1
+    `commit_queue_q.address`[3] = commit_queue_n#[504..=559]
+    `commit_queue_q.data`[3] = commit_queue_n#[440..=503]
+    `commit_queue_q.be`[3] = commit_queue_n#[432..=439]
+    `commit_queue_q.data_size`[3] = commit_queue_n#[430..=431]
+    `commit_queue_q.cbo_op`[3] = commit_queue_n#[422..=429]
+    `commit_queue_q.valid`[3] = (commit_queue_n >> 0x1a5) & 1
+    `commit_queue_q.wait_rvalid`[3] = (commit_queue_n >> 0x1a4) & 1
+    commit_read_pointer_q = commit_read_pointer_n
+    commit_write_pointer_q = commit_write_pointer_n
+    commit_status_cnt_q = commit_status_cnt
+  }
+  req_port_o.address_index = `req_port_o__bpo.address_index`
+  req_port_o.address_tag = `req_port_o__bpo.address_tag`
+  req_port_o.data_wdata = `req_port_o__bpo.data_wdata`
+  req_port_o.data_wuser = 0
+  req_port_o.data_req = `req_port_o__bpo.data_req`
+  req_port_o.data_we = 1
+  req_port_o.data_be = `req_port_o__bpo.data_be`
+  req_port_o.data_size = `req_port_o__bpo.data_size`
+  req_port_o.data_id = 0
+  req_port_o.kill_req = 0
+  req_port_o.tag_valid = 0
+  req_port_o.cbo_op = `req_port_o__bpo.cbo_op`
+  no_st_pending_o = no_st_pending_o__w1
+  store_buffer_empty_o = unsigned(speculative_status_cnt_q == 0) & no_st_pending_o__w1 & 1
+  commit_ready_o = unsigned(commit_status_cnt_q < ariane_pkg.DEPTH_COMMIT)
+  ready_o = unsigned((speculative_status_cnt_n < ariane_pkg.DEPTH_SPEC) or (commit_i != 0))
+  rvfi_mem_paddr_o = rvfi_mem_paddr_o__w1
+}

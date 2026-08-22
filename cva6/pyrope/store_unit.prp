@@ -1,0 +1,227 @@
+const amo_buffer = import("amo_buffer.amo_buffer")
+const store_buffer = import("store_buffer.store_buffer")
+const ariane_pkg = import("ariane_pkg")
+
+pub mod store_unit::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, stall_st_pending_i:u1, valid_i:u1, lsu_ctrl_i:(valid:u1, vaddr:u64, tinst:u32, hs_ld_st_inst:u1, hlvx_inst:u1, overflow:u1, g_overflow:u1, data:u64, be:u8, fu:u4, operation:u8, trans_id:u3, is_speculative_load:u1, is_speculative_load_miss:u1), commit_i:u1, amo_valid_commit_i:u1, mbe_i:u1, paddr_i:u56, ex_i:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1), dtlb_hit_i:u1, page_offset_i:u12, amo_resp_i:(ack:u1, result:u64), req_port_i:(data_gnt:u1, data_rvalid:u1, data_rid:u1, data_rdata:u64, data_ruser:u64), sdtrig_store_stall_i:u1, sdtrig_store_action_i:u64) -> (no_st_pending_o:u1@[], store_buffer_empty_o:u1@[], pop_st_o:u1@[], commit_ready_o:u1@[], valid_o:u1@[], trans_id_o:u3@[], result_o:u64@[], ex_o:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1)@[], translation_req_o:u1@[], vaddr_o:u64@[], rvfi_mem_paddr_o:u56@[], tinst_o:u32@[], hs_ld_st_inst_o:u1@[], hlvx_inst_o:u1@[], page_offset_matches_o:u1@[], amo_req_o:(req:u1, amo_op:u4, size:u2, operand_a:u64, operand_b:u64)@[], req_port_o:(address_index:u12, address_tag:u44, data_wdata:u64, data_wuser:u64, data_req:u1, data_we:u1, data_be:u8, data_size:u2, data_id:u1, kill_req:u1, tag_valid:u1, cbo_op:u8)@[]) {
+  reg state_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg st_data_q:u64:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg st_be_q:u8:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg st_data_size_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg amo_op_q:u4:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg cbo_op_q:u8:[init=86, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg trans_id_q:u3:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  wire st_ready:u1
+  wire store_buffer_ready:u1
+  wire amo_buffer_ready:u1
+  mut state_d:u2 = 0
+  mut st_valid:u1 = 0
+  mut st_valid_without_flush:u1 = 0
+  mut cbo_op_d:u8 = 0
+  mut endian_data:u64 = 0
+  mut `ex_o__bpo.cause` = 0
+  mut `ex_o__bpo.tval` = 0
+  mut `ex_o__bpo.valid` = 0
+  state_d = 0sb?
+  st_valid = 0ub?
+  st_valid_without_flush = 0ub?
+  mut amo_op_d:u4 = 0sb?
+  cbo_op_d = 0sb?
+  endian_data = 0sb?
+  pop_st_o = 0ub?
+  valid_o = 0ub?
+  translation_req_o = 0ub?
+  const op__w1 = lsu_ctrl_i.operation
+  mut is_amo = 0ub?
+  is_amo = if (op__w1 >= ariane_pkg.AMO_LRW) and (op__w1 <= ariane_pkg.AMO_MINDU) { 1 } else { 0 }
+  const instr_is_amo__w1 = is_amo
+  mut _mux_1:u3 = if (sdtrig_store_stall_i != 0) and (valid_i != 0) { lsu_ctrl_i.trans_id#[0..=2] } else { trans_id_q }
+  endian_data = lsu_ctrl_i.data
+  if mbe_i != 0 {
+    const t40 = lsu_ctrl_i.operation
+    match t40 {
+      in (ariane_pkg.SB, ariane_pkg.HSV_B, ariane_pkg.FSB) {
+        endian_data#[0..=7] = lsu_ctrl_i.data#[0..=7]
+      }
+      in (ariane_pkg.SH, ariane_pkg.HSV_H, ariane_pkg.FSH) {
+        endian_data#[0..=15] = ((lsu_ctrl_i.data#[0..=15] & 0xff) << 8) | ((lsu_ctrl_i.data#[0..=15] >> 8) & 0xff)
+      }
+      in (ariane_pkg.SW, ariane_pkg.HSV_W, ariane_pkg.FSW, ariane_pkg.AMO_LRW, ariane_pkg.AMO_SCW, ariane_pkg.AMO_SWAPW, ariane_pkg.AMO_ADDW, ariane_pkg.AMO_ANDW, ariane_pkg.AMO_ORW, ariane_pkg.AMO_XORW, ariane_pkg.AMO_MAXW, ariane_pkg.AMO_MINW, ariane_pkg.AMO_MAXWU, ariane_pkg.AMO_MINWU) {
+        endian_data#[0..=31] = (((lsu_ctrl_i.data#[0..=31] & 0xff) << 24) | (((lsu_ctrl_i.data#[0..=31] >> 8) & 0xff) << 16) | (((lsu_ctrl_i.data#[0..=31] >> 16) & 0xff) << 8) | ((lsu_ctrl_i.data#[0..=31] >> 24) & 0xff))#[0..=31]
+      }
+      else {
+        endian_data#[0..=63] = (((lsu_ctrl_i.data#[0..=63] & 0xff) << 56) | (((lsu_ctrl_i.data#[0..=63] >> 8) & 0xff) << 48) | (((lsu_ctrl_i.data#[0..=63] >> 16) & 0xff) << 40) | (((lsu_ctrl_i.data#[0..=63] >> 24) & 0xff) << 32) | (((lsu_ctrl_i.data#[0..=63] >> 32) & 0xff) << 24) | (((lsu_ctrl_i.data#[0..=63] >> 40) & 0xff) << 16) | (((lsu_ctrl_i.data#[0..=63] >> 48) & 0xff) << 8) | ((lsu_ctrl_i.data#[0..=63] >> 56) & 0xff))#[0..=63]
+      }
+    }
+  }
+  const addr__w1 = lsu_ctrl_i.vaddr#[0..=2]
+  const data__w1 = endian_data
+  const addr_tmp__w1 = ((unsigned((((addr__w1 >> 2) & 1) != 0) and true) & 1) << 2) | addr__w1#[0..=1]
+  mut data_tmp:u64 = 0sb?
+  data_tmp = 0
+  match addr_tmp__w1 {
+    == 0 {
+      data_tmp#[0..=63] = data__w1#[0..=63]
+    }
+    == 1 {
+      data_tmp#[0..=63] = (data__w1#[0..=55] << 8) | data__w1#[56..=63]
+    }
+    == 2 {
+      data_tmp#[0..=63] = (data__w1#[0..=47] << 16) | data__w1#[48..=63]
+    }
+    == 3 {
+      data_tmp#[0..=63] = (data__w1#[0..=39] << 24) | data__w1#[40..=63]
+    }
+    else {
+      {
+        data_tmp = unique if addr_tmp__w1 == 4 { (data__w1#[0..=31] << 32) | data__w1#[32..=63] } elif addr_tmp__w1 == 5 { (data__w1#[0..=23] << 40) | data__w1#[24..=63] } elif addr_tmp__w1 == 6 { (data__w1#[0..=15] << 48) | data__w1#[16..=63] } elif addr_tmp__w1 == 7 { (data__w1#[0..=7] << 56) | data__w1#[8..=63] } else { data__w1#[0..=63] }
+      }
+    }
+  }
+  mut _mux_3:u64 = if true and (instr_is_amo__w1 != 0) { endian_data } else { data_tmp }
+  const op_s1__w1 = lsu_ctrl_i.operation
+  mut extract_transfer_size:u2 = 0sb?
+  extract_transfer_size = unique if (op_s1__w1 == ariane_pkg.LD) or (op_s1__w1 == ariane_pkg.HLV_D) or (op_s1__w1 == ariane_pkg.SD) or (op_s1__w1 == ariane_pkg.HSV_D) or (op_s1__w1 == ariane_pkg.FLD) or (op_s1__w1 == ariane_pkg.FSD) or (op_s1__w1 == ariane_pkg.AMO_LRD) or (op_s1__w1 == ariane_pkg.AMO_SCD) or (op_s1__w1 == ariane_pkg.AMO_SWAPD) or (op_s1__w1 == ariane_pkg.AMO_ADDD) or (op_s1__w1 == ariane_pkg.AMO_ANDD) or (op_s1__w1 == ariane_pkg.AMO_ORD) or (op_s1__w1 == ariane_pkg.AMO_XORD) or (op_s1__w1 == ariane_pkg.AMO_MAXD) or (op_s1__w1 == ariane_pkg.AMO_MAXDU) or (op_s1__w1 == ariane_pkg.AMO_MIND) or (op_s1__w1 == ariane_pkg.AMO_MINDU) { 3 } elif (op_s1__w1 == ariane_pkg.LW) or (op_s1__w1 == ariane_pkg.LWU) or (op_s1__w1 == ariane_pkg.HLV_W) or (op_s1__w1 == ariane_pkg.HLV_WU) or (op_s1__w1 == ariane_pkg.HLVX_WU) or (op_s1__w1 == ariane_pkg.SW) or (op_s1__w1 == ariane_pkg.HSV_W) or (op_s1__w1 == ariane_pkg.FLW) or (op_s1__w1 == ariane_pkg.FSW) or (op_s1__w1 == ariane_pkg.AMO_LRW) or (op_s1__w1 == ariane_pkg.AMO_SCW) or (op_s1__w1 == ariane_pkg.AMO_SWAPW) or (op_s1__w1 == ariane_pkg.AMO_ADDW) or (op_s1__w1 == ariane_pkg.AMO_ANDW) or (op_s1__w1 == ariane_pkg.AMO_ORW) or (op_s1__w1 == ariane_pkg.AMO_XORW) or (op_s1__w1 == ariane_pkg.AMO_MAXW) or (op_s1__w1 == ariane_pkg.AMO_MAXWU) or (op_s1__w1 == ariane_pkg.AMO_MINW) or (op_s1__w1 == ariane_pkg.AMO_MINWU) { 2 } elif (op_s1__w1 == ariane_pkg.LH) or (op_s1__w1 == ariane_pkg.LHU) or (op_s1__w1 == ariane_pkg.HLV_H) or (op_s1__w1 == ariane_pkg.HLV_HU) or (op_s1__w1 == ariane_pkg.HLVX_HU) or (op_s1__w1 == ariane_pkg.SH) or (op_s1__w1 == ariane_pkg.HSV_H) or (op_s1__w1 == ariane_pkg.FLH) or (op_s1__w1 == ariane_pkg.FSH) { 1 } elif (op_s1__w1 == ariane_pkg.LB) or (op_s1__w1 == ariane_pkg.LBU) or (op_s1__w1 == ariane_pkg.HLV_B) or (op_s1__w1 == ariane_pkg.HLV_BU) or (op_s1__w1 == ariane_pkg.SB) or (op_s1__w1 == ariane_pkg.HSV_B) or (op_s1__w1 == ariane_pkg.FLB) or (op_s1__w1 == ariane_pkg.FSB) { 0 } elif (op_s1__w1 == ariane_pkg.CBO_CLEAN) or (op_s1__w1 == ariane_pkg.CBO_FLUSH) or (op_s1__w1 == ariane_pkg.CBO_INVAL) { 0 } else { 3 }
+  {
+    const t303 = lsu_ctrl_i.operation
+    amo_op_d = unique if (t303 == ariane_pkg.AMO_LRW) or (t303 == ariane_pkg.AMO_LRD) { ariane_pkg.AMO_LR } elif (t303 == ariane_pkg.AMO_SCW) or (t303 == ariane_pkg.AMO_SCD) { ariane_pkg.AMO_SC } elif (t303 == ariane_pkg.AMO_SWAPW) or (t303 == ariane_pkg.AMO_SWAPD) { ariane_pkg.AMO_SWAP } elif (t303 == ariane_pkg.AMO_ADDW) or (t303 == ariane_pkg.AMO_ADDD) { ariane_pkg.AMO_ADD } elif (t303 == ariane_pkg.AMO_ANDW) or (t303 == ariane_pkg.AMO_ANDD) { ariane_pkg.AMO_AND } elif (t303 == ariane_pkg.AMO_ORW) or (t303 == ariane_pkg.AMO_ORD) { ariane_pkg.AMO_OR } elif (t303 == ariane_pkg.AMO_XORW) or (t303 == ariane_pkg.AMO_XORD) { ariane_pkg.AMO_XOR } elif (t303 == ariane_pkg.AMO_MAXW) or (t303 == ariane_pkg.AMO_MAXD) { ariane_pkg.AMO_MAX } elif (t303 == ariane_pkg.AMO_MAXWU) or (t303 == ariane_pkg.AMO_MAXDU) { ariane_pkg.AMO_MAXU } elif (t303 == ariane_pkg.AMO_MINW) or (t303 == ariane_pkg.AMO_MIND) { ariane_pkg.AMO_MIN } elif (t303 == ariane_pkg.AMO_MINWU) or (t303 == ariane_pkg.AMO_MINDU) { ariane_pkg.AMO_MINU } else { ariane_pkg.AMO_NONE }
+  }
+  {
+    cbo_op_d = ariane_pkg.CBO_NONE
+  }
+  const t378 = (ex_i.cause << 0x8c) | (ex_i.tval << 0x4c) | (ex_i.tval2 << 35) | (ex_i.tinst << 3) | (ex_i.gva << 2) | (ex_i.valid << 1) | ex_i.timing
+  `ex_o__bpo.cause` = t378#[140..=203]
+  `ex_o__bpo.tval` = t378#[76..=139]
+  mut `ex_o__bpo.tval2` = t378#[35..=75]
+  mut `ex_o__bpo.tinst` = t378#[3..=34]
+  mut `ex_o__bpo.gva` = (t378 >> 2) & 1
+  `ex_o__bpo.valid` = (t378 >> 1) & 1
+  mut `ex_o__bpo.timing` = t378 & 1
+  translation_req_o = 0
+  valid_o = 0
+  pop_st_o = 0
+  st_valid_without_flush = 0
+  state_d = state_q
+  st_valid = 0
+  if (sdtrig_store_stall_i != 0) and (valid_i != 0) {
+    pop_st_o = 0
+    valid_o = 1
+    st_valid = 0
+    translation_req_o = 0
+    `ex_o__bpo.valid` = 1
+    `ex_o__bpo.cause` = sdtrig_store_action_i
+    `ex_o__bpo.tval` = lsu_ctrl_i.vaddr
+    state_d = 0
+  } else {
+    match state_q {
+      == 0 {
+        if valid_i != 0 {
+          state_d = 1
+          translation_req_o = 1
+          pop_st_o = 1
+          if true and (dtlb_hit_i == 0) {
+            state_d = 2
+            pop_st_o = 0
+          }
+          if st_ready == 0 {
+            state_d = 3
+            pop_st_o = 0
+          }
+        }
+      }
+      == 1 {
+        valid_o = 1
+        if (flush_i == 0) and (sdtrig_store_stall_i == 0) {
+          st_valid = 1
+        }
+        st_valid_without_flush = 1
+        if ((valid_i != 0) and true and (instr_is_amo__w1 == 0)) or ((valid_i != 0) and false) {
+          translation_req_o = 1
+          state_d = 1
+          pop_st_o = 1
+          if true and (dtlb_hit_i == 0) {
+            state_d = 2
+            pop_st_o = 0
+          }
+          if st_ready == 0 {
+            state_d = 3
+            pop_st_o = 0
+          }
+        } else {
+          state_d = 0
+        }
+      }
+      == 3 {
+        translation_req_o = 1
+        if (st_ready != 0) and (dtlb_hit_i != 0) {
+          state_d = 0
+        }
+      }
+      else {
+        if (state_q == 2) and true {
+          translation_req_o = 1
+          if dtlb_hit_i != 0 {
+            state_d = 0
+          }
+        }
+      }
+    }
+    if (ex_i.valid != 0) and (state_q != 0) {
+      pop_st_o = 1
+      st_valid = 0
+      state_d = 0
+      valid_o = 1
+    }
+    if flush_i != 0 {
+      state_d = 0
+    }
+  }
+  st_ready = store_buffer_ready & amo_buffer_ready & 1
+  mut store_buffer_i = store_buffer::[name=store_buffer_i](clk_i = clk_i, rst_ni = rst_ni, flush_i = flush_i, stall_st_pending_i = stall_st_pending_i, page_offset_i = page_offset_i, commit_i = commit_i, valid_i = st_valid & unsigned(false or (amo_op_q == ariane_pkg.AMO_NONE)) & 1, valid_without_flush_i = st_valid_without_flush, paddr_i = paddr_i, data_i = st_data_q, be_i = st_be_q, data_size_i = st_data_size_q, cbo_op_i = cbo_op_q, req_port_i.data_gnt = req_port_i.data_gnt, req_port_i.data_rvalid = req_port_i.data_rvalid, req_port_i.data_rid = req_port_i.data_rid, req_port_i.data_rdata = req_port_i.data_rdata, req_port_i.data_ruser = req_port_i.data_ruser)
+  store_buffer_ready = store_buffer_i.ready_o
+  mut i_amo_buffer = amo_buffer::[name=i_amo_buffer](clk_i = clk_i, rst_ni = rst_ni, flush_i = flush_i, valid_i = st_valid & unsigned(true and (amo_op_q != ariane_pkg.AMO_NONE)) & 1, amo_op_i = amo_op_q, paddr_i = paddr_i, data_i = st_data_q, data_size_i = st_data_size_q, amo_resp_i.ack = amo_resp_i.ack, amo_resp_i.result = amo_resp_i.result, amo_valid_commit_i = amo_valid_commit_i, no_st_pending_i = store_buffer_i.no_st_pending_o)
+  amo_buffer_ready = i_amo_buffer.ready_o
+  if rst_ni != 0 {
+    state_q = state_d
+    st_be_q = lsu_ctrl_i.be
+    st_data_q = _mux_3
+    trans_id_q = lsu_ctrl_i.trans_id
+    st_data_size_q = extract_transfer_size
+    amo_op_q = amo_op_d
+    cbo_op_q = cbo_op_d
+  }
+  ex_o.cause = `ex_o__bpo.cause`
+  ex_o.tval = `ex_o__bpo.tval`
+  ex_o.tval2 = `ex_o__bpo.tval2`
+  ex_o.tinst = `ex_o__bpo.tinst`
+  ex_o.gva = `ex_o__bpo.gva`
+  ex_o.valid = `ex_o__bpo.valid`
+  ex_o.timing = `ex_o__bpo.timing`
+  amo_req_o.req = i_amo_buffer.amo_req_o.req
+  amo_req_o.amo_op = i_amo_buffer.amo_req_o.amo_op
+  amo_req_o.size = i_amo_buffer.amo_req_o.size
+  amo_req_o.operand_a = i_amo_buffer.amo_req_o.operand_a
+  amo_req_o.operand_b = i_amo_buffer.amo_req_o.operand_b
+  req_port_o.address_index = store_buffer_i.req_port_o.address_index
+  req_port_o.address_tag = store_buffer_i.req_port_o.address_tag
+  req_port_o.data_wdata = store_buffer_i.req_port_o.data_wdata
+  req_port_o.data_wuser = store_buffer_i.req_port_o.data_wuser
+  req_port_o.data_req = store_buffer_i.req_port_o.data_req
+  req_port_o.data_we = store_buffer_i.req_port_o.data_we
+  req_port_o.data_be = store_buffer_i.req_port_o.data_be
+  req_port_o.data_size = store_buffer_i.req_port_o.data_size
+  req_port_o.data_id = store_buffer_i.req_port_o.data_id
+  req_port_o.kill_req = store_buffer_i.req_port_o.kill_req
+  req_port_o.tag_valid = store_buffer_i.req_port_o.tag_valid
+  req_port_o.cbo_op = store_buffer_i.req_port_o.cbo_op
+  no_st_pending_o = store_buffer_i.no_st_pending_o
+  store_buffer_empty_o = store_buffer_i.store_buffer_empty_o
+  commit_ready_o = store_buffer_i.commit_ready_o
+  trans_id_o = _mux_1
+  result_o = lsu_ctrl_i.data
+  vaddr_o = lsu_ctrl_i.vaddr
+  rvfi_mem_paddr_o = store_buffer_i.rvfi_mem_paddr_o
+  tinst_o = 0
+  hs_ld_st_inst_o = 0
+  hlvx_inst_o = 0
+  page_offset_matches_o = store_buffer_i.page_offset_matches_o
+}

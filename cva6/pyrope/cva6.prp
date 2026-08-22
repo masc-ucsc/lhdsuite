@@ -1,0 +1,698 @@
+const commit_stage = import("commit_stage.commit_stage")
+const controller = import("controller.controller")
+const csr_regfile = import("csr_regfile.csr_regfile")
+const cva6_rvfi_probes = import("cva6_rvfi_probes.cva6_rvfi_probes")
+const ex_stage = import("ex_stage.ex_stage")
+const frontend = import("frontend.frontend")
+const id_stage = import("id_stage.id_stage")
+const instr_tracer = import("instr_tracer.instr_tracer")
+const issue_stage = import("issue_stage.issue_stage")
+const perf_counters = import("perf_counters.perf_counters")
+const std_cache_subsystem = import("std_cache_subsystem.std_cache_subsystem")
+
+pub mod cva6::[timecheck=false](clk_i:u1, rst_ni:u1, boot_addr_i:u64, hart_id_i:u64, irq_i:u2, ipi_i:u1, time_irq_i:u1, debug_req_i:u1, cvxif_resp_i:(compressed_ready:u1, compressed_resp:(instr:u32, accept:u1), issue_ready:u1, issue_resp:(accept:u1, writeback:u1, register_read:u2), register_ready:u1, result_valid:u1, result:(hartid:u64, id:u3, data:u64, rd:u5, we:u1)), noc_resp_i:(aw_ready:u1, ar_ready:u1, w_ready:u1, b_valid:u1, b:(id:u4, resp:u2, user:u64), r_valid:u1, r:(id:u4, data:u64, resp:u2, last:u1, user:u64))) -> (rvfi_probes_o:(csr:(fcsr_q:(reserved:u17, fprec:u7, frm:u3, fflags:u5), dcsr_q:(xdebugver:u4, zero2:u10, ebreakvs:u1, ebreakvu:u1, ebreakm:u1, zero1:u1, ebreaks:u1, ebreaku:u1, stepie:u1, stopcount:u1, stoptime:u1, cause:u3, v:u1, mprven:u1, nmip:u1, `step`:u1, prv:u2), jvt_q:u64, dpc_q:u64, dscratch0_q:u64, dscratch1_q:u64, mie_q:u64, mip_q:u64, stvec_q:u64, scounteren_q:u64, sscratch_q:u64, sepc_q:u64, scause_q:u64, stval_q:u64, satp_q:u64, mstatus_extended:u64, medeleg_q:u64, mideleg_q:u64, mtvec_q:u64, mcounteren_q:u64, mscratch_q:u64, mepc_q:u64, mcause_q:u64, mtval_q:u64, fiom_q:u1, mcountinhibit_q:u9, cycle_q:u64, instret_q:u64, dcache_q:u64, icache_q:u64, acc_cons_q:u64, pmpcfg_q:u512, pmpaddr_q:u3456), instr:(issue_pointer:u3, commit_pointer:u6, flush_unissued_instr:u1, decoded_instr_valid:u1, decoded_instr_ack:u1, flush:u1, issue_instr_ack:u1, fetch_entry_valid:u1, instruction:u32, is_compressed:u1, rs1:u64, rs2:u64, commit_instr_pc:u128, commit_instr_op:u16, commit_instr_rs1:u10, commit_instr_rs2:u10, commit_instr_rd:u10, commit_instr_result:u128, commit_instr_valid:u2, commit_drop:u2, ex_commit_cause:u64, ex_commit_valid:u1, priv_lvl:u2, lsu_ctrl_vaddr:u64, lsu_ctrl_fu:u4, lsu_ctrl_be:u8, lsu_ctrl_trans_id:u3, wbdata:u320, commit_ack:u2, mem_paddr:u56, debug_mode:u1, wdata:u128, branch_valid:u1, is_taken:u1, tval:u64, branch_trans_id:u3))@[], cvxif_req_o:(compressed_valid:u1, compressed_req:(instr:u16, hartid:u64), issue_valid:u1, issue_req:(instr:u32, hartid:u64, id:u3), register_valid:u1, register:(hartid:u64, id:u3, rs:u128, rs_valid:u2), commit_valid:u1, commit:(hartid:u64, id:u3, commit_kill:u1), result_ready:u1)@[], noc_req_o:(aw:(id:u4, addr:u64, len:u8, size:u3, burst:u2, lock:u1, cache:u4, prot:u3, qos:u4, region:u4, atop:u6, user:u64), aw_valid:u1, w:(data:u64, strb:u8, last:u1, user:u64), w_valid:u1, b_ready:u1, ar:(id:u4, addr:u64, len:u8, size:u3, burst:u2, lock:u1, cache:u4, prot:u3, qos:u4, region:u4, user:u64), ar_valid:u1, r_ready:u1)@[]) {
+  wire ex_commit:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1) = nil
+  wire resolved_branch:(valid:u1, pc:u64, target_address:u64, is_mispredict:u1, is_taken:u1, cf_type:u3) = nil
+  wire x_issue_req:(instr:u32, hartid:u64, id:u3) = nil
+  wire x_register:(hartid:u64, id:u3, rs:u128, rs_valid:u2) = nil
+  wire x_commit:(hartid:u64, id:u3, commit_kill:u1) = nil
+  wire flu_exception_ex_id:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1) = nil
+  wire load_exception_ex_id:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1) = nil
+  wire store_exception_ex_id:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1) = nil
+  wire fpu_exception_ex_id:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1) = nil
+  wire x_exception_ex_id:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1) = nil
+  wire csr_exception_csr_commit:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1) = nil
+  wire irq_ctrl_csr_id:(mie:u64, mip:u64, mideleg:u64, hideleg:u64, sie:u1, global_enable:u1) = nil
+  wire jvt:(base:u58, mode:u6) = nil
+  wire icache_areq_cache_ex:(fetch_req:u1, fetch_vaddr:u64) = nil
+  wire icache_dreq_cache_if:(ready:u1, valid:u1, data:u32, user:u64, vaddr:u64, ex:u204) = nil
+  wire amo_resp:(ack:u1, result:u64) = nil
+  mut fetch_instructions:u32 = 0sb?
+  mut cvxif_req:u449 = 0
+  mut `acc_exception_ex_id.cause` = 0
+  mut `acc_exception_ex_id.tval` = 0
+  mut `acc_exception_ex_id.tval2` = 0
+  mut `acc_exception_ex_id.tinst` = 0
+  mut `acc_exception_ex_id.gva` = 0
+  mut `acc_exception_ex_id.valid` = 0
+  mut `acc_exception_ex_id.timing` = 0
+  mut `dcache_req_ports_cache_id.data_gnt` = 0
+  mut `dcache_req_ports_cache_id.data_rvalid` = 0
+  mut `dcache_req_ports_cache_id.data_rid` = 0
+  mut `dcache_req_ports_cache_id.data_rdata` = 0
+  mut `dcache_req_ports_cache_id.data_ruser` = 0
+  wire priv_lvl:u2
+  wire v:u1
+  wire pc_commit:u64
+  wire eret:u1
+  wire mbe:u1
+  wire x_issue_valid:u1
+  wire x_register_valid:u1
+  wire x_commit_valid:u1
+  wire x_result_ready:u1
+  wire trap_vector_base_commit_pcgen:u64
+  wire epc_commit_pcgen:u64
+  wire fetch_ready_id_if:u1
+  wire issue_instr_issue_id:u1
+  wire flu_ready_ex_id:u1
+  wire flu_trans_id_ex_id:u3
+  wire flu_valid_ex_id:u1
+  wire flu_result_ex_id:u64
+  wire resolve_branch_ex_id:u1
+  wire lsu_ready_ex_id:u1
+  wire load_trans_id_ex_id:u3
+  wire load_result_ex_id:u64
+  wire load_valid_ex_id:u1
+  wire store_result_ex_id:u64
+  wire store_trans_id_ex_id:u3
+  wire store_valid_ex_id:u1
+  wire fpu_ready_ex_id:u1
+  wire fpu_trans_id_ex_id:u3
+  wire fpu_result_ex_id:u64
+  wire fpu_valid_ex_id:u1
+  wire fpu_early_valid_ex_id:u1
+  wire x_trans_id_ex_id:u3
+  wire x_result_ex_id:u64
+  wire x_valid_ex_id:u1
+  wire x_we_ex_id:u1
+  wire x_rd_ex_id:u5
+  wire x_issue_ready_ex_id:u1
+  wire csr_commit_commit_ex:u1
+  wire lsu_commit_commit_ex:u1
+  wire lsu_commit_trans_id:u3
+  wire amo_valid_commit:u1
+  wire commit_ack_commit_id:u2
+  wire waddr_commit_id:u10
+  wire wdata_commit_id:u128
+  wire we_gpr_commit_id:u2
+  wire we_fpr_commit_id:u2
+  wire fs:u2
+  wire vfs:u2
+  wire frm_csr_id_issue_ex:u3
+  wire fprec_csr_ex:u7
+  wire vs:u2
+  wire enable_translation_csr_ex:u1
+  wire enable_g_translation_csr_ex:u1
+  wire en_ld_st_translation_csr_ex:u1
+  wire en_ld_st_g_translation_csr_ex:u1
+  wire ld_st_priv_lvl_csr_ex:u2
+  wire ld_st_v_csr_ex:u1
+  wire sum_csr_ex:u1
+  wire vs_sum_csr_ex:u1
+  wire mxr_csr_ex:u1
+  wire vmxr_csr_ex:u1
+  wire satp_ppn_csr_ex:u44
+  wire asid_csr_ex:u16
+  wire vsatp_ppn_csr_ex:u44
+  wire vs_asid_csr_ex:u16
+  wire hgatp_ppn_csr_ex:u44
+  wire vmid_csr_ex:u14
+  wire csr_rdata_csr_commit:u64
+  wire tvm_csr_id:u1
+  wire tw_csr_id:u1
+  wire vtw_csr_id:u1
+  wire tsr_csr_id:u1
+  wire hu:u1
+  wire debug_mode:u1
+  wire single_step_csr_commit:u1
+  wire pmpcfg:u64
+  wire pmpaddr:u432
+  wire sdtrig_commit_std_exception_valid:u1
+  wire sdtrig_load_stall:u1
+  wire sdtrig_load_cancel:u1
+  wire sdtrig_store_stall:u1
+  wire sdtrig_load_action:u64
+  wire sdtrig_store_action:u64
+  wire sdtrig_commit_action:u64
+  wire sdtrig_commit_icount_valid:u1
+  wire sdtrig_commit_icount_nr_instr:u1
+  wire mcbie:u2
+  wire scbie:u2
+  wire hcbie:u2
+  wire mcbcfe:u1
+  wire scbcfe:u1
+  wire hcbcfe:u1
+  wire data_perf_csr:u64
+  wire dcache_miss_cache_perf:u1
+  wire icache_miss_cache_perf:u1
+  wire set_pc_ctrl_pcgen:u1
+  wire flush_unissued_instr_ctrl_id:u1
+  wire flush_ctrl_if:u1
+  wire flush_ctrl_id:u1
+  wire flush_ctrl_ex:u1
+  wire flush_ctrl_bp:u1
+  wire flush_tlb_ctrl_ex:u1
+  wire flush_tlb_vvma_ctrl_ex:u1
+  wire flush_tlb_gvma_ctrl_ex:u1
+  wire halt_ctrl:u1
+  wire halt_frontend:u1
+  wire dcache_flush_ctrl_cache:u1
+  wire dcache_flush_ack_cache_ctrl:u1
+  wire set_debug_pc:u1
+  wire dcache_commit_wbuffer_empty:u1
+  wire dcache_req_from_cache:u524
+  mut dcache_req_ports_cache_acc:u262 = 0
+  mut trans_id_ex_id:u15 = 0
+  mut wbdata_ex_id:u320 = 0
+  mut ex_ex_ex_id:u1020 = 0
+  mut wt_valid_ex_id:u5 = 0
+  mut dcache_req_to_cache:u828 = 0
+  mut wdata_commit_id_padded:u128 = 0
+  mut rvfi_fetch_instr:u32 = 0
+  wire sdtrig_decoder_action__wnet:u64
+  mut dcache_req_ports_cache_ex__wtmp:u393 = 0sb?
+  wire dcache_req_ports_cache_ex:u393
+  mut _mux_1:u1 = 0
+  mut fetch_entry_valid_i:u1 = 0
+  mut fetch_entry_ready_o:u1 = 0
+  mut issue_ack_i:u1 = 0
+  mut issue_instr_o:u439 = 0
+  mut valid_i:u1 = 0
+  mut paddr_i:u56 = 0
+  mut `req_port_o.address_index` = 0
+  mut `req_port_o.address_tag` = 0
+  mut `req_port_o.data_wdata` = 0
+  mut `req_port_o.data_wuser` = 0
+  mut `req_port_o.data_req` = 0
+  mut `req_port_o.data_we` = 0
+  mut `req_port_o.data_be` = 0
+  mut `req_port_o.data_size` = 0
+  mut `req_port_o.data_id` = 0
+  mut `req_port_o.kill_req` = 0
+  mut `req_port_o.tag_valid` = 0
+  mut `req_port_o.cbo_op` = 0
+  mut paddr_i_s1:u56 = 0
+  mut `exception_o.cause` = 0
+  mut `exception_o.tval` = 0
+  mut `exception_o.tval2` = 0
+  mut `exception_o.tinst` = 0
+  mut `exception_o.gva` = 0
+  mut `exception_o.valid` = 0
+  mut `exception_o.timing` = 0
+  cvxif_req = 0sb?
+  dcache_req_ports_cache_acc = 0sb?
+  trans_id_ex_id = 0sb?
+  wbdata_ex_id = 0sb?
+  ex_ex_ex_id = 0sb?
+  wt_valid_ex_id = 0sb?
+  dcache_req_to_cache = 0sb?
+  wdata_commit_id_padded = 0sb?
+  rvfi_fetch_instr = 0sb?
+  mut `x_compressed_resp.instr` = ((cvxif_resp_i.compressed_ready << 0xb1) | (cvxif_resp_i.compressed_resp.instr << 0x91) | (cvxif_resp_i.compressed_resp.accept << 0x90) | (cvxif_resp_i.issue_ready << 0x8f) | (cvxif_resp_i.issue_resp.accept << 0x8e) | (cvxif_resp_i.issue_resp.writeback << 0x8d) | (cvxif_resp_i.issue_resp.register_read << 0x8b) | (cvxif_resp_i.register_ready << 0x8a) | (cvxif_resp_i.result_valid << 0x89) | (cvxif_resp_i.result.hartid << 0x49) | (cvxif_resp_i.result.id << 0x46) | (cvxif_resp_i.result.data << 6) | (cvxif_resp_i.result.rd << 1) | cvxif_resp_i.result.we)#[144..=176]#[1..=32]
+  mut `x_compressed_resp.accept` = ((cvxif_resp_i.compressed_ready << 0xb1) | (cvxif_resp_i.compressed_resp.instr << 0x91) | (cvxif_resp_i.compressed_resp.accept << 0x90) | (cvxif_resp_i.issue_ready << 0x8f) | (cvxif_resp_i.issue_resp.accept << 0x8e) | (cvxif_resp_i.issue_resp.writeback << 0x8d) | (cvxif_resp_i.issue_resp.register_read << 0x8b) | (cvxif_resp_i.register_ready << 0x8a) | (cvxif_resp_i.result_valid << 0x89) | (cvxif_resp_i.result.hartid << 0x49) | (cvxif_resp_i.result.id << 0x46) | (cvxif_resp_i.result.data << 6) | (cvxif_resp_i.result.rd << 1) | cvxif_resp_i.result.we)#[144..=176] & 1
+  mut `x_issue_resp.accept` = (((cvxif_resp_i.compressed_ready << 0xb1) | (cvxif_resp_i.compressed_resp.instr << 0x91) | (cvxif_resp_i.compressed_resp.accept << 0x90) | (cvxif_resp_i.issue_ready << 0x8f) | (cvxif_resp_i.issue_resp.accept << 0x8e) | (cvxif_resp_i.issue_resp.writeback << 0x8d) | (cvxif_resp_i.issue_resp.register_read << 0x8b) | (cvxif_resp_i.register_ready << 0x8a) | (cvxif_resp_i.result_valid << 0x89) | (cvxif_resp_i.result.hartid << 0x49) | (cvxif_resp_i.result.id << 0x46) | (cvxif_resp_i.result.data << 6) | (cvxif_resp_i.result.rd << 1) | cvxif_resp_i.result.we)#[139..=142] >> 3) & 1
+  mut `x_issue_resp.writeback` = (((cvxif_resp_i.compressed_ready << 0xb1) | (cvxif_resp_i.compressed_resp.instr << 0x91) | (cvxif_resp_i.compressed_resp.accept << 0x90) | (cvxif_resp_i.issue_ready << 0x8f) | (cvxif_resp_i.issue_resp.accept << 0x8e) | (cvxif_resp_i.issue_resp.writeback << 0x8d) | (cvxif_resp_i.issue_resp.register_read << 0x8b) | (cvxif_resp_i.register_ready << 0x8a) | (cvxif_resp_i.result_valid << 0x89) | (cvxif_resp_i.result.hartid << 0x49) | (cvxif_resp_i.result.id << 0x46) | (cvxif_resp_i.result.data << 6) | (cvxif_resp_i.result.rd << 1) | cvxif_resp_i.result.we)#[139..=142] >> 2) & 1
+  mut `x_issue_resp.register_read` = ((cvxif_resp_i.compressed_ready << 0xb1) | (cvxif_resp_i.compressed_resp.instr << 0x91) | (cvxif_resp_i.compressed_resp.accept << 0x90) | (cvxif_resp_i.issue_ready << 0x8f) | (cvxif_resp_i.issue_resp.accept << 0x8e) | (cvxif_resp_i.issue_resp.writeback << 0x8d) | (cvxif_resp_i.issue_resp.register_read << 0x8b) | (cvxif_resp_i.register_ready << 0x8a) | (cvxif_resp_i.result_valid << 0x89) | (cvxif_resp_i.result.hartid << 0x49) | (cvxif_resp_i.result.id << 0x46) | (cvxif_resp_i.result.data << 6) | (cvxif_resp_i.result.rd << 1) | cvxif_resp_i.result.we)#[139..=142]#[0..=1]
+  mut `x_result.hartid` = ((cvxif_resp_i.compressed_ready << 0xb1) | (cvxif_resp_i.compressed_resp.instr << 0x91) | (cvxif_resp_i.compressed_resp.accept << 0x90) | (cvxif_resp_i.issue_ready << 0x8f) | (cvxif_resp_i.issue_resp.accept << 0x8e) | (cvxif_resp_i.issue_resp.writeback << 0x8d) | (cvxif_resp_i.issue_resp.register_read << 0x8b) | (cvxif_resp_i.register_ready << 0x8a) | (cvxif_resp_i.result_valid << 0x89) | (cvxif_resp_i.result.hartid << 0x49) | (cvxif_resp_i.result.id << 0x46) | (cvxif_resp_i.result.data << 6) | (cvxif_resp_i.result.rd << 1) | cvxif_resp_i.result.we)#[0..=136]#[73..=136]
+  mut `x_result.id` = ((cvxif_resp_i.compressed_ready << 0xb1) | (cvxif_resp_i.compressed_resp.instr << 0x91) | (cvxif_resp_i.compressed_resp.accept << 0x90) | (cvxif_resp_i.issue_ready << 0x8f) | (cvxif_resp_i.issue_resp.accept << 0x8e) | (cvxif_resp_i.issue_resp.writeback << 0x8d) | (cvxif_resp_i.issue_resp.register_read << 0x8b) | (cvxif_resp_i.register_ready << 0x8a) | (cvxif_resp_i.result_valid << 0x89) | (cvxif_resp_i.result.hartid << 0x49) | (cvxif_resp_i.result.id << 0x46) | (cvxif_resp_i.result.data << 6) | (cvxif_resp_i.result.rd << 1) | cvxif_resp_i.result.we)#[0..=136]#[70..=72]
+  mut `x_result.data` = ((cvxif_resp_i.compressed_ready << 0xb1) | (cvxif_resp_i.compressed_resp.instr << 0x91) | (cvxif_resp_i.compressed_resp.accept << 0x90) | (cvxif_resp_i.issue_ready << 0x8f) | (cvxif_resp_i.issue_resp.accept << 0x8e) | (cvxif_resp_i.issue_resp.writeback << 0x8d) | (cvxif_resp_i.issue_resp.register_read << 0x8b) | (cvxif_resp_i.register_ready << 0x8a) | (cvxif_resp_i.result_valid << 0x89) | (cvxif_resp_i.result.hartid << 0x49) | (cvxif_resp_i.result.id << 0x46) | (cvxif_resp_i.result.data << 6) | (cvxif_resp_i.result.rd << 1) | cvxif_resp_i.result.we)#[0..=136]#[6..=69]
+  mut `x_result.rd` = ((cvxif_resp_i.compressed_ready << 0xb1) | (cvxif_resp_i.compressed_resp.instr << 0x91) | (cvxif_resp_i.compressed_resp.accept << 0x90) | (cvxif_resp_i.issue_ready << 0x8f) | (cvxif_resp_i.issue_resp.accept << 0x8e) | (cvxif_resp_i.issue_resp.writeback << 0x8d) | (cvxif_resp_i.issue_resp.register_read << 0x8b) | (cvxif_resp_i.register_ready << 0x8a) | (cvxif_resp_i.result_valid << 0x89) | (cvxif_resp_i.result.hartid << 0x49) | (cvxif_resp_i.result.id << 0x46) | (cvxif_resp_i.result.data << 6) | (cvxif_resp_i.result.rd << 1) | cvxif_resp_i.result.we)#[0..=136]#[1..=5]
+  mut `x_result.we` = ((cvxif_resp_i.compressed_ready << 0xb1) | (cvxif_resp_i.compressed_resp.instr << 0x91) | (cvxif_resp_i.compressed_resp.accept << 0x90) | (cvxif_resp_i.issue_ready << 0x8f) | (cvxif_resp_i.issue_resp.accept << 0x8e) | (cvxif_resp_i.issue_resp.writeback << 0x8d) | (cvxif_resp_i.issue_resp.register_read << 0x8b) | (cvxif_resp_i.register_ready << 0x8a) | (cvxif_resp_i.result_valid << 0x89) | (cvxif_resp_i.result.hartid << 0x49) | (cvxif_resp_i.result.id << 0x46) | (cvxif_resp_i.result.data << 6) | (cvxif_resp_i.result.rd << 1) | cvxif_resp_i.result.we)#[0..=136] & 1
+  mut dcache_req_to_cache__w1 = dcache_req_to_cache
+  dcache_req_to_cache__w1#[414..=620] = 0
+  _mux_1 = 0
+  {
+    _mux_1 = flush_ctrl_bp & 1
+  }
+  mut i_frontend = frontend::[name=i_frontend](clk_i = clk_i, rst_ni = rst_ni, boot_addr_i = boot_addr_i, flush_bp_i = _mux_1, flush_i = flush_ctrl_if, halt_i = halt_ctrl, halt_frontend_i = halt_frontend, set_pc_commit_i = set_pc_ctrl_pcgen, pc_commit_i = pc_commit, ex_valid_i = ex_commit.valid, `resolved_branch_i.valid` = resolved_branch.valid, `resolved_branch_i.pc` = resolved_branch.pc, `resolved_branch_i.target_address` = resolved_branch.target_address, `resolved_branch_i.is_mispredict` = resolved_branch.is_mispredict, `resolved_branch_i.is_taken` = resolved_branch.is_taken, `resolved_branch_i.cf_type` = resolved_branch.cf_type, eret_i = eret, epc_i = epc_commit_pcgen, trap_vector_base_i = trap_vector_base_commit_pcgen, set_debug_pc_i = set_debug_pc, debug_mode_i = debug_mode, `icache_dreq_i.ready` = icache_dreq_cache_if.ready, `icache_dreq_i.valid` = icache_dreq_cache_if.valid, `icache_dreq_i.data` = icache_dreq_cache_if.data, `icache_dreq_i.user` = icache_dreq_cache_if.user, `icache_dreq_i.vaddr` = icache_dreq_cache_if.vaddr, `icache_dreq_i.ex.cause` = icache_dreq_cache_if.ex#[140..=203], `icache_dreq_i.ex.tval` = icache_dreq_cache_if.ex#[76..=139], `icache_dreq_i.ex.tval2` = icache_dreq_cache_if.ex#[35..=75], `icache_dreq_i.ex.tinst` = icache_dreq_cache_if.ex#[3..=34], `icache_dreq_i.ex.gva` = (icache_dreq_cache_if.ex >> 2) & 1, `icache_dreq_i.ex.valid` = (icache_dreq_cache_if.ex >> 1) & 1, `icache_dreq_i.ex.timing` = icache_dreq_cache_if.ex & 1, fetch_entry_ready_i = fetch_ready_id_if)
+  mut id_stage_i = id_stage::[name=id_stage_i](clk_i = clk_i, rst_ni = rst_ni, flush_i = flush_ctrl_if, debug_req_i = debug_req_i, fetch_entry_i = i_frontend.fetch_entry_o, fetch_entry_valid_i = i_frontend.fetch_entry_valid_o, issue_instr_ack_i = issue_instr_issue_id, priv_lvl_i = priv_lvl, v_i = v, fs_i = fs, vfs_i = vfs, frm_i = frm_csr_id_issue_ex, vs_i = vs, irq_i = irq_i, `irq_ctrl_i.mie` = irq_ctrl_csr_id.mie, `irq_ctrl_i.mip` = irq_ctrl_csr_id.mip, `irq_ctrl_i.mideleg` = irq_ctrl_csr_id.mideleg, `irq_ctrl_i.hideleg` = irq_ctrl_csr_id.hideleg, `irq_ctrl_i.sie` = irq_ctrl_csr_id.sie, `irq_ctrl_i.global_enable` = irq_ctrl_csr_id.global_enable, debug_mode_i = debug_mode, tvm_i = tvm_csr_id, tw_i = tw_csr_id, vtw_i = vtw_csr_id, tsr_i = tsr_csr_id, hu_i = hu, mcbie_i = mcbie, scbie_i = scbie, hcbie_i = hcbie, mcbcfe_i = mcbcfe, scbcfe_i = scbcfe, hcbcfe_i = hcbcfe, hart_id_i = hart_id_i, compressed_ready_i = cvxif_resp_i.compressed_ready, `jvt_i.base` = jvt.base, `jvt_i.mode` = jvt.mode, `compressed_resp_i.instr` = `x_compressed_resp.instr`, `compressed_resp_i.accept` = `x_compressed_resp.accept`, sdtrig_decoder_action_i = sdtrig_decoder_action__wnet, `dcache_req_ports_i.data_gnt` = 0, `dcache_req_ports_i.data_rvalid` = 0, `dcache_req_ports_i.data_rid` = 0, `dcache_req_ports_i.data_rdata` = 0, `dcache_req_ports_i.data_ruser` = 0)
+  fetch_ready_id_if = id_stage_i.fetch_entry_ready_o
+  mut `dcache_req_ports_id_cache.address_index` = id_stage_i.dcache_req_ports_o.address_index
+  mut `dcache_req_ports_id_cache.address_tag` = id_stage_i.dcache_req_ports_o.address_tag
+  mut `dcache_req_ports_id_cache.data_wdata` = id_stage_i.dcache_req_ports_o.data_wdata
+  mut `dcache_req_ports_id_cache.data_wuser` = id_stage_i.dcache_req_ports_o.data_wuser
+  mut `dcache_req_ports_id_cache.data_req` = id_stage_i.dcache_req_ports_o.data_req
+  mut `dcache_req_ports_id_cache.data_we` = id_stage_i.dcache_req_ports_o.data_we
+  mut `dcache_req_ports_id_cache.data_be` = id_stage_i.dcache_req_ports_o.data_be
+  mut `dcache_req_ports_id_cache.data_size` = id_stage_i.dcache_req_ports_o.data_size
+  mut `dcache_req_ports_id_cache.data_id` = id_stage_i.dcache_req_ports_o.data_id
+  mut `dcache_req_ports_id_cache.kill_req` = id_stage_i.dcache_req_ports_o.kill_req
+  mut `dcache_req_ports_id_cache.tag_valid` = id_stage_i.dcache_req_ports_o.tag_valid
+  mut `dcache_req_ports_id_cache.cbo_op` = id_stage_i.dcache_req_ports_o.cbo_op
+  mut trans_id_ex_id__w1 = trans_id_ex_id
+  trans_id_ex_id__w1#[0..=2] = flu_trans_id_ex_id
+  mut wbdata_ex_id__w1 = wbdata_ex_id
+  wbdata_ex_id__w1#[0..=63] = flu_result_ex_id
+  mut ex_ex_ex_id__w1 = ex_ex_ex_id
+  ex_ex_ex_id__w1#[0..=203] = ((flu_exception_ex_id.cause << 0x8c) | (flu_exception_ex_id.tval << 0x4c) | (flu_exception_ex_id.tval2 << 35) | (flu_exception_ex_id.tinst << 3) | (flu_exception_ex_id.gva << 2) | (flu_exception_ex_id.valid << 1) | flu_exception_ex_id.timing)#[0..=203]
+  mut wt_valid_ex_id__w1 = wt_valid_ex_id
+  wt_valid_ex_id__w1#[0] = flu_valid_ex_id & 1
+  mut trans_id_ex_id__w2 = trans_id_ex_id__w1
+  trans_id_ex_id__w2#[3..=5] = store_trans_id_ex_id
+  mut wbdata_ex_id__w2 = wbdata_ex_id__w1
+  wbdata_ex_id__w2#[64..=127] = store_result_ex_id
+  mut ex_ex_ex_id__w2 = ex_ex_ex_id__w1
+  ex_ex_ex_id__w2#[204..=407] = ((store_exception_ex_id.cause << 0x8c) | (store_exception_ex_id.tval << 0x4c) | (store_exception_ex_id.tval2 << 35) | (store_exception_ex_id.tinst << 3) | (store_exception_ex_id.gva << 2) | (store_exception_ex_id.valid << 1) | store_exception_ex_id.timing)#[0..=203]
+  mut wt_valid_ex_id__w2 = wt_valid_ex_id__w1
+  wt_valid_ex_id__w2#[1] = store_valid_ex_id & 1
+  mut trans_id_ex_id__w3 = trans_id_ex_id__w2
+  trans_id_ex_id__w3#[6..=8] = load_trans_id_ex_id
+  mut wbdata_ex_id__w3 = wbdata_ex_id__w2
+  wbdata_ex_id__w3#[128..=191] = load_result_ex_id
+  mut ex_ex_ex_id__w3 = ex_ex_ex_id__w2
+  ex_ex_ex_id__w3#[408..=611] = ((load_exception_ex_id.cause << 0x8c) | (load_exception_ex_id.tval << 0x4c) | (load_exception_ex_id.tval2 << 35) | (load_exception_ex_id.tinst << 3) | (load_exception_ex_id.gva << 2) | (load_exception_ex_id.valid << 1) | load_exception_ex_id.timing)#[0..=203]
+  mut wt_valid_ex_id__w3 = wt_valid_ex_id__w2
+  wt_valid_ex_id__w3#[2] = load_valid_ex_id & 1
+  mut trans_id_ex_id__w4 = trans_id_ex_id__w3
+  trans_id_ex_id__w4#[9..=11] = fpu_trans_id_ex_id
+  mut wbdata_ex_id__w4 = wbdata_ex_id__w3
+  wbdata_ex_id__w4#[192..=255] = fpu_result_ex_id
+  mut ex_ex_ex_id__w4 = ex_ex_ex_id__w3
+  ex_ex_ex_id__w4#[612..=815] = ((fpu_exception_ex_id.cause << 0x8c) | (fpu_exception_ex_id.tval << 0x4c) | (fpu_exception_ex_id.tval2 << 35) | (fpu_exception_ex_id.tinst << 3) | (fpu_exception_ex_id.gva << 2) | (fpu_exception_ex_id.valid << 1) | fpu_exception_ex_id.timing)#[0..=203]
+  mut wt_valid_ex_id__w4 = wt_valid_ex_id__w3
+  wt_valid_ex_id__w4#[3] = fpu_valid_ex_id & 1
+  mut cvxif_req__w1 = cvxif_req
+  cvxif_req__w1#[448] = id_stage_i.compressed_valid_o & 1
+  mut cvxif_req__w2 = cvxif_req__w1
+  cvxif_req__w2#[368..=447] = ((id_stage_i.compressed_req_o.instr << 0x40) | id_stage_i.compressed_req_o.hartid)#[0..=79]
+  mut cvxif_req__w3 = cvxif_req__w2
+  cvxif_req__w3#[367] = x_issue_valid & 1
+  mut cvxif_req__w4 = cvxif_req__w3
+  cvxif_req__w4#[268..=366] = ((x_issue_req.instr << 0x43) | (x_issue_req.hartid << 3) | x_issue_req.id)#[0..=98]
+  mut cvxif_req__w5 = cvxif_req__w4
+  cvxif_req__w5#[267] = x_register_valid & 1
+  mut cvxif_req__w6 = cvxif_req__w5
+  cvxif_req__w6#[70..=266] = ((x_register.hartid << 0x85) | (x_register.id << 0x82) | (x_register.rs << 2) | x_register.rs_valid)#[0..=196]
+  mut cvxif_req__w7 = cvxif_req__w6
+  cvxif_req__w7#[69] = x_commit_valid & 1
+  mut cvxif_req__w8 = cvxif_req__w7
+  cvxif_req__w8#[1..=68] = ((x_commit.hartid << 4) | (x_commit.id << 1) | x_commit.commit_kill)#[0..=67]
+  mut cvxif_req__w9 = cvxif_req__w8
+  cvxif_req__w9#[0] = x_result_ready & 1
+  mut trans_id_ex_id__w5 = trans_id_ex_id__w4
+  trans_id_ex_id__w5#[12..=14] = x_trans_id_ex_id
+  mut wbdata_ex_id__w5 = wbdata_ex_id__w4
+  wbdata_ex_id__w5#[256..=319] = x_result_ex_id
+  mut ex_ex_ex_id__w5 = ex_ex_ex_id__w4
+  ex_ex_ex_id__w5#[816..=1019] = ((x_exception_ex_id.cause << 0x8c) | (x_exception_ex_id.tval << 0x4c) | (x_exception_ex_id.tval2 << 35) | (x_exception_ex_id.tinst << 3) | (x_exception_ex_id.gva << 2) | (x_exception_ex_id.valid << 1) | x_exception_ex_id.timing)#[0..=203]
+  mut wt_valid_ex_id__w5 = wt_valid_ex_id__w4
+  wt_valid_ex_id__w5#[4] = x_valid_ex_id & 1
+  mut issue_stage_i = issue_stage::[name=issue_stage_i](clk_i = clk_i, rst_ni = rst_ni, flush_unissued_instr_i = flush_unissued_instr_ctrl_id, flush_i = flush_ctrl_id, stall_i = 0, decoded_instr_i = id_stage_i.issue_entry_o, decoded_instr_i_prev = id_stage_i.issue_entry_o_prev, orig_instr_i = id_stage_i.orig_instr_o, decoded_instr_valid_i = id_stage_i.issue_entry_valid_o, is_ctrl_flow_i = id_stage_i.is_ctrl_flow_o, flu_ready_i = flu_ready_ex_id, resolve_branch_i = resolve_branch_ex_id, lsu_ready_i = lsu_ready_ex_id, fpu_ready_i = fpu_ready_ex_id, fpu_early_valid_i = fpu_early_valid_ex_id, xfu_ready_i = x_issue_ready_ex_id, hart_id_i = hart_id_i, x_issue_ready_i = cvxif_resp_i.issue_ready, `x_issue_resp_i.accept` = `x_issue_resp.accept`, `x_issue_resp_i.writeback` = `x_issue_resp.writeback`, `x_issue_resp_i.register_read` = `x_issue_resp.register_read`, x_register_ready_i = cvxif_resp_i.register_ready, trans_id_i = trans_id_ex_id__w5, `resolved_branch_i.valid` = resolved_branch.valid, `resolved_branch_i.pc` = resolved_branch.pc, `resolved_branch_i.target_address` = resolved_branch.target_address, `resolved_branch_i.is_mispredict` = resolved_branch.is_mispredict, `resolved_branch_i.is_taken` = resolved_branch.is_taken, `resolved_branch_i.cf_type` = resolved_branch.cf_type, wbdata_i = wbdata_ex_id__w5, ex_ex_i = ex_ex_ex_id__w5, wt_valid_i = wt_valid_ex_id__w5, x_we_i = x_we_ex_id, x_rd_i = x_rd_ex_id, waddr_i = waddr_commit_id, wdata_i = wdata_commit_id, we_gpr_i = we_gpr_commit_id, we_fpr_i = we_fpr_commit_id, commit_ack_i = commit_ack_commit_id)
+  issue_instr_issue_id = issue_stage_i.decoded_instr_ack_o
+  x_issue_valid = issue_stage_i.x_issue_valid_o
+  x_issue_req.instr = issue_stage_i.x_issue_req_o.instr
+  x_issue_req.hartid = issue_stage_i.x_issue_req_o.hartid
+  x_issue_req.id = issue_stage_i.x_issue_req_o.id
+  x_register_valid = issue_stage_i.x_register_valid_o
+  x_register.hartid = issue_stage_i.x_register_o.hartid
+  x_register.id = issue_stage_i.x_register_o.id
+  x_register.rs = issue_stage_i.x_register_o.rs
+  x_register.rs_valid = issue_stage_i.x_register_o.rs_valid
+  x_commit_valid = issue_stage_i.x_commit_valid_o
+  x_commit.hartid = issue_stage_i.x_commit_o.hartid
+  x_commit.id = issue_stage_i.x_commit_o.id
+  x_commit.commit_kill = issue_stage_i.x_commit_o.commit_kill
+  mut `issue_instr_id_acc.pc` = issue_stage_i.issue_instr_o.pc
+  mut `issue_instr_id_acc.trans_id` = issue_stage_i.issue_instr_o.trans_id
+  mut `issue_instr_id_acc.fu` = issue_stage_i.issue_instr_o.fu
+  mut `issue_instr_id_acc.op` = issue_stage_i.issue_instr_o.op
+  mut `issue_instr_id_acc.rs1` = issue_stage_i.issue_instr_o.rs1
+  mut `issue_instr_id_acc.rs2` = issue_stage_i.issue_instr_o.rs2
+  mut `issue_instr_id_acc.rd` = issue_stage_i.issue_instr_o.rd
+  mut `issue_instr_id_acc.result` = issue_stage_i.issue_instr_o.result
+  mut `issue_instr_id_acc.valid` = issue_stage_i.issue_instr_o.valid
+  mut `issue_instr_id_acc.use_imm` = issue_stage_i.issue_instr_o.use_imm
+  mut `issue_instr_id_acc.use_zimm` = issue_stage_i.issue_instr_o.use_zimm
+  mut `issue_instr_id_acc.use_pc` = issue_stage_i.issue_instr_o.use_pc
+  mut `issue_instr_id_acc.ex` = (issue_stage_i.issue_instr_o.ex.cause << 0x8c) | (issue_stage_i.issue_instr_o.ex.tval << 0x4c) | (issue_stage_i.issue_instr_o.ex.tval2 << 35) | (issue_stage_i.issue_instr_o.ex.tinst << 3) | (issue_stage_i.issue_instr_o.ex.gva << 2) | (issue_stage_i.issue_instr_o.ex.valid << 1) | issue_stage_i.issue_instr_o.ex.timing
+  mut `issue_instr_id_acc.bp` = (issue_stage_i.issue_instr_o.bp.cf << 0x40) | issue_stage_i.issue_instr_o.bp.predict_address
+  mut `issue_instr_id_acc.is_compressed` = issue_stage_i.issue_instr_o.is_compressed
+  mut `issue_instr_id_acc.is_macro_instr` = issue_stage_i.issue_instr_o.is_macro_instr
+  mut `issue_instr_id_acc.is_last_macro_instr` = issue_stage_i.issue_instr_o.is_last_macro_instr
+  mut `issue_instr_id_acc.is_double_rd_macro_instr` = issue_stage_i.issue_instr_o.is_double_rd_macro_instr
+  mut `issue_instr_id_acc.vfp` = issue_stage_i.issue_instr_o.vfp
+  mut `issue_instr_id_acc.is_zcmt` = issue_stage_i.issue_instr_o.is_zcmt
+  mut ex_stage_i = ex_stage::[name=ex_stage_i](clk_i = clk_i, rst_ni = rst_ni, flush_i = flush_ctrl_ex, debug_mode_i = debug_mode, rs1_forwarding_i = issue_stage_i.rs1_forwarding_o, rs2_forwarding_i = issue_stage_i.rs2_forwarding_o, fu_data_i = issue_stage_i.fu_data_o, `alu_bypass_i.rs1_from_rd` = issue_stage_i.alu_bypass_o.rs1_from_rd, `alu_bypass_i.rs2_from_rd` = issue_stage_i.alu_bypass_o.rs2_from_rd, pc_i = issue_stage_i.pc_o, is_zcmt_i = issue_stage_i.is_zcmt_o, is_compressed_instr_i = issue_stage_i.is_compressed_instr_o, tinst_i = issue_stage_i.tinst_o, alu_valid_i = issue_stage_i.alu_valid_o, aes_valid_i = issue_stage_i.aes_valid_o, branch_valid_i = issue_stage_i.branch_valid_o, `branch_predict_i.cf` = issue_stage_i.branch_predict_o.cf, `branch_predict_i.predict_address` = issue_stage_i.branch_predict_o.predict_address, csr_valid_i = issue_stage_i.csr_valid_o, csr_commit_i = csr_commit_commit_ex, mult_valid_i = issue_stage_i.mult_valid_o, lsu_valid_i = issue_stage_i.lsu_valid_o, lsu_commit_i = lsu_commit_commit_ex, commit_tran_id_i = lsu_commit_trans_id, stall_st_pending_i = 0, amo_valid_commit_i = amo_valid_commit, fpu_valid_i = issue_stage_i.fpu_valid_o, fpu_fmt_i = issue_stage_i.fpu_fmt_o, fpu_rm_i = issue_stage_i.fpu_rm_o, fpu_frm_i = frm_csr_id_issue_ex, fpu_prec_i = fprec_csr_ex, alu2_valid_i = issue_stage_i.alu2_valid_o, x_valid_i = issue_stage_i.xfu_valid_o, x_off_instr_i = issue_stage_i.x_off_instr_o, x_result_valid_i = cvxif_resp_i.result_valid, `x_result_i.hartid` = `x_result.hartid`, `x_result_i.id` = `x_result.id`, `x_result_i.data` = `x_result.data`, `x_result_i.rd` = `x_result.rd`, `x_result_i.we` = `x_result.we`, x_transaction_rejected_i = issue_stage_i.x_transaction_rejected_o, acc_valid_i = 0, acc_mmu_req_i = 0, enable_translation_i = enable_translation_csr_ex, enable_g_translation_i = enable_g_translation_csr_ex, en_ld_st_translation_i = en_ld_st_translation_csr_ex, en_ld_st_g_translation_i = en_ld_st_g_translation_csr_ex, flush_tlb_i = flush_tlb_ctrl_ex, flush_tlb_vvma_i = flush_tlb_vvma_ctrl_ex, flush_tlb_gvma_i = flush_tlb_gvma_ctrl_ex, priv_lvl_i = priv_lvl, mbe_i = mbe, v_i = v, ld_st_priv_lvl_i = ld_st_priv_lvl_csr_ex, ld_st_v_i = ld_st_v_csr_ex, sum_i = sum_csr_ex, vs_sum_i = vs_sum_csr_ex, mxr_i = mxr_csr_ex, vmxr_i = vmxr_csr_ex, satp_ppn_i = satp_ppn_csr_ex, asid_i = asid_csr_ex, vsatp_ppn_i = vsatp_ppn_csr_ex, vs_asid_i = vs_asid_csr_ex, hgatp_ppn_i = hgatp_ppn_csr_ex, vmid_i = vmid_csr_ex, `icache_areq_i.fetch_req` = icache_areq_cache_ex.fetch_req, `icache_areq_i.fetch_vaddr` = icache_areq_cache_ex.fetch_vaddr, dcache_req_ports_i = dcache_req_ports_cache_ex, dcache_wbuffer_empty_i = dcache_commit_wbuffer_empty, dcache_wbuffer_not_ni_i = 1, `amo_resp_i.ack` = amo_resp.ack, `amo_resp_i.result` = amo_resp.result, pmpcfg_i = pmpcfg, pmpaddr_i = pmpaddr, orig_instr_aes_i = issue_stage_i.orig_instr_aes_bits, sdtrig_load_stall_i = sdtrig_load_stall, sdtrig_load_cancel_i = sdtrig_load_cancel, sdtrig_load_action_i = sdtrig_load_action, sdtrig_store_stall_i = sdtrig_store_stall, sdtrig_store_action_i = sdtrig_store_action)
+  flu_result_ex_id = ex_stage_i.flu_result_o
+  flu_trans_id_ex_id = ex_stage_i.flu_trans_id_o
+  flu_exception_ex_id.cause = ex_stage_i.flu_exception_o.cause
+  flu_exception_ex_id.tval = ex_stage_i.flu_exception_o.tval
+  flu_exception_ex_id.tval2 = ex_stage_i.flu_exception_o.tval2
+  flu_exception_ex_id.tinst = ex_stage_i.flu_exception_o.tinst
+  flu_exception_ex_id.gva = ex_stage_i.flu_exception_o.gva
+  flu_exception_ex_id.valid = ex_stage_i.flu_exception_o.valid
+  flu_exception_ex_id.timing = ex_stage_i.flu_exception_o.timing
+  flu_ready_ex_id = ex_stage_i.flu_ready_o
+  flu_valid_ex_id = ex_stage_i.flu_valid_o
+  resolved_branch.valid = ex_stage_i.resolved_branch_o.valid
+  resolved_branch.pc = ex_stage_i.resolved_branch_o.pc
+  resolved_branch.target_address = ex_stage_i.resolved_branch_o.target_address
+  resolved_branch.is_mispredict = ex_stage_i.resolved_branch_o.is_mispredict
+  resolved_branch.is_taken = ex_stage_i.resolved_branch_o.is_taken
+  resolved_branch.cf_type = ex_stage_i.resolved_branch_o.cf_type
+  resolve_branch_ex_id = ex_stage_i.resolve_branch_o
+  lsu_ready_ex_id = ex_stage_i.lsu_ready_o
+  load_valid_ex_id = ex_stage_i.load_valid_o
+  load_result_ex_id = ex_stage_i.load_result_o
+  load_trans_id_ex_id = ex_stage_i.load_trans_id_o
+  load_exception_ex_id.cause = ex_stage_i.load_exception_o.cause
+  load_exception_ex_id.tval = ex_stage_i.load_exception_o.tval
+  load_exception_ex_id.tval2 = ex_stage_i.load_exception_o.tval2
+  load_exception_ex_id.tinst = ex_stage_i.load_exception_o.tinst
+  load_exception_ex_id.gva = ex_stage_i.load_exception_o.gva
+  load_exception_ex_id.valid = ex_stage_i.load_exception_o.valid
+  load_exception_ex_id.timing = ex_stage_i.load_exception_o.timing
+  store_valid_ex_id = ex_stage_i.store_valid_o
+  store_result_ex_id = ex_stage_i.store_result_o
+  store_trans_id_ex_id = ex_stage_i.store_trans_id_o
+  store_exception_ex_id.cause = ex_stage_i.store_exception_o.cause
+  store_exception_ex_id.tval = ex_stage_i.store_exception_o.tval
+  store_exception_ex_id.tval2 = ex_stage_i.store_exception_o.tval2
+  store_exception_ex_id.tinst = ex_stage_i.store_exception_o.tinst
+  store_exception_ex_id.gva = ex_stage_i.store_exception_o.gva
+  store_exception_ex_id.valid = ex_stage_i.store_exception_o.valid
+  store_exception_ex_id.timing = ex_stage_i.store_exception_o.timing
+  fpu_ready_ex_id = ex_stage_i.fpu_ready_o
+  fpu_trans_id_ex_id = ex_stage_i.fpu_trans_id_o
+  fpu_result_ex_id = ex_stage_i.fpu_result_o
+  fpu_valid_ex_id = ex_stage_i.fpu_valid_o
+  fpu_exception_ex_id.cause = ex_stage_i.fpu_exception_o.cause
+  fpu_exception_ex_id.tval = ex_stage_i.fpu_exception_o.tval
+  fpu_exception_ex_id.tval2 = ex_stage_i.fpu_exception_o.tval2
+  fpu_exception_ex_id.tinst = ex_stage_i.fpu_exception_o.tinst
+  fpu_exception_ex_id.gva = ex_stage_i.fpu_exception_o.gva
+  fpu_exception_ex_id.valid = ex_stage_i.fpu_exception_o.valid
+  fpu_exception_ex_id.timing = ex_stage_i.fpu_exception_o.timing
+  fpu_early_valid_ex_id = ex_stage_i.fpu_early_valid_o
+  x_issue_ready_ex_id = ex_stage_i.x_ready_o
+  x_trans_id_ex_id = ex_stage_i.x_trans_id_o
+  x_exception_ex_id.cause = ex_stage_i.x_exception_o.cause
+  x_exception_ex_id.tval = ex_stage_i.x_exception_o.tval
+  x_exception_ex_id.tval2 = ex_stage_i.x_exception_o.tval2
+  x_exception_ex_id.tinst = ex_stage_i.x_exception_o.tinst
+  x_exception_ex_id.gva = ex_stage_i.x_exception_o.gva
+  x_exception_ex_id.valid = ex_stage_i.x_exception_o.valid
+  x_exception_ex_id.timing = ex_stage_i.x_exception_o.timing
+  x_result_ex_id = ex_stage_i.x_result_o
+  x_valid_ex_id = ex_stage_i.x_valid_o
+  x_we_ex_id = ex_stage_i.x_we_o
+  x_rd_ex_id = ex_stage_i.x_rd_o
+  x_result_ready = ex_stage_i.x_result_ready_o
+  mut `icache_areq_ex_cache.fetch_exception` = (ex_stage_i.icache_areq_o.fetch_exception.cause << 0x8c) | (ex_stage_i.icache_areq_o.fetch_exception.tval << 0x4c) | (ex_stage_i.icache_areq_o.fetch_exception.tval2 << 35) | (ex_stage_i.icache_areq_o.fetch_exception.tinst << 3) | (ex_stage_i.icache_areq_o.fetch_exception.gva << 2) | (ex_stage_i.icache_areq_o.fetch_exception.valid << 1) | ex_stage_i.icache_areq_o.fetch_exception.timing
+  mut commit_stage_i = commit_stage::[name=commit_stage_i](clk_i = clk_i, rst_ni = rst_ni, halt_i = halt_ctrl, flush_dcache_i = dcache_flush_ctrl_cache, single_step_i = unsigned((single_step_csr_commit != 0) or false), commit_instr_i = issue_stage_i.commit_instr_o, `commit_drop_i.e1` = (issue_stage_i.commit_drop_o >> 1) & 1, `commit_drop_i.e0` = issue_stage_i.commit_drop_o & 1, `amo_resp_i.ack` = amo_resp.ack, `amo_resp_i.result` = amo_resp.result, csr_rdata_i = csr_rdata_csr_commit, `csr_exception_i.cause` = csr_exception_csr_commit.cause, `csr_exception_i.tval` = csr_exception_csr_commit.tval, `csr_exception_i.tval2` = csr_exception_csr_commit.tval2, `csr_exception_i.tinst` = csr_exception_csr_commit.tinst, `csr_exception_i.gva` = csr_exception_csr_commit.gva, `csr_exception_i.valid` = csr_exception_csr_commit.valid, `csr_exception_i.timing` = csr_exception_csr_commit.timing, commit_lsu_ready_i = ex_stage_i.lsu_commit_ready_o, no_st_pending_i = ex_stage_i.no_st_pending_o & dcache_commit_wbuffer_empty & 1, shared_tlb_flush_busy_i = ex_stage_i.shared_tlb_flush_busy_o, sdtrig_commit_icount_valid_i = sdtrig_commit_icount_valid, sdtrig_commit_icount_nr_instr_i = sdtrig_commit_icount_nr_instr, sdtrig_commit_action_i = sdtrig_commit_action, sdtrig_commit_std_exception_valid_i = sdtrig_commit_std_exception_valid)
+  ex_commit.valid = commit_stage_i.exception_o.valid
+  commit_ack_commit_id = (commit_stage_i.commit_ack_o.e1 << 1) | commit_stage_i.commit_ack_o.e0
+  waddr_commit_id = commit_stage_i.waddr_o
+  wdata_commit_id = commit_stage_i.wdata_o
+  we_gpr_commit_id = (commit_stage_i.we_gpr_o.e1 << 1) | commit_stage_i.we_gpr_o.e0
+  we_fpr_commit_id = (commit_stage_i.we_fpr_o.e1 << 1) | commit_stage_i.we_fpr_o.e0
+  pc_commit = commit_stage_i.pc_o
+  lsu_commit_commit_ex = commit_stage_i.commit_lsu_o
+  lsu_commit_trans_id = commit_stage_i.commit_tran_id_o
+  amo_valid_commit = commit_stage_i.amo_valid_commit_o
+  csr_commit_commit_ex = commit_stage_i.commit_csr_o
+  const commit_ack__w1 = commit_stage_i.commit_macro_ack_o & (~issue_stage_i.commit_drop_o)#[0..=1]
+  mut csr_regfile_i = csr_regfile::[name=csr_regfile_i](clk_i = clk_i, rst_ni = rst_ni, time_irq_i = time_irq_i, `commit_instr_i.pc` = issue_stage_i.commit_instr_o#[0..=438]#[375..=438], `commit_instr_i.trans_id` = issue_stage_i.commit_instr_o#[0..=438]#[372..=374], `commit_instr_i.fu` = issue_stage_i.commit_instr_o#[0..=438]#[368..=371], `commit_instr_i.op` = issue_stage_i.commit_instr_o#[0..=438]#[360..=367], `commit_instr_i.rs1` = issue_stage_i.commit_instr_o#[0..=438]#[355..=359], `commit_instr_i.rs2` = issue_stage_i.commit_instr_o#[0..=438]#[350..=354], `commit_instr_i.rd` = issue_stage_i.commit_instr_o#[0..=438]#[345..=349], `commit_instr_i.result` = issue_stage_i.commit_instr_o#[0..=438]#[281..=344], `commit_instr_i.valid` = (issue_stage_i.commit_instr_o#[0..=438] >> 0x118) & 1, `commit_instr_i.use_imm` = (issue_stage_i.commit_instr_o#[0..=438] >> 0x117) & 1, `commit_instr_i.use_zimm` = (issue_stage_i.commit_instr_o#[0..=438] >> 0x116) & 1, `commit_instr_i.use_pc` = (issue_stage_i.commit_instr_o#[0..=438] >> 0x115) & 1, `commit_instr_i.ex.cause` = issue_stage_i.commit_instr_o#[0..=438]#[213..=276], `commit_instr_i.ex.tval` = issue_stage_i.commit_instr_o#[0..=438]#[149..=212], `commit_instr_i.ex.tval2` = issue_stage_i.commit_instr_o#[0..=438]#[108..=148], `commit_instr_i.ex.tinst` = issue_stage_i.commit_instr_o#[0..=438]#[76..=107], `commit_instr_i.ex.gva` = (issue_stage_i.commit_instr_o#[0..=438] >> 0x4b) & 1, `commit_instr_i.ex.valid` = (issue_stage_i.commit_instr_o#[0..=438] >> 0x4a) & 1, `commit_instr_i.ex.timing` = (issue_stage_i.commit_instr_o#[0..=438] >> 0x49) & 1, `commit_instr_i.bp.cf` = issue_stage_i.commit_instr_o#[0..=438]#[70..=72], `commit_instr_i.bp.predict_address` = issue_stage_i.commit_instr_o#[0..=438]#[6..=69], `commit_instr_i.is_compressed` = (issue_stage_i.commit_instr_o#[0..=438] >> 5) & 1, `commit_instr_i.is_macro_instr` = (issue_stage_i.commit_instr_o#[0..=438] >> 4) & 1, `commit_instr_i.is_last_macro_instr` = (issue_stage_i.commit_instr_o#[0..=438] >> 3) & 1, `commit_instr_i.is_double_rd_macro_instr` = (issue_stage_i.commit_instr_o#[0..=438] >> 2) & 1, `commit_instr_i.vfp` = (issue_stage_i.commit_instr_o#[0..=438] >> 1) & 1, `commit_instr_i.is_zcmt` = issue_stage_i.commit_instr_o#[0..=438] & 1, `commit_ack_i.e1` = (commit_ack__w1 >> 1) & 1, `commit_ack_i.e0` = commit_ack__w1 & 1, boot_addr_i = boot_addr_i, hart_id_i = hart_id_i, `ex_i.cause` = commit_stage_i.exception_o.cause, `ex_i.tval` = commit_stage_i.exception_o.tval, `ex_i.tval2` = commit_stage_i.exception_o.tval2, `ex_i.tinst` = commit_stage_i.exception_o.tinst, `ex_i.gva` = commit_stage_i.exception_o.gva, `ex_i.valid` = ex_commit.valid, `ex_i.timing` = commit_stage_i.exception_o.timing, csr_op_i = commit_stage_i.csr_op_o, csr_addr_i = ex_stage_i.csr_addr_o, csr_wdata_i = commit_stage_i.csr_wdata_o, dirty_fp_state_i = commit_stage_i.dirty_fp_state_o, csr_write_fflags_i = commit_stage_i.csr_write_fflags_o, dirty_v_state_i = 0, `pc_i.e63` = (pc_commit >> 63) & 1, `pc_i.e62` = (pc_commit >> 62) & 1, `pc_i.e61` = (pc_commit >> 61) & 1, `pc_i.e60` = (pc_commit >> 60) & 1, `pc_i.e59` = (pc_commit >> 59) & 1, `pc_i.e58` = (pc_commit >> 58) & 1, `pc_i.e57` = (pc_commit >> 57) & 1, `pc_i.e56` = (pc_commit >> 56) & 1, `pc_i.e55` = (pc_commit >> 55) & 1, `pc_i.e54` = (pc_commit >> 54) & 1, `pc_i.e53` = (pc_commit >> 53) & 1, `pc_i.e52` = (pc_commit >> 52) & 1, `pc_i.e51` = (pc_commit >> 51) & 1, `pc_i.e50` = (pc_commit >> 50) & 1, `pc_i.e49` = (pc_commit >> 49) & 1, `pc_i.e48` = (pc_commit >> 48) & 1, `pc_i.e47` = (pc_commit >> 47) & 1, `pc_i.e46` = (pc_commit >> 46) & 1, `pc_i.e45` = (pc_commit >> 45) & 1, `pc_i.e44` = (pc_commit >> 44) & 1, `pc_i.e43` = (pc_commit >> 43) & 1, `pc_i.e42` = (pc_commit >> 42) & 1, `pc_i.e41` = (pc_commit >> 41) & 1, `pc_i.e40` = (pc_commit >> 40) & 1, `pc_i.e39` = (pc_commit >> 39) & 1, `pc_i.e38` = (pc_commit >> 38) & 1, `pc_i.e37` = (pc_commit >> 37) & 1, `pc_i.e36` = (pc_commit >> 36) & 1, `pc_i.e35` = (pc_commit >> 35) & 1, `pc_i.e34` = (pc_commit >> 34) & 1, `pc_i.e33` = (pc_commit >> 33) & 1, `pc_i.e32` = (pc_commit >> 32) & 1, `pc_i.e31` = (pc_commit >> 31) & 1, `pc_i.e30` = (pc_commit >> 30) & 1, `pc_i.e29` = (pc_commit >> 29) & 1, `pc_i.e28` = (pc_commit >> 28) & 1, `pc_i.e27` = (pc_commit >> 27) & 1, `pc_i.e26` = (pc_commit >> 26) & 1, `pc_i.e25` = (pc_commit >> 25) & 1, `pc_i.e24` = (pc_commit >> 24) & 1, `pc_i.e23` = (pc_commit >> 23) & 1, `pc_i.e22` = (pc_commit >> 22) & 1, `pc_i.e21` = (pc_commit >> 21) & 1, `pc_i.e20` = (pc_commit >> 20) & 1, `pc_i.e19` = (pc_commit >> 19) & 1, `pc_i.e18` = (pc_commit >> 18) & 1, `pc_i.e17` = (pc_commit >> 17) & 1, `pc_i.e16` = (pc_commit >> 16) & 1, `pc_i.e15` = (pc_commit >> 15) & 1, `pc_i.e14` = (pc_commit >> 14) & 1, `pc_i.e13` = (pc_commit >> 13) & 1, `pc_i.e12` = (pc_commit >> 12) & 1, `pc_i.e11` = (pc_commit >> 11) & 1, `pc_i.e10` = (pc_commit >> 10) & 1, `pc_i.e9` = (pc_commit >> 9) & 1, `pc_i.e8` = (pc_commit >> 8) & 1, `pc_i.e7` = (pc_commit >> 7) & 1, `pc_i.e6` = (pc_commit >> 6) & 1, `pc_i.e5` = (pc_commit >> 5) & 1, `pc_i.e4` = (pc_commit >> 4) & 1, `pc_i.e3` = (pc_commit >> 3) & 1, `pc_i.e2` = (pc_commit >> 2) & 1, `pc_i.e1` = (pc_commit >> 1) & 1, `pc_i.e0` = pc_commit & 1, acc_fflags_ex_i = 0, acc_fflags_ex_valid_i = 0, csr_hs_ld_st_inst_i = ex_stage_i.csr_hs_ld_st_inst_o, `irq_i.e1` = (irq_i >> 1) & 1, `irq_i.e0` = irq_i & 1, ipi_i = ipi_i, debug_req_i = debug_req_i, perf_data_i = data_perf_csr, sdtrig_lsu_inputs_vaddr_i = ex_stage_i.sdtrig_lsu_inputs_operand_a_o, sdtrig_lsu_inputs_data_i = ex_stage_i.sdtrig_lsu_inputs_operand_c_o, sdtrig_lsu_inputs_fu_i = ex_stage_i.sdtrig_lsu_inputs_we_o, sdtrig_lsu_inputs_valid_i = ex_stage_i.sdtrig_lsu_inputs_valid_o, sdtrig_load_data_i = load_result_ex_id, sdtrig_load_valid_i = load_valid_ex_id, fetch_sdtrig_pc_i = 0, fetch_sdtrig_instr_i = 0)
+  csr_rdata_csr_commit = csr_regfile_i.csr_rdata_o
+  csr_exception_csr_commit.cause = csr_regfile_i.csr_exception_o.cause
+  csr_exception_csr_commit.tval = csr_regfile_i.csr_exception_o.tval
+  csr_exception_csr_commit.tval2 = csr_regfile_i.csr_exception_o.tval2
+  csr_exception_csr_commit.tinst = csr_regfile_i.csr_exception_o.tinst
+  csr_exception_csr_commit.gva = csr_regfile_i.csr_exception_o.gva
+  csr_exception_csr_commit.valid = csr_regfile_i.csr_exception_o.valid
+  csr_exception_csr_commit.timing = csr_regfile_i.csr_exception_o.timing
+  epc_commit_pcgen = csr_regfile_i.epc_o
+  eret = csr_regfile_i.eret_o
+  trap_vector_base_commit_pcgen = csr_regfile_i.trap_vector_base_o
+  priv_lvl = csr_regfile_i.priv_lvl_o
+  mbe = csr_regfile_i.mbe_o
+  v = csr_regfile_i.v_o
+  fs = csr_regfile_i.fs_o
+  vfs = csr_regfile_i.vfs_o
+  frm_csr_id_issue_ex = csr_regfile_i.frm_o
+  fprec_csr_ex = csr_regfile_i.fprec_o
+  vs = csr_regfile_i.vs_o
+  irq_ctrl_csr_id.mie = csr_regfile_i.irq_ctrl_o.mie
+  irq_ctrl_csr_id.mip = csr_regfile_i.irq_ctrl_o.mip
+  irq_ctrl_csr_id.mideleg = csr_regfile_i.irq_ctrl_o.mideleg
+  irq_ctrl_csr_id.hideleg = csr_regfile_i.irq_ctrl_o.hideleg
+  irq_ctrl_csr_id.sie = csr_regfile_i.irq_ctrl_o.sie
+  irq_ctrl_csr_id.global_enable = csr_regfile_i.irq_ctrl_o.global_enable
+  enable_translation_csr_ex = csr_regfile_i.en_translation_o
+  enable_g_translation_csr_ex = csr_regfile_i.en_g_translation_o
+  en_ld_st_translation_csr_ex = csr_regfile_i.en_ld_st_translation_o
+  en_ld_st_g_translation_csr_ex = csr_regfile_i.en_ld_st_g_translation_o
+  ld_st_priv_lvl_csr_ex = csr_regfile_i.ld_st_priv_lvl_o
+  ld_st_v_csr_ex = csr_regfile_i.ld_st_v_o
+  sum_csr_ex = csr_regfile_i.sum_o
+  vs_sum_csr_ex = csr_regfile_i.vs_sum_o
+  mxr_csr_ex = csr_regfile_i.mxr_o
+  vmxr_csr_ex = csr_regfile_i.vmxr_o
+  satp_ppn_csr_ex = csr_regfile_i.satp_ppn_o
+  asid_csr_ex = csr_regfile_i.asid_o
+  vsatp_ppn_csr_ex = csr_regfile_i.vsatp_ppn_o
+  vs_asid_csr_ex = csr_regfile_i.vs_asid_o
+  hgatp_ppn_csr_ex = csr_regfile_i.hgatp_ppn_o
+  vmid_csr_ex = csr_regfile_i.vmid_o
+  mcbie = csr_regfile_i.mcbie_o
+  scbie = csr_regfile_i.scbie_o
+  hcbie = csr_regfile_i.hcbie_o
+  mcbcfe = csr_regfile_i.mcbcfe_o
+  scbcfe = csr_regfile_i.scbcfe_o
+  hcbcfe = csr_regfile_i.hcbcfe_o
+  set_debug_pc = csr_regfile_i.set_debug_pc_o
+  tvm_csr_id = csr_regfile_i.tvm_o
+  tw_csr_id = csr_regfile_i.tw_o
+  vtw_csr_id = csr_regfile_i.vtw_o
+  tsr_csr_id = csr_regfile_i.tsr_o
+  hu = csr_regfile_i.hu_o
+  debug_mode = csr_regfile_i.debug_mode_o
+  single_step_csr_commit = csr_regfile_i.single_step_o
+  pmpcfg = csr_regfile_i.pmpcfg_o
+  pmpaddr = csr_regfile_i.pmpaddr_o
+  mut `rvfi_csr.fcsr_q` = (csr_regfile_i.rvfi_csr_o.fcsr_q.reserved << 15) | (csr_regfile_i.rvfi_csr_o.fcsr_q.fprec << 8) | (csr_regfile_i.rvfi_csr_o.fcsr_q.frm << 5) | csr_regfile_i.rvfi_csr_o.fcsr_q.fflags
+  mut `rvfi_csr.dcsr_q` = (csr_regfile_i.rvfi_csr_o.dcsr_q.xdebugver << 28) | (csr_regfile_i.rvfi_csr_o.dcsr_q.zero2 << 18) | (csr_regfile_i.rvfi_csr_o.dcsr_q.ebreakvs << 17) | (csr_regfile_i.rvfi_csr_o.dcsr_q.ebreakvu << 16) | (csr_regfile_i.rvfi_csr_o.dcsr_q.ebreakm << 15) | (csr_regfile_i.rvfi_csr_o.dcsr_q.zero1 << 14) | (csr_regfile_i.rvfi_csr_o.dcsr_q.ebreaks << 13) | (csr_regfile_i.rvfi_csr_o.dcsr_q.ebreaku << 12) | (csr_regfile_i.rvfi_csr_o.dcsr_q.stepie << 11) | (csr_regfile_i.rvfi_csr_o.dcsr_q.stopcount << 10) | (csr_regfile_i.rvfi_csr_o.dcsr_q.stoptime << 9) | (csr_regfile_i.rvfi_csr_o.dcsr_q.cause << 6) | (csr_regfile_i.rvfi_csr_o.dcsr_q.v << 5) | (csr_regfile_i.rvfi_csr_o.dcsr_q.mprven << 4) | (csr_regfile_i.rvfi_csr_o.dcsr_q.nmip << 3) | (csr_regfile_i.rvfi_csr_o.dcsr_q.`step` << 2) | csr_regfile_i.rvfi_csr_o.dcsr_q.prv
+  jvt.base = csr_regfile_i.jvt_o.base
+  jvt.mode = csr_regfile_i.jvt_o.mode
+  sdtrig_load_stall = csr_regfile_i.sdtrig_load_stall_o
+  sdtrig_load_cancel = csr_regfile_i.sdtrig_load_cancel_o
+  sdtrig_load_action = csr_regfile_i.sdtrig_load_action_o
+  sdtrig_store_stall = csr_regfile_i.sdtrig_store_stall_o
+  sdtrig_store_action = csr_regfile_i.sdtrig_store_action_o
+  sdtrig_commit_icount_valid = csr_regfile_i.sdtrig_commit_icount_valid_o
+  sdtrig_commit_icount_nr_instr = csr_regfile_i.sdtrig_commit_icount_nr_instr_o
+  sdtrig_commit_action = csr_regfile_i.sdtrig_commit_action_o
+  sdtrig_commit_std_exception_valid = csr_regfile_i.sdtrig_commit_std_exception_valid_o
+  mut perf_counters_i = perf_counters::[name=perf_counters_i](clk_i = clk_i, rst_ni = rst_ni, debug_mode_i = debug_mode, addr_i = csr_regfile_i.perf_addr_o, we_i = csr_regfile_i.perf_we_o, data_i = csr_regfile_i.perf_data_o, commit_instr_i = issue_stage_i.commit_instr_o, `commit_ack_i.e1` = (commit_ack__w1 >> 1) & 1, `commit_ack_i.e0` = commit_ack__w1 & 1, l1_icache_miss_i = icache_miss_cache_perf, l1_dcache_miss_i = dcache_miss_cache_perf, itlb_miss_i = ex_stage_i.itlb_miss_o, dtlb_miss_i = ex_stage_i.dtlb_miss_o, sb_full_i = issue_stage_i.sb_full_o, if_empty_i = (~(i_frontend.fetch_entry_valid_o & 1)) & 1, `ex_i.cause` = commit_stage_i.exception_o.cause, `ex_i.tval` = commit_stage_i.exception_o.tval, `ex_i.tval2` = commit_stage_i.exception_o.tval2, `ex_i.tinst` = commit_stage_i.exception_o.tinst, `ex_i.gva` = commit_stage_i.exception_o.gva, `ex_i.valid` = ex_commit.valid, `ex_i.timing` = commit_stage_i.exception_o.timing, eret_i = eret, `resolved_branch_i.valid` = resolved_branch.valid, `resolved_branch_i.pc` = resolved_branch.pc, `resolved_branch_i.target_address` = resolved_branch.target_address, `resolved_branch_i.is_mispredict` = resolved_branch.is_mispredict, `resolved_branch_i.is_taken` = resolved_branch.is_taken, `resolved_branch_i.cf_type` = resolved_branch.cf_type, `branch_exceptions_i.cause` = flu_exception_ex_id.cause, `branch_exceptions_i.tval` = flu_exception_ex_id.tval, `branch_exceptions_i.tval2` = flu_exception_ex_id.tval2, `branch_exceptions_i.tinst` = flu_exception_ex_id.tinst, `branch_exceptions_i.gva` = flu_exception_ex_id.gva, `branch_exceptions_i.valid` = flu_exception_ex_id.valid, `branch_exceptions_i.timing` = flu_exception_ex_id.timing, `l1_icache_access_i.req` = i_frontend.icache_dreq_o.req, `l1_icache_access_i.kill_s1` = i_frontend.icache_dreq_o.kill_s1, `l1_icache_access_i.kill_s2` = i_frontend.icache_dreq_o.kill_s2, `l1_icache_access_i.spec` = i_frontend.icache_dreq_o.spec, `l1_icache_access_i.vaddr` = i_frontend.icache_dreq_o.vaddr, l1_dcache_access_i = ex_stage_i.dcache_req_ports_o, miss_vld_bits_i = 0, i_tlb_flush_i = flush_tlb_ctrl_ex, stall_issue_i = issue_stage_i.stall_issue_o, mcountinhibit_i = csr_regfile_i.mcountinhibit_o)
+  data_perf_csr = perf_counters_i
+  mut controller_i = controller::[name=controller_i](clk_i = clk_i, rst_ni = rst_ni, v_i = v, flush_dcache_ack_i = dcache_flush_ack_cache_ctrl, halt_csr_i = csr_regfile_i.halt_csr_o, halt_acc_i = 0, eret_i = eret, ex_valid_i = ex_commit.valid, set_debug_pc_i = set_debug_pc, `resolved_branch_i.valid` = resolved_branch.valid, `resolved_branch_i.pc` = resolved_branch.pc, `resolved_branch_i.target_address` = resolved_branch.target_address, `resolved_branch_i.is_mispredict` = resolved_branch.is_mispredict, `resolved_branch_i.is_taken` = resolved_branch.is_taken, `resolved_branch_i.cf_type` = resolved_branch.cf_type, flush_csr_i = csr_regfile_i.flush_o, fence_i_i = commit_stage_i.fence_i_o, fence_i = commit_stage_i.fence_o, sfence_vma_i = commit_stage_i.sfence_vma_o, hfence_vvma_i = commit_stage_i.hfence_vvma_o, hfence_gvma_i = commit_stage_i.hfence_gvma_o, flush_commit_i = commit_stage_i.flush_commit_o, flush_acc_i = 0)
+  set_pc_ctrl_pcgen = controller_i.set_pc_commit_o
+  flush_ctrl_if = controller_i.flush_if_o
+  flush_unissued_instr_ctrl_id = controller_i.flush_unissued_instr_o
+  flush_ctrl_id = controller_i.flush_id_o
+  flush_ctrl_ex = controller_i.flush_ex_o
+  flush_ctrl_bp = controller_i.flush_bp_o
+  dcache_flush_ctrl_cache = controller_i.flush_dcache_o
+  flush_tlb_ctrl_ex = controller_i.flush_tlb_o
+  flush_tlb_vvma_ctrl_ex = controller_i.flush_tlb_vvma_o
+  flush_tlb_gvma_ctrl_ex = controller_i.flush_tlb_gvma_o
+  halt_frontend = controller_i.halt_frontend_o
+  halt_ctrl = controller_i.halt_o
+  mut dcache_req_to_cache__w2 = dcache_req_to_cache__w1
+  dcache_req_to_cache__w2#[0..=206] = ex_stage_i.dcache_req_ports_o#[0..=206]
+  mut dcache_req_to_cache__w3 = dcache_req_to_cache__w2
+  dcache_req_to_cache__w3#[207..=413] = ex_stage_i.dcache_req_ports_o#[207..=413]
+  mut _mux_3:u207 = if ((ex_stage_i.dcache_req_ports_o#[414..=620] >> 22) & 1) != 0 { ex_stage_i.dcache_req_ports_o#[414..=620] } else { 0 }
+  mut dcache_req_to_cache__w4 = dcache_req_to_cache__w3
+  dcache_req_to_cache__w4#[621..=827] = _mux_3
+  dcache_req_ports_cache_ex__wtmp#[0..=130] = dcache_req_from_cache#[0..=130]
+  mut dcache_req_ports_cache_ex__wtmp__w1 = dcache_req_ports_cache_ex__wtmp
+  dcache_req_ports_cache_ex__wtmp__w1#[131..=261] = dcache_req_from_cache#[131..=261]
+  mut dcache_req_ports_cache_acc__w1 = dcache_req_ports_cache_acc
+  dcache_req_ports_cache_acc__w1#[0..=130] = dcache_req_from_cache#[262..=392]
+  mut dcache_req_ports_cache_ex__wtmp__w2 = dcache_req_ports_cache_ex__wtmp__w1
+  dcache_req_ports_cache_ex__wtmp__w2#[262..=392] = dcache_req_from_cache#[393..=523]
+  mut dcache_req_ports_cache_acc__w2 = dcache_req_ports_cache_acc__w1
+  dcache_req_ports_cache_acc__w2#[131..=261] = dcache_req_from_cache#[393..=523]
+  mut dcache_req_ports_cache_ex__wtmp__w3 = dcache_req_ports_cache_ex__wtmp__w2
+  dcache_req_ports_cache_ex__wtmp__w3#[392] = (dcache_req_ports_cache_ex__wtmp__w2#[262..=392] >> 0x82) & 1 & (ex_stage_i.dcache_req_ports_o#[414..=620] >> 22) & 1 & 1
+  mut i_cache_subsystem = std_cache_subsystem::[name=i_cache_subsystem](clk_i = clk_i, rst_ni = rst_ni, priv_lvl_i = priv_lvl, icache_en_i = csr_regfile_i.icache_en_o, icache_flush_i = controller_i.flush_icache_o, `icache_areq_i.fetch_valid` = ex_stage_i.icache_areq_o.fetch_valid, `icache_areq_i.fetch_paddr` = ex_stage_i.icache_areq_o.fetch_paddr, `icache_areq_i.fetch_exception.cause` = `icache_areq_ex_cache.fetch_exception`#[140..=203], `icache_areq_i.fetch_exception.tval` = `icache_areq_ex_cache.fetch_exception`#[76..=139], `icache_areq_i.fetch_exception.tval2` = `icache_areq_ex_cache.fetch_exception`#[35..=75], `icache_areq_i.fetch_exception.tinst` = `icache_areq_ex_cache.fetch_exception`#[3..=34], `icache_areq_i.fetch_exception.gva` = (`icache_areq_ex_cache.fetch_exception` >> 2) & 1, `icache_areq_i.fetch_exception.valid` = (`icache_areq_ex_cache.fetch_exception` >> 1) & 1, `icache_areq_i.fetch_exception.timing` = `icache_areq_ex_cache.fetch_exception` & 1, `icache_dreq_i.req` = i_frontend.icache_dreq_o.req, `icache_dreq_i.kill_s1` = i_frontend.icache_dreq_o.kill_s1, `icache_dreq_i.kill_s2` = i_frontend.icache_dreq_o.kill_s2, `icache_dreq_i.spec` = i_frontend.icache_dreq_o.spec, `icache_dreq_i.vaddr` = i_frontend.icache_dreq_o.vaddr, `amo_req_i.req` = ex_stage_i.amo_req_o.req, `amo_req_i.amo_op` = ex_stage_i.amo_req_o.amo_op, `amo_req_i.size` = ex_stage_i.amo_req_o.size, `amo_req_i.operand_a` = ex_stage_i.amo_req_o.operand_a, `amo_req_i.operand_b` = ex_stage_i.amo_req_o.operand_b, dcache_enable_i = csr_regfile_i.dcache_en_o, dcache_flush_i = dcache_flush_ctrl_cache, dcache_req_ports_i = dcache_req_to_cache__w4, `axi_resp_i.aw_ready` = noc_resp_i.aw_ready, `axi_resp_i.ar_ready` = noc_resp_i.ar_ready, `axi_resp_i.w_ready` = noc_resp_i.w_ready, `axi_resp_i.b_valid` = noc_resp_i.b_valid, `axi_resp_i.b.id` = noc_resp_i.b.id, `axi_resp_i.b.resp` = noc_resp_i.b.resp, `axi_resp_i.b.user` = noc_resp_i.b.user, `axi_resp_i.r_valid` = noc_resp_i.r_valid, `axi_resp_i.r.id` = noc_resp_i.r.id, `axi_resp_i.r.data` = noc_resp_i.r.data, `axi_resp_i.r.resp` = noc_resp_i.r.resp, `axi_resp_i.r.last` = noc_resp_i.r.last, `axi_resp_i.r.user` = noc_resp_i.r.user)
+  icache_miss_cache_perf = i_cache_subsystem.icache_miss_o
+  icache_areq_cache_ex.fetch_req = i_cache_subsystem.icache_areq_o.fetch_req
+  icache_areq_cache_ex.fetch_vaddr = i_cache_subsystem.icache_areq_o.fetch_vaddr
+  icache_dreq_cache_if.ready = i_cache_subsystem.icache_dreq_o.ready
+  icache_dreq_cache_if.valid = i_cache_subsystem.icache_dreq_o.valid
+  icache_dreq_cache_if.data = i_cache_subsystem.icache_dreq_o.data
+  icache_dreq_cache_if.user = i_cache_subsystem.icache_dreq_o.user
+  icache_dreq_cache_if.vaddr = i_cache_subsystem.icache_dreq_o.vaddr
+  icache_dreq_cache_if.ex = (i_cache_subsystem.icache_dreq_o.ex.cause << 0x8c) | (i_cache_subsystem.icache_dreq_o.ex.tval << 0x4c) | (i_cache_subsystem.icache_dreq_o.ex.tval2 << 35) | (i_cache_subsystem.icache_dreq_o.ex.tinst << 3) | (i_cache_subsystem.icache_dreq_o.ex.gva << 2) | (i_cache_subsystem.icache_dreq_o.ex.valid << 1) | i_cache_subsystem.icache_dreq_o.ex.timing
+  amo_resp.ack = i_cache_subsystem.amo_resp_o.ack
+  amo_resp.result = i_cache_subsystem.amo_resp_o.result
+  dcache_flush_ack_cache_ctrl = i_cache_subsystem.dcache_flush_ack_o
+  dcache_miss_cache_perf = i_cache_subsystem.dcache_miss_o
+  dcache_commit_wbuffer_empty = i_cache_subsystem.wbuffer_empty_o
+  dcache_req_from_cache = i_cache_subsystem.dcache_req_ports_o
+  mut `cvxif_req_o__bpo.compressed_valid` = (cvxif_req__w9 >> 0x1c0) & 1
+  mut `cvxif_req_o__bpo.compressed_req.instr` = cvxif_req__w9#[432..=447]
+  mut `cvxif_req_o__bpo.compressed_req.hartid` = cvxif_req__w9#[368..=431]
+  mut `cvxif_req_o__bpo.issue_valid` = (cvxif_req__w9 >> 0x16f) & 1
+  mut `cvxif_req_o__bpo.issue_req.instr` = cvxif_req__w9#[335..=366]
+  mut `cvxif_req_o__bpo.issue_req.hartid` = cvxif_req__w9#[271..=334]
+  mut `cvxif_req_o__bpo.issue_req.id` = cvxif_req__w9#[268..=270]
+  mut `cvxif_req_o__bpo.register_valid` = (cvxif_req__w9 >> 0x10b) & 1
+  mut `cvxif_req_o__bpo.register.hartid` = cvxif_req__w9#[203..=266]
+  mut `cvxif_req_o__bpo.register.id` = cvxif_req__w9#[200..=202]
+  mut `cvxif_req_o__bpo.register.rs` = cvxif_req__w9#[72..=199]
+  mut `cvxif_req_o__bpo.register.rs_valid` = cvxif_req__w9#[70..=71]
+  mut `cvxif_req_o__bpo.commit_valid` = (cvxif_req__w9 >> 0x45) & 1
+  mut `cvxif_req_o__bpo.commit.hartid` = cvxif_req__w9#[5..=68]
+  mut `cvxif_req_o__bpo.commit.id` = cvxif_req__w9#[2..=4]
+  mut `cvxif_req_o__bpo.commit.commit_kill` = (cvxif_req__w9 >> 1) & 1
+  mut `cvxif_req_o__bpo.result_ready` = cvxif_req__w9 & 1
+  fetch_instructions#[0..=31] = i_frontend.fetch_entry_o#[0..=366]#[271..=302]
+  mut wdata_commit_id_padded__w1 = wdata_commit_id_padded
+  wdata_commit_id_padded__w1#[0..=63] = wdata_commit_id#[0..=63]#[0..=63]
+  mut wdata_commit_id_padded__w2 = wdata_commit_id_padded__w1
+  wdata_commit_id_padded__w2#[64..=127] = wdata_commit_id#[64..=127]#[0..=63]
+  fetch_entry_valid_i = 0ub?
+  fetch_entry_ready_o = 0ub?
+  issue_ack_i = 0ub?
+  issue_instr_o = 0sb?
+  valid_i = 0ub?
+  paddr_i = 0sb?
+  paddr_i_s1 = 0sb?
+  const t1618 = (`exception_o.cause` << 0x8c) | (`exception_o.tval` << 0x4c) | (`exception_o.tval2` << 35) | (`exception_o.tinst` << 3) | (`exception_o.gva` << 2) | (`exception_o.valid` << 1) | `exception_o.timing`
+  instr_tracer::[name=instr_tracer_i](pck = clk_i, rstn = rst_ni, flush_unissued = flush_unissued_instr_ctrl_id, flush_all = flush_ctrl_ex, instruction = fetch_instructions, fetch_valid = fetch_entry_valid_i, fetch_ack = fetch_entry_ready_o, issue_ack = issue_ack_i, issue_sbe = issue_instr_o, waddr = waddr_commit_id, wdata = wdata_commit_id_padded__w2, `we_gpr.e1` = (we_gpr_commit_id >> 1) & 1, `we_gpr.e0` = we_gpr_commit_id & 1, `we_fpr.e1` = (we_fpr_commit_id >> 1) & 1, `we_fpr.e0` = we_fpr_commit_id & 1, commit_instr = issue_stage_i.commit_instr_o, commit_ack = commit_ack_commit_id, commit_drop = issue_stage_i.commit_drop_o, st_valid = valid_i, st_paddr = paddr_i, ld_valid = (((`req_port_o.address_index` << 0xc3) | (`req_port_o.address_tag` << 0x97) | (`req_port_o.data_wdata` << 0x57) | (`req_port_o.data_wuser` << 23) | (`req_port_o.data_req` << 22) | (`req_port_o.data_we` << 21) | (`req_port_o.data_be` << 13) | (`req_port_o.data_size` << 11) | (`req_port_o.data_id` << 10) | (`req_port_o.kill_req` << 9) | (`req_port_o.tag_valid` << 8) | `req_port_o.cbo_op`) >> 8) & 1, ld_kill = (((`req_port_o.address_index` << 0xc3) | (`req_port_o.address_tag` << 0x97) | (`req_port_o.data_wdata` << 0x57) | (`req_port_o.data_wuser` << 23) | (`req_port_o.data_req` << 22) | (`req_port_o.data_we` << 21) | (`req_port_o.data_be` << 13) | (`req_port_o.data_size` << 11) | (`req_port_o.data_id` << 10) | (`req_port_o.kill_req` << 9) | (`req_port_o.tag_valid` << 8) | `req_port_o.cbo_op`) >> 9) & 1, ld_paddr = paddr_i_s1, `resolve_branch.valid` = resolved_branch.valid, `resolve_branch.pc` = resolved_branch.pc, `resolve_branch.target_address` = resolved_branch.target_address, `resolve_branch.is_mispredict` = resolved_branch.is_mispredict, `resolve_branch.is_taken` = resolved_branch.is_taken, `resolve_branch.cf_type` = resolved_branch.cf_type, `commit_exception.cause` = t1618#[140..=203], `commit_exception.tval` = t1618#[76..=139], `commit_exception.tval2` = t1618#[35..=75], `commit_exception.tinst` = t1618#[3..=34], `commit_exception.gva` = (t1618 >> 2) & 1, `commit_exception.valid` = (t1618 >> 1) & 1, `commit_exception.timing` = t1618 & 1, priv_lvl = priv_lvl, debug_mode = debug_mode, hart_id_i = hart_id_i)
+  mut rvfi_fetch_instr__w1 = rvfi_fetch_instr
+  rvfi_fetch_instr__w1#[0..=31] = i_frontend.fetch_entry_o#[0..=366]#[271..=302]
+  mut i_cva6_rvfi_probes = cva6_rvfi_probes::[name=i_cva6_rvfi_probes](flush_i = flush_ctrl_if, issue_instr_ack_i = issue_instr_issue_id, fetch_entry_valid_i = i_frontend.fetch_entry_valid_o, instruction_i = rvfi_fetch_instr__w1, is_compressed_i = id_stage_i.rvfi_is_compressed_o, issue_pointer_i = issue_stage_i.rvfi_issue_pointer_o, commit_pointer_i = issue_stage_i.rvfi_commit_pointer_o, flush_unissued_instr_i = flush_unissued_instr_ctrl_id, decoded_instr_valid_i = id_stage_i.issue_entry_valid_o, decoded_instr_ack_i = issue_instr_issue_id, rs1_i = issue_stage_i.rvfi_rs1_o, rs2_i = issue_stage_i.rvfi_rs2_o, commit_instr_i = issue_stage_i.commit_instr_o, commit_drop_i = issue_stage_i.commit_drop_o, `ex_commit_i.cause` = commit_stage_i.exception_o.cause, `ex_commit_i.tval` = commit_stage_i.exception_o.tval, `ex_commit_i.tval2` = commit_stage_i.exception_o.tval2, `ex_commit_i.tinst` = commit_stage_i.exception_o.tinst, `ex_commit_i.gva` = commit_stage_i.exception_o.gva, `ex_commit_i.valid` = ex_commit.valid, `ex_commit_i.timing` = commit_stage_i.exception_o.timing, priv_lvl_i = priv_lvl, `lsu_ctrl_i.valid` = ex_stage_i.rvfi_lsu_ctrl_o.valid, `lsu_ctrl_i.vaddr` = ex_stage_i.rvfi_lsu_ctrl_o.vaddr, `lsu_ctrl_i.tinst` = ex_stage_i.rvfi_lsu_ctrl_o.tinst, `lsu_ctrl_i.hs_ld_st_inst` = ex_stage_i.rvfi_lsu_ctrl_o.hs_ld_st_inst, `lsu_ctrl_i.hlvx_inst` = ex_stage_i.rvfi_lsu_ctrl_o.hlvx_inst, `lsu_ctrl_i.overflow` = ex_stage_i.rvfi_lsu_ctrl_o.overflow, `lsu_ctrl_i.g_overflow` = ex_stage_i.rvfi_lsu_ctrl_o.g_overflow, `lsu_ctrl_i.data` = ex_stage_i.rvfi_lsu_ctrl_o.data, `lsu_ctrl_i.be` = ex_stage_i.rvfi_lsu_ctrl_o.be, `lsu_ctrl_i.fu` = ex_stage_i.rvfi_lsu_ctrl_o.fu, `lsu_ctrl_i.operation` = ex_stage_i.rvfi_lsu_ctrl_o.operation, `lsu_ctrl_i.trans_id` = ex_stage_i.rvfi_lsu_ctrl_o.trans_id, `lsu_ctrl_i.is_speculative_load` = ex_stage_i.rvfi_lsu_ctrl_o.is_speculative_load, `lsu_ctrl_i.is_speculative_load_miss` = ex_stage_i.rvfi_lsu_ctrl_o.is_speculative_load_miss, wbdata_i = wbdata_ex_id__w5, commit_ack_i = commit_ack__w1, mem_paddr_i = ex_stage_i.rvfi_mem_paddr_o, debug_mode_i = debug_mode, wdata_i = wdata_commit_id, `csr_i.fcsr_q.reserved` = `rvfi_csr.fcsr_q`#[15..=31], `csr_i.fcsr_q.fprec` = `rvfi_csr.fcsr_q`#[8..=14], `csr_i.fcsr_q.frm` = `rvfi_csr.fcsr_q`#[5..=7], `csr_i.fcsr_q.fflags` = `rvfi_csr.fcsr_q`#[0..=4], `csr_i.dcsr_q.xdebugver` = `rvfi_csr.dcsr_q`#[28..=31], `csr_i.dcsr_q.zero2` = `rvfi_csr.dcsr_q`#[18..=27], `csr_i.dcsr_q.ebreakvs` = (`rvfi_csr.dcsr_q` >> 17) & 1, `csr_i.dcsr_q.ebreakvu` = (`rvfi_csr.dcsr_q` >> 16) & 1, `csr_i.dcsr_q.ebreakm` = (`rvfi_csr.dcsr_q` >> 15) & 1, `csr_i.dcsr_q.zero1` = (`rvfi_csr.dcsr_q` >> 14) & 1, `csr_i.dcsr_q.ebreaks` = (`rvfi_csr.dcsr_q` >> 13) & 1, `csr_i.dcsr_q.ebreaku` = (`rvfi_csr.dcsr_q` >> 12) & 1, `csr_i.dcsr_q.stepie` = (`rvfi_csr.dcsr_q` >> 11) & 1, `csr_i.dcsr_q.stopcount` = (`rvfi_csr.dcsr_q` >> 10) & 1, `csr_i.dcsr_q.stoptime` = (`rvfi_csr.dcsr_q` >> 9) & 1, `csr_i.dcsr_q.cause` = `rvfi_csr.dcsr_q`#[6..=8], `csr_i.dcsr_q.v` = (`rvfi_csr.dcsr_q` >> 5) & 1, `csr_i.dcsr_q.mprven` = (`rvfi_csr.dcsr_q` >> 4) & 1, `csr_i.dcsr_q.nmip` = (`rvfi_csr.dcsr_q` >> 3) & 1, `csr_i.dcsr_q.step` = (`rvfi_csr.dcsr_q` >> 2) & 1, `csr_i.dcsr_q.prv` = `rvfi_csr.dcsr_q`#[0..=1], `csr_i.jvt_q` = csr_regfile_i.rvfi_csr_o.jvt_q, `csr_i.dpc_q` = csr_regfile_i.rvfi_csr_o.dpc_q, `csr_i.dscratch0_q` = csr_regfile_i.rvfi_csr_o.dscratch0_q, `csr_i.dscratch1_q` = csr_regfile_i.rvfi_csr_o.dscratch1_q, `csr_i.mie_q` = csr_regfile_i.rvfi_csr_o.mie_q, `csr_i.mip_q` = csr_regfile_i.rvfi_csr_o.mip_q, `csr_i.stvec_q` = csr_regfile_i.rvfi_csr_o.stvec_q, `csr_i.scounteren_q` = csr_regfile_i.rvfi_csr_o.scounteren_q, `csr_i.sscratch_q` = csr_regfile_i.rvfi_csr_o.sscratch_q, `csr_i.sepc_q` = csr_regfile_i.rvfi_csr_o.sepc_q, `csr_i.scause_q` = csr_regfile_i.rvfi_csr_o.scause_q, `csr_i.stval_q` = csr_regfile_i.rvfi_csr_o.stval_q, `csr_i.satp_q` = csr_regfile_i.rvfi_csr_o.satp_q, `csr_i.mstatus_extended` = csr_regfile_i.rvfi_csr_o.mstatus_extended, `csr_i.medeleg_q` = csr_regfile_i.rvfi_csr_o.medeleg_q, `csr_i.mideleg_q` = csr_regfile_i.rvfi_csr_o.mideleg_q, `csr_i.mtvec_q` = csr_regfile_i.rvfi_csr_o.mtvec_q, `csr_i.mcounteren_q` = csr_regfile_i.rvfi_csr_o.mcounteren_q, `csr_i.mscratch_q` = csr_regfile_i.rvfi_csr_o.mscratch_q, `csr_i.mepc_q` = csr_regfile_i.rvfi_csr_o.mepc_q, `csr_i.mcause_q` = csr_regfile_i.rvfi_csr_o.mcause_q, `csr_i.mtval_q` = csr_regfile_i.rvfi_csr_o.mtval_q, `csr_i.fiom_q` = csr_regfile_i.rvfi_csr_o.fiom_q, `csr_i.mcountinhibit_q` = csr_regfile_i.rvfi_csr_o.mcountinhibit_q, `csr_i.cycle_q` = csr_regfile_i.rvfi_csr_o.cycle_q, `csr_i.instret_q` = csr_regfile_i.rvfi_csr_o.instret_q, `csr_i.dcache_q` = csr_regfile_i.rvfi_csr_o.dcache_q, `csr_i.icache_q` = csr_regfile_i.rvfi_csr_o.icache_q, `csr_i.acc_cons_q` = csr_regfile_i.rvfi_csr_o.acc_cons_q, `csr_i.pmpcfg_q` = csr_regfile_i.rvfi_csr_o.pmpcfg_q, `csr_i.pmpaddr_q` = csr_regfile_i.rvfi_csr_o.pmpaddr_q, irq_i = irq_i, `resolved_branch_i.valid` = resolved_branch.valid, `resolved_branch_i.pc` = resolved_branch.pc, `resolved_branch_i.target_address` = resolved_branch.target_address, `resolved_branch_i.is_mispredict` = resolved_branch.is_mispredict, `resolved_branch_i.is_taken` = resolved_branch.is_taken, `resolved_branch_i.cf_type` = resolved_branch.cf_type, flu_trans_id_ex_id_i = flu_trans_id_ex_id)
+  sdtrig_decoder_action__wnet = csr_regfile_i.sdtrig_decoder_action_o
+  dcache_req_ports_cache_ex = dcache_req_ports_cache_ex__wtmp__w3
+  rvfi_probes_o.csr.fcsr_q.reserved = i_cva6_rvfi_probes.rvfi_probes_o.csr.fcsr_q.reserved
+  rvfi_probes_o.csr.fcsr_q.fprec = i_cva6_rvfi_probes.rvfi_probes_o.csr.fcsr_q.fprec
+  rvfi_probes_o.csr.fcsr_q.frm = i_cva6_rvfi_probes.rvfi_probes_o.csr.fcsr_q.frm
+  rvfi_probes_o.csr.fcsr_q.fflags = i_cva6_rvfi_probes.rvfi_probes_o.csr.fcsr_q.fflags
+  rvfi_probes_o.csr.dcsr_q.xdebugver = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcsr_q.xdebugver
+  rvfi_probes_o.csr.dcsr_q.zero2 = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcsr_q.zero2
+  rvfi_probes_o.csr.dcsr_q.ebreakvs = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcsr_q.ebreakvs
+  rvfi_probes_o.csr.dcsr_q.ebreakvu = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcsr_q.ebreakvu
+  rvfi_probes_o.csr.dcsr_q.ebreakm = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcsr_q.ebreakm
+  rvfi_probes_o.csr.dcsr_q.zero1 = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcsr_q.zero1
+  rvfi_probes_o.csr.dcsr_q.ebreaks = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcsr_q.ebreaks
+  rvfi_probes_o.csr.dcsr_q.ebreaku = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcsr_q.ebreaku
+  rvfi_probes_o.csr.dcsr_q.stepie = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcsr_q.stepie
+  rvfi_probes_o.csr.dcsr_q.stopcount = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcsr_q.stopcount
+  rvfi_probes_o.csr.dcsr_q.stoptime = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcsr_q.stoptime
+  rvfi_probes_o.csr.dcsr_q.cause = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcsr_q.cause
+  rvfi_probes_o.csr.dcsr_q.v = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcsr_q.v
+  rvfi_probes_o.csr.dcsr_q.mprven = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcsr_q.mprven
+  rvfi_probes_o.csr.dcsr_q.nmip = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcsr_q.nmip
+  rvfi_probes_o.csr.dcsr_q.`step` = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcsr_q.`step`
+  rvfi_probes_o.csr.dcsr_q.prv = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcsr_q.prv
+  rvfi_probes_o.csr.jvt_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.jvt_q
+  rvfi_probes_o.csr.dpc_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.dpc_q
+  rvfi_probes_o.csr.dscratch0_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.dscratch0_q
+  rvfi_probes_o.csr.dscratch1_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.dscratch1_q
+  rvfi_probes_o.csr.mie_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.mie_q
+  rvfi_probes_o.csr.mip_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.mip_q
+  rvfi_probes_o.csr.stvec_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.stvec_q
+  rvfi_probes_o.csr.scounteren_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.scounteren_q
+  rvfi_probes_o.csr.sscratch_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.sscratch_q
+  rvfi_probes_o.csr.sepc_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.sepc_q
+  rvfi_probes_o.csr.scause_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.scause_q
+  rvfi_probes_o.csr.stval_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.stval_q
+  rvfi_probes_o.csr.satp_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.satp_q
+  rvfi_probes_o.csr.mstatus_extended = i_cva6_rvfi_probes.rvfi_probes_o.csr.mstatus_extended
+  rvfi_probes_o.csr.medeleg_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.medeleg_q
+  rvfi_probes_o.csr.mideleg_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.mideleg_q
+  rvfi_probes_o.csr.mtvec_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.mtvec_q
+  rvfi_probes_o.csr.mcounteren_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.mcounteren_q
+  rvfi_probes_o.csr.mscratch_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.mscratch_q
+  rvfi_probes_o.csr.mepc_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.mepc_q
+  rvfi_probes_o.csr.mcause_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.mcause_q
+  rvfi_probes_o.csr.mtval_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.mtval_q
+  rvfi_probes_o.csr.fiom_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.fiom_q
+  rvfi_probes_o.csr.mcountinhibit_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.mcountinhibit_q
+  rvfi_probes_o.csr.cycle_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.cycle_q
+  rvfi_probes_o.csr.instret_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.instret_q
+  rvfi_probes_o.csr.dcache_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.dcache_q
+  rvfi_probes_o.csr.icache_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.icache_q
+  rvfi_probes_o.csr.acc_cons_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.acc_cons_q
+  rvfi_probes_o.csr.pmpcfg_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.pmpcfg_q
+  rvfi_probes_o.csr.pmpaddr_q = i_cva6_rvfi_probes.rvfi_probes_o.csr.pmpaddr_q
+  rvfi_probes_o.instr.issue_pointer = i_cva6_rvfi_probes.rvfi_probes_o.instr.issue_pointer
+  rvfi_probes_o.instr.commit_pointer = i_cva6_rvfi_probes.rvfi_probes_o.instr.commit_pointer
+  rvfi_probes_o.instr.flush_unissued_instr = i_cva6_rvfi_probes.rvfi_probes_o.instr.flush_unissued_instr
+  rvfi_probes_o.instr.decoded_instr_valid = i_cva6_rvfi_probes.rvfi_probes_o.instr.decoded_instr_valid
+  rvfi_probes_o.instr.decoded_instr_ack = i_cva6_rvfi_probes.rvfi_probes_o.instr.decoded_instr_ack
+  rvfi_probes_o.instr.flush = i_cva6_rvfi_probes.rvfi_probes_o.instr.flush
+  rvfi_probes_o.instr.issue_instr_ack = i_cva6_rvfi_probes.rvfi_probes_o.instr.issue_instr_ack
+  rvfi_probes_o.instr.fetch_entry_valid = i_cva6_rvfi_probes.rvfi_probes_o.instr.fetch_entry_valid
+  rvfi_probes_o.instr.instruction = i_cva6_rvfi_probes.rvfi_probes_o.instr.instruction
+  rvfi_probes_o.instr.is_compressed = i_cva6_rvfi_probes.rvfi_probes_o.instr.is_compressed
+  rvfi_probes_o.instr.rs1 = i_cva6_rvfi_probes.rvfi_probes_o.instr.rs1
+  rvfi_probes_o.instr.rs2 = i_cva6_rvfi_probes.rvfi_probes_o.instr.rs2
+  rvfi_probes_o.instr.commit_instr_pc = i_cva6_rvfi_probes.rvfi_probes_o.instr.commit_instr_pc
+  rvfi_probes_o.instr.commit_instr_op = i_cva6_rvfi_probes.rvfi_probes_o.instr.commit_instr_op
+  rvfi_probes_o.instr.commit_instr_rs1 = i_cva6_rvfi_probes.rvfi_probes_o.instr.commit_instr_rs1
+  rvfi_probes_o.instr.commit_instr_rs2 = i_cva6_rvfi_probes.rvfi_probes_o.instr.commit_instr_rs2
+  rvfi_probes_o.instr.commit_instr_rd = i_cva6_rvfi_probes.rvfi_probes_o.instr.commit_instr_rd
+  rvfi_probes_o.instr.commit_instr_result = i_cva6_rvfi_probes.rvfi_probes_o.instr.commit_instr_result
+  rvfi_probes_o.instr.commit_instr_valid = i_cva6_rvfi_probes.rvfi_probes_o.instr.commit_instr_valid
+  rvfi_probes_o.instr.commit_drop = i_cva6_rvfi_probes.rvfi_probes_o.instr.commit_drop
+  rvfi_probes_o.instr.ex_commit_cause = i_cva6_rvfi_probes.rvfi_probes_o.instr.ex_commit_cause
+  rvfi_probes_o.instr.ex_commit_valid = i_cva6_rvfi_probes.rvfi_probes_o.instr.ex_commit_valid
+  rvfi_probes_o.instr.priv_lvl = i_cva6_rvfi_probes.rvfi_probes_o.instr.priv_lvl
+  rvfi_probes_o.instr.lsu_ctrl_vaddr = i_cva6_rvfi_probes.rvfi_probes_o.instr.lsu_ctrl_vaddr
+  rvfi_probes_o.instr.lsu_ctrl_fu = i_cva6_rvfi_probes.rvfi_probes_o.instr.lsu_ctrl_fu
+  rvfi_probes_o.instr.lsu_ctrl_be = i_cva6_rvfi_probes.rvfi_probes_o.instr.lsu_ctrl_be
+  rvfi_probes_o.instr.lsu_ctrl_trans_id = i_cva6_rvfi_probes.rvfi_probes_o.instr.lsu_ctrl_trans_id
+  rvfi_probes_o.instr.wbdata = i_cva6_rvfi_probes.rvfi_probes_o.instr.wbdata
+  rvfi_probes_o.instr.commit_ack = i_cva6_rvfi_probes.rvfi_probes_o.instr.commit_ack
+  rvfi_probes_o.instr.mem_paddr = i_cva6_rvfi_probes.rvfi_probes_o.instr.mem_paddr
+  rvfi_probes_o.instr.debug_mode = i_cva6_rvfi_probes.rvfi_probes_o.instr.debug_mode
+  rvfi_probes_o.instr.wdata = i_cva6_rvfi_probes.rvfi_probes_o.instr.wdata
+  rvfi_probes_o.instr.branch_valid = i_cva6_rvfi_probes.rvfi_probes_o.instr.branch_valid
+  rvfi_probes_o.instr.is_taken = i_cva6_rvfi_probes.rvfi_probes_o.instr.is_taken
+  rvfi_probes_o.instr.tval = i_cva6_rvfi_probes.rvfi_probes_o.instr.tval
+  rvfi_probes_o.instr.branch_trans_id = i_cva6_rvfi_probes.rvfi_probes_o.instr.branch_trans_id
+  cvxif_req_o.compressed_valid = `cvxif_req_o__bpo.compressed_valid`
+  cvxif_req_o.compressed_req.instr = `cvxif_req_o__bpo.compressed_req.instr`
+  cvxif_req_o.compressed_req.hartid = `cvxif_req_o__bpo.compressed_req.hartid`
+  cvxif_req_o.issue_valid = `cvxif_req_o__bpo.issue_valid`
+  cvxif_req_o.issue_req.instr = `cvxif_req_o__bpo.issue_req.instr`
+  cvxif_req_o.issue_req.hartid = `cvxif_req_o__bpo.issue_req.hartid`
+  cvxif_req_o.issue_req.id = `cvxif_req_o__bpo.issue_req.id`
+  cvxif_req_o.register_valid = `cvxif_req_o__bpo.register_valid`
+  cvxif_req_o.register.hartid = `cvxif_req_o__bpo.register.hartid`
+  cvxif_req_o.register.id = `cvxif_req_o__bpo.register.id`
+  cvxif_req_o.register.rs = `cvxif_req_o__bpo.register.rs`
+  cvxif_req_o.register.rs_valid = `cvxif_req_o__bpo.register.rs_valid`
+  cvxif_req_o.commit_valid = `cvxif_req_o__bpo.commit_valid`
+  cvxif_req_o.commit.hartid = `cvxif_req_o__bpo.commit.hartid`
+  cvxif_req_o.commit.id = `cvxif_req_o__bpo.commit.id`
+  cvxif_req_o.commit.commit_kill = `cvxif_req_o__bpo.commit.commit_kill`
+  cvxif_req_o.result_ready = `cvxif_req_o__bpo.result_ready`
+  noc_req_o.aw.id = i_cache_subsystem.axi_req_o.aw.id
+  noc_req_o.aw.addr = i_cache_subsystem.axi_req_o.aw.addr
+  noc_req_o.aw.len = i_cache_subsystem.axi_req_o.aw.len
+  noc_req_o.aw.size = i_cache_subsystem.axi_req_o.aw.size
+  noc_req_o.aw.burst = i_cache_subsystem.axi_req_o.aw.burst
+  noc_req_o.aw.lock = i_cache_subsystem.axi_req_o.aw.lock
+  noc_req_o.aw.cache = i_cache_subsystem.axi_req_o.aw.cache
+  noc_req_o.aw.prot = i_cache_subsystem.axi_req_o.aw.prot
+  noc_req_o.aw.qos = i_cache_subsystem.axi_req_o.aw.qos
+  noc_req_o.aw.region = i_cache_subsystem.axi_req_o.aw.region
+  noc_req_o.aw.atop = i_cache_subsystem.axi_req_o.aw.atop
+  noc_req_o.aw.user = i_cache_subsystem.axi_req_o.aw.user
+  noc_req_o.aw_valid = i_cache_subsystem.axi_req_o.aw_valid
+  noc_req_o.w.data = i_cache_subsystem.axi_req_o.w.data
+  noc_req_o.w.strb = i_cache_subsystem.axi_req_o.w.strb
+  noc_req_o.w.last = i_cache_subsystem.axi_req_o.w.last
+  noc_req_o.w.user = i_cache_subsystem.axi_req_o.w.user
+  noc_req_o.w_valid = i_cache_subsystem.axi_req_o.w_valid
+  noc_req_o.b_ready = i_cache_subsystem.axi_req_o.b_ready
+  noc_req_o.ar.id = i_cache_subsystem.axi_req_o.ar.id
+  noc_req_o.ar.addr = i_cache_subsystem.axi_req_o.ar.addr
+  noc_req_o.ar.len = i_cache_subsystem.axi_req_o.ar.len
+  noc_req_o.ar.size = i_cache_subsystem.axi_req_o.ar.size
+  noc_req_o.ar.burst = i_cache_subsystem.axi_req_o.ar.burst
+  noc_req_o.ar.lock = i_cache_subsystem.axi_req_o.ar.lock
+  noc_req_o.ar.cache = i_cache_subsystem.axi_req_o.ar.cache
+  noc_req_o.ar.prot = i_cache_subsystem.axi_req_o.ar.prot
+  noc_req_o.ar.qos = i_cache_subsystem.axi_req_o.ar.qos
+  noc_req_o.ar.region = i_cache_subsystem.axi_req_o.ar.region
+  noc_req_o.ar.user = i_cache_subsystem.axi_req_o.ar.user
+  noc_req_o.ar_valid = i_cache_subsystem.axi_req_o.ar_valid
+  noc_req_o.r_ready = i_cache_subsystem.axi_req_o.r_ready
+}

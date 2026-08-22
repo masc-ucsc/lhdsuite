@@ -1,0 +1,402 @@
+const cva6_mmu = import("cva6_mmu.cva6_mmu")
+const load_unit = import("load_unit.load_unit")
+const lsu_bypass = import("lsu_bypass.lsu_bypass")
+const pmp_data_if = import("pmp_data_if.pmp_data_if")
+const shift_reg = import("shift_reg.shift_reg")
+const shift_reg_p1 = import("shift_reg_p1.shift_reg_p1")
+const store_unit = import("store_unit.store_unit")
+const ariane_pkg = import("ariane_pkg")
+const riscv = import("riscv")
+
+pub mod load_store_unit::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, stall_st_pending_i:u1, amo_valid_commit_i:u1, tinst_i:u32, fu_data_i:(fu:u4, operation:u8, operand_a:u64, operand_b:u64, imm:u64, trans_id:u3), lsu_valid_i:u1, speculative_load_i:u1, commit_i:u1, commit_tran_id_i:u3, resolved_branch_i:(valid:u1, pc:u64, target_address:u64, is_mispredict:u1, is_taken:u1, cf_type:u3), enable_translation_i:u1, enable_g_translation_i:u1, en_ld_st_translation_i:u1, en_ld_st_g_translation_i:u1, acc_mmu_req_i:u1, icache_areq_i:(fetch_req:u1, fetch_vaddr:u64), priv_lvl_i:u2, mbe_i:u1, v_i:u1, ld_st_priv_lvl_i:u2, ld_st_v_i:u1, sum_i:u1, vs_sum_i:u1, mxr_i:u1, vmxr_i:u1, satp_ppn_i:u44, asid_i:u16, vsatp_ppn_i:u44, vs_asid_i:u16, hgatp_ppn_i:u44, vmid_i:u14, asid_to_be_flushed_i:u16, vmid_to_be_flushed_i:u14, vaddr_to_be_flushed_i:u64, gpaddr_to_be_flushed_i:u41, flush_tlb_i:u1, flush_tlb_vvma_i:u1, flush_tlb_gvma_i:u1, dcache_req_ports_i:u393, dcache_wbuffer_empty_i:u1, dcache_wbuffer_not_ni_i:u1, amo_resp_i:(ack:u1, result:u64), pmpcfg_i:u64, pmpaddr_i:u432, sdtrig_load_stall_i:u1, sdtrig_load_cancel_i:u1, sdtrig_load_action_i:u64, sdtrig_store_stall_i:u1, sdtrig_store_action_i:u64) -> (no_st_pending_o:u1@[], shared_tlb_flush_busy_o:u1@[], lsu_ready_o:u1@[], load_trans_id_o:u3@[], load_result_o:u64@[], load_valid_o:u1@[], load_exception_o:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1)@[], store_trans_id_o:u3@[], store_result_o:u64@[], store_valid_o:u1@[], store_exception_o:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1)@[], commit_ready_o:u1@[], acc_mmu_resp_o:u1@[], icache_areq_o:(fetch_valid:u1, fetch_paddr:u56, fetch_exception:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1))@[], csr_hs_ld_st_inst_o:u1@[], itlb_miss_o:u1@[], dtlb_miss_o:u1@[], dcache_req_ports_o:u621@[], amo_req_o:(req:u1, amo_op:u4, size:u2, operand_a:u64, operand_b:u64)@[], rvfi_lsu_ctrl_o:(valid:u1, vaddr:u64, tinst:u32, hs_ld_st_inst:u1, hlvx_inst:u1, overflow:u1, g_overflow:u1, data:u64, be:u8, fu:u4, operation:u8, trans_id:u3, is_speculative_load:u1, is_speculative_load_miss:u1)@[], rvfi_mem_paddr_o:u56@[]) {
+  wire lsu_ctrl_byp:(valid:u1, vaddr:u64, tinst:u32, hs_ld_st_inst:u1, hlvx_inst:u1, overflow:u1, g_overflow:u1, data:u64, be:u8, fu:u4, operation:u8, trans_id:u3, is_speculative_load:u1, is_speculative_load_miss:u1) = nil
+  wire misaligned_exception:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1) = nil
+  mut `acc_mmu_exception.cause` = 0
+  mut `acc_mmu_exception.tval` = 0
+  mut `acc_mmu_exception.tval2` = 0
+  mut `acc_mmu_exception.tinst` = 0
+  mut `acc_mmu_exception.gva` = 0
+  mut `acc_mmu_exception.valid` = 0
+  mut `acc_mmu_exception.timing` = 0
+  mut `cva6_misaligned_exception.cause` = 0
+  mut `cva6_misaligned_exception.tval` = 0
+  mut `cva6_misaligned_exception.tval2` = 0
+  mut `cva6_misaligned_exception.tinst` = 0
+  mut `cva6_misaligned_exception.gva` = 0
+  mut `cva6_misaligned_exception.valid` = 0
+  mut `cva6_misaligned_exception.timing` = 0
+  mut `acc_misaligned_exception.cause` = 0
+  mut `acc_misaligned_exception.tval` = 0
+  mut `acc_misaligned_exception.tval2` = 0
+  mut `acc_misaligned_exception.tinst` = 0
+  mut `acc_misaligned_exception.gva` = 0
+  mut `acc_misaligned_exception.valid` = 0
+  mut `acc_misaligned_exception.timing` = 0
+  mut `lsu_req_i.valid` = 0
+  mut `lsu_req_i.vaddr` = 0
+  mut `lsu_req_i.tinst` = 0
+  mut `lsu_req_i.hs_ld_st_inst` = 0
+  mut `lsu_req_i.hlvx_inst` = 0
+  mut `lsu_req_i.overflow` = 0
+  mut `lsu_req_i.g_overflow` = 0
+  mut `lsu_req_i.data` = 0
+  mut `lsu_req_i.be` = 0
+  mut `lsu_req_i.fu` = 0
+  mut `lsu_req_i.operation` = 0
+  mut `lsu_req_i.trans_id` = 0
+  mut `lsu_req_i.is_speculative_load` = 0
+  mut `lsu_req_i.is_speculative_load_miss` = 0
+  wire st_translation_req:u1
+  wire cva6_st_translation_req:u1
+  wire translation_req:u1
+  wire mmu_vaddr:u64
+  wire page_offset:u12
+  mut data_misaligned:u1 = 0
+  mut st_valid_i__wtmp:u1 = 0sb?
+  wire st_valid_i:u1
+  mut ld_valid_i__wtmp:u1 = 0sb?
+  wire ld_valid_i:u1
+  mut cva6_translation_req__wtmp:u1 = 0sb?
+  wire cva6_translation_req:u1
+  mut cva6_mmu_vaddr__wtmp:u64 = 0sb?
+  wire cva6_mmu_vaddr:u64
+  wire mmu_tinst:u32
+  wire mmu_hs_ld_st_inst:u1
+  wire mmu_hlvx_inst:u1
+  data_misaligned = 0ub?
+  dcache_req_ports_o = 0sb?
+  const vaddr_xlen__w1 = (fu_data_i.imm#sext[0..=63] + fu_data_i.operand_a#sext[0..=63])#[0..=63]#sext[0..=63]#[0..=63]
+  const vaddr_i__w1 = vaddr_xlen__w1
+  const gen_8b_be_op__w1 = fu_data_i.operation
+  mut gen_8b_be_extract_transfer_size:u2 = 0sb?
+  gen_8b_be_extract_transfer_size = unique if (gen_8b_be_op__w1 == ariane_pkg.LD) or (gen_8b_be_op__w1 == ariane_pkg.HLV_D) or (gen_8b_be_op__w1 == ariane_pkg.SD) or (gen_8b_be_op__w1 == ariane_pkg.HSV_D) or (gen_8b_be_op__w1 == ariane_pkg.FLD) or (gen_8b_be_op__w1 == ariane_pkg.FSD) or (gen_8b_be_op__w1 == ariane_pkg.AMO_LRD) or (gen_8b_be_op__w1 == ariane_pkg.AMO_SCD) or (gen_8b_be_op__w1 == ariane_pkg.AMO_SWAPD) or (gen_8b_be_op__w1 == ariane_pkg.AMO_ADDD) or (gen_8b_be_op__w1 == ariane_pkg.AMO_ANDD) or (gen_8b_be_op__w1 == ariane_pkg.AMO_ORD) or (gen_8b_be_op__w1 == ariane_pkg.AMO_XORD) or (gen_8b_be_op__w1 == ariane_pkg.AMO_MAXD) or (gen_8b_be_op__w1 == ariane_pkg.AMO_MAXDU) or (gen_8b_be_op__w1 == ariane_pkg.AMO_MIND) or (gen_8b_be_op__w1 == ariane_pkg.AMO_MINDU) { 3 } elif (gen_8b_be_op__w1 == ariane_pkg.LW) or (gen_8b_be_op__w1 == ariane_pkg.LWU) or (gen_8b_be_op__w1 == ariane_pkg.HLV_W) or (gen_8b_be_op__w1 == ariane_pkg.HLV_WU) or (gen_8b_be_op__w1 == ariane_pkg.HLVX_WU) or (gen_8b_be_op__w1 == ariane_pkg.SW) or (gen_8b_be_op__w1 == ariane_pkg.HSV_W) or (gen_8b_be_op__w1 == ariane_pkg.FLW) or (gen_8b_be_op__w1 == ariane_pkg.FSW) or (gen_8b_be_op__w1 == ariane_pkg.AMO_LRW) or (gen_8b_be_op__w1 == ariane_pkg.AMO_SCW) or (gen_8b_be_op__w1 == ariane_pkg.AMO_SWAPW) or (gen_8b_be_op__w1 == ariane_pkg.AMO_ADDW) or (gen_8b_be_op__w1 == ariane_pkg.AMO_ANDW) or (gen_8b_be_op__w1 == ariane_pkg.AMO_ORW) or (gen_8b_be_op__w1 == ariane_pkg.AMO_XORW) or (gen_8b_be_op__w1 == ariane_pkg.AMO_MAXW) or (gen_8b_be_op__w1 == ariane_pkg.AMO_MAXWU) or (gen_8b_be_op__w1 == ariane_pkg.AMO_MINW) or (gen_8b_be_op__w1 == ariane_pkg.AMO_MINWU) { 2 } elif (gen_8b_be_op__w1 == ariane_pkg.LH) or (gen_8b_be_op__w1 == ariane_pkg.LHU) or (gen_8b_be_op__w1 == ariane_pkg.HLV_H) or (gen_8b_be_op__w1 == ariane_pkg.HLV_HU) or (gen_8b_be_op__w1 == ariane_pkg.HLVX_HU) or (gen_8b_be_op__w1 == ariane_pkg.SH) or (gen_8b_be_op__w1 == ariane_pkg.HSV_H) or (gen_8b_be_op__w1 == ariane_pkg.FLH) or (gen_8b_be_op__w1 == ariane_pkg.FSH) { 1 } elif (gen_8b_be_op__w1 == ariane_pkg.LB) or (gen_8b_be_op__w1 == ariane_pkg.LBU) or (gen_8b_be_op__w1 == ariane_pkg.HLV_B) or (gen_8b_be_op__w1 == ariane_pkg.HLV_BU) or (gen_8b_be_op__w1 == ariane_pkg.SB) or (gen_8b_be_op__w1 == ariane_pkg.HSV_B) or (gen_8b_be_op__w1 == ariane_pkg.FLB) or (gen_8b_be_op__w1 == ariane_pkg.FSB) { 0 } elif (gen_8b_be_op__w1 == ariane_pkg.CBO_CLEAN) or (gen_8b_be_op__w1 == ariane_pkg.CBO_FLUSH) or (gen_8b_be_op__w1 == ariane_pkg.CBO_INVAL) { 0 } else { 3 }
+  const gen_8b_be_addr__w1 = vaddr_i__w1#[0..=2]
+  const gen_8b_be_size__w1 = gen_8b_be_extract_transfer_size
+  match gen_8b_be_size__w1 {
+    == 3 {
+    }
+    == 2 {
+      match gen_8b_be_addr__w1 {
+        == 0 {
+        }
+        == 1 {
+        }
+        == 2 {
+        }
+        == 3 {
+        }
+        == 4 {
+        }
+        else {
+        }
+      }
+    }
+    == 1 {
+      match gen_8b_be_addr__w1 {
+        == 0 {
+        }
+        == 1 {
+        }
+        == 2 {
+        }
+        == 3 {
+        }
+        == 4 {
+        }
+        == 5 {
+        }
+        == 6 {
+        }
+        else {
+        }
+      }
+    }
+    == 0 {
+      match gen_8b_be_addr__w1 {
+        == 0 {
+        }
+        == 1 {
+        }
+        == 2 {
+        }
+        == 3 {
+        }
+        == 4 {
+        }
+        == 5 {
+        }
+        == 6 {
+        }
+        == 7 {
+        }
+        else {
+        }
+      }
+    }
+    else {
+    }
+  }
+  const t306 = ((lsu_valid_i & 1) << 189) | (vaddr_i__w1 << 125) | (tinst_i << 93) | ((unsigned(true and (not ((unsigned(vaddr_xlen__w1#[38..=63] == 0x3ffffff) == 1) or (unsigned(vaddr_xlen__w1#[38..=63] != 0) == 0)))) & 1) << 90) | (fu_data_i.operand_b#[0..=63] << 25) | (fu_data_i.fu#[0..=3] << 13) | (fu_data_i.operation#[0..=7] << 5) | (fu_data_i.trans_id#[0..=2] << 2) | ((speculative_load_i & 1) << 1)
+  `lsu_req_i.valid` = (t306 >> 0xbd) & 1
+  `lsu_req_i.vaddr` = t306#[125..=188]
+  `lsu_req_i.tinst` = t306#[93..=124]
+  `lsu_req_i.hs_ld_st_inst` = (t306 >> 0x5c) & 1
+  `lsu_req_i.hlvx_inst` = (t306 >> 0x5b) & 1
+  `lsu_req_i.overflow` = (t306 >> 0x5a) & 1
+  `lsu_req_i.g_overflow` = (t306 >> 0x59) & 1
+  `lsu_req_i.data` = t306#[25..=88]
+  `lsu_req_i.be` = t306#[17..=24]
+  `lsu_req_i.fu` = t306#[13..=16]
+  `lsu_req_i.operation` = t306#[5..=12]
+  `lsu_req_i.trans_id` = t306#[2..=4]
+  `lsu_req_i.is_speculative_load` = (t306 >> 1) & 1
+  `lsu_req_i.is_speculative_load_miss` = t306 & 1
+  mut i_cva6_mmu = cva6_mmu::[name=i_cva6_mmu](clk_i = clk_i, rst_ni = rst_ni, flush_i = flush_i, enable_translation_i = enable_translation_i, enable_g_translation_i = enable_g_translation_i, en_ld_st_translation_i = en_ld_st_translation_i, en_ld_st_g_translation_i = en_ld_st_g_translation_i, icache_areq_i.fetch_req = icache_areq_i.fetch_req, icache_areq_i.fetch_vaddr = icache_areq_i.fetch_vaddr, `misaligned_ex_i.cause` = misaligned_exception.cause, `misaligned_ex_i.tval` = misaligned_exception.tval, `misaligned_ex_i.tval2` = misaligned_exception.tval2, `misaligned_ex_i.tinst` = misaligned_exception.tinst, `misaligned_ex_i.gva` = misaligned_exception.gva, `misaligned_ex_i.valid` = misaligned_exception.valid, `misaligned_ex_i.timing` = misaligned_exception.timing, lsu_req_i = translation_req, lsu_vaddr_i = mmu_vaddr, lsu_tinst_i = mmu_tinst, lsu_is_store_i = st_translation_req, priv_lvl_i = priv_lvl_i, v_i = v_i, ld_st_priv_lvl_i = ld_st_priv_lvl_i, ld_st_v_i = ld_st_v_i, sum_i = sum_i, vs_sum_i = vs_sum_i, mxr_i = mxr_i, vmxr_i = vmxr_i, mbe_i = mbe_i, hlvx_inst_i = mmu_hlvx_inst, hs_ld_st_inst_i = mmu_hs_ld_st_inst, satp_ppn_i = satp_ppn_i, vsatp_ppn_i = vsatp_ppn_i, hgatp_ppn_i = hgatp_ppn_i, asid_i = asid_i, vs_asid_i = vs_asid_i, asid_to_be_flushed_i = asid_to_be_flushed_i, vmid_i = vmid_i, vmid_to_be_flushed_i = vmid_to_be_flushed_i, vaddr_to_be_flushed_i = vaddr_to_be_flushed_i, gpaddr_to_be_flushed_i = gpaddr_to_be_flushed_i, flush_tlb_i = flush_tlb_i, flush_tlb_vvma_i = flush_tlb_vvma_i, flush_tlb_gvma_i = flush_tlb_gvma_i, `req_port_i.data_gnt` = (dcache_req_ports_i#[0..=130] >> 0x82) & 1, `req_port_i.data_rvalid` = (dcache_req_ports_i#[0..=130] >> 0x81) & 1, `req_port_i.data_rid` = (dcache_req_ports_i#[0..=130] >> 0x80) & 1, `req_port_i.data_rdata` = dcache_req_ports_i#[0..=130]#[64..=127], `req_port_i.data_ruser` = dcache_req_ports_i#[0..=130]#[0..=63], pmpcfg_i = pmpcfg_i, pmpaddr_i = pmpaddr_i)
+  mut `pmp_icache_areq_i.fetch_exception` = (i_cva6_mmu.icache_areq_o.fetch_exception.cause << 0x8c) | (i_cva6_mmu.icache_areq_o.fetch_exception.tval << 0x4c) | (i_cva6_mmu.icache_areq_o.fetch_exception.tval2 << 35) | (i_cva6_mmu.icache_areq_o.fetch_exception.tinst << 3) | (i_cva6_mmu.icache_areq_o.fetch_exception.gva << 2) | (i_cva6_mmu.icache_areq_o.fetch_exception.valid << 1) | i_cva6_mmu.icache_areq_o.fetch_exception.timing
+  mut dcache_req_ports_o__w1 = dcache_req_ports_o
+  dcache_req_ports_o__w1#[0..=206] = ((i_cva6_mmu.req_port_o.address_index << 0xc3) | (i_cva6_mmu.req_port_o.address_tag << 0x97) | (i_cva6_mmu.req_port_o.data_wdata << 0x57) | (i_cva6_mmu.req_port_o.data_wuser << 23) | (i_cva6_mmu.req_port_o.data_req << 22) | (i_cva6_mmu.req_port_o.data_we << 21) | (i_cva6_mmu.req_port_o.data_be << 13) | (i_cva6_mmu.req_port_o.data_size << 11) | (i_cva6_mmu.req_port_o.data_id << 10) | (i_cva6_mmu.req_port_o.kill_req << 9) | (i_cva6_mmu.req_port_o.tag_valid << 8) | i_cva6_mmu.req_port_o.cbo_op)#[0..=206]
+  mut i_pmp_data_if = pmp_data_if::[name=i_pmp_data_if](clk_i = clk_i, rst_ni = rst_ni, `icache_areq_i.fetch_valid` = i_cva6_mmu.icache_areq_o.fetch_valid, `icache_areq_i.fetch_paddr` = i_cva6_mmu.icache_areq_o.fetch_paddr, `icache_areq_i.fetch_exception.cause` = `pmp_icache_areq_i.fetch_exception`#[140..=203], `icache_areq_i.fetch_exception.tval` = `pmp_icache_areq_i.fetch_exception`#[76..=139], `icache_areq_i.fetch_exception.tval2` = `pmp_icache_areq_i.fetch_exception`#[35..=75], `icache_areq_i.fetch_exception.tinst` = `pmp_icache_areq_i.fetch_exception`#[3..=34], `icache_areq_i.fetch_exception.gva` = (`pmp_icache_areq_i.fetch_exception` >> 2) & 1, `icache_areq_i.fetch_exception.valid` = (`pmp_icache_areq_i.fetch_exception` >> 1) & 1, `icache_areq_i.fetch_exception.timing` = `pmp_icache_areq_i.fetch_exception` & 1, icache_fetch_vaddr_i = icache_areq_i.fetch_vaddr, lsu_valid_i = i_cva6_mmu.lsu_valid_o, lsu_paddr_i = i_cva6_mmu.lsu_paddr_o, lsu_vaddr_i = mmu_vaddr, `lsu_exception_i.cause` = i_cva6_mmu.lsu_exception_o.cause, `lsu_exception_i.tval` = i_cva6_mmu.lsu_exception_o.tval, `lsu_exception_i.tval2` = i_cva6_mmu.lsu_exception_o.tval2, `lsu_exception_i.tinst` = i_cva6_mmu.lsu_exception_o.tinst, `lsu_exception_i.gva` = i_cva6_mmu.lsu_exception_o.gva, `lsu_exception_i.valid` = i_cva6_mmu.lsu_exception_o.valid, `lsu_exception_i.timing` = i_cva6_mmu.lsu_exception_o.timing, lsu_is_store_i = st_translation_req, priv_lvl_i = priv_lvl_i, v_i = v_i, ld_st_priv_lvl_i = ld_st_priv_lvl_i, ld_st_v_i = ld_st_v_i, pmpcfg_i = pmpcfg_i, pmpaddr_i = pmpaddr_i)
+  misaligned_exception.cause = `cva6_misaligned_exception.cause`
+  misaligned_exception.tval = `cva6_misaligned_exception.tval`
+  misaligned_exception.tval2 = `cva6_misaligned_exception.tval2`
+  misaligned_exception.tinst = `cva6_misaligned_exception.tinst`
+  misaligned_exception.gva = `cva6_misaligned_exception.gva`
+  misaligned_exception.valid = `cva6_misaligned_exception.valid`
+  misaligned_exception.timing = `cva6_misaligned_exception.timing`
+  st_translation_req = cva6_st_translation_req
+  translation_req = cva6_translation_req
+  mmu_vaddr = cva6_mmu_vaddr
+  const cva6_mmu_paddr__w1 = i_pmp_data_if.lsu_paddr_o
+  mut `cva6_mmu_exception.cause` = i_pmp_data_if.lsu_exception_o.cause
+  mut `cva6_mmu_exception.tval` = i_pmp_data_if.lsu_exception_o.tval
+  mut `cva6_mmu_exception.tval2` = i_pmp_data_if.lsu_exception_o.tval2
+  mut `cva6_mmu_exception.tinst` = i_pmp_data_if.lsu_exception_o.tinst
+  mut `cva6_mmu_exception.gva` = i_pmp_data_if.lsu_exception_o.gva
+  mut `cva6_mmu_exception.valid` = i_pmp_data_if.lsu_exception_o.valid
+  mut `cva6_mmu_exception.timing` = i_pmp_data_if.lsu_exception_o.timing
+  const cva6_dtlb_hit__w1 = i_cva6_mmu.lsu_dtlb_hit_o
+  mut `lsu_ctrl.valid` = lsu_ctrl_byp.valid
+  mut `lsu_ctrl.vaddr` = lsu_ctrl_byp.vaddr
+  mut `lsu_ctrl.tinst` = lsu_ctrl_byp.tinst
+  mut `lsu_ctrl.hs_ld_st_inst` = lsu_ctrl_byp.hs_ld_st_inst
+  mut `lsu_ctrl.hlvx_inst` = lsu_ctrl_byp.hlvx_inst
+  mut `lsu_ctrl.overflow` = lsu_ctrl_byp.overflow
+  mut `lsu_ctrl.g_overflow` = lsu_ctrl_byp.g_overflow
+  mut `lsu_ctrl.data` = lsu_ctrl_byp.data
+  mut `lsu_ctrl.be` = lsu_ctrl_byp.be
+  mut `lsu_ctrl.fu` = lsu_ctrl_byp.fu
+  mut `lsu_ctrl.operation` = lsu_ctrl_byp.operation
+  mut `lsu_ctrl.trans_id` = lsu_ctrl_byp.trans_id
+  mut `lsu_ctrl.is_speculative_load` = lsu_ctrl_byp.is_speculative_load
+  mut `lsu_ctrl.is_speculative_load_miss` = lsu_ctrl_byp.is_speculative_load_miss
+  mut i_store_unit = store_unit::[name=i_store_unit](clk_i = clk_i, rst_ni = rst_ni, flush_i = flush_i, stall_st_pending_i = stall_st_pending_i, valid_i = st_valid_i, `lsu_ctrl_i.valid` = `lsu_ctrl.valid`, `lsu_ctrl_i.vaddr` = `lsu_ctrl.vaddr`, `lsu_ctrl_i.tinst` = `lsu_ctrl.tinst`, `lsu_ctrl_i.hs_ld_st_inst` = `lsu_ctrl.hs_ld_st_inst`, `lsu_ctrl_i.hlvx_inst` = `lsu_ctrl.hlvx_inst`, `lsu_ctrl_i.overflow` = `lsu_ctrl.overflow`, `lsu_ctrl_i.g_overflow` = `lsu_ctrl.g_overflow`, `lsu_ctrl_i.data` = `lsu_ctrl.data`, `lsu_ctrl_i.be` = `lsu_ctrl.be`, `lsu_ctrl_i.fu` = `lsu_ctrl.fu`, `lsu_ctrl_i.operation` = `lsu_ctrl.operation`, `lsu_ctrl_i.trans_id` = `lsu_ctrl.trans_id`, `lsu_ctrl_i.is_speculative_load` = `lsu_ctrl.is_speculative_load`, `lsu_ctrl_i.is_speculative_load_miss` = `lsu_ctrl.is_speculative_load_miss`, commit_i = commit_i, amo_valid_commit_i = amo_valid_commit_i, mbe_i = mbe_i, paddr_i = cva6_mmu_paddr__w1, `ex_i.cause` = `cva6_mmu_exception.cause`, `ex_i.tval` = `cva6_mmu_exception.tval`, `ex_i.tval2` = `cva6_mmu_exception.tval2`, `ex_i.tinst` = `cva6_mmu_exception.tinst`, `ex_i.gva` = `cva6_mmu_exception.gva`, `ex_i.valid` = `cva6_mmu_exception.valid`, `ex_i.timing` = `cva6_mmu_exception.timing`, dtlb_hit_i = cva6_dtlb_hit__w1, page_offset_i = page_offset, amo_resp_i.ack = amo_resp_i.ack, amo_resp_i.result = amo_resp_i.result, `req_port_i.data_gnt` = (dcache_req_ports_i#[262..=392] >> 0x82) & 1, `req_port_i.data_rvalid` = (dcache_req_ports_i#[262..=392] >> 0x81) & 1, `req_port_i.data_rid` = (dcache_req_ports_i#[262..=392] >> 0x80) & 1, `req_port_i.data_rdata` = dcache_req_ports_i#[262..=392]#[64..=127], `req_port_i.data_ruser` = dcache_req_ports_i#[262..=392]#[0..=63], sdtrig_store_stall_i = sdtrig_store_stall_i, sdtrig_store_action_i = sdtrig_store_action_i)
+  cva6_st_translation_req = i_store_unit.translation_req_o
+  mut dcache_req_ports_o__w2 = dcache_req_ports_o__w1
+  dcache_req_ports_o__w2#[414..=620] = ((i_store_unit.req_port_o.address_index << 0xc3) | (i_store_unit.req_port_o.address_tag << 0x97) | (i_store_unit.req_port_o.data_wdata << 0x57) | (i_store_unit.req_port_o.data_wuser << 23) | (i_store_unit.req_port_o.data_req << 22) | (i_store_unit.req_port_o.data_we << 21) | (i_store_unit.req_port_o.data_be << 13) | (i_store_unit.req_port_o.data_size << 11) | (i_store_unit.req_port_o.data_id << 10) | (i_store_unit.req_port_o.kill_req << 9) | (i_store_unit.req_port_o.tag_valid << 8) | i_store_unit.req_port_o.cbo_op)#[0..=206]
+  mut i_load_unit = load_unit::[name=i_load_unit](clk_i = clk_i, rst_ni = rst_ni, flush_i = flush_i, valid_i = ld_valid_i, `lsu_ctrl_i.valid` = `lsu_ctrl.valid`, `lsu_ctrl_i.vaddr` = `lsu_ctrl.vaddr`, `lsu_ctrl_i.tinst` = `lsu_ctrl.tinst`, `lsu_ctrl_i.hs_ld_st_inst` = `lsu_ctrl.hs_ld_st_inst`, `lsu_ctrl_i.hlvx_inst` = `lsu_ctrl.hlvx_inst`, `lsu_ctrl_i.overflow` = `lsu_ctrl.overflow`, `lsu_ctrl_i.g_overflow` = `lsu_ctrl.g_overflow`, `lsu_ctrl_i.data` = `lsu_ctrl.data`, `lsu_ctrl_i.be` = `lsu_ctrl.be`, `lsu_ctrl_i.fu` = `lsu_ctrl.fu`, `lsu_ctrl_i.operation` = `lsu_ctrl.operation`, `lsu_ctrl_i.trans_id` = `lsu_ctrl.trans_id`, `lsu_ctrl_i.is_speculative_load` = `lsu_ctrl.is_speculative_load`, `lsu_ctrl_i.is_speculative_load_miss` = `lsu_ctrl.is_speculative_load_miss`, mbe_i = mbe_i, paddr_i = cva6_mmu_paddr__w1, `ex_i.cause` = `cva6_mmu_exception.cause`, `ex_i.tval` = `cva6_mmu_exception.tval`, `ex_i.tval2` = `cva6_mmu_exception.tval2`, `ex_i.tinst` = `cva6_mmu_exception.tinst`, `ex_i.gva` = `cva6_mmu_exception.gva`, `ex_i.valid` = `cva6_mmu_exception.valid`, `ex_i.timing` = `cva6_mmu_exception.timing`, dtlb_hit_i = cva6_dtlb_hit__w1, dtlb_ppn_i = i_cva6_mmu.lsu_dtlb_ppn_o, page_offset_matches_i = i_store_unit.page_offset_matches_o, store_buffer_empty_i = i_store_unit.store_buffer_empty_o, commit_tran_id_i = commit_tran_id_i, `req_port_i.data_gnt` = (dcache_req_ports_i#[131..=261] >> 0x82) & 1, `req_port_i.data_rvalid` = (dcache_req_ports_i#[131..=261] >> 0x81) & 1, `req_port_i.data_rid` = (dcache_req_ports_i#[131..=261] >> 0x80) & 1, `req_port_i.data_rdata` = dcache_req_ports_i#[131..=261]#[64..=127], `req_port_i.data_ruser` = dcache_req_ports_i#[131..=261]#[0..=63], dcache_wbuffer_not_ni_i = dcache_wbuffer_not_ni_i, sdtrig_load_stall_i = sdtrig_load_stall_i, sdtrig_load_cancel_i = sdtrig_load_cancel_i, sdtrig_load_action_i = sdtrig_load_action_i)
+  page_offset = i_load_unit.page_offset_o
+  mut dcache_req_ports_o__w3 = dcache_req_ports_o__w2
+  dcache_req_ports_o__w3#[207..=413] = ((i_load_unit.req_port_o.address_index << 0xc3) | (i_load_unit.req_port_o.address_tag << 0x97) | (i_load_unit.req_port_o.data_wdata << 0x57) | (i_load_unit.req_port_o.data_wuser << 23) | (i_load_unit.req_port_o.data_req << 22) | (i_load_unit.req_port_o.data_we << 21) | (i_load_unit.req_port_o.data_be << 13) | (i_load_unit.req_port_o.data_size << 11) | (i_load_unit.req_port_o.data_id << 10) | (i_load_unit.req_port_o.kill_req << 9) | (i_load_unit.req_port_o.tag_valid << 8) | i_load_unit.req_port_o.cbo_op)#[0..=206]
+  mut i_pipe_reg_load = shift_reg::[name=i_pipe_reg_load](clk_i = clk_i, rst_ni = rst_ni, d_i = ((i_load_unit.valid_o & 1) << 271) | (i_load_unit.trans_id_o#[0..=2] << 268) | (i_load_unit.result_o#[0..=63] << 204) | ((i_load_unit.ex_o.cause << 0x8c) | (i_load_unit.ex_o.tval << 0x4c) | (i_load_unit.ex_o.tval2 << 35) | (i_load_unit.ex_o.tinst << 3) | (i_load_unit.ex_o.gva << 2) | (i_load_unit.ex_o.valid << 1) | i_load_unit.ex_o.timing)#[0..=203])
+  mut `load_exception_o__bpo.cause` = i_pipe_reg_load#[0..=203]#[140..=203]
+  mut `load_exception_o__bpo.tval` = i_pipe_reg_load#[0..=203]#[76..=139]
+  mut `load_exception_o__bpo.tval2` = i_pipe_reg_load#[0..=203]#[35..=75]
+  mut `load_exception_o__bpo.tinst` = i_pipe_reg_load#[0..=203]#[3..=34]
+  mut `load_exception_o__bpo.gva` = (i_pipe_reg_load#[0..=203] >> 2) & 1
+  mut `load_exception_o__bpo.valid` = (i_pipe_reg_load#[0..=203] >> 1) & 1
+  mut `load_exception_o__bpo.timing` = i_pipe_reg_load#[0..=203] & 1
+  mut i_pipe_reg_store = shift_reg_p1::[name=i_pipe_reg_store](clk_i = clk_i, rst_ni = rst_ni, d_i = ((i_store_unit.valid_o & 1) << 271) | (i_store_unit.trans_id_o#[0..=2] << 268) | (i_store_unit.result_o#[0..=63] << 204) | ((i_store_unit.ex_o.cause << 0x8c) | (i_store_unit.ex_o.tval << 0x4c) | (i_store_unit.ex_o.tval2 << 35) | (i_store_unit.ex_o.tinst << 3) | (i_store_unit.ex_o.gva << 2) | (i_store_unit.ex_o.valid << 1) | i_store_unit.ex_o.timing)#[0..=203])
+  mut `store_exception_o__bpo.cause` = i_pipe_reg_store#[0..=203]#[140..=203]
+  mut `store_exception_o__bpo.tval` = i_pipe_reg_store#[0..=203]#[76..=139]
+  mut `store_exception_o__bpo.tval2` = i_pipe_reg_store#[0..=203]#[35..=75]
+  mut `store_exception_o__bpo.tinst` = i_pipe_reg_store#[0..=203]#[3..=34]
+  mut `store_exception_o__bpo.gva` = (i_pipe_reg_store#[0..=203] >> 2) & 1
+  mut `store_exception_o__bpo.valid` = (i_pipe_reg_store#[0..=203] >> 1) & 1
+  mut `store_exception_o__bpo.timing` = i_pipe_reg_store#[0..=203] & 1
+  ld_valid_i__wtmp = 0
+  st_valid_i__wtmp = 0
+  cva6_translation_req__wtmp = 0
+  cva6_mmu_vaddr__wtmp = 0
+  const t743 = `lsu_ctrl.fu`
+  match t743 {
+    == ariane_pkg.LOAD {
+      ld_valid_i__wtmp = `lsu_ctrl.valid`
+      cva6_translation_req__wtmp = i_load_unit.translation_req_o
+      cva6_mmu_vaddr__wtmp = i_load_unit.vaddr_o
+    }
+    == ariane_pkg.STORE {
+      st_valid_i__wtmp = `lsu_ctrl.valid`
+      cva6_translation_req__wtmp = st_translation_req
+      cva6_mmu_vaddr__wtmp = i_store_unit.vaddr_o
+    }
+    else {
+    }
+  }
+  data_misaligned = 0
+  if `lsu_ctrl.valid` != 0 {
+    {
+      const t761 = `lsu_ctrl.operation`
+      match t761 {
+        in (ariane_pkg.LD, ariane_pkg.SD, ariane_pkg.FLD, ariane_pkg.FSD, ariane_pkg.AMO_LRD, ariane_pkg.AMO_SCD, ariane_pkg.AMO_SWAPD, ariane_pkg.AMO_ADDD, ariane_pkg.AMO_ANDD, ariane_pkg.AMO_ORD, ariane_pkg.AMO_XORD, ariane_pkg.AMO_MAXD, ariane_pkg.AMO_MAXDU, ariane_pkg.AMO_MIND, ariane_pkg.AMO_MINDU, ariane_pkg.HLV_D, ariane_pkg.HSV_D) {
+          if `lsu_ctrl.vaddr`#[0..=2] != 0 {
+            data_misaligned = 1
+          }
+        }
+        else {
+        }
+      }
+    }
+    const t798 = `lsu_ctrl.operation`
+    match t798 {
+      in (ariane_pkg.LW, ariane_pkg.LWU, ariane_pkg.SW, ariane_pkg.FLW, ariane_pkg.FSW, ariane_pkg.AMO_LRW, ariane_pkg.AMO_SCW, ariane_pkg.AMO_SWAPW, ariane_pkg.AMO_ADDW, ariane_pkg.AMO_ANDW, ariane_pkg.AMO_ORW, ariane_pkg.AMO_XORW, ariane_pkg.AMO_MAXW, ariane_pkg.AMO_MAXWU, ariane_pkg.AMO_MINW, ariane_pkg.AMO_MINWU, ariane_pkg.HLV_W, ariane_pkg.HLV_WU, ariane_pkg.HLVX_WU, ariane_pkg.HSV_W) {
+        if `lsu_ctrl.vaddr`#[0..=1] != 0 {
+          data_misaligned = 1
+        }
+      }
+      in (ariane_pkg.LH, ariane_pkg.LHU, ariane_pkg.SH, ariane_pkg.FLH, ariane_pkg.FSH, ariane_pkg.HLV_H, ariane_pkg.HLV_HU, ariane_pkg.HLVX_HU, ariane_pkg.HSV_H) {
+        if (`lsu_ctrl.vaddr` & 1) != 0 {
+          data_misaligned = 1
+        }
+      }
+      else {
+      }
+    }
+  }
+  if data_misaligned != 0 {
+    const t862 = `lsu_ctrl.fu`
+    match t862 {
+      == ariane_pkg.LOAD {
+        `cva6_misaligned_exception.cause` = riscv.LD_ADDR_MISALIGNED#[0..=63]
+        `cva6_misaligned_exception.valid` = 1
+        {
+          `cva6_misaligned_exception.tval` = `lsu_ctrl.vaddr`#[0..=63]#[0..=63]
+        }
+      }
+      == ariane_pkg.STORE {
+        `cva6_misaligned_exception.cause` = riscv.ST_ADDR_MISALIGNED#[0..=63]
+        `cva6_misaligned_exception.valid` = 1
+        {
+          `cva6_misaligned_exception.tval` = `lsu_ctrl.vaddr`#[0..=63]#[0..=63]
+        }
+      }
+      else {
+      }
+    }
+  }
+  if true and (en_ld_st_translation_i != 0) and (`lsu_ctrl.overflow` != 0) {
+    const t891 = `lsu_ctrl.fu`
+    match t891 {
+      == ariane_pkg.LOAD {
+        `cva6_misaligned_exception.cause` = riscv.LOAD_PAGE_FAULT#[0..=63]
+        `cva6_misaligned_exception.valid` = 1
+        {
+          `cva6_misaligned_exception.tval` = `lsu_ctrl.vaddr`#[0..=63]#[0..=63]
+        }
+      }
+      == ariane_pkg.STORE {
+        `cva6_misaligned_exception.cause` = riscv.STORE_PAGE_FAULT#[0..=63]
+        `cva6_misaligned_exception.valid` = 1
+        {
+          `cva6_misaligned_exception.tval` = `lsu_ctrl.vaddr`#[0..=63]#[0..=63]
+        }
+      }
+      else {
+      }
+    }
+  }
+  mut lsu_bypass_i = lsu_bypass::[name=lsu_bypass_i](clk_i = clk_i, rst_ni = rst_ni, flush_i = flush_i, `lsu_req_i.valid` = `lsu_req_i.valid`, `lsu_req_i.vaddr` = `lsu_req_i.vaddr`, `lsu_req_i.tinst` = `lsu_req_i.tinst`, `lsu_req_i.hs_ld_st_inst` = `lsu_req_i.hs_ld_st_inst`, `lsu_req_i.hlvx_inst` = `lsu_req_i.hlvx_inst`, `lsu_req_i.overflow` = `lsu_req_i.overflow`, `lsu_req_i.g_overflow` = `lsu_req_i.g_overflow`, `lsu_req_i.data` = `lsu_req_i.data`, `lsu_req_i.be` = `lsu_req_i.be`, `lsu_req_i.fu` = `lsu_req_i.fu`, `lsu_req_i.operation` = `lsu_req_i.operation`, `lsu_req_i.trans_id` = `lsu_req_i.trans_id`, `lsu_req_i.is_speculative_load` = `lsu_req_i.is_speculative_load`, `lsu_req_i.is_speculative_load_miss` = `lsu_req_i.is_speculative_load_miss`, lsu_req_valid_i = lsu_valid_i, pop_ld_i = i_load_unit.pop_ld_o, pop_st_i = i_store_unit.pop_st_o, resolved_branch_i.valid = resolved_branch_i.valid, resolved_branch_i.pc = resolved_branch_i.pc, resolved_branch_i.target_address = resolved_branch_i.target_address, resolved_branch_i.is_mispredict = resolved_branch_i.is_mispredict, resolved_branch_i.is_taken = resolved_branch_i.is_taken, resolved_branch_i.cf_type = resolved_branch_i.cf_type)
+  lsu_ctrl_byp.valid = lsu_bypass_i.lsu_ctrl_o.valid
+  lsu_ctrl_byp.vaddr = lsu_bypass_i.lsu_ctrl_o.vaddr
+  lsu_ctrl_byp.tinst = lsu_bypass_i.lsu_ctrl_o.tinst
+  lsu_ctrl_byp.hs_ld_st_inst = lsu_bypass_i.lsu_ctrl_o.hs_ld_st_inst
+  lsu_ctrl_byp.hlvx_inst = lsu_bypass_i.lsu_ctrl_o.hlvx_inst
+  lsu_ctrl_byp.overflow = lsu_bypass_i.lsu_ctrl_o.overflow
+  lsu_ctrl_byp.g_overflow = lsu_bypass_i.lsu_ctrl_o.g_overflow
+  lsu_ctrl_byp.data = lsu_bypass_i.lsu_ctrl_o.data
+  lsu_ctrl_byp.be = lsu_bypass_i.lsu_ctrl_o.be
+  lsu_ctrl_byp.fu = lsu_bypass_i.lsu_ctrl_o.fu
+  lsu_ctrl_byp.operation = lsu_bypass_i.lsu_ctrl_o.operation
+  lsu_ctrl_byp.trans_id = lsu_bypass_i.lsu_ctrl_o.trans_id
+  lsu_ctrl_byp.is_speculative_load = lsu_bypass_i.lsu_ctrl_o.is_speculative_load
+  lsu_ctrl_byp.is_speculative_load_miss = lsu_bypass_i.lsu_ctrl_o.is_speculative_load_miss
+  const t1012 = (`lsu_ctrl.valid` << 0xbd) | (`lsu_ctrl.vaddr` << 0x7d) | (`lsu_ctrl.tinst` << 0x5d) | (`lsu_ctrl.hs_ld_st_inst` << 0x5c) | (`lsu_ctrl.hlvx_inst` << 0x5b) | (`lsu_ctrl.overflow` << 0x5a) | (`lsu_ctrl.g_overflow` << 0x59) | (`lsu_ctrl.data` << 25) | (`lsu_ctrl.be` << 17) | (`lsu_ctrl.fu` << 13) | (`lsu_ctrl.operation` << 5) | (`lsu_ctrl.trans_id` << 2) | (`lsu_ctrl.is_speculative_load` << 1) | `lsu_ctrl.is_speculative_load_miss`
+  mut `rvfi_lsu_ctrl_o__bpo.valid` = (t1012 >> 0xbd) & 1
+  mut `rvfi_lsu_ctrl_o__bpo.vaddr` = t1012#[125..=188]
+  mut `rvfi_lsu_ctrl_o__bpo.tinst` = t1012#[93..=124]
+  mut `rvfi_lsu_ctrl_o__bpo.hs_ld_st_inst` = (t1012 >> 0x5c) & 1
+  mut `rvfi_lsu_ctrl_o__bpo.hlvx_inst` = (t1012 >> 0x5b) & 1
+  mut `rvfi_lsu_ctrl_o__bpo.overflow` = (t1012 >> 0x5a) & 1
+  mut `rvfi_lsu_ctrl_o__bpo.g_overflow` = (t1012 >> 0x59) & 1
+  mut `rvfi_lsu_ctrl_o__bpo.data` = t1012#[25..=88]
+  mut `rvfi_lsu_ctrl_o__bpo.be` = t1012#[17..=24]
+  mut `rvfi_lsu_ctrl_o__bpo.fu` = t1012#[13..=16]
+  mut `rvfi_lsu_ctrl_o__bpo.operation` = t1012#[5..=12]
+  mut `rvfi_lsu_ctrl_o__bpo.trans_id` = t1012#[2..=4]
+  mut `rvfi_lsu_ctrl_o__bpo.is_speculative_load` = (t1012 >> 1) & 1
+  mut `rvfi_lsu_ctrl_o__bpo.is_speculative_load_miss` = t1012 & 1
+  st_valid_i = st_valid_i__wtmp
+  ld_valid_i = ld_valid_i__wtmp
+  cva6_translation_req = cva6_translation_req__wtmp
+  cva6_mmu_vaddr = cva6_mmu_vaddr__wtmp
+  mmu_tinst = 0
+  mmu_hs_ld_st_inst = 0
+  mmu_hlvx_inst = 0
+  load_exception_o.cause = `load_exception_o__bpo.cause`
+  load_exception_o.tval = `load_exception_o__bpo.tval`
+  load_exception_o.tval2 = `load_exception_o__bpo.tval2`
+  load_exception_o.tinst = `load_exception_o__bpo.tinst`
+  load_exception_o.gva = `load_exception_o__bpo.gva`
+  load_exception_o.valid = `load_exception_o__bpo.valid`
+  load_exception_o.timing = `load_exception_o__bpo.timing`
+  store_exception_o.cause = `store_exception_o__bpo.cause`
+  store_exception_o.tval = `store_exception_o__bpo.tval`
+  store_exception_o.tval2 = `store_exception_o__bpo.tval2`
+  store_exception_o.tinst = `store_exception_o__bpo.tinst`
+  store_exception_o.gva = `store_exception_o__bpo.gva`
+  store_exception_o.valid = `store_exception_o__bpo.valid`
+  store_exception_o.timing = `store_exception_o__bpo.timing`
+  icache_areq_o.fetch_valid = i_pmp_data_if.icache_areq_o.fetch_valid
+  icache_areq_o.fetch_paddr = i_pmp_data_if.icache_areq_o.fetch_paddr
+  icache_areq_o.fetch_exception.cause = i_pmp_data_if.icache_areq_o.fetch_exception.cause
+  icache_areq_o.fetch_exception.tval = i_pmp_data_if.icache_areq_o.fetch_exception.tval
+  icache_areq_o.fetch_exception.tval2 = i_pmp_data_if.icache_areq_o.fetch_exception.tval2
+  icache_areq_o.fetch_exception.tinst = i_pmp_data_if.icache_areq_o.fetch_exception.tinst
+  icache_areq_o.fetch_exception.gva = i_pmp_data_if.icache_areq_o.fetch_exception.gva
+  icache_areq_o.fetch_exception.valid = i_pmp_data_if.icache_areq_o.fetch_exception.valid
+  icache_areq_o.fetch_exception.timing = i_pmp_data_if.icache_areq_o.fetch_exception.timing
+  amo_req_o.req = i_store_unit.amo_req_o.req
+  amo_req_o.amo_op = i_store_unit.amo_req_o.amo_op
+  amo_req_o.size = i_store_unit.amo_req_o.size
+  amo_req_o.operand_a = i_store_unit.amo_req_o.operand_a
+  amo_req_o.operand_b = i_store_unit.amo_req_o.operand_b
+  rvfi_lsu_ctrl_o.valid = `rvfi_lsu_ctrl_o__bpo.valid`
+  rvfi_lsu_ctrl_o.vaddr = `rvfi_lsu_ctrl_o__bpo.vaddr`
+  rvfi_lsu_ctrl_o.tinst = `rvfi_lsu_ctrl_o__bpo.tinst`
+  rvfi_lsu_ctrl_o.hs_ld_st_inst = `rvfi_lsu_ctrl_o__bpo.hs_ld_st_inst`
+  rvfi_lsu_ctrl_o.hlvx_inst = `rvfi_lsu_ctrl_o__bpo.hlvx_inst`
+  rvfi_lsu_ctrl_o.overflow = `rvfi_lsu_ctrl_o__bpo.overflow`
+  rvfi_lsu_ctrl_o.g_overflow = `rvfi_lsu_ctrl_o__bpo.g_overflow`
+  rvfi_lsu_ctrl_o.data = `rvfi_lsu_ctrl_o__bpo.data`
+  rvfi_lsu_ctrl_o.be = `rvfi_lsu_ctrl_o__bpo.be`
+  rvfi_lsu_ctrl_o.fu = `rvfi_lsu_ctrl_o__bpo.fu`
+  rvfi_lsu_ctrl_o.operation = `rvfi_lsu_ctrl_o__bpo.operation`
+  rvfi_lsu_ctrl_o.trans_id = `rvfi_lsu_ctrl_o__bpo.trans_id`
+  rvfi_lsu_ctrl_o.is_speculative_load = `rvfi_lsu_ctrl_o__bpo.is_speculative_load`
+  rvfi_lsu_ctrl_o.is_speculative_load_miss = `rvfi_lsu_ctrl_o__bpo.is_speculative_load_miss`
+  no_st_pending_o = i_store_unit.no_st_pending_o
+  shared_tlb_flush_busy_o = i_cva6_mmu.shared_tlb_flush_busy_o
+  lsu_ready_o = lsu_bypass_i.ready_o
+  load_trans_id_o = (i_pipe_reg_load >> 0x10c)#[0..=2]
+  load_result_o = (i_pipe_reg_load >> 0xcc)#[0..=63]
+  load_valid_o = (i_pipe_reg_load >> 0x10f) & 1
+  store_trans_id_o = (i_pipe_reg_store >> 0x10c)#[0..=2]
+  store_result_o = (i_pipe_reg_store >> 0xcc)#[0..=63]
+  store_valid_o = (i_pipe_reg_store >> 0x10f) & 1
+  commit_ready_o = i_store_unit.commit_ready_o
+  acc_mmu_resp_o = 0
+  csr_hs_ld_st_inst_o = i_cva6_mmu.csr_hs_ld_st_inst_o
+  itlb_miss_o = i_cva6_mmu.itlb_miss_o
+  dtlb_miss_o = i_cva6_mmu.dtlb_miss_o
+  dcache_req_ports_o = dcache_req_ports_o__w3
+  rvfi_mem_paddr_o = i_store_unit.rvfi_mem_paddr_o
+}

@@ -31,6 +31,10 @@
 #   CORE_SIM_TOP_CYCLES  explicit `cycles` value for CORE_SIM_TOP_TB
 #   CORE_SIM_PROG_TB  program testbench ("" = none)
 #   CORE_SIM_PROG_CYCLES explicit `cycles` value for CORE_SIM_PROG_TB
+#   CORE_SIM_PROG_PYROPE_ONLY  "1" = CORE_SIM_PROG_TB drives a module that
+#                     exists only in the Pyrope tree, so MODE=verilog skips it
+#                     (no lg: compile, no sim_cpu_prog_ok metric); "" = run it
+#                     in both modes. See defs.bzl.
 #   CORE_SIM_TOP_ASSERT  "1" = the two above GATE the target (a driver that
 #                     fails fails the test); "" = report them as metrics only.
 #                     Always metrics either way. See defs.bzl.
@@ -97,6 +101,7 @@ CORE_TESTS_DIR=$CORE_DIR/tests
 : "${CORE_SIM_CYCLES=}" "${CORE_SIM_TB_UNIT=}" "${CORE_SIM_PERF_CYCLES=}"
 : "${CORE_SIM_TOP_UNIT=}" "${CORE_SIM_PROG_UNIT=}"
 : "${CORE_SIM_TOP_CYCLES=}" "${CORE_SIM_PROG_CYCLES=}"
+: "${CORE_SIM_PROG_PYROPE_ONLY=}"
 : "${CORE_VERILATOR_TB=}" "${CORE_VERILATOR_FLAGS=}" "${CORE_VERILATOR_CYCLES=}"
 WORK=${TEST_TMPDIR:?}
 cd "$WORK"

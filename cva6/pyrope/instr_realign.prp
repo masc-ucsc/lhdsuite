@@ -1,0 +1,75 @@
+pub mod instr_realign::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, valid_i:u1, address_i:u64, data_i:u32) -> (serving_unaligned_o:u1@[], valid_o:(e1:u1, e0:u1)@[], addr_o:u128@[], instr_o:u64@[]) {
+  reg unaligned_instr_q:u16:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg unaligned_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg unaligned_address_q:u64:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  mut instr_is_compressed:u2 = 0
+  mut unaligned_instr_d:u16 = 0
+  mut unaligned_d:u1 = 0
+  mut unaligned_address_d:u64 = 0
+  mut `valid_o__bpo.e1` = 0
+  mut `valid_o__bpo.e0` = 0
+  instr_is_compressed = 0sb?
+  unaligned_instr_d = 0sb?
+  unaligned_d = 0ub?
+  unaligned_address_d = 0sb?
+  addr_o = 0sb?
+  instr_o = 0sb?
+  mut instr_is_compressed__w1 = instr_is_compressed
+  instr_is_compressed__w1#[0] = unsigned(data_i#[0..=1] != 3) & 1
+  mut instr_is_compressed__w2 = instr_is_compressed__w1
+  instr_is_compressed__w2#[1] = unsigned(data_i#[16..=17] != 3) & 1
+  const serving_unaligned_o__w1 = unaligned_q
+  `valid_o__bpo.e0` = valid_i
+  mut _mux_3:u32 = if unaligned_q != 0 { (data_i#[0..=15] << 16) | unaligned_instr_q } else { data_i }
+  mut instr_o__w1 = instr_o
+  instr_o__w1#[0..=31] = _mux_3
+  mut _mux_4:u64 = if unaligned_q != 0 { unaligned_address_q } else { address_i }
+  mut addr_o__w1 = addr_o
+  addr_o__w1#[0..=63] = _mux_4
+  addr_o = addr_o__w1
+  instr_o = instr_o__w1
+  {
+    instr_o#[32..=63] = 0
+    addr_o#[64..=127] = (address_i#[2..=63] << 2) | 2
+  }
+  unaligned_instr_d = data_i#[16..=31]
+  unaligned_d = unaligned_q
+  unaligned_address_d = (address_i#[2..=63] << 2) | 2
+  if ((instr_is_compressed__w2 & 1) != 0) or (unaligned_q != 0) {
+    if (((instr_is_compressed__w2 >> 1) & 1) != 0) and true {
+      unaligned_d = 0
+      `valid_o__bpo.e1` = valid_i
+      instr_o#[32..=63] = data_i#[16..=31]
+    } else {
+      unaligned_d = 1
+      unaligned_instr_d = data_i#[16..=31]
+      unaligned_address_d = (address_i#[2..=63] << 2) | 2
+    }
+  }
+  if (valid_i != 0) and (((address_i >> 1) & 1) != 0) {
+    if (instr_is_compressed__w2 & 1) == 0 {
+      `valid_o__bpo.e1` = 0
+      `valid_o__bpo.e0` = 0
+      unaligned_d = 1
+      unaligned_address_d = (address_i#[2..=63] << 2) | 2
+      unaligned_instr_d = data_i#[0..=15]
+    } else {
+      `valid_o__bpo.e1` = 0
+      `valid_o__bpo.e0` = 1
+    }
+  }
+  if rst_ni != 0 {
+    if valid_i != 0 {
+      unaligned_address_q = unaligned_address_d
+      unaligned_instr_q = unaligned_instr_d
+    }
+    if flush_i != 0 {
+      unaligned_q = 0
+    } elif valid_i != 0 {
+      unaligned_q = unaligned_d
+    }
+  }
+  valid_o.e1 = `valid_o__bpo.e1`
+  valid_o.e0 = `valid_o__bpo.e0`
+  serving_unaligned_o = serving_unaligned_o__w1
+}

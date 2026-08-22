@@ -1,0 +1,1801 @@
+const ariane_pkg = import("ariane_pkg")
+const riscv = import("riscv")
+
+pub comb decoder::[timecheck=false](debug_req_i:u1, pc_i:u64, is_compressed_i:u1, compressed_instr_i:u16, is_illegal_i:u1, instruction_i:u32, is_macro_instr_i:u1, is_last_macro_instr_i:u1, is_double_rd_macro_instr_i:u1, is_zcmt_i:u1, jump_address_i:u64, branch_predict_i:(cf:u3, predict_address:u64), ex_i:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1), irq_i:u2, irq_ctrl_i:(mie:u64, mip:u64, mideleg:u64, hideleg:u64, sie:u1, global_enable:u1), priv_lvl_i:u2, v_i:u1, debug_mode_i:u1, fs_i:u2, vfs_i:u2, frm_i:u3, vs_i:u2, tvm_i:u1, tw_i:u1, vtw_i:u1, tsr_i:u1, hu_i:u1, mcbie_i:u2, scbie_i:u2, hcbie_i:u2, mcbcfe_i:u1, scbcfe_i:u1, hcbcfe_i:u1, sdtrig_decoder_action_i:u64) -> (instruction_o:(pc:u64, trans_id:u3, fu:u4, op:u8, rs1:u5, rs2:u5, rd:u5, result:u64, valid:u1, use_imm:u1, use_zimm:u1, use_pc:u1, ex:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1), bp:(cf:u3, predict_address:u64), is_compressed:u1, is_macro_instr:u1, is_last_macro_instr:u1, is_double_rd_macro_instr:u1, vfp:u1, is_zcmt:u1), orig_instr_o:u32, is_control_flow_instr_o:u1) {
+  mut _mux_1:u1 = 0
+  mut _mux_14:u4 = 0
+  mut _mux_17:u64 = 0
+  mut _mux_18:u64 = 0
+  mut _mux_19:u64 = 0
+  mut _mux_4:u1 = 0
+  mut _mux_7:u4 = 0
+  mut _mux_9:u4 = 0
+  mut _rep_15:u44 = 0
+  mut allow_replication:u1 = 0
+  mut `acc_instruction.pc` = 0
+  mut `acc_instruction.trans_id` = 0
+  mut `acc_instruction.fu` = 0
+  mut `acc_instruction.op` = 0
+  mut `acc_instruction.rs1` = 0
+  mut `acc_instruction.rs2` = 0
+  mut `acc_instruction.rd` = 0
+  mut `acc_instruction.result` = 0
+  mut `acc_instruction.valid` = 0
+  mut `acc_instruction.use_imm` = 0
+  mut `acc_instruction.use_zimm` = 0
+  mut `acc_instruction.use_pc` = 0
+  mut `acc_instruction.ex` = 0
+  mut `acc_instruction.bp` = 0
+  mut `acc_instruction.is_compressed` = 0
+  mut `acc_instruction.is_macro_instr` = 0
+  mut `acc_instruction.is_last_macro_instr` = 0
+  mut `acc_instruction.is_double_rd_macro_instr` = 0
+  mut `acc_instruction.vfp` = 0
+  mut `acc_instruction.is_zcmt` = 0
+  wire imm_i_type:u64
+  wire imm_s_type:u64
+  wire imm_sb_type:u64
+  wire imm_u_type:u64
+  mut illegal_instr:u1 = 0
+  mut illegal_instr_bm:u1 = 0
+  mut illegal_instr_zic:u1 = 0
+  mut illegal_instr_non_bm:u1 = 0
+  mut ecall:u1 = 0
+  mut ebreak:u1 = 0
+  mut check_fprm:u1 = 0
+  mut imm_select:u4 = 0
+  mut imm_uj_type:u64 = 0
+  mut interrupt_cause:u64 = 0
+  mut `instruction_o__bpo.trans_id` = 0
+  mut `instruction_o__bpo.fu` = 0
+  mut `instruction_o__bpo.op` = 0
+  mut `instruction_o__bpo.rs1` = 0
+  mut `instruction_o__bpo.rs2` = 0
+  mut `instruction_o__bpo.rd` = 0
+  mut `instruction_o__bpo.result` = 0
+  mut `instruction_o__bpo.use_imm` = 0
+  mut `instruction_o__bpo.use_zimm` = 0
+  mut `instruction_o__bpo.use_pc` = 0
+  mut `instruction_o__bpo.ex.cause` = 0
+  mut `instruction_o__bpo.ex.tval` = 0
+  mut `instruction_o__bpo.ex.tinst` = 0
+  mut `instruction_o__bpo.ex.gva` = 0
+  mut `instruction_o__bpo.ex.valid` = 0
+  mut `instruction_o__bpo.vfp` = 0
+  illegal_instr = 0ub?
+  illegal_instr_bm = 0ub?
+  illegal_instr_zic = 0ub?
+  illegal_instr_non_bm = 0ub?
+  ecall = 0ub?
+  ebreak = 0ub?
+  check_fprm = 0ub?
+  imm_select = 0sb?
+  imm_uj_type = 0sb?
+  interrupt_cause = 0sb?
+  orig_instr_o = 0sb?
+  is_control_flow_instr_o = 0ub?
+  const instr__w1 = instruction_i
+  mut `instruction_o__bpo.pc` = pc_i
+  `instruction_o__bpo.fu` = ariane_pkg.NONE
+  `instruction_o__bpo.op` = ariane_pkg.ADD
+  mut `instruction_o__bpo.is_compressed` = is_compressed_i
+  mut `instruction_o__bpo.is_macro_instr` = is_macro_instr_i
+  mut `instruction_o__bpo.is_last_macro_instr` = is_last_macro_instr_i
+  mut `instruction_o__bpo.is_double_rd_macro_instr` = is_double_rd_macro_instr_i
+  const t79 = (branch_predict_i.cf << 0x40) | branch_predict_i.predict_address
+  mut `instruction_o__bpo.bp.cf` = (t79 >> 0x40)#[0..=2]
+  mut `instruction_o__bpo.bp.predict_address` = t79#[0..=63]
+  mut `instruction_o__bpo.is_zcmt` = is_zcmt_i
+  is_control_flow_instr_o = 0
+  illegal_instr_bm = 0
+  illegal_instr_non_bm = 0
+  check_fprm = 0
+  ecall = 0
+  illegal_instr = 0
+  illegal_instr_zic = 0
+  imm_select = 0
+  ebreak = 0
+  if ((~ex_i.valid) & 1) != 0 {
+    match instr__w1#[0..=6] {
+      == riscv.OpcodeSystem {
+        `instruction_o__bpo.fu` = ariane_pkg.CSR
+        `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+        `instruction_o__bpo.rs2` = instr__w1#[20..=24]
+        `instruction_o__bpo.rd` = instr__w1#[7..=11]
+        match instr__w1#[12..=14] {
+          == 0 {
+            if (instr__w1#[15..=19] != 0) or (instr__w1#[7..=11] != 0) {
+              {
+                illegal_instr = 1
+              }
+            }
+            match instr__w1#[20..=31] {
+              == 0 {
+                ecall = 1
+              }
+              == 1 {
+                ebreak = 1
+              }
+              == 0x102 {
+                {
+                  `instruction_o__bpo.op` = ariane_pkg.SRET
+                  if true and (priv_lvl_i == riscv.PRIV_LVL_U) {
+                    {
+                      illegal_instr = 1
+                    }
+                    `instruction_o__bpo.op` = ariane_pkg.ADD
+                  }
+                  if (priv_lvl_i == riscv.PRIV_LVL_S) and (tsr_i != 0) {
+                    {
+                      illegal_instr = 1
+                    }
+                    `instruction_o__bpo.op` = ariane_pkg.ADD
+                  }
+                }
+              }
+              == 0x302 {
+                `instruction_o__bpo.op` = ariane_pkg.MRET
+                if (true and (priv_lvl_i == riscv.PRIV_LVL_S)) or (true and (priv_lvl_i == riscv.PRIV_LVL_U)) {
+                  illegal_instr = 1
+                }
+              }
+              == 0x7b2 {
+                `instruction_o__bpo.op` = ariane_pkg.DRET
+                {
+                  _mux_1 = if debug_mode_i == 0 { 1 } else { illegal_instr & 1 }
+                  illegal_instr = _mux_1
+                }
+              }
+              == 0x105 {
+                `instruction_o__bpo.op` = ariane_pkg.WFI
+                if true and (priv_lvl_i == riscv.PRIV_LVL_S) and (tw_i != 0) {
+                  illegal_instr = 1
+                  `instruction_o__bpo.op` = ariane_pkg.ADD
+                }
+                if false and (priv_lvl_i == riscv.PRIV_LVL_S) and (v_i != 0) and (vtw_i != 0) and (tw_i == 0) {
+                  `instruction_o__bpo.op` = ariane_pkg.ADD
+                }
+                if true and (priv_lvl_i == riscv.PRIV_LVL_U) {
+                  {
+                    illegal_instr = 1
+                  }
+                  `instruction_o__bpo.op` = ariane_pkg.ADD
+                }
+              }
+              else {
+                if instr__w1#[25..=31] == 9 {
+                  {
+                    _mux_4 = if true and ((priv_lvl_i == riscv.PRIV_LVL_M) or (priv_lvl_i == riscv.PRIV_LVL_S)) and (instr__w1#[7..=11] == 0) { 0 } else { 1 }
+                    illegal_instr = _mux_4
+                  }
+                  `instruction_o__bpo.op` = ariane_pkg.SFENCE_VMA
+                  if true and (priv_lvl_i == riscv.PRIV_LVL_S) and (tvm_i != 0) {
+                    {
+                      illegal_instr = 1
+                    }
+                  }
+                } else {
+                  {
+                    illegal_instr = 1
+                  }
+                }
+              }
+            }
+          }
+          == 4 {
+            {
+              illegal_instr = 1
+            }
+          }
+          == 1 {
+            imm_select = 1
+            `instruction_o__bpo.op` = ariane_pkg.CSR_WRITE
+          }
+          == 2 {
+            imm_select = 1
+            if instr__w1#[15..=19] == 0 {
+              `instruction_o__bpo.op` = ariane_pkg.CSR_READ
+            } else {
+              `instruction_o__bpo.op` = ariane_pkg.CSR_SET
+            }
+          }
+          == 3 {
+            imm_select = 1
+            if instr__w1#[15..=19] == 0 {
+              `instruction_o__bpo.op` = ariane_pkg.CSR_READ
+            } else {
+              `instruction_o__bpo.op` = ariane_pkg.CSR_CLEAR
+            }
+          }
+          == 5 {
+            `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+            imm_select = 1
+            `instruction_o__bpo.use_zimm` = 1
+            `instruction_o__bpo.op` = ariane_pkg.CSR_WRITE
+          }
+          == 6 {
+            `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+            imm_select = 1
+            `instruction_o__bpo.use_zimm` = 1
+            if instr__w1#[15..=19] == 0 {
+              `instruction_o__bpo.op` = ariane_pkg.CSR_READ
+            } else {
+              `instruction_o__bpo.op` = ariane_pkg.CSR_SET
+            }
+          }
+          == 7 {
+            `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+            imm_select = 1
+            `instruction_o__bpo.use_zimm` = 1
+            if instr__w1#[15..=19] == 0 {
+              `instruction_o__bpo.op` = ariane_pkg.CSR_READ
+            } else {
+              `instruction_o__bpo.op` = ariane_pkg.CSR_CLEAR
+            }
+          }
+          else {
+            illegal_instr = 1
+          }
+        }
+      }
+      == riscv.OpcodeMiscMem {
+        `instruction_o__bpo.fu` = ariane_pkg.CSR
+        `instruction_o__bpo.rs1` = 0
+        `instruction_o__bpo.rs2` = 0
+        `instruction_o__bpo.rd` = 0
+        match instr__w1#[12..=14] {
+          == 0 {
+            `instruction_o__bpo.op` = ariane_pkg.FENCE
+          }
+          == 1 {
+            `instruction_o__bpo.op` = ariane_pkg.FENCE_I
+          }
+          == 2 {
+            {
+              illegal_instr = 1
+            }
+          }
+          else {
+            illegal_instr = 1
+          }
+        }
+      }
+      == riscv.OpcodeOp {
+        if true and (instr__w1#[30..=31] == 2) {
+          if false and (fs_i != riscv.Off) and ((false and ((v_i == 0) or (vfs_i != riscv.Off))) or true) {
+            allow_replication = 0ub?
+            `instruction_o__bpo.fu` = ariane_pkg.FPU_VEC
+            `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+            `instruction_o__bpo.rs2` = instr__w1#[20..=24]
+            `instruction_o__bpo.rd` = instr__w1#[7..=11]
+            check_fprm = 1
+            allow_replication = 1
+            match instr__w1#[25..=29] {
+              == 1 {
+                `instruction_o__bpo.op` = ariane_pkg.FADD
+                `instruction_o__bpo.rs1` = 0
+                `instruction_o__bpo.rs2` = instr__w1#[15..=19]
+                imm_select = 1
+              }
+              == 2 {
+                `instruction_o__bpo.op` = ariane_pkg.FSUB
+                `instruction_o__bpo.rs1` = 0
+                `instruction_o__bpo.rs2` = instr__w1#[15..=19]
+                imm_select = 1
+              }
+              == 3 {
+                `instruction_o__bpo.op` = ariane_pkg.FMUL
+              }
+              == 4 {
+                `instruction_o__bpo.op` = ariane_pkg.FDIV
+              }
+              == 5 {
+                `instruction_o__bpo.op` = ariane_pkg.VFMIN
+                check_fprm = 0
+              }
+              == 6 {
+                `instruction_o__bpo.op` = ariane_pkg.VFMAX
+                check_fprm = 0
+              }
+              == 7 {
+                `instruction_o__bpo.op` = ariane_pkg.FSQRT
+                allow_replication = 0
+                if instr__w1#[20..=24] != 0 {
+                  illegal_instr = 1
+                }
+              }
+              == 8 {
+                `instruction_o__bpo.op` = ariane_pkg.FMADD
+                imm_select = 2
+              }
+              == 9 {
+                `instruction_o__bpo.op` = ariane_pkg.FMSUB
+                imm_select = 2
+              }
+              == 12 {
+                match instr__w1#[20..=24] {
+                  == 0 {
+                    `instruction_o__bpo.rs2` = instr__w1#[15..=19]
+                    if ((instr__w1 >> 14) & 1) != 0 {
+                      `instruction_o__bpo.op` = ariane_pkg.FMV_X2F
+                    } else {
+                      `instruction_o__bpo.op` = ariane_pkg.FMV_F2X
+                    }
+                    check_fprm = 0
+                  }
+                  == 1 {
+                    `instruction_o__bpo.op` = ariane_pkg.FCLASS
+                    check_fprm = 0
+                    allow_replication = 0
+                  }
+                  == 2 {
+                    `instruction_o__bpo.op` = ariane_pkg.FCVT_F2I
+                  }
+                  == 3 {
+                    `instruction_o__bpo.op` = ariane_pkg.FCVT_I2F
+                  }
+                  == 0ub1?? {
+                    `instruction_o__bpo.op` = ariane_pkg.FCVT_F2F
+                    `instruction_o__bpo.rs2` = instr__w1#[7..=11]
+                    imm_select = 1
+                    match instr__w1#[20..=24]#[0..=1] {
+                      == 0 {
+                        {
+                          illegal_instr = 1
+                        }
+                      }
+                      == 1 {
+                        {
+                          illegal_instr = 1
+                        }
+                      }
+                      == 2 {
+                        {
+                          illegal_instr = 1
+                        }
+                      }
+                      == 3 {
+                        {
+                          illegal_instr = 1
+                        }
+                      }
+                      else {
+                        illegal_instr = 1
+                      }
+                    }
+                  }
+                  else {
+                    illegal_instr = 1
+                  }
+                }
+              }
+              == 13 {
+                check_fprm = 0
+                `instruction_o__bpo.op` = ariane_pkg.VFSGNJ
+              }
+              == 14 {
+                check_fprm = 0
+                `instruction_o__bpo.op` = ariane_pkg.VFSGNJN
+              }
+              == 15 {
+                check_fprm = 0
+                `instruction_o__bpo.op` = ariane_pkg.VFSGNJX
+              }
+              == 16 {
+                check_fprm = 0
+                `instruction_o__bpo.op` = ariane_pkg.VFEQ
+              }
+              == 17 {
+                check_fprm = 0
+                `instruction_o__bpo.op` = ariane_pkg.VFNE
+              }
+              == 18 {
+                check_fprm = 0
+                `instruction_o__bpo.op` = ariane_pkg.VFLT
+              }
+              == 19 {
+                check_fprm = 0
+                `instruction_o__bpo.op` = ariane_pkg.VFGE
+              }
+              == 20 {
+                check_fprm = 0
+                `instruction_o__bpo.op` = ariane_pkg.VFLE
+              }
+              == 21 {
+                check_fprm = 0
+                `instruction_o__bpo.op` = ariane_pkg.VFGT
+              }
+              == 24 {
+                `instruction_o__bpo.op` = ariane_pkg.VFCPKAB_S
+                imm_select = 2
+                match instr__w1#[12..=13] {
+                  == 0 {
+                    {
+                      illegal_instr = 1
+                    }
+                    if ((instr__w1 >> 14) & 1) != 0 {
+                      illegal_instr = 1
+                    }
+                  }
+                  == 1 {
+                    {
+                      illegal_instr = 1
+                    }
+                  }
+                  == 2 {
+                    {
+                      illegal_instr = 1
+                    }
+                  }
+                  == 3 {
+                    {
+                      illegal_instr = 1
+                    }
+                  }
+                  else {
+                    illegal_instr = 1
+                  }
+                }
+              }
+              == 25 {
+                `instruction_o__bpo.op` = ariane_pkg.VFCPKCD_S
+                imm_select = 2
+                match instr__w1#[12..=13] {
+                  == 0 {
+                    illegal_instr = 1
+                  }
+                  == 1 {
+                    illegal_instr = 1
+                  }
+                  == 2 {
+                    illegal_instr = 1
+                  }
+                  == 3 {
+                    {
+                      illegal_instr = 1
+                    }
+                  }
+                  else {
+                    illegal_instr = 1
+                  }
+                }
+              }
+              == 26 {
+                `instruction_o__bpo.op` = ariane_pkg.VFCPKAB_D
+                imm_select = 2
+                match instr__w1#[12..=13] {
+                  == 0 {
+                    {
+                      illegal_instr = 1
+                    }
+                    if ((instr__w1 >> 14) & 1) != 0 {
+                      illegal_instr = 1
+                    }
+                  }
+                  == 1 {
+                    {
+                      illegal_instr = 1
+                    }
+                  }
+                  == 2 {
+                    {
+                      illegal_instr = 1
+                    }
+                  }
+                  == 3 {
+                    {
+                      illegal_instr = 1
+                    }
+                  }
+                  else {
+                    illegal_instr = 1
+                  }
+                }
+              }
+              == 27 {
+                `instruction_o__bpo.op` = ariane_pkg.VFCPKCD_D
+                imm_select = 2
+                match instr__w1#[12..=13] {
+                  == 0 {
+                    illegal_instr = 1
+                  }
+                  == 1 {
+                    illegal_instr = 1
+                  }
+                  == 2 {
+                    illegal_instr = 1
+                  }
+                  == 3 {
+                    {
+                      illegal_instr = 1
+                    }
+                  }
+                  else {
+                    illegal_instr = 1
+                  }
+                }
+              }
+              else {
+                illegal_instr = 1
+              }
+            }
+            match instr__w1#[12..=13] {
+              == 0 {
+                {
+                  illegal_instr = 1
+                }
+              }
+              == 1 {
+                {
+                  illegal_instr = 1
+                }
+              }
+              == 2 {
+                {
+                  illegal_instr = 1
+                }
+              }
+              == 3 {
+                {
+                  illegal_instr = 1
+                }
+              }
+              else {
+                illegal_instr = 1
+              }
+            }
+            if ((~allow_replication) & 1 & (instr__w1 >> 14) & 1 & 1) != 0 {
+              illegal_instr = 1
+            }
+            if check_fprm != 0 {
+              unique if (frm_i >= 0) and (frm_i <= 4) {
+              } else {
+                illegal_instr = 1
+              }
+            }
+          } else {
+            illegal_instr = 1
+          }
+        } else {
+          {
+            _mux_7 = if (instr__w1#[25..=31] == 1) or ((instr__w1#[25..=31] == 5) and (((instr__w1#[12..=14] >> 2) & 1) == 0)) { ariane_pkg.MULT#[0..=3] } else { ariane_pkg.ALU#[0..=3] }
+            `instruction_o__bpo.fu` = _mux_7
+          }
+          `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+          `instruction_o__bpo.rs2` = instr__w1#[20..=24]
+          `instruction_o__bpo.rd` = instr__w1#[7..=11]
+          const t574 = (instr__w1#[25..=31] << 3) | instr__w1#[12..=14]
+          match t574 {
+            == 0 {
+              `instruction_o__bpo.op` = ariane_pkg.ADD
+            }
+            == 0x100 {
+              `instruction_o__bpo.op` = ariane_pkg.SUB
+            }
+            == 2 {
+              `instruction_o__bpo.op` = ariane_pkg.SLTS
+            }
+            == 3 {
+              `instruction_o__bpo.op` = ariane_pkg.SLTU
+            }
+            == 4 {
+              `instruction_o__bpo.op` = ariane_pkg.XORL
+            }
+            == 6 {
+              `instruction_o__bpo.op` = ariane_pkg.ORL
+            }
+            == 7 {
+              `instruction_o__bpo.op` = ariane_pkg.ANDL
+            }
+            == 1 {
+              `instruction_o__bpo.op` = ariane_pkg.SLL
+            }
+            == 5 {
+              `instruction_o__bpo.op` = ariane_pkg.SRL
+            }
+            == 0x105 {
+              `instruction_o__bpo.op` = ariane_pkg.SRA
+            }
+            == 8 {
+              `instruction_o__bpo.op` = ariane_pkg.MUL
+            }
+            == 9 {
+              `instruction_o__bpo.op` = ariane_pkg.MULH
+            }
+            == 10 {
+              `instruction_o__bpo.op` = ariane_pkg.MULHSU
+            }
+            == 11 {
+              `instruction_o__bpo.op` = ariane_pkg.MULHU
+            }
+            == 12 {
+              `instruction_o__bpo.op` = ariane_pkg.DIV
+            }
+            == 13 {
+              `instruction_o__bpo.op` = ariane_pkg.DIVU
+            }
+            == 14 {
+              `instruction_o__bpo.op` = ariane_pkg.REM
+            }
+            == 15 {
+              `instruction_o__bpo.op` = ariane_pkg.REMU
+            }
+            else {
+              illegal_instr_non_bm = 1
+            }
+          }
+          {
+            const t598 = (instr__w1#[25..=31] << 3) | instr__w1#[12..=14]
+            match t598 {
+              == 0x107 {
+                `instruction_o__bpo.op` = ariane_pkg.ANDN
+              }
+              == 0x106 {
+                `instruction_o__bpo.op` = ariane_pkg.ORN
+              }
+              == 0x104 {
+                `instruction_o__bpo.op` = ariane_pkg.XNOR
+              }
+              == 0x82 {
+                `instruction_o__bpo.op` = ariane_pkg.SH1ADD
+              }
+              == 0x84 {
+                `instruction_o__bpo.op` = ariane_pkg.SH2ADD
+              }
+              == 0x86 {
+                `instruction_o__bpo.op` = ariane_pkg.SH3ADD
+              }
+              == 46 {
+                `instruction_o__bpo.op` = ariane_pkg.MAX
+              }
+              == 47 {
+                `instruction_o__bpo.op` = ariane_pkg.MAXU
+              }
+              == 44 {
+                `instruction_o__bpo.op` = ariane_pkg.MIN
+              }
+              == 45 {
+                `instruction_o__bpo.op` = ariane_pkg.MINU
+              }
+              == 0x121 {
+                `instruction_o__bpo.op` = ariane_pkg.BCLR
+              }
+              == 0x125 {
+                `instruction_o__bpo.op` = ariane_pkg.BEXT
+              }
+              == 0x1a1 {
+                `instruction_o__bpo.op` = ariane_pkg.BINV
+              }
+              == 0xa1 {
+                `instruction_o__bpo.op` = ariane_pkg.BSET
+              }
+              == 41 {
+                `instruction_o__bpo.op` = ariane_pkg.CLMUL
+              }
+              == 43 {
+                `instruction_o__bpo.op` = ariane_pkg.CLMULH
+              }
+              == 42 {
+                `instruction_o__bpo.op` = ariane_pkg.CLMULR
+              }
+              == 0x181 {
+                `instruction_o__bpo.op` = ariane_pkg.ROL
+              }
+              == 0x185 {
+                `instruction_o__bpo.op` = ariane_pkg.ROR
+              }
+              == 39 {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              == 0xa4 {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              == 0xa2 {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              == 36 {
+                {
+                  {
+                    illegal_instr_bm = 1
+                  }
+                }
+              }
+              == 0xc8 {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              == 0xd8 {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              == 0x1f8 {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              in (0x88, 0x188, 0x288, 0x388) {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              in (0x98, 0x198, 0x298, 0x398) {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              in (0xa8, 0x1a8, 0x2a8, 0x3a8) {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              in (0xb8, 0x1b8, 0x2b8, 0x3b8) {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              == 0xe8 {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              == 0xf8 {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              == 0x170 {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              == 0x150 {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              == 0x178 {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              == 0x158 {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              == 0x140 {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              == 0x148 {
+                {
+                  illegal_instr_bm = 1
+                }
+              }
+              else {
+                illegal_instr_bm = 1
+              }
+            }
+          }
+          {
+            const t686 = (instr__w1#[25..=31] << 3) | instr__w1#[12..=14]
+            match t686 {
+              == 61 {
+                `instruction_o__bpo.op` = ariane_pkg.CZERO_EQZ
+              }
+              == 63 {
+                `instruction_o__bpo.op` = ariane_pkg.CZERO_NEZ
+              }
+              else {
+                illegal_instr_zic = 1
+              }
+            }
+          }
+          unique if false {
+            illegal_instr = illegal_instr_non_bm
+          } elif false {
+            illegal_instr = illegal_instr_non_bm & illegal_instr_zic & 1
+          } elif false {
+            illegal_instr = illegal_instr_non_bm & illegal_instr_bm & 1
+          } elif true {
+            illegal_instr = illegal_instr_non_bm & illegal_instr_bm & 1 & illegal_instr_zic & 1
+          } else {
+          }
+        }
+      }
+      == riscv.OpcodeOp32 {
+        _mux_9 = if instr__w1#[25..=31] == 1 { ariane_pkg.MULT#[0..=3] } else { ariane_pkg.ALU#[0..=3] }
+        `instruction_o__bpo.fu` = _mux_9
+        `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+        `instruction_o__bpo.rs2` = instr__w1#[20..=24]
+        `instruction_o__bpo.rd` = instr__w1#[7..=11]
+        {
+          const t717 = (instr__w1#[25..=31] << 3) | instr__w1#[12..=14]
+          match t717 {
+            == 0 {
+              `instruction_o__bpo.op` = ariane_pkg.ADDW
+            }
+            == 0x100 {
+              `instruction_o__bpo.op` = ariane_pkg.SUBW
+            }
+            == 1 {
+              `instruction_o__bpo.op` = ariane_pkg.SLLW
+            }
+            == 5 {
+              `instruction_o__bpo.op` = ariane_pkg.SRLW
+            }
+            == 0x105 {
+              `instruction_o__bpo.op` = ariane_pkg.SRAW
+            }
+            == 8 {
+              `instruction_o__bpo.op` = ariane_pkg.MULW
+            }
+            == 12 {
+              `instruction_o__bpo.op` = ariane_pkg.DIVW
+            }
+            == 13 {
+              `instruction_o__bpo.op` = ariane_pkg.DIVUW
+            }
+            == 14 {
+              `instruction_o__bpo.op` = ariane_pkg.REMW
+            }
+            == 15 {
+              `instruction_o__bpo.op` = ariane_pkg.REMUW
+            }
+            else {
+              illegal_instr_non_bm = 1
+            }
+          }
+          {
+            const t733 = (instr__w1#[25..=31] << 3) | instr__w1#[12..=14]
+            match t733 {
+              == 0x82 {
+                `instruction_o__bpo.op` = ariane_pkg.SH1ADDUW
+              }
+              == 0x84 {
+                `instruction_o__bpo.op` = ariane_pkg.SH2ADDUW
+              }
+              == 0x86 {
+                `instruction_o__bpo.op` = ariane_pkg.SH3ADDUW
+              }
+              == 32 {
+                `instruction_o__bpo.op` = ariane_pkg.ADDUW
+              }
+              == 0x181 {
+                `instruction_o__bpo.op` = ariane_pkg.ROLW
+              }
+              == 0x185 {
+                `instruction_o__bpo.op` = ariane_pkg.RORW
+              }
+              == 36 {
+                if instr__w1#[20..=24] == 0 {
+                  `instruction_o__bpo.op` = ariane_pkg.ZEXTH
+                } else {
+                  {
+                    illegal_instr_bm = 1
+                  }
+                }
+              }
+              else {
+                illegal_instr_bm = 1
+              }
+            }
+            illegal_instr = illegal_instr_non_bm & illegal_instr_bm & 1
+          }
+        }
+      }
+      == riscv.OpcodeOpImm {
+        `instruction_o__bpo.fu` = ariane_pkg.ALU
+        imm_select = 1
+        `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+        `instruction_o__bpo.rd` = instr__w1#[7..=11]
+        match instr__w1#[12..=14] {
+          == 0 {
+            `instruction_o__bpo.op` = ariane_pkg.ADD
+          }
+          == 2 {
+            `instruction_o__bpo.op` = ariane_pkg.SLTS
+          }
+          == 3 {
+            `instruction_o__bpo.op` = ariane_pkg.SLTU
+          }
+          == 4 {
+            `instruction_o__bpo.op` = ariane_pkg.XORL
+          }
+          == 6 {
+            `instruction_o__bpo.op` = ariane_pkg.ORL
+          }
+          == 7 {
+            `instruction_o__bpo.op` = ariane_pkg.ANDL
+          }
+          == 1 {
+            `instruction_o__bpo.op` = ariane_pkg.SLL
+            if instr__w1#[26..=31] != 0 {
+              illegal_instr_non_bm = 1
+            }
+            if (((instr__w1 >> 25) & 1) != 0) and false {
+              illegal_instr_non_bm = 1
+            }
+          }
+          == 5 {
+            if instr__w1#[26..=31] == 0 {
+              `instruction_o__bpo.op` = ariane_pkg.SRL
+            } elif instr__w1#[26..=31] == 16 {
+              `instruction_o__bpo.op` = ariane_pkg.SRA
+            } else {
+              illegal_instr_non_bm = 1
+            }
+            if (((instr__w1 >> 25) & 1) != 0) and false {
+              illegal_instr_non_bm = 1
+            }
+          }
+          else {
+            illegal_instr_non_bm = 0ub?
+          }
+        }
+        {
+          match instr__w1#[12..=14] {
+            == 1 {
+              if instr__w1#[25..=31] == 48 {
+                if instr__w1#[20..=24] == 4 {
+                  `instruction_o__bpo.op` = ariane_pkg.SEXTB
+                } elif instr__w1#[20..=24] == 5 {
+                  `instruction_o__bpo.op` = ariane_pkg.SEXTH
+                } elif instr__w1#[20..=24] == 2 {
+                  `instruction_o__bpo.op` = ariane_pkg.CPOP
+                } elif instr__w1#[20..=24] == 0 {
+                  `instruction_o__bpo.op` = ariane_pkg.CLZ
+                } elif instr__w1#[20..=24] == 1 {
+                  `instruction_o__bpo.op` = ariane_pkg.CTZ
+                } else {
+                  illegal_instr_bm = 1
+                }
+              } elif true and (instr__w1#[26..=31] == 18) {
+                `instruction_o__bpo.op` = ariane_pkg.BCLRI
+              } else {
+                {
+                  if true and (instr__w1#[26..=31] == 26) {
+                    `instruction_o__bpo.op` = ariane_pkg.BINVI
+                  } else {
+                    {
+                      if true and (instr__w1#[26..=31] == 10) {
+                        `instruction_o__bpo.op` = ariane_pkg.BSETI
+                      } else {
+                        {
+                          {
+                            {
+                              {
+                                {
+                                  {
+                                    {
+                                      {
+                                        {
+                                          {
+                                            {
+                                              {
+                                                illegal_instr_bm = 1
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            == 5 {
+              if instr__w1#[20..=31] == 0x287 {
+                `instruction_o__bpo.op` = ariane_pkg.ORCB
+              } elif true and (instr__w1#[20..=31] == 0x6b8) {
+                `instruction_o__bpo.op` = ariane_pkg.REV8
+              } elif instr__w1#[20..=31] == 0x698 {
+                `instruction_o__bpo.op` = ariane_pkg.REV8
+              } elif true and (instr__w1#[26..=31] == 18) {
+                `instruction_o__bpo.op` = ariane_pkg.BEXTI
+              } else {
+                {
+                  if true and (instr__w1#[26..=31] == 24) {
+                    `instruction_o__bpo.op` = ariane_pkg.RORI
+                  } else {
+                    {
+                      {
+                        {
+                          illegal_instr_bm = 1
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            else {
+              illegal_instr_bm = 1
+            }
+          }
+          illegal_instr = illegal_instr_non_bm & illegal_instr_bm & 1
+        }
+      }
+      == riscv.OpcodeOpImm32 {
+        `instruction_o__bpo.fu` = ariane_pkg.ALU
+        imm_select = 1
+        `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+        `instruction_o__bpo.rd` = instr__w1#[7..=11]
+        {
+          match instr__w1#[12..=14] {
+            == 0 {
+              `instruction_o__bpo.op` = ariane_pkg.ADDW
+            }
+            == 1 {
+              `instruction_o__bpo.op` = ariane_pkg.SLLW
+              if instr__w1#[25..=31] != 0 {
+                illegal_instr_non_bm = 1
+              }
+            }
+            == 5 {
+              if instr__w1#[25..=31] == 0 {
+                `instruction_o__bpo.op` = ariane_pkg.SRLW
+              } elif instr__w1#[25..=31] == 32 {
+                `instruction_o__bpo.op` = ariane_pkg.SRAW
+              } else {
+                illegal_instr_non_bm = 1
+              }
+            }
+            else {
+              illegal_instr_non_bm = 1
+            }
+          }
+          {
+            match instr__w1#[12..=14] {
+              == 1 {
+                if instr__w1#[25..=31] == 48 {
+                  if instr__w1#[20..=24] == 2 {
+                    `instruction_o__bpo.op` = ariane_pkg.CPOPW
+                  } elif instr__w1#[20..=24] == 0 {
+                    `instruction_o__bpo.op` = ariane_pkg.CLZW
+                  } elif instr__w1#[20..=24] == 1 {
+                    `instruction_o__bpo.op` = ariane_pkg.CTZW
+                  } else {
+                    illegal_instr_bm = 1
+                  }
+                } elif instr__w1#[26..=31] == 2 {
+                  `instruction_o__bpo.op` = ariane_pkg.SLLIUW
+                } else {
+                  illegal_instr_bm = 1
+                }
+              }
+              == 5 {
+                if instr__w1#[25..=31] == 48 {
+                  `instruction_o__bpo.op` = ariane_pkg.RORIW
+                } else {
+                  illegal_instr_bm = 1
+                }
+              }
+              else {
+                illegal_instr_bm = 1
+              }
+            }
+            illegal_instr = illegal_instr_non_bm & illegal_instr_bm & 1
+          }
+        }
+      }
+      == riscv.OpcodeStore {
+        `instruction_o__bpo.fu` = ariane_pkg.STORE
+        imm_select = 2
+        `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+        `instruction_o__bpo.rs2` = instr__w1#[20..=24]
+        match instr__w1#[12..=14] {
+          == 0 {
+            `instruction_o__bpo.op` = ariane_pkg.SB
+          }
+          == 1 {
+            `instruction_o__bpo.op` = ariane_pkg.SH
+          }
+          == 2 {
+            `instruction_o__bpo.op` = ariane_pkg.SW
+          }
+          == 3 {
+            {
+              `instruction_o__bpo.op` = ariane_pkg.SD
+            }
+          }
+          else {
+            illegal_instr = 1
+          }
+        }
+      }
+      == riscv.OpcodeLoad {
+        `instruction_o__bpo.fu` = ariane_pkg.LOAD
+        imm_select = 1
+        `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+        `instruction_o__bpo.rd` = instr__w1#[7..=11]
+        match instr__w1#[12..=14] {
+          == 0 {
+            `instruction_o__bpo.op` = ariane_pkg.LB
+          }
+          == 1 {
+            `instruction_o__bpo.op` = ariane_pkg.LH
+          }
+          == 2 {
+            `instruction_o__bpo.op` = ariane_pkg.LW
+          }
+          == 4 {
+            `instruction_o__bpo.op` = ariane_pkg.LBU
+          }
+          == 5 {
+            `instruction_o__bpo.op` = ariane_pkg.LHU
+          }
+          == 6 {
+            {
+              `instruction_o__bpo.op` = ariane_pkg.LWU
+            }
+          }
+          == 3 {
+            {
+              `instruction_o__bpo.op` = ariane_pkg.LD
+            }
+          }
+          else {
+            illegal_instr = 1
+          }
+        }
+      }
+      == riscv.OpcodeStoreFp {
+        if true and (fs_i != riscv.Off) and ((false and ((v_i == 0) or (vfs_i != riscv.Off))) or true) {
+          `instruction_o__bpo.fu` = ariane_pkg.STORE
+          imm_select = 2
+          `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+          `instruction_o__bpo.rs2` = instr__w1#[20..=24]
+          match instr__w1#[12..=14] {
+            == 0 {
+              {
+                illegal_instr = 1
+              }
+            }
+            == 1 {
+              {
+                illegal_instr = 1
+              }
+            }
+            == 2 {
+              {
+                `instruction_o__bpo.op` = ariane_pkg.FSW
+              }
+            }
+            == 3 {
+              {
+                `instruction_o__bpo.op` = ariane_pkg.FSD
+              }
+            }
+            else {
+              illegal_instr = 1
+            }
+          }
+        } else {
+          illegal_instr = 1
+        }
+      }
+      == riscv.OpcodeLoadFp {
+        if true and (fs_i != riscv.Off) and ((false and ((v_i == 0) or (vfs_i != riscv.Off))) or true) {
+          `instruction_o__bpo.fu` = ariane_pkg.LOAD
+          imm_select = 1
+          `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+          `instruction_o__bpo.rd` = instr__w1#[7..=11]
+          match instr__w1#[12..=14] {
+            == 0 {
+              {
+                illegal_instr = 1
+              }
+            }
+            == 1 {
+              {
+                illegal_instr = 1
+              }
+            }
+            == 2 {
+              {
+                `instruction_o__bpo.op` = ariane_pkg.FLW
+              }
+            }
+            == 3 {
+              {
+                `instruction_o__bpo.op` = ariane_pkg.FLD
+              }
+            }
+            else {
+              illegal_instr = 1
+            }
+          }
+        } else {
+          illegal_instr = 1
+        }
+      }
+      in (riscv.OpcodeMadd, riscv.OpcodeMsub, riscv.OpcodeNmsub, riscv.OpcodeNmadd) {
+        if true and (fs_i != riscv.Off) and ((false and ((v_i == 0) or (vfs_i != riscv.Off))) or true) {
+          `instruction_o__bpo.fu` = ariane_pkg.FPU
+          `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+          `instruction_o__bpo.rs2` = instr__w1#[20..=24]
+          `instruction_o__bpo.rd` = instr__w1#[7..=11]
+          imm_select = 6
+          check_fprm = 1
+          match instr__w1#[0..=6] {
+            == riscv.OpcodeMsub {
+              `instruction_o__bpo.op` = ariane_pkg.FMSUB
+            }
+            == riscv.OpcodeNmsub {
+              `instruction_o__bpo.op` = ariane_pkg.FNMSUB
+            }
+            == riscv.OpcodeNmadd {
+              `instruction_o__bpo.op` = ariane_pkg.FNMADD
+            }
+            else {
+              `instruction_o__bpo.op` = ariane_pkg.FMADD
+            }
+          }
+          match instr__w1#[25..=26] {
+            == 0 {
+            }
+            == 1 {
+            }
+            == 2 {
+              {
+                illegal_instr = 1
+              }
+            }
+            == 3 {
+              {
+                illegal_instr = 1
+              }
+            }
+            else {
+              illegal_instr = 1
+            }
+          }
+          {
+            unique if (instr__w1#[12..=14] >= 0) and (instr__w1#[12..=14] <= 4) {
+            } elif instr__w1#[12..=14] == 5 {
+              {
+                illegal_instr = 1
+              }
+              unique if (frm_i >= 0) and (frm_i <= 4) {
+              } else {
+                illegal_instr = 1
+              }
+            } elif instr__w1#[12..=14] == 7 {
+              unique if (frm_i >= 0) and (frm_i <= 4) {
+              } else {
+                illegal_instr = 1
+              }
+            } else {
+              illegal_instr = 1
+            }
+          }
+        } else {
+          illegal_instr = 1
+        }
+      }
+      == riscv.OpcodeOpFp {
+        if true and (fs_i != riscv.Off) and ((false and ((v_i == 0) or (vfs_i != riscv.Off))) or true) {
+          `instruction_o__bpo.fu` = ariane_pkg.FPU
+          `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+          `instruction_o__bpo.rs2` = instr__w1#[20..=24]
+          `instruction_o__bpo.rd` = instr__w1#[7..=11]
+          check_fprm = 1
+          match instr__w1#[27..=31] {
+            == 0 {
+              `instruction_o__bpo.op` = ariane_pkg.FADD
+              `instruction_o__bpo.rs1` = 0
+              `instruction_o__bpo.rs2` = instr__w1#[15..=19]
+              imm_select = 1
+            }
+            == 1 {
+              `instruction_o__bpo.op` = ariane_pkg.FSUB
+              `instruction_o__bpo.rs1` = 0
+              `instruction_o__bpo.rs2` = instr__w1#[15..=19]
+              imm_select = 1
+            }
+            == 2 {
+              `instruction_o__bpo.op` = ariane_pkg.FMUL
+            }
+            == 3 {
+              `instruction_o__bpo.op` = ariane_pkg.FDIV
+            }
+            == 11 {
+              `instruction_o__bpo.op` = ariane_pkg.FSQRT
+              if instr__w1#[20..=24] != 0 {
+                illegal_instr = 1
+              }
+            }
+            == 4 {
+              `instruction_o__bpo.op` = ariane_pkg.FSGNJ
+              check_fprm = 0
+              {
+                if not ((instr__w1#[12..=14] >= 0) and (instr__w1#[12..=14] <= 2)) {
+                  illegal_instr = 1
+                }
+              }
+            }
+            == 5 {
+              `instruction_o__bpo.op` = ariane_pkg.FMIN_MAX
+              check_fprm = 0
+              {
+                if not ((instr__w1#[12..=14] >= 0) and (instr__w1#[12..=14] <= 1)) {
+                  illegal_instr = 1
+                }
+              }
+            }
+            == 8 {
+              `instruction_o__bpo.op` = ariane_pkg.FCVT_F2F
+              `instruction_o__bpo.rs2` = instr__w1#[15..=19]
+              imm_select = 1
+              if instr__w1#[20..=24]#[3..=4] != 0 {
+                illegal_instr = 1
+              }
+              match instr__w1#[20..=24]#[0..=2] {
+                == 0 {
+                }
+                == 1 {
+                }
+                == 2 {
+                  {
+                    illegal_instr = 1
+                  }
+                }
+                == 6 {
+                  {
+                    illegal_instr = 1
+                  }
+                }
+                == 3 {
+                  {
+                    illegal_instr = 1
+                  }
+                }
+                else {
+                  illegal_instr = 1
+                }
+              }
+            }
+            == 20 {
+              `instruction_o__bpo.op` = ariane_pkg.FCMP
+              check_fprm = 0
+              {
+                if not ((instr__w1#[12..=14] >= 0) and (instr__w1#[12..=14] <= 2)) {
+                  illegal_instr = 1
+                }
+              }
+            }
+            == 24 {
+              `instruction_o__bpo.op` = ariane_pkg.FCVT_F2I
+              imm_select = 1
+              if instr__w1#[20..=24]#[2..=4] != 0 {
+                illegal_instr = 1
+              }
+            }
+            == 26 {
+              `instruction_o__bpo.op` = ariane_pkg.FCVT_I2F
+              imm_select = 1
+              if instr__w1#[20..=24]#[2..=4] != 0 {
+                illegal_instr = 1
+              }
+            }
+            == 28 {
+              `instruction_o__bpo.rs2` = instr__w1#[15..=19]
+              check_fprm = 0
+              if (instr__w1#[12..=14] == 0) or false {
+                `instruction_o__bpo.op` = ariane_pkg.FMV_F2X
+              } elif (instr__w1#[12..=14] == 1) or false {
+                `instruction_o__bpo.op` = ariane_pkg.FCLASS
+              } else {
+                illegal_instr = 1
+              }
+              if instr__w1#[20..=24] != 0 {
+                illegal_instr = 1
+              }
+            }
+            == 30 {
+              `instruction_o__bpo.op` = ariane_pkg.FMV_X2F
+              `instruction_o__bpo.rs2` = instr__w1#[15..=19]
+              check_fprm = 0
+              if not ((instr__w1#[12..=14] == 0) or false) {
+                illegal_instr = 1
+              }
+              if instr__w1#[20..=24] != 0 {
+                illegal_instr = 1
+              }
+            }
+            else {
+              illegal_instr = 1
+            }
+          }
+          match instr__w1#[25..=26] {
+            == 0 {
+            }
+            == 1 {
+            }
+            == 2 {
+              {
+                illegal_instr = 1
+              }
+            }
+            == 3 {
+              {
+                illegal_instr = 1
+              }
+            }
+            else {
+              illegal_instr = 1
+            }
+          }
+          if check_fprm != 0 {
+            unique if (instr__w1#[12..=14] >= 0) and (instr__w1#[12..=14] <= 4) {
+            } elif instr__w1#[12..=14] == 5 {
+              {
+                illegal_instr = 1
+              }
+              unique if (frm_i >= 0) and (frm_i <= 4) {
+              } else {
+                illegal_instr = 1
+              }
+            } elif instr__w1#[12..=14] == 7 {
+              unique if (frm_i >= 0) and (frm_i <= 4) {
+              } else {
+                illegal_instr = 1
+              }
+            } else {
+              illegal_instr = 1
+            }
+          }
+        } else {
+          illegal_instr = 1
+        }
+      }
+      == riscv.OpcodeAmo {
+        `instruction_o__bpo.fu` = ariane_pkg.STORE
+        `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+        `instruction_o__bpo.rs2` = instr__w1#[20..=24]
+        `instruction_o__bpo.rd` = instr__w1#[7..=11]
+        if true and (instr__w1#[12..=14] == 2) {
+          match instr__w1#[27..=31] {
+            == 0 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_ADDW
+            }
+            == 1 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_SWAPW
+            }
+            == 2 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_LRW
+              if instr__w1#[20..=24] != 0 {
+                illegal_instr = 1
+              }
+            }
+            == 3 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_SCW
+            }
+            == 4 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_XORW
+            }
+            == 8 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_ORW
+            }
+            == 12 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_ANDW
+            }
+            == 16 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_MINW
+            }
+            == 20 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_MAXW
+            }
+            == 24 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_MINWU
+            }
+            == 28 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_MAXWU
+            }
+            else {
+              illegal_instr = 1
+            }
+          }
+        } elif true and (instr__w1#[12..=14] == 3) {
+          match instr__w1#[27..=31] {
+            == 0 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_ADDD
+            }
+            == 1 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_SWAPD
+            }
+            == 2 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_LRD
+              if instr__w1#[20..=24] != 0 {
+                illegal_instr = 1
+              }
+            }
+            == 3 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_SCD
+            }
+            == 4 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_XORD
+            }
+            == 8 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_ORD
+            }
+            == 12 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_ANDD
+            }
+            == 16 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_MIND
+            }
+            == 20 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_MAXD
+            }
+            == 24 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_MINDU
+            }
+            == 28 {
+              `instruction_o__bpo.op` = ariane_pkg.AMO_MAXDU
+            }
+            else {
+              illegal_instr = 1
+            }
+          }
+        } else {
+          illegal_instr = 1
+        }
+      }
+      == riscv.OpcodeBranch {
+        imm_select = 3
+        `instruction_o__bpo.fu` = ariane_pkg.CTRL_FLOW
+        `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+        `instruction_o__bpo.rs2` = instr__w1#[20..=24]
+        is_control_flow_instr_o = 1
+        match instr__w1#[12..=14] {
+          == 0 {
+            `instruction_o__bpo.op` = ariane_pkg.EQ
+          }
+          == 1 {
+            `instruction_o__bpo.op` = ariane_pkg.NE
+          }
+          == 4 {
+            `instruction_o__bpo.op` = ariane_pkg.LTS
+          }
+          == 5 {
+            `instruction_o__bpo.op` = ariane_pkg.GES
+          }
+          == 6 {
+            `instruction_o__bpo.op` = ariane_pkg.LTU
+          }
+          == 7 {
+            `instruction_o__bpo.op` = ariane_pkg.GEU
+          }
+          else {
+            is_control_flow_instr_o = 0
+            illegal_instr = 1
+          }
+        }
+      }
+      == riscv.OpcodeJalr {
+        `instruction_o__bpo.fu` = ariane_pkg.CTRL_FLOW
+        `instruction_o__bpo.op` = ariane_pkg.JALR
+        `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+        imm_select = 1
+        `instruction_o__bpo.rd` = instr__w1#[7..=11]
+        is_control_flow_instr_o = 1
+        if instr__w1#[12..=14] != 0 {
+          illegal_instr = 1
+        }
+      }
+      == riscv.OpcodeJal {
+        `instruction_o__bpo.fu` = ariane_pkg.CTRL_FLOW
+        imm_select = 5
+        `instruction_o__bpo.rd` = instr__w1#[7..=11]
+        is_control_flow_instr_o = 1
+      }
+      == riscv.OpcodeAuipc {
+        `instruction_o__bpo.fu` = ariane_pkg.ALU
+        imm_select = 4
+        `instruction_o__bpo.use_pc` = 1
+        `instruction_o__bpo.rd` = instr__w1#[7..=11]
+      }
+      == riscv.OpcodeLui {
+        imm_select = 4
+        `instruction_o__bpo.fu` = ariane_pkg.ALU
+        `instruction_o__bpo.rd` = instr__w1#[7..=11]
+      }
+      else {
+        illegal_instr = 1
+      }
+    }
+  }
+  {
+    if (((~ex_i.valid) & 1) != 0) and ((is_illegal_i != 0) or (illegal_instr != 0)) {
+      `instruction_o__bpo.fu` = ariane_pkg.CVXIF
+      `instruction_o__bpo.rs1` = instr__w1#[15..=19]
+      `instruction_o__bpo.rs2` = instr__w1#[20..=24]
+      `instruction_o__bpo.rd` = instr__w1#[7..=11]
+      `instruction_o__bpo.op` = ariane_pkg.OFFLOAD
+      _mux_14 = if (instr__w1#[0..=6] == riscv.OpcodeMadd) or (instr__w1#[0..=6] == riscv.OpcodeMsub) or (instr__w1#[0..=6] == riscv.OpcodeNmadd) or (instr__w1#[0..=6] == riscv.OpcodeNmsub) { 6 } else { 7 }
+      imm_select = _mux_14
+    }
+  }
+  imm_i_type = instruction_i#[20..=31]#sext[0..=11]#[0..=63]
+  imm_s_type = ((instruction_i#[25..=31] << 5) | instruction_i#[7..=11])#sext[0..=11]#[0..=63]
+  imm_sb_type = ((((instruction_i >> 31) & 1) << 12) | (((instruction_i >> 7) & 1) << 11) | (instruction_i#[25..=30] << 5) | (instruction_i#[8..=11] << 1))#sext[0..=12]#[0..=63]
+  imm_u_type = (instruction_i#[12..=31] << 12)#sext[0..=31]#[0..=63]
+  {
+    _rep_15 = if ((instruction_i >> 31) & 1) != 0 { 0xfffffffffff } else { 0 }
+    imm_uj_type = (_rep_15 << 20) | (instruction_i#[12..=19] << 12) | (((instruction_i >> 20) & 1) << 11) | (instruction_i#[21..=30] << 1)
+  }
+  match imm_select {
+    == 1 {
+      `instruction_o__bpo.result` = imm_i_type
+      `instruction_o__bpo.use_imm` = 1
+    }
+    == 2 {
+      `instruction_o__bpo.result` = imm_s_type
+      `instruction_o__bpo.use_imm` = 1
+    }
+    == 3 {
+      `instruction_o__bpo.result` = imm_sb_type
+      `instruction_o__bpo.use_imm` = 1
+    }
+    == 4 {
+      `instruction_o__bpo.result` = imm_u_type
+      `instruction_o__bpo.use_imm` = 1
+    }
+    == 5 {
+      `instruction_o__bpo.result` = imm_uj_type
+      `instruction_o__bpo.use_imm` = 1
+    }
+    == 6 {
+      `instruction_o__bpo.result` = instr__w1#[27..=31]
+      `instruction_o__bpo.use_imm` = 0
+    }
+    == 7 {
+      `instruction_o__bpo.result` = instr__w1#[7..=11]
+      `instruction_o__bpo.use_imm` = 0
+    }
+    else {
+      `instruction_o__bpo.result` = 0
+      `instruction_o__bpo.use_imm` = 0
+    }
+  }
+  mut `instruction_o__bpo.valid` = `instruction_o__bpo.ex.valid`
+  const t1436 = (ex_i.cause << 0x8c) | (ex_i.tval << 0x4c) | (ex_i.tval2 << 35) | (ex_i.tinst << 3) | (ex_i.gva << 2) | (ex_i.valid << 1) | ex_i.timing
+  `instruction_o__bpo.ex.cause` = (t1436 >> 0x8c)#[0..=63]
+  `instruction_o__bpo.ex.tval` = (t1436 >> 0x4c)#[0..=63]
+  mut `instruction_o__bpo.ex.tval2` = (t1436 >> 35)#[0..=40]
+  `instruction_o__bpo.ex.tinst` = (t1436 >> 3)#[0..=31]
+  `instruction_o__bpo.ex.gva` = (t1436 >> 2) & 1
+  `instruction_o__bpo.ex.valid` = (t1436 >> 1) & 1
+  mut `instruction_o__bpo.ex.timing` = t1436 & 1
+  orig_instr_o = 0
+  {
+    if ((~ex_i.valid) & 1) != 0 {
+      {
+        _mux_17 = if is_compressed_i != 0 { compressed_instr_i } else { instruction_i }
+        orig_instr_o = _mux_17#[0..=31]
+      }
+      {
+        _mux_18 = if is_compressed_i != 0 { compressed_instr_i } else { instruction_i }
+        `instruction_o__bpo.ex.tval` = _mux_18
+      }
+      {
+        `instruction_o__bpo.ex.tinst` = 0
+      }
+      if (illegal_instr != 0) or (is_illegal_i != 0) {
+        `instruction_o__bpo.ex.cause` = riscv.ILLEGAL_INSTR
+      } else {
+        {
+          if ecall != 0 {
+            `instruction_o__bpo.ex.valid` = 1
+            if (priv_lvl_i == riscv.PRIV_LVL_S) and true {
+              _mux_19 = riscv.ENV_CALL_SMODE#[0..=63]
+              `instruction_o__bpo.ex.cause` = _mux_19
+            } elif (priv_lvl_i == riscv.PRIV_LVL_U) and true {
+              `instruction_o__bpo.ex.cause` = riscv.ENV_CALL_UMODE
+            } elif priv_lvl_i == riscv.PRIV_LVL_M {
+              `instruction_o__bpo.ex.cause` = riscv.ENV_CALL_MMODE
+            }
+            {
+              `instruction_o__bpo.ex.tval` = 0
+            }
+          } elif ebreak != 0 {
+            `instruction_o__bpo.ex.valid` = 1
+            `instruction_o__bpo.ex.cause` = riscv.BREAKPOINT
+            {
+              `instruction_o__bpo.ex.gva` = 0
+            }
+            {
+              `instruction_o__bpo.ex.tval` = pc_i
+            }
+          }
+        }
+      }
+    }
+  }
+  interrupt_cause = 0
+  {
+    if (((irq_ctrl_i.mie >> riscv.IRQ_S_TIMER) & 1) != 0) and (((irq_ctrl_i.mip >> riscv.IRQ_S_TIMER) & 1) != 0) {
+      interrupt_cause = 0x8000000000000005
+    }
+    if (((irq_ctrl_i.mie >> riscv.IRQ_S_SOFT) & 1) != 0) and (((irq_ctrl_i.mip >> riscv.IRQ_S_SOFT) & 1) != 0) {
+      interrupt_cause = 0x8000000000000001
+    }
+    if (((irq_ctrl_i.mie >> riscv.IRQ_S_EXT) & 1) != 0) and (((((irq_ctrl_i.mip >> riscv.IRQ_S_EXT) & 1) | ((irq_i >> ariane_pkg.SupervisorIrq) & 1)) & 1) != 0) {
+      interrupt_cause = 0x8000000000000009
+    }
+  }
+  if (((irq_ctrl_i.mip >> riscv.IRQ_M_TIMER) & 1) != 0) and (((irq_ctrl_i.mie >> riscv.IRQ_M_TIMER) & 1) != 0) {
+    interrupt_cause = 0x8000000000000007
+  }
+  {
+    if (((irq_ctrl_i.mip >> riscv.IRQ_M_SOFT) & 1) != 0) and (((irq_ctrl_i.mie >> riscv.IRQ_M_SOFT) & 1) != 0) {
+      interrupt_cause = 0x8000000000000003
+    }
+  }
+  if (((irq_ctrl_i.mip >> riscv.IRQ_M_EXT) & 1) != 0) and (((irq_ctrl_i.mie >> riscv.IRQ_M_EXT) & 1) != 0) {
+    interrupt_cause = 0x800000000000000b
+  }
+  if (((interrupt_cause >> 63) & 1) != 0) and (irq_ctrl_i.global_enable != 0) {
+    if (((irq_ctrl_i.mideleg << 1) >> (interrupt_cause#[0..=5] + 1)) & 1) != 0 {
+      {
+        if (true and (irq_ctrl_i.sie != 0) and (priv_lvl_i == riscv.PRIV_LVL_S)) or (true and (priv_lvl_i == riscv.PRIV_LVL_U)) {
+          `instruction_o__bpo.ex.valid` = 1
+          `instruction_o__bpo.ex.cause` = interrupt_cause
+        }
+      }
+    } else {
+      `instruction_o__bpo.ex.valid` = 1
+      `instruction_o__bpo.ex.cause` = interrupt_cause
+    }
+  }
+  if true and (debug_req_i != 0) and (debug_mode_i == 0) {
+    `instruction_o__bpo.ex.valid` = 1
+    `instruction_o__bpo.ex.cause` = riscv.DEBUG_REQUEST
+  }
+  instruction_o.pc = `instruction_o__bpo.pc`
+  instruction_o.trans_id = 0
+  instruction_o.fu = `instruction_o__bpo.fu`
+  instruction_o.op = `instruction_o__bpo.op`
+  instruction_o.rs1 = `instruction_o__bpo.rs1`
+  instruction_o.rs2 = `instruction_o__bpo.rs2`
+  instruction_o.rd = `instruction_o__bpo.rd`
+  instruction_o.result = `instruction_o__bpo.result`
+  instruction_o.valid = `instruction_o__bpo.valid`
+  instruction_o.use_imm = `instruction_o__bpo.use_imm`
+  instruction_o.use_zimm = `instruction_o__bpo.use_zimm`
+  instruction_o.use_pc = `instruction_o__bpo.use_pc`
+  instruction_o.ex.cause = `instruction_o__bpo.ex.cause`
+  instruction_o.ex.tval = `instruction_o__bpo.ex.tval`
+  instruction_o.ex.tval2 = `instruction_o__bpo.ex.tval2`
+  instruction_o.ex.tinst = `instruction_o__bpo.ex.tinst`
+  instruction_o.ex.gva = `instruction_o__bpo.ex.gva`
+  instruction_o.ex.valid = `instruction_o__bpo.ex.valid`
+  instruction_o.ex.timing = `instruction_o__bpo.ex.timing`
+  instruction_o.bp.cf = `instruction_o__bpo.bp.cf`
+  instruction_o.bp.predict_address = `instruction_o__bpo.bp.predict_address`
+  instruction_o.is_compressed = `instruction_o__bpo.is_compressed`
+  instruction_o.is_macro_instr = `instruction_o__bpo.is_macro_instr`
+  instruction_o.is_last_macro_instr = `instruction_o__bpo.is_last_macro_instr`
+  instruction_o.is_double_rd_macro_instr = `instruction_o__bpo.is_double_rd_macro_instr`
+  instruction_o.vfp = 0
+  instruction_o.is_zcmt = `instruction_o__bpo.is_zcmt`
+}

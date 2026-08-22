@@ -1,0 +1,370 @@
+const axi_pkg = import("axi_pkg")
+const ariane_pkg = import("ariane_pkg")
+
+pub mod axi_adapter_p1::[timecheck=false](clk_i:u1, rst_ni:u1, req_i:u1, type_i:u1, amo_i:u4, addr_i:u64, we_i:u1, wdata_i:u128, be_i:u16, size_i:u2, id_i:u4, axi_resp_i:(aw_ready:u1, ar_ready:u1, w_ready:u1, b_valid:u1, b:(id:u4, resp:u2, user:u64), r_valid:u1, r:(id:u4, data:u64, resp:u2, last:u1, user:u64))) -> (gnt_o:u1@[], valid_o:u1@[], rdata_o:u128@[], id_o:u4@[], critical_word_o:u64@[], critical_word_valid_o:u1@[], axi_req_o:(aw:(id:u4, addr:u64, len:u8, size:u3, burst:u2, lock:u1, cache:u4, prot:u3, qos:u4, region:u4, atop:u6, user:u64), aw_valid:u1, w:(data:u64, strb:u8, last:u1, user:u64), w_valid:u1, b_ready:u1, ar:(id:u4, addr:u64, len:u8, size:u3, burst:u2, lock:u1, cache:u4, prot:u3, qos:u4, region:u4, user:u64), ar_valid:u1, r_ready:u1)@[]) {
+  mut _mux_10:u128 = 0
+  mut _mux_5:u4 = 0
+  mut amo_returns_data:u1 = 0
+  mut amo_s1:u4 = 0
+  mut atop:u6 = 0
+  mut is_load:u1 = 0
+  mut is_swap_or_cmp:u1 = 0
+  reg state_q:u4:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg cnt_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg cache_line_q:u128:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg addr_offset_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg id_q:u4:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg amo_q:u4:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg size_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg outstanding_aw_cnt_q:u3:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  mut cache_line_d:u128 = 0
+  mut addr_offset_d:u2 = 0
+  mut id_d:u4 = 0
+  mut index:u1 = 0
+  mut amo_d:u4 = 0
+  mut size_d:u2 = 0
+  mut outstanding_aw_cnt_d:u3 = 0
+  mut `axi_req_o__bpo.aw.len` = 0
+  mut `axi_req_o__bpo.aw.lock` = 0
+  mut `axi_req_o__bpo.aw.prot` = 0
+  mut `axi_req_o__bpo.aw.qos` = 0
+  mut `axi_req_o__bpo.aw.region` = 0
+  mut `axi_req_o__bpo.aw.user` = 0
+  mut `axi_req_o__bpo.aw_valid` = 0
+  mut `axi_req_o__bpo.w.data` = 0
+  mut `axi_req_o__bpo.w.strb` = 0
+  mut `axi_req_o__bpo.w.last` = 0
+  mut `axi_req_o__bpo.w.user` = 0
+  mut `axi_req_o__bpo.w_valid` = 0
+  mut `axi_req_o__bpo.b_ready` = 0
+  mut `axi_req_o__bpo.ar.addr` = 0
+  mut `axi_req_o__bpo.ar.len` = 0
+  mut `axi_req_o__bpo.ar.lock` = 0
+  mut `axi_req_o__bpo.ar.prot` = 0
+  mut `axi_req_o__bpo.ar.qos` = 0
+  mut `axi_req_o__bpo.ar.region` = 0
+  mut `axi_req_o__bpo.ar.user` = 0
+  mut `axi_req_o__bpo.ar_valid` = 0
+  mut `axi_req_o__bpo.r_ready` = 0
+  mut amo:u4 = 0
+  mut atop_from_amo:u6 = 0
+  mut _mux_2:u2 = 0
+  mut state_d:u4 = 0sb?
+  mut cnt_d = 0ub?
+  cache_line_d = 0sb?
+  addr_offset_d = 0sb?
+  id_d = 0sb?
+  index = 0ub?
+  amo_d = 0sb?
+  size_d = 0sb?
+  outstanding_aw_cnt_d = 0sb?
+  gnt_o = 0ub?
+  valid_o = 0ub?
+  rdata_o = 0sb?
+  id_o = 0sb?
+  critical_word_o = 0sb?
+  critical_word_valid_o = 0ub?
+  const any_outstanding_aw__w1 = unsigned(outstanding_aw_cnt_q != 0)
+  mut `axi_req_o__bpo.aw.addr` = addr_i
+  mut `axi_req_o__bpo.aw.size` = size_i
+  mut `axi_req_o__bpo.aw.burst` = axi_pkg.BURST_INCR
+  mut `axi_req_o__bpo.aw.cache` = axi_pkg.CACHE_MODIFIABLE
+  mut `axi_req_o__bpo.aw.id` = id_i
+  amo = 0sb?
+  const amo__w1 = amo_i
+  atop_from_amo = 0sb?
+  mut result:u6 = 0sb?
+  result = unique if amo__w1 == ariane_pkg.AMO_NONE { axi_pkg.ATOP_NONE#[0..=1] << 4 } elif amo__w1 == ariane_pkg.AMO_SWAP { axi_pkg.ATOP_ATOMICSWAP#[0..=5] } elif amo__w1 == ariane_pkg.AMO_ADD { (axi_pkg.ATOP_ATOMICLOAD#[0..=1] << 4) | ((axi_pkg.ATOP_LITTLE_END & 1) << 3) | axi_pkg.ATOP_ADD#[0..=2] } elif amo__w1 == ariane_pkg.AMO_AND { (axi_pkg.ATOP_ATOMICLOAD#[0..=1] << 4) | ((axi_pkg.ATOP_LITTLE_END & 1) << 3) | axi_pkg.ATOP_CLR#[0..=2] } elif amo__w1 == ariane_pkg.AMO_OR { (axi_pkg.ATOP_ATOMICLOAD#[0..=1] << 4) | ((axi_pkg.ATOP_LITTLE_END & 1) << 3) | axi_pkg.ATOP_SET#[0..=2] } elif amo__w1 == ariane_pkg.AMO_XOR { (axi_pkg.ATOP_ATOMICLOAD#[0..=1] << 4) | ((axi_pkg.ATOP_LITTLE_END & 1) << 3) | axi_pkg.ATOP_EOR#[0..=2] } elif amo__w1 == ariane_pkg.AMO_MAX { (axi_pkg.ATOP_ATOMICLOAD#[0..=1] << 4) | ((axi_pkg.ATOP_LITTLE_END & 1) << 3) | axi_pkg.ATOP_SMAX#[0..=2] } elif amo__w1 == ariane_pkg.AMO_MAXU { (axi_pkg.ATOP_ATOMICLOAD#[0..=1] << 4) | ((axi_pkg.ATOP_LITTLE_END & 1) << 3) | axi_pkg.ATOP_UMAX#[0..=2] } elif amo__w1 == ariane_pkg.AMO_MIN { (axi_pkg.ATOP_ATOMICLOAD#[0..=1] << 4) | ((axi_pkg.ATOP_LITTLE_END & 1) << 3) | axi_pkg.ATOP_SMIN#[0..=2] } elif amo__w1 == ariane_pkg.AMO_MINU { (axi_pkg.ATOP_ATOMICLOAD#[0..=1] << 4) | ((axi_pkg.ATOP_LITTLE_END & 1) << 3) | axi_pkg.ATOP_UMIN#[0..=2] } elif amo__w1 == ariane_pkg.AMO_CAS1 { axi_pkg.ATOP_NONE#[0..=1] << 4 } elif amo__w1 == ariane_pkg.AMO_CAS2 { axi_pkg.ATOP_NONE#[0..=1] << 4 } else { 0 }
+  const atop_from_amo__w1 = result
+  mut `axi_req_o__bpo.aw.atop` = atop_from_amo__w1
+  `axi_req_o__bpo.ar.addr` = addr_i
+  if true and (type_i != ariane_pkg.SINGLE_REQ) {
+    `axi_req_o__bpo.ar.addr`#[0..=3] = 0
+  }
+  mut `axi_req_o__bpo.ar.size` = size_i
+  _mux_2 = axi_pkg.BURST_INCR#[0..=1]
+  mut `axi_req_o__bpo.ar.burst` = _mux_2
+  mut `axi_req_o__bpo.ar.cache` = axi_pkg.CACHE_MODIFIABLE
+  mut `axi_req_o__bpo.ar.id` = id_i
+  `axi_req_o__bpo.w.data` = wdata_i#[0..=63]
+  `axi_req_o__bpo.w.strb` = be_i#[0..=7]
+  critical_word_valid_o = 0
+  id_d = id_q
+  amo_d = amo_q
+  atop_from_amo = atop_from_amo__w1
+  outstanding_aw_cnt_d = outstanding_aw_cnt_q
+  gnt_o = 0
+  cnt_d = cnt_q
+  amo = amo__w1
+  rdata_o = cache_line_q
+  index = 0
+  addr_offset_d = addr_offset_q
+  valid_o = 0
+  state_d = state_q
+  id_o = axi_resp_i.r.id
+  size_d = size_q
+  critical_word_o = axi_resp_i.r.data
+  cache_line_d = cache_line_q
+  match state_q {
+    == 0 {
+      cnt_d = 0
+      if req_i != 0 {
+        if we_i != 0 {
+          if (any_outstanding_aw__w1 == 0) or ((id_i == id_q) and (amo_i == ariane_pkg.AMO_NONE)) {
+            `axi_req_o__bpo.aw_valid` = 1
+            `axi_req_o__bpo.w_valid` = 1
+            `axi_req_o__bpo.aw.lock` = unsigned(amo_i == ariane_pkg.AMO_SC)
+            if type_i == ariane_pkg.SINGLE_REQ {
+              `axi_req_o__bpo.w.last` = 1
+              gnt_o = axi_resp_i.aw_ready & axi_resp_i.w_ready & 1
+              const t129 = ((axi_resp_i.aw_ready & 1) << 1) | (axi_resp_i.w_ready & 1)
+              state_d = unique if t129 == 3 { 1 } elif t129 == 1 { 2 } elif t129 == 2 { 3 } else { 0 }
+              if axi_resp_i.aw_ready != 0 {
+                id_d = id_i
+                amo_d = amo_i
+                size_d = size_i
+              }
+            } else {
+              assert(amo_i == ariane_pkg.AMO_NONE)
+              `axi_req_o__bpo.aw.len` = 1
+              `axi_req_o__bpo.w.data` = wdata_i#[0..=63]
+              `axi_req_o__bpo.w.strb` = be_i#[0..=7]
+              cnt_d = if axi_resp_i.w_ready != 0 { 0 } else { 1 }
+              const t144 = ((axi_resp_i.aw_ready & 1) << 1) | (axi_resp_i.w_ready & 1)
+              match t144 {
+                == 3 {
+                  state_d = 3
+                }
+                == 1 {
+                  state_d = 4
+                }
+                == 2 {
+                  state_d = 3
+                }
+                else {
+                }
+              }
+            }
+          }
+        } elif any_outstanding_aw__w1 == 0 {
+          `axi_req_o__bpo.ar_valid` = 1
+          `axi_req_o__bpo.ar.lock` = unsigned(amo_i == ariane_pkg.AMO_LR)
+          gnt_o = axi_resp_i.ar_ready
+          if type_i != ariane_pkg.SINGLE_REQ {
+            assert(amo_i == ariane_pkg.AMO_NONE)
+            `axi_req_o__bpo.ar.len` = 1
+            cnt_d = 1
+          }
+          if axi_resp_i.ar_ready != 0 {
+            _mux_5 = if type_i == ariane_pkg.SINGLE_REQ { 6 } else { 7 }
+            state_d = _mux_5
+            addr_offset_d = (addr_i >> 3) & 1
+          }
+        }
+      }
+    }
+    == 2 {
+      `axi_req_o__bpo.aw_valid` = 1
+      if axi_resp_i.aw_ready != 0 {
+        gnt_o = 1
+        state_d = 1
+        id_d = id_i
+        amo_d = amo_i
+        size_d = size_i
+      }
+    }
+    == 4 {
+      `axi_req_o__bpo.w_valid` = 1
+      `axi_req_o__bpo.w.last` = unsigned(cnt_q == 0)
+      if type_i == ariane_pkg.SINGLE_REQ {
+        `axi_req_o__bpo.w.data` = wdata_i#[0..=63]
+        `axi_req_o__bpo.w.strb` = be_i#[0..=7]
+      } else {
+        `axi_req_o__bpo.w.data` = ((wdata_i << 0x40) >> ((((1 - cnt_q) & 1) * 0x40) + 0x40))#[0..=63]
+        `axi_req_o__bpo.w.strb` = ((be_i << 8) >> ((((1 - cnt_q) & 1) * 8) + 8))#[0..=7]
+      }
+      `axi_req_o__bpo.aw_valid` = 1
+      `axi_req_o__bpo.aw.len` = 1
+      const t182 = ((axi_resp_i.aw_ready & 1) << 1) | (axi_resp_i.w_ready & 1)
+      match t182 {
+        == 1 {
+          if cnt_q == 0 {
+            state_d = 5
+          } else {
+            cnt_d = (cnt_q - 1)#[0..=31] & 1
+          }
+        }
+        == 2 {
+          state_d = 3
+        }
+        == 3 {
+          if cnt_q == 0 {
+            state_d = 1
+            gnt_o = 1
+          } else {
+            state_d = 3
+            cnt_d = (cnt_q - 1)#[0..=31] & 1
+          }
+        }
+        else {
+        }
+      }
+    }
+    == 5 {
+      `axi_req_o__bpo.aw_valid` = 1
+      `axi_req_o__bpo.aw.len` = 1
+      if axi_resp_i.aw_ready != 0 {
+        state_d = 1
+        gnt_o = 1
+      }
+    }
+    == 3 {
+      `axi_req_o__bpo.w_valid` = 1
+      if type_i != ariane_pkg.SINGLE_REQ {
+        `axi_req_o__bpo.w.data` = ((wdata_i << 0x40) >> ((((1 - cnt_q) & 1) * 0x40) + 0x40))#[0..=63]
+        `axi_req_o__bpo.w.strb` = ((be_i << 8) >> ((((1 - cnt_q) & 1) * 8) + 8))#[0..=7]
+      }
+      if cnt_q == 0 {
+        `axi_req_o__bpo.w.last` = 1
+        if axi_resp_i.w_ready != 0 {
+          state_d = 1
+          gnt_o = 1
+        }
+      } elif axi_resp_i.w_ready != 0 {
+        cnt_d = (cnt_q - 1)#[0..=31] & 1
+      }
+    }
+    == 1 {
+      id_o = axi_resp_i.b.id
+      if (axi_resp_i.b_valid != 0) and (any_outstanding_aw__w1 == 0) {
+        `axi_req_o__bpo.b_ready` = 1
+        amo_s1 = 0ub????
+        amo_s1 = amo_q
+        amo_returns_data = 0ub?
+        atop = 0ub??????
+        amo = amo_s1
+        result = 0
+        result = unique if amo == ariane_pkg.AMO_NONE { axi_pkg.ATOP_NONE#[0..=1] << 4 } elif amo == ariane_pkg.AMO_SWAP { axi_pkg.ATOP_ATOMICSWAP#[0..=5] } elif amo == ariane_pkg.AMO_ADD { (axi_pkg.ATOP_ATOMICLOAD#[0..=1] << 4) | ((axi_pkg.ATOP_LITTLE_END & 1) << 3) | axi_pkg.ATOP_ADD#[0..=2] } elif amo == ariane_pkg.AMO_AND { (axi_pkg.ATOP_ATOMICLOAD#[0..=1] << 4) | ((axi_pkg.ATOP_LITTLE_END & 1) << 3) | axi_pkg.ATOP_CLR#[0..=2] } elif amo == ariane_pkg.AMO_OR { (axi_pkg.ATOP_ATOMICLOAD#[0..=1] << 4) | ((axi_pkg.ATOP_LITTLE_END & 1) << 3) | axi_pkg.ATOP_SET#[0..=2] } elif amo == ariane_pkg.AMO_XOR { (axi_pkg.ATOP_ATOMICLOAD#[0..=1] << 4) | ((axi_pkg.ATOP_LITTLE_END & 1) << 3) | axi_pkg.ATOP_EOR#[0..=2] } elif amo == ariane_pkg.AMO_MAX { (axi_pkg.ATOP_ATOMICLOAD#[0..=1] << 4) | ((axi_pkg.ATOP_LITTLE_END & 1) << 3) | axi_pkg.ATOP_SMAX#[0..=2] } elif amo == ariane_pkg.AMO_MAXU { (axi_pkg.ATOP_ATOMICLOAD#[0..=1] << 4) | ((axi_pkg.ATOP_LITTLE_END & 1) << 3) | axi_pkg.ATOP_UMAX#[0..=2] } elif amo == ariane_pkg.AMO_MIN { (axi_pkg.ATOP_ATOMICLOAD#[0..=1] << 4) | ((axi_pkg.ATOP_LITTLE_END & 1) << 3) | axi_pkg.ATOP_SMIN#[0..=2] } elif amo == ariane_pkg.AMO_MINU { (axi_pkg.ATOP_ATOMICLOAD#[0..=1] << 4) | ((axi_pkg.ATOP_LITTLE_END & 1) << 3) | axi_pkg.ATOP_UMIN#[0..=2] } elif amo == ariane_pkg.AMO_CAS1 { axi_pkg.ATOP_NONE#[0..=1] << 4 } elif amo == ariane_pkg.AMO_CAS2 { axi_pkg.ATOP_NONE#[0..=1] << 4 } else { 0 }
+        atop_from_amo = result
+        atop = atop_from_amo
+        is_load = 0ub?
+        is_load = unsigned(atop#[4..=5] == axi_pkg.ATOP_ATOMICLOAD)
+        is_swap_or_cmp = 0ub?
+        is_swap_or_cmp = unsigned(atop#[4..=5] == axi_pkg.ATOP_ATOMICSWAP#[4..=5])
+        amo_returns_data = unsigned((is_load != 0) or (is_swap_or_cmp != 0))
+        if amo_returns_data != 0 {
+          if axi_resp_i.r_valid != 0 {
+            valid_o = 1
+            `axi_req_o__bpo.r_ready` = 1
+            state_d = 0
+            rdata_o = axi_resp_i.r.data
+          } else {
+            state_d = 9
+          }
+        } else {
+          valid_o = 1
+          state_d = 0
+          if amo_q == ariane_pkg.AMO_SC {
+            if axi_resp_i.b.resp == axi_pkg.RESP_EXOKAY {
+              rdata_o = 0
+            } else {
+              _mux_10 = if size_q == 2 { 0x100000001 } else { 1 }
+              rdata_o = _mux_10
+            }
+          }
+        }
+      } elif (amo_q == ariane_pkg.AMO_NONE) and (outstanding_aw_cnt_q != 7) {
+        state_d = 0
+        outstanding_aw_cnt_d = (outstanding_aw_cnt_q + 1)#[0..=2]
+      }
+    }
+    == 9 {
+      if axi_resp_i.r_valid != 0 {
+        `axi_req_o__bpo.r_ready` = 1
+        state_d = 0
+        valid_o = 1
+        rdata_o = axi_resp_i.r.data
+      }
+    }
+    in (7, 6) {
+      {
+        index = (1 - cnt_q) & 1
+      }
+      `axi_req_o__bpo.r_ready` = 1
+      if axi_resp_i.r_valid != 0 {
+        {
+          if index == addr_offset_q {
+            critical_word_valid_o = 1
+            critical_word_o = axi_resp_i.r.data
+          }
+        }
+        if axi_resp_i.r.last != 0 {
+          id_d = axi_resp_i.r.id
+          state_d = 8
+        }
+        if state_q == 7 {
+          const t324 = index * 0x40
+          cache_line_d = ((cache_line_d & (~(0xffffffffffffffff << t324))) | (axi_resp_i.r.data#[0..=63] << t324))#[0..=127]
+        } else {
+          cache_line_d#[0..=63] = axi_resp_i.r.data#[0..=63]
+        }
+        cnt_d = (cnt_q - 1)#[0..=31] & 1
+      }
+    }
+    == 8 {
+      valid_o = 1
+      state_d = 0
+      id_o = id_q
+    }
+    else {
+      state_d = 0
+    }
+  }
+  if (any_outstanding_aw__w1 != 0) and (axi_resp_i.b_valid != 0) {
+    `axi_req_o__bpo.b_ready` = 1
+    valid_o = 1
+    outstanding_aw_cnt_d = (outstanding_aw_cnt_d - 1)#[0..=31]#[0..=2]
+  }
+  if rst_ni != 0 {
+    state_q = state_d
+    cnt_q = cnt_d
+    cache_line_q = cache_line_d
+    addr_offset_q = addr_offset_d
+    id_q = id_d
+    amo_q = amo_d
+    size_q = size_d
+    outstanding_aw_cnt_q = outstanding_aw_cnt_d
+  }
+  axi_req_o.aw.id = `axi_req_o__bpo.aw.id`
+  axi_req_o.aw.addr = `axi_req_o__bpo.aw.addr`
+  axi_req_o.aw.len = `axi_req_o__bpo.aw.len`
+  axi_req_o.aw.size = `axi_req_o__bpo.aw.size`
+  axi_req_o.aw.burst = `axi_req_o__bpo.aw.burst`
+  axi_req_o.aw.lock = `axi_req_o__bpo.aw.lock`
+  axi_req_o.aw.cache = `axi_req_o__bpo.aw.cache`
+  axi_req_o.aw.prot = 0
+  axi_req_o.aw.qos = 0
+  axi_req_o.aw.region = 0
+  axi_req_o.aw.atop = `axi_req_o__bpo.aw.atop`
+  axi_req_o.aw.user = 0
+  axi_req_o.aw_valid = `axi_req_o__bpo.aw_valid`
+  axi_req_o.w.data = `axi_req_o__bpo.w.data`
+  axi_req_o.w.strb = `axi_req_o__bpo.w.strb`
+  axi_req_o.w.last = `axi_req_o__bpo.w.last`
+  axi_req_o.w.user = 0
+  axi_req_o.w_valid = `axi_req_o__bpo.w_valid`
+  axi_req_o.b_ready = `axi_req_o__bpo.b_ready`
+  axi_req_o.ar.id = `axi_req_o__bpo.ar.id`
+  axi_req_o.ar.addr = `axi_req_o__bpo.ar.addr`
+  axi_req_o.ar.len = `axi_req_o__bpo.ar.len`
+  axi_req_o.ar.size = `axi_req_o__bpo.ar.size`
+  axi_req_o.ar.burst = `axi_req_o__bpo.ar.burst`
+  axi_req_o.ar.lock = `axi_req_o__bpo.ar.lock`
+  axi_req_o.ar.cache = `axi_req_o__bpo.ar.cache`
+  axi_req_o.ar.prot = 0
+  axi_req_o.ar.qos = 0
+  axi_req_o.ar.region = 0
+  axi_req_o.ar.user = 0
+  axi_req_o.ar_valid = `axi_req_o__bpo.ar_valid`
+  axi_req_o.r_ready = `axi_req_o__bpo.r_ready`
+}

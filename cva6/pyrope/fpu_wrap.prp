@@ -1,0 +1,432 @@
+const fpnew_top = import("fpnew_top.fpnew_top")
+const fpnew_pkg = import("fpnew_pkg")
+const ariane_pkg = import("ariane_pkg")
+
+pub mod fpu_wrap::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, fpu_valid_i:u1, fu_data_i:(fu:u4, operation:u8, operand_a:u64, operand_b:u64, imm:u64, trans_id:u3), fpu_fmt_i:u2, fpu_rm_i:u3, fpu_frm_i:u3, fpu_prec_i:u7) -> (fpu_ready_o:u1@[], fpu_trans_id_o:u3@[], result_o:u64@[], fpu_valid_o:u1@[], fpu_exception_o:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1)@[], fpu_early_valid_o:u1@[]) {
+  mut _mux_2:u3 = 0
+  mut _mux_3:u64 = 0
+  mut _mux_4:u64 = 0
+  mut _mux_5:u64 = 0
+  mut _mux_6:u64 = 0
+  mut _mux_7:u64 = 0
+  mut _mux_8:u64 = 0
+  wire fpu_gen_fpu_in_ready:u1
+  reg state_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg operand_a_q:u64:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg operand_b_q:u64:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg operand_c_q:u64:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg fpu_op_q:u4:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg fpu_op_mod_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg fpu_srcfmt_q:u3:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg fpu_dstfmt_q:u3:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg fpu_ifmt_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg fpu_rm_q:u3:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg fpu_vec_op_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg fpu_tag_q:u3:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  mut state_d:u1 = 0
+  mut fpu_gen_operand_b_d:u64 = 0
+  mut fpu_gen_operand_c_d:u64 = 0
+  mut fpu_gen_fpu_op_d:u4 = 0
+  mut fpu_gen_fpu_op_mod_d:u1 = 0
+  mut fpu_gen_fpu_in_valid:u1 = 0
+  mut fpu_gen_hold_inputs:u1 = 0
+  mut fpu_gen_use_hold:u1 = 0
+  mut fpu_gen_fpu_operands:u192 = 0
+  mut `fpu_exception_o__bpo.tval` = 0
+  mut `fpu_exception_o__bpo.tval2` = 0
+  mut `fpu_exception_o__bpo.tinst` = 0
+  mut `fpu_exception_o__bpo.gva` = 0
+  mut `fpu_exception_o__bpo.valid` = 0
+  mut `fpu_exception_o__bpo.timing` = 0
+  mut fpu_gen_vec_replication:u1 = 0
+  mut fpu_gen_replicate_c:u1 = 0
+  mut fpu_gen_check_ah:u1 = 0
+  wire fpu_gen_fpu_vec_op_d:u1
+  state_d = 0ub?
+  fpu_gen_operand_b_d = 0sb?
+  fpu_gen_operand_c_d = 0sb?
+  fpu_gen_fpu_op_d = 0sb?
+  fpu_gen_fpu_op_mod_d = 0ub?
+  mut fpu_gen_fpu_srcfmt_d:u3 = 0sb?
+  mut fpu_gen_fpu_dstfmt_d:u3 = 0sb?
+  mut fpu_gen_fpu_ifmt_d:u2 = 0sb?
+  mut fpu_gen_fpu_rm_d:u3 = 0sb?
+  fpu_gen_fpu_in_valid = 0ub?
+  fpu_gen_hold_inputs = 0ub?
+  fpu_gen_use_hold = 0ub?
+  fpu_gen_fpu_operands = 0sb?
+  fpu_ready_o = 0ub?
+  const fpu_gen_operand_b_i__w1 = fu_data_i.operand_b#[0..=63]
+  const fpu_gen_operand_c_i__w1 = fu_data_i.imm#[0..=63]
+  fpu_gen_vec_replication = 0ub?
+  fpu_gen_replicate_c = 0ub?
+  fpu_gen_check_ah = 0ub?
+  const fpu_gen_operand_a_d__w1 = fu_data_i.operand_a#[0..=63]
+  fpu_gen_fpu_vec_op_d = unsigned(fu_data_i.fu == ariane_pkg.FPU_VEC)
+  const fpu_gen_fpu_tag_d__w1 = fu_data_i.trans_id
+  fpu_gen_fpu_rm_d = if not ((fpu_rm_i >= 0) and (fpu_rm_i <= 4)) { fpu_frm_i } else { fpu_rm_i }
+  if fpu_gen_fpu_vec_op_d != 0 {
+    fpu_gen_fpu_rm_d = fpu_frm_i
+  }
+  fpu_gen_fpu_dstfmt_d = fpnew_pkg.FP32
+  match fpu_fmt_i {
+    == 0 {
+      fpu_gen_fpu_dstfmt_d = fpnew_pkg.FP32
+    }
+    == 1 {
+      _mux_2 = if fpu_gen_fpu_vec_op_d != 0 { fpnew_pkg.FP16ALT#[0..=2] } else { fpnew_pkg.FP64#[0..=2] }
+      fpu_gen_fpu_dstfmt_d = _mux_2
+    }
+    == 2 {
+      fpu_gen_fpu_dstfmt_d = if (fpu_gen_fpu_vec_op_d == 0) and (fpu_rm_i == 5) { fpnew_pkg.FP16ALT } else { fpnew_pkg.FP16 }
+    }
+    else {
+      fpu_gen_fpu_dstfmt_d = fpnew_pkg.FP8
+    }
+  }
+  const t39 = fu_data_i.operation
+  fpu_gen_replicate_c = 0
+  fpu_gen_fpu_op_d = fpnew_pkg.SGNJ
+  fpu_gen_check_ah = 0
+  fpu_gen_fpu_op_mod_d = 0
+  fpu_gen_fpu_ifmt_d = fpnew_pkg.INT32
+  fpu_gen_vec_replication = fpu_rm_i & 1
+  fpu_gen_fpu_srcfmt_d = fpu_gen_fpu_dstfmt_d
+  match t39 {
+    == ariane_pkg.FADD {
+      fpu_gen_fpu_op_d = fpnew_pkg.ADD
+      fpu_gen_replicate_c = 1
+    }
+    == ariane_pkg.FSUB {
+      fpu_gen_fpu_op_d = fpnew_pkg.ADD
+      fpu_gen_fpu_op_mod_d = 1
+      fpu_gen_replicate_c = 1
+    }
+    == ariane_pkg.FMUL {
+      fpu_gen_fpu_op_d = fpnew_pkg.MUL
+    }
+    == ariane_pkg.FDIV {
+      fpu_gen_fpu_op_d = fpnew_pkg.DIV
+    }
+    == ariane_pkg.FMIN_MAX {
+      fpu_gen_fpu_op_d = fpnew_pkg.MINMAX
+      fpu_gen_fpu_rm_d = fpu_rm_i#[0..=1]
+      fpu_gen_check_ah = 1
+    }
+    == ariane_pkg.FSQRT {
+      fpu_gen_fpu_op_d = fpnew_pkg.SQRT
+    }
+    == ariane_pkg.FMADD {
+      fpu_gen_fpu_op_d = fpnew_pkg.FMADD
+    }
+    == ariane_pkg.FMSUB {
+      fpu_gen_fpu_op_d = fpnew_pkg.FMADD
+      fpu_gen_fpu_op_mod_d = 1
+    }
+    == ariane_pkg.FNMSUB {
+      fpu_gen_fpu_op_d = fpnew_pkg.FNMSUB
+    }
+    == ariane_pkg.FNMADD {
+      fpu_gen_fpu_op_d = fpnew_pkg.FNMSUB
+      fpu_gen_fpu_op_mod_d = 1
+    }
+    == ariane_pkg.FCVT_F2I {
+      fpu_gen_fpu_op_d = fpnew_pkg.F2I
+      if fpu_gen_fpu_vec_op_d != 0 {
+        fpu_gen_fpu_op_mod_d = fpu_rm_i & 1
+        fpu_gen_vec_replication = 0
+        fpu_gen_fpu_ifmt_d = unique if fpu_fmt_i == 0 { fpnew_pkg.INT32 } elif (fpu_fmt_i == 1) or (fpu_fmt_i == 2) { fpnew_pkg.INT16 } elif fpu_fmt_i == 3 { fpnew_pkg.INT8 } else { 0ub?? }
+      } else {
+        fpu_gen_fpu_op_mod_d = fpu_gen_operand_c_i__w1 & 1
+        fpu_gen_fpu_ifmt_d = if ((fpu_gen_operand_c_i__w1 >> 1) & 1) != 0 { fpnew_pkg.INT64 } else { fpnew_pkg.INT32 }
+      }
+    }
+    == ariane_pkg.FCVT_I2F {
+      fpu_gen_fpu_op_d = fpnew_pkg.I2F
+      if fpu_gen_fpu_vec_op_d != 0 {
+        fpu_gen_fpu_op_mod_d = fpu_rm_i & 1
+        fpu_gen_vec_replication = 0
+        fpu_gen_fpu_ifmt_d = unique if fpu_fmt_i == 0 { fpnew_pkg.INT32 } elif (fpu_fmt_i == 1) or (fpu_fmt_i == 2) { fpnew_pkg.INT16 } elif fpu_fmt_i == 3 { fpnew_pkg.INT8 } else { 0ub?? }
+      } else {
+        fpu_gen_fpu_op_mod_d = fpu_gen_operand_c_i__w1 & 1
+        fpu_gen_fpu_ifmt_d = if ((fpu_gen_operand_c_i__w1 >> 1) & 1) != 0 { fpnew_pkg.INT64 } else { fpnew_pkg.INT32 }
+      }
+    }
+    == ariane_pkg.FCVT_F2F {
+      fpu_gen_fpu_op_d = fpnew_pkg.F2F
+      if fpu_gen_fpu_vec_op_d != 0 {
+        fpu_gen_vec_replication = 0
+        fpu_gen_fpu_srcfmt_d = unique if fpu_gen_operand_c_i__w1#[0..=1] == 0 { fpnew_pkg.FP32 } elif fpu_gen_operand_c_i__w1#[0..=1] == 1 { fpnew_pkg.FP16ALT } elif fpu_gen_operand_c_i__w1#[0..=1] == 2 { fpnew_pkg.FP16 } elif fpu_gen_operand_c_i__w1#[0..=1] == 3 { fpnew_pkg.FP8 } else { 0ub??? }
+      } else {
+        match fpu_gen_operand_c_i__w1#[0..=2] {
+          == 0 {
+            fpu_gen_fpu_srcfmt_d = fpnew_pkg.FP32
+          }
+          == 1 {
+            fpu_gen_fpu_srcfmt_d = fpnew_pkg.FP64
+          }
+          == 2 {
+            fpu_gen_fpu_srcfmt_d = fpnew_pkg.FP16
+          }
+          == 6 {
+            fpu_gen_fpu_srcfmt_d = fpnew_pkg.FP16ALT
+          }
+          == 3 {
+            fpu_gen_fpu_srcfmt_d = fpnew_pkg.FP8
+          }
+          else {
+          }
+        }
+      }
+    }
+    == ariane_pkg.FSGNJ {
+      fpu_gen_fpu_op_d = fpnew_pkg.SGNJ
+      fpu_gen_fpu_rm_d = fpu_rm_i#[0..=1]
+      fpu_gen_check_ah = 1
+    }
+    == ariane_pkg.FMV_F2X {
+      fpu_gen_fpu_op_d = fpnew_pkg.SGNJ
+      fpu_gen_fpu_rm_d = 3
+      fpu_gen_fpu_op_mod_d = 1
+      fpu_gen_check_ah = 1
+      fpu_gen_vec_replication = 0
+    }
+    == ariane_pkg.FMV_X2F {
+      fpu_gen_fpu_op_d = fpnew_pkg.SGNJ
+      fpu_gen_fpu_rm_d = 3
+      fpu_gen_check_ah = 1
+      fpu_gen_vec_replication = 0
+    }
+    == ariane_pkg.FCMP {
+      fpu_gen_fpu_op_d = fpnew_pkg.CMP
+      fpu_gen_fpu_rm_d = fpu_rm_i#[0..=1]
+      fpu_gen_check_ah = 1
+    }
+    == ariane_pkg.FCLASS {
+      fpu_gen_fpu_op_d = fpnew_pkg.CLASSIFY
+      fpu_gen_fpu_rm_d = fpu_rm_i#[0..=1]
+      fpu_gen_check_ah = 1
+    }
+    == ariane_pkg.VFMIN {
+      fpu_gen_fpu_op_d = fpnew_pkg.MINMAX
+      fpu_gen_fpu_rm_d = 0
+    }
+    == ariane_pkg.VFMAX {
+      fpu_gen_fpu_op_d = fpnew_pkg.MINMAX
+      fpu_gen_fpu_rm_d = 1
+    }
+    == ariane_pkg.VFSGNJ {
+      fpu_gen_fpu_op_d = fpnew_pkg.SGNJ
+      fpu_gen_fpu_rm_d = 0
+    }
+    == ariane_pkg.VFSGNJN {
+      fpu_gen_fpu_op_d = fpnew_pkg.SGNJ
+      fpu_gen_fpu_rm_d = 1
+    }
+    == ariane_pkg.VFSGNJX {
+      fpu_gen_fpu_op_d = fpnew_pkg.SGNJ
+      fpu_gen_fpu_rm_d = 2
+    }
+    == ariane_pkg.VFEQ {
+      fpu_gen_fpu_op_d = fpnew_pkg.CMP
+      fpu_gen_fpu_rm_d = 2
+    }
+    == ariane_pkg.VFNE {
+      fpu_gen_fpu_op_d = fpnew_pkg.CMP
+      fpu_gen_fpu_op_mod_d = 1
+      fpu_gen_fpu_rm_d = 2
+    }
+    == ariane_pkg.VFLT {
+      fpu_gen_fpu_op_d = fpnew_pkg.CMP
+      fpu_gen_fpu_rm_d = 1
+    }
+    == ariane_pkg.VFGE {
+      fpu_gen_fpu_op_d = fpnew_pkg.CMP
+      fpu_gen_fpu_op_mod_d = 1
+      fpu_gen_fpu_rm_d = 1
+    }
+    == ariane_pkg.VFLE {
+      fpu_gen_fpu_op_d = fpnew_pkg.CMP
+      fpu_gen_fpu_rm_d = 0
+    }
+    == ariane_pkg.VFGT {
+      fpu_gen_fpu_op_d = fpnew_pkg.CMP
+      fpu_gen_fpu_op_mod_d = 1
+      fpu_gen_fpu_rm_d = 0
+    }
+    == ariane_pkg.VFCPKAB_S {
+      fpu_gen_fpu_op_d = fpnew_pkg.CPKAB
+      fpu_gen_fpu_op_mod_d = fpu_rm_i & 1
+      fpu_gen_vec_replication = 0
+      fpu_gen_fpu_srcfmt_d = fpnew_pkg.FP32
+    }
+    == ariane_pkg.VFCPKCD_S {
+      fpu_gen_fpu_op_d = fpnew_pkg.CPKCD
+      fpu_gen_fpu_op_mod_d = fpu_rm_i & 1
+      fpu_gen_vec_replication = 0
+      fpu_gen_fpu_srcfmt_d = fpnew_pkg.FP32
+    }
+    == ariane_pkg.VFCPKAB_D {
+      fpu_gen_fpu_op_d = fpnew_pkg.CPKAB
+      fpu_gen_fpu_op_mod_d = fpu_rm_i & 1
+      fpu_gen_vec_replication = 0
+      fpu_gen_fpu_srcfmt_d = fpnew_pkg.FP64
+    }
+    == ariane_pkg.VFCPKCD_D {
+      fpu_gen_fpu_op_d = fpnew_pkg.CPKCD
+      fpu_gen_fpu_op_mod_d = fpu_rm_i & 1
+      fpu_gen_vec_replication = 0
+      fpu_gen_fpu_srcfmt_d = fpnew_pkg.FP64
+    }
+    else {
+    }
+  }
+  if (fpu_gen_fpu_vec_op_d == 0) and (fpu_gen_check_ah != 0) {
+    if ((fpu_rm_i >> 2) & 1) != 0 {
+      fpu_gen_fpu_dstfmt_d = fpnew_pkg.FP16ALT
+    }
+  }
+  fpu_gen_operand_c_d = fpu_gen_operand_c_i__w1
+  fpu_gen_operand_b_d = fpu_gen_operand_b_i__w1
+  if (fpu_gen_fpu_vec_op_d != 0) and (fpu_gen_vec_replication != 0) {
+    if fpu_gen_replicate_c != 0 {
+      match fpu_gen_fpu_dstfmt_d {
+        == fpnew_pkg.FP32 {
+          const t193 = fpu_gen_operand_c_i__w1#[0..=31]
+          _mux_3 = fpu_gen_operand_c_i__w1
+          {
+            _mux_3 = t193 | (t193 << 32)
+          }
+          fpu_gen_operand_c_d = _mux_3
+        }
+        in (fpnew_pkg.FP16, fpnew_pkg.FP16ALT) {
+          const t200 = fpu_gen_operand_c_i__w1#[0..=15]
+          const t209 = fpu_gen_operand_c_i__w1#[0..=15]
+          _mux_4 = t209 | (t209 << 16)
+          {
+            _mux_4 = (t200 | (t200 << 16) | (t200 << 32) | (t200 << 48))#[0..=63]
+          }
+          fpu_gen_operand_c_d = _mux_4
+        }
+        == fpnew_pkg.FP8 {
+          const t215 = fpu_gen_operand_c_i__w1#[0..=7]
+          const t232 = fpu_gen_operand_c_i__w1#[0..=7]
+          _mux_5 = (t232 | (t232 << 8) | (t232 << 16) | (t232 << 24))#[0..=63]
+          {
+            _mux_5 = (t215 | (t215 << 8) | (t215 << 16) | (t215 << 24) | (t215 << 32) | (t215 << 40) | (t215 << 48) | (t215 << 56))#[0..=63]
+          }
+          fpu_gen_operand_c_d = _mux_5
+        }
+        else {
+        }
+      }
+    } else {
+      match fpu_gen_fpu_dstfmt_d {
+        == fpnew_pkg.FP32 {
+          const t247 = fpu_gen_operand_b_i__w1#[0..=31]
+          _mux_6 = fpu_gen_operand_b_i__w1
+          {
+            _mux_6 = t247 | (t247 << 32)
+          }
+          fpu_gen_operand_b_d = _mux_6
+        }
+        in (fpnew_pkg.FP16, fpnew_pkg.FP16ALT) {
+          const t254 = fpu_gen_operand_b_i__w1#[0..=15]
+          const t263 = fpu_gen_operand_b_i__w1#[0..=15]
+          _mux_7 = t263 | (t263 << 16)
+          {
+            _mux_7 = (t254 | (t254 << 16) | (t254 << 32) | (t254 << 48))#[0..=63]
+          }
+          fpu_gen_operand_b_d = _mux_7
+        }
+        == fpnew_pkg.FP8 {
+          const t269 = fpu_gen_operand_b_i__w1#[0..=7]
+          const t286 = fpu_gen_operand_b_i__w1#[0..=7]
+          _mux_8 = (t286 | (t286 << 8) | (t286 << 16) | (t286 << 24))#[0..=63]
+          {
+            _mux_8 = (t269 | (t269 << 8) | (t269 << 16) | (t269 << 24) | (t269 << 32) | (t269 << 40) | (t269 << 48) | (t269 << 56))#[0..=63]
+          }
+          fpu_gen_operand_b_d = _mux_8
+        }
+        else {
+        }
+      }
+    }
+  }
+  state_d = state_q
+  fpu_gen_hold_inputs = 0
+  fpu_ready_o = 0
+  fpu_gen_fpu_in_valid = 0
+  fpu_gen_use_hold = 0
+  match state_q {
+    == 0 {
+      fpu_ready_o = 1
+      fpu_gen_fpu_in_valid = fpu_valid_i
+      if (fpu_valid_i & (~fpu_gen_fpu_in_ready) & 1 & 1) != 0 {
+        fpu_ready_o = 0
+        fpu_gen_hold_inputs = 1
+        state_d = 1
+      }
+    }
+    == 1 {
+      fpu_gen_fpu_in_valid = 1
+      fpu_gen_use_hold = 1
+      if fpu_gen_fpu_in_ready != 0 {
+        fpu_ready_o = 1
+        state_d = 0
+      }
+    }
+    else {
+    }
+  }
+  if flush_i != 0 {
+    state_d = 0
+  }
+  if rst_ni != 0 {
+    state_q = state_d
+    if fpu_gen_hold_inputs != 0 {
+      operand_a_q = fpu_gen_operand_a_d__w1
+      operand_b_q = fpu_gen_operand_b_d
+      operand_c_q = fpu_gen_operand_c_d
+      fpu_op_q = fpu_gen_fpu_op_d
+      fpu_op_mod_q = fpu_gen_fpu_op_mod_d
+      fpu_srcfmt_q = fpu_gen_fpu_srcfmt_d
+      fpu_dstfmt_q = fpu_gen_fpu_dstfmt_d
+      fpu_ifmt_q = fpu_gen_fpu_ifmt_d
+      fpu_rm_q = fpu_gen_fpu_rm_d
+      fpu_vec_op_q = fpu_gen_fpu_vec_op_d
+      fpu_tag_q = fpu_gen_fpu_tag_d__w1
+    }
+  }
+  mut _mux_9:u64 = if fpu_gen_use_hold != 0 { operand_a_q } else { fpu_gen_operand_a_d__w1 }
+  mut _mux_10:u64 = if fpu_gen_use_hold != 0 { operand_b_q } else { fpu_gen_operand_b_d }
+  mut _mux_11:u64 = if fpu_gen_use_hold != 0 { operand_c_q } else { fpu_gen_operand_c_d }
+  mut _mux_12:u4 = if fpu_gen_use_hold != 0 { fpu_op_q } else { fpu_gen_fpu_op_d }
+  mut _mux_13:u1 = if fpu_gen_use_hold != 0 { fpu_op_mod_q & 1 } else { fpu_gen_fpu_op_mod_d & 1 }
+  mut _mux_14:u3 = if fpu_gen_use_hold != 0 { fpu_srcfmt_q } else { fpu_gen_fpu_srcfmt_d }
+  mut _mux_15:u3 = if fpu_gen_use_hold != 0 { fpu_dstfmt_q } else { fpu_gen_fpu_dstfmt_d }
+  mut _mux_16:u2 = if fpu_gen_use_hold != 0 { fpu_ifmt_q } else { fpu_gen_fpu_ifmt_d }
+  mut _mux_17:u3 = if fpu_gen_use_hold != 0 { fpu_rm_q } else { fpu_gen_fpu_rm_d }
+  mut _mux_18:u1 = if fpu_gen_use_hold != 0 { fpu_vec_op_q & 1 } else { fpu_gen_fpu_vec_op_d & 1 }
+  mut _mux_19:u3 = if fpu_gen_use_hold != 0 { fpu_tag_q } else { fpu_gen_fpu_tag_d__w1#[0..=2] }
+  mut fpu_gen_fpu_operands__w1 = fpu_gen_fpu_operands
+  fpu_gen_fpu_operands__w1#[0..=63] = _mux_9
+  mut fpu_gen_fpu_operands__w2 = fpu_gen_fpu_operands__w1
+  fpu_gen_fpu_operands__w2#[64..=127] = _mux_10
+  mut fpu_gen_fpu_operands__w3 = fpu_gen_fpu_operands__w2
+  fpu_gen_fpu_operands__w3#[128..=191] = _mux_11
+  mut i_fpnew_bulk = fpnew_top::[name=i_fpnew_bulk](clk_i = clk_i, rst_ni = rst_ni, operands_i = fpu_gen_fpu_operands__w3, rnd_mode_i = _mux_17, op_i = _mux_12, op_mod_i = _mux_13, src_fmt_i = _mux_14, dst_fmt_i = _mux_15, int_fmt_i = _mux_16, vectorial_op_i = _mux_18, tag_i = _mux_19, simd_mask_i = 1, in_valid_i = fpu_gen_fpu_in_valid, flush_i = flush_i, out_ready_i = 1)
+  fpu_gen_fpu_in_ready = i_fpnew_bulk.in_ready_o
+  mut `fpu_exception_o__bpo.cause` = ((i_fpnew_bulk.status_o.NV << 4) | (i_fpnew_bulk.status_o.DZ << 3) | (i_fpnew_bulk.status_o.OF << 2) | (i_fpnew_bulk.status_o.UF << 1) | i_fpnew_bulk.status_o.NX)#[0..=4]
+  fpu_exception_o.cause = `fpu_exception_o__bpo.cause`
+  fpu_exception_o.tval = 0
+  fpu_exception_o.tval2 = 0
+  fpu_exception_o.tinst = 0
+  fpu_exception_o.gva = 0
+  fpu_exception_o.valid = 0
+  fpu_exception_o.timing = `fpu_exception_o__bpo.timing`
+  fpu_trans_id_o = i_fpnew_bulk.tag_o
+  result_o = i_fpnew_bulk.result_o
+  fpu_valid_o = i_fpnew_bulk.out_valid_o
+  fpu_early_valid_o = i_fpnew_bulk.early_valid_o
+}

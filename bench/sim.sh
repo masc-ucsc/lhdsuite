@@ -37,11 +37,14 @@
 # core has one, a program-driving testbench ($CORE_SIM_PROG_TB). They run
 # separately from the timed benchmark above, at $CORE_SIM_TOP_CYCLES /
 # $CORE_SIM_PROG_CYCLES. Both are always reported as METRIC sim_cpu_top_ok /
-# sim_cpu_prog_ok; with
-# $CORE_SIM_TOP_ASSERT set they ALSO gate the target, so a regression fails it
-# instead of silently flipping a metric to 0. dino gates its extra top smoke;
-# minion reports only, its vpu_top still hitting a derived clock inou.cgen.sim
-# cannot fold (fixme issue 12). An empty $CORE_SIM_*_TB skips that driver.
+# sim_cpu_prog_ok; with $CORE_SIM_TOP_ASSERT set they ALSO gate the target, so
+# a regression fails it instead of silently flipping a metric to 0. dino gates
+# its extra top smoke; minion reports only, its vpu_top still hitting a derived
+# clock inou.cgen.sim cannot fold (fixme issue 12), and so does cva6, whose
+# program driver is blocked by the generated icache (see README's
+# "Known-failing scenarios"). An empty $CORE_SIM_*_TB skips that driver, and
+# $CORE_SIM_PROG_PYROPE_ONLY skips the program driver under MODE=verilog only —
+# for a DUT that core's Verilog tree does not carry.
 #
 #   MODE=pyrope   sim the <core>/pyrope tree directly.
 #   MODE=verilog  compile the Verilog through slang straight to an lgraph
@@ -124,6 +127,16 @@ verilog)
       emit_lg top "$CORE_SIM_TOP_UNIT"
       TOP_INPUT="lg:lg_top"
     fi
+  fi
+  # A program driver whose DUT exists only in the Pyrope tree has nothing to
+  # compile here: cva6/verilog/ carries the tag_cmp cone, not the `cva6` top
+  # its driver drives, so `--top cva6` could not elaborate at all. Skip the
+  # driver (and its metric) instead of failing on a module that is absent by
+  # design. See sim_prog_pyrope_only in defs.bzl.
+  if [ -n "$CORE_SIM_PROG_PYROPE_ONLY" ] && [ -n "$CORE_SIM_PROG_TB" ]; then
+    echo "NOTE: MODE=verilog skips program driver '$CORE_SIM_PROG_TB'" \
+      "— its DUT '$CORE_SIM_PROG_UNIT' is not in this core's Verilog tree"
+    CORE_SIM_PROG_TB=
   fi
   if [ -n "$CORE_SIM_PROG_TB" ]; then
     if [ "$CORE_SIM_PROG_UNIT" = "$CORE_SIM_TB_UNIT" ]; then

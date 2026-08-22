@@ -1,0 +1,36 @@
+pub comb cvxif_compressed_if_driver::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, hart_id_i:u64, is_compressed_i:u1, is_illegal_i:u1, instruction_i:u32, stall_i:u1, compressed_ready_i:u1, compressed_resp_i:(instr:u32, accept:u1)) -> (is_compressed_o:u1, is_illegal_o:u1, instruction_o:u32, stall_o:u1, compressed_valid_o:u1, compressed_req_o:(instr:u16, hartid:u64)) {
+  mut _mux_1:u32 = 0
+  mut _mux_2:u1 = 0
+  mut `compressed_req_o__bpo.instr` = 0
+  mut `compressed_req_o__bpo.hartid` = 0
+  is_compressed_o = 0ub?
+  is_illegal_o = 0ub?
+  instruction_o = 0sb?
+  stall_o = 0ub?
+  compressed_valid_o = 0ub?
+  `compressed_req_o__bpo.hartid` = hart_id_i
+  is_illegal_o = is_illegal_i
+  is_compressed_o = is_compressed_i
+  instruction_o = instruction_i
+  compressed_valid_o = 0
+  stall_o = stall_i
+  if is_illegal_i != 0 {
+    compressed_valid_o = is_illegal_i
+    `compressed_req_o__bpo.instr` = instruction_i#[0..=15]
+    is_illegal_o = (~compressed_resp_i.accept) & 1
+    _mux_1 = if compressed_resp_i.accept != 0 { compressed_resp_i.instr#[0..=31] } else { instruction_i }
+    instruction_o = _mux_1
+    _mux_2 = if compressed_resp_i.accept != 0 { 0 } else { is_compressed_i & 1 }
+    is_compressed_o = _mux_2
+    if ((~stall_i) & 1) != 0 {
+      stall_o = unsigned((compressed_valid_o != 0) and (((~compressed_ready_i) & 1) != 0))
+    }
+  }
+  if flush_i != 0 {
+    compressed_valid_o = 0
+    `compressed_req_o__bpo.instr` = 0
+    `compressed_req_o__bpo.hartid` = hart_id_i
+  }
+  compressed_req_o.instr = `compressed_req_o__bpo.instr`
+  compressed_req_o.hartid = `compressed_req_o__bpo.hartid`
+}

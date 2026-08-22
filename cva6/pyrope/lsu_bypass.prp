@@ -1,0 +1,122 @@
+pub mod lsu_bypass::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, lsu_req_i:(valid:u1, vaddr:u64, tinst:u32, hs_ld_st_inst:u1, hlvx_inst:u1, overflow:u1, g_overflow:u1, data:u64, be:u8, fu:u4, operation:u8, trans_id:u3, is_speculative_load:u1, is_speculative_load_miss:u1), lsu_req_valid_i:u1, pop_ld_i:u1, pop_st_i:u1, resolved_branch_i:(valid:u1, pc:u64, target_address:u64, is_mispredict:u1, is_taken:u1, cf_type:u3)) -> (lsu_ctrl_o:(valid:u1, vaddr:u64, tinst:u32, hs_ld_st_inst:u1, hlvx_inst:u1, overflow:u1, g_overflow:u1, data:u64, be:u8, fu:u4, operation:u8, trans_id:u3, is_speculative_load:u1, is_speculative_load_miss:u1)@[], ready_o:u1@[]) {
+  reg mem_q:[2]u190:[ordering="old", init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg read_pointer_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg write_pointer_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg status_cnt_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  mut mem_n:u380 = 0
+  mut `lsu_ctrl_o__bpo.valid` = 0
+  mut `lsu_ctrl_o__bpo.vaddr` = 0
+  mut `lsu_ctrl_o__bpo.tinst` = 0
+  mut `lsu_ctrl_o__bpo.hs_ld_st_inst` = 0
+  mut `lsu_ctrl_o__bpo.hlvx_inst` = 0
+  mut `lsu_ctrl_o__bpo.overflow` = 0
+  mut `lsu_ctrl_o__bpo.g_overflow` = 0
+  mut `lsu_ctrl_o__bpo.data` = 0
+  mut `lsu_ctrl_o__bpo.be` = 0
+  mut `lsu_ctrl_o__bpo.fu` = 0
+  mut `lsu_ctrl_o__bpo.operation` = 0
+  mut `lsu_ctrl_o__bpo.trans_id` = 0
+  mut `lsu_ctrl_o__bpo.is_speculative_load` = 0
+  mut `lsu_ctrl_o__bpo.is_speculative_load_miss` = 0
+  mut status_cnt:u2 = 0
+  mut write_pointer:u1 = 0
+  mut read_pointer:u1 = 0
+  mem_n = 0sb?
+  const empty__w1 = unsigned(status_cnt_q == 0)
+  status_cnt = 0sb?
+  write_pointer = 0ub?
+  read_pointer = 0ub?
+  status_cnt = status_cnt_q
+  mem_n = mem_q
+  write_pointer = write_pointer_q
+  if lsu_req_valid_i != 0 {
+    const t57 = write_pointer_q * 0xbe
+    mem_n = ((mem_n & (~(0x3fffffffffffffffffffffffffffffffffffffffffffffff << t57))) | (((lsu_req_i.valid << 0xbd) | (lsu_req_i.vaddr << 0x7d) | (lsu_req_i.tinst << 0x5d) | (lsu_req_i.hs_ld_st_inst << 0x5c) | (lsu_req_i.hlvx_inst << 0x5b) | (lsu_req_i.overflow << 0x5a) | (lsu_req_i.g_overflow << 0x59) | (lsu_req_i.data << 25) | (lsu_req_i.be << 17) | (lsu_req_i.fu << 13) | (lsu_req_i.operation << 5) | (lsu_req_i.trans_id << 2) | (lsu_req_i.is_speculative_load << 1) | lsu_req_i.is_speculative_load_miss)#[0..=189] << t57))#[0..=379]
+    if (lsu_req_i.is_speculative_load != 0) and (resolved_branch_i.valid != 0) {
+      if resolved_branch_i.is_mispredict != 0 {
+        const t72 = write_pointer_q * 0xbe
+        mem_n = ((mem_n & (~(1 << t72))) | (1 << t72))#[0..=379]
+      } else {
+        const t80 = (write_pointer_q * 0xbe) + 1
+        mem_n = ((mem_n & (~(1 << t80))) | (0 << t80))#[0..=379]
+      }
+    }
+    write_pointer = (write_pointer + 1) & 1
+    status_cnt = (status_cnt + 1)#[0..=1]
+  }
+  read_pointer = read_pointer_q
+  if pop_ld_i != 0 {
+    const t95 = (read_pointer_q * 0xbe) + 0xbd
+    mem_n = ((mem_n & (~(1 << t95))) | (0 << t95))#[0..=379]
+    read_pointer = (read_pointer + 1) & 1
+    status_cnt = (status_cnt - 1)#[0..=1]
+  }
+  if pop_st_i != 0 {
+    const t110 = (read_pointer_q * 0xbe) + 0xbd
+    mem_n = ((mem_n & (~(1 << t110))) | (0 << t110))#[0..=379]
+    read_pointer = (read_pointer + 1) & 1
+    status_cnt = (status_cnt - 1)#[0..=1]
+  }
+  if (pop_st_i != 0) and (pop_ld_i != 0) {
+    mem_n = 0
+  }
+  if flush_i != 0 {
+    status_cnt = 0
+    write_pointer = 0
+    read_pointer = 0
+    mem_n = 0
+  }
+  if empty__w1 != 0 {
+    const t167 = (lsu_req_i.valid << 0xbd) | (lsu_req_i.vaddr << 0x7d) | (lsu_req_i.tinst << 0x5d) | (lsu_req_i.hs_ld_st_inst << 0x5c) | (lsu_req_i.hlvx_inst << 0x5b) | (lsu_req_i.overflow << 0x5a) | (lsu_req_i.g_overflow << 0x59) | (lsu_req_i.data << 25) | (lsu_req_i.be << 17) | (lsu_req_i.fu << 13) | (lsu_req_i.operation << 5) | (lsu_req_i.trans_id << 2) | (lsu_req_i.is_speculative_load << 1) | lsu_req_i.is_speculative_load_miss
+    `lsu_ctrl_o__bpo.valid` = (t167 >> 0xbd) & 1
+    `lsu_ctrl_o__bpo.vaddr` = t167#[125..=188]
+    `lsu_ctrl_o__bpo.tinst` = t167#[93..=124]
+    `lsu_ctrl_o__bpo.hs_ld_st_inst` = (t167 >> 0x5c) & 1
+    `lsu_ctrl_o__bpo.hlvx_inst` = (t167 >> 0x5b) & 1
+    `lsu_ctrl_o__bpo.overflow` = (t167 >> 0x5a) & 1
+    `lsu_ctrl_o__bpo.g_overflow` = (t167 >> 0x59) & 1
+    `lsu_ctrl_o__bpo.data` = t167#[25..=88]
+    `lsu_ctrl_o__bpo.be` = t167#[17..=24]
+    `lsu_ctrl_o__bpo.fu` = t167#[13..=16]
+    `lsu_ctrl_o__bpo.operation` = t167#[5..=12]
+    `lsu_ctrl_o__bpo.trans_id` = t167#[2..=4]
+    `lsu_ctrl_o__bpo.is_speculative_load` = (t167 >> 1) & 1
+    `lsu_ctrl_o__bpo.is_speculative_load_miss` = t167 & 1
+  } else {
+    `lsu_ctrl_o__bpo.valid` = (mem_q[read_pointer_q] >> 0xbd) & 1
+    `lsu_ctrl_o__bpo.vaddr` = mem_q[read_pointer_q]#[125..=188]
+    `lsu_ctrl_o__bpo.tinst` = mem_q[read_pointer_q]#[93..=124]
+    `lsu_ctrl_o__bpo.hs_ld_st_inst` = (mem_q[read_pointer_q] >> 0x5c) & 1
+    `lsu_ctrl_o__bpo.hlvx_inst` = (mem_q[read_pointer_q] >> 0x5b) & 1
+    `lsu_ctrl_o__bpo.overflow` = (mem_q[read_pointer_q] >> 0x5a) & 1
+    `lsu_ctrl_o__bpo.g_overflow` = (mem_q[read_pointer_q] >> 0x59) & 1
+    `lsu_ctrl_o__bpo.data` = mem_q[read_pointer_q]#[25..=88]
+    `lsu_ctrl_o__bpo.be` = mem_q[read_pointer_q]#[17..=24]
+    `lsu_ctrl_o__bpo.fu` = mem_q[read_pointer_q]#[13..=16]
+    `lsu_ctrl_o__bpo.operation` = mem_q[read_pointer_q]#[5..=12]
+    `lsu_ctrl_o__bpo.trans_id` = mem_q[read_pointer_q]#[2..=4]
+    `lsu_ctrl_o__bpo.is_speculative_load` = (mem_q[read_pointer_q] >> 1) & 1
+    `lsu_ctrl_o__bpo.is_speculative_load_miss` = mem_q[read_pointer_q] & 1
+  }
+  if rst_ni != 0 {
+    mem_q = mem_n
+    status_cnt_q = status_cnt
+    write_pointer_q = write_pointer
+    read_pointer_q = read_pointer
+  }
+  lsu_ctrl_o.valid = `lsu_ctrl_o__bpo.valid`
+  lsu_ctrl_o.vaddr = `lsu_ctrl_o__bpo.vaddr`
+  lsu_ctrl_o.tinst = `lsu_ctrl_o__bpo.tinst`
+  lsu_ctrl_o.hs_ld_st_inst = `lsu_ctrl_o__bpo.hs_ld_st_inst`
+  lsu_ctrl_o.hlvx_inst = `lsu_ctrl_o__bpo.hlvx_inst`
+  lsu_ctrl_o.overflow = `lsu_ctrl_o__bpo.overflow`
+  lsu_ctrl_o.g_overflow = `lsu_ctrl_o__bpo.g_overflow`
+  lsu_ctrl_o.data = `lsu_ctrl_o__bpo.data`
+  lsu_ctrl_o.be = `lsu_ctrl_o__bpo.be`
+  lsu_ctrl_o.fu = `lsu_ctrl_o__bpo.fu`
+  lsu_ctrl_o.operation = `lsu_ctrl_o__bpo.operation`
+  lsu_ctrl_o.trans_id = `lsu_ctrl_o__bpo.trans_id`
+  lsu_ctrl_o.is_speculative_load = `lsu_ctrl_o__bpo.is_speculative_load`
+  lsu_ctrl_o.is_speculative_load_miss = `lsu_ctrl_o__bpo.is_speculative_load_miss`
+  ready_o = empty__w1
+}

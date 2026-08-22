@@ -1,0 +1,31 @@
+pub mod ras::[timecheck=false](clk_i:u1, rst_ni:u1, flush_bp_i:u1, push_i:u1, pop_i:u1, data_i:u64) -> (data_o:(valid:u1, ra:u64)@[]) {
+  reg stack_q:[2]u65:[ordering="old", init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  mut stack_d:u130 = 0
+  stack_d = 0sb?
+  mut `data_o__bpo.valid` = (stack_q[0] >> 0x40) & 1
+  mut `data_o__bpo.ra` = stack_q[0]#[0..=63]
+  stack_d = stack_q
+  if push_i != 0 {
+    stack_d#[0..=63] = data_i
+    stack_d#[64] = 1
+    stack_d#[65..=129] = stack_q#[0..=64]
+  }
+  if pop_i != 0 {
+    stack_d#[0..=64] = stack_q#[65..=129]
+    stack_d#[129] = 0
+    stack_d#[65..=128] = 0
+  }
+  if (pop_i != 0) and (push_i != 0) {
+    stack_d = stack_q
+    stack_d#[0..=63] = data_i
+    stack_d#[64] = 1
+  }
+  if flush_bp_i != 0 {
+    stack_d = 0
+  }
+  if rst_ni != 0 {
+    stack_q = stack_d
+  }
+  data_o.valid = `data_o__bpo.valid`
+  data_o.ra = `data_o__bpo.ra`
+}

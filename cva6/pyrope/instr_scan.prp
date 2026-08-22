@@ -1,0 +1,32 @@
+const riscv = import("riscv")
+
+pub comb instr_scan::[timecheck=false](instr_i:u32) -> (rvi_return_o:u1, rvi_call_o:u1, rvi_branch_o:u1, rvi_jalr_o:u1, rvi_jump_o:u1, rvi_imm_o:u64, rvc_branch_o:u1, rvc_jump_o:u1, rvc_jr_o:u1, rvc_return_o:u1, rvc_jalr_o:u1, rvc_call_o:u1, rvc_imm_o:u64) {
+  const rv32_rvc_jal__w1 = 0 & unsigned(instr_i#[13..=15] == riscv.OpcodeC1Jal) & unsigned(instr_i#[0..=1] == riscv.OpcodeC1) & 1 & 1
+  const is_xret__w1 = unsigned(instr_i#[30..=31] == 0) & unsigned(instr_i#[0..=28] == 0x10200073) & 1
+  const instruction_i__w1 = instr_i
+  mut _rep_5:u44 = if ((instruction_i__w1 >> 31) & 1) != 0 { 0xfffffffffff } else { 0 }
+  const instruction_i_s1__w1 = instr_i
+  mut _mux_6:u64 = if ((instr_i >> 3) & 1) != 0 { (_rep_5 << 20) | (instruction_i__w1#[12..=19] << 12) | (((instruction_i__w1 >> 20) & 1) << 11) | (instruction_i__w1#[21..=30] << 1) } else { ((((instruction_i_s1__w1 >> 31) & 1) << 12) | (((instruction_i_s1__w1 >> 7) & 1) << 11) | (instruction_i_s1__w1#[25..=30] << 5) | (instruction_i_s1__w1#[8..=11] << 1))#sext[0..=12]#[0..=63] }
+  mut _mux_7:u64 = if is_xret__w1 != 0 { 0 } else { _mux_6 }
+  const rvi_jalr_o__w1 = unsigned(instr_i#[0..=6] == riscv.OpcodeJalr)
+  const rvi_jump_o__w1 = (unsigned(instr_i#[0..=6] == riscv.OpcodeJal) | is_xret__w1) & 1
+  const is_jal_r__w1 = unsigned(instr_i#[13..=15] == riscv.OpcodeC2JalrMvAdd) & unsigned(instr_i#[7..=11] != 0) & 1 & unsigned(instr_i#[2..=6] == 0) & 1 & unsigned(instr_i#[0..=1] == riscv.OpcodeC2) & 1
+  const rvc_jr_o__w1 = is_jal_r__w1 & (~((instr_i >> 12) & 1)) & 1 & 1
+  const rvc_jalr_o__w1 = is_jal_r__w1 & (instr_i >> 12) & 1 & 1
+  mut _rep_22:u56 = if ((instr_i >> 12) & 1) != 0 { 0xffffffffffffff } else { 0 }
+  mut _rep_23:u53 = if ((instr_i >> 12) & 1) != 0 { 0x1fffffffffffff } else { 0 }
+  mut _mux_24:u64 = if ((instr_i >> 14) & 1) != 0 { (_rep_22 << 8) | (instr_i#[5..=6] << 6) | (((instr_i >> 2) & 1) << 5) | (instr_i#[10..=11] << 3) | (instr_i#[3..=4] << 1) } else { (_rep_23 << 11) | (((instr_i >> 8) & 1) << 10) | (instr_i#[9..=10] << 8) | (((instr_i >> 6) & 1) << 7) | (((instr_i >> 7) & 1) << 6) | (((instr_i >> 2) & 1) << 5) | (((instr_i >> 11) & 1) << 4) | (instr_i#[3..=5] << 1) }
+  rvi_return_o = rvi_jalr_o__w1 & (unsigned(instr_i#[15..=19] == 1) | unsigned(instr_i#[15..=19] == 5)) & 1 & 1 & unsigned(instr_i#[15..=19] != instr_i#[7..=11]) & 1
+  rvi_call_o = (rvi_jalr_o__w1 | rvi_jump_o__w1) & 1 & (unsigned(instr_i#[7..=11] == 1) | unsigned(instr_i#[7..=11] == 5)) & 1 & 1
+  rvi_branch_o = unsigned(instr_i#[0..=6] == riscv.OpcodeBranch)
+  rvi_jalr_o = rvi_jalr_o__w1
+  rvi_jump_o = rvi_jump_o__w1
+  rvi_imm_o = _mux_7
+  rvc_branch_o = (unsigned(instr_i#[13..=15] == riscv.OpcodeC1Beqz) | unsigned(instr_i#[13..=15] == riscv.OpcodeC1Bnez)) & 1 & unsigned(instr_i#[0..=1] == riscv.OpcodeC1) & 1
+  rvc_jump_o = ((unsigned(instr_i#[13..=15] == riscv.OpcodeC1J) & unsigned(instr_i#[0..=1] == riscv.OpcodeC1) & 1) | rv32_rvc_jal__w1) & 1
+  rvc_jr_o = rvc_jr_o__w1
+  rvc_return_o = (unsigned(instr_i#[7..=11] == 1) | unsigned(instr_i#[7..=11] == 5)) & 1 & rvc_jr_o__w1 & 1
+  rvc_jalr_o = rvc_jalr_o__w1
+  rvc_call_o = (rvc_jalr_o__w1 | rv32_rvc_jal__w1) & 1
+  rvc_imm_o = _mux_24
+}

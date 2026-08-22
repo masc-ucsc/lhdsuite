@@ -8,7 +8,7 @@
 //                            &req_i |=> $onehot0(hit_way_o))
 //
 // onto Pyrope's temporal operators:
-//   &req_i        -> every request bit set (NR_PORTS x DCACHE_SET_ASSOC = 24)
+//   &req_i        -> every request bit set (NR_PORTS x DCACHE_SET_ASSOC = 40)
 //   |=>           -> past(..., 1) implies <this cycle>. tag_cmp registers the
 //                    winning port id, so the tag arrives a cycle after the
 //                    request — which is exactly why the SVA is |=> not |->.
@@ -19,11 +19,18 @@
 // wrote it. Three things this sidecar makes explicit that the SVA leaves
 // implicit or that the flow would otherwise get wrong:
 //
-// 1. The design is reached through tag_cmp_wrap. tag_cmp takes its cache-line
-//    types as MODULE PARAMETERS; standalone they default to `logic`, which
-//    collapses the tag compare and leaves hit_way_o UNDRIVEN — every property
-//    over it then passes vacuously. The wrapper binds them exactly as
-//    std_nbdcache.sv does.
+// 1. The design is bound DIRECTLY, with no wrapper, and that is only safe
+//    because of where cva6/pyrope/tag_cmp.prp now comes from. tag_cmp takes
+//    its cache-line types as MODULE PARAMETERS; elaborated standalone from
+//    Verilog they default to `logic`, which collapses the tag compare and
+//    leaves hit_way_o UNDRIVEN — every property over it then passes vacuously
+//    (measured: `lhd compile verilog --top tag_cmp` yields rdata_i:u2,
+//    hit_way_o:u2). The checked-in Pyrope is instead emitted from the WHOLE
+//    core, where std_nbdcache binds the real types, so it arrives with
+//    rdata_i:u1392 and a real 44-bit compare gated by each way's valid bit.
+//    That is what retired cva6/pyrope/tag_cmp_wrap.prp, which existed only to
+//    reproduce that binding. If this file is ever pointed at a cone-generated
+//    tag_cmp again, the vacuity trap comes back — check rdata_i's width first.
 // 2. The assertion is NOT true of tag_cmp alone. It rests on an invariant the
 //    cache FILL logic maintains elsewhere: no two VALID ways hold the same tag.
 //    Without it two ways legitimately hit at once and the property refutes
@@ -34,7 +41,7 @@
 //    logically identical but currently proves WEAKER — `assume(X); assume(Y)`
 //    and `assume(X and Y)` disagree (livehd bug, found here: the merged form
 //    refutes while the split form proves). Keep them split until that is fixed.
-const dut = import("tag_cmp_wrap.tag_cmp_wrap")
+const dut = import("tag_cmp.tag_cmp")
 
 formal tag_cmp.onehot {
   mut acc = dut
@@ -68,7 +75,11 @@ formal tag_cmp.onehot {
   assume_nocheck(not ((acc.rdata_i#[871..=871] != 0) and (acc.rdata_i#[1219..=1219] != 0) and (acc.rdata_i#[1000..=1043] == acc.rdata_i#[1348..=1391])))
   assume_nocheck(not ((acc.rdata_i#[1045..=1045] != 0) and (acc.rdata_i#[1219..=1219] != 0) and (acc.rdata_i#[1174..=1217] == acc.rdata_i#[1348..=1391])))
 
-  assert(((past(acc.rst_ni, 1) != 0) and (past(acc.req_i, 1) == 0xffffff))
-           implies (acc.hit_way_o#+[..] <= 1),
+  // hit_way_o is a per-leaf struct (e7..e0), not a flat u8, so $onehot0 is a
+  // sum over the leaves rather than a popcount over a bus.
+  assert(((past(acc.rst_ni, 1) != 0) and (past(acc.req_i, 1) == 0xffffffffff))
+           implies ((acc.hit_way_o.e0 + acc.hit_way_o.e1 + acc.hit_way_o.e2
+                     + acc.hit_way_o.e3 + acc.hit_way_o.e4 + acc.hit_way_o.e5
+                     + acc.hit_way_o.e6 + acc.hit_way_o.e7) <= 1),
          "&req_i |=> $onehot0(hit_way_o)")
 }

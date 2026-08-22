@@ -1,0 +1,135 @@
+const axi_pkg = import("axi_pkg")
+
+pub mod axi_shim::[timecheck=false](clk_i:u1, rst_ni:u1, rd_req_i:u1, rd_addr_i:u64, rd_blen_i:u1, rd_size_i:u3, rd_id_i:u4, rd_lock_i:u1, rd_rdy_i:u1, wr_req_i:u1, wr_addr_i:u64, wr_data_i:u128, wr_user_i:u128, wr_be_i:u16, wr_blen_i:u1, wr_size_i:u3, wr_id_i:u4, wr_lock_i:u1, wr_atop_i:u6, wr_rdy_i:u1, axi_resp_i:(aw_ready:u1, ar_ready:u1, w_ready:u1, b_valid:u1, b:(id:u4, resp:u2, user:u64), r_valid:u1, r:(id:u4, data:u64, resp:u2, last:u1, user:u64))) -> (rd_gnt_o:u1@[], rd_last_o:u1@[], rd_valid_o:u1@[], rd_data_o:u64@[], rd_user_o:u64@[], rd_id_o:u4@[], rd_exokay_o:u1@[], wr_gnt_o:u1@[], wr_valid_o:u1@[], wr_id_o:u4@[], wr_exokay_o:u1@[], axi_req_o:(aw:(id:u4, addr:u64, len:u8, size:u3, burst:u2, lock:u1, cache:u4, prot:u3, qos:u4, region:u4, atop:u6, user:u64), aw_valid:u1, w:(data:u64, strb:u8, last:u1, user:u64), w_valid:u1, b_ready:u1, ar:(id:u4, addr:u64, len:u8, size:u3, burst:u2, lock:u1, cache:u4, prot:u3, qos:u4, region:u4, user:u64), ar_valid:u1, r_ready:u1)@[]) {
+  reg wr_state_q:u4:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg wr_cnt_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  mut wr_cnt_clr:u1 = 0
+  mut `axi_req_o__bpo.aw.prot` = 0
+  mut `axi_req_o__bpo.aw.qos` = 0
+  mut `axi_req_o__bpo.aw.region` = 0
+  mut `axi_req_o__bpo.aw.user` = 0
+  mut `axi_req_o__bpo.aw_valid` = 0
+  mut `axi_req_o__bpo.w_valid` = 0
+  mut `axi_req_o__bpo.ar.prot` = 0
+  mut `axi_req_o__bpo.ar.qos` = 0
+  mut `axi_req_o__bpo.ar.region` = 0
+  mut `axi_req_o__bpo.ar.user` = 0
+  mut _mux_5:u32 = 0
+  mut wr_state_d:u4 = 0sb?
+  wr_cnt_clr = 0ub?
+  wr_gnt_o = 0ub?
+  mut `axi_req_o__bpo.aw.burst` = axi_pkg.BURST_INCR
+  mut `axi_req_o__bpo.aw.addr` = wr_addr_i
+  mut `axi_req_o__bpo.aw.size` = wr_size_i
+  mut `axi_req_o__bpo.aw.len` = wr_blen_i
+  mut `axi_req_o__bpo.aw.id` = wr_id_i
+  mut `axi_req_o__bpo.aw.lock` = wr_lock_i
+  mut `axi_req_o__bpo.aw.cache` = axi_pkg.CACHE_MODIFIABLE
+  mut `axi_req_o__bpo.aw.atop` = wr_atop_i
+  mut `axi_req_o__bpo.w.data` = ((wr_data_i << 0x40) >> ((wr_cnt_q * 0x40) + 0x40))#[0..=63]
+  mut `axi_req_o__bpo.w.user` = ((wr_user_i << 0x40) >> ((wr_cnt_q * 0x40) + 0x40))#[0..=63]
+  mut `axi_req_o__bpo.w.strb` = ((wr_be_i << 8) >> ((wr_cnt_q * 8) + 8))#[0..=7]
+  mut `axi_req_o__bpo.b_ready` = wr_rdy_i
+  const wr_cnt_done__w1 = unsigned(wr_cnt_q == wr_blen_i)
+  wr_gnt_o = 0
+  wr_cnt_clr = 0
+  wr_state_d = wr_state_q
+  match wr_state_q {
+    == 0 {
+      if wr_req_i != 0 {
+        `axi_req_o__bpo.aw_valid` = 1
+        `axi_req_o__bpo.w_valid` = 1
+        {
+          if unsigned(wr_blen_i == 0) != 0 {
+            wr_cnt_clr = 1
+            wr_gnt_o = axi_resp_i.aw_ready & axi_resp_i.w_ready & 1
+            const t78 = ((axi_resp_i.aw_ready & 1) << 1) | (axi_resp_i.w_ready & 1)
+            wr_state_d = unique if t78 == 1 { 1 } elif t78 == 2 { 2 } else { 0 }
+          }
+        }
+      }
+    }
+    == 1 {
+      `axi_req_o__bpo.aw_valid` = 1
+      if axi_resp_i.aw_ready != 0 {
+        wr_state_d = 0
+        wr_gnt_o = 1
+      }
+    }
+    == 2 {
+      `axi_req_o__bpo.w_valid` = 1
+      {
+        if wr_cnt_done__w1 != 0 {
+          if axi_resp_i.w_ready != 0 {
+            wr_state_d = 0
+            wr_cnt_clr = 1
+            wr_gnt_o = 1
+          }
+        }
+      }
+    }
+    else {
+      {
+        wr_state_d = 0
+      }
+    }
+  }
+  mut `axi_req_o__bpo.ar.burst` = axi_pkg.BURST_INCR
+  mut `axi_req_o__bpo.ar.addr` = rd_addr_i
+  mut `axi_req_o__bpo.ar.size` = rd_size_i
+  mut `axi_req_o__bpo.ar.len` = rd_blen_i
+  mut `axi_req_o__bpo.ar.id` = rd_id_i
+  mut `axi_req_o__bpo.ar.lock` = rd_lock_i
+  mut `axi_req_o__bpo.ar.cache` = axi_pkg.CACHE_MODIFIABLE
+  mut `axi_req_o__bpo.ar_valid` = rd_req_i
+  mut `axi_req_o__bpo.r_ready` = rd_rdy_i
+  mut `axi_req_o__bpo.w.last` = wr_cnt_done__w1
+  _mux_5 = wr_cnt_q
+  mut _mux_6:u32 = if wr_cnt_clr != 0 { 0 } else { _mux_5 }
+  if rst_ni != 0 {
+    wr_state_q = wr_state_d
+    wr_cnt_q = _mux_6 & 1
+  }
+  axi_req_o.aw.id = `axi_req_o__bpo.aw.id`
+  axi_req_o.aw.addr = `axi_req_o__bpo.aw.addr`
+  axi_req_o.aw.len = `axi_req_o__bpo.aw.len`
+  axi_req_o.aw.size = `axi_req_o__bpo.aw.size`
+  axi_req_o.aw.burst = `axi_req_o__bpo.aw.burst`
+  axi_req_o.aw.lock = `axi_req_o__bpo.aw.lock`
+  axi_req_o.aw.cache = `axi_req_o__bpo.aw.cache`
+  axi_req_o.aw.prot = 0
+  axi_req_o.aw.qos = 0
+  axi_req_o.aw.region = 0
+  axi_req_o.aw.atop = `axi_req_o__bpo.aw.atop`
+  axi_req_o.aw.user = 0
+  axi_req_o.aw_valid = `axi_req_o__bpo.aw_valid`
+  axi_req_o.w.data = `axi_req_o__bpo.w.data`
+  axi_req_o.w.strb = `axi_req_o__bpo.w.strb`
+  axi_req_o.w.last = `axi_req_o__bpo.w.last`
+  axi_req_o.w.user = `axi_req_o__bpo.w.user`
+  axi_req_o.w_valid = `axi_req_o__bpo.w_valid`
+  axi_req_o.b_ready = `axi_req_o__bpo.b_ready`
+  axi_req_o.ar.id = `axi_req_o__bpo.ar.id`
+  axi_req_o.ar.addr = `axi_req_o__bpo.ar.addr`
+  axi_req_o.ar.len = `axi_req_o__bpo.ar.len`
+  axi_req_o.ar.size = `axi_req_o__bpo.ar.size`
+  axi_req_o.ar.burst = `axi_req_o__bpo.ar.burst`
+  axi_req_o.ar.lock = `axi_req_o__bpo.ar.lock`
+  axi_req_o.ar.cache = `axi_req_o__bpo.ar.cache`
+  axi_req_o.ar.prot = 0
+  axi_req_o.ar.qos = 0
+  axi_req_o.ar.region = 0
+  axi_req_o.ar.user = 0
+  axi_req_o.ar_valid = `axi_req_o__bpo.ar_valid`
+  axi_req_o.r_ready = `axi_req_o__bpo.r_ready`
+  rd_gnt_o = rd_req_i & axi_resp_i.ar_ready & 1
+  rd_last_o = axi_resp_i.r.last
+  rd_valid_o = axi_resp_i.r_valid
+  rd_data_o = axi_resp_i.r.data
+  rd_user_o = 0
+  rd_id_o = axi_resp_i.r.id
+  rd_exokay_o = unsigned(axi_resp_i.r.resp == axi_pkg.RESP_EXOKAY)
+  wr_valid_o = axi_resp_i.b_valid
+  wr_id_o = axi_resp_i.b.id
+  wr_exokay_o = unsigned(axi_resp_i.b.resp == axi_pkg.RESP_EXOKAY)
+}

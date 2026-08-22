@@ -1,0 +1,274 @@
+// A real RISC-V program on the whole CVA6 core — the counterpart of
+// dino/sim/dino_prog_tb.prp and minion/sim/minion_prog_tb.prp, against CVA6's
+// AXI memory interface.
+//
+// ============================================================================
+// STATUS 2026-08-21: this driver does NOT pass yet, and the fault is in the
+// GENERATED PYROPE, not here. See the "Known-failing scenarios" table in
+// README.md. The short version: the core resets, its frontend computes the
+// right next PC (`i_frontend.npc_q` == boot_addr_i), the icache finishes its
+// 256-entry flush and issues an AXI read — and then nothing retires, because
+// `cva6/pyrope/cva6_icache.prp` mistranslates the fetch address. Two root
+// causes are confirmed by simulation, a third is not yet root-caused:
+//
+//   1. `dreq_o.ready` is emitted as a `mut` seeded 0 at the top of the body,
+//      READ at the `vaddr_d` / `cl_offset_d` muxes, and only ASSIGNED later
+//      inside the FSM. Pyrope `mut` is last-write-in-PROGRAM-ORDER, so those
+//      reads always see 0, `vaddr_q` never latches `dreq_i.vaddr`, and the
+//      icache asks the MMU to translate address 0. In the SystemVerilog these
+//      are continuous assigns that see the settled value; the emitted net
+//      needed to be a `wire` (which may be read above its driver), the way
+//      `mem_data_req_o` in the same file correctly is.
+//   2. `address`, the argument of the inlined `is_inside_cacheable_regions`
+//      check, is assigned `0sb?` and never bound to `{cl_tag_d, 12'b0}`, so
+//      the cacheable-region test is unknown and every fetch takes the
+//      non-cacheable path.
+//   3. With both patched in a scratch tree the fetch address and the burst
+//      shape become correct (addr 0x8000_0000, len 1 = a 128-bit line), the
+//      testbench delivers both beats, and the icache still re-requests
+//      forever with `icache_valid_q` stuck at 0. At least one more defect
+//      remains in the line-fill path.
+//
+// Also observed, not root-caused and NOT what blocks this driver (this model
+// ignores both fields): `cva6_icache_axi_wrapper` drives ar.size=3 / a valid
+// burst at its own `axi_req_o`, but at the cva6 top `noc_req_o.ar_size` and
+// `ar_burst` read 0 while `ar_id`, `ar_len` and `ar_addr` come through — i.e.
+// bits 80..84 of the packed AR are lost across `std_cache_subsystem`'s
+// stream_arbiter, and bits 85+ are not.
+//
+// Fixing any of this belongs in livehd, not here. Do NOT weaken the asserts
+// below to make the target green — they are plain RISC-V semantics.
+// ============================================================================
+//
+// WHY THE INTERFACE IS DIFFERENT FROM dino AND minion. dino exposes a
+// combinational `io_imem_*` pair and minion a fixed-latency cache-line port;
+// CVA6 speaks AXI4 (`noc_req_o` / `noc_resp_i`, 64-bit data, 4-bit ID), so
+// this driver is a small AXI SLAVE:
+//
+//   AR/R  one outstanding read burst at a time (`ar_ready` is deasserted
+//         while a burst is in flight — legal AXI, the master must tolerate
+//         backpressure). Each beat is 64 bits = two RV64 instructions, and
+//         `r_id` echoes `ar_id` because `std_cache_subsystem` demuxes the R
+//         channel BY ID (id 0 -> icache, 8..15 -> bypass, 7 -> dcache data).
+//   AW/W/B  always accepted; the B response carries the latched AW id.
+//
+// WHY THE RESULTS COME BACK ON AN UNCACHED WINDOW. CVA6's dcache is
+// write-back, so a store into DRAM is not visible at the AXI boundary when it
+// retires — only when its line is evicted, which may be much later or never
+// (the same trap minion documents). The config's cacheable region is
+// [0x8000_0000, 0xC000_0000), so this program publishes its results to
+// 0x1000_0000, OUTSIDE it: those stores bypass the cache and appear on AW/W
+// immediately. That keeps the check architectural, the way dino's does —
+// the testbench reads the program's own stores, not internal register taps.
+//
+// NO VERILATOR TWIN. cva6/verilog/ carries only the tag_cmp cone, not the
+// whole core (see cva6/README), so there is no reference simulator for this
+// design and no `*_verilator.cpp` counterpart. That is also why the CORES
+// entry marks the driver pyrope-only.
+//
+// THE PROGRAM. Assembled from source with a real toolchain, not hand-encoded:
+//
+//   riscv64-unknown-elf-as -march=rv64g -mabi=lp64 -o prog.o prog.S
+//   riscv64-unknown-elf-ld -Ttext=0x80000000 -o prog.elf prog.o
+//   riscv64-unknown-elf-objdump -d prog.elf
+//
+// `-march=rv64g` excludes the C extension on purpose, so every instruction is
+// 32 bits and the ROM below is one word per line. Phase 0 zeroes all 31
+// writable integer registers (the software init a real boot path performs,
+// which keeps architectural state deterministic even when the physical
+// register file powers up randomized). Phase 1 is the CHECKED workload.
+// Phase 2 loops forever over pure ALU work, so a larger `cycles` keeps the
+// core doing real work instead of extending an idle spin — the checks latch
+// once and hold at any count above completion.
+const cva6 = import("lg:cva6")
+
+test cva6.prog(cycles:u20 = 50000) {
+  mut acc = cva6
+
+  // 0x8000_0000 + 4*index. Padded to 64 entries with nops so a speculative
+  // fetch past the end lands on something decodable; the program itself never
+  // leaves loop2, so those words are never retired.
+  mut rom = [0x00000093,  // [ 0] li   x1, 0      ; phase 0: zero x1..x31
+             0x00000113,  // [ 1] li   x2, 0
+             0x00000193,  // [ 2] li   x3, 0
+             0x00000213,  // [ 3] li   x4, 0
+             0x00000293,  // [ 4] li   x5, 0
+             0x00000313,  // [ 5] li   x6, 0
+             0x00000393,  // [ 6] li   x7, 0
+             0x00000413,  // [ 7] li   x8, 0
+             0x00000493,  // [ 8] li   x9, 0
+             0x00000513,  // [ 9] li   x10, 0
+             0x00000593,  // [10] li   x11, 0
+             0x00000613,  // [11] li   x12, 0
+             0x00000693,  // [12] li   x13, 0
+             0x00000713,  // [13] li   x14, 0
+             0x00000793,  // [14] li   x15, 0
+             0x00000813,  // [15] li   x16, 0
+             0x00000893,  // [16] li   x17, 0
+             0x00000913,  // [17] li   x18, 0
+             0x00000993,  // [18] li   x19, 0
+             0x00000A13,  // [19] li   x20, 0
+             0x00000A93,  // [20] li   x21, 0
+             0x00000B13,  // [21] li   x22, 0
+             0x00000B93,  // [22] li   x23, 0
+             0x00000C13,  // [23] li   x24, 0
+             0x00000C93,  // [24] li   x25, 0
+             0x00000D13,  // [25] li   x26, 0
+             0x00000D93,  // [26] li   x27, 0
+             0x00000E13,  // [27] li   x28, 0
+             0x00000E93,  // [28] li   x29, 0
+             0x00000F13,  // [29] li   x30, 0
+             0x00000F93,  // [30] li   x31, 0
+             0x06400093,  // [31] li   x1, 100    ; phase 1: iteration bound
+             0x00110113,  // [32] loop1: addi x2, x2, 1
+             0xFFF18193,  // [33]        addi x3, x3, -1
+             0xFE111CE3,  // [34]        bne  x2, x1, loop1
+             0x10000537,  // [35] lui  x10, 0x10000  ; the UNCACHED window
+             0x00253023,  // [36] sd   x2, 0(x10)
+             0x00353423,  // [37] sd   x3, 8(x10)
+             0x5A500593,  // [38] li   x11, 0x5a5    ; done marker
+             0x00B53823,  // [39] sd   x11, 16(x10)
+             0x00120213,  // [40] loop2: addi x4, x4, 1   ; phase 2: forever
+             0x002242B3,  // [41]        xor  x5, x4, x2
+             0x00328333,  // [42]        add  x6, x5, x3
+             0x404303B3,  // [43]        sub  x7, x6, x4
+             0x00121413,  // [44]        slli x8, x4, 1
+             0x00245493,  // [45]        srli x9, x8, 2
+             0xFE9FF06F,  // [46]        j    loop2
+             0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013,
+             0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013,
+             0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013,
+             0x00000013, 0x00000013]
+
+  // AXI read channel: one burst in flight. 0 beats == idle.
+  mut r_beats = 0
+  mut r_addr  = 0
+  mut r_id    = 0
+  // AXI write channel.
+  mut w_addr = 0
+  mut aw_id  = 0
+  mut b_pend = 0
+
+  // What the program published on the uncached window.
+  mut st0  = 0      // sd x2,  0(x10)
+  mut st8:s64 = 0   // sd x3,  8(x10)
+  mut st16 = 0      // sd x11, 16(x10)
+  mut got  = 0      // bit per store
+  mut retired = 0
+  mut nexc = 0
+  mut done_cycle = 0
+
+  tick cycles clocks=(clk_i=1) {
+    // ---- reset + static configuration -------------------------------------
+    acc.rst_ni      = u1(clk_i >= 8)
+    acc.boot_addr_i = 0x80000000
+    acc.hart_id_i   = 0
+    acc.irq_i       = 0
+    acc.ipi_i       = 0
+    acc.time_irq_i  = 0
+    acc.debug_req_i = 0
+
+    // CVXIF: always ready, never accepting. The program uses no custom
+    // instruction, so a coprocessor that declines everything is the
+    // environment that cannot stall the core.
+    acc.cvxif_resp_i.compressed_ready        = 1
+    acc.cvxif_resp_i.compressed_resp_accept  = 0
+    acc.cvxif_resp_i.issue_ready             = 1
+    acc.cvxif_resp_i.issue_resp_accept       = 0
+    acc.cvxif_resp_i.register_ready          = 1
+    acc.cvxif_resp_i.result_valid            = 0
+
+    // ---- AXI read data ----------------------------------------------------
+    // One 64-bit beat = two instructions. The guard keeps the subtraction
+    // non-negative: `>>` on a testbench value that can go negative is an
+    // ARITHMETIC shift (see AGENTS.md), and the address is only in range
+    // inside the `if`. Out of range returns two nops rather than 0, which is
+    // an illegal instruction.
+    mut idx  = 0
+    mut beat = 0x0000001300000013
+    if r_addr >= 0x80000000 and r_addr < 0x80000100 {
+      idx  = ((r_addr - 0x80000000) >> 2) & 0x3E
+      beat = rom[idx] | (rom[idx + 1] << 32)
+    }
+    acc.noc_resp_i.ar_ready = u1(r_beats == 0)
+    acc.noc_resp_i.r_valid  = u1(r_beats != 0)
+    acc.noc_resp_i.r_id     = r_id     // echo: the R channel is demuxed by id
+    acc.noc_resp_i.r_data   = beat
+    acc.noc_resp_i.r_resp   = 0
+    acc.noc_resp_i.r_last   = u1(r_beats == 1)
+
+    acc.noc_resp_i.aw_ready = 1
+    acc.noc_resp_i.w_ready  = 1
+    acc.noc_resp_i.b_valid  = u1(b_pend != 0)
+    acc.noc_resp_i.b_id     = aw_id
+    acc.noc_resp_i.b_resp   = 0
+
+    step
+
+    // ---- observe (all reads BELOW the step, see AGENTS.md) -----------------
+    // AR: latch one burst, then stream it. `ar_ready` above was computed from
+    // last cycle's state, so accepting here is the registered-slave handshake.
+    if r_beats == 0 {
+      if acc.noc_req_o.ar_valid != 0 {
+        r_beats = acc.noc_req_o.ar_len + 1
+        r_addr  = acc.noc_req_o.ar_addr
+        r_id    = acc.noc_req_o.ar_id
+      }
+    } elif acc.noc_req_o.r_ready != 0 {
+      r_beats = r_beats - 1
+      r_addr  = r_addr + 8
+    }
+
+    // AW/W/B. A burst's beats walk `w_addr` forward; `sd` uses a full strobe,
+    // so the whole 64-bit beat is the stored value.
+    if acc.noc_req_o.aw_valid != 0 {
+      w_addr = acc.noc_req_o.aw_addr
+      aw_id  = acc.noc_req_o.aw_id
+    }
+    if acc.noc_req_o.w_valid != 0 {
+      mut wd = acc.noc_req_o.w_data
+      if w_addr == 0x10000000 {
+        st0 = wd
+        got = got | 1
+      } elif w_addr == 0x10000008 {
+        st8 = wd
+        got = got | 2
+      } elif w_addr == 0x10000010 {
+        st16 = wd
+        got = got | 4
+      }
+      w_addr = w_addr + 8
+      if acc.noc_req_o.w_last != 0 {
+        b_pend = 1
+      }
+    }
+    if b_pend != 0 and acc.noc_req_o.b_ready != 0 {
+      b_pend = 0
+    }
+
+    // Retirement straight from the RVFI probes: `commit_ack` is one bit per
+    // commit port, so its popcount is this cycle's retire count.
+    mut ack = acc.rvfi_probes_o.instr_commit_ack
+    retired = retired + (ack & 1) + ((ack >> 1) & 1)
+    if acc.rvfi_probes_o.instr_ex_commit_valid != 0 {
+      nexc = nexc + 1
+    }
+    if done_cycle == 0 and got == 7 {
+      done_cycle = clk_i
+    }
+  }
+
+  assert(nexc == 0, "the program runs to completion without taking a trap")
+  assert(got == 7, "the program published all three results on the uncached window")
+  assert(st0 == 100, "x2 counted up to the iteration bound")
+  assert(st8 == -100, "x3 counted down in lockstep: x3 == -100")
+  assert(st16 == 0x5a5, "the done marker reached the uncached window")
+  // IPC in milli-units to stay integer-friendly, as dino's driver does.
+  // bench/sim.sh greps this line out of the driver log.
+  mut ipc_milli = 0
+  if done_cycle > 0 {
+    ipc_milli = (retired * 1000) / done_cycle
+  }
+  mut neg_x3 = -st8
+  puts("cva6 program: x2={st0} -x3={neg_x3} marker={st16}, retired={retired}, done at cycle {done_cycle}, IPC={ipc_milli} milli-instr/cycle")
+}

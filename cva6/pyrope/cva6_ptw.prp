@@ -1,0 +1,420 @@
+const pmp = import("pmp.pmp")
+const ariane_pkg = import("ariane_pkg")
+const riscv = import("riscv")
+
+pub mod cva6_ptw::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, enable_translation_i:u1, enable_g_translation_i:u1, en_ld_st_translation_i:u1, en_ld_st_g_translation_i:u1, v_i:u1, ld_st_v_i:u1, hlvx_inst_i:u1, lsu_is_store_i:u1, req_port_i:(data_gnt:u1, data_rvalid:u1, data_rid:u1, data_rdata:u64, data_ruser:u64), asid_i:u16, vs_asid_i:u16, vmid_i:u14, shared_tlb_access_i:u1, shared_tlb_hit_i:u1, shared_tlb_vaddr_i:u64, itlb_req_i:u1, satp_ppn_i:u44, vsatp_ppn_i:u44, hgatp_ppn_i:u44, mxr_i:u1, vmxr_i:u1, mbe_i:u1, pmpcfg_i:u64, pmpaddr_i:u432) -> (ptw_active_o:u1@[], walking_instr_o:u1@[], ptw_error_o:u1@[], ptw_error_at_g_st_o:u1@[], ptw_err_at_g_int_st_o:u1@[], ptw_access_exception_o:u1@[], req_port_o:(address_index:u12, address_tag:u44, data_wdata:u64, data_wuser:u64, data_req:u1, data_we:u1, data_be:u8, data_size:u2, data_id:u1, kill_req:u1, tag_valid:u1, cbo_op:u8)@[], shared_tlb_update_o:(valid:u1, is_napot_64k:u1, is_page:u2, vpn:u27, asid:u16, vmid:u14, v_st_enbl:u1, content:(n:u1, reserved:u9, ppn:u44, rsw:u2, d:u1, a:u1, g:u1, u:u1, x:u1, w:u1, r:u1, v:u1), g_content:(n:u1, reserved:u9, ppn:u44, rsw:u2, d:u1, a:u1, g:u1, u:u1, x:u1, w:u1, r:u1, v:u1))@[], update_vaddr_o:u64@[], shared_tlb_miss_o:u1@[], bad_paddr_o:u56@[], bad_gpaddr_o:u41@[]) {
+  mut _mux_10:u16 = 0
+  mut _mux_11:u3 = 0
+  mut _mux_21:u1 = 0
+  mut _mux_24:u1 = 0
+  mut _mux_9:u16 = 0
+  reg data_rvalid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg data_rdata_q:u64:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg gpte_q:u64:[clock_pin=ref clk_i]
+  reg state_q:u3:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg ptw_lvl_q:[1]u2:[ordering="old", init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg ptw_stage_q:u2:[clock_pin=ref clk_i]
+  reg is_instr_ptw_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg global_mapping_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg tag_valid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg kill_req_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg tlb_update_asid_q:u16:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg tlb_update_vmid_q:u14:[clock_pin=ref clk_i]
+  reg vaddr_q:u64:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg gpaddr_q:u41:[clock_pin=ref clk_i]
+  reg ptw_pptr_q:u56:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg gptw_pptr_q:u56:[clock_pin=ref clk_i]
+  mut `gpte_d.n` = 0
+  mut `gpte_d.reserved` = 0
+  mut `gpte_d.ppn` = 0
+  mut `gpte_d.rsw` = 0
+  mut `gpte_d.d` = 0
+  mut `gpte_d.a` = 0
+  mut `gpte_d.g` = 0
+  mut `gpte_d.u` = 0
+  mut `gpte_d.x` = 0
+  mut `gpte_d.w` = 0
+  mut `gpte_d.r` = 0
+  mut `gpte_d.v` = 0
+  mut state_d:u3 = 0
+  mut misaligned_page:u2 = 0
+  mut shared_tlb_update_valid:u1 = 0
+  mut ptw_lvl_n:u2 = 0
+  mut is_instr_ptw_n:u1 = 0
+  mut global_mapping_n:u1 = 0
+  mut tag_valid_n:u1 = 0
+  mut kill_req_n:u1 = 0
+  mut tlb_update_asid_n:u16 = 0
+  mut vaddr_n:u64 = 0
+  mut vaddr_lvl:u18 = 0
+  mut gpaddr:u123 = 0
+  mut ptw_pptr_n:u56 = 0
+  mut `req_port_o__bpo.data_wdata` = 0
+  mut `req_port_o__bpo.data_wuser` = 0
+  mut `req_port_o__bpo.data_req` = 0
+  mut `req_port_o__bpo.data_we` = 0
+  mut `req_port_o__bpo.data_be` = 0
+  mut `req_port_o__bpo.data_size` = 0
+  mut `req_port_o__bpo.data_id` = 0
+  mut `shared_tlb_update_o__bpo.is_napot_64k` = 0
+  mut `shared_tlb_update_o__bpo.is_page` = 0
+  mut `shared_tlb_update_o__bpo.vmid` = 0
+  mut `shared_tlb_update_o__bpo.v_st_enbl` = 0
+  mut `shared_tlb_update_o__bpo.content.n` = 0
+  mut `shared_tlb_update_o__bpo.content.reserved` = 0
+  mut `shared_tlb_update_o__bpo.content.ppn` = 0
+  mut `shared_tlb_update_o__bpo.content.rsw` = 0
+  mut `shared_tlb_update_o__bpo.content.d` = 0
+  mut `shared_tlb_update_o__bpo.content.a` = 0
+  mut `shared_tlb_update_o__bpo.content.g` = 0
+  mut `shared_tlb_update_o__bpo.content.u` = 0
+  mut `shared_tlb_update_o__bpo.content.x` = 0
+  mut `shared_tlb_update_o__bpo.content.w` = 0
+  mut `shared_tlb_update_o__bpo.content.r` = 0
+  mut `shared_tlb_update_o__bpo.content.v` = 0
+  mut `shared_tlb_update_o__bpo.g_content.n` = 0
+  mut `shared_tlb_update_o__bpo.g_content.reserved` = 0
+  mut `shared_tlb_update_o__bpo.g_content.ppn` = 0
+  mut `shared_tlb_update_o__bpo.g_content.rsw` = 0
+  mut `shared_tlb_update_o__bpo.g_content.d` = 0
+  mut `shared_tlb_update_o__bpo.g_content.a` = 0
+  mut `shared_tlb_update_o__bpo.g_content.g` = 0
+  mut `shared_tlb_update_o__bpo.g_content.u` = 0
+  mut `shared_tlb_update_o__bpo.g_content.x` = 0
+  mut `shared_tlb_update_o__bpo.g_content.w` = 0
+  mut `shared_tlb_update_o__bpo.g_content.r` = 0
+  mut `shared_tlb_update_o__bpo.g_content.v` = 0
+  mut _mux_3:u9 = 0
+  mut _mux_4:u9 = 0
+  mut _mux_6:u9 = 0
+  mut _mux_7:u9 = 0
+  mut pptr:u56 = 0
+  state_d = 0sb?
+  misaligned_page = 0sb?
+  shared_tlb_update_valid = 0ub?
+  ptw_lvl_n = 0sb?
+  is_instr_ptw_n = 0ub?
+  global_mapping_n = 0ub?
+  tag_valid_n = 0ub?
+  kill_req_n = 0ub?
+  tlb_update_asid_n = 0sb?
+  vaddr_n = 0sb?
+  vaddr_lvl = 0sb?
+  gpaddr = 0sb?
+  ptw_pptr_n = 0sb?
+  ptw_error_o = 0ub?
+  ptw_access_exception_o = 0ub?
+  shared_tlb_miss_o = 0ub?
+  bad_gpaddr_o = 0sb?
+  mut `pte.n` = (data_rdata_q >> 63) & 1
+  mut `pte.reserved` = data_rdata_q#[54..=62]
+  mut `pte.ppn` = data_rdata_q#[10..=53]
+  mut `pte.rsw` = data_rdata_q#[8..=9]
+  mut `pte.d` = (data_rdata_q >> 7) & 1
+  mut `pte.a` = (data_rdata_q >> 6) & 1
+  mut `pte.g` = (data_rdata_q >> 5) & 1
+  mut `pte.u` = (data_rdata_q >> 4) & 1
+  mut `pte.x` = (data_rdata_q >> 3) & 1
+  mut `pte.w` = (data_rdata_q >> 2) & 1
+  mut `pte.r` = (data_rdata_q >> 1) & 1
+  mut `pte.v` = data_rdata_q & 1
+  const update_vaddr_o__w1 = vaddr_q
+  const walking_instr_o__w1 = is_instr_ptw_q
+  mut `req_port_o__bpo.address_index` = ptw_pptr_q#[0..=11]
+  mut `req_port_o__bpo.address_tag` = ptw_pptr_q#[12..=55]
+  mut `req_port_o__bpo.cbo_op` = ariane_pkg.CBO_NONE
+  mut misaligned_page__w1 = misaligned_page
+  misaligned_page__w1#[0] = unsigned((ptw_lvl_q[0] == 0) and (`pte.ppn`#[0..=17] != 0)) & 1
+  _mux_3 = gpaddr_q#[21..=29]
+  _mux_4 = _mux_3
+  {
+    _mux_4 = vaddr_q#[21..=29]
+  }
+  mut vaddr_lvl__w1 = vaddr_lvl
+  vaddr_lvl__w1#[0..=8] = _mux_4
+  mut misaligned_page__w2 = misaligned_page__w1
+  misaligned_page__w2#[1] = unsigned((ptw_lvl_q[0] == 1) and (`pte.ppn`#[0..=8] != 0)) & 1
+  _mux_6 = gpaddr_q#[12..=20]
+  _mux_7 = _mux_6
+  {
+    _mux_7 = vaddr_q#[12..=20]
+  }
+  mut vaddr_lvl__w2 = vaddr_lvl__w1
+  vaddr_lvl__w2#[9..=17] = _mux_7
+  mut `req_port_o__bpo.tag_valid` = tag_valid_q
+  mut `req_port_o__bpo.kill_req` = unsigned(state_q == 6)
+  mut i_pmp_ptw = pmp::[name=i_pmp_ptw](addr_i = ptw_pptr_q, access_type_i = riscv.ACCESS_READ, priv_lvl_i = riscv.PRIV_LVL_S, conf_addr_i = pmpaddr_i, conf_i = pmpcfg_i)
+  pptr = 0sb?
+  ptw_pptr_n = ptw_pptr_q
+  global_mapping_n = global_mapping_q
+  kill_req_n = kill_req_q
+  ptw_access_exception_o = 0
+  is_instr_ptw_n = is_instr_ptw_q
+  ptw_err_at_g_int_st_o = 0
+  shared_tlb_update_valid = 0
+  pptr = ptw_pptr_q
+  ptw_error_at_g_st_o = 0
+  ptw_lvl_n = ptw_lvl_q
+  tag_valid_n = 0
+  vaddr_n = vaddr_q
+  state_d = state_q
+  shared_tlb_miss_o = 0
+  ptw_error_o = 0
+  tlb_update_asid_n = tlb_update_asid_q
+  match state_q {
+    == 0 {
+      ptw_lvl_n = 0
+      global_mapping_n = 0
+      is_instr_ptw_n = 0
+      if ((((enable_translation_i | enable_g_translation_i) & 1) != 0) or (en_ld_st_translation_i != 0) or (en_ld_st_g_translation_i != 0) or true) and (shared_tlb_access_i != 0) and (((~shared_tlb_hit_i) & 1) != 0) {
+        if (((enable_translation_i != 0) and (enable_g_translation_i != 0)) or ((en_ld_st_translation_i != 0) and (en_ld_st_g_translation_i != 0))) and false {
+          pptr = (vsatp_ppn_i << 12) | (shared_tlb_vaddr_i#[30..=38] << 3)
+          ptw_pptr_n = (hgatp_ppn_i#[2..=43] << 12) | (pptr#[30..=38] << 3)
+        } elif (((((enable_translation_i | enable_g_translation_i) & 1) != 0) and (enable_translation_i == 0)) or (((en_ld_st_translation_i != 0) or (en_ld_st_g_translation_i != 0)) and (en_ld_st_translation_i == 0))) and false {
+          ptw_pptr_n = (hgatp_ppn_i#[2..=43] << 12) | (shared_tlb_vaddr_i#[30..=38] << 3)
+        } elif ((v_i != 0) or (ld_st_v_i != 0)) and false {
+          ptw_pptr_n = (vsatp_ppn_i << 12) | (shared_tlb_vaddr_i#[30..=38] << 3)
+        } else {
+          ptw_pptr_n = (satp_ppn_i << 12) | (shared_tlb_vaddr_i#[30..=38] << 3)
+        }
+        is_instr_ptw_n = itlb_req_i
+        vaddr_n = shared_tlb_vaddr_i
+        state_d = 1
+        shared_tlb_miss_o = 1
+        if itlb_req_i != 0 {
+          _mux_9 = if v_i != 0 { vs_asid_i } else { asid_i }
+          tlb_update_asid_n = _mux_9
+        } else {
+          _mux_10 = if ld_st_v_i != 0 { vs_asid_i } else { asid_i }
+          tlb_update_asid_n = _mux_10
+        }
+      }
+    }
+    == 1 {
+      `req_port_o__bpo.data_req` = 1
+      if req_port_i.data_gnt != 0 {
+        tag_valid_n = 1
+        _mux_11 = if (kill_req_q != 0) or (flush_i != 0) { 6 } else { 2 }
+        state_d = _mux_11
+      }
+    }
+    == 6 {
+      kill_req_n = 0
+      state_d = 3
+    }
+    == 2 {
+      if data_rvalid_q != 0 {
+        if (`pte.g` != 0) and ((ptw_stage_q == 0) or true) {
+          global_mapping_n = 1
+        }
+        if (`pte.v` == 0) or ((`pte.r` == 0) and (`pte.w` != 0)) or ((`pte.reserved` != 0) and true) or (true and (`pte.n` != 0)) or false {
+          state_d = 4
+        } else {
+          state_d = 7
+          if (`pte.r` != 0) or (`pte.x` != 0) {
+            if is_instr_ptw_q != 0 {
+              if ((`pte.x` == 0) and true) or (`pte.a` == 0) or false {
+                state_d = 4
+              } else {
+                {
+                  shared_tlb_update_valid = 1
+                }
+              }
+            } elif (`pte.a` != 0) and (((`pte.r` != 0) and (hlvx_inst_i == 0)) or ((`pte.x` != 0) and ((mxr_i != 0) or (hlvx_inst_i != 0) or ((ptw_stage_q == 0) and (vmxr_i != 0) and (ld_st_v_i != 0) and false)))) and ((lsu_is_store_i == 0) or ((`pte.w` != 0) and (`pte.d` != 0)) or ((ptw_stage_q == 1) and false)) {
+              {
+                shared_tlb_update_valid = 1
+              }
+            } else {
+              state_d = 4
+            }
+            if misaligned_page__w2 != 0 {
+              state_d = 4
+              shared_tlb_update_valid = 0
+            }
+          } elif ptw_lvl_q[0] == 2 {
+            ptw_lvl_n#[0..=1] = ptw_lvl_q[0]
+            state_d = 4
+          } else {
+            ptw_lvl_n#[0..=1] = (ptw_lvl_q[0] + 1)#[0..=1]
+            state_d = 1
+            {
+              ptw_pptr_n = (`pte.ppn`#[0..=43] << 12) | (((vaddr_lvl__w2#[0..=17] << 9) >> ((ptw_lvl_q[0] * 9) + 9))#[0..=8] << 3)
+            }
+          }
+        }
+        if i_pmp_ptw == 0 {
+          shared_tlb_update_valid = 0
+          ptw_pptr_n = ptw_pptr_q
+          state_d = 5
+        }
+      }
+    }
+    == 4 {
+      state_d = 7
+      ptw_error_o = 1
+    }
+    == 5 {
+      state_d = 7
+      ptw_access_exception_o = 1
+    }
+    == 3 {
+      if data_rvalid_q != 0 {
+        state_d = 0
+      }
+    }
+    == 7 {
+      state_d = 0
+    }
+    else {
+      state_d = 0
+    }
+  }
+  if flush_i != 0 {
+    if ((state_q == 2) or (state_q == 3)) and (data_rvalid_q == 0) {
+      state_d = 3
+    } elif state_q != 1 {
+      state_d = 7
+    }
+    kill_req_n = unsigned(state_q == 1)
+  }
+  const t532 = req_port_i.data_rdata
+  mut _mux_18:u64 = if mbe_i != 0 { (((t532 & 0xff) << 56) | (((t532 >> 8) & 0xff) << 48) | (((t532 >> 16) & 0xff) << 40) | (((t532 >> 24) & 0xff) << 32) | (((t532 >> 32) & 0xff) << 24) | (((t532 >> 40) & 0xff) << 16) | (((t532 >> 48) & 0xff) << 8) | ((t532 >> 56) & 0xff))#[0..=63] } else { req_port_i.data_rdata#[0..=63] }
+  if rst_ni != 0 {
+    state_q = state_d
+    ptw_pptr_q = ptw_pptr_n
+    is_instr_ptw_q = is_instr_ptw_n
+    ptw_lvl_q = ptw_lvl_n
+    tag_valid_q = tag_valid_n
+    kill_req_q = kill_req_n
+    tlb_update_asid_q = tlb_update_asid_n
+    vaddr_q = vaddr_n
+    global_mapping_q = global_mapping_n
+    data_rdata_q = _mux_18
+    data_rvalid_q = req_port_i.data_rvalid
+  }
+  mut `shared_tlb_update_o__bpo.valid` = shared_tlb_update_valid
+  if (((enable_g_translation_i != 0) and (enable_translation_i != 0)) or ((en_ld_st_g_translation_i != 0) and (en_ld_st_translation_i != 0))) and false {
+    `shared_tlb_update_o__bpo.is_page`#[0] = unsigned(ptw_lvl_q[1] == 0)
+  } elif (enable_translation_i != 0) or (en_ld_st_translation_i != 0) or true {
+    _mux_21 = 0
+    {
+      _mux_21 = unsigned(ptw_lvl_q[0] == 0) & 1
+    }
+    `shared_tlb_update_o__bpo.is_page`#[0] = _mux_21
+  } else {
+    `shared_tlb_update_o__bpo.is_page`#[0] = 0
+  }
+  if (((enable_g_translation_i != 0) and (enable_translation_i != 0)) or ((en_ld_st_g_translation_i != 0) and (en_ld_st_translation_i != 0))) and false {
+    `shared_tlb_update_o__bpo.is_page`#[1] = unsigned(ptw_lvl_q[1] == 1)
+  } elif (enable_translation_i != 0) or (en_ld_st_translation_i != 0) or true {
+    _mux_24 = 0
+    {
+      _mux_24 = unsigned(ptw_lvl_q[0] == 1) & 1
+    }
+    `shared_tlb_update_o__bpo.is_page`#[1] = _mux_24
+  } else {
+    `shared_tlb_update_o__bpo.is_page`#[1] = 0
+  }
+  if ((enable_g_translation_i != 0) or (en_ld_st_g_translation_i != 0)) and false {
+    `shared_tlb_update_o__bpo.content.n` = ((gpte_q | (global_mapping_q << 5)) >> 63) & 1
+    `shared_tlb_update_o__bpo.content.reserved` = ((gpte_q | (global_mapping_q << 5)) >> 54)#[0..=8]
+    `shared_tlb_update_o__bpo.content.ppn` = ((gpte_q | (global_mapping_q << 5)) >> 10)#[0..=43]
+    `shared_tlb_update_o__bpo.content.rsw` = ((gpte_q | (global_mapping_q << 5)) >> 8)#[0..=1]
+    `shared_tlb_update_o__bpo.content.d` = ((gpte_q | (global_mapping_q << 5)) >> 7) & 1
+    `shared_tlb_update_o__bpo.content.a` = ((gpte_q | (global_mapping_q << 5)) >> 6) & 1
+    `shared_tlb_update_o__bpo.content.g` = ((gpte_q | (global_mapping_q << 5)) >> 5) & 1
+    `shared_tlb_update_o__bpo.content.u` = ((gpte_q | (global_mapping_q << 5)) >> 4) & 1
+    `shared_tlb_update_o__bpo.content.x` = ((gpte_q | (global_mapping_q << 5)) >> 3) & 1
+    `shared_tlb_update_o__bpo.content.w` = ((gpte_q | (global_mapping_q << 5)) >> 2) & 1
+    `shared_tlb_update_o__bpo.content.r` = ((gpte_q | (global_mapping_q << 5)) >> 1) & 1
+    `shared_tlb_update_o__bpo.content.v` = (gpte_q | (global_mapping_q << 5)) & 1
+    const t707 = (`pte.n` << 63) | (`pte.reserved` << 54) | (`pte.ppn` << 10) | (`pte.rsw` << 8) | (`pte.d` << 7) | (`pte.a` << 6) | (`pte.g` << 5) | (`pte.u` << 4) | (`pte.x` << 3) | (`pte.w` << 2) | (`pte.r` << 1) | `pte.v`
+    `shared_tlb_update_o__bpo.g_content.n` = (t707 >> 63) & 1
+    `shared_tlb_update_o__bpo.g_content.reserved` = (t707 >> 54)#[0..=8]
+    `shared_tlb_update_o__bpo.g_content.ppn` = (t707 >> 10)#[0..=43]
+    `shared_tlb_update_o__bpo.g_content.rsw` = (t707 >> 8)#[0..=1]
+    `shared_tlb_update_o__bpo.g_content.d` = (t707 >> 7) & 1
+    `shared_tlb_update_o__bpo.g_content.a` = (t707 >> 6) & 1
+    `shared_tlb_update_o__bpo.g_content.g` = (t707 >> 5) & 1
+    `shared_tlb_update_o__bpo.g_content.u` = (t707 >> 4) & 1
+    `shared_tlb_update_o__bpo.g_content.x` = (t707 >> 3) & 1
+    `shared_tlb_update_o__bpo.g_content.w` = (t707 >> 2) & 1
+    `shared_tlb_update_o__bpo.g_content.r` = (t707 >> 1) & 1
+    `shared_tlb_update_o__bpo.g_content.v` = t707 & 1
+  } else {
+    `shared_tlb_update_o__bpo.content.n` = (((`pte.n` << 63) | (`pte.reserved` << 54) | (`pte.ppn` << 10) | (`pte.rsw` << 8) | (`pte.d` << 7) | (`pte.a` << 6) | (`pte.g` << 5) | (`pte.u` << 4) | (`pte.x` << 3) | (`pte.w` << 2) | (`pte.r` << 1) | `pte.v` | (global_mapping_q << 5))#[0..=63] >> 63) & 1
+    `shared_tlb_update_o__bpo.content.reserved` = (((`pte.n` << 63) | (`pte.reserved` << 54) | (`pte.ppn` << 10) | (`pte.rsw` << 8) | (`pte.d` << 7) | (`pte.a` << 6) | (`pte.g` << 5) | (`pte.u` << 4) | (`pte.x` << 3) | (`pte.w` << 2) | (`pte.r` << 1) | `pte.v` | (global_mapping_q << 5))#[0..=63] >> 54)#[0..=8]
+    `shared_tlb_update_o__bpo.content.ppn` = (((`pte.n` << 63) | (`pte.reserved` << 54) | (`pte.ppn` << 10) | (`pte.rsw` << 8) | (`pte.d` << 7) | (`pte.a` << 6) | (`pte.g` << 5) | (`pte.u` << 4) | (`pte.x` << 3) | (`pte.w` << 2) | (`pte.r` << 1) | `pte.v` | (global_mapping_q << 5))#[0..=63] >> 10)#[0..=43]
+    `shared_tlb_update_o__bpo.content.rsw` = (((`pte.n` << 63) | (`pte.reserved` << 54) | (`pte.ppn` << 10) | (`pte.rsw` << 8) | (`pte.d` << 7) | (`pte.a` << 6) | (`pte.g` << 5) | (`pte.u` << 4) | (`pte.x` << 3) | (`pte.w` << 2) | (`pte.r` << 1) | `pte.v` | (global_mapping_q << 5))#[0..=63] >> 8)#[0..=1]
+    `shared_tlb_update_o__bpo.content.d` = (((`pte.n` << 63) | (`pte.reserved` << 54) | (`pte.ppn` << 10) | (`pte.rsw` << 8) | (`pte.d` << 7) | (`pte.a` << 6) | (`pte.g` << 5) | (`pte.u` << 4) | (`pte.x` << 3) | (`pte.w` << 2) | (`pte.r` << 1) | `pte.v` | (global_mapping_q << 5))#[0..=63] >> 7) & 1
+    `shared_tlb_update_o__bpo.content.a` = (((`pte.n` << 63) | (`pte.reserved` << 54) | (`pte.ppn` << 10) | (`pte.rsw` << 8) | (`pte.d` << 7) | (`pte.a` << 6) | (`pte.g` << 5) | (`pte.u` << 4) | (`pte.x` << 3) | (`pte.w` << 2) | (`pte.r` << 1) | `pte.v` | (global_mapping_q << 5))#[0..=63] >> 6) & 1
+    `shared_tlb_update_o__bpo.content.g` = (((`pte.n` << 63) | (`pte.reserved` << 54) | (`pte.ppn` << 10) | (`pte.rsw` << 8) | (`pte.d` << 7) | (`pte.a` << 6) | (`pte.g` << 5) | (`pte.u` << 4) | (`pte.x` << 3) | (`pte.w` << 2) | (`pte.r` << 1) | `pte.v` | (global_mapping_q << 5))#[0..=63] >> 5) & 1
+    `shared_tlb_update_o__bpo.content.u` = (((`pte.n` << 63) | (`pte.reserved` << 54) | (`pte.ppn` << 10) | (`pte.rsw` << 8) | (`pte.d` << 7) | (`pte.a` << 6) | (`pte.g` << 5) | (`pte.u` << 4) | (`pte.x` << 3) | (`pte.w` << 2) | (`pte.r` << 1) | `pte.v` | (global_mapping_q << 5))#[0..=63] >> 4) & 1
+    `shared_tlb_update_o__bpo.content.x` = (((`pte.n` << 63) | (`pte.reserved` << 54) | (`pte.ppn` << 10) | (`pte.rsw` << 8) | (`pte.d` << 7) | (`pte.a` << 6) | (`pte.g` << 5) | (`pte.u` << 4) | (`pte.x` << 3) | (`pte.w` << 2) | (`pte.r` << 1) | `pte.v` | (global_mapping_q << 5))#[0..=63] >> 3) & 1
+    `shared_tlb_update_o__bpo.content.w` = (((`pte.n` << 63) | (`pte.reserved` << 54) | (`pte.ppn` << 10) | (`pte.rsw` << 8) | (`pte.d` << 7) | (`pte.a` << 6) | (`pte.g` << 5) | (`pte.u` << 4) | (`pte.x` << 3) | (`pte.w` << 2) | (`pte.r` << 1) | `pte.v` | (global_mapping_q << 5))#[0..=63] >> 2) & 1
+    `shared_tlb_update_o__bpo.content.r` = (((`pte.n` << 63) | (`pte.reserved` << 54) | (`pte.ppn` << 10) | (`pte.rsw` << 8) | (`pte.d` << 7) | (`pte.a` << 6) | (`pte.g` << 5) | (`pte.u` << 4) | (`pte.x` << 3) | (`pte.w` << 2) | (`pte.r` << 1) | `pte.v` | (global_mapping_q << 5))#[0..=63] >> 1) & 1
+    `shared_tlb_update_o__bpo.content.v` = ((`pte.n` << 63) | (`pte.reserved` << 54) | (`pte.ppn` << 10) | (`pte.rsw` << 8) | (`pte.d` << 7) | (`pte.a` << 6) | (`pte.g` << 5) | (`pte.u` << 4) | (`pte.x` << 3) | (`pte.w` << 2) | (`pte.r` << 1) | `pte.v` | (global_mapping_q << 5))#[0..=63] & 1
+    `shared_tlb_update_o__bpo.g_content.n` = 0
+    `shared_tlb_update_o__bpo.g_content.reserved` = 0
+    `shared_tlb_update_o__bpo.g_content.ppn` = 0
+    `shared_tlb_update_o__bpo.g_content.rsw` = 0
+    `shared_tlb_update_o__bpo.g_content.d` = 0
+    `shared_tlb_update_o__bpo.g_content.a` = 0
+    `shared_tlb_update_o__bpo.g_content.g` = 0
+    `shared_tlb_update_o__bpo.g_content.u` = 0
+    `shared_tlb_update_o__bpo.g_content.x` = 0
+    `shared_tlb_update_o__bpo.g_content.w` = 0
+    `shared_tlb_update_o__bpo.g_content.r` = 0
+    `shared_tlb_update_o__bpo.g_content.v` = 0
+  }
+  mut `shared_tlb_update_o__bpo.asid` = tlb_update_asid_q
+  mut `shared_tlb_update_o__bpo.vpn` = vaddr_q#[12..=38]
+  mut _mux_25:u56 = if ptw_access_exception_o != 0 { ptw_pptr_q } else { 0 }
+  req_port_o.address_index = `req_port_o__bpo.address_index`
+  req_port_o.address_tag = `req_port_o__bpo.address_tag`
+  req_port_o.data_wdata = 0
+  req_port_o.data_wuser = 0
+  req_port_o.data_req = `req_port_o__bpo.data_req`
+  req_port_o.data_we = 0
+  req_port_o.data_be = 0xff
+  req_port_o.data_size = 3
+  req_port_o.data_id = 0
+  req_port_o.kill_req = `req_port_o__bpo.kill_req`
+  req_port_o.tag_valid = `req_port_o__bpo.tag_valid`
+  req_port_o.cbo_op = `req_port_o__bpo.cbo_op`
+  shared_tlb_update_o.valid = `shared_tlb_update_o__bpo.valid`
+  shared_tlb_update_o.is_napot_64k = 0
+  shared_tlb_update_o.is_page = `shared_tlb_update_o__bpo.is_page`
+  shared_tlb_update_o.vpn = `shared_tlb_update_o__bpo.vpn`
+  shared_tlb_update_o.asid = `shared_tlb_update_o__bpo.asid`
+  shared_tlb_update_o.vmid = 0
+  shared_tlb_update_o.v_st_enbl = `shared_tlb_update_o__bpo.v_st_enbl`
+  shared_tlb_update_o.content.n = `shared_tlb_update_o__bpo.content.n`
+  shared_tlb_update_o.content.reserved = `shared_tlb_update_o__bpo.content.reserved`
+  shared_tlb_update_o.content.ppn = `shared_tlb_update_o__bpo.content.ppn`
+  shared_tlb_update_o.content.rsw = `shared_tlb_update_o__bpo.content.rsw`
+  shared_tlb_update_o.content.d = `shared_tlb_update_o__bpo.content.d`
+  shared_tlb_update_o.content.a = `shared_tlb_update_o__bpo.content.a`
+  shared_tlb_update_o.content.g = `shared_tlb_update_o__bpo.content.g`
+  shared_tlb_update_o.content.u = `shared_tlb_update_o__bpo.content.u`
+  shared_tlb_update_o.content.x = `shared_tlb_update_o__bpo.content.x`
+  shared_tlb_update_o.content.w = `shared_tlb_update_o__bpo.content.w`
+  shared_tlb_update_o.content.r = `shared_tlb_update_o__bpo.content.r`
+  shared_tlb_update_o.content.v = `shared_tlb_update_o__bpo.content.v`
+  shared_tlb_update_o.g_content.n = `shared_tlb_update_o__bpo.g_content.n`
+  shared_tlb_update_o.g_content.reserved = `shared_tlb_update_o__bpo.g_content.reserved`
+  shared_tlb_update_o.g_content.ppn = `shared_tlb_update_o__bpo.g_content.ppn`
+  shared_tlb_update_o.g_content.rsw = `shared_tlb_update_o__bpo.g_content.rsw`
+  shared_tlb_update_o.g_content.d = `shared_tlb_update_o__bpo.g_content.d`
+  shared_tlb_update_o.g_content.a = `shared_tlb_update_o__bpo.g_content.a`
+  shared_tlb_update_o.g_content.g = `shared_tlb_update_o__bpo.g_content.g`
+  shared_tlb_update_o.g_content.u = `shared_tlb_update_o__bpo.g_content.u`
+  shared_tlb_update_o.g_content.x = `shared_tlb_update_o__bpo.g_content.x`
+  shared_tlb_update_o.g_content.w = `shared_tlb_update_o__bpo.g_content.w`
+  shared_tlb_update_o.g_content.r = `shared_tlb_update_o__bpo.g_content.r`
+  shared_tlb_update_o.g_content.v = `shared_tlb_update_o__bpo.g_content.v`
+  ptw_active_o = unsigned(state_q != 0)
+  walking_instr_o = walking_instr_o__w1
+  update_vaddr_o = update_vaddr_o__w1
+  bad_paddr_o = _mux_25
+}

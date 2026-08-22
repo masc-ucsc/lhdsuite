@@ -1,0 +1,162 @@
+const gated_clk_cell = import("gated_clk_cell.gated_clk_cell")
+
+pub mod ct_vfdsu_ctrl::[timecheck=false](cp0_vfpu_icg_en:u1, cp0_yy_clk_en:u1, cpurst_b:u1, dp_vfdsu_ex1_pipex_sel:u1, dp_vfdsu_fdiv_gateclk_issue:u1, dp_vfdsu_idu_fdiv_issue:u1, ex1_double:u1, ex1_single:u1, ex1_half:u1, ex1_bfloat:u1, forever_cpuclk:u1, pad_yy_icg_scan_en:u1, rtu_yy_xx_flush:u1, srt_ctrl_rem_zero:u1, srt_ctrl_skip_srt:u1, vfdsu_ex2_double:u1, vfdsu_ex2_single:u1, vfdsu_ex2_half:u1, vfdsu_ex2_bfloat:u1) -> (ex1_data_clk:u1@[], ex1_pipedown:u1@[], ex2_data_clk:u1@[], ex2_pipedown:u1@[], ex2_srt_first_round:u1@[], ex3_data_clk:u1@[], ex3_pipedown:u1@[], pipex_dp_vfdsu_inst_vld:u1@[], srt_secd_round:u1@[], srt_sm_on:u1@[], vfdsu_dp_fdiv_busy:u1@[], vfdsu_dp_inst_wb_req:u1@[], vfdsu_ifu_debug_ex2_wait:u1@[], vfdsu_ifu_debug_idle:u1@[], vfdsu_ifu_debug_pipe_busy:u1@[]) {
+  reg div_cur_state:u4:[init=0, reset_pin=ref cpurst_b, async=true, negreset=true, clock_pin=ref div_sm_clk]
+  reg ex2_srt_first_round:u1:[init=0, reset_pin=ref cpurst_b, async=true, negreset=true, clock_pin=ref srt_sm_clk]
+  reg ex2_srt_secd_round:u1:[init=0, reset_pin=ref cpurst_b, async=true, negreset=true, clock_pin=ref srt_sm_clk]
+  reg srt_cnt:u5:[init=0, reset_pin=ref cpurst_b, async=true, negreset=true, clock_pin=ref srt_sm_clk]
+  reg srt_cur_state:u1:[init=0, reset_pin=ref cpurst_b, async=true, negreset=true, clock_pin=ref srt_sm_clk]
+  reg vfdsu_ex3_vld:u1:[init=0, reset_pin=ref cpurst_b, async=true, negreset=true, clock_pin=ref ex2_pipe_clk]
+  reg vfdsu_ex4_vld:u1:[init=0, reset_pin=ref cpurst_b, async=true, negreset=true, clock_pin=ref ex3_pipe_clk]
+  wire div_sm_clk:u1
+  wire ex2_pipe_clk:u1
+  wire ex3_pipe_clk:u1
+  wire srt_sm_clk:u1
+  mut div_next_state:u4 = 0
+  mut srt_cnt_ini:u5 = 0
+  div_next_state = 0sb?
+  mut srt_nxt_state = 0ub?
+  const ex1_pipedown__w1 = dp_vfdsu_ex1_pipex_sel
+  const srt_sm_on__w1 = srt_cur_state
+  mut _mux_3:u5 = if ex1_half != 0 { 3 } else { 2 }
+  mut _mux_4:u5 = if ex1_single != 0 { 6 } else { _mux_3 }
+  mut _mux_5:u5 = if ex1_double != 0 { 13 } else { _mux_4 }
+  srt_cnt_ini = 0sb?
+  mut srt_cnt_ini__w1 = srt_cnt_ini
+  srt_cnt_ini__w1#[0..=4] = _mux_5
+  const srt_secd_round__w1 = ex2_srt_secd_round
+  mut _mux_10:u1 = if vfdsu_ex2_half != 0 { unsigned(srt_cnt == 3) & 1 } else { unsigned(srt_cnt == 2) & 1 }
+  mut _mux_11:u1 = if vfdsu_ex2_single != 0 { unsigned(srt_cnt == 6) & 1 } else { _mux_10 & 1 }
+  mut _mux_12:u1 = if vfdsu_ex2_double != 0 { unsigned(srt_cnt == 13) & 1 } else { _mux_11 & 1 }
+  const ex3_pipedown__w1 = vfdsu_ex3_vld
+  const ex4_pipedown__w1 = vfdsu_ex4_vld
+  const vfdsu_dp_inst_wb_req__w1 = vfdsu_ex3_vld
+  const vfdsu_dp_fdiv_busy__w1 = (div_cur_state >> 2) & 1
+  mut x_srt_sm_clk = gated_clk_cell::[name=x_srt_sm_clk](clk_in = forever_cpuclk, global_en = cp0_yy_clk_en, module_en = cp0_vfpu_icg_en, local_en = unsigned((srt_cur_state != 0) or (ex1_pipedown__w1 != 0) or (rtu_yy_xx_flush != 0)), external_en = 0, pad_yy_icg_scan_en = pad_yy_icg_scan_en)
+  srt_sm_clk = x_srt_sm_clk
+  const srt_last_round__w1 = unsigned(((srt_ctrl_skip_srt != 0) or (srt_ctrl_rem_zero != 0) or (unsigned(srt_cnt == 0) != 0)) and (srt_sm_on__w1 != 0))
+  if cpurst_b != 0 {
+    if rtu_yy_xx_flush != 0 {
+      srt_cnt#[0..=4] = 0
+    } elif ex1_pipedown__w1 != 0 {
+      srt_cnt#[0..=4] = srt_cnt_ini__w1#[0..=4]
+    } elif srt_sm_on__w1 != 0 {
+      srt_cnt#[0..=4] = (srt_cnt - 1)#[0..=4]
+    } else {
+      srt_cnt#[0..=4] = srt_cnt
+    }
+  }
+  const ex2_pipedown__w1 = unsigned((srt_last_round__w1 != 0) and (unsigned(div_cur_state == 6) != 0))
+  if cpurst_b != 0 {
+    if rtu_yy_xx_flush != 0 {
+      ex2_srt_first_round = 0
+    } else {
+      ex2_srt_first_round = if ex1_pipedown__w1 != 0 { 1 } else { 0 }
+    }
+  }
+  mut x_ex3_pipe_clk = gated_clk_cell::[name=x_ex3_pipe_clk](clk_in = forever_cpuclk, global_en = cp0_yy_clk_en, module_en = cp0_vfpu_icg_en, local_en = unsigned((ex3_pipedown__w1 != 0) or (vfdsu_ex4_vld != 0) or (rtu_yy_xx_flush != 0)), external_en = 0, pad_yy_icg_scan_en = pad_yy_icg_scan_en)
+  ex3_pipe_clk = x_ex3_pipe_clk
+  if cpurst_b != 0 {
+    if rtu_yy_xx_flush != 0 {
+      vfdsu_ex4_vld = 0
+    } else {
+      vfdsu_ex4_vld = if ex3_pipedown__w1 != 0 { 1 } else { 0 }
+    }
+  }
+  mut x_div_sm_clk = gated_clk_cell::[name=x_div_sm_clk](clk_in = forever_cpuclk, global_en = cp0_yy_clk_en, module_en = cp0_vfpu_icg_en, local_en = unsigned((dp_vfdsu_fdiv_gateclk_issue != 0) or (not (div_cur_state == 0))), external_en = 0, pad_yy_icg_scan_en = pad_yy_icg_scan_en)
+  div_sm_clk = x_div_sm_clk
+  match div_cur_state {
+    == 0 {
+      if dp_vfdsu_idu_fdiv_issue != 0 {
+        div_next_state = 4
+        div_next_state#[0..=3] = 4
+      } else {
+        div_next_state#[0..=3] = 0
+      }
+    }
+    == 4 {
+      div_next_state#[0..=3] = 5
+    }
+    == 5 {
+      if dp_vfdsu_ex1_pipex_sel != 0 {
+        div_next_state#[0..=3] = 6
+      } else {
+        div_next_state#[0..=3] = 0
+      }
+    }
+    == 6 {
+      if srt_last_round__w1 != 0 {
+        div_next_state#[0..=3] = 7
+      } else {
+        div_next_state#[0..=3] = 6
+      }
+    }
+    == 7 {
+      if ex4_pipedown__w1 != 0 {
+        div_next_state#[0..=3] = 8
+      } else {
+        div_next_state#[0..=3] = 7
+      }
+    }
+    == 8 {
+      if dp_vfdsu_idu_fdiv_issue != 0 {
+        div_next_state#[0..=3] = 4
+      } else {
+        div_next_state#[0..=3] = 0
+      }
+    }
+    else {
+      div_next_state#[0..=3] = 0
+    }
+  }
+  mut x_ex1_data_clk = gated_clk_cell::[name=x_ex1_data_clk](clk_in = forever_cpuclk, global_en = cp0_yy_clk_en, module_en = cp0_vfpu_icg_en, local_en = ex1_pipedown__w1, external_en = 0, pad_yy_icg_scan_en = pad_yy_icg_scan_en)
+  mut x_ex3_data_clk = gated_clk_cell::[name=x_ex3_data_clk](clk_in = forever_cpuclk, global_en = cp0_yy_clk_en, module_en = cp0_vfpu_icg_en, local_en = ex3_pipedown__w1, external_en = 0, pad_yy_icg_scan_en = pad_yy_icg_scan_en)
+  match srt_cur_state {
+    == 0 {
+      srt_nxt_state = if ex1_pipedown__w1 != 0 { 1 } else { 0 }
+    }
+    == 1 {
+      srt_nxt_state = if srt_last_round__w1 != 0 { 0 } else { 1 }
+    }
+    else {
+      srt_nxt_state = 0
+    }
+  }
+  if cpurst_b != 0 {
+    ex2_srt_secd_round = if rtu_yy_xx_flush != 0 { 0 } else { (unsigned((srt_sm_on__w1 != 0) and (_mux_12 != 0)) & 1) }
+  }
+  if cpurst_b != 0 {
+    if rtu_yy_xx_flush != 0 {
+      div_cur_state#[0..=3] = 0
+    } else {
+      div_cur_state#[0..=3] = div_next_state
+    }
+  }
+  mut x_ex2_data_clk = gated_clk_cell::[name=x_ex2_data_clk](clk_in = forever_cpuclk, global_en = cp0_yy_clk_en, module_en = cp0_vfpu_icg_en, local_en = ex2_pipedown__w1, external_en = 0, pad_yy_icg_scan_en = pad_yy_icg_scan_en)
+  if cpurst_b != 0 {
+    srt_cur_state = if rtu_yy_xx_flush != 0 { 0 } else { srt_nxt_state }
+  }
+  mut x_ex2_pipe_clk = gated_clk_cell::[name=x_ex2_pipe_clk](clk_in = forever_cpuclk, global_en = cp0_yy_clk_en, module_en = cp0_vfpu_icg_en, local_en = unsigned((ex2_pipedown__w1 != 0) or (vfdsu_ex3_vld != 0) or (rtu_yy_xx_flush != 0)), external_en = 0, pad_yy_icg_scan_en = pad_yy_icg_scan_en)
+  ex2_pipe_clk = x_ex2_pipe_clk
+  if cpurst_b != 0 {
+    if rtu_yy_xx_flush != 0 {
+      vfdsu_ex3_vld = 0
+    } else {
+      vfdsu_ex3_vld = if ex2_pipedown__w1 != 0 { 1 } else { 0 }
+    }
+  }
+  ex1_data_clk = x_ex1_data_clk
+  ex1_pipedown = ex1_pipedown__w1
+  ex2_data_clk = x_ex2_data_clk
+  ex2_pipedown = ex2_pipedown__w1
+  ex3_data_clk = x_ex3_data_clk
+  ex3_pipedown = ex3_pipedown__w1
+  pipex_dp_vfdsu_inst_vld = unsigned(div_cur_state == 8)
+  srt_secd_round = srt_secd_round__w1
+  srt_sm_on = srt_sm_on__w1
+  vfdsu_dp_fdiv_busy = vfdsu_dp_fdiv_busy__w1
+  vfdsu_dp_inst_wb_req = vfdsu_dp_inst_wb_req__w1
+  vfdsu_ifu_debug_ex2_wait = 0
+  vfdsu_ifu_debug_idle = unsigned(div_cur_state == 0)
+  vfdsu_ifu_debug_pipe_busy = 0
+}

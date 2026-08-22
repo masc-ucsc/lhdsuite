@@ -1,0 +1,385 @@
+const bht = import("bht.bht")
+const btb = import("btb.btb")
+const instr_queue = import("instr_queue.instr_queue")
+const instr_realign = import("instr_realign.instr_realign")
+const instr_scan = import("instr_scan.instr_scan")
+const ras = import("ras.ras")
+const ariane_pkg = import("ariane_pkg")
+const riscv = import("riscv")
+
+pub mod frontend::[timecheck=false](clk_i:u1, rst_ni:u1, boot_addr_i:u64, flush_bp_i:u1, flush_i:u1, halt_i:u1, halt_frontend_i:u1, set_pc_commit_i:u1, pc_commit_i:u64, ex_valid_i:u1, resolved_branch_i:(valid:u1, pc:u64, target_address:u64, is_mispredict:u1, is_taken:u1, cf_type:u3), eret_i:u1, epc_i:u64, trap_vector_base_i:u64, set_debug_pc_i:u1, debug_mode_i:u1, icache_dreq_i:(ready:u1, valid:u1, data:u32, user:u64, vaddr:u64, ex:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1)), fetch_entry_ready_i:u1) -> (icache_dreq_o:(req:u1, kill_s1:u1, kill_s2:u1, spec:u1, vaddr:u64)@[], fetch_entry_o:u367@[], fetch_entry_valid_o:u1@[]) {
+  wire ras_predict:(valid:u1, ra:u64) = nil
+  mut _mux_10:u64 = 0
+  mut _mux_18:u64 = 0
+  mut _mux_7:u64 = 0
+  mut _mux_8:u64 = 0
+  mut _mux_9:u64 = 0
+  reg icache_data_q:u32:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg icache_valid_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg icache_ex_valid_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg icache_vaddr_q:u64:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg icache_gpaddr_q:u41:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg icache_tinst_q:u32:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg icache_gva_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg btb_q:u65:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg bht_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg npc_q:u64:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg npc_rst_load_q:u1:[init=1, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg speculative_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  wire instr_queue_ready:u1
+  wire instr_queue_consumed:u2
+  wire replay:u1
+  wire replay_addr:u64
+  mut npc_d:u64 = 0
+  mut bht_prediction_shifted:u4 = 0
+  mut btb_prediction_shifted:u130 = 0
+  mut ras_push:u1 = 0
+  mut ras_pop:u1 = 0
+  mut ras_update:u64 = 0
+  mut predict_address:u64 = 0
+  mut cf_type:u6 = 0
+  mut taken_rvi_cf:u2 = 0
+  mut taken_rvc_cf:u2 = 0
+  mut is_branch:u2 = 0
+  mut is_call:u2 = 0
+  mut is_jump:u2 = 0
+  mut is_return:u2 = 0
+  mut is_jalr:u2 = 0
+  mut `icache_dreq_o__bpo.kill_s2` = 0
+  mut rvi_return__wtmp:u2 = 0sb?
+  wire rvi_return:u2
+  mut rvi_call__wtmp:u2 = 0sb?
+  wire rvi_call:u2
+  mut rvi_branch__wtmp:u2 = 0sb?
+  wire rvi_branch:u2
+  mut rvi_jalr__wtmp:u2 = 0sb?
+  wire rvi_jalr:u2
+  mut rvi_jump__wtmp:u2 = 0sb?
+  wire rvi_jump:u2
+  mut rvi_imm__wtmp:u128 = 0sb?
+  wire rvi_imm:u128
+  mut rvc_branch__wtmp:u2 = 0sb?
+  wire rvc_branch:u2
+  mut rvc_jump__wtmp:u2 = 0sb?
+  wire rvc_jump:u2
+  mut rvc_jr__wtmp:u2 = 0sb?
+  wire rvc_jr:u2
+  mut rvc_return__wtmp:u2 = 0sb?
+  wire rvc_return:u2
+  mut rvc_jalr__wtmp:u2 = 0sb?
+  wire rvc_jalr:u2
+  mut rvc_call__wtmp:u2 = 0sb?
+  wire rvc_call:u2
+  mut rvc_imm__wtmp:u128 = 0sb?
+  wire rvc_imm:u128
+  mut _mux_3:u64 = 0
+  mut _mux_4:u64 = 0
+  mut fetch_address:u64 = 0
+  npc_d = 0sb?
+  bht_prediction_shifted = 0sb?
+  btb_prediction_shifted = 0sb?
+  ras_push = 0ub?
+  ras_pop = 0ub?
+  ras_update = 0sb?
+  predict_address = 0sb?
+  cf_type = 0sb?
+  taken_rvi_cf = 0sb?
+  taken_rvc_cf = 0sb?
+  is_branch = 0sb?
+  is_call = 0sb?
+  is_jump = 0sb?
+  is_return = 0sb?
+  is_jalr = 0sb?
+  const is_mispredict__w1 = resolved_branch_i.valid & resolved_branch_i.is_mispredict & 1
+  mut `bht_update.valid` = resolved_branch_i.valid & unsigned(resolved_branch_i.cf_type == ariane_pkg.Branch) & 1
+  mut `bht_update.pc` = resolved_branch_i.pc#[0..=63]
+  mut `bht_update.taken` = resolved_branch_i.is_taken & 1
+  mut `btb_update.valid` = resolved_branch_i.valid & resolved_branch_i.is_mispredict & 1 & unsigned(resolved_branch_i.cf_type == ariane_pkg.JumpR) & 1
+  mut `btb_update.pc` = resolved_branch_i.pc#[0..=63]
+  mut `btb_update.target_address` = resolved_branch_i.target_address#[0..=63]
+  _mux_3 = icache_vaddr_q
+  _mux_4 = icache_vaddr_q
+  mut i_btb = btb::[name=i_btb](clk_i = clk_i, rst_ni = rst_ni, flush_bp_i = flush_bp_i, debug_mode_i = debug_mode_i, vpc_i = _mux_3, `btb_update_i.valid` = `btb_update.valid`, `btb_update_i.pc` = `btb_update.pc`, `btb_update_i.target_address` = `btb_update.target_address`)
+  const btb_prediction__w1 = i_btb
+  mut i_bht = bht::[name=i_bht](clk_i = clk_i, rst_ni = rst_ni, flush_bp_i = flush_bp_i, debug_mode_i = debug_mode_i, vpc_i = _mux_4, `bht_update_i.valid` = `bht_update.valid`, `bht_update_i.pc` = `bht_update.pc`, `bht_update_i.taken` = `bht_update.taken`)
+  const bht_prediction__w1 = i_bht
+  mut i_instr_realign = instr_realign::[name=i_instr_realign](clk_i = clk_i, rst_ni = rst_ni, flush_i = `icache_dreq_o__bpo.kill_s2`, valid_i = icache_valid_q, address_i = icache_vaddr_q, data_i = icache_data_q)
+  const instruction_valid__w1 = (i_instr_realign.valid_o.e1 << 1) | i_instr_realign.valid_o.e0
+  mut _mux_5:u2 = if i_instr_realign.serving_unaligned_o != 0 { bht_q } else { ((bht_prediction__w1 << 2) >> ((((i_instr_realign.addr_o#[0..=63] >> 1) & 1) * 2) + 2))#[0..=1] }
+  mut bht_prediction_shifted__w1 = bht_prediction_shifted
+  bht_prediction_shifted__w1#[0..=1] = _mux_5
+  mut _mux_6:u65 = if i_instr_realign.serving_unaligned_o != 0 { btb_q } else { ((btb_prediction__w1 << 0x41) >> ((((i_instr_realign.addr_o#[0..=63] >> 1) & 1) * 0x41) + 0x41))#[0..=64] }
+  mut btb_prediction_shifted__w1 = btb_prediction_shifted
+  btb_prediction_shifted__w1#[0..=64] = _mux_6
+  mut bht_prediction_shifted__w2 = bht_prediction_shifted__w1
+  bht_prediction_shifted__w2#[2..=3] = ((bht_prediction__w1 << 2) >> ((((i_instr_realign.addr_o#[64..=127] >> 1) & 1) * 2) + 2))#[0..=1]
+  mut btb_prediction_shifted__w2 = btb_prediction_shifted__w1
+  btb_prediction_shifted__w2#[65..=129] = ((btb_prediction__w1 << 0x41) >> ((((i_instr_realign.addr_o#[64..=127] >> 1) & 1) * 0x41) + 0x41))#[0..=64]
+  mut is_branch__w1 = is_branch
+  is_branch__w1#[0] = instruction_valid__w1 & 1 & ((rvi_branch & 1) | (rvc_branch & 1)) & 1 & 1
+  mut is_call__w1 = is_call
+  is_call__w1#[0] = instruction_valid__w1 & 1 & ((rvi_call & 1) | (rvc_call & 1)) & 1 & 1
+  mut is_return__w1 = is_return
+  is_return__w1#[0] = instruction_valid__w1 & 1 & ((rvi_return & 1) | (rvc_return & 1)) & 1 & 1
+  mut is_jump__w1 = is_jump
+  is_jump__w1#[0] = instruction_valid__w1 & 1 & ((rvi_jump & 1) | (rvc_jump & 1)) & 1 & 1
+  mut is_jalr__w1 = is_jalr
+  is_jalr__w1#[0] = instruction_valid__w1 & 1 & (~(is_return__w1 & 1)) & 1 & 1 & ((((rvi_jalr & 1) | (rvc_jalr & 1)) & 1) | (rvc_jr & 1)) & 1 & 1
+  mut is_branch__w2 = is_branch__w1
+  is_branch__w2#[1] = (instruction_valid__w1 >> 1) & 1 & (((rvi_branch >> 1) & 1) | ((rvc_branch >> 1) & 1)) & 1 & 1
+  mut is_call__w2 = is_call__w1
+  is_call__w2#[1] = (instruction_valid__w1 >> 1) & 1 & (((rvi_call >> 1) & 1) | ((rvc_call >> 1) & 1)) & 1 & 1
+  mut is_return__w2 = is_return__w1
+  is_return__w2#[1] = (instruction_valid__w1 >> 1) & 1 & (((rvi_return >> 1) & 1) | ((rvc_return >> 1) & 1)) & 1 & 1
+  mut is_jump__w2 = is_jump__w1
+  is_jump__w2#[1] = (instruction_valid__w1 >> 1) & 1 & (((rvi_jump >> 1) & 1) | ((rvc_jump >> 1) & 1)) & 1 & 1
+  mut is_jalr__w2 = is_jalr__w1
+  is_jalr__w2#[1] = (instruction_valid__w1 >> 1) & 1 & (~((is_return__w2 >> 1) & 1)) & 1 & 1 & (((((rvi_jalr >> 1) & 1) | ((rvc_jalr >> 1) & 1)) & 1) | ((rvc_jr >> 1) & 1)) & 1 & 1
+  mut cf_type__w1 = cf_type
+  cf_type__w1#[0..=2] = ariane_pkg.NoCF#[0..=2]
+  mut cf_type__w2 = cf_type__w1
+  cf_type__w2#[3..=5] = ariane_pkg.NoCF#[0..=2]
+  const t217 = (((is_branch__w2 >> 1) & 1) << 3) | (((is_return__w2 >> 1) & 1) << 2) | (((is_jump__w2 >> 1) & 1) << 1) | ((is_jalr__w2 >> 1) & 1)
+  taken_rvi_cf = 0
+  ras_push = 0
+  ras_pop = 0
+  predict_address = 0
+  taken_rvc_cf = 0
+  cf_type = cf_type__w2
+  match t217 {
+    == 0 {
+    }
+    == 1 {
+      ras_pop = 0
+      ras_push = 0
+      if true and (((btb_prediction_shifted__w2#[65..=129] >> 0x40) & 1) != 0) {
+        predict_address = btb_prediction_shifted__w2#[65..=129]#[0..=63]
+        cf_type#[3..=5] = ariane_pkg.JumpR#[0..=2]
+      }
+    }
+    == 2 {
+      ras_pop = 0
+      ras_push = 0
+      taken_rvi_cf#[1] = (rvi_jump >> 1) & 1
+      taken_rvc_cf#[1] = (rvc_jump >> 1) & 1
+      cf_type#[3..=5] = ariane_pkg.Jump#[0..=2]
+    }
+    == 4 {
+      ras_pop = ras_predict.valid & (instr_queue_consumed >> 1) & 1 & 1
+      ras_push = 0
+      predict_address = ras_predict.ra
+      cf_type#[3..=5] = ariane_pkg.Return#[0..=2]
+    }
+    == 8 {
+      ras_pop = 0
+      ras_push = 0
+      if ((bht_prediction_shifted__w2#[2..=3] >> 1) & 1) != 0 {
+        taken_rvi_cf#[1] = (rvi_branch >> 1) & 1 & bht_prediction_shifted__w2#[2..=3] & 1 & 1
+        taken_rvc_cf#[1] = (rvc_branch >> 1) & 1 & bht_prediction_shifted__w2#[2..=3] & 1 & 1
+      } else {
+        taken_rvi_cf#[1] = (rvi_branch >> 1) & 1 & (rvi_imm#[64..=127] >> 63) & 1 & 1
+        taken_rvc_cf#[1] = (rvc_branch >> 1) & 1 & (rvc_imm#[64..=127] >> 63) & 1 & 1
+      }
+      if (((taken_rvi_cf >> 1) & 1) != 0) or (((taken_rvc_cf >> 1) & 1) != 0) {
+        cf_type#[3..=5] = ariane_pkg.Branch#[0..=2]
+      }
+    }
+    else {
+    }
+  }
+  ras_update = 0
+  if ((is_call__w2 >> 1) & 1) != 0 {
+    ras_push = (instr_queue_consumed >> 1) & 1
+    _mux_7 = if ((rvc_call >> 1) & 1) != 0 { 2 } else { 4 }
+    ras_update = (i_instr_realign.addr_o#[64..=127] + _mux_7)#[0..=63]
+  }
+  if (((taken_rvc_cf >> 1) & 1) != 0) or (((taken_rvi_cf >> 1) & 1) != 0) {
+    _mux_8 = if ((taken_rvc_cf >> 1) & 1) != 0 { rvc_imm#[64..=127] } else { rvi_imm#[64..=127] }
+    predict_address = (i_instr_realign.addr_o#[64..=127] + _mux_8)#[0..=63]
+  }
+  const t312 = ((is_branch__w2 & 1) << 3) | ((is_return__w2 & 1) << 2) | ((is_jump__w2 & 1) << 1) | (is_jalr__w2 & 1)
+  match t312 {
+    == 0 {
+    }
+    == 1 {
+      ras_pop = 0
+      ras_push = 0
+      if true and (((btb_prediction_shifted__w2#[0..=64] >> 0x40) & 1) != 0) {
+        predict_address = btb_prediction_shifted__w2#[0..=64]#[0..=63]
+        cf_type#[0..=2] = ariane_pkg.JumpR#[0..=2]
+      }
+    }
+    == 2 {
+      ras_pop = 0
+      ras_push = 0
+      taken_rvi_cf#[0] = rvi_jump & 1
+      taken_rvc_cf#[0] = rvc_jump & 1
+      cf_type#[0..=2] = ariane_pkg.Jump#[0..=2]
+    }
+    == 4 {
+      ras_pop = ras_predict.valid & instr_queue_consumed & 1 & 1
+      ras_push = 0
+      predict_address = ras_predict.ra
+      cf_type#[0..=2] = ariane_pkg.Return#[0..=2]
+    }
+    == 8 {
+      ras_pop = 0
+      ras_push = 0
+      if ((bht_prediction_shifted__w2#[0..=1] >> 1) & 1) != 0 {
+        taken_rvi_cf#[0] = rvi_branch & 1 & bht_prediction_shifted__w2#[0..=1] & 1 & 1
+        taken_rvc_cf#[0] = rvc_branch & 1 & bht_prediction_shifted__w2#[0..=1] & 1 & 1
+      } else {
+        taken_rvi_cf#[0] = rvi_branch & 1 & (rvi_imm#[0..=63] >> 63) & 1 & 1
+        taken_rvc_cf#[0] = rvc_branch & 1 & (rvc_imm#[0..=63] >> 63) & 1 & 1
+      }
+      if ((taken_rvi_cf & 1) != 0) or ((taken_rvc_cf & 1) != 0) {
+        cf_type#[0..=2] = ariane_pkg.Branch#[0..=2]
+      }
+    }
+    else {
+    }
+  }
+  if (is_call__w2 & 1) != 0 {
+    ras_push = instr_queue_consumed & 1
+    _mux_9 = if (rvc_call & 1) != 0 { 2 } else { 4 }
+    ras_update = (i_instr_realign.addr_o#[0..=63] + _mux_9)#[0..=63]
+  }
+  if ((taken_rvc_cf & 1) != 0) or ((taken_rvi_cf & 1) != 0) {
+    _mux_10 = if (taken_rvc_cf & 1) != 0 { rvc_imm#[0..=63] } else { rvi_imm#[0..=63] }
+    predict_address = (i_instr_realign.addr_o#[0..=63] + _mux_10)#[0..=63]
+  }
+  const bp_valid__w3 = (((0 | (((unsigned(cf_type#[0..=2] != ariane_pkg.NoCF) & unsigned(cf_type#[0..=2] != ariane_pkg.Return) & 1) | (unsigned(cf_type#[0..=2] == ariane_pkg.Return) & ras_predict.valid & 1)) & 1)) & 1) | (((unsigned(cf_type#[3..=5] != ariane_pkg.NoCF) & unsigned(cf_type#[3..=5] != ariane_pkg.Return) & 1) | (unsigned(cf_type#[3..=5] == ariane_pkg.Return) & ras_predict.valid & 1)) & 1)) & 1
+  mut `icache_dreq_o__bpo.req` = instr_queue_ready & (~halt_frontend_i) & 1 & 1
+  mut `icache_dreq_o__bpo.kill_s1` = (((is_mispredict__w1 | flush_i) & 1) | replay) & 1
+  `icache_dreq_o__bpo.kill_s2` = (`icache_dreq_o__bpo.kill_s1` | bp_valid__w3) & 1
+  const speculative_d__w1 = unsigned((((speculative_q != 0) and (resolved_branch_i.valid == 0)) or (is_branch__w2 != 0) or (is_return__w2 != 0) or (is_jalr__w2 != 0)) and (flush_i == 0))
+  mut `icache_dreq_o__bpo.spec` = speculative_d__w1
+  fetch_address = 0sb?
+  if npc_rst_load_q != 0 {
+    npc_d = boot_addr_i
+    fetch_address = boot_addr_i
+  } else {
+    fetch_address = npc_q
+    npc_d = npc_q
+  }
+  if bp_valid__w3 != 0 {
+    fetch_address = predict_address
+    npc_d = predict_address
+  }
+  if (icache_dreq_i.ready & instr_queue_ready & 1 & (~halt_frontend_i) & 1 & 1) != 0 {
+    npc_d = (fetch_address#[2..=63] + 1)#[0..=61] << 2
+  }
+  if replay != 0 {
+    npc_d = replay_addr
+  }
+  if is_mispredict__w1 != 0 {
+    npc_d = resolved_branch_i.target_address
+  }
+  if eret_i != 0 {
+    npc_d = epc_i
+  }
+  if ex_valid_i != 0 {
+    npc_d = trap_vector_base_i
+  }
+  if set_pc_commit_i != 0 {
+    _mux_18 = if halt_i != 0 { 0 } else { 4 }
+    npc_d = (pc_commit_i + _mux_18)#[0..=63]
+  }
+  if true and (set_debug_pc_i != 0) {
+    npc_d = 0x800
+  }
+  mut `icache_dreq_o__bpo.vaddr` = fetch_address
+  if rst_ni != 0 {
+    npc_rst_load_q = 0
+    npc_q = npc_d
+    speculative_q = speculative_d__w1
+    icache_valid_q = icache_dreq_i.valid
+    if icache_dreq_i.valid != 0 {
+      icache_data_q = icache_dreq_i.data >> ((((icache_dreq_i.vaddr >> 1) & 1) & 1) << 4)
+      icache_vaddr_q = icache_dreq_i.vaddr
+      {
+        icache_gpaddr_q = 0
+        icache_tinst_q = 0
+        icache_gva_q = 0
+      }
+      if true and (icache_dreq_i.ex.cause == riscv.INSTR_GUEST_PAGE_FAULT) {
+        icache_ex_valid_q = ariane_pkg.FE_INSTR_GUEST_PAGE_FAULT
+      } elif true and (icache_dreq_i.ex.cause == riscv.INSTR_PAGE_FAULT) {
+        icache_ex_valid_q = ariane_pkg.FE_INSTR_PAGE_FAULT
+      } else {
+        icache_ex_valid_q = if icache_dreq_i.ex.cause == riscv.INSTR_ACCESS_FAULT { ariane_pkg.FE_INSTR_ACCESS_FAULT } else { ariane_pkg.FE_NONE }
+      }
+      btb_q = btb_prediction__w1#[65..=129]
+      bht_q = bht_prediction__w1#[2..=3]
+    }
+  }
+  mut i_ras = ras::[name=i_ras](clk_i = clk_i, rst_ni = rst_ni, flush_bp_i = flush_bp_i, push_i = ras_push, pop_i = ras_pop, data_i = ras_update)
+  ras_predict.valid = i_ras.data_o.valid
+  ras_predict.ra = i_ras.data_o.ra
+  mut i_instr_scan = instr_scan::[name=i_instr_scan](instr_i = i_instr_realign.instr_o#[0..=31])
+  rvi_return__wtmp#[0] = i_instr_scan["rvi_return_o"] & 1
+  rvi_call__wtmp#[0] = i_instr_scan["rvi_call_o"] & 1
+  rvi_branch__wtmp#[0] = i_instr_scan["rvi_branch_o"] & 1
+  rvi_jalr__wtmp#[0] = i_instr_scan["rvi_jalr_o"] & 1
+  rvi_jump__wtmp#[0] = i_instr_scan["rvi_jump_o"] & 1
+  rvi_imm__wtmp#[0..=63] = i_instr_scan["rvi_imm_o"]#[0..=63]
+  rvc_branch__wtmp#[0] = i_instr_scan["rvc_branch_o"] & 1
+  rvc_jump__wtmp#[0] = i_instr_scan["rvc_jump_o"] & 1
+  rvc_jr__wtmp#[0] = i_instr_scan["rvc_jr_o"] & 1
+  rvc_return__wtmp#[0] = i_instr_scan["rvc_return_o"] & 1
+  rvc_jalr__wtmp#[0] = i_instr_scan["rvc_jalr_o"] & 1
+  rvc_call__wtmp#[0] = i_instr_scan["rvc_call_o"] & 1
+  rvc_imm__wtmp#[0..=63] = i_instr_scan["rvc_imm_o"]#[0..=63]
+  i_instr_scan = instr_scan::[name=i_instr_scan](instr_i = i_instr_realign.instr_o#[32..=63])
+  mut rvi_return__wtmp__w1 = rvi_return__wtmp
+  rvi_return__wtmp__w1#[1] = i_instr_scan["rvi_return_o"] & 1
+  mut rvi_call__wtmp__w1 = rvi_call__wtmp
+  rvi_call__wtmp__w1#[1] = i_instr_scan["rvi_call_o"] & 1
+  mut rvi_branch__wtmp__w1 = rvi_branch__wtmp
+  rvi_branch__wtmp__w1#[1] = i_instr_scan["rvi_branch_o"] & 1
+  mut rvi_jalr__wtmp__w1 = rvi_jalr__wtmp
+  rvi_jalr__wtmp__w1#[1] = i_instr_scan["rvi_jalr_o"] & 1
+  mut rvi_jump__wtmp__w1 = rvi_jump__wtmp
+  rvi_jump__wtmp__w1#[1] = i_instr_scan["rvi_jump_o"] & 1
+  mut rvi_imm__wtmp__w1 = rvi_imm__wtmp
+  rvi_imm__wtmp__w1#[64..=127] = i_instr_scan["rvi_imm_o"]#[0..=63]
+  mut rvc_branch__wtmp__w1 = rvc_branch__wtmp
+  rvc_branch__wtmp__w1#[1] = i_instr_scan["rvc_branch_o"] & 1
+  mut rvc_jump__wtmp__w1 = rvc_jump__wtmp
+  rvc_jump__wtmp__w1#[1] = i_instr_scan["rvc_jump_o"] & 1
+  mut rvc_jr__wtmp__w1 = rvc_jr__wtmp
+  rvc_jr__wtmp__w1#[1] = i_instr_scan["rvc_jr_o"] & 1
+  mut rvc_return__wtmp__w1 = rvc_return__wtmp
+  rvc_return__wtmp__w1#[1] = i_instr_scan["rvc_return_o"] & 1
+  mut rvc_jalr__wtmp__w1 = rvc_jalr__wtmp
+  rvc_jalr__wtmp__w1#[1] = i_instr_scan["rvc_jalr_o"] & 1
+  mut rvc_call__wtmp__w1 = rvc_call__wtmp
+  rvc_call__wtmp__w1#[1] = i_instr_scan["rvc_call_o"] & 1
+  mut rvc_imm__wtmp__w1 = rvc_imm__wtmp
+  rvc_imm__wtmp__w1#[64..=127] = i_instr_scan["rvc_imm_o"]#[0..=63]
+  mut i_instr_queue = instr_queue::[name=i_instr_queue](clk_i = clk_i, rst_ni = rst_ni, flush_i = flush_i, instr_i = i_instr_realign.instr_o, addr_i = i_instr_realign.addr_o, valid_i = instruction_valid__w1, exception_i = icache_ex_valid_q, exception_addr_i = icache_vaddr_q, exception_gpaddr_i = icache_gpaddr_q, exception_tinst_i = icache_tinst_q, exception_gva_i = icache_gva_q, predict_address_i = predict_address, cf_type_i = cf_type, fetch_entry_ready_i = fetch_entry_ready_i)
+  instr_queue_ready = i_instr_queue.ready_o
+  instr_queue_consumed = i_instr_queue.consumed_o
+  replay = i_instr_queue.replay_o
+  replay_addr = i_instr_queue.replay_addr_o
+  rvi_return = rvi_return__wtmp__w1
+  rvi_call = rvi_call__wtmp__w1
+  rvi_branch = rvi_branch__wtmp__w1
+  rvi_jalr = rvi_jalr__wtmp__w1
+  rvi_jump = rvi_jump__wtmp__w1
+  rvi_imm = rvi_imm__wtmp__w1
+  rvc_branch = rvc_branch__wtmp__w1
+  rvc_jump = rvc_jump__wtmp__w1
+  rvc_jr = rvc_jr__wtmp__w1
+  rvc_return = rvc_return__wtmp__w1
+  rvc_jalr = rvc_jalr__wtmp__w1
+  rvc_call = rvc_call__wtmp__w1
+  rvc_imm = rvc_imm__wtmp__w1
+  icache_dreq_o.req = `icache_dreq_o__bpo.req`
+  icache_dreq_o.kill_s1 = `icache_dreq_o__bpo.kill_s1`
+  icache_dreq_o.kill_s2 = `icache_dreq_o__bpo.kill_s2`
+  icache_dreq_o.spec = `icache_dreq_o__bpo.spec`
+  icache_dreq_o.vaddr = `icache_dreq_o__bpo.vaddr`
+  fetch_entry_o = i_instr_queue.fetch_entry_o
+  fetch_entry_valid_o = i_instr_queue.fetch_entry_valid_o
+}

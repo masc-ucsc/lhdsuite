@@ -1,0 +1,755 @@
+const lfsr = import("lfsr.lfsr")
+const lzc = import("lzc.lzc")
+
+pub mod cva6_shared_tlb::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, flush_vvma_i:u1, flush_gvma_i:u1, s_st_enbl_i:u1, g_st_enbl_i:u1, v_i:u1, s_ld_st_enbl_i:u1, g_ld_st_enbl_i:u1, ld_st_v_i:u1, dtlb_asid_i:u16, itlb_asid_i:u16, lu_vmid_i:u14, itlb_access_i:u1, itlb_hit_i:u1, itlb_vaddr_i:u64, dtlb_access_i:u1, dtlb_hit_i:u1, dtlb_vaddr_i:u64, shared_tlb_miss_i:u1, asid_to_be_flushed_i:u16, vaddr_to_be_flushed_i:u64, vmid_to_be_flushed_i:u14, gpaddr_to_be_flushed_i:u41, shared_tlb_update_i:(valid:u1, is_napot_64k:u1, is_page:u2, vpn:u27, asid:u16, vmid:u14, v_st_enbl:u1, content:(n:u1, reserved:u9, ppn:u44, rsw:u2, d:u1, a:u1, g:u1, u:u1, x:u1, w:u1, r:u1, v:u1), g_content:(n:u1, reserved:u9, ppn:u44, rsw:u2, d:u1, a:u1, g:u1, u:u1, x:u1, w:u1, r:u1, v:u1))) -> (itlb_update_o:(valid:u1, is_napot_64k:u1, is_page:u2, vpn:u27, asid:u16, vmid:u14, v_st_enbl:u1, content:(n:u1, reserved:u9, ppn:u44, rsw:u2, d:u1, a:u1, g:u1, u:u1, x:u1, w:u1, r:u1, v:u1), g_content:(n:u1, reserved:u9, ppn:u44, rsw:u2, d:u1, a:u1, g:u1, u:u1, x:u1, w:u1, r:u1, v:u1))@[], dtlb_update_o:(valid:u1, is_napot_64k:u1, is_page:u2, vpn:u27, asid:u16, vmid:u14, v_st_enbl:u1, content:(n:u1, reserved:u9, ppn:u44, rsw:u2, d:u1, a:u1, g:u1, u:u1, x:u1, w:u1, r:u1, v:u1), g_content:(n:u1, reserved:u9, ppn:u44, rsw:u2, d:u1, a:u1, g:u1, u:u1, x:u1, w:u1, r:u1, v:u1))@[], itlb_miss_o:u1@[], dtlb_miss_o:u1@[], flush_busy_o:u1@[], shared_tlb_access_o:u1@[], shared_tlb_hit_o:u1@[], shared_tlb_vaddr_o:u64@[], itlb_req_o:u1@[]) {
+  mut pte:u128 = 0
+  reg flush_kind_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg flush_state_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg flush_idx_q:u6:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg flush_asid_q:u16:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg flush_vaddr_q:u64:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg flush_vmid_q:u14:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg flush_gpaddr_q:u41:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg shared_tag_valid_q:[64]u2:[ordering="old", init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg shared_tag_valid:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg vpn_q:[3]u9:[ordering="old", init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg itlb_vpn_q:u52:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg dtlb_vpn_q:u52:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg tlb_update_asid_q:u16:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg shared_tlb_access_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg shared_tlb_vaddr_q:u64:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg itlb_req_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg dtlb_req_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg i_req_q:s32:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  mut pte_wr_data:u128 = 0sb?
+  mut `shared_tag_wr.vpn` = 0
+  mut `patched_pte.n` = 0
+  mut `patched_pte.reserved` = 0
+  mut `patched_pte.ppn` = 0
+  mut `patched_pte.rsw` = 0
+  mut `patched_pte.d` = 0
+  mut `patched_pte.a` = 0
+  mut `patched_pte.g` = 0
+  mut `patched_pte.u` = 0
+  mut `patched_pte.x` = 0
+  mut `patched_pte.w` = 0
+  mut `patched_pte.r` = 0
+  mut `patched_pte.v` = 0
+  mut shared_tag_rd:u122 = 0
+  mut flush_kind_d:u2 = 0
+  mut flush_state_d:u2 = 0
+  mut flush_idx_d:u6 = 0
+  mut flush_asid_d:u16 = 0
+  mut flush_vaddr_d:u64 = 0
+  mut flush_vmid_d:u14 = 0
+  mut flush_gpaddr_d:u41 = 0
+  mut sfence_match_way:u2 = 0
+  mut shared_tag_valid_d:u128 = 0
+  mut tag_wr_en:u2 = 0
+  mut tag_rd_en:u2 = 0
+  mut tag_rd_addr:u6 = 0
+  mut pte_wr_en:u2 = 0
+  mut pte_rd_en:u2 = 0
+  mut pte_rd_addr:u6 = 0
+  mut vpn_d:u27 = 0
+  mut vpn_match:u6 = 0
+  mut page_match:u6 = 0
+  mut level_match:u6 = 0
+  mut tlb_update_asid_d:u16 = 0
+  mut shared_tlb_access_d:u1 = 0
+  mut shared_tlb_hit_d:u1 = 0
+  mut shared_tlb_vaddr_d:u64 = 0
+  mut vpn0_napot_match:u2 = 0
+  mut napot_tag_match:u2 = 0
+  mut itlb_req_d:u1 = 0
+  mut dtlb_req_d:u1 = 0
+  mut i_req_d = 0
+  mut `itlb_update_o__bpo.valid` = 0
+  mut `itlb_update_o__bpo.is_napot_64k` = 0
+  mut `itlb_update_o__bpo.is_page` = 0
+  mut `itlb_update_o__bpo.vpn` = 0
+  mut `itlb_update_o__bpo.asid` = 0
+  mut `itlb_update_o__bpo.vmid` = 0
+  mut `itlb_update_o__bpo.v_st_enbl` = 0
+  mut `itlb_update_o__bpo.content.n` = 0
+  mut `itlb_update_o__bpo.content.reserved` = 0
+  mut `itlb_update_o__bpo.content.ppn` = 0
+  mut `itlb_update_o__bpo.content.rsw` = 0
+  mut `itlb_update_o__bpo.content.d` = 0
+  mut `itlb_update_o__bpo.content.a` = 0
+  mut `itlb_update_o__bpo.content.g` = 0
+  mut `itlb_update_o__bpo.content.u` = 0
+  mut `itlb_update_o__bpo.content.x` = 0
+  mut `itlb_update_o__bpo.content.w` = 0
+  mut `itlb_update_o__bpo.content.r` = 0
+  mut `itlb_update_o__bpo.content.v` = 0
+  mut `itlb_update_o__bpo.g_content.n` = 0
+  mut `itlb_update_o__bpo.g_content.reserved` = 0
+  mut `itlb_update_o__bpo.g_content.ppn` = 0
+  mut `itlb_update_o__bpo.g_content.rsw` = 0
+  mut `itlb_update_o__bpo.g_content.d` = 0
+  mut `itlb_update_o__bpo.g_content.a` = 0
+  mut `itlb_update_o__bpo.g_content.g` = 0
+  mut `itlb_update_o__bpo.g_content.u` = 0
+  mut `itlb_update_o__bpo.g_content.x` = 0
+  mut `itlb_update_o__bpo.g_content.w` = 0
+  mut `itlb_update_o__bpo.g_content.r` = 0
+  mut `itlb_update_o__bpo.g_content.v` = 0
+  mut `dtlb_update_o__bpo.valid` = 0
+  mut `dtlb_update_o__bpo.is_napot_64k` = 0
+  mut `dtlb_update_o__bpo.is_page` = 0
+  mut `dtlb_update_o__bpo.vpn` = 0
+  mut `dtlb_update_o__bpo.asid` = 0
+  mut `dtlb_update_o__bpo.vmid` = 0
+  mut `dtlb_update_o__bpo.v_st_enbl` = 0
+  mut `dtlb_update_o__bpo.content.n` = 0
+  mut `dtlb_update_o__bpo.content.reserved` = 0
+  mut `dtlb_update_o__bpo.content.ppn` = 0
+  mut `dtlb_update_o__bpo.content.rsw` = 0
+  mut `dtlb_update_o__bpo.content.d` = 0
+  mut `dtlb_update_o__bpo.content.a` = 0
+  mut `dtlb_update_o__bpo.content.g` = 0
+  mut `dtlb_update_o__bpo.content.u` = 0
+  mut `dtlb_update_o__bpo.content.x` = 0
+  mut `dtlb_update_o__bpo.content.w` = 0
+  mut `dtlb_update_o__bpo.content.r` = 0
+  mut `dtlb_update_o__bpo.content.v` = 0
+  mut `dtlb_update_o__bpo.g_content.n` = 0
+  mut `dtlb_update_o__bpo.g_content.reserved` = 0
+  mut `dtlb_update_o__bpo.g_content.ppn` = 0
+  mut `dtlb_update_o__bpo.g_content.rsw` = 0
+  mut `dtlb_update_o__bpo.g_content.d` = 0
+  mut `dtlb_update_o__bpo.g_content.a` = 0
+  mut `dtlb_update_o__bpo.g_content.g` = 0
+  mut `dtlb_update_o__bpo.g_content.u` = 0
+  mut `dtlb_update_o__bpo.g_content.x` = 0
+  mut `dtlb_update_o__bpo.g_content.w` = 0
+  mut `dtlb_update_o__bpo.g_content.r` = 0
+  mut `dtlb_update_o__bpo.g_content.v` = 0
+  mut tlb_update_vmid_q:u14 = 0
+  mut _mux_18:u1 = 0
+  mut _mux_23:u32 = 0
+  mut _mux_24:u32 = 0
+  mut _mux_27:u1 = 0
+  mut _mux_32:u32 = 0
+  mut _mux_33:u32 = 0
+  mut _mux_36:u1 = 0
+  mut _mux_40:u1 = 0
+  mut _mux_45:u32 = 0
+  mut _mux_46:u32 = 0
+  mut _mux_49:u1 = 0
+  mut _mux_54:u32 = 0
+  mut _mux_55:u32 = 0
+  mut _mux_58:u1 = 0
+  shared_tag_rd = 0sb?
+  flush_kind_d = 0sb?
+  flush_state_d = 0sb?
+  flush_idx_d = 0sb?
+  flush_asid_d = 0sb?
+  flush_vaddr_d = 0sb?
+  flush_vmid_d = 0sb?
+  flush_gpaddr_d = 0sb?
+  sfence_match_way = 0sb?
+  shared_tag_valid_d = 0sb?
+  tag_wr_en = 0sb?
+  tag_rd_en = 0sb?
+  tag_rd_addr = 0sb?
+  pte_wr_en = 0sb?
+  pte_rd_en = 0sb?
+  pte_rd_addr = 0sb?
+  vpn_d = 0sb?
+  vpn_match = 0sb?
+  page_match = 0sb?
+  level_match = 0sb?
+  tlb_update_asid_d = 0sb?
+  shared_tlb_access_d = 0ub?
+  shared_tlb_hit_d = 0ub?
+  shared_tlb_vaddr_d = 0sb?
+  vpn0_napot_match = 0sb?
+  napot_tag_match = 0sb?
+  itlb_req_d = 0ub?
+  dtlb_req_d = 0ub?
+  i_req_d = 0sb?
+  itlb_miss_o = 0ub?
+  dtlb_miss_o = 0ub?
+  const shared_tlb_access_o__w1 = shared_tlb_access_q
+  const shared_tlb_vaddr_o__w1 = shared_tlb_vaddr_q
+  const itlb_req_o__w1 = itlb_req_q
+  const v_st_enbl__w1 = ((((v_i & 1) << 2) | ((g_st_enbl_i & 1) << 1) | (s_st_enbl_i & 1)) << 3) | (((ld_st_v_i & 1) << 2) | ((g_ld_st_enbl_i & 1) << 1) | (s_ld_st_enbl_i & 1))
+  mut _mux_1:u52 = if itlb_req_q != 0 { itlb_vpn_q } else { dtlb_vpn_q }
+  const lu_vpn__w1 = _mux_1#[0..=26]
+  mut `shared_tag_wr.asid` = shared_tlb_update_i.asid#[0..=15]
+  mut `shared_tag_wr.vmid` = shared_tlb_update_i.vmid#[0..=13]
+  mut `shared_tag_wr.is_page` = shared_tlb_update_i.is_page#[0..=1]
+  mut `shared_tag_wr.v_st_enbl` = ((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1
+  mut _mux_4:u9 = if ((v_st_enbl__w1#[0..=2] & 1) != 0) and (dtlb_access_i != 0) and (((~dtlb_hit_i) & 1) != 0) { dtlb_vaddr_i#[12..=20] } else { vpn_q[0] }
+  mut _mux_5:u9 = if ((v_st_enbl__w1#[3..=5] & 1) != 0) and (itlb_access_i != 0) and (((~itlb_hit_i) & 1) != 0) and (((~dtlb_access_i) & 1) != 0) { itlb_vaddr_i#[12..=20] } else { _mux_4 }
+  mut vpn_d__w1 = vpn_d
+  vpn_d__w1#[0..=8] = _mux_5
+  mut _mux_6:u9 = if ((v_st_enbl__w1#[0..=2] & 1) != 0) and (dtlb_access_i != 0) and (((~dtlb_hit_i) & 1) != 0) { dtlb_vaddr_i#[21..=29] } else { vpn_q[1] }
+  mut _mux_7:u9 = if ((v_st_enbl__w1#[3..=5] & 1) != 0) and (itlb_access_i != 0) and (((~itlb_hit_i) & 1) != 0) and (((~dtlb_access_i) & 1) != 0) { itlb_vaddr_i#[21..=29] } else { _mux_6 }
+  mut vpn_d__w2 = vpn_d__w1
+  vpn_d__w2#[9..=17] = _mux_7
+  mut _mux_8:u9 = if ((v_st_enbl__w1#[0..=2] & 1) != 0) and (dtlb_access_i != 0) and (((~dtlb_hit_i) & 1) != 0) { dtlb_vaddr_i#[30..=38] } else { vpn_q[2] }
+  mut _mux_9:u9 = if ((v_st_enbl__w1#[3..=5] & 1) != 0) and (itlb_access_i != 0) and (((~itlb_hit_i) & 1) != 0) and (((~dtlb_access_i) & 1) != 0) { itlb_vaddr_i#[30..=38] } else { _mux_8 }
+  mut vpn_d__w3 = vpn_d__w2
+  vpn_d__w3#[18..=26] = _mux_9
+  tlb_update_vmid_q = 0sb?
+  pte_rd_addr = 0
+  dtlb_miss_o = 0
+  tag_rd_en = 0
+  shared_tlb_access_d = 0
+  tag_rd_addr = 0
+  itlb_miss_o = 0
+  tlb_update_asid_d = tlb_update_asid_q
+  itlb_req_d = 0
+  i_req_d = i_req_q
+  pte_rd_en = 0
+  shared_tlb_vaddr_d = shared_tlb_vaddr_q
+  dtlb_req_d = 0
+  if flush_state_q == 1 {
+    tag_rd_en = 3
+    pte_rd_en = 3
+    tag_rd_addr = flush_idx_q
+    pte_rd_addr = flush_idx_q
+  } else {
+    const t200 = (flush_state_q != 0) or (flush_i != 0) or (flush_vvma_i != 0) or (flush_gvma_i != 0)
+    if t200 {
+    }
+    if not t200 {
+      if (unsigned((v_st_enbl__w1#[3..=5] & 1) != 0) & itlb_access_i & 1 & (~itlb_hit_i) & 1 & 1 & (~dtlb_access_i) & 1 & 1) != 0 {
+        tag_rd_en = 3
+        tag_rd_addr = itlb_vaddr_i#[12..=17]
+        pte_rd_en = 3
+        pte_rd_addr = itlb_vaddr_i#[12..=17]
+        itlb_miss_o = shared_tlb_miss_i
+        itlb_req_d = 1
+        tlb_update_asid_d = itlb_asid_i
+        shared_tlb_access_d = 1
+        shared_tlb_vaddr_d = itlb_vaddr_i
+        i_req_d = 1
+      } elif (unsigned((v_st_enbl__w1#[0..=2] & 1) != 0) & dtlb_access_i & 1 & (~dtlb_hit_i) & 1 & 1) != 0 {
+        tag_rd_en = 3
+        tag_rd_addr = dtlb_vaddr_i#[12..=17]
+        pte_rd_en = 3
+        pte_rd_addr = dtlb_vaddr_i#[12..=17]
+        dtlb_miss_o = shared_tlb_miss_i
+        dtlb_req_d = 1
+        tlb_update_asid_d = dtlb_asid_i
+        shared_tlb_access_d = 1
+        shared_tlb_vaddr_d = dtlb_vaddr_i
+        i_req_d = 0
+      }
+    }
+  }
+  mut _mux_12:u27 = if (shared_tlb_update_i.is_napot_64k != 0) and false { shared_tlb_update_i.vpn#[4..=26] << 4 } else { shared_tlb_update_i.vpn#[0..=26] }
+  const vpn_to_store__w1 = _mux_12
+  const flush_asid_is0__w1 = (~unsigned(flush_asid_q != 0)) & 1
+  const flush_vaddr_is0__w1 = (~unsigned(flush_vaddr_q != 0)) & 1
+  mut `shared_tag_wr.is_napot_64k` = shared_tlb_update_i.is_napot_64k & 1
+  `shared_tag_wr.vpn`#[0..=8] = vpn_to_store__w1#[0..=8]
+  mut `shared_tag_wr.vpn__w1` = `shared_tag_wr.vpn`
+  `shared_tag_wr.vpn__w1`#[9..=17] = vpn_to_store__w1#[9..=17]
+  mut `shared_tag_wr.vpn__w2` = `shared_tag_wr.vpn__w1`
+  `shared_tag_wr.vpn__w2`#[18..=26] = vpn_to_store__w1#[18..=26]
+  const vpn_index__w1 = shared_tlb_update_i.vpn#[0..=5]
+  pte_wr_data#[0..=63] = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127]
+  mut i_lzc = lzc::[name=i_lzc](`in_i.e1` = ((~shared_tag_valid_q[shared_tlb_update_i.vpn#[0..=5]])#[0..=1] >> 1) & 1, `in_i.e0` = (~shared_tag_valid_q[shared_tlb_update_i.vpn#[0..=5]])#[0..=1] & 1)
+  mut page_match__w1 = page_match
+  page_match__w1#[0] = 1
+  mut _b2i_16 = if (vpn_q[0] == 0) and ((vpn_q[0] & 1) == 0) { 1 } else { 0 }
+  _mux_18 = unsigned(vpn_q[0] == 0) & 1
+  mut vpn_match__w1 = vpn_match
+  vpn_match__w1#[0] = _mux_18 & 1
+  {
+  }
+  mut _mux_22:u32 = if (((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1) == 1 { 0 } else { unsigned((false and ((((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1) != 0)) or (false and ((((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1) != 0)))#[0..=31] }
+  _mux_23 = _mux_22
+  {
+    _mux_23 = unsigned(((0 | ((~(((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1)) & 1)) & 1) == 1)#[0..=31]
+  }
+  _mux_24 = _mux_23
+  mut page_match__w2 = page_match__w1
+  page_match__w2#[1] = _mux_24 & 1
+  mut _b2i_25 = if (vpn_q[1] == 0) and ((vpn_q[1] & 1) == 0) { 1 } else { 0 }
+  _mux_27 = unsigned(vpn_q[1] == 0) & 1
+  mut vpn_match__w2 = vpn_match__w1
+  vpn_match__w2#[1] = _mux_27 & 1
+  {
+  }
+  mut _mux_31:u32 = if (((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1) == 1 { 0 } else { unsigned((false and ((((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1) != 0)) or (false and ((((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1) != 0)))#[0..=31] }
+  _mux_32 = _mux_31
+  {
+    _mux_32 = unsigned(((0 | ((~(((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1)) & 1)) & 1) == 1)#[0..=31]
+  }
+  _mux_33 = _mux_32
+  mut page_match__w3 = page_match__w2
+  page_match__w3#[2] = _mux_33 & 1
+  mut _b2i_34 = if (vpn_q[2] == 0) and ((vpn_q[2] & 1) == 0) { 1 } else { 0 }
+  _mux_36 = unsigned(vpn_q[2] == 0) & 1
+  mut vpn_match__w3 = vpn_match__w2
+  vpn_match__w3#[2] = _mux_36 & 1
+  mut vpn0_napot_match__w1 = vpn0_napot_match
+  vpn0_napot_match__w1#[0] = unsigned(lu_vpn__w1#[4..=8] == 0) & 1
+  mut page_match__w4 = page_match__w3
+  page_match__w4#[3] = 1
+  mut _b2i_38 = if (vpn_q[0] == 0) and ((vpn_q[0] & 1) == 0) { 1 } else { 0 }
+  _mux_40 = unsigned(vpn_q[0] == 0) & 1
+  mut vpn_match__w4 = vpn_match__w3
+  vpn_match__w4#[3] = _mux_40 & 1
+  {
+  }
+  mut _mux_44:u32 = if (((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1) == 1 { 0 } else { unsigned((false and ((((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1) != 0)) or (false and ((((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1) != 0)))#[0..=31] }
+  _mux_45 = _mux_44
+  {
+    _mux_45 = unsigned(((0 | ((~(((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1)) & 1)) & 1) == 1)#[0..=31]
+  }
+  _mux_46 = _mux_45
+  mut page_match__w5 = page_match__w4
+  page_match__w5#[4] = _mux_46 & 1
+  mut _b2i_47 = if (vpn_q[1] == 0) and ((vpn_q[1] & 1) == 0) { 1 } else { 0 }
+  _mux_49 = unsigned(vpn_q[1] == 0) & 1
+  mut vpn_match__w5 = vpn_match__w4
+  vpn_match__w5#[4] = _mux_49 & 1
+  {
+  }
+  mut _mux_53:u32 = if (((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1) == 1 { 0 } else { unsigned((false and ((((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1) != 0)) or (false and ((((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1) != 0)))#[0..=31] }
+  _mux_54 = _mux_53
+  {
+    _mux_54 = unsigned(((0 | ((~(((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1)) & 1)) & 1) == 1)#[0..=31]
+  }
+  _mux_55 = _mux_54
+  mut page_match__w6 = page_match__w5
+  page_match__w6#[5] = _mux_55 & 1
+  mut _b2i_56 = if (vpn_q[2] == 0) and ((vpn_q[2] & 1) == 0) { 1 } else { 0 }
+  _mux_58 = unsigned(vpn_q[2] == 0) & 1
+  mut vpn_match__w6 = vpn_match__w5
+  vpn_match__w6#[5] = _mux_58 & 1
+  mut level_match__w1 = level_match
+  level_match__w1#[5] = unsigned((((vpn_match__w6#[3..=5] >> 2) & 1) == 1) and (((page_match__w6#[3..=5] >> 2) & 1) != 0)) & 1
+  flush_asid_d = flush_asid_q
+  flush_vaddr_d = flush_vaddr_q
+  flush_state_d = flush_state_q
+  flush_idx_d = flush_idx_q
+  flush_kind_d = flush_kind_q
+  flush_vmid_d = flush_vmid_q
+  flush_gpaddr_d = flush_gpaddr_q
+  match flush_state_q {
+    == 0 {
+      if flush_i != 0 {
+        flush_state_d = 1
+        flush_idx_d = 0
+        flush_asid_d = asid_to_be_flushed_i
+        flush_vaddr_d = vaddr_to_be_flushed_i
+        flush_kind_d = 0
+        flush_vmid_d = 0
+        flush_gpaddr_d = 0
+      } elif flush_vvma_i != 0 {
+        flush_state_d = 1
+        flush_idx_d = 0
+        flush_asid_d = asid_to_be_flushed_i
+        flush_vaddr_d = vaddr_to_be_flushed_i
+        flush_kind_d = 1
+        flush_vmid_d = lu_vmid_i
+        flush_gpaddr_d = 0
+      } elif flush_gvma_i != 0 {
+        flush_state_d = 1
+        flush_idx_d = 0
+        flush_asid_d = 0
+        flush_vaddr_d = 0
+        flush_kind_d = 2
+        flush_vmid_d = vmid_to_be_flushed_i
+        flush_gpaddr_d = gpaddr_to_be_flushed_i
+      }
+    }
+    == 1 {
+      flush_state_d = 2
+    }
+    == 2 {
+      if unsigned(flush_idx_q == 63) != 0 {
+        flush_state_d = 0
+        flush_idx_d = 0
+      } else {
+        flush_idx_d = (flush_idx_q + 1)#[0..=5]
+        flush_state_d = 1
+      }
+    }
+    else {
+      flush_state_d = 0
+    }
+  }
+  mut flush_vpn_match__w2 = 0
+  flush_vpn_match__w2#[0] = unsigned(flush_vaddr_q#[12..=20] == 0) & 1
+  mut flush_vpn_match__w3 = flush_vpn_match__w2
+  flush_vpn_match__w3#[1] = unsigned(flush_vaddr_q#[21..=29] == 0) & 1
+  mut flush_vpn_match__w4 = flush_vpn_match__w3
+  flush_vpn_match__w4#[2] = unsigned(flush_vaddr_q#[30..=38] == 0) & 1
+  mut flush_level_match__w2 = 0
+  flush_level_match__w2#[0] = unsigned(((((1 & flush_vpn_match__w4 & 1 & 1) & (flush_vpn_match__w4 >> 1) & 1 & 1) & (flush_vpn_match__w4 >> 2) & 1 & 1) != 0) and true) & 1
+  mut flush_level_match__w3 = flush_level_match__w2
+  flush_level_match__w3#[1] = unsigned((((1 & (flush_vpn_match__w4 >> 1) & 1 & 1) & (flush_vpn_match__w4 >> 2) & 1 & 1) != 0) and false) & 1
+  mut flush_level_match__w4 = flush_level_match__w3
+  flush_level_match__w4#[2] = unsigned(((1 & (flush_vpn_match__w4 >> 2) & 1 & 1) != 0) and false) & 1
+  const flush_addr_matches__w2 = unsigned((flush_level_match__w4 != 0) or false)
+  sfence_match_way = 0
+  if ((shared_tag_valid & 1) != 0) and true {
+    if (flush_asid_is0__w1 != 0) and (flush_vaddr_is0__w1 != 0) {
+      sfence_match_way = 1
+      sfence_match_way#[0] = 1
+    } elif (flush_asid_is0__w1 != 0) and (flush_addr_matches__w2 != 0) and (flush_vaddr_is0__w1 == 0) {
+      sfence_match_way#[0] = 1
+    } else {
+      pte = 0ub????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+      if (((pte#[0..=63] >> 5) & 1) == 0) and (flush_addr_matches__w2 != 0) and (flush_asid_q == 0) and (flush_vaddr_is0__w1 == 0) and (flush_asid_is0__w1 == 0) {
+        sfence_match_way#[0] = 1
+      } elif (((pte#[0..=63] >> 5) & 1) == 0) and (flush_vaddr_is0__w1 != 0) and (flush_asid_q == 0) and (flush_asid_is0__w1 == 0) {
+        sfence_match_way#[0] = 1
+      }
+    }
+  }
+  mut flush_vpn_match__w6 = 0
+  flush_vpn_match__w6#[0] = unsigned(flush_vaddr_q#[12..=20] == 0) & 1
+  mut flush_vpn_match__w7 = flush_vpn_match__w6
+  flush_vpn_match__w7#[1] = unsigned(flush_vaddr_q#[21..=29] == 0) & 1
+  mut flush_vpn_match__w8 = flush_vpn_match__w7
+  flush_vpn_match__w8#[2] = unsigned(flush_vaddr_q#[30..=38] == 0) & 1
+  mut flush_level_match__w6 = 0
+  flush_level_match__w6#[0] = unsigned(((((1 & flush_vpn_match__w8 & 1 & 1) & (flush_vpn_match__w8 >> 1) & 1 & 1) & (flush_vpn_match__w8 >> 2) & 1 & 1) != 0) and true) & 1
+  mut flush_level_match__w7 = flush_level_match__w6
+  flush_level_match__w7#[1] = unsigned((((1 & (flush_vpn_match__w8 >> 1) & 1 & 1) & (flush_vpn_match__w8 >> 2) & 1 & 1) != 0) and false) & 1
+  mut flush_level_match__w8 = flush_level_match__w7
+  flush_level_match__w8#[2] = unsigned(((1 & (flush_vpn_match__w8 >> 2) & 1 & 1) != 0) and false) & 1
+  const flush_addr_matches__w4 = unsigned((flush_level_match__w8 != 0) or false)
+  if (((shared_tag_valid >> 1) & 1) != 0) and true {
+    if (flush_asid_is0__w1 != 0) and (flush_vaddr_is0__w1 != 0) {
+      sfence_match_way#[1] = 1
+    } elif (flush_asid_is0__w1 != 0) and (flush_addr_matches__w4 != 0) and (flush_vaddr_is0__w1 == 0) {
+      sfence_match_way#[1] = 1
+    } elif (((pte#[64..=127] >> 5) & 1) == 0) and (flush_addr_matches__w4 != 0) and (flush_asid_q == 0) and (flush_vaddr_is0__w1 == 0) and (flush_asid_is0__w1 == 0) {
+      sfence_match_way#[1] = 1
+    } elif (((pte#[64..=127] >> 5) & 1) == 0) and (flush_vaddr_is0__w1 != 0) and (flush_asid_q == 0) and (flush_asid_is0__w1 == 0) {
+      sfence_match_way#[1] = 1
+    }
+  }
+  mut flush_vpn_match_s1__w2 = 0
+  flush_vpn_match_s1__w2#[0] = unsigned(flush_vaddr_q#[12..=20] == 0) & 1
+  mut flush_vpn_match_s1__w3 = flush_vpn_match_s1__w2
+  flush_vpn_match_s1__w3#[1] = unsigned(flush_vaddr_q#[21..=29] == 0) & 1
+  mut flush_vpn_match_s1__w4 = flush_vpn_match_s1__w3
+  flush_vpn_match_s1__w4#[2] = unsigned(flush_vaddr_q#[30..=38] == 0) & 1
+  mut flush_level_match_s1__w2 = 0
+  flush_level_match_s1__w2#[0] = unsigned(((((1 & flush_vpn_match_s1__w4 & 1 & 1) & (flush_vpn_match_s1__w4 >> 1) & 1 & 1) & (flush_vpn_match_s1__w4 >> 2) & 1 & 1) != 0) and true) & 1
+  mut flush_level_match_s1__w3 = flush_level_match_s1__w2
+  flush_level_match_s1__w3#[1] = unsigned((((1 & (flush_vpn_match_s1__w4 >> 1) & 1 & 1) & (flush_vpn_match_s1__w4 >> 2) & 1 & 1) != 0) and false) & 1
+  mut flush_level_match_s1__w4 = flush_level_match_s1__w3
+  flush_level_match_s1__w4#[2] = unsigned(((1 & (flush_vpn_match_s1__w4 >> 2) & 1 & 1) != 0) and false) & 1
+  mut flush_vpn_match_s1__w6 = 0
+  flush_vpn_match_s1__w6#[0] = unsigned(flush_vaddr_q#[12..=20] == 0) & 1
+  mut flush_vpn_match_s1__w7 = flush_vpn_match_s1__w6
+  flush_vpn_match_s1__w7#[1] = unsigned(flush_vaddr_q#[21..=29] == 0) & 1
+  mut flush_vpn_match_s1__w8 = flush_vpn_match_s1__w7
+  flush_vpn_match_s1__w8#[2] = unsigned(flush_vaddr_q#[30..=38] == 0) & 1
+  mut flush_level_match_s1__w6 = 0
+  flush_level_match_s1__w6#[0] = unsigned(((((1 & flush_vpn_match_s1__w8 & 1 & 1) & (flush_vpn_match_s1__w8 >> 1) & 1 & 1) & (flush_vpn_match_s1__w8 >> 2) & 1 & 1) != 0) and true) & 1
+  mut flush_level_match_s1__w7 = flush_level_match_s1__w6
+  flush_level_match_s1__w7#[1] = unsigned((((1 & (flush_vpn_match_s1__w8 >> 1) & 1 & 1) & (flush_vpn_match_s1__w8 >> 2) & 1 & 1) != 0) and false) & 1
+  mut flush_level_match_s1__w8 = flush_level_match_s1__w7
+  flush_level_match_s1__w8#[2] = unsigned(((1 & (flush_vpn_match_s1__w8 >> 2) & 1 & 1) != 0) and false) & 1
+  mut i_lfsr = lfsr::[name=i_lfsr](clk_i = clk_i, rst_ni = rst_ni, en_i = shared_tlb_update_i.valid & i_lzc.empty_o & 1)
+  mut _mux_127:u2 = if flush_kind_q == 1 { 0 } else { 0 }
+  mut _mux_128:u2 = if flush_kind_q == 0 { sfence_match_way } else { _mux_127 }
+  const flush_match_way__w1 = _mux_128
+  mut level_match__w2 = level_match__w1
+  level_match__w2#[0] = unsigned((vpn_match__w6#[0..=2] == 7) and ((page_match__w6#[0..=2] & 1) != 0)) & 1
+  mut level_match__w3 = level_match__w2
+  level_match__w3#[1] = unsigned((vpn_match__w6#[0..=2]#[1..=2] == 3) and (((page_match__w6#[0..=2] >> 1) & 1) != 0)) & 1
+  mut level_match__w4 = level_match__w3
+  level_match__w4#[2] = unsigned((((vpn_match__w6#[0..=2] >> 2) & 1) == 1) and (((page_match__w6#[0..=2] >> 2) & 1) != 0)) & 1
+  mut level_match__w5 = level_match__w4
+  level_match__w5#[3] = unsigned((vpn_match__w6#[3..=5] == 7) and ((page_match__w6#[3..=5] & 1) != 0)) & 1
+  shared_tlb_hit_d = 0
+  {
+    if shared_tlb_update_i.valid != 0 {
+      shared_tlb_hit_d = 1
+      if itlb_req_q != 0 {
+        `itlb_update_o__bpo.valid` = 1
+        `itlb_update_o__bpo.vpn` = shared_tlb_update_i.vpn
+        `itlb_update_o__bpo.is_page` = shared_tlb_update_i.is_page
+        const t1963 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 63
+        const t1964 = t1963 & 1
+        `itlb_update_o__bpo.content.n` = t1964
+        const t1965 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 54
+        const t1966 = t1965#[0..=8]
+        `itlb_update_o__bpo.content.reserved` = t1966
+        const t1967 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 10
+        const t1968 = t1967#[0..=43]
+        `itlb_update_o__bpo.content.ppn` = t1968
+        const t1969 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 8
+        const t1970 = t1969#[0..=1]
+        `itlb_update_o__bpo.content.rsw` = t1970
+        const t1971 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 7
+        const t1972 = t1971 & 1
+        `itlb_update_o__bpo.content.d` = t1972
+        const t1973 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 6
+        const t1974 = t1973 & 1
+        `itlb_update_o__bpo.content.a` = t1974
+        const t1975 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 5
+        const t1976 = t1975 & 1
+        `itlb_update_o__bpo.content.g` = t1976
+        const t1977 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 4
+        const t1978 = t1977 & 1
+        `itlb_update_o__bpo.content.u` = t1978
+        const t1979 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 3
+        const t1980 = t1979 & 1
+        `itlb_update_o__bpo.content.x` = t1980
+        const t1981 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 2
+        const t1982 = t1981 & 1
+        `itlb_update_o__bpo.content.w` = t1982
+        const t1983 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 1
+        const t1984 = t1983 & 1
+        `itlb_update_o__bpo.content.r` = t1984
+        const t1985 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] & 1
+        `itlb_update_o__bpo.content.v` = t1985
+        const t2078 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 63
+        const t2079 = t2078 & 1
+        `itlb_update_o__bpo.g_content.n` = t2079
+        const t2080 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 54
+        const t2081 = t2080#[0..=8]
+        `itlb_update_o__bpo.g_content.reserved` = t2081
+        const t2082 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 10
+        const t2083 = t2082#[0..=43]
+        `itlb_update_o__bpo.g_content.ppn` = t2083
+        const t2084 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 8
+        const t2085 = t2084#[0..=1]
+        `itlb_update_o__bpo.g_content.rsw` = t2085
+        const t2086 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 7
+        const t2087 = t2086 & 1
+        `itlb_update_o__bpo.g_content.d` = t2087
+        const t2088 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 6
+        const t2089 = t2088 & 1
+        `itlb_update_o__bpo.g_content.a` = t2089
+        const t2090 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 5
+        const t2091 = t2090 & 1
+        `itlb_update_o__bpo.g_content.g` = t2091
+        const t2092 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 4
+        const t2093 = t2092 & 1
+        `itlb_update_o__bpo.g_content.u` = t2093
+        const t2094 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 3
+        const t2095 = t2094 & 1
+        `itlb_update_o__bpo.g_content.x` = t2095
+        const t2096 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 2
+        const t2097 = t2096 & 1
+        `itlb_update_o__bpo.g_content.w` = t2097
+        const t2098 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 1
+        const t2099 = t2098 & 1
+        `itlb_update_o__bpo.g_content.r` = t2099
+        const t2100 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] & 1
+        `itlb_update_o__bpo.g_content.v` = t2100
+        `itlb_update_o__bpo.v_st_enbl` = ((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1
+        `itlb_update_o__bpo.asid` = shared_tlb_update_i.asid
+        `itlb_update_o__bpo.vmid` = shared_tlb_update_i.vmid
+        `itlb_update_o__bpo.is_napot_64k` = shared_tlb_update_i.is_napot_64k
+      } elif dtlb_req_q != 0 {
+        `dtlb_update_o__bpo.valid` = 1
+        `dtlb_update_o__bpo.vpn` = shared_tlb_update_i.vpn
+        `dtlb_update_o__bpo.is_page` = shared_tlb_update_i.is_page
+        const t2205 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 63
+        const t2206 = t2205 & 1
+        `dtlb_update_o__bpo.content.n` = t2206
+        const t2207 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 54
+        const t2208 = t2207#[0..=8]
+        `dtlb_update_o__bpo.content.reserved` = t2208
+        const t2209 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 10
+        const t2210 = t2209#[0..=43]
+        `dtlb_update_o__bpo.content.ppn` = t2210
+        const t2211 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 8
+        const t2212 = t2211#[0..=1]
+        `dtlb_update_o__bpo.content.rsw` = t2212
+        const t2213 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 7
+        const t2214 = t2213 & 1
+        `dtlb_update_o__bpo.content.d` = t2214
+        const t2215 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 6
+        const t2216 = t2215 & 1
+        `dtlb_update_o__bpo.content.a` = t2216
+        const t2217 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 5
+        const t2218 = t2217 & 1
+        `dtlb_update_o__bpo.content.g` = t2218
+        const t2219 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 4
+        const t2220 = t2219 & 1
+        `dtlb_update_o__bpo.content.u` = t2220
+        const t2221 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 3
+        const t2222 = t2221 & 1
+        `dtlb_update_o__bpo.content.x` = t2222
+        const t2223 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 2
+        const t2224 = t2223 & 1
+        `dtlb_update_o__bpo.content.w` = t2224
+        const t2225 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] >> 1
+        const t2226 = t2225 & 1
+        `dtlb_update_o__bpo.content.r` = t2226
+        const t2227 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[64..=127] & 1
+        `dtlb_update_o__bpo.content.v` = t2227
+        const t2320 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 63
+        const t2321 = t2320 & 1
+        `dtlb_update_o__bpo.g_content.n` = t2321
+        const t2322 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 54
+        const t2323 = t2322#[0..=8]
+        `dtlb_update_o__bpo.g_content.reserved` = t2323
+        const t2324 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 10
+        const t2325 = t2324#[0..=43]
+        `dtlb_update_o__bpo.g_content.ppn` = t2325
+        const t2326 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 8
+        const t2327 = t2326#[0..=1]
+        `dtlb_update_o__bpo.g_content.rsw` = t2327
+        const t2328 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 7
+        const t2329 = t2328 & 1
+        `dtlb_update_o__bpo.g_content.d` = t2329
+        const t2330 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 6
+        const t2331 = t2330 & 1
+        `dtlb_update_o__bpo.g_content.a` = t2331
+        const t2332 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 5
+        const t2333 = t2332 & 1
+        `dtlb_update_o__bpo.g_content.g` = t2333
+        const t2334 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 4
+        const t2335 = t2334 & 1
+        `dtlb_update_o__bpo.g_content.u` = t2335
+        const t2336 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 3
+        const t2337 = t2336 & 1
+        `dtlb_update_o__bpo.g_content.x` = t2337
+        const t2338 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 2
+        const t2339 = t2338 & 1
+        `dtlb_update_o__bpo.g_content.w` = t2339
+        const t2340 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] >> 1
+        const t2341 = t2340 & 1
+        `dtlb_update_o__bpo.g_content.r` = t2341
+        const t2342 = ((shared_tlb_update_i.valid << 0xbd) | (shared_tlb_update_i.is_napot_64k << 0xbc) | (shared_tlb_update_i.is_page << 0xba) | (shared_tlb_update_i.vpn << 0x9f) | (shared_tlb_update_i.asid << 0x8f) | (shared_tlb_update_i.vmid << 0x81) | (shared_tlb_update_i.v_st_enbl << 0x80) | (shared_tlb_update_i.content.n << 0x7f) | (shared_tlb_update_i.content.reserved << 0x76) | (shared_tlb_update_i.content.ppn << 0x4a) | (shared_tlb_update_i.content.rsw << 0x48) | (shared_tlb_update_i.content.d << 0x47) | (shared_tlb_update_i.content.a << 0x46) | (shared_tlb_update_i.content.g << 0x45) | (shared_tlb_update_i.content.u << 0x44) | (shared_tlb_update_i.content.x << 0x43) | (shared_tlb_update_i.content.w << 0x42) | (shared_tlb_update_i.content.r << 0x41) | (shared_tlb_update_i.content.v << 0x40) | (shared_tlb_update_i.g_content.n << 63) | (shared_tlb_update_i.g_content.reserved << 54) | (shared_tlb_update_i.g_content.ppn << 10) | (shared_tlb_update_i.g_content.rsw << 8) | (shared_tlb_update_i.g_content.d << 7) | (shared_tlb_update_i.g_content.a << 6) | (shared_tlb_update_i.g_content.g << 5) | (shared_tlb_update_i.g_content.u << 4) | (shared_tlb_update_i.g_content.x << 3) | (shared_tlb_update_i.g_content.w << 2) | (shared_tlb_update_i.g_content.r << 1) | shared_tlb_update_i.g_content.v)#[0..=63] & 1
+        `dtlb_update_o__bpo.g_content.v` = t2342
+        `dtlb_update_o__bpo.v_st_enbl` = ((v_st_enbl__w1 << 3) >> ((i_req_q * 3) + 3))#[0..=2] & 1
+        `dtlb_update_o__bpo.asid` = shared_tlb_update_i.asid
+        `dtlb_update_o__bpo.vmid` = shared_tlb_update_i.vmid
+        `dtlb_update_o__bpo.is_napot_64k` = shared_tlb_update_i.is_napot_64k
+      }
+    }
+  }
+  mut _mux_140:u1 = if i_lzc.empty_o != 0 { i_lfsr & 1 } else { i_lzc.cnt_o & 1 }
+  const in__w1 = _mux_140
+  mut _mux_141:u2 = if shared_tlb_update_i.valid != 0 { ((0 & (~(1 << in__w1))) | (1 << in__w1))#[0..=1] } else { 0 }
+  const repl_way_oh_d__w1 = _mux_141
+  shared_tag_valid_d = shared_tag_valid_q
+  if flush_state_q == 2 {
+    if (flush_match_way__w1 & 1) != 0 {
+      const t2925 = flush_idx_q * 2
+      shared_tag_valid_d = ((shared_tag_valid_d & (~(1 << t2925))) | (0 << t2925))#[0..=127]
+    }
+    if ((flush_match_way__w1 >> 1) & 1) != 0 {
+      const t2936 = (flush_idx_q * 2) + 1
+      shared_tag_valid_d = ((shared_tag_valid_d & (~(1 << t2936))) | (0 << t2936))#[0..=127]
+    }
+  }
+  pte_wr_en = 0
+  tag_wr_en = 0
+  if (flush_state_q == 0) and (flush_i == 0) and (flush_vvma_i == 0) and (flush_gvma_i == 0) and (shared_tlb_update_i.valid != 0) {
+    if (repl_way_oh_d__w1 & 1) != 0 {
+      const t2955 = vpn_index__w1 * 2
+      shared_tag_valid_d = ((shared_tag_valid_d & (~(1 << t2955))) | (1 << t2955))#[0..=127]
+      tag_wr_en = 1
+      tag_wr_en#[0] = 1
+      pte_wr_en = 1
+      pte_wr_en#[0] = 1
+    }
+    if ((repl_way_oh_d__w1 >> 1) & 1) != 0 {
+      const t2966 = (vpn_index__w1 * 2) + 1
+      shared_tag_valid_d = ((shared_tag_valid_d & (~(1 << t2966))) | (1 << t2966))#[0..=127]
+      tag_wr_en#[1] = 1
+      pte_wr_en#[1] = 1
+    }
+  }
+  mut _mux_142:u6 = if tag_wr_en != 0 { vpn_index__w1 } else { tag_rd_addr }
+  mut _mux_143:u6 = if pte_wr_en != 0 { vpn_index__w1 } else { pte_rd_addr }
+  if rst_ni != 0 {
+    itlb_vpn_q = itlb_vaddr_i#[12..=38]
+    dtlb_vpn_q = dtlb_vaddr_i#[12..=38]
+    tlb_update_asid_q = tlb_update_asid_d
+    shared_tlb_access_q = shared_tlb_access_d
+    shared_tlb_vaddr_q = shared_tlb_vaddr_d
+    shared_tag_valid_q = shared_tag_valid_d
+    vpn_q = vpn_d__w3
+    itlb_req_q = itlb_req_d
+    dtlb_req_q = dtlb_req_d
+    i_req_q = i_req_d
+    shared_tag_valid = shared_tag_valid_q[tag_rd_addr]
+    flush_state_q = flush_state_d
+    flush_idx_q = flush_idx_d
+    flush_asid_q = flush_asid_d
+    flush_vaddr_q = flush_vaddr_d
+    flush_kind_q = flush_kind_d
+    flush_vmid_q = flush_vmid_d
+    flush_gpaddr_q = flush_gpaddr_d
+  }
+  itlb_update_o.valid = `itlb_update_o__bpo.valid`
+  itlb_update_o.is_napot_64k = `itlb_update_o__bpo.is_napot_64k`
+  itlb_update_o.is_page = `itlb_update_o__bpo.is_page`
+  itlb_update_o.vpn = `itlb_update_o__bpo.vpn`
+  itlb_update_o.asid = `itlb_update_o__bpo.asid`
+  itlb_update_o.vmid = `itlb_update_o__bpo.vmid`
+  itlb_update_o.v_st_enbl = `itlb_update_o__bpo.v_st_enbl`
+  itlb_update_o.content.n = `itlb_update_o__bpo.content.n`
+  itlb_update_o.content.reserved = `itlb_update_o__bpo.content.reserved`
+  itlb_update_o.content.ppn = `itlb_update_o__bpo.content.ppn`
+  itlb_update_o.content.rsw = `itlb_update_o__bpo.content.rsw`
+  itlb_update_o.content.d = `itlb_update_o__bpo.content.d`
+  itlb_update_o.content.a = `itlb_update_o__bpo.content.a`
+  itlb_update_o.content.g = `itlb_update_o__bpo.content.g`
+  itlb_update_o.content.u = `itlb_update_o__bpo.content.u`
+  itlb_update_o.content.x = `itlb_update_o__bpo.content.x`
+  itlb_update_o.content.w = `itlb_update_o__bpo.content.w`
+  itlb_update_o.content.r = `itlb_update_o__bpo.content.r`
+  itlb_update_o.content.v = `itlb_update_o__bpo.content.v`
+  itlb_update_o.g_content.n = `itlb_update_o__bpo.g_content.n`
+  itlb_update_o.g_content.reserved = `itlb_update_o__bpo.g_content.reserved`
+  itlb_update_o.g_content.ppn = `itlb_update_o__bpo.g_content.ppn`
+  itlb_update_o.g_content.rsw = `itlb_update_o__bpo.g_content.rsw`
+  itlb_update_o.g_content.d = `itlb_update_o__bpo.g_content.d`
+  itlb_update_o.g_content.a = `itlb_update_o__bpo.g_content.a`
+  itlb_update_o.g_content.g = `itlb_update_o__bpo.g_content.g`
+  itlb_update_o.g_content.u = `itlb_update_o__bpo.g_content.u`
+  itlb_update_o.g_content.x = `itlb_update_o__bpo.g_content.x`
+  itlb_update_o.g_content.w = `itlb_update_o__bpo.g_content.w`
+  itlb_update_o.g_content.r = `itlb_update_o__bpo.g_content.r`
+  itlb_update_o.g_content.v = `itlb_update_o__bpo.g_content.v`
+  dtlb_update_o.valid = `dtlb_update_o__bpo.valid`
+  dtlb_update_o.is_napot_64k = `dtlb_update_o__bpo.is_napot_64k`
+  dtlb_update_o.is_page = `dtlb_update_o__bpo.is_page`
+  dtlb_update_o.vpn = `dtlb_update_o__bpo.vpn`
+  dtlb_update_o.asid = `dtlb_update_o__bpo.asid`
+  dtlb_update_o.vmid = `dtlb_update_o__bpo.vmid`
+  dtlb_update_o.v_st_enbl = `dtlb_update_o__bpo.v_st_enbl`
+  dtlb_update_o.content.n = `dtlb_update_o__bpo.content.n`
+  dtlb_update_o.content.reserved = `dtlb_update_o__bpo.content.reserved`
+  dtlb_update_o.content.ppn = `dtlb_update_o__bpo.content.ppn`
+  dtlb_update_o.content.rsw = `dtlb_update_o__bpo.content.rsw`
+  dtlb_update_o.content.d = `dtlb_update_o__bpo.content.d`
+  dtlb_update_o.content.a = `dtlb_update_o__bpo.content.a`
+  dtlb_update_o.content.g = `dtlb_update_o__bpo.content.g`
+  dtlb_update_o.content.u = `dtlb_update_o__bpo.content.u`
+  dtlb_update_o.content.x = `dtlb_update_o__bpo.content.x`
+  dtlb_update_o.content.w = `dtlb_update_o__bpo.content.w`
+  dtlb_update_o.content.r = `dtlb_update_o__bpo.content.r`
+  dtlb_update_o.content.v = `dtlb_update_o__bpo.content.v`
+  dtlb_update_o.g_content.n = `dtlb_update_o__bpo.g_content.n`
+  dtlb_update_o.g_content.reserved = `dtlb_update_o__bpo.g_content.reserved`
+  dtlb_update_o.g_content.ppn = `dtlb_update_o__bpo.g_content.ppn`
+  dtlb_update_o.g_content.rsw = `dtlb_update_o__bpo.g_content.rsw`
+  dtlb_update_o.g_content.d = `dtlb_update_o__bpo.g_content.d`
+  dtlb_update_o.g_content.a = `dtlb_update_o__bpo.g_content.a`
+  dtlb_update_o.g_content.g = `dtlb_update_o__bpo.g_content.g`
+  dtlb_update_o.g_content.u = `dtlb_update_o__bpo.g_content.u`
+  dtlb_update_o.g_content.x = `dtlb_update_o__bpo.g_content.x`
+  dtlb_update_o.g_content.w = `dtlb_update_o__bpo.g_content.w`
+  dtlb_update_o.g_content.r = `dtlb_update_o__bpo.g_content.r`
+  dtlb_update_o.g_content.v = `dtlb_update_o__bpo.g_content.v`
+  flush_busy_o = 0
+  shared_tlb_access_o = shared_tlb_access_o__w1
+  shared_tlb_hit_o = shared_tlb_hit_d
+  shared_tlb_vaddr_o = shared_tlb_vaddr_o__w1
+  itlb_req_o = itlb_req_o__w1
+}

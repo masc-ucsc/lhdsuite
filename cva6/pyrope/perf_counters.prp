@@ -1,0 +1,572 @@
+const ariane_pkg = import("ariane_pkg")
+const riscv = import("riscv")
+
+pub mod perf_counters::[timecheck=false](clk_i:u1, rst_ni:u1, debug_mode_i:u1, addr_i:u12, we_i:u1, data_i:u64, commit_instr_i:u878, commit_ack_i:(e1:u1, e0:u1), l1_icache_miss_i:u1, l1_dcache_miss_i:u1, itlb_miss_i:u1, dtlb_miss_i:u1, sb_full_i:u1, if_empty_i:u1, ex_i:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1), eret_i:u1, resolved_branch_i:(valid:u1, pc:u64, target_address:u64, is_mispredict:u1, is_taken:u1, cf_type:u3), branch_exceptions_i:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1), l1_icache_access_i:(req:u1, kill_s1:u1, kill_s2:u1, spec:u1, vaddr:u64), l1_dcache_access_i:u621, miss_vld_bits_i:u32, i_tlb_flush_i:u1, stall_issue_i:u1, mcountinhibit_i:u32) -> (data_o:u64@[]) {
+  reg generic_counter_q:[6]u64:[ordering="old", clock_pin=ref clk_i]
+  reg mhpmevent_q:[6]u5:[ordering="old", clock_pin=ref clk_i]
+  mut events:u6 = 0sb?
+  mut generic_counter_d:u384 = 0sb?
+  mut mhpmevent_d:u30 = 0sb?
+  data_o = 0sb?
+  events = 0
+  mut load_event__w2 = 0
+  load_event__w2#[0] = commit_ack_i.e0 & unsigned(commit_instr_i#[0..=438]#[368..=371] == ariane_pkg.LOAD) & 1
+  mut store_event__w2 = 0
+  store_event__w2#[0] = commit_ack_i.e0 & unsigned(commit_instr_i#[0..=438]#[368..=371] == ariane_pkg.STORE) & 1
+  mut branch_event__w2 = 0
+  branch_event__w2#[0] = commit_ack_i.e0 & unsigned(commit_instr_i#[0..=438]#[368..=371] == ariane_pkg.CTRL_FLOW) & 1
+  mut call_event__w2 = 0
+  call_event__w2#[0] = commit_ack_i.e0 & unsigned((commit_instr_i#[0..=438]#[368..=371] == ariane_pkg.CTRL_FLOW) and ((commit_instr_i#[0..=438]#[360..=367] == ariane_pkg.ADD) or (commit_instr_i#[0..=438]#[360..=367] == ariane_pkg.JALR)) and ((commit_instr_i#[0..=438]#[345..=349] == 1) or (commit_instr_i#[0..=438]#[345..=349] == 5))) & 1
+  mut return_event__w2 = 0
+  return_event__w2#[0] = commit_ack_i.e0 & unsigned((commit_instr_i#[0..=438]#[360..=367] == ariane_pkg.JALR) and (commit_instr_i#[0..=438]#[345..=349] == 0)) & 1
+  mut int_event__w2 = 0
+  int_event__w2#[0] = commit_ack_i.e0 & unsigned((commit_instr_i#[0..=438]#[368..=371] == ariane_pkg.ALU) or (commit_instr_i#[0..=438]#[368..=371] == ariane_pkg.MULT)) & 1
+  mut fp_event__w2 = 0
+  fp_event__w2#[0] = commit_ack_i.e0 & unsigned((commit_instr_i#[0..=438]#[368..=371] == ariane_pkg.FPU) or (commit_instr_i#[0..=438]#[368..=371] == ariane_pkg.FPU_VEC)) & 1
+  mut load_event__w3 = load_event__w2
+  load_event__w3#[1] = commit_ack_i.e1 & unsigned(commit_instr_i#[439..=877]#[368..=371] == ariane_pkg.LOAD) & 1
+  mut store_event__w3 = store_event__w2
+  store_event__w3#[1] = commit_ack_i.e1 & unsigned(commit_instr_i#[439..=877]#[368..=371] == ariane_pkg.STORE) & 1
+  mut branch_event__w3 = branch_event__w2
+  branch_event__w3#[1] = commit_ack_i.e1 & unsigned(commit_instr_i#[439..=877]#[368..=371] == ariane_pkg.CTRL_FLOW) & 1
+  mut call_event__w3 = call_event__w2
+  call_event__w3#[1] = commit_ack_i.e1 & unsigned((commit_instr_i#[439..=877]#[368..=371] == ariane_pkg.CTRL_FLOW) and ((commit_instr_i#[439..=877]#[360..=367] == ariane_pkg.ADD) or (commit_instr_i#[439..=877]#[360..=367] == ariane_pkg.JALR)) and ((commit_instr_i#[439..=877]#[345..=349] == 1) or (commit_instr_i#[439..=877]#[345..=349] == 5))) & 1
+  mut return_event__w3 = return_event__w2
+  return_event__w3#[1] = commit_ack_i.e1 & unsigned((commit_instr_i#[439..=877]#[360..=367] == ariane_pkg.JALR) and (commit_instr_i#[439..=877]#[345..=349] == 0)) & 1
+  mut int_event__w3 = int_event__w2
+  int_event__w3#[1] = commit_ack_i.e1 & unsigned((commit_instr_i#[439..=877]#[368..=371] == ariane_pkg.ALU) or (commit_instr_i#[439..=877]#[368..=371] == ariane_pkg.MULT)) & 1
+  mut fp_event__w3 = fp_event__w2
+  fp_event__w3#[1] = commit_ack_i.e1 & unsigned((commit_instr_i#[439..=877]#[368..=371] == ariane_pkg.FPU) or (commit_instr_i#[439..=877]#[368..=371] == ariane_pkg.FPU_VEC)) & 1
+  match mhpmevent_q[0] {
+    == 0 {
+      events = 0
+      events#[0] = 0
+    }
+    == 1 {
+      events#[0] = l1_icache_miss_i
+    }
+    == 2 {
+      events#[0] = l1_dcache_miss_i
+    }
+    == 3 {
+      events#[0] = itlb_miss_i
+    }
+    == 4 {
+      events#[0] = dtlb_miss_i
+    }
+    == 5 {
+      events#[0] = unsigned(load_event__w3 != 0)
+    }
+    == 6 {
+      events#[0] = unsigned(store_event__w3 != 0)
+    }
+    == 7 {
+      events#[0] = ex_i.valid
+    }
+    == 8 {
+      events#[0] = eret_i
+    }
+    == 9 {
+      events#[0] = unsigned(branch_event__w3 != 0)
+    }
+    == 10 {
+      events#[0] = unsigned((resolved_branch_i.valid != 0) and (resolved_branch_i.is_mispredict != 0))
+    }
+    == 11 {
+      events#[0] = branch_exceptions_i.valid
+    }
+    == 12 {
+      events#[0] = unsigned(call_event__w3 != 0)
+    }
+    == 13 {
+      events#[0] = unsigned(return_event__w3 != 0)
+    }
+    == 14 {
+      events#[0] = sb_full_i
+    }
+    == 15 {
+      events#[0] = if_empty_i
+    }
+    == 16 {
+      events#[0] = l1_icache_access_i.req
+    }
+    == 17 {
+      events#[0] = unsigned((((l1_dcache_access_i#[0..=206] >> 22) & 1) != 0) or (((l1_dcache_access_i#[207..=413] >> 22) & 1) != 0) or (((l1_dcache_access_i#[414..=620] >> 22) & 1) != 0))
+    }
+    == 18 {
+      events#[0] = unsigned(((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[0..=7] == 0xff)) or ((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[8..=15] == 0xff)) or ((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[16..=23] == 0xff)))
+    }
+    == 19 {
+      events#[0] = i_tlb_flush_i
+    }
+    == 20 {
+      events#[0] = unsigned(int_event__w3 != 0)
+    }
+    == 21 {
+      events#[0] = unsigned(fp_event__w3 != 0)
+    }
+    == 22 {
+      events#[0] = stall_issue_i
+    }
+    else {
+      events#[0] = 0
+    }
+  }
+  match mhpmevent_q[1] {
+    == 0 {
+      events#[1] = 0
+    }
+    == 1 {
+      events#[1] = l1_icache_miss_i
+    }
+    == 2 {
+      events#[1] = l1_dcache_miss_i
+    }
+    == 3 {
+      events#[1] = itlb_miss_i
+    }
+    == 4 {
+      events#[1] = dtlb_miss_i
+    }
+    == 5 {
+      events#[1] = unsigned(load_event__w3 != 0)
+    }
+    == 6 {
+      events#[1] = unsigned(store_event__w3 != 0)
+    }
+    == 7 {
+      events#[1] = ex_i.valid
+    }
+    == 8 {
+      events#[1] = eret_i
+    }
+    == 9 {
+      events#[1] = unsigned(branch_event__w3 != 0)
+    }
+    == 10 {
+      events#[1] = unsigned((resolved_branch_i.valid != 0) and (resolved_branch_i.is_mispredict != 0))
+    }
+    == 11 {
+      events#[1] = branch_exceptions_i.valid
+    }
+    == 12 {
+      events#[1] = unsigned(call_event__w3 != 0)
+    }
+    == 13 {
+      events#[1] = unsigned(return_event__w3 != 0)
+    }
+    == 14 {
+      events#[1] = sb_full_i
+    }
+    == 15 {
+      events#[1] = if_empty_i
+    }
+    == 16 {
+      events#[1] = l1_icache_access_i.req
+    }
+    == 17 {
+      events#[1] = unsigned((((l1_dcache_access_i#[0..=206] >> 22) & 1) != 0) or (((l1_dcache_access_i#[207..=413] >> 22) & 1) != 0) or (((l1_dcache_access_i#[414..=620] >> 22) & 1) != 0))
+    }
+    == 18 {
+      events#[1] = unsigned(((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[0..=7] == 0xff)) or ((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[8..=15] == 0xff)) or ((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[16..=23] == 0xff)))
+    }
+    == 19 {
+      events#[1] = i_tlb_flush_i
+    }
+    == 20 {
+      events#[1] = unsigned(int_event__w3 != 0)
+    }
+    == 21 {
+      events#[1] = unsigned(fp_event__w3 != 0)
+    }
+    == 22 {
+      events#[1] = stall_issue_i
+    }
+    else {
+      events#[1] = 0
+    }
+  }
+  match mhpmevent_q[2] {
+    == 0 {
+      events#[2] = 0
+    }
+    == 1 {
+      events#[2] = l1_icache_miss_i
+    }
+    == 2 {
+      events#[2] = l1_dcache_miss_i
+    }
+    == 3 {
+      events#[2] = itlb_miss_i
+    }
+    == 4 {
+      events#[2] = dtlb_miss_i
+    }
+    == 5 {
+      events#[2] = unsigned(load_event__w3 != 0)
+    }
+    == 6 {
+      events#[2] = unsigned(store_event__w3 != 0)
+    }
+    == 7 {
+      events#[2] = ex_i.valid
+    }
+    == 8 {
+      events#[2] = eret_i
+    }
+    == 9 {
+      events#[2] = unsigned(branch_event__w3 != 0)
+    }
+    == 10 {
+      events#[2] = unsigned((resolved_branch_i.valid != 0) and (resolved_branch_i.is_mispredict != 0))
+    }
+    == 11 {
+      events#[2] = branch_exceptions_i.valid
+    }
+    == 12 {
+      events#[2] = unsigned(call_event__w3 != 0)
+    }
+    == 13 {
+      events#[2] = unsigned(return_event__w3 != 0)
+    }
+    == 14 {
+      events#[2] = sb_full_i
+    }
+    == 15 {
+      events#[2] = if_empty_i
+    }
+    == 16 {
+      events#[2] = l1_icache_access_i.req
+    }
+    == 17 {
+      events#[2] = unsigned((((l1_dcache_access_i#[0..=206] >> 22) & 1) != 0) or (((l1_dcache_access_i#[207..=413] >> 22) & 1) != 0) or (((l1_dcache_access_i#[414..=620] >> 22) & 1) != 0))
+    }
+    == 18 {
+      events#[2] = unsigned(((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[0..=7] == 0xff)) or ((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[8..=15] == 0xff)) or ((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[16..=23] == 0xff)))
+    }
+    == 19 {
+      events#[2] = i_tlb_flush_i
+    }
+    == 20 {
+      events#[2] = unsigned(int_event__w3 != 0)
+    }
+    == 21 {
+      events#[2] = unsigned(fp_event__w3 != 0)
+    }
+    == 22 {
+      events#[2] = stall_issue_i
+    }
+    else {
+      events#[2] = 0
+    }
+  }
+  match mhpmevent_q[3] {
+    == 0 {
+      events#[3] = 0
+    }
+    == 1 {
+      events#[3] = l1_icache_miss_i
+    }
+    == 2 {
+      events#[3] = l1_dcache_miss_i
+    }
+    == 3 {
+      events#[3] = itlb_miss_i
+    }
+    == 4 {
+      events#[3] = dtlb_miss_i
+    }
+    == 5 {
+      events#[3] = unsigned(load_event__w3 != 0)
+    }
+    == 6 {
+      events#[3] = unsigned(store_event__w3 != 0)
+    }
+    == 7 {
+      events#[3] = ex_i.valid
+    }
+    == 8 {
+      events#[3] = eret_i
+    }
+    == 9 {
+      events#[3] = unsigned(branch_event__w3 != 0)
+    }
+    == 10 {
+      events#[3] = unsigned((resolved_branch_i.valid != 0) and (resolved_branch_i.is_mispredict != 0))
+    }
+    == 11 {
+      events#[3] = branch_exceptions_i.valid
+    }
+    == 12 {
+      events#[3] = unsigned(call_event__w3 != 0)
+    }
+    == 13 {
+      events#[3] = unsigned(return_event__w3 != 0)
+    }
+    == 14 {
+      events#[3] = sb_full_i
+    }
+    == 15 {
+      events#[3] = if_empty_i
+    }
+    == 16 {
+      events#[3] = l1_icache_access_i.req
+    }
+    == 17 {
+      events#[3] = unsigned((((l1_dcache_access_i#[0..=206] >> 22) & 1) != 0) or (((l1_dcache_access_i#[207..=413] >> 22) & 1) != 0) or (((l1_dcache_access_i#[414..=620] >> 22) & 1) != 0))
+    }
+    == 18 {
+      events#[3] = unsigned(((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[0..=7] == 0xff)) or ((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[8..=15] == 0xff)) or ((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[16..=23] == 0xff)))
+    }
+    == 19 {
+      events#[3] = i_tlb_flush_i
+    }
+    == 20 {
+      events#[3] = unsigned(int_event__w3 != 0)
+    }
+    == 21 {
+      events#[3] = unsigned(fp_event__w3 != 0)
+    }
+    == 22 {
+      events#[3] = stall_issue_i
+    }
+    else {
+      events#[3] = 0
+    }
+  }
+  match mhpmevent_q[4] {
+    == 0 {
+      events#[4] = 0
+    }
+    == 1 {
+      events#[4] = l1_icache_miss_i
+    }
+    == 2 {
+      events#[4] = l1_dcache_miss_i
+    }
+    == 3 {
+      events#[4] = itlb_miss_i
+    }
+    == 4 {
+      events#[4] = dtlb_miss_i
+    }
+    == 5 {
+      events#[4] = unsigned(load_event__w3 != 0)
+    }
+    == 6 {
+      events#[4] = unsigned(store_event__w3 != 0)
+    }
+    == 7 {
+      events#[4] = ex_i.valid
+    }
+    == 8 {
+      events#[4] = eret_i
+    }
+    == 9 {
+      events#[4] = unsigned(branch_event__w3 != 0)
+    }
+    == 10 {
+      events#[4] = unsigned((resolved_branch_i.valid != 0) and (resolved_branch_i.is_mispredict != 0))
+    }
+    == 11 {
+      events#[4] = branch_exceptions_i.valid
+    }
+    == 12 {
+      events#[4] = unsigned(call_event__w3 != 0)
+    }
+    == 13 {
+      events#[4] = unsigned(return_event__w3 != 0)
+    }
+    == 14 {
+      events#[4] = sb_full_i
+    }
+    == 15 {
+      events#[4] = if_empty_i
+    }
+    == 16 {
+      events#[4] = l1_icache_access_i.req
+    }
+    == 17 {
+      events#[4] = unsigned((((l1_dcache_access_i#[0..=206] >> 22) & 1) != 0) or (((l1_dcache_access_i#[207..=413] >> 22) & 1) != 0) or (((l1_dcache_access_i#[414..=620] >> 22) & 1) != 0))
+    }
+    == 18 {
+      events#[4] = unsigned(((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[0..=7] == 0xff)) or ((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[8..=15] == 0xff)) or ((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[16..=23] == 0xff)))
+    }
+    == 19 {
+      events#[4] = i_tlb_flush_i
+    }
+    == 20 {
+      events#[4] = unsigned(int_event__w3 != 0)
+    }
+    == 21 {
+      events#[4] = unsigned(fp_event__w3 != 0)
+    }
+    == 22 {
+      events#[4] = stall_issue_i
+    }
+    else {
+      events#[4] = 0
+    }
+  }
+  match mhpmevent_q[5] {
+    == 0 {
+      events#[5] = 0
+    }
+    == 1 {
+      events#[5] = l1_icache_miss_i
+    }
+    == 2 {
+      events#[5] = l1_dcache_miss_i
+    }
+    == 3 {
+      events#[5] = itlb_miss_i
+    }
+    == 4 {
+      events#[5] = dtlb_miss_i
+    }
+    == 5 {
+      events#[5] = unsigned(load_event__w3 != 0)
+    }
+    == 6 {
+      events#[5] = unsigned(store_event__w3 != 0)
+    }
+    == 7 {
+      events#[5] = ex_i.valid
+    }
+    == 8 {
+      events#[5] = eret_i
+    }
+    == 9 {
+      events#[5] = unsigned(branch_event__w3 != 0)
+    }
+    == 10 {
+      events#[5] = unsigned((resolved_branch_i.valid != 0) and (resolved_branch_i.is_mispredict != 0))
+    }
+    == 11 {
+      events#[5] = branch_exceptions_i.valid
+    }
+    == 12 {
+      events#[5] = unsigned(call_event__w3 != 0)
+    }
+    == 13 {
+      events#[5] = unsigned(return_event__w3 != 0)
+    }
+    == 14 {
+      events#[5] = sb_full_i
+    }
+    == 15 {
+      events#[5] = if_empty_i
+    }
+    == 16 {
+      events#[5] = l1_icache_access_i.req
+    }
+    == 17 {
+      events#[5] = unsigned((((l1_dcache_access_i#[0..=206] >> 22) & 1) != 0) or (((l1_dcache_access_i#[207..=413] >> 22) & 1) != 0) or (((l1_dcache_access_i#[414..=620] >> 22) & 1) != 0))
+    }
+    == 18 {
+      events#[5] = unsigned(((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[0..=7] == 0xff)) or ((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[8..=15] == 0xff)) or ((l1_dcache_miss_i != 0) and (miss_vld_bits_i#[16..=23] == 0xff)))
+    }
+    == 19 {
+      events#[5] = i_tlb_flush_i
+    }
+    == 20 {
+      events#[5] = unsigned(int_event__w3 != 0)
+    }
+    == 21 {
+      events#[5] = unsigned(fp_event__w3 != 0)
+    }
+    == 22 {
+      events#[5] = stall_issue_i
+    }
+    else {
+      events#[5] = 0
+    }
+  }
+  generic_counter_d = generic_counter_q
+  mhpmevent_d = mhpmevent_q
+  if (debug_mode_i == 0) and (we_i == 0) {
+    if ((events & 1) == 1) and (((mcountinhibit_i >> 3) & 1) == 0) {
+      generic_counter_d#[0..=63] = (generic_counter_q[0] + 1)#[0..=63]
+    }
+  }
+  if (debug_mode_i == 0) and (we_i == 0) {
+    if (((events >> 1) & 1) == 1) and (((mcountinhibit_i >> 4) & 1) == 0) {
+      generic_counter_d#[64..=127] = (generic_counter_q[1] + 1)#[0..=63]
+    }
+  }
+  if (debug_mode_i == 0) and (we_i == 0) {
+    if (((events >> 2) & 1) == 1) and (((mcountinhibit_i >> 5) & 1) == 0) {
+      generic_counter_d#[128..=191] = (generic_counter_q[2] + 1)#[0..=63]
+    }
+  }
+  if (debug_mode_i == 0) and (we_i == 0) {
+    if (((events >> 3) & 1) == 1) and (((mcountinhibit_i >> 6) & 1) == 0) {
+      generic_counter_d#[192..=255] = (generic_counter_q[3] + 1)#[0..=63]
+    }
+  }
+  if (debug_mode_i == 0) and (we_i == 0) {
+    if (((events >> 4) & 1) == 1) and (((mcountinhibit_i >> 7) & 1) == 0) {
+      generic_counter_d#[256..=319] = (generic_counter_q[4] + 1)#[0..=63]
+    }
+  }
+  if (debug_mode_i == 0) and (we_i == 0) {
+    if (((events >> 5) & 1) == 1) and (((mcountinhibit_i >> 8) & 1) == 0) {
+      generic_counter_d#[320..=383] = (generic_counter_q[5] + 1)#[0..=63]
+    }
+  }
+  data_o = 0
+  if (addr_i >= riscv.CSR_MHPM_COUNTER_3) and (addr_i < (riscv.CSR_MHPM_COUNTER_3 + ariane_pkg.MHPMCounterNum)) {
+    data_o = if riscv.XLEN == 32 { generic_counter_q[((addr_i - riscv.CSR_MHPM_COUNTER_3)#[0..=31] + 1)#[0..=31] - 1]#[0..=31] } else { generic_counter_q[((addr_i - riscv.CSR_MHPM_COUNTER_3)#[0..=31] + 1)#[0..=31] - 1] }
+  } elif (addr_i >= riscv.CSR_MHPM_COUNTER_3H) and (addr_i < (riscv.CSR_MHPM_COUNTER_3H + ariane_pkg.MHPMCounterNum)) {
+    if riscv.XLEN == 32 {
+      data_o = generic_counter_q[((addr_i - riscv.CSR_MHPM_COUNTER_3H)#[0..=31] + 1)#[0..=31] - 1]#[32..=63]
+    } else {
+    }
+  } elif (addr_i >= riscv.CSR_MHPM_EVENT_3) and (addr_i < (riscv.CSR_MHPM_EVENT_3 + ariane_pkg.MHPMCounterNum)) {
+    data_o = mhpmevent_q[((addr_i - riscv.CSR_MHPM_EVENT_3)#[0..=31] + 1)#[0..=31] - 1]
+  } elif (addr_i >= riscv.CSR_HPM_COUNTER_3) and (addr_i < (riscv.CSR_HPM_COUNTER_3 + ariane_pkg.MHPMCounterNum)) {
+    data_o = if riscv.XLEN == 32 { generic_counter_q[((addr_i - riscv.CSR_HPM_COUNTER_3)#[0..=31] + 1)#[0..=31] - 1]#[0..=31] } else { generic_counter_q[((addr_i - riscv.CSR_HPM_COUNTER_3)#[0..=31] + 1)#[0..=31] - 1] }
+  } elif (addr_i > riscv.CSR_HPM_COUNTER_3H) and (addr_i < (riscv.CSR_HPM_COUNTER_3H + ariane_pkg.MHPMCounterNum)) {
+    if riscv.XLEN == 32 {
+      data_o = generic_counter_q[((addr_i - riscv.CSR_MHPM_COUNTER_3H)#[0..=31] + 1)#[0..=31] - 1]#[32..=63]
+    } else {
+    }
+  }
+  if we_i != 0 {
+    if (addr_i >= riscv.CSR_MHPM_COUNTER_3) and (addr_i < (riscv.CSR_MHPM_COUNTER_3 + ariane_pkg.MHPMCounterNum)) {
+      if riscv.XLEN == 32 {
+        const t702 = (((addr_i - riscv.CSR_MHPM_COUNTER_3)#[0..=31] + 1)#[0..=31] - 1) * 0x40
+        generic_counter_d = ((generic_counter_d & (~(0xffffffff << t702))) | (data_i#[0..=31] << t702)) & 1
+      } else {
+        const t714 = (((addr_i - riscv.CSR_MHPM_COUNTER_3)#[0..=31] + 1)#[0..=31] - 1) * 0x40
+        generic_counter_d = ((generic_counter_d & (~(0xffffffffffffffff << t714))) | (data_i << t714))#[0..=383]
+      }
+    } elif (addr_i >= riscv.CSR_MHPM_COUNTER_3H) and (addr_i < (riscv.CSR_MHPM_COUNTER_3H + ariane_pkg.MHPMCounterNum)) {
+      if riscv.XLEN == 32 {
+        const t733 = ((((addr_i - riscv.CSR_MHPM_COUNTER_3H)#[0..=31] + 1)#[0..=31] - 1) * 0x40) + 32
+        generic_counter_d = ((generic_counter_d & (~(0xffffffff << t733))) | (data_i#[0..=31] << t733)) & 1
+      } else {
+      }
+    } elif (addr_i >= riscv.CSR_MHPM_EVENT_3) and (addr_i < (riscv.CSR_MHPM_EVENT_3 + ariane_pkg.MHPMCounterNum)) {
+      const t750 = (((addr_i - riscv.CSR_MHPM_EVENT_3)#[0..=31] + 1)#[0..=31] - 1) * 5
+      mhpmevent_d = ((mhpmevent_d & (~(31 << t750))) | (data_i#[0..=4] << t750))#[0..=29]
+    }
+  }
+  if rst_ni == 0 {
+    generic_counter_q[0] = 0
+    generic_counter_q[1] = 0
+    generic_counter_q[2] = 0
+    generic_counter_q[3] = 0
+    generic_counter_q[4] = 0
+    generic_counter_q[5] = 0
+    mhpmevent_q[0] = 0
+    mhpmevent_q[1] = 0
+    mhpmevent_q[2] = 0
+    mhpmevent_q[3] = 0
+    mhpmevent_q[4] = 0
+    mhpmevent_q[5] = 0
+  } else {
+    generic_counter_q = generic_counter_d
+    mhpmevent_q = mhpmevent_d
+  }
+}

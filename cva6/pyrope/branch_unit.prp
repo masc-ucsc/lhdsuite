@@ -1,0 +1,71 @@
+const ariane_pkg = import("ariane_pkg")
+const riscv = import("riscv")
+
+pub comb branch_unit::[timecheck=false](clk_i:u1, rst_ni:u1, v_i:u1, debug_mode_i:u1, fu_data_i:(fu:u4, operation:u8, operand_a:u64, operand_b:u64, imm:u64, trans_id:u3), pc_i:u64, is_zcmt_i:u1, is_compressed_instr_i:u1, branch_valid_i:u1, branch_comp_res_i:u1, branch_predict_i:(cf:u3, predict_address:u64)) -> (branch_result_o:u64, resolved_branch_o:(valid:u1, pc:u64, target_address:u64, is_mispredict:u1, is_taken:u1, cf_type:u3), resolve_branch_o:u1, branch_exception_o:(cause:u64, tval:u64, tval2:u41, tinst:u32, gva:u1, valid:u1, timing:u1)) {
+  mut _mux_3:u64 = 0
+  mut op:u8 = 0
+  mut op_is_branch:u1 = 0
+  wire next_pc:u64
+  mut target_address:u64 = 0
+  mut `resolved_branch_o__bpo.target_address` = 0
+  mut `resolved_branch_o__bpo.is_mispredict` = 0
+  mut `resolved_branch_o__bpo.is_taken` = 0
+  mut `resolved_branch_o__bpo.cf_type` = 0
+  mut `branch_exception_o__bpo.tval` = 0
+  mut `branch_exception_o__bpo.tval2` = 0
+  mut `branch_exception_o__bpo.tinst` = 0
+  mut `branch_exception_o__bpo.gva` = 0
+  mut `branch_exception_o__bpo.valid` = 0
+  mut `branch_exception_o__bpo.timing` = 0
+  target_address = 0sb?
+  resolve_branch_o = 0ub?
+  mut _mux_1:u64 = if fu_data_i.operation == ariane_pkg.JALR { fu_data_i.operand_a#[0..=63] } else { pc_i }
+  mut `resolved_branch_o__bpo.valid` = branch_valid_i
+  `resolved_branch_o__bpo.cf_type` = branch_predict_i.cf
+  mut _mux_2:u64 = if is_compressed_instr_i != 0 { 2 } else { 4 }
+  next_pc = (pc_i + _mux_2)#[0..=63]
+  target_address = (_mux_1#sext[0..=63] + fu_data_i.imm#[0..=63]#sext[0..=63])#[0..=63]#sext[0..=63]#[0..=63]
+  if fu_data_i.operation == ariane_pkg.JALR {
+    target_address#[0] = 0
+  }
+  mut `resolved_branch_o__bpo.pc` = pc_i
+  resolve_branch_o = 0
+  if branch_valid_i != 0 {
+    _mux_3 = if branch_comp_res_i != 0 { target_address } else { next_pc }
+    `resolved_branch_o__bpo.target_address` = _mux_3
+    `resolved_branch_o__bpo.is_taken` = branch_comp_res_i
+    op = 0ub????????
+    op = fu_data_i.operation
+    op_is_branch = 0ub?
+    op_is_branch = unique if (op == ariane_pkg.EQ) or (op == ariane_pkg.NE) or (op == ariane_pkg.LTS) or (op == ariane_pkg.GES) or (op == ariane_pkg.LTU) or (op == ariane_pkg.GEU) { 1 } else { 0 }
+    if op_is_branch != 0 {
+      `resolved_branch_o__bpo.cf_type` = ariane_pkg.Branch
+      `resolved_branch_o__bpo.is_mispredict` = unsigned(branch_comp_res_i != unsigned(branch_predict_i.cf == ariane_pkg.Branch))
+    }
+    if (fu_data_i.operation == ariane_pkg.JALR) and ((branch_predict_i.cf == ariane_pkg.NoCF) or (target_address != branch_predict_i.predict_address)) {
+      `resolved_branch_o__bpo.is_mispredict` = 1
+      if branch_predict_i.cf != ariane_pkg.Return {
+        `resolved_branch_o__bpo.cf_type` = ariane_pkg.JumpR
+      }
+    }
+    resolve_branch_o = 1
+  }
+  mut `branch_exception_o__bpo.cause` = riscv.INSTR_ADDR_MISALIGNED
+  {
+    `branch_exception_o__bpo.tval` = target_address
+  }
+  resolved_branch_o.valid = `resolved_branch_o__bpo.valid`
+  resolved_branch_o.pc = `resolved_branch_o__bpo.pc`
+  resolved_branch_o.target_address = `resolved_branch_o__bpo.target_address`
+  resolved_branch_o.is_mispredict = `resolved_branch_o__bpo.is_mispredict`
+  resolved_branch_o.is_taken = `resolved_branch_o__bpo.is_taken`
+  resolved_branch_o.cf_type = `resolved_branch_o__bpo.cf_type`
+  branch_exception_o.cause = `branch_exception_o__bpo.cause`
+  branch_exception_o.tval = `branch_exception_o__bpo.tval`
+  branch_exception_o.tval2 = 0
+  branch_exception_o.tinst = 0
+  branch_exception_o.gva = 0
+  branch_exception_o.valid = 0
+  branch_exception_o.timing = `branch_exception_o__bpo.timing`
+  branch_result_o = next_pc
+}

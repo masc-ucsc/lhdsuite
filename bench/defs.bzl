@@ -54,6 +54,12 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             testbench never instantiates (minion's tensor RF benchmark dies
 #             on `vpu_ctrl` and `intpipe_csr_file`). Drivers sharing a unit
 #             share the one compile. "" where the driver is "".
+#   sim_prog_pyrope_only  skip sim_prog_tb entirely under MODE=verilog. For a
+#             core whose Verilog tree does not carry the module the program
+#             driver drives, so `lhd compile verilog --top <unit>` could not
+#             elaborate it at all (cva6: pyrope/ has the whole core, verilog/
+#             only the tag_cmp cone). Absent/False = run the driver in both
+#             modes, as dino and minion do.
 #   sim_tb_v  MODE=verilog override for sim_tb (optional; "" or absent = drive
 #             both modes with the one sim_tb). Needed when the two sides
 #             declare a port differently and a driver written for one shape
@@ -180,7 +186,15 @@ CORES = {
         # compare collapses and hit_way_o is undriven, so every property over it
         # passes vacuously. The wrapper binds them as std_nbdcache.sv does.
         "top": "tag_cmp_wrap",
-        "unit": "tag_cmp_wrap",
+        # The verify sidecar and the bug1/comment1 variants bind `tag_cmp`
+        # DIRECTLY — no wrapper. That is safe only because cva6/pyrope/ is now
+        # emitted from the WHOLE core, where std_nbdcache binds tag_cmp's type
+        # parameters, so the checked-in tag_cmp.prp already carries the real
+        # rdata_i:u1392 and a valid-bit-gated 44-bit compare. (Elaborated
+        # standalone from Verilog it still collapses: `lhd compile verilog
+        # --top tag_cmp` yields rdata_i:u2 — which is what `top` above still
+        # needs tag_cmp_wrap.sv for.)
+        "unit": "tag_cmp",
         # No sequential sidecar yet; the onehot property already uses `past`.
         "seq_unit": "",
         # CVA6 packages reference identifiers across files, so one compilation
@@ -196,7 +210,29 @@ CORES = {
         # driven at all — the miss path is what is checkable here.
         "sim_expect": "hit_way=0",
         "sim_top_tb": "",
-        "sim_prog_tb": "",
+        # The whole-core RISC-V program workload, the counterpart of
+        # dino_prog_tb / minion_prog_tb. Its DUT is `cva6` — the FULL core,
+        # which cva6/pyrope/ now carries even though cva6/verilog/ is still
+        # only the tag_cmp cone (see cva6/README). The driver is an AXI slave
+        # serving the program out of a ROM at 0x8000_0000 and reading the
+        # results back off an UNCACHED window at 0x1000_0000.
+        #
+        # It does NOT pass yet, and `sim_top_assert` stays unset on this core
+        # so that is a metric (`sim_cpu_prog_ok 0`) rather than a red target —
+        # the same treatment minion's vpu_top driver gets. The blockers are in
+        # the generated Pyrope, not the driver; see the "Known-failing
+        # scenarios" table in README.md and the driver's own header.
+        "sim_prog_tb": "cva6_prog_tb.prp",
+        "sim_prog_tb_unit": "cva6",
+        # 50k cycles: the program's phase 2 loops forever, so the workload
+        # stays ACTIVE for the whole count instead of falling into an idle
+        # spin, and the checks latch once and hold at any larger count.
+        "sim_prog_cycles": 50000,
+        # cva6/verilog/ has no `cva6` module to compile, so MODE=verilog must
+        # skip this driver entirely rather than run `--top cva6` against a
+        # filelist that cannot elaborate it. Drop this knob once the Verilog
+        # side carries the whole core.
+        "sim_prog_pyrope_only": True,
         "lec_trust": "",
         "verilator_tb": "",
     },
@@ -574,6 +610,9 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_SIM_TOP_CYCLES": str(cfg.get("sim_top_cycles", "")),
             "CORE_SIM_PROG_TB": cfg.get("sim_prog_tb", ""),
             "CORE_SIM_PROG_CYCLES": str(cfg.get("sim_prog_cycles", "")),
+            # "1" = MODE=verilog has no such module to compile; skip the
+            # program driver there instead of failing on `--top <unit>`.
+            "CORE_SIM_PROG_PYROPE_ONLY": "1" if cfg.get("sim_prog_pyrope_only", False) else "",
             # "1" = the whole-top drivers gate the target; "" = metric only.
             "CORE_SIM_TOP_ASSERT": "1" if cfg.get("sim_top_assert", False) else "",
             "CORE_LEC_TRUST": cfg.get("lec_trust", ""),

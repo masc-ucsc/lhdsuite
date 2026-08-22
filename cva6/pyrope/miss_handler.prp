@@ -1,0 +1,876 @@
+const axi_adapter = import("axi_adapter.axi_adapter")
+const axi_adapter_arbiter = import("axi_adapter_arbiter.axi_adapter_arbiter")
+const axi_adapter_p1 = import("axi_adapter_p1.axi_adapter_p1")
+const lfsr_8bit = import("lfsr_8bit.lfsr_8bit")
+const ariane_pkg = import("ariane_pkg")
+
+pub mod miss_handler::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, busy_i:u1, miss_req_i:u564, axi_bypass_i:(aw_ready:u1, ar_ready:u1, w_ready:u1, b_valid:u1, b:(id:u4, resp:u2, user:u64), r_valid:u1, r:(id:u4, data:u64, resp:u2, last:u1, user:u64)), axi_data_i:(aw_ready:u1, ar_ready:u1, w_ready:u1, b_valid:u1, b:(id:u4, resp:u2, user:u64), r_valid:u1, r:(id:u4, data:u64, resp:u2, last:u1, user:u64)), mshr_addr_i:u224, amo_req_i:(req:u1, amo_op:u4, size:u2, operand_a:u64, operand_b:u64), data_i:u1392) -> (flush_ack_o:u1@[], miss_o:u1@[], bypass_gnt_o:u4@[], bypass_valid_o:u4@[], bypass_data_o:u256@[], axi_bypass_o:(aw:(id:u4, addr:u64, len:u8, size:u3, burst:u2, lock:u1, cache:u4, prot:u3, qos:u4, region:u4, atop:u6, user:u64), aw_valid:u1, w:(data:u64, strb:u8, last:u1, user:u64), w_valid:u1, b_ready:u1, ar:(id:u4, addr:u64, len:u8, size:u3, burst:u2, lock:u1, cache:u4, prot:u3, qos:u4, region:u4, user:u64), ar_valid:u1, r_ready:u1)@[], miss_gnt_o:u4@[], active_serving_o:u4@[], critical_word_o:u64@[], critical_word_valid_o:u1@[], axi_data_o:(aw:(id:u4, addr:u64, len:u8, size:u3, burst:u2, lock:u1, cache:u4, prot:u3, qos:u4, region:u4, atop:u6, user:u64), aw_valid:u1, w:(data:u64, strb:u8, last:u1, user:u64), w_valid:u1, b_ready:u1, ar:(id:u4, addr:u64, len:u8, size:u3, burst:u2, lock:u1, cache:u4, prot:u3, qos:u4, region:u4, user:u64), ar_valid:u1, r_ready:u1)@[], mshr_addr_matches_o:u4@[], mshr_index_matches_o:u4@[], amo_resp_o:(ack:u1, result:u64)@[], req_o:u8@[], addr_o:u12@[], data_o:(tag:u44, data:u128, valid:u1, dirty:u1)@[], be_o:(tag:u6, data:u16, vldrty:u8)@[], we_o:u1@[]) {
+  wire amo_bypass_rsp:(gnt:u1, valid:u1, rdata:u64) = nil
+  mut _brk_1 = 0
+  mut _mux_2:u1 = 0
+  mut _mux_3:u4 = 0
+  mut _mux_4:u8 = 0
+  mut `in`:u8 = 0
+  mut get_victim_cl:u8 = 0
+  mut oh:u8 = 0
+  mut one_hot_to_bin:u3 = 0
+  mut valid_dirty:u8 = 0
+  reg state_q:u4:[init=11, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg mshr_q:u132:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg cnt_q:u12:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg evict_way_q:u8:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg evict_cl_q:u174:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg serve_amo_q:u1:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  mut `mshr_d.id` = 0
+  mut `mshr_d.valid` = 0
+  mut `mshr_d.we` = 0
+  mut `mshr_d.addr` = 0
+  mut `mshr_d.wdata` = 0
+  mut `mshr_d.be` = 0
+  mut `evict_cl_d.tag` = 0
+  mut `evict_cl_d.data` = 0
+  mut `evict_cl_d.valid` = 0
+  mut `evict_cl_d.dirty` = 0
+  mut `amo_bypass_req.req` = 0
+  mut `amo_bypass_req.reqtype` = 0
+  mut `amo_bypass_req.amo` = 0
+  mut `amo_bypass_req.id` = 0
+  mut `amo_bypass_req.addr` = 0
+  mut `amo_bypass_req.wdata` = 0
+  mut `amo_bypass_req.we` = 0
+  mut `amo_bypass_req.be` = 0
+  mut `amo_bypass_req.size` = 0
+  mut `bypass_adapter_rsp.gnt` = 0
+  mut `bypass_adapter_rsp.valid` = 0
+  mut `bypass_adapter_rsp.rdata` = 0
+  wire bypass_ports_rsp:u330
+  wire gnt_miss_fsm:u1
+  wire valid_miss_fsm:u1
+  wire data_miss_fsm:u128
+  wire lfsr_oh:u8
+  wire lfsr_bin:u3
+  mut state_d:u4 = 0
+  mut cnt_d:u12 = 0
+  mut evict_way_d:u8 = 0
+  mut serve_amo_d:u1 = 0
+  mut miss_req_valid:u4 = 0
+  mut miss_req_bypass:u4 = 0
+  mut miss_req_addr:u256 = 0
+  mut miss_req_wdata:u256 = 0
+  mut miss_req_we:u4 = 0
+  mut miss_req_be:u32 = 0
+  mut miss_req_size:u8 = 0
+  mut bypass_ports_req:u745 = 0
+  mut req_fsm_miss_valid:u1 = 0
+  mut req_fsm_miss_addr:u64 = 0
+  mut req_fsm_miss_wdata:u128 = 0
+  mut req_fsm_miss_we:u1 = 0
+  mut req_fsm_miss_be:u16 = 0
+  mut lfsr_enable:u1 = 0
+  mut cl_offset:u7 = 0
+  mut `amo_resp_o__bpo.ack` = 0
+  mut `amo_resp_o__bpo.result` = 0
+  mut `data_o__bpo.tag` = 0
+  mut `data_o__bpo.data` = 0
+  mut `data_o__bpo.valid` = 0
+  mut `data_o__bpo.dirty` = 0
+  mut `be_o__bpo.tag` = 0
+  mut `be_o__bpo.data` = 0
+  mut `be_o__bpo.vldrty` = 0
+  mut evict_way:u8 = 0
+  mut valid_way:u8 = 0
+  state_d = 0sb?
+  cnt_d = 0sb?
+  evict_way_d = 0sb?
+  serve_amo_d = 0ub?
+  miss_req_valid = 0sb?
+  miss_req_bypass = 0sb?
+  miss_req_addr = 0sb?
+  miss_req_wdata = 0sb?
+  miss_req_we = 0sb?
+  miss_req_be = 0sb?
+  miss_req_size = 0sb?
+  bypass_ports_req = 0sb?
+  req_fsm_miss_valid = 0ub?
+  req_fsm_miss_addr = 0sb?
+  req_fsm_miss_wdata = 0sb?
+  req_fsm_miss_we = 0ub?
+  req_fsm_miss_be = 0sb?
+  lfsr_enable = 0ub?
+  mut amo_operand_b:u64 = 0sb?
+  mut halfword:u32 = 0sb?
+  cl_offset = 0sb?
+  flush_ack_o = 0ub?
+  miss_o = 0ub?
+  bypass_gnt_o = 0sb?
+  bypass_valid_o = 0sb?
+  bypass_data_o = 0sb?
+  miss_gnt_o = 0sb?
+  mshr_addr_matches_o = 0sb?
+  mshr_index_matches_o = 0sb?
+  req_o = 0sb?
+  addr_o = 0sb?
+  we_o = 0ub?
+  mshr_addr_matches_o = 0
+  if (((mshr_q >> 0x81) & 1) != 0) and (mshr_addr_i#[0..=55]#[4..=55] == mshr_q#[72..=127]#[4..=55]) {
+    mshr_addr_matches_o = 1
+    mshr_addr_matches_o#[0] = 1
+  }
+  mshr_index_matches_o = 0
+  if (((mshr_q >> 0x81) & 1) != 0) and (mshr_addr_i#[0..=55]#[4..=11] == mshr_q#[72..=127]#[4..=11]) {
+    mshr_index_matches_o = 1
+    mshr_index_matches_o#[0] = 1
+  }
+  if (((mshr_q >> 0x81) & 1) != 0) and (mshr_addr_i#[56..=111]#[4..=55] == mshr_q#[72..=127]#[4..=55]) {
+    mshr_addr_matches_o#[1] = 1
+  }
+  if (((mshr_q >> 0x81) & 1) != 0) and (mshr_addr_i#[56..=111]#[4..=11] == mshr_q#[72..=127]#[4..=11]) {
+    mshr_index_matches_o#[1] = 1
+  }
+  if (((mshr_q >> 0x81) & 1) != 0) and (mshr_addr_i#[112..=167]#[4..=55] == mshr_q#[72..=127]#[4..=55]) {
+    mshr_addr_matches_o#[2] = 1
+  }
+  if (((mshr_q >> 0x81) & 1) != 0) and (mshr_addr_i#[112..=167]#[4..=11] == mshr_q#[72..=127]#[4..=11]) {
+    mshr_index_matches_o#[2] = 1
+  }
+  if (((mshr_q >> 0x81) & 1) != 0) and (mshr_addr_i#[168..=223]#[4..=55] == mshr_q#[72..=127]#[4..=55]) {
+    mshr_addr_matches_o#[3] = 1
+  }
+  if (((mshr_q >> 0x81) & 1) != 0) and (mshr_addr_i#[168..=223]#[4..=11] == mshr_q#[72..=127]#[4..=11]) {
+    mshr_index_matches_o#[3] = 1
+  }
+  mut `miss_req.valid` = (miss_req_i#[0..=140] >> 0x8c) & 1
+  mut `miss_req.addr` = miss_req_i#[0..=140]#[76..=139]
+  mut `miss_req.be` = miss_req_i#[0..=140]#[68..=75]
+  mut `miss_req.size` = miss_req_i#[0..=140]#[66..=67]
+  mut `miss_req.we` = (miss_req_i#[0..=140] >> 0x41) & 1
+  mut `miss_req.wdata` = miss_req_i#[0..=140]#[1..=64]
+  mut `miss_req.bypass` = miss_req_i#[0..=140] & 1
+  mut miss_req_valid__w1 = miss_req_valid
+  miss_req_valid__w1#[0] = `miss_req.valid` & 1
+  mut miss_req_bypass__w1 = miss_req_bypass
+  miss_req_bypass__w1#[0] = `miss_req.bypass` & 1
+  mut miss_req_addr__w1 = miss_req_addr
+  miss_req_addr__w1#[0..=63] = `miss_req.addr`#[0..=63]
+  mut miss_req_wdata__w1 = miss_req_wdata
+  miss_req_wdata__w1#[0..=63] = `miss_req.wdata`#[0..=63]
+  mut miss_req_we__w1 = miss_req_we
+  miss_req_we__w1#[0] = `miss_req.we` & 1
+  mut miss_req_be__w1 = miss_req_be
+  miss_req_be__w1#[0..=7] = `miss_req.be`#[0..=7]
+  mut miss_req_size__w1 = miss_req_size
+  miss_req_size__w1#[0..=1] = `miss_req.size`#[0..=1]
+  const `miss_req.valid__w1` = (miss_req_i#[141..=281] >> 0x8c) & 1
+  const `miss_req.addr__w1` = miss_req_i#[141..=281]#[76..=139]
+  const `miss_req.be__w1` = miss_req_i#[141..=281]#[68..=75]
+  const `miss_req.size__w1` = miss_req_i#[141..=281]#[66..=67]
+  const `miss_req.we__w1` = (miss_req_i#[141..=281] >> 0x41) & 1
+  const `miss_req.wdata__w1` = miss_req_i#[141..=281]#[1..=64]
+  const `miss_req.bypass__w1` = miss_req_i#[141..=281] & 1
+  mut miss_req_valid__w2 = miss_req_valid__w1
+  miss_req_valid__w2#[1] = `miss_req.valid__w1` & 1
+  mut miss_req_bypass__w2 = miss_req_bypass__w1
+  miss_req_bypass__w2#[1] = `miss_req.bypass__w1` & 1
+  mut miss_req_addr__w2 = miss_req_addr__w1
+  miss_req_addr__w2#[64..=127] = `miss_req.addr__w1`
+  mut miss_req_wdata__w2 = miss_req_wdata__w1
+  miss_req_wdata__w2#[64..=127] = `miss_req.wdata__w1`
+  mut miss_req_we__w2 = miss_req_we__w1
+  miss_req_we__w2#[1] = `miss_req.we__w1` & 1
+  mut miss_req_be__w2 = miss_req_be__w1
+  miss_req_be__w2#[8..=15] = `miss_req.be__w1`
+  mut miss_req_size__w2 = miss_req_size__w1
+  miss_req_size__w2#[2..=3] = `miss_req.size__w1`
+  const `miss_req.valid__w2` = (miss_req_i#[282..=422] >> 0x8c) & 1
+  const `miss_req.addr__w2` = miss_req_i#[282..=422]#[76..=139]
+  const `miss_req.be__w2` = miss_req_i#[282..=422]#[68..=75]
+  const `miss_req.size__w2` = miss_req_i#[282..=422]#[66..=67]
+  const `miss_req.we__w2` = (miss_req_i#[282..=422] >> 0x41) & 1
+  const `miss_req.wdata__w2` = miss_req_i#[282..=422]#[1..=64]
+  const `miss_req.bypass__w2` = miss_req_i#[282..=422] & 1
+  mut miss_req_valid__w3 = miss_req_valid__w2
+  miss_req_valid__w3#[2] = `miss_req.valid__w2` & 1
+  mut miss_req_bypass__w3 = miss_req_bypass__w2
+  miss_req_bypass__w3#[2] = `miss_req.bypass__w2` & 1
+  mut miss_req_addr__w3 = miss_req_addr__w2
+  miss_req_addr__w3#[128..=191] = `miss_req.addr__w2`
+  mut miss_req_wdata__w3 = miss_req_wdata__w2
+  miss_req_wdata__w3#[128..=191] = `miss_req.wdata__w2`
+  mut miss_req_we__w3 = miss_req_we__w2
+  miss_req_we__w3#[2] = `miss_req.we__w2` & 1
+  mut miss_req_be__w3 = miss_req_be__w2
+  miss_req_be__w3#[16..=23] = `miss_req.be__w2`
+  mut miss_req_size__w3 = miss_req_size__w2
+  miss_req_size__w3#[4..=5] = `miss_req.size__w2`
+  const `miss_req.valid__w3` = (miss_req_i#[423..=563] >> 0x8c) & 1
+  const `miss_req.addr__w3` = miss_req_i#[423..=563]#[76..=139]
+  const `miss_req.be__w3` = miss_req_i#[423..=563]#[68..=75]
+  const `miss_req.size__w3` = miss_req_i#[423..=563]#[66..=67]
+  const `miss_req.we__w3` = (miss_req_i#[423..=563] >> 0x41) & 1
+  const `miss_req.wdata__w3` = miss_req_i#[423..=563]#[1..=64]
+  const `miss_req.bypass__w3` = miss_req_i#[423..=563] & 1
+  mut miss_req_valid__w4 = miss_req_valid__w3
+  miss_req_valid__w4#[3] = `miss_req.valid__w3` & 1
+  mut miss_req_bypass__w4 = miss_req_bypass__w3
+  miss_req_bypass__w4#[3] = `miss_req.bypass__w3` & 1
+  mut miss_req_addr__w4 = miss_req_addr__w3
+  miss_req_addr__w4#[192..=255] = `miss_req.addr__w3`
+  mut miss_req_wdata__w4 = miss_req_wdata__w3
+  miss_req_wdata__w4#[192..=255] = `miss_req.wdata__w3`
+  mut miss_req_we__w4 = miss_req_we__w3
+  miss_req_we__w4#[3] = `miss_req.we__w3` & 1
+  mut miss_req_be__w4 = miss_req_be__w3
+  miss_req_be__w4#[24..=31] = `miss_req.be__w3`
+  mut miss_req_size__w4 = miss_req_size__w3
+  miss_req_size__w4#[6..=7] = `miss_req.size__w3`
+  evict_way = 0sb?
+  valid_way = 0sb?
+  mut evict_way__w1 = evict_way
+  evict_way__w1#[0] = (data_i#[0..=173] >> 1) & 1 & data_i#[0..=173] & 1 & 1
+  mut valid_way__w1 = valid_way
+  valid_way__w1#[0] = (data_i#[0..=173] >> 1) & 1
+  mut evict_way__w2 = evict_way__w1
+  evict_way__w2#[1] = (data_i#[174..=347] >> 1) & 1 & data_i#[174..=347] & 1 & 1
+  mut valid_way__w2 = valid_way__w1
+  valid_way__w2#[1] = (data_i#[174..=347] >> 1) & 1
+  mut evict_way__w3 = evict_way__w2
+  evict_way__w3#[2] = (data_i#[348..=521] >> 1) & 1 & data_i#[348..=521] & 1 & 1
+  mut valid_way__w3 = valid_way__w2
+  valid_way__w3#[2] = (data_i#[348..=521] >> 1) & 1
+  mut evict_way__w4 = evict_way__w3
+  evict_way__w4#[3] = (data_i#[522..=695] >> 1) & 1 & data_i#[522..=695] & 1 & 1
+  mut valid_way__w4 = valid_way__w3
+  valid_way__w4#[3] = (data_i#[522..=695] >> 1) & 1
+  mut evict_way__w5 = evict_way__w4
+  evict_way__w5#[4] = (data_i#[696..=869] >> 1) & 1 & data_i#[696..=869] & 1 & 1
+  mut valid_way__w5 = valid_way__w4
+  valid_way__w5#[4] = (data_i#[696..=869] >> 1) & 1
+  mut evict_way__w6 = evict_way__w5
+  evict_way__w6#[5] = (data_i#[870..=1043] >> 1) & 1 & data_i#[870..=1043] & 1 & 1
+  mut valid_way__w6 = valid_way__w5
+  valid_way__w6#[5] = (data_i#[870..=1043] >> 1) & 1
+  mut evict_way__w7 = evict_way__w6
+  evict_way__w7#[6] = (data_i#[1044..=1217] >> 1) & 1 & data_i#[1044..=1217] & 1 & 1
+  mut valid_way__w7 = valid_way__w6
+  valid_way__w7#[6] = (data_i#[1044..=1217] >> 1) & 1
+  mut evict_way__w8 = evict_way__w7
+  evict_way__w8#[7] = (data_i#[1218..=1391] >> 1) & 1 & data_i#[1218..=1391] & 1 & 1
+  mut valid_way__w8 = valid_way__w7
+  valid_way__w8#[7] = (data_i#[1218..=1391] >> 1) & 1
+  `amo_bypass_req.reqtype` = ariane_pkg.SINGLE_REQ & 1
+  `amo_bypass_req.amo` = ariane_pkg.AMO_NONE#[0..=3]
+  `evict_cl_d.tag` = evict_cl_q#[130..=173]
+  `evict_cl_d.data` = evict_cl_q#[2..=129]
+  `evict_cl_d.valid` = (evict_cl_q >> 1) & 1
+  `evict_cl_d.dirty` = evict_cl_q & 1
+  `mshr_d.id` = mshr_q#[130..=131]
+  `mshr_d.valid` = (mshr_q >> 0x81) & 1
+  `mshr_d.we` = (mshr_q >> 0x80) & 1
+  `mshr_d.addr` = mshr_q#[72..=127]
+  `mshr_d.wdata` = mshr_q#[8..=71]
+  `mshr_d.be` = mshr_q#[0..=7]
+  const active_serving_o__w2 = ((0 & (~(1 << mshr_q#[130..=131]))) | (((mshr_q >> 0x81) & 1) << mshr_q#[130..=131]))#[0..=3]
+  serve_amo_d = serve_amo_q
+  miss_gnt_o = 0
+  cl_offset = 0
+  evict_way_d = evict_way_q
+  amo_operand_b = 0
+  halfword = 0
+  req_fsm_miss_be = 0
+  req_fsm_miss_addr = 0
+  req_fsm_miss_valid = 0
+  we_o = 0
+  flush_ack_o = 0
+  miss_o = 0
+  addr_o = 0
+  lfsr_enable = 0
+  cnt_d = cnt_q
+  req_fsm_miss_wdata = 0
+  state_d = state_q
+  req_fsm_miss_we = 0
+  req_o = 0
+  match state_q {
+    == 0 {
+      if (amo_req_i.req != 0) and (busy_i == 0) {
+        state_d = 4
+        serve_amo_d = 1
+        cnt_d = 0
+      }
+      if (flush_i != 0) and (busy_i == 0) {
+        state_d = 4
+        cnt_d = 0
+      }
+      _brk_1 = 0
+      {
+        if ((miss_req_valid__w4 & 1) != 0) and ((miss_req_bypass__w4 & 1) == 0) {
+          state_d = 7
+          serve_amo_d = 0
+          `mshr_d.valid` = 1
+          `mshr_d.we` = miss_req_we__w4 & 1
+          `mshr_d.id` = 0
+          `mshr_d.addr` = miss_req_addr__w4#[0..=63]#[0..=55]
+          `mshr_d.wdata` = miss_req_wdata__w4#[0..=63]
+          `mshr_d.be` = miss_req_be__w4#[0..=7]
+          _brk_1 = 1
+        }
+      }
+      if _brk_1 == 0 {
+        if (((miss_req_valid__w4 >> 1) & 1) != 0) and (((miss_req_bypass__w4 >> 1) & 1) == 0) {
+          state_d = 7
+          serve_amo_d = 0
+          `mshr_d.valid` = 1
+          `mshr_d.we` = (miss_req_we__w4 >> 1) & 1
+          `mshr_d.id` = 1
+          `mshr_d.addr` = miss_req_addr__w4#[64..=127]#[0..=55]
+          `mshr_d.wdata` = miss_req_wdata__w4#[64..=127]
+          `mshr_d.be` = miss_req_be__w4#[8..=15]
+          _brk_1 = 1
+        }
+      }
+      if _brk_1 == 0 {
+        if (((miss_req_valid__w4 >> 2) & 1) != 0) and (((miss_req_bypass__w4 >> 2) & 1) == 0) {
+          state_d = 7
+          serve_amo_d = 0
+          `mshr_d.valid` = 1
+          `mshr_d.we` = (miss_req_we__w4 >> 2) & 1
+          `mshr_d.id` = 2
+          `mshr_d.addr` = miss_req_addr__w4#[128..=191]#[0..=55]
+          `mshr_d.wdata` = miss_req_wdata__w4#[128..=191]
+          `mshr_d.be` = miss_req_be__w4#[16..=23]
+          _brk_1 = 1
+        }
+      }
+      if _brk_1 == 0 {
+        if (((miss_req_valid__w4 >> 3) & 1) != 0) and (((miss_req_bypass__w4 >> 3) & 1) == 0) {
+          state_d = 7
+          serve_amo_d = 0
+          `mshr_d.valid` = 1
+          `mshr_d.we` = (miss_req_we__w4 >> 3) & 1
+          `mshr_d.id` = 3
+          `mshr_d.addr` = miss_req_addr__w4#[192..=255]#[0..=55]
+          `mshr_d.wdata` = miss_req_wdata__w4#[192..=255]
+          `mshr_d.be` = miss_req_be__w4#[24..=31]
+          _brk_1 = 1
+        }
+      }
+    }
+    == 7 {
+      req_o = 0xff
+      addr_o = mshr_q#[72..=127]#[0..=11]
+      state_d = 9
+      miss_o = 1
+    }
+    == 9 {
+      if valid_way__w8 == 0xff {
+        lfsr_enable = 1
+        evict_way_d = lfsr_oh
+        if (((data_i << 0xae) >> ((lfsr_bin * 0xae) + 0xae))#[0..=173] & 1) != 0 {
+          state_d = 5
+          `evict_cl_d.tag` = ((data_i << 0xae) >> ((lfsr_bin * 0xae) + 0xae))#[0..=173]#[130..=173]
+          `evict_cl_d.data` = ((data_i << 0xae) >> ((lfsr_bin * 0xae) + 0xae))#[0..=173]#[2..=129]
+          cnt_d = mshr_q#[72..=127]#[0..=11]
+        } else {
+          state_d = 8
+        }
+      } else {
+        valid_dirty = 0ub????????
+        valid_dirty = (~valid_way__w8)#[0..=7]
+        get_victim_cl = 0ub????????
+        oh = 0ub????????
+        oh = 0
+        if (valid_dirty & 1) != 0 {
+          oh = 1
+          oh#[0] = 1
+          get_victim_cl = 1
+        }
+        if ((valid_dirty >> 1) & 1) != 0 {
+          oh#[1] = 1
+          get_victim_cl = oh
+        }
+        if ((valid_dirty >> 2) & 1) != 0 {
+          oh#[2] = 1
+          get_victim_cl = oh
+        }
+        if ((valid_dirty >> 3) & 1) != 0 {
+          oh#[3] = 1
+          get_victim_cl = oh
+        }
+        if ((valid_dirty >> 4) & 1) != 0 {
+          oh#[4] = 1
+          get_victim_cl = oh
+        }
+        if ((valid_dirty >> 5) & 1) != 0 {
+          oh#[5] = 1
+          get_victim_cl = oh
+        }
+        if ((valid_dirty >> 6) & 1) != 0 {
+          oh#[6] = 1
+          get_victim_cl = oh
+        }
+        if ((valid_dirty >> 7) & 1) != 0 {
+          oh#[7] = 1
+          get_victim_cl = oh
+        }
+        evict_way_d = get_victim_cl
+        state_d = 8
+      }
+    }
+    == 8 {
+      req_fsm_miss_valid = 1
+      req_fsm_miss_addr = mshr_q#[72..=127]
+      if gnt_miss_fsm != 0 {
+        state_d = 10
+        miss_gnt_o = ((0 & (~(1 << mshr_q#[130..=131]))) | (1 << mshr_q#[130..=131]))#[0..=3]
+      }
+    }
+    == 10 {
+      cl_offset = ((mshr_q#[72..=127] >> 3) & 1) << 6
+      if valid_miss_fsm != 0 {
+        addr_o = mshr_q#[72..=127]#[0..=11]
+        req_o = evict_way_q
+        we_o = 1
+        `be_o__bpo.tag` = 63
+        `be_o__bpo.data` = 0xffff
+        `be_o__bpo.vldrty` = 0xff
+        `be_o__bpo.vldrty` = evict_way_q
+        `data_o__bpo.tag` = mshr_q#[72..=127]#[12..=55]
+        `data_o__bpo.data` = data_miss_fsm
+        `data_o__bpo.valid` = 1
+        `data_o__bpo.dirty` = 0
+        if ((mshr_q >> 0x80) & 1) != 0 {
+          if (mshr_q#[0..=7] & 1) != 0 {
+            const t555 = (cl_offset + 0)#[0..=31] + 2
+            const t560 = (((`data_o__bpo.tag` << 0x82) | (`data_o__bpo.data` << 2) | 2 | 0) & (~(0xff << t555))) | (mshr_q#[8..=71]#[0..=7] << t555)
+            `data_o__bpo.tag` = t560#[130..=173]
+            `data_o__bpo.data` = t560#[2..=129]
+            `data_o__bpo.valid` = (t560 >> 1) & 1
+            `data_o__bpo.dirty` = t560 & 1
+          }
+          if ((mshr_q#[0..=7] >> 1) & 1) != 0 {
+            const t584 = (cl_offset + 8)#[0..=31] + 2
+            const t589 = (((`data_o__bpo.tag` << 0x82) | (`data_o__bpo.data` << 2) | (`data_o__bpo.valid` << 1) | `data_o__bpo.dirty`) & (~(0xff << t584))) | (mshr_q#[8..=71]#[8..=15] << t584)
+            `data_o__bpo.tag` = t589#[130..=173]
+            `data_o__bpo.data` = t589#[2..=129]
+            `data_o__bpo.valid` = (t589 >> 1) & 1
+            `data_o__bpo.dirty` = t589 & 1
+          }
+          if ((mshr_q#[0..=7] >> 2) & 1) != 0 {
+            const t613 = (cl_offset + 16)#[0..=31] + 2
+            const t618 = (((`data_o__bpo.tag` << 0x82) | (`data_o__bpo.data` << 2) | (`data_o__bpo.valid` << 1) | `data_o__bpo.dirty`) & (~(0xff << t613))) | (mshr_q#[8..=71]#[16..=23] << t613)
+            `data_o__bpo.tag` = t618#[130..=173]
+            `data_o__bpo.data` = t618#[2..=129]
+            `data_o__bpo.valid` = (t618 >> 1) & 1
+            `data_o__bpo.dirty` = t618 & 1
+          }
+          if ((mshr_q#[0..=7] >> 3) & 1) != 0 {
+            const t642 = (cl_offset + 24)#[0..=31] + 2
+            const t647 = (((`data_o__bpo.tag` << 0x82) | (`data_o__bpo.data` << 2) | (`data_o__bpo.valid` << 1) | `data_o__bpo.dirty`) & (~(0xff << t642))) | (mshr_q#[8..=71]#[24..=31] << t642)
+            `data_o__bpo.tag` = t647#[130..=173]
+            `data_o__bpo.data` = t647#[2..=129]
+            `data_o__bpo.valid` = (t647 >> 1) & 1
+            `data_o__bpo.dirty` = t647 & 1
+          }
+          if ((mshr_q#[0..=7] >> 4) & 1) != 0 {
+            const t671 = (cl_offset + 32)#[0..=31] + 2
+            const t676 = (((`data_o__bpo.tag` << 0x82) | (`data_o__bpo.data` << 2) | (`data_o__bpo.valid` << 1) | `data_o__bpo.dirty`) & (~(0xff << t671))) | (mshr_q#[8..=71]#[32..=39] << t671)
+            `data_o__bpo.tag` = t676#[130..=173]
+            `data_o__bpo.data` = t676#[2..=129]
+            `data_o__bpo.valid` = (t676 >> 1) & 1
+            `data_o__bpo.dirty` = t676 & 1
+          }
+          if ((mshr_q#[0..=7] >> 5) & 1) != 0 {
+            const t700 = (cl_offset + 40)#[0..=31] + 2
+            const t705 = (((`data_o__bpo.tag` << 0x82) | (`data_o__bpo.data` << 2) | (`data_o__bpo.valid` << 1) | `data_o__bpo.dirty`) & (~(0xff << t700))) | (mshr_q#[8..=71]#[40..=47] << t700)
+            `data_o__bpo.tag` = t705#[130..=173]
+            `data_o__bpo.data` = t705#[2..=129]
+            `data_o__bpo.valid` = (t705 >> 1) & 1
+            `data_o__bpo.dirty` = t705 & 1
+          }
+          if ((mshr_q#[0..=7] >> 6) & 1) != 0 {
+            const t729 = (cl_offset + 48)#[0..=31] + 2
+            const t734 = (((`data_o__bpo.tag` << 0x82) | (`data_o__bpo.data` << 2) | (`data_o__bpo.valid` << 1) | `data_o__bpo.dirty`) & (~(0xff << t729))) | (mshr_q#[8..=71]#[48..=55] << t729)
+            `data_o__bpo.tag` = t734#[130..=173]
+            `data_o__bpo.data` = t734#[2..=129]
+            `data_o__bpo.valid` = (t734 >> 1) & 1
+            `data_o__bpo.dirty` = t734 & 1
+          }
+          if ((mshr_q#[0..=7] >> 7) & 1) != 0 {
+            const t758 = (cl_offset + 56)#[0..=31] + 2
+            const t763 = (((`data_o__bpo.tag` << 0x82) | (`data_o__bpo.data` << 2) | (`data_o__bpo.valid` << 1) | `data_o__bpo.dirty`) & (~(0xff << t758))) | (mshr_q#[8..=71]#[56..=63] << t758)
+            `data_o__bpo.tag` = t763#[130..=173]
+            `data_o__bpo.data` = t763#[2..=129]
+            `data_o__bpo.valid` = (t763 >> 1) & 1
+            `data_o__bpo.dirty` = t763 & 1
+          }
+          `data_o__bpo.dirty` = 1
+        }
+        `mshr_d.valid` = 0
+        state_d = 0
+      }
+    }
+    in (3, 5) {
+      req_fsm_miss_valid = 1
+      req_fsm_miss_addr = (evict_cl_q#[130..=173] << 12) | (cnt_q#[4..=11] << 4)
+      req_fsm_miss_be = 0xffff
+      req_fsm_miss_we = 1
+      req_fsm_miss_wdata = evict_cl_q#[2..=129]
+      if gnt_miss_fsm != 0 {
+        addr_o = cnt_q
+        req_o = 1
+        we_o = 1
+        _mux_2 = if ariane_pkg.INVALIDATE_ON_FLUSH != 0 { 0 } else { 1 }
+        `data_o__bpo.valid` = _mux_2
+        `be_o__bpo.vldrty` = evict_way_q
+        _mux_3 = if state_q == 5 { 7 } else { 4 }
+        state_d = _mux_3
+      }
+    }
+    == 4 {
+      req_o = 0xff
+      addr_o = cnt_q
+      state_d = 1
+    }
+    == 1 {
+      if evict_way__w8 != 0 {
+        valid_dirty = evict_way__w8
+        oh = 0
+        if (valid_dirty & 1) != 0 {
+          oh = 1
+          oh#[0] = 1
+          get_victim_cl = 1
+        }
+        if ((valid_dirty >> 1) & 1) != 0 {
+          oh#[1] = 1
+          get_victim_cl = oh
+        }
+        if ((valid_dirty >> 2) & 1) != 0 {
+          oh#[2] = 1
+          get_victim_cl = oh
+        }
+        if ((valid_dirty >> 3) & 1) != 0 {
+          oh#[3] = 1
+          get_victim_cl = oh
+        }
+        if ((valid_dirty >> 4) & 1) != 0 {
+          oh#[4] = 1
+          get_victim_cl = oh
+        }
+        if ((valid_dirty >> 5) & 1) != 0 {
+          oh#[5] = 1
+          get_victim_cl = oh
+        }
+        if ((valid_dirty >> 6) & 1) != 0 {
+          oh#[6] = 1
+          get_victim_cl = oh
+        }
+        if ((valid_dirty >> 7) & 1) != 0 {
+          oh#[7] = 1
+          get_victim_cl = oh
+        }
+        evict_way_d = get_victim_cl
+        `in` = 0ub????????
+        `in` = evict_way__w8
+        one_hot_to_bin = if (`in` & 1) != 0 { 0 } else { 0ub??? }
+        if ((`in` >> 1) & 1) != 0 {
+          one_hot_to_bin = 1
+        }
+        if ((`in` >> 2) & 1) != 0 {
+          one_hot_to_bin = 2
+        }
+        if ((`in` >> 3) & 1) != 0 {
+          one_hot_to_bin = 3
+        }
+        if ((`in` >> 4) & 1) != 0 {
+          one_hot_to_bin = 4
+        }
+        if ((`in` >> 5) & 1) != 0 {
+          one_hot_to_bin = 5
+        }
+        if ((`in` >> 6) & 1) != 0 {
+          one_hot_to_bin = 6
+        }
+        if ((`in` >> 7) & 1) != 0 {
+          one_hot_to_bin = 7
+        }
+        `evict_cl_d.tag` = ((data_i << 0xae) >> ((one_hot_to_bin * 0xae) + 0xae))#[0..=173]#[130..=173]
+        `evict_cl_d.data` = ((data_i << 0xae) >> ((one_hot_to_bin * 0xae) + 0xae))#[0..=173]#[2..=129]
+        `evict_cl_d.valid` = (((data_i << 0xae) >> ((one_hot_to_bin * 0xae) + 0xae))#[0..=173] >> 1) & 1
+        `evict_cl_d.dirty` = ((data_i << 0xae) >> ((one_hot_to_bin * 0xae) + 0xae))#[0..=173] & 1
+        state_d = 3
+      } else {
+        cnt_d = (cnt_q + 16)#[0..=11]
+        state_d = 4
+        addr_o = cnt_q
+        req_o = 1
+        _mux_4 = if ariane_pkg.INVALIDATE_ON_FLUSH != 0 { 0xff } else { 0 }
+        `be_o__bpo.vldrty` = _mux_4
+        we_o = 1
+        if cnt_q#[4..=11] == 0xff {
+          flush_ack_o = (~serve_amo_q) & 1
+          if serve_amo_q != 0 {
+            state_d = 12
+            serve_amo_d = 0
+          } else {
+            state_d = 0
+          }
+        }
+      }
+    }
+    == 11 {
+      addr_o = cnt_q
+      req_o = 1
+      we_o = 1
+      `be_o__bpo.vldrty` = 0xff
+      cnt_d = (cnt_q + 16)#[0..=11]
+      if cnt_q#[4..=11] == 0xff {
+        state_d = 0
+      }
+    }
+    == 12 {
+      `amo_bypass_req.req` = 1
+      `amo_bypass_req.reqtype` = ariane_pkg.SINGLE_REQ & 1
+      `amo_bypass_req.amo` = amo_req_i.amo_op#[0..=3]
+      `amo_bypass_req.addr` = amo_req_i.operand_a#[0..=63]
+      if amo_req_i.amo_op != ariane_pkg.AMO_LR {
+        `amo_bypass_req.we` = 1
+      }
+      `amo_bypass_req.size` = amo_req_i.size#[0..=1]
+      amo_operand_b = if amo_req_i.amo_op == ariane_pkg.AMO_AND { (~amo_req_i.operand_b)#[0..=63] } else { amo_req_i.operand_b }
+      `amo_bypass_req.wdata` = amo_operand_b
+      if amo_req_i.size == 3 {
+        `amo_bypass_req.be` = 0xff
+      } elif amo_req_i.operand_a#[0..=2] == 0 {
+        `amo_bypass_req.be` = 15
+      } else {
+        `amo_bypass_req.be` = 0xf0
+        `amo_bypass_req.wdata` = amo_operand_b#[0..=31] << 32
+      }
+      if amo_bypass_rsp.gnt != 0 {
+        if amo_bypass_rsp.valid != 0 {
+          state_d = 0
+          `amo_resp_o__bpo.ack` = 1
+          `amo_resp_o__bpo.result` = amo_bypass_rsp.rdata
+        } else {
+          state_d = 13
+        }
+      }
+    }
+    == 13 {
+      if amo_bypass_rsp.valid != 0 {
+        state_d = 0
+        `amo_resp_o__bpo.ack` = 1
+        if amo_req_i.size == 2 {
+          halfword = if amo_req_i.operand_a#[0..=2] == 0 { amo_bypass_rsp.rdata#[0..=31] } else { amo_bypass_rsp.rdata#[32..=63] }
+          `amo_resp_o__bpo.result` = halfword#sext[0..=31]#[0..=63]
+        } else {
+          `amo_resp_o__bpo.result` = amo_bypass_rsp.rdata
+        }
+      }
+    }
+    else {
+    }
+  }
+  if rst_ni != 0 {
+    mshr_q = (`mshr_d.id` << 0x82) | (`mshr_d.valid` << 0x81) | (`mshr_d.we` << 0x80) | (`mshr_d.addr` << 0x48) | (`mshr_d.wdata` << 8) | `mshr_d.be`
+    state_q = state_d
+    cnt_q = cnt_d
+    evict_way_q = evict_way_d
+    evict_cl_q = (`evict_cl_d.tag` << 0x82) | (`evict_cl_d.data` << 2) | (`evict_cl_d.valid` << 1) | `evict_cl_d.dirty`
+    serve_amo_q = serve_amo_d
+  }
+  mut bypass_ports_req__w1 = bypass_ports_req
+  bypass_ports_req__w1#[148] = miss_req_valid__w4 & 1 & miss_req_bypass__w4 & 1 & 1
+  mut bypass_ports_req__w2 = bypass_ports_req__w1
+  bypass_ports_req__w2#[147] = ariane_pkg.SINGLE_REQ & 1
+  mut bypass_ports_req__w3 = bypass_ports_req__w2
+  bypass_ports_req__w3#[143..=146] = ariane_pkg.AMO_NONE#[0..=3]
+  mut bypass_ports_req__w4 = bypass_ports_req__w3
+  bypass_ports_req__w4#[139..=142] = 8
+  mut bypass_ports_req__w5 = bypass_ports_req__w4
+  bypass_ports_req__w5#[75..=138] = miss_req_addr__w4#[0..=63]
+  mut bypass_ports_req__w6 = bypass_ports_req__w5
+  bypass_ports_req__w6#[11..=74] = miss_req_wdata__w4#[0..=63]
+  mut bypass_ports_req__w7 = bypass_ports_req__w6
+  bypass_ports_req__w7#[10] = miss_req_we__w4 & 1
+  mut bypass_ports_req__w8 = bypass_ports_req__w7
+  bypass_ports_req__w8#[2..=9] = miss_req_be__w4#[0..=7]
+  mut bypass_ports_req__w9 = bypass_ports_req__w8
+  bypass_ports_req__w9#[0..=1] = miss_req_size__w4#[0..=1]
+  mut bypass_gnt_o__w1 = bypass_gnt_o
+  bypass_gnt_o__w1#[0] = (bypass_ports_rsp#[0..=65] >> 0x41) & 1
+  mut bypass_valid_o__w1 = bypass_valid_o
+  bypass_valid_o__w1#[0] = (bypass_ports_rsp#[0..=65] >> 0x40) & 1
+  mut bypass_data_o__w1 = bypass_data_o
+  bypass_data_o__w1#[0..=63] = bypass_ports_rsp#[0..=65]#[0..=63]
+  mut bypass_ports_req__w10 = bypass_ports_req__w9
+  bypass_ports_req__w10#[297] = (miss_req_valid__w4 >> 1) & 1 & (miss_req_bypass__w4 >> 1) & 1 & 1
+  mut bypass_ports_req__w11 = bypass_ports_req__w10
+  bypass_ports_req__w11#[296] = ariane_pkg.SINGLE_REQ & 1
+  mut bypass_ports_req__w12 = bypass_ports_req__w11
+  bypass_ports_req__w12#[292..=295] = ariane_pkg.AMO_NONE#[0..=3]
+  mut bypass_ports_req__w13 = bypass_ports_req__w12
+  bypass_ports_req__w13#[288..=291] = 9
+  mut bypass_ports_req__w14 = bypass_ports_req__w13
+  bypass_ports_req__w14#[224..=287] = miss_req_addr__w4#[64..=127]
+  mut bypass_ports_req__w15 = bypass_ports_req__w14
+  bypass_ports_req__w15#[160..=223] = miss_req_wdata__w4#[64..=127]
+  mut bypass_ports_req__w16 = bypass_ports_req__w15
+  bypass_ports_req__w16#[159] = (miss_req_we__w4 >> 1) & 1
+  mut bypass_ports_req__w17 = bypass_ports_req__w16
+  bypass_ports_req__w17#[151..=158] = miss_req_be__w4#[8..=15]
+  mut bypass_ports_req__w18 = bypass_ports_req__w17
+  bypass_ports_req__w18#[149..=150] = miss_req_size__w4#[2..=3]
+  mut bypass_gnt_o__w2 = bypass_gnt_o__w1
+  bypass_gnt_o__w2#[1] = (bypass_ports_rsp#[66..=131] >> 0x41) & 1
+  mut bypass_valid_o__w2 = bypass_valid_o__w1
+  bypass_valid_o__w2#[1] = (bypass_ports_rsp#[66..=131] >> 0x40) & 1
+  mut bypass_data_o__w2 = bypass_data_o__w1
+  bypass_data_o__w2#[64..=127] = bypass_ports_rsp#[66..=131]#[0..=63]
+  mut bypass_ports_req__w19 = bypass_ports_req__w18
+  bypass_ports_req__w19#[446] = (miss_req_valid__w4 >> 2) & 1 & (miss_req_bypass__w4 >> 2) & 1 & 1
+  mut bypass_ports_req__w20 = bypass_ports_req__w19
+  bypass_ports_req__w20#[445] = ariane_pkg.SINGLE_REQ & 1
+  mut bypass_ports_req__w21 = bypass_ports_req__w20
+  bypass_ports_req__w21#[441..=444] = ariane_pkg.AMO_NONE#[0..=3]
+  mut bypass_ports_req__w22 = bypass_ports_req__w21
+  bypass_ports_req__w22#[437..=440] = 10
+  mut bypass_ports_req__w23 = bypass_ports_req__w22
+  bypass_ports_req__w23#[373..=436] = miss_req_addr__w4#[128..=191]
+  mut bypass_ports_req__w24 = bypass_ports_req__w23
+  bypass_ports_req__w24#[309..=372] = miss_req_wdata__w4#[128..=191]
+  mut bypass_ports_req__w25 = bypass_ports_req__w24
+  bypass_ports_req__w25#[308] = (miss_req_we__w4 >> 2) & 1
+  mut bypass_ports_req__w26 = bypass_ports_req__w25
+  bypass_ports_req__w26#[300..=307] = miss_req_be__w4#[16..=23]
+  mut bypass_ports_req__w27 = bypass_ports_req__w26
+  bypass_ports_req__w27#[298..=299] = miss_req_size__w4#[4..=5]
+  mut bypass_gnt_o__w3 = bypass_gnt_o__w2
+  bypass_gnt_o__w3#[2] = (bypass_ports_rsp#[132..=197] >> 0x41) & 1
+  mut bypass_valid_o__w3 = bypass_valid_o__w2
+  bypass_valid_o__w3#[2] = (bypass_ports_rsp#[132..=197] >> 0x40) & 1
+  mut bypass_data_o__w3 = bypass_data_o__w2
+  bypass_data_o__w3#[128..=191] = bypass_ports_rsp#[132..=197]#[0..=63]
+  mut bypass_ports_req__w28 = bypass_ports_req__w27
+  bypass_ports_req__w28#[595] = (miss_req_valid__w4 >> 3) & 1 & (miss_req_bypass__w4 >> 3) & 1 & 1
+  mut bypass_ports_req__w29 = bypass_ports_req__w28
+  bypass_ports_req__w29#[594] = ariane_pkg.SINGLE_REQ & 1
+  mut bypass_ports_req__w30 = bypass_ports_req__w29
+  bypass_ports_req__w30#[590..=593] = ariane_pkg.AMO_NONE#[0..=3]
+  mut bypass_ports_req__w31 = bypass_ports_req__w30
+  bypass_ports_req__w31#[586..=589] = 11
+  mut bypass_ports_req__w32 = bypass_ports_req__w31
+  bypass_ports_req__w32#[522..=585] = miss_req_addr__w4#[192..=255]
+  mut bypass_ports_req__w33 = bypass_ports_req__w32
+  bypass_ports_req__w33#[458..=521] = miss_req_wdata__w4#[192..=255]
+  mut bypass_ports_req__w34 = bypass_ports_req__w33
+  bypass_ports_req__w34#[457] = (miss_req_we__w4 >> 3) & 1
+  mut bypass_ports_req__w35 = bypass_ports_req__w34
+  bypass_ports_req__w35#[449..=456] = miss_req_be__w4#[24..=31]
+  mut bypass_ports_req__w36 = bypass_ports_req__w35
+  bypass_ports_req__w36#[447..=448] = miss_req_size__w4#[6..=7]
+  mut bypass_gnt_o__w4 = bypass_gnt_o__w3
+  bypass_gnt_o__w4#[3] = (bypass_ports_rsp#[198..=263] >> 0x41) & 1
+  mut bypass_valid_o__w4 = bypass_valid_o__w3
+  bypass_valid_o__w4#[3] = (bypass_ports_rsp#[198..=263] >> 0x40) & 1
+  mut bypass_data_o__w4 = bypass_data_o__w3
+  bypass_data_o__w4#[192..=255] = bypass_ports_rsp#[198..=263]#[0..=63]
+  const t1032 = bypass_ports_req__w36 & (-0x1fffffffffffffffffffffffffffffffffffff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001)
+  const t1034 = t1032 | (((`amo_bypass_req.req` << 0x94) | (`amo_bypass_req.reqtype` << 0x93) | (`amo_bypass_req.amo` << 0x8f) | 0x600000000000000000000000000000000000 | (`amo_bypass_req.addr` << 0x4b) | (`amo_bypass_req.wdata` << 11) | (`amo_bypass_req.we` << 10) | (`amo_bypass_req.be` << 2) | `amo_bypass_req.size`)#[0..=148] << 0x254)
+  const t1035 = t1034#[0..=744]
+  const bypass_ports_req__w37 = t1035
+  amo_bypass_rsp.gnt = (((bypass_ports_rsp << 0x42) >> 0x14a)#[0..=65] >> 0x41) & 1
+  amo_bypass_rsp.valid = (((bypass_ports_rsp << 0x42) >> 0x14a)#[0..=65] >> 0x40) & 1
+  amo_bypass_rsp.rdata = ((bypass_ports_rsp << 0x42) >> 0x14a)#[0..=65]#[0..=63]
+  mut i_bypass_arbiter = axi_adapter_arbiter::[name=i_bypass_arbiter](clk_i = clk_i, rst_ni = rst_ni, req_i = bypass_ports_req__w37, `rsp_i.gnt` = `bypass_adapter_rsp.gnt`, `rsp_i.valid` = `bypass_adapter_rsp.valid`, `rsp_i.rdata` = `bypass_adapter_rsp.rdata`)
+  bypass_ports_rsp = i_bypass_arbiter.rsp_o
+  mut i_bypass_axi_adapter = axi_adapter::[name=i_bypass_axi_adapter](clk_i = clk_i, rst_ni = rst_ni, req_i = i_bypass_arbiter.req_o.req, type_i = i_bypass_arbiter.req_o.reqtype, amo_i = i_bypass_arbiter.req_o.amo, addr_i = i_bypass_arbiter.req_o.addr, we_i = i_bypass_arbiter.req_o.we, wdata_i = i_bypass_arbiter.req_o.wdata, be_i = i_bypass_arbiter.req_o.be, size_i = i_bypass_arbiter.req_o.size, id_i = i_bypass_arbiter.req_o.id#[0..=3], `axi_resp_i.aw_ready` = axi_bypass_i.aw_ready, `axi_resp_i.ar_ready` = axi_bypass_i.ar_ready, `axi_resp_i.w_ready` = axi_bypass_i.w_ready, `axi_resp_i.b_valid` = axi_bypass_i.b_valid, `axi_resp_i.b.id` = axi_bypass_i.b.id, `axi_resp_i.b.resp` = axi_bypass_i.b.resp, `axi_resp_i.b.user` = axi_bypass_i.b.user, `axi_resp_i.r_valid` = axi_bypass_i.r_valid, `axi_resp_i.r.id` = axi_bypass_i.r.id, `axi_resp_i.r.data` = axi_bypass_i.r.data, `axi_resp_i.r.resp` = axi_bypass_i.r.resp, `axi_resp_i.r.last` = axi_bypass_i.r.last, `axi_resp_i.r.user` = axi_bypass_i.r.user)
+  `bypass_adapter_rsp.gnt` = i_bypass_axi_adapter.gnt_o & 1
+  `bypass_adapter_rsp.valid` = i_bypass_axi_adapter.valid_o & 1
+  `bypass_adapter_rsp.rdata` = i_bypass_axi_adapter.rdata_o#[0..=63]
+  mut i_miss_axi_adapter = axi_adapter_p1::[name=i_miss_axi_adapter](clk_i = clk_i, rst_ni = rst_ni, req_i = req_fsm_miss_valid, type_i = ariane_pkg.CACHE_LINE_REQ, amo_i = ariane_pkg.AMO_NONE, addr_i = req_fsm_miss_addr, we_i = req_fsm_miss_we, wdata_i = req_fsm_miss_wdata, be_i = req_fsm_miss_be, size_i = 3, id_i = 7, `axi_resp_i.aw_ready` = axi_data_i.aw_ready, `axi_resp_i.ar_ready` = axi_data_i.ar_ready, `axi_resp_i.w_ready` = axi_data_i.w_ready, `axi_resp_i.b_valid` = axi_data_i.b_valid, `axi_resp_i.b.id` = axi_data_i.b.id, `axi_resp_i.b.resp` = axi_data_i.b.resp, `axi_resp_i.b.user` = axi_data_i.b.user, `axi_resp_i.r_valid` = axi_data_i.r_valid, `axi_resp_i.r.id` = axi_data_i.r.id, `axi_resp_i.r.data` = axi_data_i.r.data, `axi_resp_i.r.resp` = axi_data_i.r.resp, `axi_resp_i.r.last` = axi_data_i.r.last, `axi_resp_i.r.user` = axi_data_i.r.user)
+  gnt_miss_fsm = i_miss_axi_adapter.gnt_o
+  valid_miss_fsm = i_miss_axi_adapter.valid_o
+  data_miss_fsm = i_miss_axi_adapter.rdata_o
+  mut i_lfsr = lfsr_8bit::[name=i_lfsr](clk_i = clk_i, rst_ni = rst_ni, en_i = lfsr_enable)
+  lfsr_oh = i_lfsr.refill_way_oh
+  lfsr_bin = i_lfsr.refill_way_bin
+  axi_bypass_o.aw.id = i_bypass_axi_adapter.axi_req_o.aw.id
+  axi_bypass_o.aw.addr = i_bypass_axi_adapter.axi_req_o.aw.addr
+  axi_bypass_o.aw.len = i_bypass_axi_adapter.axi_req_o.aw.len
+  axi_bypass_o.aw.size = i_bypass_axi_adapter.axi_req_o.aw.size
+  axi_bypass_o.aw.burst = i_bypass_axi_adapter.axi_req_o.aw.burst
+  axi_bypass_o.aw.lock = i_bypass_axi_adapter.axi_req_o.aw.lock
+  axi_bypass_o.aw.cache = i_bypass_axi_adapter.axi_req_o.aw.cache
+  axi_bypass_o.aw.prot = i_bypass_axi_adapter.axi_req_o.aw.prot
+  axi_bypass_o.aw.qos = i_bypass_axi_adapter.axi_req_o.aw.qos
+  axi_bypass_o.aw.region = i_bypass_axi_adapter.axi_req_o.aw.region
+  axi_bypass_o.aw.atop = i_bypass_axi_adapter.axi_req_o.aw.atop
+  axi_bypass_o.aw.user = i_bypass_axi_adapter.axi_req_o.aw.user
+  axi_bypass_o.aw_valid = i_bypass_axi_adapter.axi_req_o.aw_valid
+  axi_bypass_o.w.data = i_bypass_axi_adapter.axi_req_o.w.data
+  axi_bypass_o.w.strb = i_bypass_axi_adapter.axi_req_o.w.strb
+  axi_bypass_o.w.last = i_bypass_axi_adapter.axi_req_o.w.last
+  axi_bypass_o.w.user = i_bypass_axi_adapter.axi_req_o.w.user
+  axi_bypass_o.w_valid = i_bypass_axi_adapter.axi_req_o.w_valid
+  axi_bypass_o.b_ready = i_bypass_axi_adapter.axi_req_o.b_ready
+  axi_bypass_o.ar.id = i_bypass_axi_adapter.axi_req_o.ar.id
+  axi_bypass_o.ar.addr = i_bypass_axi_adapter.axi_req_o.ar.addr
+  axi_bypass_o.ar.len = i_bypass_axi_adapter.axi_req_o.ar.len
+  axi_bypass_o.ar.size = i_bypass_axi_adapter.axi_req_o.ar.size
+  axi_bypass_o.ar.burst = i_bypass_axi_adapter.axi_req_o.ar.burst
+  axi_bypass_o.ar.lock = i_bypass_axi_adapter.axi_req_o.ar.lock
+  axi_bypass_o.ar.cache = i_bypass_axi_adapter.axi_req_o.ar.cache
+  axi_bypass_o.ar.prot = i_bypass_axi_adapter.axi_req_o.ar.prot
+  axi_bypass_o.ar.qos = i_bypass_axi_adapter.axi_req_o.ar.qos
+  axi_bypass_o.ar.region = i_bypass_axi_adapter.axi_req_o.ar.region
+  axi_bypass_o.ar.user = i_bypass_axi_adapter.axi_req_o.ar.user
+  axi_bypass_o.ar_valid = i_bypass_axi_adapter.axi_req_o.ar_valid
+  axi_bypass_o.r_ready = i_bypass_axi_adapter.axi_req_o.r_ready
+  axi_data_o.aw.id = i_miss_axi_adapter.axi_req_o.aw.id
+  axi_data_o.aw.addr = i_miss_axi_adapter.axi_req_o.aw.addr
+  axi_data_o.aw.len = i_miss_axi_adapter.axi_req_o.aw.len
+  axi_data_o.aw.size = i_miss_axi_adapter.axi_req_o.aw.size
+  axi_data_o.aw.burst = i_miss_axi_adapter.axi_req_o.aw.burst
+  axi_data_o.aw.lock = i_miss_axi_adapter.axi_req_o.aw.lock
+  axi_data_o.aw.cache = i_miss_axi_adapter.axi_req_o.aw.cache
+  axi_data_o.aw.prot = i_miss_axi_adapter.axi_req_o.aw.prot
+  axi_data_o.aw.qos = i_miss_axi_adapter.axi_req_o.aw.qos
+  axi_data_o.aw.region = i_miss_axi_adapter.axi_req_o.aw.region
+  axi_data_o.aw.atop = i_miss_axi_adapter.axi_req_o.aw.atop
+  axi_data_o.aw.user = i_miss_axi_adapter.axi_req_o.aw.user
+  axi_data_o.aw_valid = i_miss_axi_adapter.axi_req_o.aw_valid
+  axi_data_o.w.data = i_miss_axi_adapter.axi_req_o.w.data
+  axi_data_o.w.strb = i_miss_axi_adapter.axi_req_o.w.strb
+  axi_data_o.w.last = i_miss_axi_adapter.axi_req_o.w.last
+  axi_data_o.w.user = i_miss_axi_adapter.axi_req_o.w.user
+  axi_data_o.w_valid = i_miss_axi_adapter.axi_req_o.w_valid
+  axi_data_o.b_ready = i_miss_axi_adapter.axi_req_o.b_ready
+  axi_data_o.ar.id = i_miss_axi_adapter.axi_req_o.ar.id
+  axi_data_o.ar.addr = i_miss_axi_adapter.axi_req_o.ar.addr
+  axi_data_o.ar.len = i_miss_axi_adapter.axi_req_o.ar.len
+  axi_data_o.ar.size = i_miss_axi_adapter.axi_req_o.ar.size
+  axi_data_o.ar.burst = i_miss_axi_adapter.axi_req_o.ar.burst
+  axi_data_o.ar.lock = i_miss_axi_adapter.axi_req_o.ar.lock
+  axi_data_o.ar.cache = i_miss_axi_adapter.axi_req_o.ar.cache
+  axi_data_o.ar.prot = i_miss_axi_adapter.axi_req_o.ar.prot
+  axi_data_o.ar.qos = i_miss_axi_adapter.axi_req_o.ar.qos
+  axi_data_o.ar.region = i_miss_axi_adapter.axi_req_o.ar.region
+  axi_data_o.ar.user = i_miss_axi_adapter.axi_req_o.ar.user
+  axi_data_o.ar_valid = i_miss_axi_adapter.axi_req_o.ar_valid
+  axi_data_o.r_ready = i_miss_axi_adapter.axi_req_o.r_ready
+  amo_resp_o.ack = `amo_resp_o__bpo.ack`
+  amo_resp_o.result = `amo_resp_o__bpo.result`
+  data_o.tag = `data_o__bpo.tag`
+  data_o.data = `data_o__bpo.data`
+  data_o.valid = `data_o__bpo.valid`
+  data_o.dirty = `data_o__bpo.dirty`
+  be_o.tag = `be_o__bpo.tag`
+  be_o.data = `be_o__bpo.data`
+  be_o.vldrty = `be_o__bpo.vldrty`
+  bypass_gnt_o = bypass_gnt_o__w4
+  bypass_valid_o = bypass_valid_o__w4
+  bypass_data_o = bypass_data_o__w4
+  active_serving_o = active_serving_o__w2
+  critical_word_o = i_miss_axi_adapter.critical_word_o
+  critical_word_valid_o = i_miss_axi_adapter.critical_word_valid_o
+}

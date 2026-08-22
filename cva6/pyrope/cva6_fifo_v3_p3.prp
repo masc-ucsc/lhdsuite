@@ -1,0 +1,77 @@
+pub mod cva6_fifo_v3_p3::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, testmode_i:u1, data_i:u2, push_i:u1, pop_i:u1) -> (full_o:u1@[], empty_o:u1@[], usage_o:u2@[], data_o:u2@[]) {
+  mut _mux_4:u2 = 0
+  reg read_pointer_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg write_pointer_q:u2:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg status_cnt_q:u3:[init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg mem_q:[4]u2:[ordering="old", init=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  reg data_ft_q:u2:[clock_pin=ref clk_i]
+  reg first_word_q:u1:[clock_pin=ref clk_i]
+  mut gate_clock:u1 = 0
+  mut status_cnt_n:u3 = 0
+  mut mem_n:u8 = 0
+  gate_clock = 0ub?
+  mut read_pointer_n:u2 = 0sb?
+  mut write_pointer_n:u2 = 0sb?
+  status_cnt_n = 0sb?
+  mem_n = 0sb?
+  data_o = 0sb?
+  const usage_o__w1 = status_cnt_q#[0..=1]
+  const full_o__w1 = unsigned(status_cnt_q == 4)
+  const empty_o__w1 = unsigned(status_cnt_q == 0) & (~(1 & push_i & 1)) & 1 & 1
+  {
+    _mux_4 = mem_q[read_pointer_q]
+    data_o = _mux_4
+    mem_n = mem_q
+    gate_clock = 1
+  }
+  write_pointer_n = write_pointer_q
+  status_cnt_n = status_cnt_q
+  if (push_i != 0) and (((~full_o__w1) & 1) != 0) {
+    {
+      const t31 = write_pointer_q * 2
+      mem_n = ((mem_n & (~(3 << t31))) | (data_i << t31))#[0..=7]
+      gate_clock = 0
+    }
+    write_pointer_n = if write_pointer_q == 0xffffffff { 0 } else { (write_pointer_q + 1)#[0..=1] }
+    status_cnt_n = (status_cnt_q + 1)#[0..=2]
+  }
+  read_pointer_n = read_pointer_q
+  if (pop_i != 0) and (((~empty_o__w1) & 1) != 0) {
+    read_pointer_n = if read_pointer_n == 0xffffffff { 0 } else { (read_pointer_q + 1)#[0..=1] }
+    status_cnt_n = (status_cnt_q - 1)#[0..=31]#[0..=2]
+  }
+  if (push_i != 0) and (pop_i != 0) and (((~full_o__w1) & 1) != 0) and (((~empty_o__w1) & 1) != 0) {
+    status_cnt_n = status_cnt_q
+  }
+  if true and (status_cnt_q == 0) and (push_i != 0) {
+    {
+      data_o = data_i
+    }
+    if pop_i != 0 {
+      status_cnt_n = status_cnt_q
+      read_pointer_n = read_pointer_q
+      write_pointer_n = write_pointer_q
+    }
+  }
+  {
+  }
+  if rst_ni != 0 {
+    if flush_i != 0 {
+      read_pointer_q = 0
+      write_pointer_q = 0
+      status_cnt_q = 0
+    } else {
+      read_pointer_q = read_pointer_n
+      write_pointer_q = write_pointer_n
+      status_cnt_q = status_cnt_n
+    }
+  }
+  if rst_ni != 0 {
+    if gate_clock == 0 {
+      mem_q = mem_n
+    }
+  }
+  full_o = full_o__w1
+  empty_o = empty_o__w1
+  usage_o = usage_o__w1
+}
