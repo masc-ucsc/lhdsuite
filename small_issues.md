@@ -124,32 +124,6 @@ escalates, so the defect only shows when the block is the top.
 
 ---
 
-## 3. `--reader slang` cannot order a generate-loop reduction tree
-
-**Blocks:** `genprp_minion` at step 1. Pre-existing, not a xiangshan issue —
-surfaced here only because the `genprp.sh` fixes made the target report its
-verdict instead of silently passing.
-
-```
---reader slang cannot order the drivers of 'rr16_f6a_h': a driver reads that
-net and also writes it, before any driver has written it, so the read takes the
-net's undefined initial value    (minion/verilog/txfma_f6.sv:219)
-```
-
-lhd's own hint names the pattern (`common_cells lzc.sv` / `rr_arb_tree.sv`) and
-offers `--reader yosys-slang` as a workaround. minion never reaches lec, so the
-older note claiming it "proves 162/171 defs then REFUTES at `prim_rst_sync`" is
-stale — corrected in `verif/BUILD` and the README table.
-
-```bash
-lhd compile verilog --top minion_top --emit-dir pyrope:gen --workdir /tmp/w \
-    -- -F minion/verilog/filelist.f -DSYNTHESIS \
-       --relax-enum-conversions --allow-use-before-declare
-# exit 7 in ~0.4s, {"code":"unsupported-driver-order"}
-```
-
----
-
 ## 4. Word-level cycle on the VERILOG side (`ref encode failed`)
 
 **Not wired as a target on purpose** — the cycle is in the reference, so this is

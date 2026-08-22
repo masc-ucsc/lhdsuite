@@ -56,10 +56,18 @@ Every core shares one shape (`<core>/` = `dino/`, `minion/` or `cva6/`):
   test's scratch dir and LECs the two, which is the only thing that polices
   `pass.prp_writer` (the checked-in `<core>/pyrope/` trees are never
   re-derived). Per-core targets come from `CORES`; the xiangshan ones do NOT —
-  `//xiangshan/Backend` is one 1088-module tree, so `verif/BUILD` keeps a plain
-  `_XS_TOPS` list of MODULE names and each target selects its own `--top`. A
-  CORES entry there would spawn the whole bench scenario matrix for something
-  that only needs a top name.
+  `//xiangshan/Backend` is one 1088-module tree, so `verif/BUILD` keeps an
+  `_XS_TOPS` list of `(target suffix, MODULE)` pairs and each target selects its
+  own `--top`. `pkg` and `v_flags` are identical for every module in that tree,
+  so a CORES lookup would buy only a second spelling, and a NEW CORES entry
+  would spawn the whole bench scenario matrix for something that only needs a
+  top name. Where a module IS already a bench core the suffix reuses that CORES
+  key, so `//verif:genprp_xs_alu`, `//verif:v2v_xs_alu` and `//bench:xs_alu_*`
+  all name one module; every xs target carries both a `core_xs` tag and its own
+  `core_<suffix>` one. `v2v` is the longer round trip — Verilog -> generated
+  Pyrope -> generated Verilog, checked back against the ORIGINAL Verilog, with
+  `v2v_run_<core>` `sh_binary` twins for the tops that outlast the test
+  runner's wall clock.
 
 ## Conventions
 
