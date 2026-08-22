@@ -335,7 +335,11 @@ find_verilator() {
 }
 
 # abc_incr_counts RESULT_JSON — echo "hits misses hit_ms miss_ms store_failed"
-# from the pass.abc incremental report (or "MISSING" when it has none).
+# from the abc incremental report (or "MISSING" when the region cache did not
+# run). Read from the envelope's `incremental.abc` member first — the ONE place
+# `lhd synth` and `lhd pass abc` both report every reuse tier (enabled=false
+# there is an honest cold map, not a missing report) — and only then from the
+# pass's own qor object, for an envelope written by an older lhd.
 #
 # The counts alone are NOT a speedup measure: minion once reported 199 hits of
 # 264 regions and saved 2% of the runtime, because the regions that missed held
@@ -363,14 +367,52 @@ try:
 except Exception:
     print("MISSING")
     raise SystemExit
-inc = find(d, "incremental")
-if not isinstance(inc, dict):
+tier = (d.get("incremental") or {}).get("abc") if isinstance(d, dict) else None
+if isinstance(tier, dict):
+    if not tier.get("enabled", False):
+        print("MISSING")
+        raise SystemExit
+    print(tier["hits"], tier["misses"], round(tier.get("hit_ms", 0)), round(tier.get("miss_ms", 0)),
+          tier.get("store_failed", 0))
+    raise SystemExit
+inc = find(d.get("qor", d) if isinstance(d, dict) else d, "incremental")
+if not isinstance(inc, dict) or "hits" not in inc:
     print("MISSING")
     raise SystemExit
 regions = find(d, "regions")
 regions = regions if isinstance(regions, list) else []
 failed = sum(1 for r in regions if r.get("cache") == "store-failed")
 print(inc["hits"], inc["misses"], round(inc.get("hit_ms", 0)), round(inc.get("miss_ms", 0)), failed)
+PY
+}
+
+# synth_phase_ms RESULT_JSON — echo "compile color abc sta" (ms, integers) from
+# an `lhd synth` envelope's `phases`: the three synth passes by name, and
+# `compile` = every other phase (front end, recipe, run_id, library saves).
+# Duplicate phase names are summed, as the envelope's contract says.
+synth_phase_ms() {
+  python3 - "$1" <<'PY'
+import json, sys
+by = {}
+try:
+    for p in json.load(open(sys.argv[1])).get("phases", []):
+        by[p["name"]] = by.get(p["name"], 0.0) + float(p["ms"])
+except Exception:
+    pass
+color, abc, sta = by.pop("pass.color", 0.0), by.pop("pass.abc", 0.0), by.pop("pass.opentimer", 0.0)
+print(round(sum(by.values())), round(color), round(abc), round(sta))
+PY
+}
+
+# compile_incr_field RESULT_JSON KEY — one counter of the envelope's
+# `incremental.compile` tier ("" when the run had no user --workdir).
+compile_incr_field() {
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+try:
+    print(json.load(open(sys.argv[1]))["incremental"]["compile"][sys.argv[2]])
+except Exception:
+    print("")
 PY
 }
 
@@ -485,6 +527,18 @@ require_tech_dir() {
   # Resolve the PDK from ciel every time.  In particular, do not trust an
   # inherited HAGENT_TECH_DIR: it can silently pin a benchmark to an older
   # library after `ciel enable` moves on.
+  # ciel is host state like verilator (find_verilator): bazel's sanitized test
+  # PATH does not carry /opt/homebrew/bin or pip's user bin, so probe the usual
+  # install prefixes before giving up.
+  if ! command -v ciel >/dev/null 2>&1; then
+    local prefix
+    for prefix in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" "$HOME/Library/Python/3.9/bin"; do
+      if [ -x "$prefix/ciel" ]; then
+        PATH="$prefix:$PATH"
+        break
+      fi
+    done
+  fi
   command -v ciel >/dev/null 2>&1 || {
     echo "FAIL: synthesis benchmarks require 'ciel' on PATH (see README.md)" >&2
     return 1
@@ -495,7 +549,10 @@ require_tech_dir() {
     echo "FAIL: could not enumerate installed sky130 versions with ciel" >&2
     return 1
   }
-  hashes=$(python3 -c 'import json,sys; print("\\n".join(json.loads(sys.stdin.read())))' <<<"$installed_json") || {
+  # ("\n", not "\\n": inside the single quotes python must see a real newline
+  # escape — the doubled form joined two installed hashes into ONE line, so a
+  # two-version install looked like a single bogus version.)
+  hashes=$(python3 -c 'import json,sys; print("\n".join(json.loads(sys.stdin.read())))' <<<"$installed_json") || {
     echo "FAIL: ciel returned an invalid installed-version list: $installed_json" >&2
     return 1
   }
@@ -518,18 +575,44 @@ require_tech_dir() {
     # `ciel ls` deliberately emits dates only to a tty.  Give it a small pty
     # and parse the rendered YYYY.MM.DD values; this is portable across the
     # GNU/BSD variants of the external `script` utility.
+    #
+    # The read loop polls with select() and reaps the child with WNOHANG: on
+    # macOS a blocking read() of the pty master does NOT fail with EIO once
+    # the child has exited (Linux does), it blocks forever -- which is exactly
+    # what every synth target did the first time two sky130 versions were
+    # installed on a Mac.
     rendered=$(python3 - <<'PY'
-import os, pty, sys
+import os, pty, select, sys, time
 pid, fd = pty.fork()
 if pid == 0:
     os.execvp("ciel", ["ciel", "ls", "--pdk-family", "sky130"])
 chunks = []
-while True:
-    try:
-        chunks.append(os.read(fd, 65536))
-    except OSError:
-        break
-_, status = os.waitpid(pid, 0)
+status = None
+deadline = time.monotonic() + 120.0
+while time.monotonic() < deadline:
+    if status is None:
+        wpid, st = os.waitpid(pid, os.WNOHANG)
+        if wpid == pid:
+            status = st
+    ready, _, _ = select.select([fd], [], [], 0.2)
+    if ready:
+        try:
+            data = os.read(fd, 65536)
+        except OSError:
+            data = b""
+        if data:
+            chunks.append(data)
+            continue
+        if status is not None:
+            break  # EOF after the child exited: fully drained
+        time.sleep(0.05)  # readable-but-empty while the child lives: a pty hiccup, not EOF
+        continue
+    if status is not None:
+        break  # child gone and nothing left to drain
+if status is None:
+    os.kill(pid, 9)
+    _, status = os.waitpid(pid, 0)
+os.close(fd)
 sys.stdout.buffer.write(b"".join(chunks))
 raise SystemExit(os.waitstatus_to_exitcode(status))
 PY
@@ -539,8 +622,10 @@ PY
     }
     dates=$(python3 -c '
 import re,sys
-s=re.sub(r"\\x1b\\[[0-9;]*m", "", sys.stdin.read())
-for h,d in re.findall(r"([0-9a-f]{7,64})\\s+\\((\\d{4}\\.\\d{2}\\.\\d{2})\\)", s):
+# single backslashes: this is a single-quoted bash string, so python sees
+# exactly what is written here (\\s would be a literal backslash + s)
+s=re.sub(r"\x1b\[[0-9;]*m", "", sys.stdin.read())
+for h,d in re.findall(r"([0-9a-f]{7,64})\s+\((\d{4}\.\d{2}\.\d{2})\)", s):
     print(d, h)
 ' <<<"$rendered")
     [ "$(printf '%s\n' "$dates" | grep -c . || true)" -eq "$count" ] || {

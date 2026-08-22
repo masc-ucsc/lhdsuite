@@ -44,7 +44,7 @@ verilog)
   ;;
 pyrope)
   run_timed compile_pyrope lhd compile "$CORE_P_DIR/$CORE_TOP.prp" \
-    "${P_STUBS[@]}" \
+    ${P_STUBS[@]+"${P_STUBS[@]}"} \
     --top "$CORE_TOP" --emit-dir lg:out_lg --workdir w --result-json compile_pyrope.json
   read -r n_loc n_words <<EOF
 $(compile_input_stats compile_pyrope.json "$CORE_P_DIR" "$CORE_P_STUB_DIR")
@@ -79,7 +79,7 @@ $(python3 - "$result" <<'PY'
 import json, sys
 try:
     with open(sys.argv[1]) as f:
-        c = json.load(f).get("compile_cache", {})
+        c = json.load(f).get("incremental", {}).get("compile", {})
     print(c.get("hits", 0), c.get("misses", 0), c.get("redone_ms", 0),
           c.get("refused", 0), c.get("store_failed", 0))
 except Exception:
@@ -124,7 +124,7 @@ EOF
   # run_timed, so it never contaminates compile_edit_ms.
   rm -rf edit_cold_lg edit_cold_w
   lhd compile "tree/$CORE_TOP.prp" --top "$CORE_TOP" --emit-dir lg:edit_cold_lg \
-    --workdir edit_cold_w --set compile.cache=false -q --result-json edit_cold.json \
+    --workdir edit_cold_w --set lhd.incremental=false -q --result-json edit_cold.json \
     || { echo "FAIL: cache-disabled H5 reference compile failed" >&2; exit 1; }
   edit_diff=$(lhd tool diff lg:edit_cold_lg lg:out_lg --structural -q 2>/dev/null)
   [ "$edit_diff" = identical ] || warm_equal=0
@@ -169,7 +169,7 @@ pyrope_parallel)
   scan_tree() {
     printf 'CMD %s: lhd scan %s/pyrope/*.prp -q --result-json scan.json --workdir sw\n' \
       "${CURRENT_STEP:--}" "$CORE" >&3
-    "$LHD_BIN" scan "$CORE_P_DIR"/*.prp "${P_STUBS[@]}" -q --result-json scan.json --workdir sw
+    "$LHD_BIN" scan "$CORE_P_DIR"/*.prp ${P_STUBS[@]+"${P_STUBS[@]}"} -q --result-json scan.json --workdir sw
   }
   run_timed scan scan_tree
   scan_ms=$LAST_MS

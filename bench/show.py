@@ -184,11 +184,15 @@ def report_core(root: Path, core: str) -> list:
         # help". A hit COUNT does not: minion once showed 199 hits of 264
         # regions and a 1.0x speedup, because everything expensive sat in the
         # 65 that missed.
-        print(f"   {'':22} {'compile':>8} {'color':>7} {'abc':>8} {'hits':>5} {'miss':>5} {'remapped':>9}")
+        # One `lhd synth` per pass: compile/color/abc/sta are lhd's own `phases`
+        # (compile = every phase that is not one of the three synth passes), and
+        # `total` is the one-shot's wall clock — what the edit cost end to end.
+        print(f"   {'':22} {'compile':>8} {'color':>7} {'abc':>8} {'sta':>7} {'total':>8} {'hits':>5} {'miss':>5} {'remapped':>9}")
         for p, what in (("pass1", "cold"), ("pass2", "comment-only"), ("pass3", "one-line edit")):
             print(f"   {p} ({what})".ljust(25)
                   + f" {fmt(m.get(f'compile_{p}_ms'), 'ms'):>8} {fmt(m.get(f'{p}_color_ms'), 'ms'):>7}"
-                  f" {fmt(m.get(f'{p}_abc_ms'), 'ms'):>8} {fmt(m.get(f'{p}_cache_hits')):>5}"
+                  f" {fmt(m.get(f'{p}_abc_ms'), 'ms'):>8} {fmt(m.get(f'{p}_sta_ms'), 'ms'):>7}"
+                  f" {fmt(m.get(f'{p}_synth_ms'), 'ms'):>8} {fmt(m.get(f'{p}_cache_hits')):>5}"
                   f" {fmt(m.get(f'{p}_cache_misses')):>5} {fmt(m.get(f'{p}_cache_miss_ms'), 'ms'):>9}")
         print(f"   abc warm speedup (pass2 vs pass1): "
               f"{speedup(m.get('pass1_abc_ms'), m.get('pass2_abc_ms'))}")

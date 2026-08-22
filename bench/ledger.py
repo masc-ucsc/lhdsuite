@@ -1355,8 +1355,8 @@ because a guessed direction paints a regression green. Add the name to
 MODE_PROSE = """
 <h2>What the three columns mean</h2>
 <dl>
-<dt>full</dt><dd>&mdash; Every cache that has an off switch is <b>off</b>
-(<code>pass.abc.cache=false</code>, <code>formal.cache=false</code>), every output
+<dt>full</dt><dd>&mdash; Every cache is <b>off</b> (the one switch
+<code>lhd.incremental=false</code> covers the compile, pass.abc and formal caches), every output
 directory fresh. This is what the flow costs with <b>no incremental machinery at
 all</b>: the honest denominator.</dd>
 <dt>cold</dt><dd>&mdash; Caches <b>on</b>, every directory still fresh: the same
