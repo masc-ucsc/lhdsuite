@@ -55,8 +55,8 @@ EOF
   }
   ;;
 incr)
-  # The three-pass FRONT-END rebuild over one --workdir and one lg: output:
-  # cold, comment-only touch, one real edit. There is no front-end cache today,
+  # The four-pass FRONT-END rebuild over one --workdir and one lg: output:
+  # full, cold, comment-only touch, one real edit. There is no front-end cache today,
   # so on day one this scenario's job is to put honest cold numbers in the
   # ledger and make a future lever attributable — which is why it gates on WALL
   # TIME and never on a hit count. A hit count would go green the moment
@@ -67,9 +67,11 @@ incr)
   fi
 
   compile_pass() {
-    run_timed "compile_$1" lhd compile "tree/$CORE_TOP.prp" \
+    local tag=$1
+    shift
+    run_timed "compile_$tag" lhd compile "tree/$CORE_TOP.prp" \
       --top "$CORE_TOP" --emit-dir lg:out_lg --workdir w \
-      --result-json "compile_$1.json"
+      --result-json "compile_$tag.json" "$@"
   }
 
   compile_cache_metrics() {  # TOKEN RESULT_JSON
@@ -94,6 +96,11 @@ EOF
     metric "store_failed_$token" "$failed" units
   }
 
+  rm -rf w out_lg
+  compile_pass full --set lhd.incremental=false || exit 1
+  compile_cache_metrics full compile_full.json
+  metric workdir_bytes_full "$(dir_bytes w)" bytes
+
   rm -rf w out_lg cold_lg
   compile_pass cold || exit 1
   compile_cache_metrics cold compile_cold.json
@@ -113,6 +120,21 @@ EOF
   comment_diff=$(lhd tool diff lg:cold_lg lg:out_lg --structural -q 2>/dev/null)
   [ "$comment_diff" = identical ] && warm_equal=1
   [ "$comment_diff" = identical ] || echo "H5 comment mismatch: $comment_diff" >&2
+
+  # Backend's cache-disabled full and cold builds each take about 40 minutes.
+  # Its semantic-edit reference is another cache-disabled build and is not part
+  # of the requested full/cold/warm axis, so matrix refreshes may omit that
+  # optional fourth pass without weakening the comment-only H5 comparison.
+  if [ -n "${BENCH_SKIP_EDIT:-}" ]; then
+    metric compile_warm_equals_cold "$warm_equal" bool
+    [ "$warm_equal" = 1 ] || { echo "FAIL: comment-only incremental compile differs structurally from cold" >&2; exit 1; }
+    if [ -n "${TEST_UNDECLARED_OUTPUTS_DIR:-}" ]; then
+      cp compile_full.json compile_cold.json compile_comment.json \
+        "$TEST_UNDECLARED_OUTPUTS_DIR"/ 2>/dev/null || true
+    fi
+    echo "PASS: compile_incremental (full/cold/comment over one workdir; semantic edit skipped)"
+    exit 0
+  fi
 
   core_variant bug1 tree || exit 1
   compile_pass edit || exit 1
@@ -145,7 +167,7 @@ EOF
   # scraper consumes the latter, while optimization work needs the former to
   # attribute residual wall time without rerunning a large cold build.
   if [ -n "${TEST_UNDECLARED_OUTPUTS_DIR:-}" ]; then
-    cp compile_cold.json compile_comment.json compile_edit.json edit_cold.json \
+    cp compile_full.json compile_cold.json compile_comment.json compile_edit.json edit_cold.json \
       "$TEST_UNDECLARED_OUTPUTS_DIR"/ 2>/dev/null || true
   fi
 

@@ -60,7 +60,7 @@ if [ -z "${TEST_SRCDIR:-}" ]; then
 fi
 : "${TEST_TMPDIR:=$(mktemp -d "${TMPDIR:-/tmp}/lhdbench.XXXXXX")}" 
 
-# The two largest XiangShan synthesis scenarios have a hard 30-minute
+# The largest XiangShan synthesis scenarios have a hard two-hour
 # end-to-end budget. Re-exec the complete scenario under coreutils timeout so
 # setup/compile/color/ABC/STA all count, not just one selected command.
 if [ -n "${CORE_SYNTH_BUDGET_S:-}" ] && [ -z "${CORE_SYNTH_BUDGET_ACTIVE:-}" ]; then
@@ -225,12 +225,53 @@ run_timed() {
   t0=$(now_ms)
   "$@" >"step_${label}.log" 2>&1 || rc=$?
   t1=$(now_ms)
+  LAST_MS=$((t1 - t0))
+  metric "${label}_ms" "$LAST_MS" ms
   if [ "$rc" -ne 0 ]; then
     step_failed "$label" "step '$label' exited $rc: $*"
     return "$rc"
   fi
-  metric "${label}_ms" $((t1 - t0)) ms
-  LAST_MS=$((t1 - t0))
+}
+
+# run_timed_rss LABEL cmd args... — run_timed plus GNU time's peak RSS for the
+# complete process tree. This is diagnostic by default: a many-color synthesis
+# retains completed mapped modules, so its process peak is not the memory used
+# by one ABC color. Set BENCH_PROCESS_MAX_RSS_KB explicitly to gate total RSS;
+# the normal 16-GiB policy is enforced per color by pass.abc and its QoR field.
+run_timed_rss() {
+  local label=$1
+  shift
+  local usage="rusage_${label}.txt" rc=0 rss=""
+  run_timed "$label" /usr/bin/time -f '%M' -o "$usage" "$@" || rc=$?
+  [ ! -s "$usage" ] || rss=$(tail -1 "$usage" | tr -d '[:space:]')
+  case "$rss" in
+    ''|*[!0-9]*) ;;
+    *)
+      metric "${label}_peak_rss_kb" "$rss" KiB
+      if [ -n "${BENCH_PROCESS_MAX_RSS_KB:-}" ] && [ "$rss" -gt "$BENCH_PROCESS_MAX_RSS_KB" ]; then
+        # run_timed already archived a command failure. Only create the failure
+        # envelope here when RSS is what turns an otherwise successful command
+        # red; this avoids reporting the same failed step twice.
+        if [ "$rc" -eq 0 ]; then
+          step_failed "$label" \
+            "step '$label' peaked at ${rss} KiB RSS (explicit whole-process limit ${BENCH_PROCESS_MAX_RSS_KB} KiB)"
+        fi
+        rc=1
+      fi
+      ;;
+  esac
+  return "$rc"
+}
+
+# lhd_timed_rss LABEL args... — RSS-timed counterpart of the lhd shell wrapper.
+# GNU time cannot exec a shell function, so log the same sanitized command and
+# invoke the resolved runfile binary directly.
+lhd_timed_rss() {
+  local label=$1
+  shift
+  CURRENT_STEP=$label
+  printf 'CMD %s: lhd %s\n' "$label" "$(sanitize_args "$@")" >&3
+  run_timed_rss "$label" "$LHD_BIN" "$@"
 }
 
 # run_expect_fail LABEL cmd args... — as run_timed but the step MUST exit
@@ -427,6 +468,69 @@ except Exception:
     t = {}
 print(" ".join(str(t.get(k, 0 if k == "div_blackbox" else "MISSING"))
                for k in ("regions", "gates", "area", "max_delay", "div_blackbox")))
+PY
+}
+
+# qor_max_region_ms QOR_JSON — maximum wall time of any mapped ABC color.
+qor_max_region_ms() {
+  python3 - "$1" <<'PY'
+import json, sys
+try:
+    rs = json.load(open(sys.argv[1])).get("regions") or []
+    values = [float(r["ms"]) for r in rs if "ms" in r and r.get("resynth", 1)]
+except Exception:
+    values = []
+print(round(max(values)) if values else "MISSING")
+PY
+}
+
+# qor_abc_peak_rss_kb QOR_JSON — maximum conservative RSS growth attributable
+# to one resynthesized ABC color. New QoR writes color_peak_rss_kb; old artifacts
+# fall back to the cumulative process high-water so historical pages still render.
+qor_abc_peak_rss_kb() {
+  python3 - "$1" <<'PY'
+import json, sys
+try:
+    total = json.load(open(sys.argv[1])).get("total") or {}
+    value = total.get("color_peak_rss_kb", total.get("peak_rss_kb"))
+except Exception:
+    value = None
+print(round(float(value)) if value is not None else "MISSING")
+PY
+}
+
+# qor_color_hist QOR_JSON — resynthesized-color samples grouped by input GE.
+# Each line is "bucket count sum_ge sum_ms". Cache hits are deliberately
+# excluded: their `ms` is cache-load time, not synthesis time. Sum fields let
+# the ledger aggregate designs/runs without averaging averages.
+qor_color_hist() {
+  python3 - "$1" <<'PY'
+import json, sys
+bins = [
+    ("lt_1k", 0, 1_000),
+    ("1k_5k", 1_000, 5_000),
+    ("5k_15k", 5_000, 15_000),
+    ("15k_25k", 15_000, 25_000),
+    ("ge_25k", 25_000, None),
+]
+try:
+    rows = json.load(open(sys.argv[1])).get("regions") or []
+except Exception:
+    rows = []
+samples = []
+for row in rows:
+    if not row.get("resynth", 1) or "input_ge" not in row or "ms" not in row:
+        continue
+    try:
+        samples.append((float(row["input_ge"]), float(row["ms"])))
+    except (TypeError, ValueError):
+        pass
+def emit(tag, values):
+    print(tag, len(values), round(sum(x for x, _ in values), 3),
+          round(sum(x for _, x in values), 3))
+emit("all", samples)
+for tag, lo, hi in bins:
+    emit(tag, [(ge, ms) for ge, ms in samples if ge >= lo and (hi is None or ge < hi)])
 PY
 }
 

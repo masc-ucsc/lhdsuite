@@ -20,8 +20,12 @@ RF="${TEST_SRCDIR:-${RUNFILES_DIR:-$0.runfiles}}"
 copy_core_pyrope src/pyrope
 
 vrun() {
+  local wd=${1:-FW} incremental=${2:-true}
+  local incr_args=()
+  [ "$incremental" != false ] || incr_args=(--set lhd.incremental=false)
   lhd formal verify "src/pyrope/$CORE_UNIT.prp" "$CORE_VERIF_DIR/$CORE_UNIT.verify.prp" \
-    --top "$CORE_UNIT" --set formal.bound=2 --workdir FW
+    --top "$CORE_UNIT" --set formal.bound=2 --workdir "$wd" \
+    ${incr_args[@]+"${incr_args[@]}"}
 }
 
 # The SEQUENTIAL sidecar ($CORE_SEQ_UNIT), whose properties relate one cycle to
@@ -61,8 +65,8 @@ print(sum(t.get("asserts", 0) for t in d.get("tests", [])))'
 # and the target would still go green. Same reasoning as CORE_SIM_EXPECT: a run
 # that completes but checks less than it should must not pass.
 check_proven() {
-  local label=$1 want=$2
-  python3 - "FW/formal_report.json" "$want" <<'PY' || { step_failed "$label" "obligation check failed"; exit 1; }
+  local label=$1 want=$2 report=${3:-FW/formal_report.json}
+  python3 - "$report" "$want" <<'PY' || { step_failed "$label" "obligation check failed"; exit 1; }
 import json, sys
 rep, want = sys.argv[1], int(sys.argv[2])
 try:
@@ -131,6 +135,9 @@ temporal)
   ;;
 incr)
   want=$(expected_asserts)
+  run_timed verify_full vrun FF false
+  check_proven verify_full "$want" FF/formal_report.json
+
   run_timed verify_cold vrun
   check_proven verify_cold "$want"
 

@@ -158,12 +158,13 @@ cp -L "$CORE_SIM_DIR"/*.prp tree/
 
 SIM_INPUTS=("$BENCH_INPUT" "tree/$SIM_TB")
 
-# ---- MODE=incr: the three-pass rebuild over ONE workdir ----------------------
+# ---- MODE=incr: full plus the three-pass rebuild over ONE workdir ------------
 #
 # The sim counterpart of synth_incremental. Everything this loop optimizes shows
 # up in the split: sim_setup_ms is `lhd sim` codegen, sim_cc_ms is the host C++
 # compile+link, sim_exec_ms is the simulation itself.
 #
+#   full                  caches disabled with fresh work and emit directories.
 #   pass 1  cold          fresh workdir AND fresh emit dir. Both, because sim
 #                         keys its generation digests off the EMIT DIR, not the
 #                         workdir — a "cold" run that only renamed the workdir
@@ -198,13 +199,17 @@ if [ "$MODE" = incr ]; then
   # checksum MUST move. Keeping the pass-1 checksum as a gate there would fail
   # the target for doing its job.
   sim_pass() {
-    local tag=$1 expect=$2 run_ms exec_ms cc_ms
+    local tag=$1 expect=$2 incremental=${3:-true} run_ms exec_ms cc_ms
+    local incr_args=()
+    [ "$incremental" != false ] || incr_args=(--set lhd.incremental=false)
     # shellcheck disable=SC2086  # CORE_SIM_SETS is a token LIST, split on purpose
     run_timed "sim_setup_$tag" lhd sim "${SIM_INPUTS[@]}" --setup-only \
-      --set sim.vcd=false $CORE_SIM_SETS --workdir SW || return 1
+      --set sim.vcd=false $CORE_SIM_SETS --workdir SW \
+      ${incr_args[@]+"${incr_args[@]}"} || return 1
     # shellcheck disable=SC2086
     run_timed "sim_run_$tag" lhd sim "${SIM_INPUTS[@]}" --run-only \
-      --arg "cycles=$CYCLES" $CORE_SIM_SETS --diag-fmt pretty --workdir SW || return 1
+      --arg "cycles=$CYCLES" $CORE_SIM_SETS --diag-fmt pretty --workdir SW \
+      ${incr_args[@]+"${incr_args[@]}"} || return 1
     run_ms=$LAST_MS
     SIM_GATE_EXPECT=$expect sim_gate "sim_run_$tag"
 
@@ -242,6 +247,9 @@ if [ "$MODE" = incr ]; then
       \( -name '*.hpp' -o -name '*.cpp' -o -name '*.llvm.o' -o -name '*.iface.json' \) \
       -newer "$1" -exec basename {} \; 2>/dev/null | sort | tr '\n' ' '
   }
+
+  rm -rf SW
+  sim_pass full 1 false || exit 1
 
   rm -rf SW
   sim_pass cold 1 || exit 1

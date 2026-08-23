@@ -35,7 +35,10 @@ compile_impl() {  # OUT_LG — compile the (possibly variant-overlaid) copy
     --emit-dir "lg:$1" --workdir "cw_$1"
 }
 
-lec_run() {  # IMPL_LG
+lec_run() {  # IMPL_LG [WORKDIR] [INCREMENTAL]
+  local impl=$1 wd=${2:-LW} incremental=${3:-true}
+  local incr_args=()
+  [ "$incremental" != false ] || incr_args=(--set lhd.incremental=false)
   # CORE_LEC_TRUST (defs.bzl): modules ASSUMED equivalent without proof — the
   # escape hatch for cones holding a cell the LEC encoder cannot model yet (a
   # latch). lhd is strict by default, so a witness-free UNKNOWN top is a hard
@@ -44,10 +47,11 @@ lec_run() {  # IMPL_LG
   # forms rather than one array — an empty "${arr[@]}" is an unbound error
   # under `set -u` in the sandbox's bash.
   if [ -n "$CORE_LEC_TRUST" ]; then
-    lhd lec --impl "lg:$1" --ref lg:ref.lg --top "$CORE_TOP" --workdir LW \
-      --set "formal.lec.trust=$CORE_LEC_TRUST"
+    lhd lec --impl "lg:$impl" --ref lg:ref.lg --top "$CORE_TOP" --workdir "$wd" \
+      --set "formal.lec.trust=$CORE_LEC_TRUST" ${incr_args[@]+"${incr_args[@]}"}
   else
-    lhd lec --impl "lg:$1" --ref lg:ref.lg --top "$CORE_TOP" --workdir LW
+    lhd lec --impl "lg:$impl" --ref lg:ref.lg --top "$CORE_TOP" --workdir "$wd" \
+      ${incr_args[@]+"${incr_args[@]}"}
   fi
 }
 
@@ -91,6 +95,7 @@ bug)
   ;;
 incr)
   run_timed compile_p1 compile_impl impl1
+  run_timed lec_full lec_run impl1 LF false
   run_timed lec_cold lec_run impl1
   run_timed lec_warm lec_run impl1
   grep -qa "lec\[cache\]" step_lec_warm.log \

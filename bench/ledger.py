@@ -38,10 +38,9 @@ Subcommands:
                       target/phase/mode/wall_ms/phases/passed — from a file or
                       stdin, stamp the identity block, append. This is the path
                       `bench/matrix.sh` feeds.
-  append CFG TARGET…  the older scraper: read the most recent bazel-testlogs run
-                      and append rows in the SAME new shape (its three scenario
-                      passes map to modes cold / incremental / edit; it has no
-                      `full` mode, so that column renders "-").
+  append CFG TARGET…  scrape the most recent bazel-testlogs run and append rows
+                      in the SAME shape. Scenario passes map to full / cold /
+                      incremental / edit as applicable to each phase.
   render              re-derive the scoreboard HTML from the ledger.
 
 The HTML is a pure rendering of the JSONL and is regenerated on land AND on
@@ -57,6 +56,7 @@ evidence (`usable()` on a run that did not pass).
 """
 
 import argparse
+import hashlib
 import html
 import json
 import os
@@ -219,13 +219,21 @@ QOR_INVALIDATED = ("area", "gates", "max_delay", "sta_delay", "regions")
 # name across modes, and the same names the two contracts use.
 #
 # `wall` is a LIST of templates, SUMMED. A phase is rarely one command: a sim
-# rebuild is `--setup-only` plus `--run-only` and a synth rebuild is color plus
-# abc. `bench/matrix.sh` puts their sum in `wall_ms` because the sum is what an
-# edit costs; taking only the first here put a DIFFERENT quantity in the same
-# column depending on which tool wrote the row.
-PASS_TOKENS = {"cold": "_cold", "incremental": "_comment", "edit": "_edit"}
-NUMBERED_TOKENS = {"cold": "pass1", "incremental": "pass2", "edit": "pass3"}
-WARM_TOKENS = {"cold": "_cold", "incremental": "_warm", "edit": "_touch"}
+# rebuild is `--setup-only` plus `--run-only`. Synthesis is now the one-shot
+# `lhd synth` flow, so its wall is the reported `*_synth_ms` rather than the old
+# color+abc subtotal (which omitted compile and STA).
+PASS_TOKENS = {
+    "full": "_full", "cold": "_cold",
+    "incremental": "_comment", "edit": "_edit",
+}
+NUMBERED_TOKENS = {
+    "full": "full", "cold": "pass1",
+    "incremental": "pass2", "edit": "pass3",
+}
+WARM_TOKENS = {
+    "full": "_full", "cold": "_cold",
+    "incremental": "_warm", "edit": "_touch",
+}
 
 PHASES = {
     "compile": {
@@ -253,11 +261,22 @@ PHASES = {
     "synth": {
         "target": "{core}_synth_incremental",
         "tokens": NUMBERED_TOKENS,
-        "wall": ["{p}_color_ms", "{p}_abc_ms"],
+        "wall": ["{p}_synth_ms"],
         "extra": [
-            "{p}_color_ms", "{p}_abc_ms", "{p}_sta_ms", "{p}_sta_delay",
+            "compile_{p}_ms", "{p}_color_ms", "{p}_abc_ms",
+            "{p}_sta_ms", "{p}_sta_delay",
             "{p}_cache_hits", "{p}_cache_misses",
             "{p}_cache_hit_ms", "{p}_cache_miss_ms",
+            "{p}_synth_peak_rss_kb", "{p}_max_region_ms",
+            "{p}_abc_peak_rss_kb",
+            "{p}_regions", "{p}_gates", "{p}_area",
+            "{p}_max_delay", "{p}_div_blackbox",
+            *[
+                "{p}_color_%s_%s" % (bucket, field)
+                for bucket in ("all", "lt_1k", "1k_5k", "5k_15k",
+                               "15k_25k", "ge_25k")
+                for field in ("count", "ge_sum", "ms_sum")
+            ],
         ],
         "scenario": ["abc_warm_speedup"],
     },
@@ -291,6 +310,20 @@ def sh(*cmd, cwd=None):
         return ""
 
 
+def tracked_diff_sha256(repo: Path, excludes=()):
+    """Hash source/harness changes, excluding generated measurement artifacts."""
+    try:
+        cmd = ["git", "diff", "--binary", "HEAD", "--", "."]
+        cmd.extend(":(exclude)%s" % path for path in excludes)
+        diff = subprocess.run(
+            cmd, cwd=repo,
+            capture_output=True, check=True,
+        ).stdout
+    except Exception:
+        return ""
+    return hashlib.sha256(diff).hexdigest() if diff else ""
+
+
 def identity(root: Path):
     """The block that makes a row comparable — or refuses to."""
     livehd = root.parent / "livehd"
@@ -306,12 +339,20 @@ def identity(root: Path):
             pdk = parts[parts.index("versions") + 1]
         elif parts:
             pdk = next((p for p in reversed(parts) if p not in ("lib", "libs.ref")), "")
-    return {
+    out = {
         "host": socket.gethostname().split(".")[0],
         "lhd_git_sha": sh("git", "rev-parse", "--short", "HEAD", cwd=livehd),
         "lhdsuite_git_sha": sh("git", "rev-parse", "--short", "HEAD", cwd=root),
         "pdk_version": pdk,
     }
+    for key, repo, excludes in (
+            ("lhd_diff_sha256", livehd,
+             ("docs/current_opt_loop_incr.html", "docs/current_opt_loop_synth.html")),
+            ("lhdsuite_diff_sha256", root, (str(LEDGER),))):
+        digest = tracked_diff_sha256(repo, excludes)
+        if digest:
+            out[key] = digest
+    return out
 
 
 def norm_phases(v):
@@ -467,40 +508,154 @@ def write_rows(root: Path, rows, dry_run=False):
 
 # ------------------------------------------------------------------ append ---
 def read_metrics(logdir: Path, target: str):
-    """-> ({metric: value}, passed) or None when the target has not run."""
+    """-> (metrics, passed, duration_ms, failed_step, reason), or None."""
     log = logdir / target / "test.log"
     if not log.is_file():
         return None
     metrics = {}
-    for line in log.read_text(errors="replace").splitlines():
+    log_text = log.read_text(errors="replace")
+    errors, fail_lines = [], []
+    for line in log_text.splitlines():
+        stripped = line.strip()
         m = re.match(r"METRIC\s+(\S+)\s+(\S+)\s+(\S+)", line)
         if m:
             try:
                 metrics[m.group(1)] = float(m.group(2))
             except ValueError:
                 pass
+        if line.startswith("{") and '"severity":"error"' in line:
+            try:
+                message = json.loads(line).get("message")
+                if message:
+                    errors.append(str(message))
+            except ValueError:
+                pass
+        if line.startswith("FAIL:") and not line.startswith("FAIL: step '"):
+            fail_lines.append(line.removeprefix("FAIL:").strip())
+        elif "assert fail:" in stripped:
+            fail_lines.append(stripped)
+        elif " REFUTED (not equivalent)" in stripped:
+            fail_lines.append(stripped.split('{"schema_version"', 1)[0].strip())
     ok = True
+    duration_ms = None
     xml = logdir / target / "test.xml"
     if xml.is_file():
         t = xml.read_text(errors="replace")
         bad = int((re.search(r'failures="(\d+)"', t) or ["", "0"])[1]) + \
             int((re.search(r'errors="(\d+)"', t) or ["", "0"])[1])
         ok = bad == 0
-    return metrics, ok
+        tm = re.search(r'<testcase\b[^>]*\btime="([0-9.]+)"', t)
+        if tm:
+            duration_ms = float(tm.group(1)) * 1000.0
+    fm = re.search(r"FAIL: step '([^']+)' exited", log_text)
+    reason = errors[-1] if errors else (fail_lines[-1] if fail_lines else "")
+    return metrics, ok, duration_ms, (fm.group(1) if fm else ""), reason
+
+
+def failed_step_result(logdir: Path, target: str, step: str):
+    """Recover lhd's result envelope from an archived failing step log.
+
+    A benchmark copies successful result JSON files, but a failed command used
+    to exit before that copy. lhd still prints the same one-line envelope in
+    the step log, so retain its phase breakdown instead of reducing a failed
+    synth row to one opaque testcase duration.
+    """
+    path = logdir / target / "test.outputs" / ("step_%s.log" % step)
+    if not path.is_file():
+        return {}
+    for line in reversed(path.read_text(errors="replace").splitlines()):
+        line = line.strip()
+        if not line.startswith("{") or '"tool":"lhd"' not in line:
+            continue
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def failed_step_reason(logdir: Path, target: str, step: str):
+    """Most specific diagnostic archived for one failed timed command."""
+    path = logdir / target / "test.outputs" / ("step_%s.log" % step)
+    if not path.is_file():
+        return ""
+    errors, fails = [], []
+    for line in path.read_text(errors="replace").splitlines():
+        line = line.strip()
+        if line.startswith("{") and '"severity":"error"' in line:
+            try:
+                message = json.loads(line).get("message")
+                if message:
+                    errors.append(str(message))
+            except ValueError:
+                pass
+        elif line.startswith("FAIL:"):
+            fails.append(line.removeprefix("FAIL:").strip())
+    return errors[-1] if errors else (fails[-1] if fails else "")
+
+
+def qor_color_metrics(path: Path):
+    """Aggregate raw QoR regions into mergeable histogram sum fields."""
+    try:
+        regions = (json.loads(path.read_text()).get("regions") or [])
+    except (OSError, ValueError):
+        return {}
+    samples = []
+    for region in regions:
+        if not region.get("resynth", 1):
+            continue
+        try:
+            samples.append((float(region["input_ge"]), float(region["ms"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    bins = (
+        ("all", 0, None), ("lt_1k", 0, 1_000),
+        ("1k_5k", 1_000, 5_000), ("5k_15k", 5_000, 15_000),
+        ("15k_25k", 15_000, 25_000),
+        ("ge_25k", 25_000, None),
+    )
+    out = {}
+    for tag, lo, hi in bins:
+        selected = [(ge, ms_) for ge, ms_ in samples
+                    if ge >= lo and (hi is None or ge < hi)]
+        out["color_%s_count" % tag] = len(selected)
+        out["color_%s_ge_sum" % tag] = sum(ge for ge, _ in selected)
+        out["color_%s_ms_sum" % tag] = sum(ms_ for _, ms_ in selected)
+    return out
 
 
 def cmd_append(args, root: Path):
     """The bazel-testlogs scraper, emitting the NEW per-mode row shape.
 
-    Its three scenario passes are cold / comment-only / one-line-edit, which are
-    modes cold / incremental / edit. It never runs a caches-off pass, so it
-    produces no `full` row and the page's `full` column shows "-" for it — an
-    honest gap, not a zero.
+    Scenario passes map to full / cold / incremental / edit as applicable to
+    the phase.
     """
     logdir = root / "bazel-testlogs" / "bench"
     if not logdir.is_dir():
         sys.exit("FAIL: no bazel-testlogs/bench — run `bazel test //bench:...` first")
     ident = identity(root)
+    # Synthesis resolves the PDK inside the Bazel test sandbox, where the
+    # renderer's process environment cannot see it. Trust the benchmark's own
+    # emitted metadata, and reject a mixed-PDK scrape instead of stamping every
+    # row with a stale inherited HAGENT_TECH_DIR basename.
+    pdks = set()
+    for core in args.targets:
+        target_name = PHASES["synth"]["target"].format(core=core)
+        meta = logdir / target_name / "test.outputs" / "run_metadata.json"
+        if meta.is_file():
+            try:
+                pdk = json.loads(meta.read_text()).get("pdk_version")
+                if pdk:
+                    pdks.add(pdk)
+            except (OSError, ValueError):
+                pass
+    if len(pdks) > 1:
+        sys.exit("FAIL: selected benchmark results span multiple PDKs: %s"
+                 % ", ".join(sorted(pdks)))
+    if pdks:
+        ident["pdk_version"] = next(iter(pdks))
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     rows = []
     selected = set(args.phase or PHASES)
@@ -512,7 +667,14 @@ def cmd_append(args, root: Path):
             got = read_metrics(logdir, target_name)
             if got is None:
                 continue
-            metrics, ok = got
+            metrics, ok, duration_ms, failed_step, failure_reason = got
+            failed_mode = None
+            if not ok and failed_step:
+                for candidate, tok in spec["tokens"].items():
+                    if tok.strip("_") in failed_step:
+                        failed_mode = candidate
+                        break
+            emitted_modes = set()
             for mode, tok in spec["tokens"].items():
                 parts = [metrics.get(t.format(p=tok)) for t in spec["wall"]]
                 if all(v is None for v in parts):
@@ -524,8 +686,19 @@ def cmd_append(args, root: Path):
                 row.update({
                     "date": now, "flow": args.flow, "target": core,
                     "phase": phase, "mode": mode, "config_id": args.config_id,
-                    "passed": ok, "wall_ms": wall, "phases": {},
+                    # A scenario-level gate can fail after every timed mode
+                    # completed (for example an incremental-vs-cold structural
+                    # diff). Keep those timings usable and let its recorded
+                    # correctness metric carry the hard failure. Only a named
+                    # timed step invalidates its mode and the modes after it.
+                    "passed": (True if failed_mode is None
+                               else mode_key(mode) < mode_key(failed_mode)),
+                    "wall_ms": wall, "phases": {},
                 })
+                if mode == failed_mode:
+                    row["failed_step"] = failed_step
+                    if failure_reason:
+                        row["failure_reason"] = failure_reason
                 if phase == "compile":
                     result_name = "compile_%s.json" % tok.removeprefix("_")
                     result_path = logdir / target_name / "test.outputs" / result_name
@@ -535,6 +708,42 @@ def cmd_append(args, root: Path):
                             row["phases"] = norm_phases(result.get("phases"))
                         except (OSError, ValueError):
                             pass
+                elif phase == "synth":
+                    phase_metrics = (
+                        ("compile", "compile_{p}_ms"),
+                        ("pass.color", "{p}_color_ms"),
+                        ("pass.abc", "{p}_abc_ms"),
+                        ("pass.opentimer", "{p}_sta_ms"),
+                    )
+                    row["phases"] = {
+                        name: metrics[tmpl.format(p=tok)]
+                        for name, tmpl in phase_metrics
+                        if tmpl.format(p=tok) in metrics
+                    }
+                    # Current harnesses emit scalar histogram sums as METRIC
+                    # lines. Backfill the same fields from archived QoR JSON so
+                    # older completed ABC runs immediately gain the new page
+                    # diagnostics without being rerun just for presentation.
+                    qor = logdir / target_name / "test.outputs" / ("%s_qor.json" % tok)
+                    for key, value in qor_color_metrics(qor).items():
+                        row.setdefault(key, value)
+                    # A scenario deliberately continues after downstream STA
+                    # failures so full/cold/warm ABC evidence is not lost.
+                    # Mark each invocation from its own archived result instead
+                    # of invalidating every mode after the first red step.
+                    result_path = logdir / target_name / "test.outputs" / ("%s_result.json" % tok)
+                    if result_path.is_file():
+                        try:
+                            mode_result = json.loads(result_path.read_text())
+                        except (OSError, ValueError):
+                            mode_result = {}
+                        if mode_result.get("status") == "fail":
+                            step = "%s_synth" % tok
+                            row["passed"] = False
+                            row["failed_step"] = step
+                            reason = failed_step_reason(logdir, target_name, step)
+                            if reason:
+                                row["failure_reason"] = reason
                 for tmpl in spec["extra"]:
                     v = metrics.get(tmpl.format(p=tok))
                     if v is not None:
@@ -543,6 +752,26 @@ def cmd_append(args, root: Path):
                     for k in spec["scenario"]:
                         if k in metrics:
                             row[k] = metrics[k]
+                rows.append(row)
+                emitted_modes.add(mode)
+            # A failed timed command emits no METRIC line, but disappearing it
+            # would make an unsupported full/cold pass look like a benchmark
+            # that was never requested. Preserve an explicit failed cell. Its
+            # duration is the test's time-to-failure and is intentionally never
+            # used in a speedup or cache-cost calculation.
+            if not ok and failed_mode and failed_mode not in emitted_modes:
+                result = failed_step_result(logdir, target_name, failed_step)
+                row = dict(ident)
+                row.update({
+                    "date": now, "flow": args.flow, "target": core,
+                    "phase": phase, "mode": failed_mode,
+                    "config_id": args.config_id, "passed": False,
+                    "wall_ms": duration_ms or 0.0,
+                    "phases": norm_phases(result.get("phases")),
+                    "failed_step": failed_step,
+                })
+                if failure_reason:
+                    row["failure_reason"] = failure_reason
                 rows.append(row)
     if not rows:
         sys.exit("FAIL: none of the requested targets have results in bazel-testlogs")
@@ -746,7 +975,7 @@ def any_of(cells, key):
     return None
 
 
-def section_wall(out, data, modes, eps):
+def section_wall(out, data, modes, eps, previous=None, previous_label=""):
     out.append("<h3>1. Wall clock — full vs cold vs incremental</h3>")
     out.append("<p><b>incr speedup</b> = cold / incremental: what the machinery "
                "buys on a rebuild. <b>cache cost</b> = (cold &minus; full) / full: "
@@ -756,6 +985,11 @@ def section_wall(out, data, modes, eps):
                "shown but never used</b>: its wall clock is the time to a crash, "
                "not the time to an answer, so both derived columns read "
                "&quot;-&quot;.</p>" % (CACHE_COST_WARN * 100))
+    if previous:
+        out.append("<p><b>previous speedup (%s)</b> is the earlier cold / "
+                   "incremental ratio only. It is historical context, not a "
+                   "cross-host timing comparison and never participates in a "
+                   "verdict.</p>" % esc(previous_label))
     out.append("<p><b>load</b> is the 1-minute run queue while the three modes ran, "
                "highest of the three. It is not a result — it is how much to trust "
                "the row. The control probe is single-threaded and cannot see this: "
@@ -767,6 +1001,8 @@ def section_wall(out, data, modes, eps):
                "the raw cells do.</p>")
     out.append("<table><tr><th>target</th><th>phase</th>"
                + "".join("<th>%s (ms)</th>" % esc(m) for m in modes)
+               + (("<th>previous speedup<br><small>%s</small></th>"
+                   % esc(previous_label)) if previous else "")
                + "<th>incr speedup</th><th>cache cost</th><th>load</th></tr>")
     warned = []
     for target, phase in sorted(data, key=lambda k: (k[0], phase_key(k[1]))):
@@ -777,11 +1013,16 @@ def section_wall(out, data, modes, eps):
             if r is None:
                 tds.append(cell("-", "miss"))
             elif not r.get("passed", True):
-                tds.append(cell(ms(r.get("wall_ms")) + " FAILED", "worse"))
+                tds.append(cell("not run" if r.get("not_run") else
+                                ms(r.get("wall_ms")) + " FAILED", "worse"))
             else:
                 tds.append(cell(ms(r.get("wall_ms"))))
         cold, incr, full = (uwall(cells, "cold"), uwall(cells, "incremental"),
                             uwall(cells, "full"))
+        if previous:
+            old = previous.get((target, phase))
+            tds.append(cell("-" if old is None else "%.2f&times;" % old,
+                            "miss" if old is None else "una"))
         if cold is None or incr is None:
             tds.append(cell("-", "miss"))
         elif incr <= 0:
@@ -819,6 +1060,29 @@ def section_wall(out, data, modes, eps):
                    'incremental machinery is charging a first build more than it '
                    'should.</p>' % (CACHE_COST_WARN * 100, esc(", ".join(warned))))
     return warned
+
+
+def section_failures(out, data):
+    """Make every red cell actionable without requiring ledger archaeology."""
+    failed = []
+    for (target, phase), cells in sorted(
+            data.items(), key=lambda item: (item[0][0], phase_key(item[0][1]))):
+        for mode, row in sorted(cells.items(), key=lambda item: mode_key(item[0])):
+            if row.get("passed", True):
+                continue
+            reason = row.get("failure_reason") or (
+                "failed step %s" % row["failed_step"] if row.get("failed_step")
+                else "scenario did not pass; inspect its archived test log")
+            failed.append((target, phase, mode, reason))
+    if not failed:
+        return
+    out.append("<h3>Failed and incomplete cells</h3>")
+    out.append("<p>These rows remain in the tables but are excluded from every "
+               "speedup and verdict calculation.</p><ul>")
+    for target, phase, mode, reason in failed:
+        out.append('<li><code>%s/%s/%s</code>: %s</li>'
+                   % (esc(target), esc(phase), esc(mode), esc(reason)))
+    out.append("</ul>")
 
 
 def section_guardrail(out, data, modes, eps):
@@ -940,6 +1204,7 @@ def section_gates(out, data):
     out.append("<table><tr><th>target</th><th>phase</th><th>passed (per mode)</th>"
                "<th>warm==cold</th><th>edit changed</th><th>rewritten</th><th>store_failed</th>"
                "<th>refused</th><th>workdir bytes</th></tr>")
+    breached = []
     for target, phase in sorted(data, key=lambda k: (k[0], phase_key(k[1]))):
         cells = data[(target, phase)]
         marks = []
@@ -958,6 +1223,13 @@ def section_gates(out, data):
         if ref is None:
             ref = any_of(cells, "abc_refused")
         wb = any_of(cells, "workdir_bytes")
+        if wec not in (None, True, 1, 1.0):
+            breached.append("%s/%s warm != cold" % (target, phase))
+        if changed not in (None, True, 1, 1.0):
+            breached.append("%s/%s edit fixture did not change the graph" %
+                            (target, phase))
+        if sf:
+            breached.append("%s/%s store_failed=%s" % (target, phase, num(sf)))
         out.append("<tr><td>%s</td><td>%s</td>%s<td class='%s'>%s</td><td class='%s'>%s</td>"
                    "<td>%s</td><td class='%s'>%s</td><td class='%s'>%s</td>"
                    "<td>%s</td></tr>"
@@ -971,6 +1243,10 @@ def section_gates(out, data):
                       "worse" if sf else "", num(sf),
                       "warn" if ref else "", num(ref), num(wb)))
     out.append("</table>")
+    if breached:
+        out.append('<p class="worse">NON-TIME GATE FAILED on: %s</p>'
+                   % esc(", ".join(breached)))
+    return breached
 
 
 def section_other(out, data, modes):
@@ -1076,6 +1352,84 @@ def section_breakdown(out, data, modes):
                    "clock is known.</p>" % esc(", ".join(empty)))
 
 
+COLOR_HIST_BINS = (
+    ("lt_1k", "&lt;1k"),
+    ("1k_5k", "1k–5k"),
+    ("5k_15k", "5k–15k"),
+    ("15k_25k", "15k–25k"),
+    ("ge_25k", "&ge;25k"),
+)
+
+
+def section_color_hist(out, data):
+    """Mapped color size/time distribution; cache hits are not synth samples."""
+    rows = []
+    by_target = {}
+    for (target, phase), cells in data.items():
+        if phase != "synth":
+            continue
+        for mode, row in cells.items():
+            count = row.get("color_all_count")
+            if count is None:
+                continue
+            rows.append(row)
+            by_target.setdefault(target, {})[mode] = row
+
+    out.append("<h3>6. ABC color-size / synthesis-time histogram</h3>")
+    if not rows:
+        out.append("<p>No per-color samples were recorded by this configuration. "
+                   "Re-run synthesis with the current harness; failed STA rows still "
+                   "contribute when ABC completed.</p>")
+        return
+
+    out.append("<p>All <b>resynthesized</b> colors recorded across full, cold, and "
+               "incremental runs. Cache hits are excluded because their milliseconds "
+               "measure snapshot loading, not ABC synthesis. A failed downstream STA "
+               "run remains useful here when its QoR file is complete.</p>")
+
+    totals = {}
+    for key, _ in COLOR_HIST_BINS:
+        count = sum(float(r.get("color_%s_count" % key, 0) or 0) for r in rows)
+        ge_sum = sum(float(r.get("color_%s_ge_sum" % key, 0) or 0) for r in rows)
+        ms_sum = sum(float(r.get("color_%s_ms_sum" % key, 0) or 0) for r in rows)
+        totals[key] = (count, ge_sum, ms_sum)
+    peak = max([v[0] for v in totals.values()] or [0])
+    out.append("<table><tr><th>input GE bucket</th><th>histogram</th>"
+               "<th>mapped colors</th><th>avg input GE</th><th>avg ABC ms</th></tr>")
+    for key, label in COLOR_HIST_BINS:
+        count, ge_sum, ms_sum = totals[key]
+        width = 0 if peak <= 0 else max(1, round(28 * count / peak))
+        bar = "&#9608;" * width
+        out.append("<tr><td>%s</td><td class='bar'>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
+                   % (label, bar, num(count),
+                      "-" if count <= 0 else num(ge_sum / count),
+                      "-" if count <= 0 else ms(ms_sum / count)))
+    out.append("</table>")
+
+    out.append("<h4>Per-design color summary</h4>")
+    out.append("<table><tr><th rowspan='2'>target</th>"
+               "<th colspan='3'>full (incrementality off)</th>"
+               "<th colspan='3'>cold (cache population)</th>"
+               "<th colspan='3'>warm incremental (remapped only)</th></tr>"
+               "<tr><th>colors</th><th>avg GE</th><th>avg ABC ms</th>"
+               "<th>colors</th><th>avg GE</th><th>avg ABC ms</th>"
+               "<th>colors</th><th>avg GE</th><th>avg ABC ms</th></tr>")
+    for target, cells in sorted(by_target.items()):
+        def mode_cells(mode):
+            row = cells.get(mode)
+            if row is None or row.get("color_all_count") is None:
+                return ("-", "-", "-")
+            count = float(row.get("color_all_count", 0) or 0)
+            ge_sum = float(row.get("color_all_ge_sum", 0) or 0)
+            ms_sum = float(row.get("color_all_ms_sum", 0) or 0)
+            return (num(count), "-" if count <= 0 else num(ge_sum / count),
+                    "-" if count <= 0 else ms(ms_sum / count))
+        values = mode_cells("full") + mode_cells("cold") + mode_cells("incremental")
+        out.append("<tr><td>%s</td>%s</tr>" %
+                   (esc(target), "".join("<td>%s</td>" % value for value in values)))
+    out.append("</table>")
+
+
 def plain(d):
     """The delta strings carry HTML entities (`+&infin;%`) because they are
     written into the page; the same string also reaches a stderr banner, where
@@ -1115,7 +1469,7 @@ def section_config_delta(out, hrows, base_id, cur_id, eps):
     the SAME mode and build identity. Never across hosts, modes, revisions, or
     PDK snapshots."""
     base, cur = index_modes(hrows, base_id), index_modes(hrows, cur_id)
-    out.append("<h3>6. &sect;8 gate — baseline <code>%s</code> &rarr; current "
+    out.append("<h3>7. &sect;8 gate — baseline <code>%s</code> &rarr; current "
                "<code>%s</code></h3>" % (esc(base_id), esc(cur_id)))
     if base_id == cur_id:
         out.append("<p>only one config_id on this host yet — nothing to gate "
@@ -1466,11 +1820,15 @@ def host_sections(out, hrows, args, eps, all_configs, configs, base_id, cur_id):
     elif data:
         present = {m for cells in data.values() for m in cells}
         modes = list(MODE_COLS) + sorted(present - set(MODE_COLS), key=mode_key)
-        warned += section_wall(out, data, modes, eps)
+        warned += section_wall(out, data, modes, eps,
+                               getattr(args, "_previous_speedups", None),
+                               getattr(args, "_previous_label", ""))
+        section_failures(out, data)
         breach = section_guardrail(out, data, modes, eps)
-        section_gates(out, data)
+        non_time_breach = section_gates(out, data)
         section_other(out, data, modes)
         section_breakdown(out, data, modes)
+        section_color_hist(out, data)
         gate_breach, regressed, incomparable = section_config_delta(
             out, hrows, base_id, cur_id, eps)
         breach += gate_breach
@@ -1480,6 +1838,9 @@ def host_sections(out, hrows, args, eps, all_configs, configs, base_id, cur_id):
         if breach:
             hard.append("I3 guardrail breached (%d): %s"
                         % (len(breach), ", ".join(breach)))
+        if non_time_breach:
+            hard.append("non-time gate failed (%d): %s"
+                        % (len(non_time_breach), ", ".join(non_time_breach)))
         if regressed:
             hard.append("rejected by the §8 gate (%d): %s"
                         % (len(regressed), brief(regressed)))
@@ -1493,7 +1854,7 @@ def host_sections(out, hrows, args, eps, all_configs, configs, base_id, cur_id):
         if stored:
             hard.append("store_failed non-zero on: " + ", ".join(stored))
         if flat:
-            out.append("<h3>7. Rows with no mode axis</h3>")
+            out.append("<h3>8. Rows with no mode axis</h3>")
             h, w = render_flat_host(out, flat, base_id, cur_id, eps, synth=False)
             hard += h
             warned += w
@@ -1574,7 +1935,7 @@ def glance_takeaway(data):
     return "; ".join(bits) + "."
 
 
-def section_glance(out, data, show_host=None):
+def section_glance(out, data, show_host=None, previous=None, previous_label=""):
     """The headline: three walls and the speedup, nothing else.
 
     Deliberately ABOVE the methodology. A status page whose first screen is
@@ -1587,7 +1948,9 @@ def section_glance(out, data, show_host=None):
         out.append("<h3>host: %s</h3>" % esc(show_host))
     out.append("<table><tr><th>target</th><th>phase</th><th>full (ms)</th>"
                "<th>cold (ms)</th><th>incremental (ms)</th>"
-               "<th>incr speedup</th></tr>")
+               + (("<th>previous speedup<br><small>%s</small></th>"
+                   % esc(previous_label)) if previous else "")
+               + "<th>incr speedup</th></tr>")
     for target, phase in sorted(data, key=lambda k: (k[0], phase_key(k[1]))):
         cells = data[(target, phase)]
         tds = []
@@ -1596,10 +1959,15 @@ def section_glance(out, data, show_host=None):
             if r is None:
                 tds.append(cell("-", "miss"))
             elif not r.get("passed", True):
-                tds.append(cell(ms(r.get("wall_ms")) + " FAILED", "worse"))
+                tds.append(cell("not run" if r.get("not_run") else
+                                ms(r.get("wall_ms")) + " FAILED", "worse"))
             else:
                 tds.append(cell(ms(r.get("wall_ms"))))
         cold, incr = uwall(cells, "cold"), uwall(cells, "incremental")
+        if previous:
+            old = previous.get((target, phase))
+            tds.append(cell("-" if old is None else "%.1f&times;" % old,
+                            "miss" if old is None else "una"))
         if cold is None or incr is None or incr <= 0:
             tds.append(cell("-", "miss"))
         else:
@@ -1621,24 +1989,62 @@ def cmd_render(args, root: Path):
         sys.exit("FAIL: %s holds no flow=%s rows yet" % (LEDGER, args.flow))
     eps = args.epsilon / 100.0
 
+    # A previous ratio is the one explicitly permitted historical column: it
+    # carries no delta or verdict. Keep its source host out of the current
+    # section and retain only cold/incremental, a dimensionless within-run
+    # ratio.
+    args._previous_speedups = {}
+    args._previous_label = ""
+    if args.previous:
+        previous_rows = [r for r in rows if r.get("config_id") == args.previous]
+        previous_data = index_modes(previous_rows, args.previous)
+        for key, cells in previous_data.items():
+            cold, incr = uwall(cells, "cold"), uwall(cells, "incremental")
+            if cold is not None and incr is not None and incr > 0:
+                args._previous_speedups[key] = cold / incr
+        dates = sorted(str(r.get("date") or "")[:10] for r in previous_rows
+                       if r.get("date"))
+        args._previous_label = dates[-1] if dates else args.previous
+
     # One section per host. Never a cross-host diff (I11): different boxes are
     # different experiments that happen to share a file.
     by_host = {}
     for r in rows:
         by_host.setdefault(r.get("host", "?"), []).append(r)
+    if args.host:
+        if args.host not in by_host:
+            sys.exit("FAIL: host %r has no flow=%s rows" % (args.host, args.flow))
+        by_host = {args.host: by_host[args.host]}
     all_configs = {r.get("config_id") for r in rows}
+
+    render_cmd = ["bazel run //bench:ledger -- render", "--flow", args.flow]
+    for flag, value in (("--out", args.out), ("--baseline", args.baseline),
+                        ("--current", args.current), ("--previous", args.previous),
+                        ("--host", args.host)):
+        if value:
+            render_cmd.extend((flag, value))
+    if args.epsilon != 3.0:
+        render_cmd.extend(("--epsilon", str(args.epsilon)))
 
     out = [
         "<title>%s</title>" % esc(args.title),
         "<style>%s</style>" % STYLE,
         "<h1>%s</h1>" % esc(args.title),
         "<p>Generated from <code>%s</code> at %s. Derived, never authored — "
-        "re-run <code>bazel run //bench:ledger -- render</code> to refresh. "
+        "re-run <code>%s</code> to refresh. "
         "Verdicts use an epsilon of <b>%.1f%%</b>; anything inside it is not a "
         "win. <b>%d host section(s) — never compare a number across them</b> "
         "(I11).</p>"
-        % (LEDGER, time.strftime("%Y-%m-%d %H:%M"), args.epsilon, len(by_host)),
+        % (LEDGER, time.strftime("%Y-%m-%d %H:%M"), esc(" ".join(render_cmd)),
+           args.epsilon, len(by_host)),
     ]
+    if args.flow == "incr":
+        out.append("<p>Synthesis resource policy: one shared color sizing for "
+                   "every design; each ABC color must stay within the soft "
+                   "bounds of <b>16 GiB peak RSS</b> and <b>15 minutes</b>. "
+                   "<code>abc_peak_rss_kb</code> is the maximum conservative per-color RSS growth before STA; "
+                   "<code>synth_peak_rss_kb</code> is the conservative whole-process "
+                   "diagnostic. Oversize regions are failures, not speedups.</p>")
 
     # THE HEADLINE, before any methodology. One block per host, because a
     # cross-host summary is exactly the comparison I11 forbids; with a single
@@ -1649,7 +2055,9 @@ def cmd_render(args, root: Path):
             cid = args.current or (
                 [r.get("config_id") for r in hrows if r.get("config_id")] or [""])[-1]
             section_glance(out, glance_rows(hrows, cid),
-                           show_host=host if len(by_host) > 1 else None)
+                           show_host=host if len(by_host) > 1 else None,
+                           previous=args._previous_speedups,
+                           previous_label=args._previous_label)
 
     # ...and the methodology below it, collapsed. It is load-bearing (a reader
     # who does not know what `full` means will misread every number above) but
@@ -1727,6 +2135,10 @@ def main():
     r.add_argument("--title", default="")
     r.add_argument("--baseline", default="", help="config_id of the baseline column")
     r.add_argument("--current", default="", help="config_id of the current column")
+    r.add_argument("--previous", default="",
+                   help="config_id supplying the dated historical speedup-only column")
+    r.add_argument("--host", default="",
+                   help="render only this host (historical speedup may still come from --previous)")
     r.add_argument("--epsilon", type=float, default=3.0,
                    help="noise floor, in percent (H6); a delta inside it is not a win")
     r.add_argument("--fail-on-regression", action="store_true",

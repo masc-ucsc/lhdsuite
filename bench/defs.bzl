@@ -374,6 +374,11 @@ CORES = {
         # fill: the .prp tree, `lhd compile verilog --top Rob`, and Verilator on
         # the same .sv. Do NOT re-pin this from one side's output.
         "sim_expect": "sum=9223372036854775801",
+        # ROB is deliberately partitioned into many bounded ABC colors. Its
+        # cache-disabled full/cold aggregates can therefore be long even though
+        # every individual color must stay under the shared 15-minute/16-GiB
+        # gates; the slow-target backstop below leaves room for those aggregates.
+        "slow": True,
         # No sim_perf_cycles: sim_cycles IS the throughput count now.
         "verilator_tb": "xs_rob_tb_verilator.cpp",
         "verilator_flags": "",
@@ -560,11 +565,6 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             pkg + ":tests",
             pkg + ":verif",
         ])
-    else:
-        data.extend([
-            pkg + ":pyrope_stubs",
-            pkg + ":pyrope_stub_top",
-        ])
 
     # The drivers are staged for any core that names one, synth-only or not —
     # otherwise a synth-only core's sim scenario would run with an empty tree/.
@@ -582,7 +582,9 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE": core,
             "CORE_V_FLIST": "$(rlocationpath %s:verilog_filelist)" % pkg,
             "CORE_P_TOP": "$(rlocationpath %s:pyrope_top)" % pkg,
-            "CORE_P_STUB_TOP": "$(rlocationpath %s:pyrope_stub_top)" % pkg if synth_only else "",
+            # Current generated Pyrope makes the DummyDPICWrapper_* bodies
+            # empty, matching the synthesis-side SV without DiffExt stubs.
+            "CORE_P_STUB_TOP": "",
             "CORE_TOP": cfg["top"],
             "CORE_V_FLAGS": cfg["v_flags"],
             "CORE_UNIT": cfg["unit"],
@@ -590,9 +592,11 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_SEQ_UNIT": cfg.get("seq_unit", ""),
             "CORE_COLOR_ALGS": " ".join(cfg["color_algs"]),
             "CORE_SYNTH_ONLY": "1" if synth_only else "",
-            # The 30-minute hard gate applies to the end-to-end synthesis
-            # scenarios, not source-only compile measurements.
-            "CORE_SYNTH_BUDGET_S": "1800" if cfg.get("slow", False) and script == "synth.sh" else "",
+            # Per-color limits are 16 GiB / 15 minutes. A partitioned scenario
+            # maps many colors across full/cold/warm/edit, so its six-hour
+            # end-to-end backstop is deliberately much larger than the
+            # per-color gate. Full/cold can be patient; warm should reuse them.
+            "CORE_SYNTH_BUDGET_S": "21600" if cfg.get("slow", False) and script == "synth.sh" else "",
             "CORE_SIM_TB": cfg.get("sim_tb", ""),
             "CORE_SIM_CYCLES": str(cfg.get("sim_cycles", "")),
             # The I3 throughput leg's cycle count, when the gate count is too

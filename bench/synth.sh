@@ -60,6 +60,7 @@ RF="${TEST_SRCDIR:-${RUNFILES_DIR:-$0.runfiles}}"
 . "$RF/_main/bench/common.sh"
 require_tech_dir
 SYNTH_START_MS=$(now_ms)
+SYNTH_DOWNSTREAM_FAILURES=0
 printf '{"pdk_version":"%s","target":"%s"}\n' \
   "$PDK_VERSION" "${TEST_TARGET:-$CORE}" >"$OUT_DIR/run_metadata.json"
 
@@ -78,8 +79,15 @@ ABC_ARGS=()
 [ -z "${BENCH_ABC_LOAD:-}" ] || ABC_ARGS+=(--set "abc.load=$BENCH_ABC_LOAD")
 [ -z "${BENCH_ABC_FLOW:-}" ] || ABC_ARGS+=(--set "abc.flow=$BENCH_ABC_FLOW")
 [ -z "${BENCH_ABC_CACHE:-}" ] || ABC_ARGS+=(--set "lhd.incremental=$BENCH_ABC_CACHE")
+# The suite's shared soft resource envelope. pass.abc refuses a projected
+# oversize region early; GNU time checks the actual process-tree peak after the
+# run. This is intentionally uniform across cores.
+ABC_ARGS+=(--set "abc.memory_budget_mb=${BENCH_ABC_MEMORY_BUDGET_MB:-16384}")
+ABC_ARGS+=(--set "abc.time_budget_ms=${BENCH_ABC_TIME_BUDGET_MS:-900000}")
+ABC_ARGS+=(--set "abc.verbose=${BENCH_ABC_VERBOSE:-true}")
 COLOR_ARGS=()
 [ -z "${BENCH_COLOR_SYNTH_ALG:-}" ] || COLOR_ARGS+=(--set "color.synth_alg=$BENCH_COLOR_SYNTH_ALG")
+[ -z "${BENCH_COLOR_MAX_GE:-}" ] || COLOR_ARGS+=(--set "color.max_ge=$BENCH_COLOR_MAX_GE")
 
 stubs=()
 if [ -n "$CORE_P_STUB_DIR" ]; then
@@ -147,24 +155,57 @@ report_sta() {
 # the front end, the recipe, run_id, the library saves). LABEL_synth_ms is the
 # one-shot's wall clock, i.e. what an edit costs end to end.
 synth_oneshot() {
-  local label=$1 src=$2 wd=$3
-  run_timed "${label}_synth" lhd synth "$src/$CORE_TOP.prp" ${stubs[@]+"${stubs[@]}"} --top "$CORE_TOP" \
+  local label=$1 src=$2 wd=$3 incremental=${4:-true}
+  local incr_args=()
+  [ "$incremental" != false ] || incr_args=(--set lhd.incremental=false)
+  local rc=0
+  lhd_timed_rss "${label}_synth" synth "$src/$CORE_TOP.prp" ${stubs[@]+"${stubs[@]}"} --top "$CORE_TOP" \
     --workdir "$wd" --emit-dir "lg:net_$label" --result-json "r_$label.json" --stats \
-    ${COLOR_ARGS[@]+"${COLOR_ARGS[@]}"} ${ABC_ARGS[@]+"${ABC_ARGS[@]}"}
+    ${COLOR_ARGS[@]+"${COLOR_ARGS[@]}"} ${ABC_ARGS[@]+"${ABC_ARGS[@]}"} \
+    ${incr_args[@]+"${incr_args[@]}"} || rc=$?
+  # A failed STA still completed compile/color/ABC. Keep those phase timers in
+  # the ledger so a red full row is diagnosable rather than one opaque
+  # time-to-failure number.
+  if [ -f "r_$label.json" ]; then
+    read -r ph_compile ph_color ph_abc ph_sta <<EOF
+$(synth_phase_ms "r_$label.json")
+EOF
+    metric "compile_${label}_ms" "$ph_compile" ms
+    metric "${label}_color_ms" "$ph_color" ms
+    metric "${label}_abc_ms" "$ph_abc" ms
+    metric "${label}_sta_ms" "$ph_sta" ms
+    cp "r_$label.json" "$OUT_DIR/${label}_result.json"
+  fi
+  cp "step_${label}_synth.log" "$OUT_DIR/${label}_synth.log"
+  if [ -f "$wd/synth/qor.json" ]; then
+    cp "$wd/synth/qor.json" "$OUT_DIR/${label}_qor.json"
+    QOR_JSON="$wd/synth/qor.json"
+    report_qor "$label" "$QOR_JSON"
+  fi
+  if [ "$rc" != 0 ]; then
+    # pass.opentimer is downstream of a complete mapped netlist. Preserve its
+    # red result, but do not let it erase the cold/warm ABC experiment: a
+    # non-zero STA phase plus complete QoR proves compile/color/ABC finished.
+    # Resource refusals and ABC failures have no such STA phase and still stop
+    # immediately because continuing would manufacture invalid cache evidence.
+    if [ -n "${ph_sta:-}" ] && [ "${ph_sta:-0}" -gt 0 ] && [ -f "$wd/synth/qor.json" ]; then
+      # A failed one-shot envelope only retains compile-tier incremental
+      # counters; the already-written QoR file is the authoritative ABC tier.
+      report_abc "$label" "$wd/synth/qor.json" "step_${label}_synth.log"
+      SYNTH_DOWNSTREAM_FAILURES=$((SYNTH_DOWNSTREAM_FAILURES + 1))
+      return 0
+    fi
+    return "$rc"
+  fi
   read -r ph_compile ph_color ph_abc ph_sta <<EOF
 $(synth_phase_ms "r_$label.json")
 EOF
-  metric "compile_${label}_ms" "$ph_compile" ms
-  metric "${label}_color_ms" "$ph_color" ms
-  metric "${label}_abc_ms" "$ph_abc" ms
-  metric "${label}_sta_ms" "$ph_sta" ms
+  # Successful runs emitted these phase metrics above too; do not duplicate
+  # them in metrics.jsonl.
   # Preserve the reports even when a later gate fails (netlist LEC, budget):
   # the run remains measurable without weakening the downstream gate.
-  cp "$wd/synth/qor.json" "$OUT_DIR/${label}_qor.json"
-  cp "step_${label}_synth.log" "$OUT_DIR/${label}_synth.log"
   report_sta "$label" "$wd/synth/timing.json"
   report_abc "$label" "r_$label.json" "step_${label}_synth.log"
-  QOR_JSON="$wd/synth/qor.json"
 }
 
 # synth_pass LABEL LG_DIR COLOR_ALG WORKDIR — the MANUAL flow: color in place,
@@ -179,7 +220,7 @@ synth_pass() {
   else
     run_timed "${1}_color" lhd pass color synth --top "$TOP" "lg:$2" --workdir "$4" ${COLOR_ARGS[@]+"${COLOR_ARGS[@]}"}
   fi
-  run_timed "${1}_abc" lhd pass abc --top "$TOP" "lg:$2" \
+  lhd_timed_rss "${1}_abc" pass abc --top "$TOP" "lg:$2" \
     --emit-dir "lg:net_$1" --workdir "$4" --result-json "r_$1.json" ${ABC_ARGS[@]+"${ABC_ARGS[@]}"}
   cp "$4/qor.json" "$OUT_DIR/${1}_qor.json"
   cp "step_${1}_abc.log" "$OUT_DIR/${1}_abc.log"
@@ -199,6 +240,25 @@ EOF
   metric "${1}_area" "$q_area" um2
   metric "${1}_max_delay" "$q_delay" ns
   metric "${1}_div_blackbox" "$q_div_blackbox" cones
+  q_max_region_ms=$(qor_max_region_ms "$2")
+  [ "$q_max_region_ms" = MISSING ] || {
+    metric "${1}_max_region_ms" "$q_max_region_ms" ms
+    [ "$q_max_region_ms" -le "${BENCH_ABC_TIME_BUDGET_MS:-900000}" ] || {
+      step_failed "${1}_abc" \
+        "$1: one ABC color took ${q_max_region_ms}ms (soft limit ${BENCH_ABC_TIME_BUDGET_MS:-900000}ms); reduce color.max_ge"
+      exit 1
+    }
+  }
+  q_abc_peak_rss_kb=$(qor_abc_peak_rss_kb "$2")
+  [ "$q_abc_peak_rss_kb" = MISSING ] || \
+    metric "${1}_abc_peak_rss_kb" "$q_abc_peak_rss_kb" KiB
+  while read -r bucket count ge_sum ms_sum; do
+    metric "${1}_color_${bucket}_count" "$count" colors
+    metric "${1}_color_${bucket}_ge_sum" "$ge_sum" GE
+    metric "${1}_color_${bucket}_ms_sum" "$ms_sum" ms
+  done <<EOF
+$(qor_color_hist "$2")
+EOF
 }
 
 case "${MODE:?}" in
@@ -212,8 +272,8 @@ cold)
       # The manual flow colors IN PLACE, so each alg gets its own compiled copy.
       run_timed "compile_$alg" compile_p "$CORE_P_DIR" "lg_$alg"
       synth_pass "$alg" "lg_$alg" "$alg" "W_$alg"
+      report_qor "$alg" "$QOR_JSON"
     fi
-    report_qor "$alg" "$QOR_JSON"
     [ -n "$(ls -A "net_$alg" 2>/dev/null)" ] || { echo "FAIL: empty netlist for $alg" >&2; exit 1; }
   done
   metric synthesis_elapsed_ms "$(( $(now_ms) - SYNTH_START_MS ))" ms
@@ -222,6 +282,7 @@ cold)
 incr)
   copy_core_pyrope src/pyrope
 
+  synth_oneshot full src/pyrope W_full false
   synth_oneshot pass1 src/pyrope W
   cold_miss_ms=$ic_miss_ms
 
@@ -260,6 +321,10 @@ incr)
   metric synthesis_elapsed_ms "$(( $(now_ms) - SYNTH_START_MS ))" ms
   echo "PASS: warm hits=$h2/misses=$m2 (${warm_miss_ms}ms re-mapped of ${cold_miss_ms}ms cold);" \
     "after one-line edit hits=$h3/misses=$m3"
+  [ "$SYNTH_DOWNSTREAM_FAILURES" = 0 ] || {
+    echo "FAIL: $SYNTH_DOWNSTREAM_FAILURES synthesis invocation(s) completed ABC but failed downstream STA; cold/warm metrics were retained" >&2
+    exit 1
+  }
   ;;
 lec_flat | lec_synth)
   alg=${MODE#lec_}
