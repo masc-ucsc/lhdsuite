@@ -70,6 +70,7 @@ core_benches("xs_renametable")
 core_benches("xs_div")
 core_benches("xs_exu")
 core_benches("xs_backend")
+core_benches("matched_filter")
 
 # Cross-core scenario suites, for comparing one flow across both designs.
 test_suite(

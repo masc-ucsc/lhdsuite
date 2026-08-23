@@ -1,0 +1,31 @@
+// Free-running throughput driver shared by the Pyrope and Verilog-built lg:
+// designs. Its Verilator twin also checks the first results against a direct
+// software dot product before continuing the same checksum benchmark.
+const mf = import("lg:matched_filter")
+
+test mf.free_run(cycles:u32 = 1000) {
+  mut acc = mf
+  mut lfsr:u64 = 0x123456789abcdef
+  mut sum:u64  = 0
+
+  tick cycles {
+    acc.reset    = clock < 2
+    acc.ref_load = clock >= 2 and clock < 66
+    acc.ref_in   = lfsr#[0..=7]
+    acc.x        = lfsr#[8..=15]
+
+    step
+
+    if acc.y_valid {
+      // Default output is s10. Fold its two's-complement bit pattern.
+      wrap sum = ((sum << 1) + (acc.y & 0x3ff)) & 0x7fffffffffffffff
+    }
+
+    // Logical xorshift64, independent of Pyrope's signed wrap representative.
+    wrap lfsr = lfsr ^ (lfsr << 13)
+    wrap lfsr = lfsr ^ lfsr#[7..=63]
+    wrap lfsr = lfsr ^ (lfsr << 17)
+  }
+
+  puts("matched_filter: cycles={cycles} sum={sum}")
+}

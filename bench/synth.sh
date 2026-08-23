@@ -88,6 +88,14 @@ ABC_ARGS+=(--set "abc.verbose=${BENCH_ABC_VERBOSE:-true}")
 COLOR_ARGS=()
 [ -z "${BENCH_COLOR_SYNTH_ALG:-}" ] || COLOR_ARGS+=(--set "color.synth_alg=$BENCH_COLOR_SYNTH_ALG")
 [ -z "${BENCH_COLOR_MAX_GE:-}" ] || COLOR_ARGS+=(--set "color.max_ge=$BENCH_COLOR_MAX_GE")
+# BENCH_PYROPE_SETS="k=v k=v": `--set` flags for every Pyrope COMPILE in this
+# script (the front end, not abc/color) — e.g. `compile.unroll=true` to
+# measure a loop benchmark with its source loops unrolled (the default keeps
+# an eligible loop as one replicated Sub), or `compile.upass.roll_arrays=true`
+# to roll array-carrying loops too. Spell keys fully qualified: `lhd synth`/
+# `lhd sim` reject the bare `unroll`.
+PYROPE_ARGS=()
+for kv in ${BENCH_PYROPE_SETS:-}; do PYROPE_ARGS+=(--set "$kv"); done
 
 stubs=()
 if [ -n "$CORE_P_STUB_DIR" ]; then
@@ -96,7 +104,7 @@ fi
 
 compile_p() {  # SRC_DIR OUT_LG
   lhd compile "$1/$CORE_TOP.prp" ${stubs[@]+"${stubs[@]}"} --top "$CORE_TOP" \
-    --emit-dir "lg:$2" --workdir "cw_$2"
+    --emit-dir "lg:$2" --workdir "cw_$2" ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"}
 }
 
 # report_abc LABEL RESULT_JSON ABC_LOG — the abc reuse counters and the
@@ -161,7 +169,7 @@ synth_oneshot() {
   local rc=0
   lhd_timed_rss "${label}_synth" synth "$src/$CORE_TOP.prp" ${stubs[@]+"${stubs[@]}"} --top "$CORE_TOP" \
     --workdir "$wd" --emit-dir "lg:net_$label" --result-json "r_$label.json" --stats \
-    ${COLOR_ARGS[@]+"${COLOR_ARGS[@]}"} ${ABC_ARGS[@]+"${ABC_ARGS[@]}"} \
+    ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} ${COLOR_ARGS[@]+"${COLOR_ARGS[@]}"} ${ABC_ARGS[@]+"${ABC_ARGS[@]}"} \
     ${incr_args[@]+"${incr_args[@]}"} || rc=$?
   # A failed STA still completed compile/color/ABC. Keep those phase timers in
   # the ledger so a red full row is diagnosable rather than one opaque

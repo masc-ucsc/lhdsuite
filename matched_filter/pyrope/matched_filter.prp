@@ -1,0 +1,79 @@
+// Streaming one-dimensional SAR matched filter.
+//
+// Signed 8-bit return samples enter continuously and walk down the SIZE-tap x
+// chain. Signed 8-bit reference samples use an independent serial chain which
+// advances only under ref_load, then remains fixed during operation. Every x
+// sample starts a new dot product. The LOG2_SIZE-level registered adder tree
+// returns one result per cycle after its deterministic pipeline delay.
+const tap      = import("tap.tap")
+const add_node = import("add_node.add_node")
+
+comptime const SIZE       = 64
+comptime const LOG2_SIZE  = 6
+comptime const MULT_WIDTH = 4
+comptime const SUM_WIDTH  = MULT_WIDTH + LOG2_SIZE
+
+cassert(SIZE == (1 << LOG2_SIZE), "SIZE must equal 2**LOG2_SIZE")
+cassert(LOG2_SIZE > 0, "LOG2_SIZE must be positive")
+cassert(MULT_WIDTH > 0 and MULT_WIDTH <= 16,
+        "MULT_WIDTH must be in 1..=16 for signed 8-bit inputs")
+
+// One validity register per adder level. ref_load flushes all outstanding
+// results; y_valid is also gated low immediately throughout the load window.
+mod valid_stage(in_valid:bool, clear:bool) -> (out_valid:bool@[0]) {
+  reg valid_r:bool = false
+  out_valid = valid_r
+  valid_r = if clear { false } else { in_valid }
+}
+
+// `timecheck=false`: the sample chain, held reference state, and registered
+// reduction deliberately mix cycle ages.
+pub mod matched_filter::[timecheck=false](x:s8, ref_in:s8, ref_load:bool) -> (y:signed(bits=SUM_WIDTH)@[0], y_valid:bool@[0]) {
+  mut xs:s8 = x
+  mut refs:s8 = ref_in
+  mut current:[SIZE]signed(bits=SUM_WIDTH) = 0
+
+  for i in 0..<SIZE {
+    const t = tap(x_in=xs, ref_in=refs, ref_load=ref_load)
+    xs   = t.x_out
+    refs = t.ref_out
+
+    // Always retain the MSB side. At 8..=16 bits, multiply the full s8
+    // operands and retain the upper MULT_WIDTH product bits. Below 8 bits,
+    // first retain the upper MULT_WIDTH bits of each operand, multiply those
+    // signed values, then retain the upper MULT_WIDTH product bits. Width 4:
+    //   (x#[4..=7] * ref#[4..=7])#[4..=7]
+    // #sext selects those same bits while declaring the selected MSB as sign.
+    mut product:signed(bits=MULT_WIDTH) = 0
+    if MULT_WIDTH >= 8 {
+      const full_product:s16 = t.x_out * t.ref_out
+      product = full_product#sext[(16 - MULT_WIDTH)..=15]
+    } else {
+      mut x_msb:signed(bits=MULT_WIDTH) = 0
+      mut ref_msb:signed(bits=MULT_WIDTH) = 0
+      x_msb = t.x_out#sext[(8 - MULT_WIDTH)..=7]
+      ref_msb = t.ref_out#sext[(8 - MULT_WIDTH)..=7]
+      const narrow_product = x_msb * ref_msb
+      product = narrow_product#sext[MULT_WIDTH..=((2 * MULT_WIDTH) - 1)]
+    }
+    current[i] = product
+  }
+
+  // Each registered level reads one vector and writes a distinct next vector.
+  // After the level is complete, current advances to that new pipeline stage.
+  mut tree_valid:bool = not ref_load
+  for lvl in 0..<LOG2_SIZE {
+    mut next:[SIZE]signed(bits=SUM_WIDTH) = 0
+    for j in 0..<(SIZE >> (lvl + 1)) {
+      next[j] = add_node<signed(bits=SUM_WIDTH)>(
+        a=current[2 * j],
+        b=current[2 * j + 1],
+      )
+    }
+    current = next
+    tree_valid = valid_stage(in_valid=tree_valid, clear=ref_load)
+  }
+
+  y_valid = tree_valid and not ref_load
+  y = if y_valid { current[0] } else { 0 }
+}

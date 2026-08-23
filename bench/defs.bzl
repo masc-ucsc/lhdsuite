@@ -385,6 +385,50 @@ CORES = {
         # Equal to sim_cycles on purpose — see xs_alu.
         "verilator_cycles": 25000,
     },
+    "matched_filter": {
+        # Streaming 64-tap signed-8-bit matched filter: x advances every cycle,
+        # ref advances only under ref_load, and a 6-level registered tree emits
+        # one valid result per operating cycle. The Pyrope and generate-loop
+        # Verilog are independent implementations of the same contract.
+        "pkg": "//matched_filter",
+        "top": "matched_filter",
+        # `tap` sits under the top (64 instances) and its reference load is the
+        # bug1 site: tests/bug1/tap.prp corrupts each loaded byte, which the
+        # verify sidecar REFUTES and whole-design LEC catches.
+        "unit": "tap",
+        "seq_unit": "",
+        "v_flags": "",
+        "color_algs": ["flat", "synth"],
+        # Throughput driver (sim/matched_filter_tb.prp): two reset cycles, a
+        # 64-cycle reference load, then a free-running xorshift64 return
+        # signal; the checksum folds each valid 10-bit result.
+        "sim_tb": "matched_filter_tb.prp",
+        # 5M cycles: `lhd sim` runs the filter at ~2.5-4M cycles/s (measured
+        # 2026-08-22, 1.3-2.1 s here) and Verilator at ~18M (0.27 s), so the
+        # simulation, not the ~15 ms process startup, is what the interval
+        # measures. 200k was 80 ms / 14 ms — startup.
+        "sim_cycles": 5000000,
+        "sim_tb_unit": "matched_filter",
+        "sim_tb_v": "",
+        "sim_sets": "",
+        "sim_marker": "matched_filter:",
+        # Pinned from ALL THREE simulators at sim_cycles (the .prp tree,
+        # `lhd compile verilog --top matched_filter`, and Verilator on the
+        # same .sv), which is what makes it safe to gate on.
+        "sim_expect": "sum=6209346479474330016",
+        "sim_top_tb": "",
+        "sim_top_tb_unit": "",
+        "sim_top_cycles": "",
+        "sim_prog_tb": "",
+        "sim_prog_tb_unit": "",
+        "sim_prog_cycles": "",
+        "sim_top_assert": False,
+        "lec_trust": "",
+        "verilator_tb": "matched_filter_tb_verilator.cpp",
+        "verilator_flags": "",
+        # 20M for the long throughput leg: ~1.2 s of Verilator, well past startup.
+        "verilator_cycles": 20000000,
+    },
     "xs_alu": {
         "pkg": "//xiangshan/Backend",
         "top": "Alu",
