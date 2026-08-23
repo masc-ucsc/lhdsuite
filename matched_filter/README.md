@@ -76,12 +76,14 @@ To use the sibling LiveHD checkout while developing compiler changes, append
 
 ## Pyrope compiler notes
 
-The derived-width fix now allows `SUM_WIDTH = MULT_WIDTH + LOG2_SIZE` to be
-used directly in array elements, module ports, and generic `add_node` type
-arguments. That is what makes the compact `current`/`next` tree possible.
+The derived-width and type-alias fixes allow
+`SUM_WIDTH = MULT_WIDTH + LOG2_SIZE` to define a named `Sum_T` used directly in
+the output port and array elements. The design likewise uses `Product_T` for
+its retained multiplier values.
 
-Two related forms are still unsupported, but are not needed here: a named type
-alias such as `type Sum_T = signed(bits=SUM_WIDTH)` is not accepted as an array
-element type, and a non-type generic bound computed from the surrounding loop
-index (for example `add_level<N=(SIZE >> (lvl + 1))>`) does not elaborate. The
-tree therefore keeps the node loop directly in the top module.
+Two generic cases remain unsupported. Passing `Sum_T` as the `add_node` type
+argument loses the `a.[bits]` metadata used inside that generic, so the call
+keeps the equivalent structural type. A non-type generic bound computed from
+the surrounding loop index (for example
+`add_level<N=(SIZE >> (lvl + 1))>`) also does not elaborate. The tree therefore
+keeps the node loop directly in the top module.
