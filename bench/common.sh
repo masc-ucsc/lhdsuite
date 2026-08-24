@@ -60,13 +60,37 @@ if [ -z "${TEST_SRCDIR:-}" ]; then
 fi
 : "${TEST_TMPDIR:=$(mktemp -d "${TMPDIR:-/tmp}/lhdbench.XXXXXX")}" 
 
-# The largest XiangShan synthesis scenarios have a hard two-hour
+# The largest XiangShan synthesis scenarios have a hard six-hour
 # end-to-end budget. Re-exec the complete scenario under coreutils timeout so
 # setup/compile/color/ABC/STA all count, not just one selected command.
 if [ -n "${CORE_SYNTH_BUDGET_S:-}" ] && [ -z "${CORE_SYNTH_BUDGET_ACTIVE:-}" ]; then
   export CORE_SYNTH_BUDGET_ACTIVE=1
   set +e
-  timeout --foreground "$CORE_SYNTH_BUDGET_S" "$0" "$@"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout --foreground "$CORE_SYNTH_BUDGET_S" "$0" "$@"
+  else
+    # macOS has no coreutils `timeout`. Perl's alarm supplies the same exit-124
+    # contract without making every developer install GNU userland. The child
+    # remains in the foreground just like `timeout --foreground` above.
+    perl -e '
+      $seconds = shift @ARGV;
+      $pid = fork();
+      if (!defined $pid) { exit 125; }
+      if ($pid == 0) { exec @ARGV; exit 127; }
+      $timed_out = 0;
+      $SIG{ALRM} = sub { $timed_out = 1; kill "TERM", $pid; };
+      alarm $seconds;
+      waitpid($pid, 0);
+      $status = $?;
+      alarm 0;
+      if ($timed_out) {
+        kill "KILL", $pid;
+        waitpid($pid, 0);
+        exit 124;
+      }
+      exit(($status & 127) ? 128 + ($status & 127) : ($status >> 8));
+    ' "$CORE_SYNTH_BUDGET_S" "$0" "$@"
+  fi
   budget_rc=$?
   set -e
   if [ "$budget_rc" = 124 ]; then
@@ -115,15 +139,17 @@ METRICS=$OUT_DIR/metrics.jsonl
 
 # ---- output discipline -------------------------------------------------------
 # The test log is meant to stay SHORT: bazel echoes it in full on failure, and
-# //bench:show parses it. Only three kinds of line belong there — the `CMD`
-# line per lhd invocation, the `METRIC` lines, and one verdict line per
-# scenario. A failing step's output is NOT dumped wholesale; `step_failed`
+# //bench:show parses it. Only four kinds of line belong there — the `CMD`
+# line per lhd invocation, per-color `PROGRESS pass.abc` heartbeats, the
+# `METRIC` lines, and one verdict line per scenario. A failing step's output is
+# NOT dumped wholesale; `step_failed`
 # prints a short excerpt and files the FULL log under OUT_DIR, which lands in
 # `bazel-testlogs/bench/<target>/test.outputs/`.
 #   bazel test --test_env=BENCH_VERBOSE=1 //bench:<target>   # dump it inline
 #   BENCH_FAIL_TAIL=N                                        # resize the excerpt
 : "${BENCH_VERBOSE:=0}"
 : "${BENCH_FAIL_TAIL:=12}"
+: "${BENCH_PROGRESS:=1}"
 
 now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 
@@ -217,13 +243,43 @@ step_failed() {
 
 # run_timed LABEL cmd args... — run a step, record wall ms as METRIC LABEL_ms.
 # The step's stdout/stderr goes to step_LABEL.log (excerpted on failure).
+# pass.abc's compact completion records are also forwarded immediately to the
+# main test output by default. This makes a multi-hour, many-color synthesis
+# visibly advance without exposing warnings or verbose ABC internals. Set
+# BENCH_PROGRESS=0 to retain the old silent console behavior; the records still
+# remain in the complete step log.
 run_timed() {
   local label=$1
   shift
-  local t0 t1 rc=0
+  local t0 t1 rc=0 status
   CURRENT_STEP=$label
   t0=$(now_ms)
-  "$@" >"step_${label}.log" 2>&1 || rc=$?
+  if [ "$BENCH_PROGRESS" != 0 ]; then
+    # PIPESTATUS is a bash array and must be captured before any other command.
+    # The first non-zero component is the step's status; tee/awk failures are
+    # real harness failures too because they would silently lose evidence.
+    set +e
+    "$@" 2>&1 | tee "step_${label}.log" | awk '
+      /^PROGRESS pass[.]abc / { print; fflush(); next }
+      /"kind":"progress","pass":"pass[.]abc"/ {
+        line = $0
+        sub(/^.*"message":"/, "", line)
+        sub(/","attrs":\{.*$/, "", line)
+        print line
+        fflush()
+      }
+    ' >&3
+    local pipe_status=("${PIPESTATUS[@]}")
+    set -e
+    for status in "${pipe_status[@]}"; do
+      if [ "$status" -ne 0 ]; then
+        rc=$status
+        break
+      fi
+    done
+  else
+    "$@" >"step_${label}.log" 2>&1 || rc=$?
+  fi
   t1=$(now_ms)
   LAST_MS=$((t1 - t0))
   metric "${label}_ms" "$LAST_MS" ms
@@ -233,17 +289,26 @@ run_timed() {
   fi
 }
 
-# run_timed_rss LABEL cmd args... — run_timed plus GNU time's peak RSS for the
-# complete process tree. This is diagnostic by default: a many-color synthesis
-# retains completed mapped modules, so its process peak is not the memory used
-# by one ABC color. Set BENCH_PROCESS_MAX_RSS_KB explicitly to gate total RSS;
+# run_timed_rss LABEL cmd args... — run_timed plus the platform time tool's
+# peak RSS for the complete process tree. This is diagnostic by default: a
+# many-color synthesis retains completed mapped modules, so its process peak is
+# not the memory used by one ABC color. Set BENCH_PROCESS_MAX_RSS_KB explicitly
+# to gate total RSS;
 # the normal 16-GiB policy is enforced per color by pass.abc and its QoR field.
 run_timed_rss() {
   local label=$1
   shift
   local usage="rusage_${label}.txt" rc=0 rss=""
-  run_timed "$label" /usr/bin/time -f '%M' -o "$usage" "$@" || rc=$?
-  [ ! -s "$usage" ] || rss=$(tail -1 "$usage" | tr -d '[:space:]')
+  if /usr/bin/time -f '%M' -o /dev/null true >/dev/null 2>&1; then
+    run_timed "$label" /usr/bin/time -f '%M' -o "$usage" "$@" || rc=$?
+    [ ! -s "$usage" ] || rss=$(tail -1 "$usage" | tr -d '[:space:]')
+  else
+    # BSD time (including macOS) has no GNU -f format. Its -l report writes
+    # maximum resident set size in bytes, so normalize that to the KiB metric
+    # emitted by the GNU path.
+    run_timed "$label" /usr/bin/time -l -o "$usage" "$@" || rc=$?
+    [ ! -s "$usage" ] || rss=$(awk '/maximum resident set size/ {print int($1 / 1024)}' "$usage")
+  fi
   case "$rss" in
     ''|*[!0-9]*) ;;
     *)

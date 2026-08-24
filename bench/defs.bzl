@@ -24,6 +24,10 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             edit. Empty means `top`; use a small, definitely-instantiated
 #             stateful leaf when mutating the generated top would make the
 #             cache-disabled H5 reference pathologically expensive.
+#   incremental_variant  checked-in tests/<name>/ overlay used only by the
+#             synth incremental semantic-edit pass. Empty means bug1; use a
+#             localized real edit when bug1 deliberately changes every shared
+#             occurrence and therefore cannot retain an untouched ABC region.
 #   seq_unit  module carrying a SEQUENTIAL verify sidecar
 #             (<core>/verif/<seq_unit>.verify.prp), i.e. one whose properties
 #             relate a cycle to the next with `past`/`stable`/`rose`/... The
@@ -37,6 +41,9 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             `flat` fuses the whole hierarchy into ONE abc region, so it does
 #             not scale past a certain design size; a core that omits it also
 #             loses its `synth_lec_flat` target.
+#   color_max_ge  optional synth-color region cap. Use it when the default
+#             would fuse the whole core into one region and make a localized
+#             semantic edit incapable of demonstrating mixed cache hit/miss.
 #   sim_tb    asserted, timed sim benchmark. sim_cycles is its explicit cycle
 #             count. sim_top_tb / sim_prog_tb are additional whole-top
 #             correctness drivers ("" = none). sim_top_cycles /
@@ -396,9 +403,11 @@ CORES = {
         # bug1 site: tests/bug1/tap.prp corrupts each loaded byte, which the
         # verify sidecar REFUTES and whole-design LEC catches.
         "unit": "tap",
+        "incremental_variant": "incr1",
         "seq_unit": "",
         "v_flags": "",
         "color_algs": ["flat", "synth"],
+        "color_max_ge": 4000,
         # Throughput driver (sim/matched_filter_tb.prp): two reset cycles, a
         # 64-cycle reference load, then a free-running xorshift64 return
         # signal; the checksum folds each valid 10-bit result.
@@ -633,8 +642,10 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_V_FLAGS": cfg["v_flags"],
             "CORE_UNIT": cfg["unit"],
             "CORE_INCR_EDIT_UNIT": cfg.get("incremental_edit_unit", ""),
+            "CORE_INCR_VARIANT": cfg.get("incremental_variant", ""),
             "CORE_SEQ_UNIT": cfg.get("seq_unit", ""),
             "CORE_COLOR_ALGS": " ".join(cfg["color_algs"]),
+            "BENCH_COLOR_MAX_GE": str(cfg.get("color_max_ge", "")),
             "CORE_SYNTH_ONLY": "1" if synth_only else "",
             # Per-color limits are 16 GiB / 15 minutes. A partitioned scenario
             # maps many colors across full/cold/warm/edit, so its six-hour

@@ -124,14 +124,21 @@ Each test prints `METRIC <name> <value> <unit>` lines (also collected as
 `metrics.jsonl` under `bazel-testlogs/bench/<target>/test.outputs/`). Targets
 are tagged `exclusive` so timings are never polluted by parallel tests.
 
-The test log itself is deliberately terse — the `CMD` and `METRIC` lines, plus
-a short excerpt when a step fails. Each step's FULL stdout/stderr is saved
-beside `metrics.jsonl` as `step_<label>.log`, so `--test_output=all` on a
-failing target gives you the diagnosis and the file to open next. Two knobs:
+The test log itself is deliberately terse — the `CMD` and `METRIC` lines, one
+compact `PROGRESS pass.abc` heartbeat as each synthesis color completes, plus
+a short excerpt when a step fails. Each heartbeat names the region/color and
+reports cache status, input GE, output gates, and elapsed milliseconds; its
+full structured row (area, delay, RSS, and critical endpoint included) remains
+in the step's JSONL output. Each step's FULL stdout/stderr is saved beside
+`metrics.jsonl` as `step_<label>.log`, so `--test_output=all` on a failing
+target gives you the diagnosis and the file to open next. Progress is enabled
+by default; set `BENCH_PROGRESS=0` only when a caller needs silent stdout.
+Three knobs:
 
 ```bash
 bazel test //bench:minion_lec --test_env=BENCH_VERBOSE=1   # dump step logs inline
 bazel test //bench:minion_lec --test_env=BENCH_FAIL_TAIL=40 # longer excerpt
+bazel test //bench:minion_synth --test_env=BENCH_PROGRESS=0 # retain progress only in the full step log
 ```
 
 Scenario cost scales with the design: everything on dino finishes in seconds,

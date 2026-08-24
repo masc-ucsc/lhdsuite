@@ -320,7 +320,7 @@ incr)
   if [ -n "$CORE_SYNTH_ONLY" ]; then
     apply_synth_only_variant bug1 src/pyrope
   else
-    apply_variant bug1 src/pyrope
+    apply_variant "${CORE_INCR_VARIANT:-bug1}" src/pyrope
   fi
   synth_oneshot pass3 src/pyrope W
   h3=$ic_hits m3=$ic_misses
