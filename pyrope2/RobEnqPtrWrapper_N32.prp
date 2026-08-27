@@ -1,0 +1,38 @@
+// Loop-form Pyrope for XiangShan RobEnqPtrWrapper at N=RobSize=32.
+// Diff vs the N=16 loop file: robIdx.value:u4->u5, reg u40->u48,
+// slot spacing 5->6 bits, reset 0x398a418820 -> 0x1c61440c2040,
+// io_out u40->u48. Everything else identical.
+
+pub mod RobEnqPtrWrapper::[timecheck=false](
+  clock:u1,
+  reset:u1,
+  io_redirect:(valid:u1, bits:(ftqIdx:(flag:u1, value:u6), canTrain:u1, pc:u50, taken:u1, ftqOffset:u5, isRVC:u1, attribute_0:(branchType:u2, rasAction:u2), target:u50, level:u1, backendIGPF:u1, backendIPF:u1, backendIAF:u1, robIdx:(flag:u1, value:u5), interrupt:u1, isMisPred:u1, fullTarget:u64, stFtqIdx:(flag:u1, value:u6), stFtqOffset:u5, stIsRVC:u1, debug_runahead_checkpoint_id:u64, debugIsCtrl:u1, debugIsMemVio:u1)),
+  io_allowEnqueue:u1,
+  io_hasBlockBackward:u1,
+  io_enq:u8
+) -> (io_out:u48@[]) {
+  reg enqPtrVec:u48:[reset_pin=ref reset, async=true] = 0x1c61440c2040
+
+  const canAccept:u1   = io_allowEnqueue & ~io_hasBlockBackward
+  const disp_pc:u4     = io_enq#+[..]
+  const dispatchNum:u4 = if canAccept != 0 { disp_pc } else { 0 }
+  const rd_flag:u1     = io_redirect.bits.robIdx.flag
+  const rd_val:u5      = io_redirect.bits.robIdx.value
+  const rd_level:u1    = io_redirect.bits.level
+  const rd_valid:u1    = io_redirect.valid
+  const base:u6        = (rd_flag << 5) | rd_val
+
+  for i in 0..<8 {
+    const new_ptr:u6   = (base + i)#[0..=5]
+    const new_ptr_1:u6 = (base + i + 1)#[0..=5]
+    const cur:u6       = enqPtrVec#[(i*6)..=(i*6+5)]
+    const new_ptr_2:u6 = (cur + dispatchNum)#[0..=5]
+
+    const t1:u6  = if rd_level != 0 { new_ptr } else { new_ptr_1 }
+    const nxt:u6 = if rd_valid != 0 { t1 }      else { new_ptr_2 }
+
+    enqPtrVec#[(i*6)..=(i*6+5)] = nxt
+  }
+
+  io_out = enqPtrVec
+}
