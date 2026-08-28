@@ -6,7 +6,8 @@
 #   CORE              design under test: dino | minion
 #   CORE_V_FLIST      rlocationpath of <core>/verilog/filelist.f
 #   CORE_P_TOP        rlocationpath of <core>/pyrope/<CORE_TOP>.prp
-#   CORE_TOP          whole-design top module, in both languages
+#   CORE_TOP          whole-design top module (Pyrope-only for a core whose
+#                     CORES entry sets pyrope_only)
 #   CORE_V_FLAGS      extra slang options for this core (may be empty)
 #   CORE_UNIT         module carrying the verify sidecar + bug1/comment1
 #   CORE_COLOR_ALGS   space-separated `pass color` algorithms this core runs
@@ -31,10 +32,6 @@
 #   CORE_SIM_TOP_CYCLES  explicit `cycles` value for CORE_SIM_TOP_TB
 #   CORE_SIM_PROG_TB  program testbench ("" = none)
 #   CORE_SIM_PROG_CYCLES explicit `cycles` value for CORE_SIM_PROG_TB
-#   CORE_SIM_PROG_PYROPE_ONLY  "1" = CORE_SIM_PROG_TB drives a module that
-#                     exists only in the Pyrope tree, so MODE=verilog skips it
-#                     (no lg: compile, no sim_cpu_prog_ok metric); "" = run it
-#                     in both modes. See defs.bzl.
 #   CORE_SIM_TOP_ASSERT  "1" = the two above GATE the target (a driver that
 #                     fails fails the test); "" = report them as metrics only.
 #                     Always metrics either way. See defs.bzl.
@@ -125,7 +122,6 @@ CORE_TESTS_DIR=$CORE_DIR/tests
 : "${CORE_SIM_CYCLES=}" "${CORE_SIM_TB_UNIT=}" "${CORE_SIM_PERF_CYCLES=}"
 : "${CORE_SIM_TOP_UNIT=}" "${CORE_SIM_PROG_UNIT=}"
 : "${CORE_SIM_TOP_CYCLES=}" "${CORE_SIM_PROG_CYCLES=}"
-: "${CORE_SIM_PROG_PYROPE_ONLY=}"
 : "${CORE_VERILATOR_TB=}" "${CORE_VERILATOR_FLAGS=}" "${CORE_VERILATOR_CYCLES=}"
 WORK=${TEST_TMPDIR:?}
 cd "$WORK"
@@ -453,6 +449,31 @@ find_verilator() {
 # incremental help", and `store_failed` names the bug behind a stuck one — a
 # region the cache could not snapshot re-runs ABC on every iteration forever
 # (unlike `uncacheable`, which is a principled, documented refusal).
+# sta_incr_counts RESULT_JSON — echo "hits misses digestable lookup_ms" from
+# the STA reuse tier (`incremental.sta`), or "MISSING" when it did not run
+# (no user --workdir, lhd.incremental=false, or an lhd without the tier).
+#
+# ONE analysis per run, so hits/misses is 1/0 or 0/1: this is a boolean "did
+# the identical netlist re-time or not", and `digestable=False` is the one way
+# the tier is enabled and still can never hit (an anonymous state cell leaves
+# the netlist without a reproducible identity).
+sta_incr_counts() {
+  python3 - "$1" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print("MISSING")
+    raise SystemExit
+tier = (d.get("incremental") or {}).get("sta") if isinstance(d, dict) else None
+if not isinstance(tier, dict) or not tier.get("enabled", False):
+    print("MISSING")
+    raise SystemExit
+print(tier.get("hits", 0), tier.get("misses", 0), tier.get("digestable", True),
+      round(tier.get("lookup_ms", 0)))
+PY
+}
+
 abc_incr_counts() {
   python3 - "$1" <<'PY'
 import json, sys
@@ -856,6 +877,40 @@ apply_variant() {
   cp -fL "$vdir"/* "$2"/
 }
 
+# apply_generated_variant NAME DIR — create a core-configured one-line variant
+# in a writable copy. The exact design text lives in CORES, not this shared
+# script, so the flow remains core-agnostic. This is for generated trees where
+# checking in another complete copy of a large unit for one changed line would
+# be pure churn.
+apply_generated_variant() {
+  local name=$1 dir=$2 file="$2/$CORE_UNIT.prp" tmp="$2/$CORE_UNIT.prp.tmp"
+  case "$name" in
+  comment1)
+    printf '\n// lhdsuite incremental comment-only touch\n' >>"$file"
+    ;;
+  bug1)
+    [ -n "${CORE_VARIANT_BUG_FIND:-}" ] && [ -n "${CORE_VARIANT_BUG_REPLACE:-}" ] || {
+      echo "FAIL: generated bug1 needs variant_bug_find and variant_bug_replace" >&2
+      return 1
+    }
+    awk -v find="$CORE_VARIANT_BUG_FIND" -v repl="$CORE_VARIANT_BUG_REPLACE" '
+      !done && $0 == find { print repl; done = 1; next }
+      { print }
+      END { if (!done) exit 42 }
+    ' "$file" >"$tmp" || {
+      rm -f "$tmp"
+      echo "FAIL: generated bug1 anchor not found in $CORE_UNIT.prp" >&2
+      return 1
+    }
+    mv "$tmp" "$file"
+    ;;
+  *)
+    echo "FAIL: unknown generated variant '$name'" >&2
+    return 1
+    ;;
+  esac
+}
+
 # apply_synth_only_variant NAME DIR — synth-only cores deliberately have no
 # tests/ overlays. Make equivalent edits to their writable top copy without
 # naming any design in this shared script.
@@ -923,7 +978,15 @@ apply_synth_only_variant() {
 # finds no site is a hard failure, never a skipped edit.
 core_variant() {
   local name=$1 dir=$2
-  if [ -n "${CORE_SYNTH_ONLY:-}" ]; then
+  if [ -n "${CORE_GENERATED_VARIANTS:-}" ]; then
+    apply_generated_variant "$name" "$dir" || return 1
+    if [ "$name" = bug1 ]; then
+      printf 'VARIANT %s: %s.prp: %s -> %s\n' "$name" "$CORE_UNIT" \
+        "$CORE_VARIANT_BUG_FIND" "$CORE_VARIANT_BUG_REPLACE" >&3
+    else
+      printf 'VARIANT %s: appended to %s.prp\n' "$name" "$CORE_UNIT" >&3
+    fi
+  elif [ -n "${CORE_SYNTH_ONLY:-}" ]; then
     apply_synth_only_variant "$name" "$dir" || return 1
     local variant_unit=$CORE_TOP
     if [ "$name" = bug1 ] && [ -n "${CORE_INCR_EDIT_UNIT:-}" ]; then

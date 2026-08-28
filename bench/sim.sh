@@ -40,11 +40,8 @@
 # sim_cpu_prog_ok; with $CORE_SIM_TOP_ASSERT set they ALSO gate the target, so
 # a regression fails it instead of silently flipping a metric to 0. dino gates
 # its extra top smoke; minion reports only, its vpu_top still hitting a derived
-# clock inou.cgen.sim cannot fold (fixme issue 12), and so does cva6, whose
-# program driver is blocked by the generated icache (see README's
-# "Known-failing scenarios"). An empty $CORE_SIM_*_TB skips that driver, and
-# $CORE_SIM_PROG_PYROPE_ONLY skips the program driver under MODE=verilog only —
-# for a DUT that core's Verilog tree does not carry.
+# clock inou.cgen.sim cannot fold (fixme issue 12). An empty $CORE_SIM_*_TB
+# skips that driver.
 #
 #   MODE=pyrope   sim the <core>/pyrope tree directly.
 #   MODE=verilog  compile the Verilog through slang straight to an lgraph
@@ -128,16 +125,6 @@ verilog)
       TOP_INPUT="lg:lg_top"
     fi
   fi
-  # A program driver whose DUT exists only in the Pyrope tree has nothing to
-  # compile here: cva6/verilog/ carries the tag_cmp cone, not the `cva6` top
-  # its driver drives, so `--top cva6` could not elaborate at all. Skip the
-  # driver (and its metric) instead of failing on a module that is absent by
-  # design. See sim_prog_pyrope_only in defs.bzl.
-  if [ -n "$CORE_SIM_PROG_PYROPE_ONLY" ] && [ -n "$CORE_SIM_PROG_TB" ]; then
-    echo "NOTE: MODE=verilog skips program driver '$CORE_SIM_PROG_TB'" \
-      "— its DUT '$CORE_SIM_PROG_UNIT' is not in this core's Verilog tree"
-    CORE_SIM_PROG_TB=
-  fi
   if [ -n "$CORE_SIM_PROG_TB" ]; then
     if [ "$CORE_SIM_PROG_UNIT" = "$CORE_SIM_TB_UNIT" ]; then
       PROG_INPUT=$BENCH_INPUT
@@ -194,12 +181,19 @@ if [ "$MODE" = incr ]; then
   ninja_path=$(type -P ninja || true)
   metric sim_ninja_present "$([ -n "$ninja_path" ] && echo 1 || echo 0)" bool
 
-  # sim_pass TAG GATE_EXPECT — one full pass. GATE_EXPECT=0 relaxes to the
+  # sim_pass TAG GATE_EXPECT [INCREMENTAL] [ALLOW_TEST_FAIL] — one full pass.
+  # GATE_EXPECT=0 relaxes to the
   # marker alone, which is what pass 3 needs: `bug1` changes the design, so the
   # checksum MUST move. Keeping the pass-1 checksum as a gate there would fail
-  # the target for doing its job.
+  # the target for doing its job. ALLOW_TEST_FAIL is also pass-3-only: an
+  # asserted driver may correctly reject the injected mutant. Its non-zero
+  # status is accepted only if sim_gate still finds the final marker, proving
+  # the driver ran to completion rather than crashing.
+  allow_nonzero() { "$@" || return 0; }
+
   sim_pass() {
-    local tag=$1 expect=$2 incremental=${3:-true} run_ms exec_ms cc_ms
+    local tag=$1 expect=$2 incremental=${3:-true} allow_test_fail=${4:-false}
+    local run_ms exec_ms cc_ms
     local incr_args=()
     [ "$incremental" != false ] || incr_args=(--set lhd.incremental=false)
     # shellcheck disable=SC2086  # CORE_SIM_SETS is a token LIST, split on purpose
@@ -207,17 +201,28 @@ if [ "$MODE" = incr ]; then
       --set sim.vcd=false $CORE_SIM_SETS --workdir SW \
       ${incr_args[@]+"${incr_args[@]}"} || return 1
     # shellcheck disable=SC2086
-    run_timed "sim_run_$tag" lhd sim "${SIM_INPUTS[@]}" --run-only \
-      --arg "cycles=$CYCLES" $CORE_SIM_SETS --diag-fmt pretty --workdir SW \
-      ${incr_args[@]+"${incr_args[@]}"} || return 1
+    if [ "$allow_test_fail" = true ]; then
+      run_timed "sim_run_$tag" allow_nonzero lhd sim "${SIM_INPUTS[@]}" --run-only \
+        --arg "cycles=$CYCLES" $CORE_SIM_SETS --diag-fmt pretty --workdir SW \
+        ${incr_args[@]+"${incr_args[@]}"} || return 1
+    else
+      run_timed "sim_run_$tag" lhd sim "${SIM_INPUTS[@]}" --run-only \
+        --arg "cycles=$CYCLES" $CORE_SIM_SETS --diag-fmt pretty --workdir SW \
+        ${incr_args[@]+"${incr_args[@]}"} || return 1
+    fi
     run_ms=$LAST_MS
     SIM_GATE_EXPECT=$expect sim_gate "sim_run_$tag"
 
     # exec at the GATE count first: sim_cc_ms is only meaningful as
     # sim_run_ms minus the same simulation sim_run just paid for.
     log_cmd "sim_exec_$tag" "SW/sim/drv.bin --cycles $CYCLES  (x$SIM_REPS, best)"
-    SIM_GATE_EXPECT=$expect best_run "sim_exec_$tag" "$SIM_REPS" \
-      SW/sim/drv.bin --cycles "$CYCLES" --result-json SW/sim/exec_tests.json
+    if [ "$allow_test_fail" = true ]; then
+      SIM_GATE_EXPECT=$expect best_run "sim_exec_$tag" "$SIM_REPS" allow_nonzero \
+        SW/sim/drv.bin --cycles "$CYCLES" --result-json SW/sim/exec_tests.json
+    else
+      SIM_GATE_EXPECT=$expect best_run "sim_exec_$tag" "$SIM_REPS" \
+        SW/sim/drv.bin --cycles "$CYCLES" --result-json SW/sim/exec_tests.json
+    fi
     exec_ms=$BEST_MS
     cc_ms=$((run_ms - exec_ms))
     [ "$cc_ms" -ge 0 ] || cc_ms=0
@@ -227,8 +232,13 @@ if [ "$MODE" = incr ]; then
     # floor. Marker-only: a different cycle count is a different checksum.
     if [ "$PERF_CYCLES" != "$CYCLES" ]; then
       log_cmd "sim_perf_$tag" "SW/sim/drv.bin --cycles $PERF_CYCLES  (x$SIM_REPS, best)"
-      SIM_GATE_EXPECT=0 best_run "sim_perf_$tag" "$SIM_REPS" \
-        SW/sim/drv.bin --cycles "$PERF_CYCLES" --result-json SW/sim/perf_tests.json
+      if [ "$allow_test_fail" = true ]; then
+        SIM_GATE_EXPECT=0 best_run "sim_perf_$tag" "$SIM_REPS" allow_nonzero \
+          SW/sim/drv.bin --cycles "$PERF_CYCLES" --result-json SW/sim/perf_tests.json
+      else
+        SIM_GATE_EXPECT=0 best_run "sim_perf_$tag" "$SIM_REPS" \
+          SW/sim/drv.bin --cycles "$PERF_CYCLES" --result-json SW/sim/perf_tests.json
+      fi
       exec_ms=$BEST_MS
     fi
     metric "sim_exec_ms_$tag" "$exec_ms" ms
@@ -280,7 +290,7 @@ if [ "$MODE" = incr ]; then
 
   core_variant bug1 tree || exit 1
   touch marker
-  sim_pass edit 0 || exit 1
+  sim_pass edit 0 true true || exit 1
   rewritten=$(generated_newer marker)
   metric sim_rewritten_edit "$(echo "$rewritten" | wc -w | tr -d ' ')" files
   [ -n "$rewritten" ] \

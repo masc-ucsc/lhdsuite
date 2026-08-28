@@ -68,7 +68,7 @@ TOP=$CORE_TOP.$CORE_TOP
 LIB="$HAGENT_TECH_DIR/sky130_fd_sc_hd__tt_025C_1v80.lib"
 
 # Experiment-only synthesis knobs. Bazel tests can set BENCH_ABC_*=...,
-# BENCH_COLOR_SYNTH_ALG=pipe|synth, or BENCH_COLOR_REDUCE=1 so one candidate is
+# BENCH_COLOR_SYNTH_ALG=pipe|synth|cones, or BENCH_COLOR_REDUCE=1 so one candidate is
 # applied uniformly across targets without editing LiveHD defaults between
 # measurements. The reduction step is timed separately as <alg>_reduce_ms (the
 # manual flow only: `lhd synth` has no reduce step, by design).
@@ -88,6 +88,13 @@ ABC_ARGS+=(--set "abc.verbose=${BENCH_ABC_VERBOSE:-true}")
 COLOR_ARGS=()
 [ -z "${BENCH_COLOR_SYNTH_ALG:-}" ] || COLOR_ARGS+=(--set "color.synth_alg=$BENCH_COLOR_SYNTH_ALG")
 [ -z "${BENCH_COLOR_MAX_GE:-}" ] || COLOR_ARGS+=(--set "color.max_ge=$BENCH_COLOR_MAX_GE")
+# cones mode's clustering threshold, in PREDICTED generic-AIG size. A different
+# unit from max_ge (which is synthesis GE and shapes the synth/pipe size
+# window), so both can be set in one run without one overriding the other.
+[ -z "${BENCH_COLOR_MAX_GATE:-}" ] || COLOR_ARGS+=(--set "color.max_gate=$BENCH_COLOR_MAX_GATE")
+# cones phase 2: false|pair|all -- merge a register's color FORWARD across its Q
+# after the backward overlap merge has taken its share of the budget.
+[ -z "${BENCH_COLOR_FORWARD:-}" ] || COLOR_ARGS+=(--set "color.forward=$BENCH_COLOR_FORWARD")
 # BENCH_PYROPE_SETS="k=v k=v": `--set` flags for every Pyrope COMPILE in this
 # script (the front end, not abc/color) — e.g. `compile.unroll=true` to
 # measure a loop benchmark with its source loops unrolled (the default keeps
@@ -149,6 +156,28 @@ report_sta() {
     exit 1
   }
   metric "${1}_sta_delay" "$STA_DELAY" ns
+}
+
+# report_sta_incr LABEL RESULT_JSON — pass.opentimer's STA result-cache tier.
+# Sets sc_hits/sc_misses (empty when the tier did not run). STA is 70-97% of a
+# warm synth on the big blocks, so whether this tier hit is what decides the
+# whole-flow incremental number; `LABEL_sta_ms` next to it says what it bought.
+report_sta_incr() {
+  sc_hits="" sc_misses="" sc_digestable="" sc_lookup_ms=""
+  STA_COUNTS=$(sta_incr_counts "$2")
+  if [ "$STA_COUNTS" != MISSING ]; then
+    read -r sc_hits sc_misses sc_digestable sc_lookup_ms <<EOF
+$STA_COUNTS
+EOF
+    metric "${1}_sta_cache_hits" "$sc_hits" hits
+    metric "${1}_sta_cache_misses" "$sc_misses" misses
+    # The netlist walk a hit still pays; it is the tier's whole cost.
+    metric "${1}_sta_lookup_ms" "$sc_lookup_ms" ms
+    # An undigestable netlist can NEVER hit: the tier is on and dead. Surface it
+    # rather than letting it read as an ordinary miss forever.
+    [ "$sc_digestable" != False ] || \
+      echo "NOTE: $1: the netlist has no reproducible identity (anonymous state cell) — STA re-times every run" >&2
+  fi
 }
 
 # synth_oneshot LABEL SRC_DIR WORKDIR — `lhd synth`: compile + color synth +
@@ -213,6 +242,7 @@ EOF
   # Preserve the reports even when a later gate fails (netlist LEC, budget):
   # the run remains measurable without weakening the downstream gate.
   report_sta "$label" "$wd/synth/timing.json"
+  report_sta_incr "$label" "r_$label.json"
   report_abc "$label" "r_$label.json" "step_${label}_synth.log"
 }
 
@@ -294,14 +324,29 @@ incr)
   synth_oneshot pass1 src/pyrope W
   cold_miss_ms=$ic_miss_ms
 
-  if [ -n "$CORE_SYNTH_ONLY" ]; then
-    apply_synth_only_variant comment1 src/pyrope
-  else
-    apply_variant comment1 src/pyrope
-  fi
+  core_variant comment1 src/pyrope
   synth_oneshot pass2 src/pyrope W
   h2=$ic_hits m2=$ic_misses warm_miss_ms=$ic_miss_ms
+  sta_h2=${sc_hits:-}
   [ "${h2:-0}" -gt 0 ] || { echo "FAIL: comment-only pass got no abc cache hits ($ABC_COUNTS)" >&2; exit 1; }
+  # STA is 47-97% of a warm synth, so an abc cache that hits everything still
+  # buys only ~1.3x if pass.opentimer re-times. The gate is conditional on the
+  # abc tier, and deliberately so: the STA cache is keyed on the NETLIST, and a
+  # region that re-mapped may legitimately have produced a different one (dino
+  # has two reuse-ineligible regions whose remap is not byte-reproducible). What
+  # must never happen is "every region was reused and STA still re-timed".
+  if [ -z "${sta_h2:-}" ]; then
+    :  # tier not reported (cache off, or a run that failed downstream)
+  elif [ "${sc_digestable:-True}" = False ]; then
+    echo "NOTE: comment-only pass could not reuse STA: the netlist has no reproducible identity" >&2
+  elif [ "${m2:-0}" -gt 0 ]; then
+    echo "NOTE: comment-only pass re-mapped $m2 region(s), so the netlist may differ; STA reuse=$sta_h2" >&2
+  else
+    [ "${sta_h2:-0}" -gt 0 ] || {
+      echo "FAIL: comment-only pass reused every abc region and still re-timed the identical netlist ($STA_COUNTS)" >&2
+      exit 1
+    }
+  fi
   # The gate that matters. A hit COUNT proves nothing about wall time: minion
   # once hit 199 of 264 regions and saved 2%, because everything expensive was
   # in the 65 that missed. What a comment-only edit must not re-map is time.
@@ -317,18 +362,14 @@ incr)
   c2_misses=$(compile_incr_field r_pass2.json misses)
   metric pass2_compile_misses "${c2_misses:-0}" misses
 
-  if [ -n "$CORE_SYNTH_ONLY" ]; then
-    apply_synth_only_variant bug1 src/pyrope
-  else
-    apply_variant "${CORE_INCR_VARIANT:-bug1}" src/pyrope
-  fi
+  core_variant "${CORE_INCR_VARIANT:-bug1}" src/pyrope
   synth_oneshot pass3 src/pyrope W
   h3=$ic_hits m3=$ic_misses
   [ "${m3:-0}" -ge 1 ] || { echo "FAIL: real edit re-synthesized nothing ($ABC_COUNTS)" >&2; exit 1; }
   [ "${h3:-0}" -gt 0 ] || { echo "FAIL: real edit lost every cache hit ($ABC_COUNTS)" >&2; exit 1; }
   metric synthesis_elapsed_ms "$(( $(now_ms) - SYNTH_START_MS ))" ms
   echo "PASS: warm hits=$h2/misses=$m2 (${warm_miss_ms}ms re-mapped of ${cold_miss_ms}ms cold);" \
-    "after one-line edit hits=$h3/misses=$m3"
+    "sta reuse=${sta_h2:-n/a}; after one-line edit hits=$h3/misses=$m3"
   [ "$SYNTH_DOWNSTREAM_FAILURES" = 0 ] || {
     echo "FAIL: $SYNTH_DOWNSTREAM_FAILURES synthesis invocation(s) completed ABC but failed downstream STA; cold/warm metrics were retained" >&2
     exit 1
@@ -340,14 +381,14 @@ lec_flat | lec_synth)
 
   if [ "$alg" = synth ]; then
     synth_oneshot pass1 src/pyrope W
-    apply_variant comment1 src/pyrope
+    core_variant comment1 src/pyrope
     synth_oneshot pass2 src/pyrope W
     [ "${ic_hits:-0}" -gt 0 ] || { echo "FAIL: 2nd run got no abc cache hits ($ABC_COUNTS) — nothing cloned to validate" >&2; exit 1; }
     design=W/synth/lg  # the one-shot's compiled design, as of pass 2
   else
     run_timed compile_pass1 compile_p src/pyrope lg_p1
     synth_pass pass1 lg_p1 "$alg" W
-    apply_variant comment1 src/pyrope
+    core_variant comment1 src/pyrope
     run_timed compile_pass2 compile_p src/pyrope lg_p2
     synth_pass pass2 lg_p2 "$alg" W
     design=lg_p2

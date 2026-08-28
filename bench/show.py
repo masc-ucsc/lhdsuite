@@ -18,6 +18,8 @@ from pathlib import Path
 # Keep in sync with the CORES table in bench/defs.bzl.
 CORES = ("dino", "cva6", "minion", "xs_rob", "xs_alu", "xs_div", "xs_exu", "xs_backend")
 SYNTH_ONLY_CORES = ("xs_rob", "xs_alu", "xs_div", "xs_exu", "xs_backend")
+PYROPE_ONLY_CORES = ("cva6",)
+FLAT_CORES = ("minion",)
 # ...and with which of those entries carry a `verilator_tb` (only those get a
 # <core>_sim_verilator target, so only those may be looked up — asking for a
 # target that is not generated would report it as "not run yet" forever).
@@ -132,8 +134,10 @@ def report_core(root: Path, core: str) -> list:
     print(f"\n{'─' * 72}\n{core}\n{'─' * 72}")
 
     # ---- compile ----------------------------------------------------------
-    cv, cp, cpp = G("compile_verilog"), G("compile_pyrope"), G("compile_pyrope_parallel")
-    rep.head("compile (source -> lg:)", cv, cp, cpp)
+    cv = None if core in PYROPE_ONLY_CORES else G("compile_verilog")
+    cp, cpp = G("compile_pyrope"), G("compile_pyrope_parallel")
+    compile_rows = [cp, cpp] if core in PYROPE_ONLY_CORES else [cv, cp, cpp]
+    rep.head("compile (source -> lg:)", *compile_rows)
     if cv or cp or cpp:
         print(f"   {'':11} {'LoC':>8} {'words':>9} {'time':>8} {'LoC/s':>9} {'words/s':>9}")
         for name, r in (("verilog", cv), ("pyrope", cp)):
@@ -162,18 +166,24 @@ def report_core(root: Path, core: str) -> list:
         rep.cmds(("compile_verilog", cv), ("compile_pyrope", cp),
                  ("compile_pyrope_parallel", cpp))
 
-    # ---- synth: flat vs synth coloring -----------------------------------
+    # ---- synthesis coloring ----------------------------------------------
     sy = G("synth")
-    rep.head("synth (color flat vs synth)", sy)
+    synth_algs = ("flat", "synth") if core in FLAT_CORES else ("synth",)
+    rep.head("synth (color " + " + ".join(synth_algs) + ")", sy)
     if sy:
         m = sy[3]
         print(f"   {'':7} {'color':>7} {'abc':>8} {'regions':>8} {'gates':>8} {'area um2':>11} {'ABC':>7} {'STA':>7}")
-        for alg in ("flat", "synth"):
+        for alg in synth_algs:
             print(f"   {alg:7} {fmt(m.get(f'{alg}_color_ms'), 'ms'):>7} {fmt(m.get(f'{alg}_abc_ms'), 'ms'):>8}"
                   f" {fmt(m.get(f'{alg}_regions')):>8} {fmt(m.get(f'{alg}_gates')):>8}"
                   f" {fmt(m.get(f'{alg}_area')):>11} {fmt(m.get(f'{alg}_max_delay')):>7}"
                   f" {fmt(m.get(f'{alg}_sta_delay')):>7}")
-        rep.cmds(("synth", sy))
+        # A target may still have an old pre-policy log. Do not resurrect its
+        # removed flat commands in a current report for a non-flat core.
+        sy_cmd = sy
+        if core not in FLAT_CORES:
+            sy_cmd = sy[:4] + ([(step, cmd) for step, cmd in sy[4] if "flat" not in step],)
+        rep.cmds(("synth", sy_cmd))
 
     # ---- synth incremental ------------------------------------------------
     si = G("synth_incremental")
@@ -202,8 +212,10 @@ def report_core(root: Path, core: str) -> list:
         return rep.missing
 
     # ---- netlist lec: 2nd-run netlist proven against the design ------------
-    nf, ns = G("synth_lec_flat"), G("synth_lec_synth")
-    rep.head("netlist lec (2nd run vs design)", nf, ns)
+    nf = G("synth_lec_flat") if core in FLAT_CORES else None
+    ns = G("synth_lec_synth")
+    netlist_rows = [nf, ns] if core in FLAT_CORES else [ns]
+    rep.head("netlist lec (2nd run vs design)", *netlist_rows)
     if nf or ns:
         for name, r in (("flat", nf), ("synth", ns)):
             if not r:
@@ -215,13 +227,19 @@ def report_core(root: Path, core: str) -> list:
         rep.cmds(("synth_lec_flat", nf), ("synth_lec_synth", ns))
 
     # ---- sim --------------------------------------------------------------
-    sp, sv = G("sim_pyrope"), G("sim_verilog")
+    sp = G("sim_pyrope")
+    sv = None if core in PYROPE_ONLY_CORES else G("sim_verilog")
     # A core with no verilator_tb has no such target at all, so it must not
     # reach head() either — a None there means "generated but never run", and
     # would mark the whole section [not run] on every minion report.
     has_vl = core in VERILATOR_CORES
     svl = G("sim_verilator") if has_vl else None
-    rep.head("sim benchmark throughput", *([sp, sv, svl] if has_vl else [sp, sv]))
+    sim_rows = [sp]
+    if core not in PYROPE_ONLY_CORES:
+        sim_rows.append(sv)
+    if has_vl:
+        sim_rows.append(svl)
+    rep.head("sim benchmark throughput", *sim_rows)
     if sp or sv or svl:
         # `lhd sim --setup-only` only writes the driver sources; the host C++
         # compile lives inside --run-only and is rebuilt every time, so it used
@@ -306,23 +324,24 @@ def report_core(root: Path, core: str) -> list:
         rep.cmds(("sim_pyrope", sp), ("sim_verilog", sv), ("sim_verilator", svl))
 
     # ---- lec --------------------------------------------------------------
-    lc, lb, li = G("lec"), G("lec_bug"), G("lec_incremental")
-    rep.head("lec (pyrope impl vs verilog ref)", lc, lb, li)
-    if lc:
-        m = lc[3]
-        print(f"   proven:   compile ref {fmt(m.get('compile_ref_ms'), 'ms')},"
-              f" impl {fmt(m.get('compile_impl_ms'), 'ms')}, lec {fmt(m.get('lec_pass_ms'), 'ms')}")
-    if lb:
-        m = lb[3]
-        print(f"   bug1:     refuted in {fmt(m.get('lec_bug_ms'), 'ms')}"
-              f" (compile {fmt(m.get('compile_bug_ms'), 'ms')})")
-    if li:
-        m = li[3]
-        print(f"   incr:     cold {fmt(m.get('lec_cold_ms'), 'ms')} ->"
-              f" warm {fmt(m.get('lec_warm_ms'), 'ms')}"
-              f" ({speedup(m.get('lec_cold_ms'), m.get('lec_warm_ms'))}),"
-              f" comment-touch {fmt(m.get('lec_touch_ms'), 'ms')}")
-    rep.cmds(("lec", lc), ("lec_bug", lb), ("lec_incremental", li))
+    if core not in PYROPE_ONLY_CORES:
+        lc, lb, li = G("lec"), G("lec_bug"), G("lec_incremental")
+        rep.head("lec (pyrope impl vs verilog ref)", lc, lb, li)
+        if lc:
+            m = lc[3]
+            print(f"   proven:   compile ref {fmt(m.get('compile_ref_ms'), 'ms')},"
+                  f" impl {fmt(m.get('compile_impl_ms'), 'ms')}, lec {fmt(m.get('lec_pass_ms'), 'ms')}")
+        if lb:
+            m = lb[3]
+            print(f"   bug1:     refuted in {fmt(m.get('lec_bug_ms'), 'ms')}"
+                  f" (compile {fmt(m.get('compile_bug_ms'), 'ms')})")
+        if li:
+            m = li[3]
+            print(f"   incr:     cold {fmt(m.get('lec_cold_ms'), 'ms')} ->"
+                  f" warm {fmt(m.get('lec_warm_ms'), 'ms')}"
+                  f" ({speedup(m.get('lec_cold_ms'), m.get('lec_warm_ms'))}),"
+                  f" comment-touch {fmt(m.get('lec_touch_ms'), 'ms')}")
+        rep.cmds(("lec", lc), ("lec_bug", lb), ("lec_incremental", li))
 
     # ---- verify ------------------------------------------------------------
     vf, vi = G("verify"), G("verify_incremental")

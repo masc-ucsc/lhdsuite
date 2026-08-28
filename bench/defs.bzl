@@ -17,7 +17,12 @@ scenarios, not simulation/formal/LEC scenarios.
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 # Per-core knobs:
-#   top       whole-design top, in BOTH languages (compile, synthesis, LEC).
+#   top       whole-design top. It is present in both languages unless the
+#             core sets pyrope_only; compile, synthesis, and simulation use it.
+#   pyrope_only  the whole `top` exists only in the checked-in Pyrope tree.
+#             Such a core has no compile_verilog, sim_verilog, or cross-language
+#             lec scenarios; those targets are omitted rather than redirected
+#             to a smaller, unrelated Verilog cone.
 #   unit      module carrying the verify sidecar and the bug1/comment1
 #             variants; must be inside the top's cone.
 #   incremental_edit_unit  synth-only override for the semantic incremental
@@ -28,6 +33,11 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             synth incremental semantic-edit pass. Empty means bug1; use a
 #             localized real edit when bug1 deliberately changes every shared
 #             occurrence and therefore cannot retain an untouched ABC region.
+#   generated_variants  make comment1/bug1 directly on `unit` rather than
+#             overlaying tests/<name>. `variant_bug_find` and
+#             `variant_bug_replace` are the exact one-line replacement. This
+#             keeps a generated whole-core tree from needing a second checked-in
+#             copy of a large unit merely to carry one benchmark mutation.
 #   seq_unit  module carrying a SEQUENTIAL verify sidecar
 #             (<core>/verif/<seq_unit>.verify.prp), i.e. one whose properties
 #             relate a cycle to the next with `past`/`stable`/`rose`/... The
@@ -42,8 +52,9 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             not scale past a certain design size; a core that omits it also
 #             loses its `synth_lec_flat` target.
 #   color_max_ge  optional synth-color region cap. Use it when the default
-#             would fuse the whole core into one region and make a localized
-#             semantic edit incapable of demonstrating mixed cache hit/miss.
+#             would fuse the whole core into one region, make a localized
+#             semantic edit incapable of demonstrating mixed cache hit/miss,
+#             or leave one color outside the suite's per-color time envelope.
 #   sim_tb    asserted, timed sim benchmark. sim_cycles is its explicit cycle
 #             count. sim_top_tb / sim_prog_tb are additional whole-top
 #             correctness drivers ("" = none). sim_top_cycles /
@@ -61,12 +72,6 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             testbench never instantiates (minion's tensor RF benchmark dies
 #             on `vpu_ctrl` and `intpipe_csr_file`). Drivers sharing a unit
 #             share the one compile. "" where the driver is "".
-#   sim_prog_pyrope_only  skip sim_prog_tb entirely under MODE=verilog. For a
-#             core whose Verilog tree does not carry the module the program
-#             driver drives, so `lhd compile verilog --top <unit>` could not
-#             elaborate it at all (cva6: pyrope/ has the whole core, verilog/
-#             only the tag_cmp cone). Absent/False = run the driver in both
-#             modes, as dino and minion do.
 #   sim_tb_v  MODE=verilog override for sim_tb (optional; "" or absent = drive
 #             both modes with the one sim_tb). Needed when the two sides
 #             declare a port differently and a driver written for one shape
@@ -130,7 +135,7 @@ CORES = {
         # "one cycle after", so its whole contract is a `past` property.
         "seq_unit": "StageReg",
         "v_flags": "",
-        "color_algs": ["flat", "synth"],
+        "color_algs": ["synth"],
         # Time the real program on the whole CPU. This checks architectural
         # state through the program's stores, unlike the old StageReg
         # microbench. The program's two stores land at cycle 521 and it then
@@ -188,58 +193,42 @@ CORES = {
     },
     "cva6": {
         "pkg": "//cva6",
-        # tag_cmp_wrap, not tag_cmp: tag_cmp takes its cache-line types as
-        # module PARAMETERS, and standalone they default to `logic` — the tag
-        # compare collapses and hit_way_o is undriven, so every property over it
-        # passes vacuously. The wrapper binds them as std_nbdcache.sv does.
-        "top": "tag_cmp_wrap",
-        # The verify sidecar and the bug1/comment1 variants bind `tag_cmp`
-        # DIRECTLY — no wrapper. That is safe only because cva6/pyrope/ is now
-        # emitted from the WHOLE core, where std_nbdcache binds tag_cmp's type
-        # parameters, so the checked-in tag_cmp.prp already carries the real
-        # rdata_i:u1392 and a valid-bit-gated 44-bit compare. (Elaborated
-        # standalone from Verilog it still collapses: `lhd compile verilog
-        # --top tag_cmp` yields rdata_i:u2 — which is what `top` above still
-        # needs tag_cmp_wrap.sv for.)
-        "unit": "tag_cmp",
-        # No sequential sidecar yet; the onehot property already uses `past`.
+        # The benchmark is the generated WHOLE CVA6 core. cva6/verilog/ still
+        # carries only the tag_cmp cone, so redirecting Verilog/LEC legs there
+        # would benchmark a different, trivial design. Omit those legs until a
+        # whole-core Verilog tree can be staged.
+        "top": "cva6",
+        "pyrope_only": True,
+        # Formal uses the core's real integer ALU. It is in cva6's cone and its
+        # ADD/SUB contract is materially broader than the old all-miss tag_cmp
+        # smoke. The full top currently reaches a word-level cycle in the FPU
+        # that the formal encoder refuses, so verify stays at this meaningful
+        # architectural leaf while synth/sim exercise the complete hierarchy.
+        "unit": "alu",
+        "generated_variants": True,
+        "variant_bug_find": "      result_o = adder_result__w1",
+        "variant_bug_replace": "      result_o = operand_a__w1 - operand_b__w1",
+        # No separate temporal sidecar yet.
         "seq_unit": "",
         # CVA6 packages reference identifiers across files, so one compilation
         # unit; the filelist carries the elaboration order.
         "v_flags": "--single-unit",
-        "color_algs": ["flat", "synth"],
-        "sim_tb": "tag_cmp_tb.prp",
-        "sim_tb_unit": "tag_cmp_wrap",
-        "sim_cycles": "200",
-        "sim_marker": "cva6 tag_cmp:",
-        # An empty cache must report NO hit. The line array is 1392 bits and a
-        # testbench scalar truncates past 64, so a populated array cannot be
-        # driven at all — the miss path is what is checkable here.
-        "sim_expect": "hit_way=0",
+        "color_algs": ["synth"],
+        # A real RISC-V program on the full core over its AXI interface. Keep
+        # the architectural readback gate live: the generated icache currently
+        # prevents retirement, so this target remains red until LiveHD's
+        # emitted Pyrope is fixed.
+        "sim_tb": "cva6_prog_tb.prp",
+        "sim_tb_unit": "cva6",
+        "sim_cycles": 50000,
+        "sim_marker": "cva6 program:",
+        "sim_expect": "x2=100 -x3=100 marker=1445",
         "sim_top_tb": "",
-        # The whole-core RISC-V program workload, the counterpart of
-        # dino_prog_tb / minion_prog_tb. Its DUT is `cva6` — the FULL core,
-        # which cva6/pyrope/ now carries even though cva6/verilog/ is still
-        # only the tag_cmp cone (see cva6/README). The driver is an AXI slave
-        # serving the program out of a ROM at 0x8000_0000 and reading the
-        # results back off an UNCACHED window at 0x1000_0000.
-        #
-        # It does NOT pass yet, and `sim_top_assert` stays unset on this core
-        # so that is a metric (`sim_cpu_prog_ok 0`) rather than a red target —
-        # the same treatment minion's vpu_top driver gets. The blockers are in
-        # the generated Pyrope, not the driver; see the "Known-failing
-        # scenarios" table in README.md and the driver's own header.
-        "sim_prog_tb": "cva6_prog_tb.prp",
-        "sim_prog_tb_unit": "cva6",
-        # 50k cycles: the program's phase 2 loops forever, so the workload
-        # stays ACTIVE for the whole count instead of falling into an idle
-        # spin, and the checks latch once and hold at any larger count.
-        "sim_prog_cycles": 50000,
-        # cva6/verilog/ has no `cva6` module to compile, so MODE=verilog must
-        # skip this driver entirely rather than run `--top cva6` against a
-        # filelist that cannot elaborate it. Drop this knob once the Verilog
-        # side carries the whole core.
-        "sim_prog_pyrope_only": True,
+        # The program is already the asserted/timed driver; do not run it a
+        # second time as auxiliary correctness collateral.
+        "sim_prog_tb": "",
+        "sim_prog_tb_unit": "",
+        "sim_prog_cycles": "",
         "lec_trust": "",
         "verilator_tb": "",
     },
@@ -255,10 +244,10 @@ CORES = {
         # intpipe_csr_file_auto_*.svh includes resolve relative to the file
         # that includes them, so no -I is required.
         "v_flags": "--relax-enum-conversions --allow-use-before-declare",
-        # No `flat`: one region over all 534k nodes projects ~801 GiB at the
-        # ABC mapping peak, so `pass abc` refuses it outright. Only the
-        # partitioned `color synth` is meaningful at this size.
-        "color_algs": ["synth"],
+        # Minion is the one benchmark that retains both whole-hierarchy flat
+        # mapping and partitioned synth coloring. Every other core reports only
+        # `synth`; this keeps `flat` a single deliberate comparison point.
+        "color_algs": ["flat", "synth"],
         # THE benchmark is the whole-core program workload, the counterpart of
         # dino_prog — a real RISC-V instruction stream on minion_top, with a C++
         # twin (minion_prog_tb_verilator.cpp) so the Verilator comparison is the
@@ -406,7 +395,7 @@ CORES = {
         "incremental_variant": "incr1",
         "seq_unit": "",
         "v_flags": "",
-        "color_algs": ["flat", "synth"],
+        "color_algs": ["synth"],
         "color_max_ge": 4000,
         # Throughput driver (sim/matched_filter_tb.prp): two reset cycles, a
         # 64-cycle reference load, then a free-running xorshift64 return
@@ -524,6 +513,12 @@ CORES = {
         "incremental_edit_unit": "DelayN_6",
         "v_flags": "--single-unit",
         "color_algs": ["synth"],
+        # The default ~25k-GE window produced Dispatch color 14 at 21,994 GE,
+        # which took 1,371,369 ms by itself. Backend is expected to be slow,
+        # but that one color exceeded the shared 15-minute soft limit and made
+        # progress highly uneven. Split this core more finely; the knob belongs
+        # in CORES rather than as a module special case in bench/synth.sh.
+        "color_max_ge": 8000,
         "synth_only": True,
         "slow": True,
     },
@@ -643,6 +638,9 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_UNIT": cfg["unit"],
             "CORE_INCR_EDIT_UNIT": cfg.get("incremental_edit_unit", ""),
             "CORE_INCR_VARIANT": cfg.get("incremental_variant", ""),
+            "CORE_GENERATED_VARIANTS": "1" if cfg.get("generated_variants", False) else "",
+            "CORE_VARIANT_BUG_FIND": cfg.get("variant_bug_find", ""),
+            "CORE_VARIANT_BUG_REPLACE": cfg.get("variant_bug_replace", ""),
             "CORE_SEQ_UNIT": cfg.get("seq_unit", ""),
             "CORE_COLOR_ALGS": " ".join(cfg["color_algs"]),
             "BENCH_COLOR_MAX_GE": str(cfg.get("color_max_ge", "")),
@@ -669,9 +667,6 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_SIM_TOP_CYCLES": str(cfg.get("sim_top_cycles", "")),
             "CORE_SIM_PROG_TB": cfg.get("sim_prog_tb", ""),
             "CORE_SIM_PROG_CYCLES": str(cfg.get("sim_prog_cycles", "")),
-            # "1" = MODE=verilog has no such module to compile; skip the
-            # program driver there instead of failing on `--top <unit>`.
-            "CORE_SIM_PROG_PYROPE_ONLY": "1" if cfg.get("sim_prog_pyrope_only", False) else "",
             # "1" = the whole-top drivers gate the target; "" = metric only.
             "CORE_SIM_TOP_ASSERT": "1" if cfg.get("sim_top_assert", False) else "",
             "CORE_LEC_TRUST": cfg.get("lec_trust", ""),
@@ -689,6 +684,16 @@ def core_benches(core):
     cfg = CORES[core]
     names = []
     for suffix, script, mode, timeout, needs_color, needs_cfg in _SCENARIOS:
+        # A pyrope-only whole top has no corresponding Verilog design. Do not
+        # silently benchmark a smaller cone under the same core name.
+        if cfg.get("pyrope_only", False) and suffix in [
+            "compile_verilog",
+            "sim_verilog",
+            "lec",
+            "lec_bug",
+            "lec_incremental",
+        ]:
+            continue
         # `synth_only` says "this core ships no verify sidecar and no LEC
         # reference", not "this core cannot be simulated". Simulation is
         # decided by needs_cfg="sim_tb" below, so a synth-only core that names

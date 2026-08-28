@@ -84,7 +84,7 @@ pass)
   echo "PASS: pyrope impl == verilog ref (lec ${LAST_MS} ms)"
   ;;
 bug)
-  apply_variant bug1 src/pyrope
+  core_variant bug1 src/pyrope
   run_timed compile_bug compile_impl implb
   run_expect_fail lec_bug lec_run implb
   if ! grep -qiaE "refut|equiv_fail" step_lec_bug.log; then
@@ -101,7 +101,7 @@ incr)
   grep -qa "lec\[cache\]" step_lec_warm.log \
     || { step_failed lec_warm "warm identical re-run reported no verdict-cache use"; exit 1; }
 
-  apply_variant comment1 src/pyrope
+  core_variant comment1 src/pyrope
   run_timed compile_p3 compile_impl impl3
   run_timed lec_touch lec_run impl3
   echo "PASS: cold/warm/comment-touch lec runs all equivalent"

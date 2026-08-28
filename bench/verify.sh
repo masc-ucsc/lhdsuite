@@ -102,7 +102,7 @@ bug)
   # what tests/bug1 breaks (the unit's add flipped to subtract), so the run must
   # REFUTE — a non-zero exit alone is not enough, since strict mode also exits
   # non-zero on an UNKNOWN that proves nothing.
-  apply_variant bug1 src/pyrope
+  core_variant bug1 src/pyrope
   run_expect_fail verify_bug vrun
   if ! grep -qa "REFUTED" step_verify_bug.log; then
     step_failed verify_bug "bug1 failed the run but not as a refutation (an UNKNOWN proves nothing)"
@@ -146,7 +146,7 @@ incr)
   grep -qaE "formal\[cache\]: [1-9][0-9]* obligation hit" step_verify_warm.log \
     || { echo "FAIL: warm identical re-run reported no obligation-cache hits" >&2; exit 1; }
 
-  apply_variant comment1 src/pyrope
+  core_variant comment1 src/pyrope
   run_timed verify_touch vrun
   check_proven verify_touch "$want"
   echo "PASS: cold/warm/comment-touch verify runs all PROVEN ($want obligations each)"
