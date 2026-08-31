@@ -45,7 +45,8 @@ verilog)
 pyrope)
   run_timed compile_pyrope lhd compile "$CORE_P_DIR/$CORE_TOP.prp" \
     ${P_STUBS[@]+"${P_STUBS[@]}"} \
-    --top "$CORE_TOP" --emit-dir lg:out_lg --workdir w --result-json compile_pyrope.json
+    --top "$CORE_TOP" --emit-dir lg:out_lg --workdir w --result-json compile_pyrope.json \
+    ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"}
   read -r n_loc n_words <<EOF
 $(compile_input_stats compile_pyrope.json "$CORE_P_DIR" "$CORE_P_STUB_DIR")
 EOF
@@ -71,7 +72,7 @@ incr)
     shift
     run_timed "compile_$tag" lhd compile "tree/$CORE_TOP.prp" \
       --top "$CORE_TOP" --emit-dir lg:out_lg --workdir w \
-      --result-json "compile_$tag.json" "$@"
+      --result-json "compile_$tag.json" ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} "$@"
   }
 
   compile_cache_metrics() {  # TOKEN RESULT_JSON
@@ -147,6 +148,7 @@ EOF
   rm -rf edit_cold_lg edit_cold_w
   lhd compile "tree/$CORE_TOP.prp" --top "$CORE_TOP" --emit-dir lg:edit_cold_lg \
     --workdir edit_cold_w --set lhd.incremental=false -q --result-json edit_cold.json \
+    ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
     || { echo "FAIL: cache-disabled H5 reference compile failed" >&2; exit 1; }
   edit_diff=$(lhd tool diff lg:edit_cold_lg lg:out_lg --structural -q 2>/dev/null)
   [ "$edit_diff" = identical ] || warm_equal=0

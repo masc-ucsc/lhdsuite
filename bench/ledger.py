@@ -11,8 +11,9 @@ one host's ledger is (I11).
 ROW SHAPE, flow="incr" — one row per (target, phase, MODE):
 
     {"date","host","lhd_git_sha","lhdsuite_git_sha","pdk_version",
-     "flow":"incr", "target":"dino", "phase":"compile|synth|sim|lec",
-     "mode":"full|cold|incremental", "config_id":"...", "passed":true,
+     "flow":"incr", "target":"dino",
+     "phase":"compile|synth|sim_slop|sim_llvm|sim_verilator|lec",
+     "mode":"full|cold|incremental|edit", "config_id":"...", "passed":true,
      "wall_ms": 12244.0,                     // end-to-end for this phase+mode
      "phases": {"inou.prp":41234.5, ...},    // per-pass ms, from --result-json
      ...optional extras: sim_exec_ms, sim_cc_ms, abc_hits, workdir_bytes, ...}
@@ -22,7 +23,7 @@ ROW SHAPE, flow="synth" — one row per (target, config): the QoR block of
 cache_hits cache_misses cache_hit_ms cache_miss_ms div_blackbox compile_ms
 color_ms abc_ms`), with no mode axis.
 
-The three incr modes are not interchangeable, and the page says so in prose:
+The four incr modes are not interchangeable, and the page says so in prose:
 
   full         every cache that has an off switch is off, every output dir
                fresh: what the flow costs with no incremental machinery at all.
@@ -31,6 +32,8 @@ The three incr modes are not interchangeable, and the page says so in prose:
                admission for incrementality and is flagged past +5%.
   incremental  the identical command again over that workdir after a
                comment-only source touch. Every content-keyed cache must hit.
+  edit         one small semantic edit over the same warm workdir. Only the
+               work affected by that file should be redone.
 
 Subcommands:
 
@@ -59,6 +62,7 @@ import argparse
 import hashlib
 import html
 import json
+import math
 import os
 import re
 import socket
@@ -75,8 +79,12 @@ LEDGER = "bench/ledger.jsonl"
 # edit — the old scraper's pass 3) and `control` (the T12 drift probe, rendered
 # in the header rather than as a data row).
 MODE_COLS = ("full", "cold", "incremental")
+SUMMARY_MODES = MODE_COLS + ("edit",)
 KNOWN_MODES = MODE_COLS + ("edit", "control")
-PHASE_ORDER = ("compile", "synth", "sim", "lec", "formal")
+PHASE_ORDER = (
+    "compile", "synth", "sim", "sim_slop", "sim_llvm", "sim_verilator",
+    "lec", "formal",
+)
 
 # `(cold-full)/full` past this is a warning: a cache that costs this much on
 # every clean build has to earn it back before it is worth having.
@@ -115,7 +123,7 @@ GUARDRAIL_FLOOR_MS = 50
 # it as the row's epsilon is the only noise floor this page can measure rather
 # than assume (H6), and it stops the page reporting its own control measurement
 # as a violation.
-NO_OFF_SWITCH_PHASES = ("sim", "sim_llvm")
+NO_OFF_SWITCH_PHASES = ("sim", "sim_slop", "sim_llvm")
 
 
 def _tokens(*words):
@@ -219,7 +227,7 @@ QOR_INVALIDATED = ("area", "gates", "max_delay", "sta_delay", "regions")
 # name across modes, and the same names the two contracts use.
 #
 # `wall` is a LIST of templates, SUMMED. A phase is rarely one command: a sim
-# rebuild is `--setup-only` plus `--run-only`. Synthesis is now the one-shot
+# rebuild is `--setup-only` plus the generated host build. Synthesis is the one-shot
 # `lhd synth` flow, so its wall is the reported `*_synth_ms` rather than the old
 # color+abc subtotal (which omitted compile and STA).
 PASS_TOKENS = {
@@ -249,14 +257,40 @@ PHASES = {
     "sim": {
         "target": "{core}_sim_incremental",
         "tokens": PASS_TOKENS,
-        "wall": ["sim_setup{p}_ms", "sim_run{p}_ms"],
+        "wall": ["sim_setup{p}_ms", "sim_cc{p}_ms"],
         "extra": [
-            "sim_setup{p}_ms", "sim_run{p}_ms",
-            "sim_cc_ms{p}", "sim_exec_ms{p}", "sim_cycles_per_s{p}",
-            "sim_cycles_per_s_with_cc{p}", "sim_rewritten{p}",
+            "sim_setup{p}_ms", "sim_cc{p}_ms", "sim_rewritten{p}",
             "workdir_bytes{p}",
         ],
         "scenario": ["sim_warm_equals_cold", "sim_ninja_present"],
+    },
+    "sim_llvm": {
+        "target": "{core}_sim_incremental_llvm",
+        "tokens": PASS_TOKENS,
+        "wall": ["sim_setup{p}_ms", "sim_cc{p}_ms"],
+        "extra": [
+            "sim_setup{p}_ms", "sim_cc{p}_ms", "sim_rewritten{p}",
+            "workdir_bytes{p}",
+        ],
+        "scenario": ["sim_warm_equals_cold", "sim_ninja_present"],
+    },
+    # The outside reference has one clean-build sample rather than an
+    # incremental mode sequence.  Keep its front end, host compile/link, and
+    # execution split beside the LiveHD rows: a total alone cannot distinguish
+    # a simulator problem from a generated-C++ compilation problem.
+    "sim_verilator": {
+        "target": "{core}_sim_verilator",
+        "tokens": {"full": ""},
+        "wall": ["sim_setup{p}_ms", "sim_cc{p}_ms", "sim_exec{p}_ms"],
+        "extra": [
+            "sim_setup{p}_ms", "sim_cc{p}_ms", "sim_exec{p}_ms",
+            "sim_setup_warm_ms", "sim_cc_warm_ms",
+            "sim_cycles{p}", "sim_cycles_per_s{p}",
+            "sim_cycles_per_s_with_cc{p}", "sim_long_exec{p}_ms",
+            "sim_long_cycles{p}", "sim_long_cycles_per_s{p}",
+            "verilator_present",
+        ],
+        "scenario": [],
     },
     "synth": {
         "target": "{core}_synth_incremental",
@@ -523,9 +557,13 @@ def read_metrics(logdir: Path, target: str):
                 metrics[m.group(1)] = float(m.group(2))
             except ValueError:
                 pass
-        if line.startswith("{") and '"severity":"error"' in line:
+        if line.startswith("{") and ('"severity":"error"' in line
+                                      or '"status":"fail"' in line):
             try:
-                message = json.loads(line).get("message")
+                event = json.loads(line)
+                message = event.get("message")
+                if not message and isinstance(event.get("error"), dict):
+                    message = event["error"].get("message")
                 if message:
                     errors.append(str(message))
             except ValueError:
@@ -669,12 +707,18 @@ def cmd_append(args, root: Path):
                 continue
             metrics, ok, duration_ms, failed_step, failure_reason = got
             failed_mode = None
-            if not ok and failed_step:
+            # The timed-command marker is authoritative even when an
+            # interrupted Bazel invocation did not get to write test.xml.
+            if failed_step:
                 for candidate, tok in spec["tokens"].items():
                     if tok.strip("_") in failed_step:
                         failed_mode = candidate
                         break
             emitted_modes = set()
+            stored_phase = phase
+            if phase == "sim" and "sim_backend_llvm" in metrics:
+                stored_phase = ("sim_llvm" if metrics["sim_backend_llvm"]
+                                else "sim_slop")
             for mode, tok in spec["tokens"].items():
                 parts = [metrics.get(t.format(p=tok)) for t in spec["wall"]]
                 if all(v is None for v in parts):
@@ -685,7 +729,7 @@ def cmd_append(args, root: Path):
                 row = dict(ident)
                 row.update({
                     "date": now, "flow": args.flow, "target": core,
-                    "phase": phase, "mode": mode, "config_id": args.config_id,
+                    "phase": stored_phase, "mode": mode, "config_id": args.config_id,
                     # A scenario-level gate can fail after every timed mode
                     # completed (for example an incremental-vs-cold structural
                     # diff). Keep those timings usable and let its recorded
@@ -793,6 +837,13 @@ def load_rows(root: Path, flow: str):
         except json.JSONDecodeError:
             continue
         if isinstance(r, dict) and r.get("flow") == flow:
+            # Before the backend metric existed, every `sim` benchmark used
+            # the default Slop engine.  Preserve the append-only ledger bytes,
+            # but render that historical identity explicitly so a generic
+            # `sim` row can never be mistaken for an LLVM measurement.
+            if r.get("phase") == "sim":
+                r = dict(r)
+                r["phase"] = "sim_slop"
             rows.append(r)
     return rows
 
@@ -1163,7 +1214,7 @@ def section_guardrail(out, data, modes, eps):
                "of net wall time (&sect;8.3). A reference of <b>0</b> with a "
                "non-zero mode is an infinite regression, not an absent one. "
                "Two floors keep this column honest rather than merely strict: "
-               "on <code>sim</code>/<code>sim_llvm</code> the <code>full</code> "
+               "on <code>sim</code>/<code>sim_slop</code>/<code>sim_llvm</code> the <code>full</code> "
                "vs <code>cold</code> pair is the SAME command run twice, so its "
                "spread is this row's measured epsilon (shown as "
                "<code>[eps N%% measured]</code>) and the page never reports its "
@@ -1684,14 +1735,85 @@ table{border-collapse:collapse;margin:1rem 0;width:100%}
 th,td{border:1px solid #bbb;padding:.25rem .5rem;text-align:right}
 th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
 th{background:#eee}
+th.sortable{cursor:pointer;user-select:none;white-space:nowrap}
+th.sortable::after{content:" ⇅";color:#888;font-size:.8em}
+th.sortable[aria-sort="ascending"]::after{content:" ↑";color:#111}
+th.sortable[aria-sort="descending"]::after{content:" ↓";color:#111}
 h2{border-top:3px solid #333;padding-top:.6rem;margin-top:2.5rem}
 h4{margin:1.2rem 0 0}
 .better{color:#0a0;font-weight:bold}.worse{color:#c00;font-weight:bold}
 .warn{color:#a60;font-weight:bold}.noise{color:#888}.miss{color:#999}
 .unknown{color:#66c;font-style:italic}
 .guard{background:#fff6f6}.una{color:#666}.total{background:#f7f7f7;font-weight:bold}
+.geomean td{background:#f7f7f7;font-weight:bold;border-top:2px solid #777}
 code{background:#f4f4f4;padding:0 .2rem}
 dt{font-weight:bold;margin-top:.4rem}
+"""
+
+SORTABLE_TABLES_JS = r"""
+<script>
+(function () {
+  var collator = typeof Intl !== 'undefined' && Intl.Collator
+    ? new Intl.Collator(undefined, {numeric: true})
+    : {compare: function (a, b) { return a < b ? -1 : a > b ? 1 : 0; }};
+
+  function key(cell) {
+    if (!cell || cell.classList.contains('miss') || /FAILED/.test(cell.textContent || '')) return null;
+    var raw = cell.getAttribute('data-sort');
+    if (raw !== null && raw !== '') return {number: true, value: Number(raw)};
+    var text = (cell.textContent || '').replace(/\s+/g, ' ').trim();
+    return text && text !== '-' ? {number: false, value: text} : null;
+  }
+
+  document.querySelectorAll('table.sortable-table').forEach(function (table) {
+    var body = table.tBodies[0];
+    if (!body || body.rows.length < 2) return;
+    var headers = table.tHead ? table.tHead.rows[0].cells : [];
+    var original = Array.prototype.slice.call(body.rows);
+    var state = null;
+
+    Array.prototype.forEach.call(headers, function (th, column) {
+      th.classList.add('sortable');
+      th.tabIndex = 0;
+      th.title = 'Sort by ' + (th.textContent || 'this column').trim();
+      function activate() {
+        if (!state || state.column !== column) state = {column: column, dir: 1};
+        else if (state.dir === 1) state.dir = -1;
+        else state = null;
+
+        Array.prototype.forEach.call(headers, function (other) {
+          other.removeAttribute('aria-sort');
+        });
+        var rows = Array.prototype.slice.call(body.rows);
+        if (!state) rows = original.slice();
+        else {
+          th.setAttribute('aria-sort', state.dir === 1 ? 'ascending' : 'descending');
+          rows = rows.map(function (row, index) {
+            return {row: row, index: index, key: key(row.cells[column])};
+          }).sort(function (a, b) {
+            if (a.key === null || b.key === null) {
+              if (a.key === null && b.key === null) return a.index - b.index;
+              return a.key === null ? 1 : -1;
+            }
+            var d = a.key.number && b.key.number
+              ? a.key.value - b.key.value
+              : collator.compare(String(a.key.value), String(b.key.value));
+            return d ? state.dir * d : a.index - b.index;
+          }).map(function (entry) { return entry.row; });
+        }
+        rows.forEach(function (row) { body.appendChild(row); });
+      }
+      th.addEventListener('click', activate);
+      th.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          activate();
+        }
+      });
+    });
+  });
+})();
+</script>
 """
 
 VERDICT_PROSE = """
@@ -1707,21 +1829,33 @@ because a guessed direction paints a regression green. Add the name to
 """
 
 MODE_PROSE = """
-<h2>What the three columns mean</h2>
+<h2>What the four timing columns mean</h2>
 <dl>
 <dt>full</dt><dd>&mdash; Every cache is <b>off</b> (the one switch
-<code>lhd.incremental=false</code> covers the compile, pass.abc and formal caches), every output
+<code>lhd.incremental=false</code> covers the compile, pass.abc, pass.opentimer,
+and formal caches), every output
 directory fresh. This is what the flow costs with <b>no incremental machinery at
 all</b>: the honest denominator.</dd>
 <dt>cold</dt><dd>&mdash; Caches <b>on</b>, every directory still fresh: the same
 work as <code>full</code> <b>plus the cost of populating the caches</b>. The
 difference is the price of admission for incrementality, charged on every clean
 build.</dd>
-<dt>incremental</dt><dd>&mdash; The <b>identical command again</b> over that
+<dt>no-change incremental</dt><dd>&mdash; The <b>identical command again</b> over that
 workdir, after a comment-only touch to the source. Nothing semantic changed, so
 every content-keyed cache must hit. This is the number the loop exists to
 move.</dd>
+<dt>one-file edit</dt><dd>&mdash; One small semantic edit, built over the same
+warm workdir. Only work affected by that file should be redone.</dd>
 </dl>
+<p>Both speedups use <code>full</code> as their denominator:
+<code>full / no-change</code> and <code>full / edit</code>. The cold incremental
+sample is shown to expose cache-population cost, but it is never the denominator
+of a displayed speedup.</p>
+<p>The <b>Compile only</b> table is the dedicated <code>lhd compile</code>
+incremental benchmark. <b>Synthesis &minus; STA</b> is compile + color + ABC and
+excludes OpenTimer. In the edit-only <b>colors changed</b> column, simulation
+uses the number of rewritten simulator units and synthesis uses ABC cache
+misses (the colors resynthesized).</p>
 <p>Where a phase has no cache off-switch today, <code>full</code> and
 <code>cold</code> run the same command and are expected to match within noise —
 that is a measurement, not redundancy.</p>
@@ -1743,8 +1877,10 @@ def render_host(out, host, hrows, args, eps, all_configs):
             configs.append(r.get("config_id"))
     base_id = args.baseline or configs[0]
     cur_id = args.current or configs[-1]
-    newest = max(hrows, key=lambda r: str(r.get("date") or ""))
-    out.append("<h2>host: %s</h2>" % esc(host))
+    current_rows = [r for r in hrows if r.get("config_id") == cur_id]
+    newest = max(current_rows or hrows, key=lambda r: str(r.get("date") or ""))
+    heading = "h3" if getattr(args, "_multi_current", False) else "h2"
+    out.append("<%s>host: %s</%s>" % (heading, esc(host), heading))
     out.append(
         "<p>lhd <code>%s</code> &middot; lhdsuite <code>%s</code> &middot; "
         "pdk <code>%s</code><br>baseline <b>%s</b> &rarr; current <b>%s</b> "
@@ -1897,9 +2033,14 @@ def glance_rows(hrows, cid):
     for r in hrows:
         if r.get("config_id") != cid or r.get("phase") == "control":
             continue
-        if r.get("mode") not in MODE_COLS:
+        if r.get("mode") not in SUMMARY_MODES:
             continue
-        data.setdefault((r.get("target"), r.get("phase")), {})[r["mode"]] = r
+        # A config_id names one immutable experiment.  If an accidental rerun
+        # is appended under the same id, preserve the original cell instead of
+        # silently changing the published result; intentional reruns need a
+        # new config_id.
+        data.setdefault((r.get("target"), r.get("phase")), {}).setdefault(
+            r["mode"], r)
     return data
 
 
@@ -1935,52 +2076,160 @@ def glance_takeaway(data):
     return "; ".join(bits) + "."
 
 
-def section_glance(out, data, show_host=None, previous=None, previous_label=""):
-    """The headline: three walls and the speedup, nothing else.
+SUMMARY_TABLES = (
+    ("Simulation compile — SLOP", ("sim_slop",), "wall", "sim_rewritten"),
+    ("Simulation compile — LLVM", ("sim_llvm",), "wall", "sim_rewritten"),
+    ("Compile only", ("compile",), "wall", None),
+    ("Synthesis − STA", ("synth",), "synth_no_sta", "cache_misses"),
+    ("Synthesis", ("synth",), "wall", None),
+    ("LEC", ("lec",), "wall", None),
+)
 
-    Deliberately ABOVE the methodology. A status page whose first screen is
-    definitions is a page nobody reads twice; the detail is all still below, and
-    §1 repeats these columns with the cache-cost and load qualifiers.
+SUMMARY_PHASE_LABELS = {
+    "sim_slop": "SLOP",
+    "sim_llvm": "LLVM",
+    "compile": "",
+    "synth": "",
+    "lec": "",
+}
+
+
+def sortable_cell(text, value=None, cls=""):
+    attr = (' data-sort="%.12g"' % value) if is_num(value) else ""
+    return '<td class="%s"%s>%s</td>' % (cls, attr, text)
+
+
+def timing_value(cells, mode, metric):
+    row = cells.get(mode)
+    if row is None or not usable(row):
+        return None
+    if metric == "wall":
+        return row.get("wall_ms")
+    if metric == "compile":
+        return row.get("compile_ms")
+    if metric == "synth_no_sta":
+        values = [row.get(key) for key in ("compile_ms", "color_ms", "abc_ms")]
+        return sum(values) if all(is_num(value) for value in values) else None
+    raise ValueError("unknown summary timing metric: %s" % metric)
+
+
+def timing_cell(cells, mode, metric):
+    row = cells.get(mode)
+    if row is None:
+        return sortable_cell("-", cls="miss")
+    value = timing_value(cells, mode, metric)
+    if not usable(row):
+        failed_value = row.get("wall_ms") if metric == "wall" else None
+        text = (ms(failed_value) + " " if is_num(failed_value) else "") + "FAILED"
+        return sortable_cell(text, cls="worse")
+    if not is_num(value):
+        return sortable_cell("-", cls="miss")
+    return sortable_cell(ms(value), value=value)
+
+
+def colors_changed_cell(cells, changed_metric):
+    row = cells.get("edit")
+    value = row.get(changed_metric) if usable(row) else None
+    if not is_num(value):
+        return sortable_cell("-", cls="miss")
+    return sortable_cell("%g" % value, value=value)
+
+
+def speedup_cell(full, rebuilt):
+    if not is_num(full) or not is_num(rebuilt) or rebuilt <= 0:
+        return sortable_cell("-", cls="miss"), None
+    value = full / rebuilt
+    cls = speedup_class(value)
+    return sortable_cell("%.2f&times;" % value, value=value, cls=cls), value
+
+
+def speedup_class(value):
+    return "better" if value >= 1.1 else "worse" if value < 0.95 else "noise"
+
+
+def geometric_mean(values):
+    values = [v for v in values if is_num(v) and v > 0]
+    if not values:
+        return None
+    return math.exp(sum(math.log(v) for v in values) / len(values))
+
+
+def section_glance(out, data, show_host=None, previous=None, previous_label=""):
+    """The incremental dashboard: one sortable table per requested flow.
+
+    `previous` is intentionally ignored here. This report has one reference
+    internal to every row: the same run's full, cache-disabled build.
     """
+    del previous, previous_label
     if not data:
         return
     if show_host:
         out.append("<h3>host: %s</h3>" % esc(show_host))
-    out.append("<table><tr><th>target</th><th>phase</th><th>full (ms)</th>"
-               "<th>cold (ms)</th><th>incremental (ms)</th>"
-               + (("<th>previous speedup<br><small>%s</small></th>"
-                   % esc(previous_label)) if previous else "")
-               + "<th>incr speedup</th></tr>")
-    for target, phase in sorted(data, key=lambda k: (k[0], phase_key(k[1]))):
-        cells = data[(target, phase)]
-        tds = []
-        for m in MODE_COLS:
-            r = cells.get(m)
-            if r is None:
-                tds.append(cell("-", "miss"))
-            elif not r.get("passed", True):
-                tds.append(cell("not run" if r.get("not_run") else
-                                ms(r.get("wall_ms")) + " FAILED", "worse"))
-            else:
-                tds.append(cell(ms(r.get("wall_ms"))))
-        cold, incr = uwall(cells, "cold"), uwall(cells, "incremental")
-        if previous:
-            old = previous.get((target, phase))
-            tds.append(cell("-" if old is None else "%.1f&times;" % old,
-                            "miss" if old is None else "una"))
-        if cold is None or incr is None or incr <= 0:
-            tds.append(cell("-", "miss"))
-        else:
-            sp = cold / incr
-            # 1.1x is the line between "there is reuse here" and "there is not".
-            tds.append(cell("%.1f&times;" % sp,
-                            "better" if sp >= 1.1 else "worse" if sp < 0.95 else "noise"))
-        out.append("<tr><td>%s</td><td>%s</td>%s</tr>"
-                   % (esc(target), esc(phase), "".join(tds)))
-    out.append("</table>")
-    tell = glance_takeaway(data)
-    if tell:
-        out.append("<p>%s</p>" % tell)
+
+    for title, phases, metric, changed_metric in SUMMARY_TABLES:
+        keys = sorted((key for key in data if key[1] in phases),
+                      key=lambda key: (key[0], phase_key(key[1])))
+        show_backend = len(phases) > 1
+        out.append("<h2>%s</h2>" % esc(title))
+        if not keys:
+            out.append('<p class="warn">No %s incremental measurements in this '
+                       'configuration.</p>' % esc(title.lower()))
+            continue
+        out.append("<table class=\"sortable-table\"><thead><tr>"
+                   "<th>design</th>" + ("<th>backend</th>" if show_backend else "") +
+                   "<th>full<br><small>caches off (ms)</small></th>"
+                   "<th>cold incremental<br><small>fresh cache (ms)</small></th>"
+                   "<th>no-change incremental<br><small>comment edit (ms)</small></th>"
+                   "<th>no-change speedup<br><small>full / no-change</small></th>"
+                   "<th>one-file edit<br><small>warm cache (ms)</small></th>"
+                   "<th>edit speedup<br><small>full / edit</small></th>"
+                   + ("<th>colors changed<br><small>one-file edit %s</small></th>"
+                      % ("rewritten sim units" if changed_metric == "sim_rewritten"
+                         else "ABC misses") if changed_metric else "") +
+                   "</tr></thead><tbody>")
+        nochange_speedups, edit_speedups = [], []
+        for target, phase in keys:
+            cells = data[(target, phase)]
+            full = timing_value(cells, "full", metric)
+            nochange = timing_value(cells, "incremental", metric)
+            edit = timing_value(cells, "edit", metric)
+            nochange_cell, nochange_speedup = speedup_cell(full, nochange)
+            edit_cell, edit_speedup = speedup_cell(full, edit)
+            if nochange_speedup is not None:
+                nochange_speedups.append(nochange_speedup)
+            if edit_speedup is not None:
+                edit_speedups.append(edit_speedup)
+            out.append("<tr><td>%s</td>%s%s%s%s%s%s%s%s</tr>" % (
+                esc(target),
+                ("<td>%s</td>" % esc(SUMMARY_PHASE_LABELS.get(phase, phase)))
+                if show_backend else "",
+                timing_cell(cells, "full", metric),
+                timing_cell(cells, "cold", metric),
+                timing_cell(cells, "incremental", metric), nochange_cell,
+                timing_cell(cells, "edit", metric), edit_cell,
+                colors_changed_cell(cells, changed_metric) if changed_metric else "",
+            ))
+        out.append("</tbody><tfoot><tr class=\"geomean\"><td%s>geomean</td>"
+                   % (" colspan=\"2\"" if show_backend else ""))
+        out.append(sortable_cell("-", cls="miss") * 3)
+        gm_nochange = geometric_mean(nochange_speedups)
+        nochange_text = ("-" if gm_nochange is None else
+                         "%.2f&times; <small>(n=%d)</small>" %
+                         (gm_nochange, len(nochange_speedups)))
+        out.append(sortable_cell(nochange_text, value=gm_nochange,
+                                 cls="miss" if gm_nochange is None else
+                                 speedup_class(gm_nochange)))
+        out.append(sortable_cell("-", cls="miss"))
+        gm_edit = geometric_mean(edit_speedups)
+        edit_text = ("-" if gm_edit is None else
+                     "%.2f&times; <small>(n=%d)</small>" %
+                     (gm_edit, len(edit_speedups)))
+        out.append(sortable_cell(edit_text, value=gm_edit,
+                                 cls="miss" if gm_edit is None else
+                                 speedup_class(gm_edit)))
+        if changed_metric:
+            out.append(sortable_cell("-", cls="miss"))
+        out.append("</tr></tfoot></table>")
 
 
 def cmd_render(args, root: Path):
@@ -2017,73 +2266,144 @@ def cmd_render(args, root: Path):
         by_host = {args.host: by_host[args.host]}
     all_configs = {r.get("config_id") for r in rows}
 
-    render_cmd = ["bazel run //bench:ledger -- render", "--flow", args.flow]
+    also_current = getattr(args, "also_current", [])
+    requested_currents = ([args.current] if args.current else []) + also_current
+    if not requested_currents:
+        requested_currents = [""]
+
+    # An incremental report is a snapshot of the explicitly selected run(s),
+    # not every historical host preserved in the append-only ledger.  Keep the
+    # host count and host headings scoped to those selections as well.
+    if args.flow == "incr":
+        selected_ids = {cid for cid in requested_currents if cid}
+        if selected_ids:
+            selected_hosts = {
+                r.get("host", "?") for r in rows
+                if r.get("config_id") in selected_ids
+            }
+            by_host = {
+                host: hrows for host, hrows in by_host.items()
+                if host in selected_hosts
+            }
+
+    render_cmd = ["bazel run -c opt //bench:ledger -- render", "--flow", args.flow]
     for flag, value in (("--out", args.out), ("--baseline", args.baseline),
                         ("--current", args.current), ("--previous", args.previous),
                         ("--host", args.host)):
         if value:
             render_cmd.extend((flag, value))
+    for value in also_current:
+        render_cmd.extend(("--also-current", value))
     if args.epsilon != 3.0:
         render_cmd.extend(("--epsilon", str(args.epsilon)))
 
+    report_rule = (
+        "Every speedup is computed within one row against that row's "
+        "<b>full, caches-off build</b>; cold incremental is displayed but is "
+        "not a speedup denominator."
+        if args.flow == "incr" else
+        "Verdicts use an epsilon of <b>%.1f%%</b>; anything inside it is not a win."
+        % args.epsilon
+    )
     out = [
         "<title>%s</title>" % esc(args.title),
         "<style>%s</style>" % STYLE,
         "<h1>%s</h1>" % esc(args.title),
         "<p>Generated from <code>%s</code> at %s. Derived, never authored — "
-        "re-run <code>%s</code> to refresh. "
-        "Verdicts use an epsilon of <b>%.1f%%</b>; anything inside it is not a "
-        "win. <b>%d host section(s) — never compare a number across them</b> "
+        "re-run <code>%s</code> to refresh. %s "
+        "<b>%d host section(s) — never compare a number across them</b> "
         "(I11).</p>"
         % (LEDGER, time.strftime("%Y-%m-%d %H:%M"), esc(" ".join(render_cmd)),
-           args.epsilon, len(by_host)),
+           report_rule, len(by_host)),
     ]
     if args.flow == "incr":
         out.append("<p>Synthesis resource policy: one shared color sizing for "
-                   "every design; each ABC color must stay within the soft "
-                   "bounds of <b>16 GiB peak RSS</b> and <b>15 minutes</b>. "
+                   "every design; ABC uses soft per-color guards of "
+                   "<b>16 GiB peak RSS</b> and <b>15 minutes</b>. "
                    "<code>abc_peak_rss_kb</code> is the maximum conservative per-color RSS growth before STA; "
                    "<code>synth_peak_rss_kb</code> is the conservative whole-process "
-                   "diagnostic. Oversize regions are failures, not speedups.</p>")
+                   "diagnostic and is <b>not</b> a benchmark rejection threshold. "
+                   "Whole-process RSS may exceed 16 GiB during STA; only an actual "
+                   "tool failure marks the run failed. Incremental simulation stops "
+                   "after compiling and linking <code>drv.bin</code>; it does not run "
+                   "the testbench. Its wall clock is setup/codegen plus the generated "
+                   "host build.</p>")
 
     # THE HEADLINE, before any methodology. One block per host, because a
     # cross-host summary is exactly the comparison I11 forbids; with a single
     # host this is simply the top of the page.
     if args.flow != "synth":
         out.append("<h2>At a glance</h2>")
-        for host, hrows in sorted(by_host.items()):
-            cid = args.current or (
-                [r.get("config_id") for r in hrows if r.get("config_id")] or [""])[-1]
-            section_glance(out, glance_rows(hrows, cid),
-                           show_host=host if len(by_host) > 1 else None,
-                           previous=args._previous_speedups,
-                           previous_label=args._previous_label)
+        for selected in requested_currents:
+            if args.flow == "incr" or len(requested_currents) > 1:
+                out.append("<h3>configuration: <code>%s</code></h3>" % esc(selected))
+            for host, hrows in sorted(by_host.items()):
+                cid = selected or (
+                    [r.get("config_id") for r in hrows if r.get("config_id")] or [""])[-1]
+                data = glance_rows(hrows, cid)
+                fallback_keys = []
+                if args.flow == "incr" and args.previous and cid != args.previous:
+                    for key, cells in glance_rows(hrows, args.previous).items():
+                        if key not in data:
+                            data[key] = cells
+                            fallback_keys.append(key)
+                if fallback_keys:
+                    fallback_phases = sorted({phase for _, phase in fallback_keys}, key=phase_key)
+                    out.append("<p>Fresh measurements come from <code>%s</code>. "
+                               "Unrerun %s tables retain <code>%s</code>; every "
+                               "speedup remains within one configuration row.</p>" %
+                               (esc(cid), esc(", ".join(fallback_phases)), esc(args.previous)))
+                section_glance(out, data,
+                               show_host=host if args.flow == "incr" or len(by_host) > 1 else None,
+                               previous=args._previous_speedups,
+                               previous_label=args._previous_label)
 
     # ...and the methodology below it, collapsed. It is load-bearing (a reader
     # who does not know what `full` means will misread every number above) but
     # it is reference material, and a status page must open on status.
-    out.append("<details><summary><b>How to read this page</b> — what the three "
-               "columns mean, and the four verdict states</summary>")
-    out.append(VERDICT_PROSE)
-    if args.flow != "synth":
+    if args.flow == "incr":
+        out.append("<details><summary><b>How to read this page</b> — full, cold, "
+                   "no-change, edit, and the speedup denominator</summary>")
         out.append(MODE_PROSE)
+        out.append("</details>")
+        out.append(SORTABLE_TABLES_JS.strip())
+        dest = Path(args.out)
+        if not dest.is_absolute():
+            dest = root.parent / "livehd" / args.out
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text("\n".join(out) + "\n")
+        print("wrote %s (%d row(s), %d host(s))" %
+              (dest, len(rows), len(by_host)))
+        return
+
+    out.append("<details><summary><b>How to read this page</b> — verdict "
+               "states</summary>")
+    out.append(VERDICT_PROSE)
     out.append("</details>")
 
     hard_any = []
-    for host, hrows in sorted(by_host.items()):
-        try:
-            hard = render_host(out, host, hrows, args, eps, all_configs)
-        except Exception:
-            # `render_host` already contains the per-section guard; this is the
-            # last resort for its own header. Either way the page still gets
-            # written — the ledger is append-only and shared, and an unwritable
-            # page is a one-way trap.
-            hard = ["renderer crashed before this host's header"]
-            out.append('<p class="worse">RENDERER ERROR on host %s.</p>'
-                       '<pre>%s</pre>'
-                       % (esc(host), esc(traceback.format_exc())))
-        if hard:
-            hard_any.append("%s: %s" % (host, brief(hard, 8, "; ")))
+    for selected in requested_currents:
+        section_args = argparse.Namespace(**vars(args))
+        section_args.current = selected
+        section_args._multi_current = len(requested_currents) > 1
+        if section_args._multi_current:
+            out.append("<h2>Detailed results — configuration: <code>%s</code></h2>"
+                       % esc(selected))
+        for host, hrows in sorted(by_host.items()):
+            try:
+                hard = render_host(out, host, hrows, section_args, eps, all_configs)
+            except Exception:
+                # `render_host` already contains the per-section guard; this is the
+                # last resort for its own header. Either way the page still gets
+                # written — the ledger is append-only and shared, and an unwritable
+                # page is a one-way trap.
+                hard = ["renderer crashed before this host's header"]
+                out.append('<p class="worse">RENDERER ERROR on host %s.</p>'
+                           '<pre>%s</pre>'
+                           % (esc(host), esc(traceback.format_exc())))
+            if hard:
+                hard_any.append("%s/%s: %s"
+                                % (host, selected or "latest", brief(hard, 8, "; ")))
 
     dest = Path(args.out)
     if not dest.is_absolute():
@@ -2135,8 +2455,11 @@ def main():
     r.add_argument("--title", default="")
     r.add_argument("--baseline", default="", help="config_id of the baseline column")
     r.add_argument("--current", default="", help="config_id of the current column")
+    r.add_argument("--also-current", action="append", default=[], metavar="CONFIG_ID",
+                   help="render another at-a-glance table and detailed section; "
+                        "repeat for additional measurement configurations")
     r.add_argument("--previous", default="",
-                   help="config_id supplying the dated historical speedup-only column")
+                   help="config_id supplying historical speedups and, on the incremental dashboard, phases absent from --current")
     r.add_argument("--host", default="",
                    help="render only this host (historical speedup may still come from --previous)")
     r.add_argument("--epsilon", type=float, default=3.0,
@@ -2150,8 +2473,8 @@ def main():
     args = ap.parse_args()
     if args.cmd == "render":
         args.out = args.out or "current_opt_loop_%s.html" % args.flow
-        args.title = args.title or ("Incremental rebuild loop — full vs cold vs "
-                                    "incremental" if args.flow == "incr"
+        args.title = args.title or ("Incremental rebuild speedup — full vs "
+                                    "no-change and one-file edit" if args.flow == "incr"
                                     else "Synthesis QoR loop")
     args.fn(args, root)
 

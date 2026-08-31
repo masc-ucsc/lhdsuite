@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Asserted `lhd sim` benchmark over real modules of the design under test.
+# `lhd sim` benchmark over real modules of the design under test.
 #
 # Asserted and timed: the per-core benchmark testbench ($CORE_SIM_TB). It must
 # print $CORE_SIM_MARKER AND, when the core sets $CORE_SIM_EXPECT, known-good data
@@ -69,6 +69,14 @@ RF="${TEST_SRCDIR:-${RUNFILES_DIR:-$0.runfiles}}"
 # the separate whole-top correctness drivers near the end of this script.
 : "${CYCLES:=$CORE_SIM_CYCLES}"
 SIM_TB=$CORE_SIM_TB
+
+# Several checksum oracles are intentionally pinned to their default cycle
+# count. A longer throughput run still has the testbench's in-source assertions
+# and required marker, but must not compare its later checksum with the default
+# run's value.
+if [ "$CYCLES" != "$CORE_SIM_CYCLES" ]; then
+  CORE_SIM_EXPECT=
+fi
 
 # emit_lg TAG UNIT — MODE=verilog: compile the Verilog cone rooted at UNIT into
 # lg:lg_TAG, timed as METRIC compile_lg_TAG_ms. One slang read of the whole
@@ -145,11 +153,26 @@ cp -L "$CORE_SIM_DIR"/*.prp tree/
 
 SIM_INPUTS=("$BENCH_INPUT" "tree/$SIM_TB")
 
+# Make the selected execution engine part of the scraped benchmark identity.
+# Historical rows predate this metric and remain under phase `sim`; new rows
+# are rendered as `sim_slop` or `sim_llvm` by bench/ledger.py.
+SIM_BACKEND=slop
+for kv in ${CORE_SIM_SETS:-}; do
+  case "$kv" in sim.backend=*) SIM_BACKEND=${kv#sim.backend=} ;; esac
+done
+case "$SIM_BACKEND" in
+  slop) metric sim_backend_llvm 0 bool ;;
+  llvm) metric sim_backend_llvm 1 bool ;;
+  *) echo "FAIL: unsupported simulator backend '$SIM_BACKEND'" >&2; exit 2 ;;
+esac
+
 # ---- MODE=incr: full plus the three-pass rebuild over ONE workdir ------------
 #
-# The sim counterpart of synth_incremental. Everything this loop optimizes shows
-# up in the split: sim_setup_ms is `lhd sim` codegen, sim_cc_ms is the host C++
-# compile+link, sim_exec_ms is the simulation itself.
+# The sim counterpart of synth_incremental. The measured endpoint is a compiled
+# simulator, not an executed simulation: sim_setup_ms is `lhd sim` codegen and
+# sim_cc_ms is Ninja's host C++ compile+link. This keeps the table focused on
+# incremental build latency and avoids mixing a design-dependent runtime into
+# the edit loop.
 #
 #   full                  caches disabled with fresh work and emit directories.
 #   pass 1  cold          fresh workdir AND fresh emit dir. Both, because sim
@@ -163,89 +186,33 @@ SIM_INPUTS=("$BENCH_INPUT" "tree/$SIM_TB")
 #                         that rebuilds nothing after a real edit is a stale
 #                         cache, not a fast one.
 #
-# On every pass sim_exec_ms is re-measured, because it is the hard guardrail: a
-# change that cuts the host compile by slowing the simulation is a net loss,
-# and only a per-pass measurement can see that.
-#
-# sim.ninja is deliberately NOT pinned here (unlike the cold sim_pyrope
-# benchmark, which pins it off for reproducibility): the incremental host build
-# is precisely what is under test. Which path ran is reported instead.
+# Ninja is invoked directly after `--setup-only`: the generated build.ninja is
+# the exact host build `lhd sim --run-only` would perform, but stopping at its
+# default drv.bin target guarantees that no testbench cycles execute.
 if [ "$MODE" = incr ]; then
-  # The exec leg re-runs the binary at $PERF_CYCLES rather than the gate count.
-  # 1000 cycles is a marker/checksum count and measures process startup, not the
-  # simulator (T1) — a guardrail read off startup noise cannot reject anything.
-  PERF_CYCLES=${CORE_SIM_PERF_CYCLES:-}
-  [ -n "$PERF_CYCLES" ] || PERF_CYCLES=$CYCLES
-  : "${SIM_REPS:=3}"
-
   ninja_path=$(type -P ninja || true)
   metric sim_ninja_present "$([ -n "$ninja_path" ] && echo 1 || echo 0)" bool
+  [ -n "$ninja_path" ] \
+    || { echo "FAIL: sim_incremental needs ninja to compile without executing drv.bin" >&2; exit 1; }
 
-  # sim_pass TAG GATE_EXPECT [INCREMENTAL] [ALLOW_TEST_FAIL] — one full pass.
-  # GATE_EXPECT=0 relaxes to the
-  # marker alone, which is what pass 3 needs: `bug1` changes the design, so the
-  # checksum MUST move. Keeping the pass-1 checksum as a gate there would fail
-  # the target for doing its job. ALLOW_TEST_FAIL is also pass-3-only: an
-  # asserted driver may correctly reject the injected mutant. Its non-zero
-  # status is accepted only if sim_gate still finds the final marker, proving
-  # the driver ran to completion rather than crashing.
-  allow_nonzero() { "$@" || return 0; }
-
+  # sim_pass TAG [INCREMENTAL] — generate, then compile+link drv.bin. It never
+  # launches the binary.
   sim_pass() {
-    local tag=$1 expect=$2 incremental=${3:-true} allow_test_fail=${4:-false}
-    local run_ms exec_ms cc_ms
+    local tag=$1 incremental=${2:-true}
     local incr_args=()
     [ "$incremental" != false ] || incr_args=(--set lhd.incremental=false)
     # shellcheck disable=SC2086  # CORE_SIM_SETS is a token LIST, split on purpose
     run_timed "sim_setup_$tag" lhd sim "${SIM_INPUTS[@]}" --setup-only \
       --set sim.vcd=false $CORE_SIM_SETS --workdir SW \
+      ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
       ${incr_args[@]+"${incr_args[@]}"} || return 1
     # shellcheck disable=SC2086
-    if [ "$allow_test_fail" = true ]; then
-      run_timed "sim_run_$tag" allow_nonzero lhd sim "${SIM_INPUTS[@]}" --run-only \
-        --arg "cycles=$CYCLES" $CORE_SIM_SETS --diag-fmt pretty --workdir SW \
-        ${incr_args[@]+"${incr_args[@]}"} || return 1
-    else
-      run_timed "sim_run_$tag" lhd sim "${SIM_INPUTS[@]}" --run-only \
-        --arg "cycles=$CYCLES" $CORE_SIM_SETS --diag-fmt pretty --workdir SW \
-        ${incr_args[@]+"${incr_args[@]}"} || return 1
-    fi
-    run_ms=$LAST_MS
-    SIM_GATE_EXPECT=$expect sim_gate "sim_run_$tag"
-
-    # exec at the GATE count first: sim_cc_ms is only meaningful as
-    # sim_run_ms minus the same simulation sim_run just paid for.
-    log_cmd "sim_exec_$tag" "SW/sim/drv.bin --cycles $CYCLES  (x$SIM_REPS, best)"
-    if [ "$allow_test_fail" = true ]; then
-      SIM_GATE_EXPECT=$expect best_run "sim_exec_$tag" "$SIM_REPS" allow_nonzero \
-        SW/sim/drv.bin --cycles "$CYCLES" --result-json SW/sim/exec_tests.json
-    else
-      SIM_GATE_EXPECT=$expect best_run "sim_exec_$tag" "$SIM_REPS" \
-        SW/sim/drv.bin --cycles "$CYCLES" --result-json SW/sim/exec_tests.json
-    fi
-    exec_ms=$BEST_MS
-    cc_ms=$((run_ms - exec_ms))
-    [ "$cc_ms" -ge 0 ] || cc_ms=0
-    metric "sim_cc_ms_$tag" "$cc_ms" ms
-
-    # ...then the throughput leg, at the count that actually clears the noise
-    # floor. Marker-only: a different cycle count is a different checksum.
-    if [ "$PERF_CYCLES" != "$CYCLES" ]; then
-      log_cmd "sim_perf_$tag" "SW/sim/drv.bin --cycles $PERF_CYCLES  (x$SIM_REPS, best)"
-      if [ "$allow_test_fail" = true ]; then
-        SIM_GATE_EXPECT=0 best_run "sim_perf_$tag" "$SIM_REPS" allow_nonzero \
-          SW/sim/drv.bin --cycles "$PERF_CYCLES" --result-json SW/sim/perf_tests.json
-      else
-        SIM_GATE_EXPECT=0 best_run "sim_perf_$tag" "$SIM_REPS" \
-          SW/sim/drv.bin --cycles "$PERF_CYCLES" --result-json SW/sim/perf_tests.json
-      fi
-      exec_ms=$BEST_MS
-    fi
-    metric "sim_exec_ms_$tag" "$exec_ms" ms
-    rate "sim_cycles_per_s_$tag" "$PERF_CYCLES" "$exec_ms" "cycles/s"
-    rate "sim_cycles_per_s_with_cc_$tag" "$CYCLES" "$run_ms" "cycles/s"
+    run_timed "sim_cc_$tag" lhd sim "${SIM_INPUTS[@]}" --run-only \
+      --set sim.compile_only=true --set "sim.ninja=$ninja_path" \
+      $CORE_SIM_SETS --diag-fmt pretty --workdir SW \
+      ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
+      ${incr_args[@]+"${incr_args[@]}"} || return 1
     metric "workdir_bytes_$tag" "$(dir_bytes SW)" bytes
-    LAST_EXEC_MS=$exec_ms
   }
 
   # generated_newer MARKER — the generated C++/objects touched since MARKER.
@@ -259,16 +226,20 @@ if [ "$MODE" = incr ]; then
   }
 
   rm -rf SW
-  sim_pass full 1 false || exit 1
+  sim_pass full false || exit 1
 
   rm -rf SW
-  sim_pass cold 1 || exit 1
-  BASE_EXEC_MS=$LAST_EXEC_MS
+  sim_pass cold || exit 1
   tree_fingerprint SW/sim -name '*.cpp' -o -name '*.hpp' -o -name '*.iface.json' >fp_cold.txt
 
-  core_variant comment1 tree || exit 1
+  # Some old checked-in comment1 fixtures have drifted into structurally
+  # different (though equivalent) implementations.  This pass measures a true
+  # source-only no-op, so append a comment to the current unit exactly as the
+  # compile incremental benchmark does.
+  printf '\n// sim incremental comment-only touch\n' >> "tree/$CORE_UNIT.prp"
+  echo "VARIANT comment-only: appended to $CORE_UNIT.prp" >&3
   touch marker
-  sim_pass comment 1 || exit 1
+  sim_pass comment || exit 1
   rewritten=$(generated_newer marker)
   metric sim_rewritten_comment "$(echo "$rewritten" | wc -w | tr -d ' ')" files
   if [ -n "$rewritten" ]; then
@@ -290,14 +261,13 @@ if [ "$MODE" = incr ]; then
 
   core_variant bug1 tree || exit 1
   touch marker
-  sim_pass edit 0 true true || exit 1
+  sim_pass edit || exit 1
   rewritten=$(generated_newer marker)
   metric sim_rewritten_edit "$(echo "$rewritten" | wc -w | tr -d ' ')" files
   [ -n "$rewritten" ] \
     || { echo "FAIL: a real one-line edit rewrote NO generated file — stale cache" >&2; exit 1; }
 
-  echo "PASS: sim_incremental (cold/comment/edit over one workdir;" \
-    "exec ${BASE_EXEC_MS} ms cold, ${LAST_EXEC_MS} ms after the edit)"
+  echo "PASS: sim_incremental compiled drv.bin for full/cold/no-change/edit; no simulation executed"
   exit 0
 fi
 
@@ -306,7 +276,8 @@ fi
 # timed leg keeps the tracer out.
 # shellcheck disable=SC2086  # CORE_SIM_SETS is a token LIST, split on purpose
 run_timed sim_setup lhd sim "${SIM_INPUTS[@]}" --setup-only \
-  --set sim.vcd=false $CORE_SIM_SETS --workdir SW
+  --set sim.vcd=false $CORE_SIM_SETS --workdir SW \
+  ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"}
 # sim.ninja=false PINS the build path. `lhd sim` uses ninja when it finds one on
 # PATH and its own parallel compile otherwise — great for a developer's warm
 # edit-sim loop, useless here (every target starts from a fresh workdir, so
@@ -317,7 +288,8 @@ run_timed sim_setup lhd sim "${SIM_INPUTS[@]}" --setup-only \
 # covered by livehd's own lhd_sim_incremental_test.
 # shellcheck disable=SC2086
 run_timed sim_run lhd sim "${SIM_INPUTS[@]}" --run-only --arg "cycles=$CYCLES" \
-  --set sim.ninja=false $CORE_SIM_SETS --diag-fmt pretty --workdir SW
+  --set sim.ninja=false $CORE_SIM_SETS --diag-fmt pretty --workdir SW \
+  ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"}
 RUN_MS=$LAST_MS  # compile + simulate; sim_exec below splits it
 
 sim_gate sim_run
@@ -362,7 +334,8 @@ run_top_driver() {
   # shellcheck disable=SC2086
   if CURRENT_STEP=$label lhd sim "$design" "tree/$tb" \
     --arg "cycles=$cycles" --set sim.vcd=true $CORE_SIM_SETS --diag-fmt pretty \
-    --workdir "SW_$label" >"step_$label.log" 2>&1; then
+    --workdir "SW_$label" ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
+    >"step_$label.log" 2>&1; then
     echo 1
   else
     echo 0

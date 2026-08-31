@@ -9,9 +9,9 @@ with `bazel test //bench:<core>` and a single scenario with
 `bazel test //bench:<core>_<scenario>`.
 
 Adding a full core = one CORES entry + a package exposing the same filegroup
-names as //dino.  A `synth_only` core needs only verilog,
-verilog_filelist, pyrope, and pyrope_top; it emits the compile and synthesis
-scenarios, not simulation/formal/LEC scenarios.
+names as //dino. A `synth_only` core needs only verilog, verilog_filelist,
+pyrope, and pyrope_top; when it also has a Pyrope sim testbench it emits the
+incremental simulation-compile and LEC scenarios as well as synthesis.
 """
 
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
@@ -465,7 +465,7 @@ CORES = {
         # bug1 site: tests/bug1/tap.prp corrupts each loaded byte, which the
         # verify sidecar REFUTES and whole-design LEC catches.
         "unit": "tap",
-        "incremental_variant": "incr1",
+        "incremental_variant": "local_output",
         "seq_unit": "",
         "v_flags": "",
         "color_algs": ["synth"],
@@ -631,11 +631,11 @@ _SCENARIOS = [
     # core opt IN to simulation just by naming a driver.
     ("sim_verilog", "sim.sh", "verilog", "long", "", "sim_tb"),
     ("sim_pyrope", "sim.sh", "pyrope", "long", "", "sim_tb"),
-    # The sim counterpart of synth_incremental: three passes over ONE workdir
-    # AND one emit dir, reporting sim_setup_ms / sim_cc_ms / sim_exec_ms on
-    # every pass. sim_exec_ms is the I3 guardrail — a pass that cuts the host
-    # compile while slowing the simulation fails here.
+    # The sim counterpart of synth_incremental: four compiled-driver builds
+    # over one workdir and emit dir, reporting setup/codegen and host C++
+    # compile+link separately. The driver is not executed in this scenario.
     ("sim_incremental", "sim.sh", "incr", "eternal", "", "sim_tb"),
+    ("sim_incremental_llvm", "sim.sh", "incr", "eternal", "", "sim_tb"),
     # The same benchmark under Verilator, for cores carrying a C++ twin of
     # their sim_tb: how `lhd sim` compares against the reference simulator on
     # compile time AND on cycles/s. Held to the same output gates, so it is
@@ -769,10 +769,10 @@ def core_benches(core):
             "lec_incremental",
         ]:
             continue
-        # `synth_only` says "this core ships no verify sidecar and no LEC
-        # reference", not "this core cannot be simulated". Simulation is
-        # decided by needs_cfg="sim_tb" below, so a synth-only core that names
-        # a driver gets the sim scenarios and one that does not gets none.
+        # `synth_only` says "this core ships no verify sidecar or checked-in
+        # edit overlays". A synth-only core with sim_tb still has both source
+        # languages, so it can populate every incremental report table:
+        # simulation compile, synthesis, and LEC.
         if cfg.get("synth_only", False) and suffix not in [
             "compile_verilog",
             "compile_pyrope",
@@ -783,6 +783,8 @@ def core_benches(core):
             "sim_verilog",
             "sim_pyrope",
             "sim_incremental",
+            "sim_incremental_llvm",
+            "lec_incremental",
             # ...and the Verilator comparison, for the same reason: it is
             # decided by needs_cfg="verilator_tb" below, so a synth-only core
             # that ships a C++ twin of its driver gets the target and one that
@@ -795,7 +797,12 @@ def core_benches(core):
         if needs_cfg and not cfg.get(needs_cfg, ""):
             continue  # e.g. no sim_verilator on a core with no verilator_tb
         name = "%s_%s" % (core, suffix)
-        _lhd_bench(name, core, cfg, script, mode, timeout)
+        scenario_cfg = cfg
+        if suffix == "sim_incremental_llvm":
+            scenario_cfg = dict(cfg)
+            scenario_cfg["sim_sets"] = (cfg.get("sim_sets", "") +
+                                         " --set sim.backend=llvm").strip()
+        _lhd_bench(name, core, scenario_cfg, script, mode, timeout)
         names.append(":" + name)
 
     # `bazel test //bench:<core>` — every scenario for this core only.

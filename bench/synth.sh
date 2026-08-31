@@ -32,15 +32,16 @@
 #   MODE=cold  runs each of this core's colorings ($CORE_COLOR_ALGS) and
 #              reports timing + QoR for each — METRICs:
 #              <alg>_color_ms/abc_ms/sta_ms/regions/gates/area/delay/sta_delay.
-#   MODE=incr  `lhd synth` over three passes sharing ONE --workdir (both the
-#              compile cache and the abc_cache live under it):
+#   MODE=incr  `lhd synth` for full, cold, no-change, and edit measurements.
+#              The cold, no-change, and edit passes share ONE --workdir (the
+#              compile, abc, and opentimer caches live under it):
+#                full: incremental machinery disabled;
 #                pass 1: cold — every region really synthesizes;
 #                pass 2: comment1 variant (nothing really changed) — regions
 #                        must HIT the cache (asserted), and the compile tier
 #                        reuses the unchanged units;
-#                pass 3: bug1 variant (a real one-line logic edit) — only the
-#                        touched region re-synthesizes (asserted: >=1 miss,
-#                        untouched regions still hit).
+#                pass 3: bug1 variant (a real one-line logic edit) — at least
+#                        one region misses while untouched regions still hit.
 #              Incremental needs the different colors/partitions that
 #              `color synth` creates and `color flat` intentionally does not
 #              (one region = nothing to reuse).
@@ -95,15 +96,12 @@ COLOR_ARGS=()
 # cones phase 2: false|pair|all -- merge a register's color FORWARD across its Q
 # after the backward overlap merge has taken its share of the budget.
 [ -z "${BENCH_COLOR_FORWARD:-}" ] || COLOR_ARGS+=(--set "color.forward=$BENCH_COLOR_FORWARD")
-# BENCH_PYROPE_SETS="k=v k=v": `--set` flags for every Pyrope COMPILE in this
-# script (the front end, not abc/color) — e.g. `compile.unroll=true` to
+# BENCH_PYROPE_SETS="k=v k=v": `--set` flags for every Pyrope compile in this
+# benchmark configuration — e.g. `compile.unroll=true` to
 # measure a loop benchmark with its source loops unrolled (the default keeps
 # an eligible loop as one replicated Sub), or `compile.upass.roll_arrays=true`
 # to roll array-carrying loops too. Spell keys fully qualified: `lhd synth`/
 # `lhd sim` reject the bare `unroll`.
-PYROPE_ARGS=()
-for kv in ${BENCH_PYROPE_SETS:-}; do PYROPE_ARGS+=(--set "$kv"); done
-
 stubs=()
 if [ -n "$CORE_P_STUB_DIR" ]; then
   stubs=("$CORE_P_STUB_DIR"/*.prp)
@@ -320,7 +318,9 @@ cold)
 incr)
   copy_core_pyrope src/pyrope
 
-  synth_oneshot full src/pyrope W_full false
+  if [ -z "${BENCH_SYNTH_SKIP_FULL:-}" ]; then
+    synth_oneshot full src/pyrope W_full false
+  fi
   synth_oneshot pass1 src/pyrope W
   cold_miss_ms=$ic_miss_ms
 
@@ -367,11 +367,12 @@ incr)
   h3=$ic_hits m3=$ic_misses
   [ "${m3:-0}" -ge 1 ] || { echo "FAIL: real edit re-synthesized nothing ($ABC_COUNTS)" >&2; exit 1; }
   [ "${h3:-0}" -gt 0 ] || { echo "FAIL: real edit lost every cache hit ($ABC_COUNTS)" >&2; exit 1; }
+
   metric synthesis_elapsed_ms "$(( $(now_ms) - SYNTH_START_MS ))" ms
   echo "PASS: warm hits=$h2/misses=$m2 (${warm_miss_ms}ms re-mapped of ${cold_miss_ms}ms cold);" \
     "sta reuse=${sta_h2:-n/a}; after one-line edit hits=$h3/misses=$m3"
   [ "$SYNTH_DOWNSTREAM_FAILURES" = 0 ] || {
-    echo "FAIL: $SYNTH_DOWNSTREAM_FAILURES synthesis invocation(s) completed ABC but failed downstream STA; cold/warm metrics were retained" >&2
+    echo "FAIL: $SYNTH_DOWNSTREAM_FAILURES synthesis invocation(s) completed ABC but failed downstream STA; cold/warm/edit metrics were retained" >&2
     exit 1
   }
   ;;

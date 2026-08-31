@@ -69,6 +69,13 @@ metric verilator_present 1 bool
 : "${CYCLES:=$CORE_SIM_CYCLES}"
 : "${LONG_CYCLES:=$CORE_VERILATOR_CYCLES}"
 : "${SIM_REPS:=3}"
+# Fixed-output oracles describe the default matched cycle count.  A caller
+# extending that matched leg for a throughput measurement still has the
+# driver's own assertions and required progress marker, but its later checksum
+# is expected to differ.
+if [ "$CYCLES" != "$CORE_SIM_CYCLES" ]; then
+  CORE_SIM_EXPECT=
+fi
 VTB=$CORE_SIM_DIR/$CORE_VERILATOR_TB
 VOBJ=vobj
 VBIN=$VOBJ/V$CORE_TOP
@@ -97,6 +104,16 @@ JOBS=$(cpu_count)
 log_cmd sim_cc "make -C $VOBJ -f V$CORE_TOP.mk -j$JOBS V$CORE_TOP"
 run_timed sim_cc make -C "$VOBJ" -f "V$CORE_TOP.mk" -j"$JOBS" "V$CORE_TOP"
 CC_MS=$LAST_MS  # run_timed already reported it as METRIC sim_cc_ms
+
+# --- 2b. identical warm rebuild ------------------------------------------------
+# This is the outside reference for LiveHD's comment-only incremental pass.
+# Verilator still pays its RTL front end, but write-if-changed should leave
+# identical generated C++ alone and make should have no native work. Keep the
+# two costs separate: otherwise a fast make can hide an expensive re-Verilation.
+run_timed sim_setup_warm vlt --cc --exe --Mdir "$VOBJ" --top-module "$CORE_TOP" \
+  -Wno-fatal $CORE_VERILATOR_FLAGS -DSYNTHESIS -I"$CORE_V_DIR" \
+  -F "$CORE_V_DIR/filelist.f" "$VTB"
+run_timed sim_cc_warm make -C "$VOBJ" -f "V$CORE_TOP.mk" -j"$JOBS" "V$CORE_TOP"
 
 # --- 3a. matched run: the cycle count the lhd sim targets use -----------------
 log_cmd sim_exec "$VBIN --cycles $CYCLES  (x$SIM_REPS, best)"

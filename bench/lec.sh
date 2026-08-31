@@ -32,7 +32,7 @@ run_timed compile_ref lhd compile verilog --top "$CORE_TOP" \
 compile_impl() {  # OUT_LG — compile the (possibly variant-overlaid) copy
   rm -rf "$1"
   lhd compile "src/pyrope/$CORE_TOP.prp" --top "$CORE_TOP" \
-    --emit-dir "lg:$1" --workdir "cw_$1"
+    --emit-dir "lg:$1" --workdir "cw_$1" ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"}
 }
 
 lec_run() {  # IMPL_LG [WORKDIR] [INCREMENTAL]

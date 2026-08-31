@@ -33,6 +33,7 @@ vrun() {
   lhd formal verify "src/pyrope/$CORE_UNIT.prp" "$CORE_VERIF_DIR/$CORE_UNIT.verify.prp" \
     --top "$CORE_UNIT" --set "formal.bound=$CORE_VERIFY_BOUND" --workdir "$wd" \
     $CORE_VERIFY_SETS \
+    ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
     ${incr_args[@]+"${incr_args[@]}"}
 }
 
@@ -43,7 +44,8 @@ vrun() {
 : "${SEQ_BOUND:=8}"
 vrun_seq() {
   lhd formal verify "src/pyrope/$CORE_SEQ_UNIT.prp" "$CORE_VERIF_DIR/$CORE_SEQ_UNIT.verify.prp" \
-    --top "$CORE_SEQ_UNIT" --set "formal.bound=$SEQ_BOUND" --workdir FW
+    --top "$CORE_SEQ_UNIT" --set "formal.bound=$SEQ_BOUND" --workdir FW \
+    ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"}
 }
 
 # How many assert obligations the sidecar DECLARES. `--list-tests` is a pure
@@ -53,13 +55,21 @@ vrun_seq() {
 expected_asserts() {  # UNIT — defaults to $CORE_UNIT
   local u=${1:-$CORE_UNIT}
   lhd formal verify "src/pyrope/$u.prp" "$CORE_VERIF_DIR/$u.verify.prp" \
-    --top "$u" --list-tests 2>/dev/null | head -1 | python3 -c '
+    --top "$u" --list-tests 2>/dev/null | python3 -c '
 import json, sys
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    print(0); raise SystemExit
-print(sum(t.get("asserts", 0) for t in d.get("tests", [])))'
+count = None
+# Diagnostics and the list envelope are both JSONL on stdout. Drain the whole
+# producer rather than `head -1`: closing the pipe after a warning made lhd
+# receive SIGPIPE under `set -o pipefail` (CVA6 emits a top-name warning before
+# its list envelope), so the benchmark failed before proving anything.
+for line in sys.stdin:
+    try:
+        d = json.loads(line)
+    except Exception:
+        continue
+    if "tests" in d:
+        count = sum(t.get("asserts", 0) for t in d.get("tests", []))
+print(0 if count is None else count)'
 }
 
 # check_proven LABEL EXPECTED — every assert obligation PROVEN, and as many of

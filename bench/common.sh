@@ -123,6 +123,13 @@ CORE_TESTS_DIR=$CORE_DIR/tests
 : "${CORE_SIM_TOP_UNIT=}" "${CORE_SIM_PROG_UNIT=}"
 : "${CORE_SIM_TOP_CYCLES=}" "${CORE_SIM_PROG_CYCLES=}"
 : "${CORE_VERILATOR_TB=}" "${CORE_VERILATOR_FLAGS=}" "${CORE_VERILATOR_CYCLES=}"
+
+# BENCH_PYROPE_SETS="k=v k=v": front-end settings that must describe every
+# Pyrope-consuming benchmark command in one measurement configuration. Keep
+# this shared: applying compile.unroll only to synthesis would make the
+# compile/sim/LEC/formal rows on the same ledger config measure another build.
+PYROPE_ARGS=()
+for kv in ${BENCH_PYROPE_SETS:-}; do PYROPE_ARGS+=(--set "$kv"); done
 WORK=${TEST_TMPDIR:?}
 cd "$WORK"
 
