@@ -19,12 +19,20 @@ RF="${TEST_SRCDIR:-${RUNFILES_DIR:-$0.runfiles}}"
 
 copy_core_pyrope src/pyrope
 
+# The bound is per-core (CORE_VERIFY_BOUND, default 2) because the useful depth
+# is a property of the DESIGN's reset: a core that holds reset longer than the
+# window has all its obligations checked while it is still idle, which makes the
+# proof weak and makes the bug1 twin unable to refute anything.
+: "${CORE_VERIFY_BOUND:=2}"
+: "${CORE_VERIFY_SETS:=}"  # set -u: the script also runs outside bazel
 vrun() {
   local wd=${1:-FW} incremental=${2:-true}
   local incr_args=()
   [ "$incremental" != false ] || incr_args=(--set lhd.incremental=false)
+  # shellcheck disable=SC2086  # CORE_VERIFY_SETS is a token LIST, split on purpose
   lhd formal verify "src/pyrope/$CORE_UNIT.prp" "$CORE_VERIF_DIR/$CORE_UNIT.verify.prp" \
-    --top "$CORE_UNIT" --set formal.bound=2 --workdir "$wd" \
+    --top "$CORE_UNIT" --set "formal.bound=$CORE_VERIFY_BOUND" --workdir "$wd" \
+    $CORE_VERIFY_SETS \
     ${incr_args[@]+"${incr_args[@]}"}
 }
 

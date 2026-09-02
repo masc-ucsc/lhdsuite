@@ -1,0 +1,84 @@
+// Assert/assume collateral for picorv32 — a sidecar, so the design file is
+// never touched.
+//
+// Every property below is picorv32's OWN, translated: they are the `assert`s
+// inside the `ifdef FORMAL` block of picorv32.v (the file's "Formal
+// Verification" section), which upstream drives with SymbiYosys. Proving the
+// design author's spec rather than one invented for the bench is the same
+// discipline cva6/verif/ follows.
+//
+// Two of the four are genuinely SEQUENTIAL, which is why this core names the
+// same module as `unit` and `seq_unit`: upstream registers the look-ahead bus
+// into `last_mem_la_*` and asserts the NEXT cycle's memory bus against it, so
+// the property is a `past` claim by construction. Writing them any other way
+// would mean re-deriving the spec instead of translating it.
+//
+// Every signal named here is a PORT of picorv32, so no internal probe is
+// needed. The two properties in the source that read `cpu_state` (a valid-state
+// check and the `restrict` on resetn) are deliberately NOT here: `cpu_state` is
+// internal, and a `restrict` is a constraint on the environment rather than a
+// claim about the design.
+//
+// Usage:
+//   lhd formal verify picorv32/pyrope/picorv32.prp \
+//       picorv32/verif/picorv32.verify.prp \
+//       --top picorv32 --set formal.bound=8 --workdir W
+const cpu = import("picorv32.picorv32")
+
+// Instruction fetches are READ-ONLY. picorv32.v:2121
+//   if (mem_valid && mem_instr) assert (mem_wstrb == 0);
+// guarded, as the source guards the whole block, on `resetn`.
+formal picorv32.ifetch_is_read_only {
+  mut acc = cpu
+  assert(((acc.resetn != 0) and (acc.mem_valid != 0) and (acc.mem_instr != 0))
+           implies (acc.mem_wstrb == 0),
+         "an instruction fetch must never drive a write strobe")
+}
+
+// The look-ahead READ contract. picorv32.v:2151
+//   if (last_mem_la_read) begin
+//     assert(mem_valid); assert(mem_addr == last_mem_la_addr);
+//     assert(mem_wstrb == 0);
+//   end
+// `last_mem_la_*` is the look-ahead bus registered one cycle, so upstream's
+// `last_mem_la_read` IS `past(mem_la_read, 1)`. This is the property the
+// look-ahead interface exists for: a consumer that starts its access a cycle
+// early on mem_la_* must see the SAME access on the real bus next cycle.
+formal picorv32.la_read_honored {
+  mut acc = cpu
+  assert((past(acc.mem_la_read, 1) != 0)
+           implies ((acc.mem_valid != 0)
+                    and (acc.mem_addr == past(acc.mem_la_addr, 1))
+                    and (acc.mem_wstrb == 0)),
+         "a look-ahead read must be the next cycle's real read, same address")
+}
+
+// The look-ahead WRITE contract. picorv32.v:2156
+//   if (last_mem_la_write) begin
+//     assert(mem_valid); assert(mem_addr == last_mem_la_addr);
+//     assert(mem_wdata == last_mem_la_wdata);
+//     assert(mem_wstrb == last_mem_la_wstrb);
+//   end
+// Strictly stronger than the read case: the data and the strobe must match
+// too, so a look-ahead write cannot turn into a different write.
+formal picorv32.la_write_honored {
+  mut acc = cpu
+  assert((past(acc.mem_la_write, 1) != 0)
+           implies ((acc.mem_valid != 0)
+                    and (acc.mem_addr == past(acc.mem_la_addr, 1))
+                    and (acc.mem_wdata == past(acc.mem_la_wdata, 1))
+                    and (acc.mem_wstrb == past(acc.mem_la_wstrb, 1))),
+         "a look-ahead write must be the next cycle's real write, same data and strobe")
+}
+
+// The look-ahead bus only moves on a settled cycle. picorv32.v:2162
+//   if (mem_la_read || mem_la_write) assert(!mem_valid || mem_ready);
+// i.e. picorv32 never announces the NEXT access while the current one is still
+// outstanding — which is what makes the two properties above implementable by
+// a consumer.
+formal picorv32.la_only_when_settled {
+  mut acc = cpu
+  assert(((acc.mem_la_read != 0) or (acc.mem_la_write != 0))
+           implies ((acc.mem_valid == 0) or (acc.mem_ready != 0)),
+         "the look-ahead bus must not move while a transfer is still outstanding")
+}

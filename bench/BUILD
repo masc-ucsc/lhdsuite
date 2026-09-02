@@ -55,6 +55,12 @@ core_benches("dino")
 # rather than benchmarking that smaller design under the same name.
 core_benches("cva6")
 
+# PicoRV32 (YosysHQ): a size-optimized RISC-V CPU, vendored verbatim, with a
+# suite-written wrapper pinning the parameters. Both languages are the same
+# design, so every cross-language leg is real. Its verify sidecar is picorv32's
+# OWN `ifdef FORMAL` spec translated.
+core_benches("picorv32")
+
 # Minion: an industrial multi-threaded RISC-V core with a vector/tensor unit.
 # Whole-design (Pyrope) top is minion_top; Verilog-side and cross-language
 # scenarios use vpu_top, the largest subtree complete in both languages

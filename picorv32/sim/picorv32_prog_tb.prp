@@ -1,0 +1,59 @@
+// A real RISC-V program on picorv32, with the testbench acting as its memory.
+//
+// The program accumulates 3 ten times and stores the result, so the check is
+// architectural (x1 == 30 observed through the program's own `sw`) rather than
+// a tap on any internal signal — the same discipline as dino_prog_tb.prp.
+//
+// The memory model is picorv32's simple (non-look-ahead) interface, served with
+// ONE cycle of latency: `mem_ready` and `mem_rdata` answer the request that was
+// latched below the previous `step`. That is not a workaround, it is what the
+// bench conventions require — a read placed above the `step` sees what the
+// PREVIOUS step settled, so a zero-latency memory here would be reading the
+// address one cycle stale and answering the wrong word. picorv32 holds
+// `mem_valid` (and the address) until it sees `mem_ready`, so a latency of one
+// is a legal transaction; it also means `mem_ready` is only ever raised in a
+// cycle where `mem_valid` is still high, never spuriously.
+const cpu = import("lg:picorv32_top")
+
+test picorv32.prog(cycles:u20 = 2000) {
+  mut acc = cpu
+  mut rom = [0x00000093,  // [0] 0x00: addi x1, x0, 0    ; acc = 0
+             0x00A00113,  // [1] 0x04: addi x2, x0, 10   ; n = 10
+             0x00308093,  // [2] 0x08: addi x1, x1, 3    ; loop: acc += 3
+             0xFFF10113,  // [3] 0x0c: addi x2, x2, -1   ; n -= 1
+             0xFE011CE3,  // [4] 0x10: bne  x2, x0, -8   ; until n == 0 (-> 0x08)
+             0x10102023,  // [5] 0x14: sw   x1, 256(x0)  ; expose acc to the tb
+             0x0000006F,  // [6] 0x18: jal  x0, 0        ; spin forever
+             0x00000013]  // [7] 0x1c: nop
+  mut req_valid = 0     // the request latched below the previous step
+  mut req_addr  = 0
+  mut stored    = 0     // data of the `sw` to 0x100
+  mut got       = 0
+  mut trapped   = 0
+  mut done_cycle = 0
+  tick cycles clocks=(clk=1) {
+    acc.resetn = clk >= 4       // active LOW reset, held for the first cycles
+    acc.irq    = 0
+    // Answer last cycle's request. The ROM is 8 words; the program never reads
+    // data, so aliasing the store address into it is harmless.
+    acc.mem_ready = req_valid
+    acc.mem_rdata = rom[(req_addr >> 2) & 7]
+    step
+    if acc.mem_valid != 0 and acc.mem_wstrb != 0 and acc.mem_addr == 0x100 {
+      if got == 0 {
+        stored = acc.mem_wdata
+        got = 1
+        done_cycle = clk
+      }
+    }
+    if acc.trap != 0 {
+      trapped = 1
+    }
+    req_valid = acc.mem_valid
+    req_addr  = acc.mem_addr
+  }
+  assert(trapped == 0, "picorv32 must not trap on this program")
+  assert(got == 1, "the program's store to 0x100 never appeared on the bus")
+  assert(stored == 30, "10 iterations of `acc += 3` must store 30")
+  puts("picorv32 prog: stored={stored} at cycle {done_cycle} of {cycles}")
+}

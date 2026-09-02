@@ -38,6 +38,20 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             `variant_bug_replace` are the exact one-line replacement. This
 #             keeps a generated whole-core tree from needing a second checked-in
 #             copy of a large unit merely to carry one benchmark mutation.
+#   verify_bound  `formal.bound` for the COMBINATIONAL sidecar scenarios
+#             (verify, verify_bug, verify_incremental). Default 2. Raise it for
+#             a core whose reset is longer than the default window: picorv32
+#             holds reset 22 cycles, so at bound=2 the only checked cycles are
+#             22-23 — before the CPU has issued its first fetch, which makes
+#             `verify` weak and leaves `verify_bug` unable to refute a real bug
+#             at all (measured: the same bug1 PROVES at bound 2 and REFUTES at
+#             8). It is a property of the DESIGN's reset, not a knob for making
+#             a target green.
+#   verify_sets  extra `--set k=v` flags for this core's `lhd formal verify`
+#             invocations, space separated, each already spelled `--set k=v`.
+#             The counterpart of sim_sets. picorv32 needs a larger
+#             `formal.timeout` because one of its four properties does not
+#             discharge inside the default budget at the deeper bound.
 #   seq_unit  module carrying a SEQUENTIAL verify sidecar
 #             (<core>/verif/<seq_unit>.verify.prp), i.e. one whose properties
 #             relate a cycle to the next with `past`/`stable`/`rose`/... The
@@ -230,6 +244,65 @@ CORES = {
         "sim_prog_tb_unit": "",
         "sim_prog_cycles": "",
         "lec_trust": "",
+        "verilator_tb": "",
+    },
+    "picorv32": {
+        "pkg": "//picorv32",
+        # picorv32_top is the parameter-pinning wrapper; picorv32 is the CPU.
+        # Both languages are the SAME design here (unlike cva6), so every
+        # cross-language scenario is real.
+        "top": "picorv32_top",
+        # The CPU itself carries the sidecar and the variants. It is the only
+        # module in the top's cone besides the wrapper.
+        "unit": "picorv32",
+        # picorv32's own formal spec is half sequential (upstream registers the
+        # look-ahead bus and asserts the next cycle's real bus against it), so
+        # one sidecar serves both the combinational and the temporal scenario
+        # rather than inventing a second unit for the sake of the knob.
+        "seq_unit": "picorv32",
+        # picorv32 holds reset for 22 cycles, so the default bound=2 window
+        # (cycles 22-23) sits before the CPU's first fetch: `verify` would be
+        # near-vacuous and `verify_bug` could not refute at all. Measured: bug1
+        # PROVES at bound 2 and REFUTES at 8. The larger formal.timeout is what
+        # la_only_when_settled needs to discharge at that depth.
+        "verify_bound": 8,
+        "verify_sets": "--set formal.timeout=600",
+        # The generated variants mutate pyrope/picorv32.prp in place: a second
+        # checked-in copy of a 1352-line whole CPU would have to be regenerated
+        # in lockstep with the tree for one changed line.
+        "generated_variants": True,
+        # An instruction fetch drives a write strobe — the CPU writes to memory
+        # while fetching. Refutes picorv32's own ifetch_is_read_only property
+        # (and the look-ahead read contract, which also requires wstrb == 0).
+        "variant_bug_find": "          mem_wstrb = 0",
+        "variant_bug_replace": "          mem_wstrb = 1",
+        # picorv32.v uses a function-like `assert macro that expands to a call
+        # to an undefined `empty_statement` outside FORMAL. Defining it away is
+        # a PREPROCESSOR fact about the vendored source, not an lhd knob added
+        # to make a bench pass: with -DFORMAL slang instead refuses over
+        # $initstate, and upstream's own synthesis flows define it away too.
+        "v_flags": "-Dassert(assert_expr)=",
+        "color_algs": ["synth"],
+        # A real RISC-V program with the testbench acting as the CPU's memory,
+        # checked architecturally through the program's own store.
+        #
+        # BOTH sim targets are RED, and not because of this driver: Icarus
+        # Verilog runs the identical program on the identical RTL and issues
+        # the store (a=256 wstrb=15 wdata=5), while `lhd sim` never drives a
+        # write strobe at all. See the README's known-failing table for the
+        # reproducer. Keep the architectural gate live.
+        "sim_tb": "picorv32_prog_tb.prp",
+        "sim_cycles": 500000,
+        "sim_tb_unit": "picorv32_top",
+        "sim_marker": "picorv32 prog:",
+        "sim_expect": "stored=30",
+        "sim_top_tb": "",
+        "sim_prog_tb": "",
+        "sim_prog_tb_unit": "",
+        "sim_prog_cycles": "",
+        "lec_trust": "",
+        # No Verilator twin yet. The Icarus run above is a one-off reproducer
+        # in the README, not a suite target.
         "verilator_tb": "",
     },
     "minion": {
@@ -669,6 +742,8 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_SIM_PROG_CYCLES": str(cfg.get("sim_prog_cycles", "")),
             # "1" = the whole-top drivers gate the target; "" = metric only.
             "CORE_SIM_TOP_ASSERT": "1" if cfg.get("sim_top_assert", False) else "",
+            "CORE_VERIFY_BOUND": str(cfg.get("verify_bound", "")),
+            "CORE_VERIFY_SETS": cfg.get("verify_sets", ""),
             "CORE_LEC_TRUST": cfg.get("lec_trust", ""),
             "CORE_VERILATOR_TB": cfg.get("verilator_tb", ""),
             "CORE_VERILATOR_FLAGS": cfg.get("verilator_flags", ""),

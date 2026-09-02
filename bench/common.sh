@@ -859,9 +859,22 @@ copy_core_pyrope() {
 # copy_core_sources DEST — writable copy of both language trees.
 copy_core_sources() {
   mkdir -p "$1/verilog"
-  cp -L "$CORE_V_DIR"/*.sv "$CORE_V_DIR"/filelist.f "$1/verilog/"
-  # .svh includes (minion has them; dino does not)
+  cp -L "$CORE_V_DIR"/filelist.f "$1/verilog/"
+  # Stage every Verilog source the core ships, whatever it spells them: .sv for
+  # the SystemVerilog cores, plain .v for vendored Verilog-2005 (picorv32). The
+  # extension is the core's business, not this script's — hardcoding one made
+  # a .v-only core fail to stage at all. At least one must match.
+  local staged=0
+  for ext in sv v; do
+    if compgen -G "$CORE_V_DIR/*.$ext" >/dev/null; then
+      cp -L "$CORE_V_DIR"/*."$ext" "$1/verilog/"
+      staged=1
+    fi
+  done
+  [ "$staged" = 1 ] || { echo "FAIL: no .sv/.v sources in $CORE_V_DIR" >&2; return 1; }
+  # .svh/.vh includes (minion has them; dino does not)
   cp -L "$CORE_V_DIR"/*.svh "$1/verilog/" 2>/dev/null || true
+  cp -L "$CORE_V_DIR"/*.vh "$1/verilog/" 2>/dev/null || true
   copy_core_pyrope "$1/pyrope"
 }
 
