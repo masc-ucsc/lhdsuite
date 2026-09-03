@@ -15,9 +15,17 @@
 # //verif:v2v — the longer round trip: Verilog -> generated Pyrope -> generated
 # Verilog, checked back against the ORIGINAL Verilog. See its own header below.
 #
-# Tagged `manual`: a wildcard (`bazel test //...`) skips them, an explicit name
-# runs them. They are the "from time to time" check — run after touching
-# upass/prp_writer, inou/slang, or the LEC encoder.
+# These are a plain wildcard's business: `bazel test //verif:all` (and
+# `bazel test //...`) RUNS them. They were tagged `manual` until 2026-09-03,
+# which made `//verif:all` match zero tests and exit "No test targets were
+# found" — a green-looking no-op. Do not put `manual` back to make a wildcard
+# cheap again; that hides the gate instead of reporting it.
+#
+# They are still CPU-hungry and `exclusive`, so a wildcard run serializes them
+# and takes hours. The per-test budget is the `eternal` bucket, which
+# `.bazelrc` raises to 21600s (6h) — only a top that outruns THAT needs an
+# explicit `--test_timeout`. Name one target after touching upass/prp_writer,
+# inou/slang, or the LEC encoder.
 #
 # Status (2026-08-21, re-measured after the two `genprp.sh` gate fixes below —
 # BEFORE them a failing step exited 0 and the target went GREEN, so any status
@@ -56,11 +64,11 @@ load("//bench:defs.bzl", "CORES")
             "CORE_V_FLAGS": CORES[core]["v_flags"],
             "CORE_V_FLIST": "$(rlocationpath %s:verilog_filelist)" % CORES[core]["pkg"],
         },
-        # LEC on a whole core is CPU-hungry; `manual` keeps it off wildcards.
+        # LEC on a whole core is CPU-hungry, so it stays `exclusive` (one at a
+        # time); it still runs under a wildcard.
         tags = [
             "core_" + core,
             "exclusive",
-            "manual",
         ],
     )
     for core in [
@@ -168,7 +176,6 @@ _XS_TOPS = [
             "core_xs",
             "core_" + suffix,
             "exclusive",
-            "manual",
         ],
     )
     for suffix, top in _XS_TOPS
@@ -176,13 +183,11 @@ _XS_TOPS = [
 
 test_suite(
     name = "genprp_xs",
-    tags = ["manual"],
     tests = [":genprp_" + suffix for suffix, _top in _XS_TOPS],
 )
 
 test_suite(
     name = "genprp",
-    tags = ["manual"],
     tests = [
         ":genprp_cva6",
         ":genprp_dino",
@@ -228,18 +233,17 @@ _V2V_CORES = [
         tags = [
             "core_" + core,
             "exclusive",
-            "manual",
         ],
     )
     for core in _V2V_CORES
 ]
 
-# `timeout = "eternal"` still maps to Bazel's default 3600-second test cap.
-# That is not suitable for XiangShan: parsing/elaboration is intentionally
-# uncapped and only lgcheck's equivalence phase has the 600-second limit. These
-# `bazel run` entry points have no test-runner wall timeout and are therefore
-# the canonical way to execute the large tops. The sh_tests remain useful for
-# CI when invoked with an explicit `--test_timeout=999999`.
+# `timeout = "eternal"` is NOT Bazel's stock 3600s here: `.bazelrc` sets
+# `test --test_timeout=-1,-1,-1,21600`, so an eternal test gets 6 hours.
+# Parsing/elaboration is intentionally uncapped and only lgcheck's equivalence
+# phase has the 600-second limit. These `bazel run` entry points have no
+# test-runner wall timeout at all, so they remain the way to execute a top that
+# outruns even the 6-hour bucket.
 [
     sh_binary(
         name = "v2v_run_" + core,
@@ -263,6 +267,5 @@ _V2V_CORES = [
 
 test_suite(
     name = "v2v",
-    tags = ["manual"],
     tests = [":v2v_" + core for core in _V2V_CORES],
 )
