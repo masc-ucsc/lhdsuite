@@ -52,7 +52,7 @@ load("//bench:defs.bzl", "CORES")
         env = {
             "LHD": "$(rlocationpath @livehd//lhd:lhd)",
             "CORE": core,
-            "CORE_TOP": CORES[core]["top"],
+            "CORE_TOP": CORES[core].get("genprp_top", CORES[core]["top"]),
             "CORE_V_FLAGS": CORES[core]["v_flags"],
             "CORE_V_FLIST": "$(rlocationpath %s:verilog_filelist)" % CORES[core]["pkg"],
         },

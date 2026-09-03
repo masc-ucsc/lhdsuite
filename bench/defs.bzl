@@ -212,6 +212,10 @@ CORES = {
         # would benchmark a different, trivial design. Omit those legs until a
         # whole-core Verilog tree can be staged.
         "top": "cva6",
+        # The local Verilog collateral is only the parameter-pinned tag_cmp
+        # cone. The generator verification must name that real Verilog top;
+        # synthesis/simulation continue to use the whole generated Pyrope core.
+        "genprp_top": "tag_cmp_wrap",
         "pyrope_only": True,
         # Formal uses the core's real integer ALU. It is in cva6's cone and its
         # ADD/SUB contract is materially broader than the old all-miss tag_cmp
@@ -228,6 +232,11 @@ CORES = {
         # unit; the filelist carries the elaboration order.
         "v_flags": "--single-unit",
         "color_algs": ["synth"],
+        # The default window left a 16.9k-GE multiplier in one ABC color; that
+        # color alone took 25 minutes and violated the suite's 15-minute
+        # per-color bound. Keep CVA6's regions small enough for bounded,
+        # observable progress, as is already done for XS Backend below.
+        "color_max_ge": 8000,
         # A real RISC-V program on the full core over its AXI interface. Keep
         # the architectural readback gate live: the generated icache currently
         # prevents retirement, so this target remains red until LiveHD's
