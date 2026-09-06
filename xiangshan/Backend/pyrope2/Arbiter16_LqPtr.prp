@@ -1,0 +1,105 @@
+// Loop-form Pyrope for XiangShan Arbiter16_LqPtr.
+// Reference: XiangShan/build/rtl_rob16/Arbiter16_LqPtr.sv (241 SV lines).
+// Design: 16-input priority arbiter over ready/valid/{flag:u1, value:u7} slots.
+// Index 0 = highest priority. When no input is valid, chosen=15 and bits=bits[15].
+//
+// firtool unrolled three per-slot loops that we re-roll here:
+//   1. Priority mux chain (indices 14 -> 0, taking bits from the highest-priority
+//      valid input, defaulting to index 15).
+//   2. Cumulative-OR grant chain (indices 0 -> 15, grant_j = ~any_valid[0..j-1]).
+//   3. Ready signal formation (indices 0 -> 15, ready_j = grant_j & io_out_ready).
+
+pub mod Arbiter16_LqPtr::[timecheck=false](
+  io_in_0_valid:u1,  io_in_0_bits:(flag:u1, value:u7),
+  io_in_1_valid:u1,  io_in_1_bits:(flag:u1, value:u7),
+  io_in_2_valid:u1,  io_in_2_bits:(flag:u1, value:u7),
+  io_in_3_valid:u1,  io_in_3_bits:(flag:u1, value:u7),
+  io_in_4_valid:u1,  io_in_4_bits:(flag:u1, value:u7),
+  io_in_5_valid:u1,  io_in_5_bits:(flag:u1, value:u7),
+  io_in_6_valid:u1,  io_in_6_bits:(flag:u1, value:u7),
+  io_in_7_valid:u1,  io_in_7_bits:(flag:u1, value:u7),
+  io_in_8_valid:u1,  io_in_8_bits:(flag:u1, value:u7),
+  io_in_9_valid:u1,  io_in_9_bits:(flag:u1, value:u7),
+  io_in_10_valid:u1, io_in_10_bits:(flag:u1, value:u7),
+  io_in_11_valid:u1, io_in_11_bits:(flag:u1, value:u7),
+  io_in_12_valid:u1, io_in_12_bits:(flag:u1, value:u7),
+  io_in_13_valid:u1, io_in_13_bits:(flag:u1, value:u7),
+  io_in_14_valid:u1, io_in_14_bits:(flag:u1, value:u7),
+  io_in_15_valid:u1, io_in_15_bits:(flag:u1, value:u7),
+  io_out_ready:u1
+) -> (
+  io_in_0_ready:u1@[],  io_in_1_ready:u1@[],  io_in_2_ready:u1@[],  io_in_3_ready:u1@[],
+  io_in_4_ready:u1@[],  io_in_5_ready:u1@[],  io_in_6_ready:u1@[],  io_in_7_ready:u1@[],
+  io_in_8_ready:u1@[],  io_in_9_ready:u1@[],  io_in_10_ready:u1@[], io_in_11_ready:u1@[],
+  io_in_12_ready:u1@[], io_in_13_ready:u1@[], io_in_14_ready:u1@[], io_in_15_ready:u1@[],
+  io_out_valid:u1@[], io_out_bits:(flag:u1, value:u7)@[], io_chosen:u4@[]
+) {
+  // Pack the 16 per-slot signals into wide vectors so the loop can index them
+  // via compile-time-constant slice ranges.
+  const valids:u16 =
+      io_in_0_valid        | (io_in_1_valid  << 1)  | (io_in_2_valid  << 2)  | (io_in_3_valid  << 3)
+    | (io_in_4_valid  << 4) | (io_in_5_valid  << 5)  | (io_in_6_valid  << 6)  | (io_in_7_valid  << 7)
+    | (io_in_8_valid  << 8) | (io_in_9_valid  << 9)  | (io_in_10_valid << 10) | (io_in_11_valid << 11)
+    | (io_in_12_valid << 12)| (io_in_13_valid << 13) | (io_in_14_valid << 14) | (io_in_15_valid << 15)
+  const flags:u16 =
+      io_in_0_bits.flag        | (io_in_1_bits.flag  << 1)  | (io_in_2_bits.flag  << 2)  | (io_in_3_bits.flag  << 3)
+    | (io_in_4_bits.flag  << 4) | (io_in_5_bits.flag  << 5)  | (io_in_6_bits.flag  << 6)  | (io_in_7_bits.flag  << 7)
+    | (io_in_8_bits.flag  << 8) | (io_in_9_bits.flag  << 9)  | (io_in_10_bits.flag << 10) | (io_in_11_bits.flag << 11)
+    | (io_in_12_bits.flag << 12)| (io_in_13_bits.flag << 13) | (io_in_14_bits.flag << 14) | (io_in_15_bits.flag << 15)
+  const values:u112 =
+      io_in_0_bits.value          | (io_in_1_bits.value  << 7)  | (io_in_2_bits.value  << 14) | (io_in_3_bits.value  << 21)
+    | (io_in_4_bits.value  << 28) | (io_in_5_bits.value  << 35) | (io_in_6_bits.value  << 42) | (io_in_7_bits.value  << 49)
+    | (io_in_8_bits.value  << 56) | (io_in_9_bits.value  << 63) | (io_in_10_bits.value << 70) | (io_in_11_bits.value << 77)
+    | (io_in_12_bits.value << 84) | (io_in_13_bits.value << 91) | (io_in_14_bits.value << 98) | (io_in_15_bits.value << 105)
+
+  // Priority mux, default = index 15 (lowest priority when nothing else is valid).
+  // Iterate j from 14 down to 0; whenever slot j is valid, take it (overriding any
+  // higher-indexed choice we had so far).
+  mut chosen:u4    = 15
+  mut sel_flag:u1  = (flags  >> 15) & 1
+  mut sel_value:u7 = (values >> 105) & 0x7f
+  for i_rev in 0..<15 {
+    const j:u4       = (14 - i_rev)#[0..=3]
+    const v_j:u1     = (valids >> j) & 1
+    const f_j:u1     = (flags  >> j) & 1
+    const val_j:u7   = (values >> (j*7)) & 0x7f
+    chosen    = if v_j != 0 { j }     else { chosen }
+    sel_flag  = if v_j != 0 { f_j }   else { sel_flag }
+    sel_value = if v_j != 0 { val_j } else { sel_value }
+  }
+
+  // Grant / ready mask: grant_j = ~(any valid at index < j). ready_j = grant_j & io_out_ready.
+  // Full-width OR accumulator (no bit-slice write to a mut, to dodge encoder gaps).
+  mut cum:u1         = 0
+  mut ready_mask:u16 = 0
+  for j in 0..<16 {
+    const g:u1 = if cum == 0 { 1 } else { 0 }
+    const r:u1 = g & io_out_ready
+    ready_mask = ready_mask | (r << j)
+    cum        = cum | ((valids >> j) & 1)
+  }
+
+  const any_valid:u1 = if valids != 0 { 1 } else { 0 }
+
+  io_in_0_ready  = (ready_mask >> 0)  & 1
+  io_in_1_ready  = (ready_mask >> 1)  & 1
+  io_in_2_ready  = (ready_mask >> 2)  & 1
+  io_in_3_ready  = (ready_mask >> 3)  & 1
+  io_in_4_ready  = (ready_mask >> 4)  & 1
+  io_in_5_ready  = (ready_mask >> 5)  & 1
+  io_in_6_ready  = (ready_mask >> 6)  & 1
+  io_in_7_ready  = (ready_mask >> 7)  & 1
+  io_in_8_ready  = (ready_mask >> 8)  & 1
+  io_in_9_ready  = (ready_mask >> 9)  & 1
+  io_in_10_ready = (ready_mask >> 10) & 1
+  io_in_11_ready = (ready_mask >> 11) & 1
+  io_in_12_ready = (ready_mask >> 12) & 1
+  io_in_13_ready = (ready_mask >> 13) & 1
+  io_in_14_ready = (ready_mask >> 14) & 1
+  io_in_15_ready = (ready_mask >> 15) & 1
+
+  io_out_valid      = any_valid
+  io_out_bits.flag  = sel_flag
+  io_out_bits.value = sel_value
+  io_chosen         = chosen
+}

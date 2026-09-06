@@ -1,0 +1,157 @@
+// Loop-form Pyrope for XiangShan AgeDetector.
+// Reference: XiangShan/build/rtl_rob16/AgeDetector.sv (551 SV lines).
+// Design: 6-entry issue-queue oldest-tracker.
+//   - State: 6x6 pairwise "older-than" bits (age_i_j = 1 iff slot i older than j).
+//   - 2 enq lanes; each cycle 0-2 slots receive a new instruction.
+//   - 4 issue lanes; each computes a per-slot "oldest-to-issue" mask against a
+//     per-lane can-issue vector.
+// firtool unrolled three per-slot loops that we re-roll here:
+//   Pass 1: strict-upper-triangular nextAge (i<j).
+//   Pass 2: full 6x6 next-age assembly (diag / upper / lower cases).
+//   Pass 3: 4 lanes x 6 candidates x 6 pairwise comparisons.
+// State is kept as 36 individual u1 regs (matches the SV name-for-name) so the
+// LEC tier-2 matcher can pair state cleanly; the loop computes a packed u36
+// `next_age` accumulator and fans out to 36 assignments at the end.
+
+pub mod AgeDetector::[timecheck=false](
+  clock:u1, reset:u1,
+  io_enq:u12,
+  io_canIssue:u24
+) -> (io_out:u24@[]) {
+
+  reg age_0_0:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_0_1:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_0_2:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_0_3:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_0_4:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_0_5:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_1_0:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_1_1:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_1_2:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_1_3:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_1_4:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_1_5:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_2_0:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_2_1:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_2_2:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_2_3:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_2_4:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_2_5:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_3_0:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_3_1:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_3_2:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_3_3:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_3_4:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_3_5:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_4_0:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_4_1:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_4_2:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_4_3:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_4_4:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_4_5:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_5_0:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_5_1:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_5_2:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_5_3:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_5_4:u1:[init=0, reset_pin=ref reset, async=true]
+  reg age_5_5:u1:[init=0, reset_pin=ref reset, async=true]
+
+  // Pack current age state into a u36 (bit i*6+j = age_i_j) so the loops
+  // can index by (i,j) via shifts. The individual regs are still what LEC
+  // pairs against; this is a read-only combinational view.
+  const age:u36 =
+      age_0_0 | (age_0_1 << 1) | (age_0_2 << 2) | (age_0_3 << 3) | (age_0_4 << 4) | (age_0_5 << 5)
+    | (age_1_0 << 6)  | (age_1_1 << 7)  | (age_1_2 << 8)  | (age_1_3 << 9)  | (age_1_4 << 10) | (age_1_5 << 11)
+    | (age_2_0 << 12) | (age_2_1 << 13) | (age_2_2 << 14) | (age_2_3 << 15) | (age_2_4 << 16) | (age_2_5 << 17)
+    | (age_3_0 << 18) | (age_3_1 << 19) | (age_3_2 << 20) | (age_3_3 << 21) | (age_3_4 << 22) | (age_3_5 << 23)
+    | (age_4_0 << 24) | (age_4_1 << 25) | (age_4_2 << 26) | (age_4_3 << 27) | (age_4_4 << 28) | (age_4_5 << 29)
+    | (age_5_0 << 30) | (age_5_1 << 31) | (age_5_2 << 32) | (age_5_3 << 33) | (age_5_4 << 34) | (age_5_5 << 35)
+
+  const enq0:u6 = io_enq#[0..=5]
+  const enq1:u6 = io_enq#[6..=11]
+
+  // Pass 1: nextAge for strict upper triangular (i<j) cells.
+  mut nextAge_up:u36 = 0
+  for i in 0..<6 {
+    for j in 0..<6 {
+      const ei_0:u1 = (enq0 >> i) & 1
+      const ei_1:u1 = (enq1 >> i) & 1
+      const ej_0:u1 = (enq0 >> j) & 1
+      const ej_1:u1 = (enq1 >> j) & 1
+      const any_i:u1 = ei_0 | ei_1
+      const any_j:u1 = ej_0 | ej_1
+      const both:u1  = any_i & any_j
+      const not_i:u1 = (~any_i) & 1
+      const cur:u1   = (age >> (i*6+j)) & 1
+      const nAij:u1 = if both != 0 { (~(ei_1 & ej_0)) & 1 } else { not_i & (any_j | cur) }
+      const upper_bit:u1 = if i < j { nAij } else { 0 }
+      nextAge_up = nextAge_up | (upper_bit << (i*6+j))
+    }
+  }
+
+  // Pass 2: assemble next-cycle full u36 age vector.
+  mut next_age:u36 = 0
+  for i in 0..<6 {
+    for j in 0..<6 {
+      const ei_0:u1 = (enq0 >> i) & 1
+      const ei_1:u1 = (enq1 >> i) & 1
+      const ej_0:u1 = (enq0 >> j) & 1
+      const ej_1:u1 = (enq1 >> j) & 1
+      const any_i:u1 = ei_0 | ei_1
+      const any_j:u1 = ej_0 | ej_1
+      const enq_detected:u1 = any_i | any_j
+      const cur:u1 = (age >> (i*6+j)) & 1
+      const nAij:u1 = (nextAge_up >> (i*6+j)) & 1
+      const nAji:u1 = (nextAge_up >> (j*6+i)) & 1
+      const upper_bit:u1 = if enq_detected != 0 { nAij } else { cur }
+      const lower_bit:u1 = if enq_detected != 0 { ((~nAji) & 1) } else { cur }
+      const diag_bit:u1  = (any_i | cur) & 1
+      const bit:u1 = if i == j {
+        diag_bit
+      } else {
+        if i < j { upper_bit } else { lower_bit }
+      }
+      next_age = next_age | (bit << (i*6+j))
+    }
+  }
+
+  // Fan out u36 next_age to 36 individual regs (matches SV state exactly).
+  age_0_0 = next_age#[0..=0]  ; age_0_1 = next_age#[1..=1]  ; age_0_2 = next_age#[2..=2]
+  age_0_3 = next_age#[3..=3]  ; age_0_4 = next_age#[4..=4]  ; age_0_5 = next_age#[5..=5]
+  age_1_0 = next_age#[6..=6]  ; age_1_1 = next_age#[7..=7]  ; age_1_2 = next_age#[8..=8]
+  age_1_3 = next_age#[9..=9]  ; age_1_4 = next_age#[10..=10]; age_1_5 = next_age#[11..=11]
+  age_2_0 = next_age#[12..=12]; age_2_1 = next_age#[13..=13]; age_2_2 = next_age#[14..=14]
+  age_2_3 = next_age#[15..=15]; age_2_4 = next_age#[16..=16]; age_2_5 = next_age#[17..=17]
+  age_3_0 = next_age#[18..=18]; age_3_1 = next_age#[19..=19]; age_3_2 = next_age#[20..=20]
+  age_3_3 = next_age#[21..=21]; age_3_4 = next_age#[22..=22]; age_3_5 = next_age#[23..=23]
+  age_4_0 = next_age#[24..=24]; age_4_1 = next_age#[25..=25]; age_4_2 = next_age#[26..=26]
+  age_4_3 = next_age#[27..=27]; age_4_4 = next_age#[28..=28]; age_4_5 = next_age#[29..=29]
+  age_5_0 = next_age#[30..=30]; age_5_1 = next_age#[31..=31]; age_5_2 = next_age#[32..=32]
+  age_5_3 = next_age#[33..=33]; age_5_4 = next_age#[34..=34]; age_5_5 = next_age#[35..=35]
+
+  // Pass 3: outputs.
+  mut io_out_w:u24 = 0
+  for p in 0..<4 {
+    const canIssue_p:u6 = (io_canIssue >> (p*6)) & 0x3f
+    const invalid_p:u6  = (~canIssue_p) & 0x3f
+    for k in 0..<6 {
+      mut V:u6 = 0
+      for m in 0..<6 {
+        const bit_upper:u1 = (age >> (k*6+m)) & 1
+        const bit_lower:u1 = ((~((age >> (m*6+k)) & 1)) & 1)
+        const bit:u1 = if m == k {
+          1
+        } else {
+          if k < m { bit_upper } else { bit_lower }
+        }
+        V = V | (bit << m)
+      }
+      const V_masked:u6 = V | invalid_p
+      const dominates:u1 = if V_masked == 63 { 1 } else { 0 }
+      const can_k:u1 = (canIssue_p >> k) & 1
+      const win:u1 = dominates & can_k
+      io_out_w = io_out_w | (win << (p*6+k))
+    }
+  }
+  io_out = io_out_w
+}
