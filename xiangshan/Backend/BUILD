@@ -37,6 +37,15 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# Parallel Pyrope implementation of a subset of the same design (hand-written
+# variants, not an emitted snapshot — no manifest.json). Exposed so a sim/verif
+# target can point at pyrope2/ instead of pyrope/ and share the sim/ drivers.
+filegroup(
+    name = "pyrope2",
+    srcs = glob(["pyrope2/*.prp"]),
+    visibility = ["//visibility:public"],
+)
+
 # Only the directory matters to bench/common.sh; every synth-only target then
 # selects its own $CORE_TOP.prp from the same runfiles tree.
 filegroup(
