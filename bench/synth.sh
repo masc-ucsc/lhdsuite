@@ -87,6 +87,7 @@ ABC_ARGS+=(--set "abc.memory_budget_mb=${BENCH_ABC_MEMORY_BUDGET_MB:-16384}")
 ABC_ARGS+=(--set "abc.time_budget_ms=${BENCH_ABC_TIME_BUDGET_MS:-900000}")
 ABC_ARGS+=(--set "abc.verbose=${BENCH_ABC_VERBOSE:-true}")
 COLOR_ARGS=()
+[ -z "${BENCH_COLOR_CTRL_CONES:-}" ] || COLOR_ARGS+=(--set "color.ctrl_cones=$BENCH_COLOR_CTRL_CONES")
 [ -z "${BENCH_COLOR_SYNTH_ALG:-}" ] || COLOR_ARGS+=(--set "color.synth_alg=$BENCH_COLOR_SYNTH_ALG")
 [ -z "${BENCH_COLOR_MAX_GE:-}" ] || COLOR_ARGS+=(--set "color.max_ge=$BENCH_COLOR_MAX_GE")
 # cones mode's clustering threshold, in PREDICTED generic-AIG size. A different

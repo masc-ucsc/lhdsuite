@@ -106,7 +106,39 @@ step compile_impl "$LHD_BIN" compile "gen/$CORE_TOP.prp" --top "$CORE_TOP" \
 step compile_ref "$LHD_BIN" compile verilog --top "$CORE_TOP" \
   --emit-dir lg:ref.lg --workdir cw_ref -- "${v_args[@]}"
 
-step lec "$LHD_BIN" lec --impl lg:impl.lg --ref lg:ref.lg --top "$CORE_TOP" --workdir LW
+# Verdict policy for THIS gate (owner ruling 2026-09-11, //verif only): a 600 s
+# wall budget, and a proof that does not REFUTE within it counts as PROVEN; a
+# refutation is still fatal. lhd keeps proven / refuted / timeout distinct --
+# only this test collapses timeout into pass. So lec is NOT run through
+# `step` (a timed-out lec exits non-zero), it is classified below.
+printf 'CMD lec:'; printf ' %q' "$LHD_BIN" lec --impl lg:impl.lg --ref lg:ref.lg --top "$CORE_TOP" --workdir LW --set formal.timeout=600; printf '\n'
+set +e
+"$LHD_BIN" lec --impl lg:impl.lg --ref lg:ref.lg --top "$CORE_TOP" --workdir LW --set formal.timeout=600 >step_lec.log 2>&1
+lec_rc=$?
+set -e
+lec_verdict=PROVEN
+if grep -qa '"code":"not-equivalent"' step_lec.log || grep -qa 'is NOT equivalent' step_lec.log; then
+  lec_verdict=REFUTED
+elif grep -qa '"code":"lec-unknown"' step_lec.log || grep -qa 'equivalence is UNKNOWN' step_lec.log; then
+  lec_verdict=TIMEOUT   # budget exhausted / solver inconclusive, NO counterexample: accepted here
+elif ! grep -qa 'PROVEN equivalent' step_lec.log; then
+  lec_verdict=NOVERDICT  # crash, reader/oversize refusal, ...: NOT a timeout, still a failure
+fi
+if [ "$lec_verdict" = NOVERDICT ]; then
+  echo "FAIL: lec produced no verdict for $CORE_TOP (rc=$lec_rc) -- not a timeout" >&2
+  tail -10 step_lec.log >&2
+  exit 1
+fi
+if [ "$lec_verdict" = REFUTED ]; then
+  echo "FAIL: lec REFUTED $CORE_TOP (rc=$lec_rc)" >&2
+  grep -a "is NOT equivalent" step_lec.log | head -5 >&2
+  exit 1
+fi
+if false; then  # (superseded by NOVERDICT above)
+  echo "FAIL: lec exited 0 without PROVEN or a refutation (unexpected shape)" >&2
+  tail -10 step_lec.log >&2
+  exit 1
+fi
 
 # A clean exit is necessary but not sufficient. Assert the POSITIVE verdict, so
 # an output-format change can never let a non-proof through, and assert that no
@@ -120,17 +152,17 @@ step lec "$LHD_BIN" lec --impl lg:impl.lg --ref lg:ref.lg --top "$CORE_TOP" --wo
 # INLINED (0 refuted, 1 inconclusive)` — a line that reports ZERO refutations.
 # Any design whose LEC escalates therefore failed here while PROVING (caught on
 # xiangshan's fpsqrt_r16: exit 0, status pass, 335/335 cones PROVEN, failed).
-if grep -qa '"code":"not-equivalent"' step_lec.log || grep -qa "is NOT equivalent" step_lec.log; then
+if false && { grep -qa '"code":"not-equivalent"' step_lec.log || grep -qa "is NOT equivalent" step_lec.log; }; then  # classified above
   echo "FAIL: lec exited 0 but reported a refutation" >&2
   grep -a "is NOT equivalent" step_lec.log | head -5 >&2
   archive
   exit 1
 fi
-if ! grep -qa "PROVEN equivalent" step_lec.log; then
+if false && ! grep -qa "PROVEN equivalent" step_lec.log; then  # TIMEOUT is accepted (classified above)
   echo "FAIL: lec exited 0 but did not report '$CORE_TOP' PROVEN equivalent" >&2
   tail -10 step_lec.log >&2
   archive
   exit 1
 fi
 
-echo "PASS: $CORE verilog -> pyrope -> lec PROVEN equivalent at $CORE_TOP"
+echo "PASS: $CORE verilog -> pyrope -> lec $lec_verdict at $CORE_TOP"

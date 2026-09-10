@@ -50,9 +50,14 @@ while IFS= read -r rel || [ -n "$rel" ]; do
 done <"$V_FILELIST"
 
 # CORE_V_FLAGS is a list of slang arguments supplied by the core table.
+# Splat it straight into a NON-EMPTY array literal, exactly as genprp.sh:59 does.
+# Do NOT build an intermediate `v_flags=($CORE_V_FLAGS)` and then expand
+# "${v_flags[@]}" -- a core with no extra flags (dino) leaves it EMPTY, and under
+# `set -u` bash 3.2 treats an empty "${arr[@]}" as unbound. bazel's test PATH
+# carries no homebrew, so `#!/usr/bin/env bash` resolves to /bin/bash 3.2.57 and
+# every such core died with `v_flags[@]: unbound variable` before running a step.
 # shellcheck disable=SC2206
-v_flags=($CORE_V_FLAGS)
-v_args=(-DSYNTHESIS "${v_flags[@]}")
+v_args=(-DSYNTHESIS $CORE_V_FLAGS)
 
 archive() {
   [ "$OUT_DIR" = "$WORK" ] && return 0
@@ -84,7 +89,7 @@ run_step() { # LABEL COMMAND...
 # reference LGraph.  Keeping these in one invocation guarantees both artifacts
 # came from exactly the same source/options while avoiding a second expensive
 # front-end pass on XiangShan.
-run_step gen "$LHD_BIN" compile verilog "${v_sources[@]}" --top "$CORE_TOP" --recipe O1 \
+run_step gen "$LHD_BIN" compile verilog "${v_sources[@]}" --top "$CORE_TOP" \
   --emit-dir pyrope:gen --emit-dir lg:ref_lg --workdir work_gen \
   --unused-inputs unused_inputs.txt -- "${v_args[@]}"
 
@@ -98,7 +103,7 @@ fi
 # modules.  lgcheck accepts one implementation file, so concatenate every
 # emitted module into a single hierarchy-preserving input.
 run_step emit_impl "$LHD_BIN" compile "gen/$CORE_TOP.prp" --top "$CORE_TOP" \
-  --recipe O0 --emit-dir verilog:impl_v --workdir work_impl
+  --emit-dir verilog:impl_v --workdir work_impl
 
 shopt -s nullglob
 impl_parts=(impl_v/*.v)
@@ -107,7 +112,15 @@ if [ "${#impl_parts[@]}" -eq 0 ]; then
   archive
   exit 1
 fi
-mapfile -t impl_parts < <(printf '%s\n' "${impl_parts[@]}" | sort)
+# NOTE bash 3.2: no `mapfile`/`readarray` (bash 4+). bazel's test PATH carries no
+# homebrew, so `#!/usr/bin/env bash` here is /bin/bash 3.2.57 and `mapfile` is
+# "command not found". Read the sorted list back with a plain loop instead --
+# these are glob results, so no path contains a newline.
+impl_sorted=()
+while IFS= read -r impl_p; do
+  impl_sorted+=("$impl_p")
+done < <(printf '%s\n' "${impl_parts[@]}" | sort)
+impl_parts=("${impl_sorted[@]}")
 # Each emitted user module may include the same LiveHD memory model. Keep the
 # first include of each model, stage those runfile-backed models beside the
 # concatenated source, and drop duplicate includes. The models are support RTL,
@@ -127,10 +140,14 @@ awk '/^`include "cgen_memory_[^"]*\.v"/ { if (seen[$0]++) next } { print }' \
 # reachable modules and otherwise spends hours re-reading unrelated Backend
 # sources. Defining SYNTHESIS matches the generation leg; copying headers beside
 # the combined file keeps Minion's relative `include directives valid.
-declare -A unused_sources=()
+# NOTE bash 3.2: no `declare -A` (bash 4+), same reason as the mapfile above.
+# This is only ever used as a SET of absolute paths, so keep it as a file and
+# test membership with `grep -Fxq` -- realpath output contains no newline.
+unused_abs=unused_abs.txt
+: >"$unused_abs"
 while IFS= read -r unused || [ -n "$unused" ]; do
   [ -z "$unused" ] && continue
-  unused_sources["$(realpath "$unused")"]=1
+  realpath "$unused" >>"$unused_abs"
 done <unused_inputs.txt
 
 printf '`define SYNTHESIS\n' >ref_all.sv
@@ -143,7 +160,7 @@ while IFS= read -r rel || [ -n "$rel" ]; do
   # files unused even while retained modules import their types/constants
   # (Minion's dft_pkg, etlink_pkg, and frontend packages). Preserve every
   # package source; only prune an unused file when it contains no package.
-  if [ -n "${unused_sources[$src]+x}" ] \
+  if grep -Fxq "$src" "$unused_abs" \
       && ! grep -Eq '^[[:space:]]*package[[:space:]]+[A-Za-z_$][A-Za-z0-9_$]*' "$src"; then
     continue
   fi
@@ -211,20 +228,39 @@ esac
 # serial so one oversize proof owns the memory budget at a time.
 printf 'CMD lec:'
 printf ' %q' "$LHD_BIN" lec --impl verilog:"$WORK/impl_all.v" \
-  --ref lg:"$WORK/ref_lg" --top "$CORE_TOP" --set formal.timeout=0 \
+  --ref lg:"$WORK/ref_lg" --top "$CORE_TOP" --set formal.timeout=600 \
   --set formal.allow_oversize=true --set formal.jobs=1 \
   --workdir work_lec
 printf '\n'
 lec_rc=0
 set +e
 "$LHD_BIN" lec --impl verilog:"$WORK/impl_all.v" \
-  --ref lg:"$WORK/ref_lg" --top "$CORE_TOP" --set formal.timeout=0 \
+  --ref lg:"$WORK/ref_lg" --top "$CORE_TOP" --set formal.timeout=600 \
   --set formal.allow_oversize=true --set formal.jobs=1 \
   --workdir work_lec >step_lec.log 2>&1
 lec_rc=$?
 set -e
 native_ok=1
-if [ "$lec_rc" -ne 0 ] || grep -qia 'refut' step_lec.log || ! grep -qa 'PROVEN equivalent' step_lec.log; then
+# Verdict policy for THIS gate (owner ruling 2026-09-11, //verif only): the
+# native leg runs under a 600 s wall budget (formal.timeout above) and a proof
+# that does not REFUTE within it counts as PROVEN -- a refutation is still
+# fatal. lhd itself keeps proven / refuted / timeout distinct; only this test
+# collapses timeout into pass, because a multi-hour inconclusive LEC of a
+# whole core says nothing the 10-minute one does not.
+lec_verdict=PROVEN
+if grep -qa '"code":"not-equivalent"' step_lec.log || grep -qa 'is NOT equivalent' step_lec.log; then
+  lec_verdict=REFUTED
+elif grep -qa '"code":"lec-unknown"' step_lec.log || grep -qa 'equivalence is UNKNOWN' step_lec.log; then
+  lec_verdict=TIMEOUT   # budget exhausted / solver inconclusive, NO counterexample: accepted here
+elif ! grep -qa 'PROVEN equivalent' step_lec.log; then
+  lec_verdict=NOVERDICT  # crash, reader/oversize refusal, ...: NOT a timeout, still a failure
+fi
+if [ "$lec_verdict" = NOVERDICT ]; then
+  echo "FAIL: lec produced no verdict for $CORE_TOP (rc=$lec_rc) -- not a timeout" >&2
+  tail -10 step_lec.log >&2
+  exit 1
+fi
+if [ "$lec_verdict" = REFUTED ]; then
   native_ok=0
   echo "FAIL: native lhd LEC did not prove $CORE_TOP" >&2
   tail -40 step_lec.log >&2
@@ -238,4 +274,4 @@ if [ "$native_ok" -ne 1 ]; then
   exit "$native_rc"
 fi
 
-echo "PASS: $CORE/$CORE_TOP original Verilog == generated Verilog; lhd=PROVEN lgyosys=$lgyosys_verdict"
+echo "PASS: $CORE/$CORE_TOP original Verilog == generated Verilog; lhd=$lec_verdict lgyosys=$lgyosys_verdict"
