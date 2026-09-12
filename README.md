@@ -23,10 +23,6 @@ behavior, including cycle timing and reset behavior. Check equivalence against
 the reference RTL; a bounded pass or an inconclusive result is not an unbounded
 proof.
 
-Not every design has all three trees. The
-[matched filter](matched_filter/README.md) is an existing exception: its
-Verilog and Pyrope implementations were written independently.
-
 Generation is automatic, but refreshing the checked-in `pyrope/` baseline is
 an explicit maintenance step. Benchmark runs use scratch directories and do
 not rewrite it. Keep agent cleanup in `pyrope2/`; the files selected by each
