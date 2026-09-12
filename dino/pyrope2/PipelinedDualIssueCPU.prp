@@ -76,12 +76,12 @@ pub mod PipelinedDualIssueCPU::[timecheck = false](
   io_dmem_sext:u1@[]
 ) {
   // Pipeline outputs are forward-declared: writeback and redirects feed earlier stages.
-  wire b_writeback_control:(toreg:u1, regwrite:u1) = nil
-  wire a_writeback_control:(toreg:u1, regwrite:u1) = nil
+  wire b_writeback_control:(wb_ctrl:(toreg:u1, regwrite:u1)) = nil
+  wire a_writeback_control:(wb_ctrl:(toreg:u1, regwrite:u1)) = nil
   wire b_writeback:(pc:u64, readdata:u64, ex_result:u64, instruction:u64, isValid:u1)
   wire a_writeback:(pc:u64, readdata:u64, ex_result:u64, instruction:u64, isValid:u1)
-  wire b_memory_control:(memop:u2, toreg:u1, regwrite:u1) = nil
-  wire a_memory_control:(memop:u2, toreg:u1, regwrite:u1) = nil
+  wire b_memory_control:(mem_ctrl:(memop:u2), wb_ctrl:(toreg:u1, regwrite:u1)) = nil
+  wire a_memory_control:(mem_ctrl:(memop:u2), wb_ctrl:(toreg:u1, regwrite:u1)) = nil
   wire b_memory:(
     pc:u64,
     ex_result:u64,
@@ -101,30 +101,32 @@ pub mod PipelinedDualIssueCPU::[timecheck = false](
     isValid:u1
   )
   wire b_execute_control:(
-    itype:u1,
-    aluop:u1,
-    src1:u1,
-    src2:u2,
-    branch:u1,
-    jumptype:u2,
-    resultselect:u1,
-    wordinst:u1,
-    memop:u2,
-    toreg:u1,
-    regwrite:u1
+    ex_ctrl:(
+      itype:u1,
+      aluop:u1,
+      src1:u1,
+      src2:u2,
+      branch:u1,
+      jumptype:u2,
+      resultselect:u1,
+      wordinst:u1
+    ),
+    mem_ctrl:(memop:u2),
+    wb_ctrl:(toreg:u1, regwrite:u1)
   ) = nil
   reg a_execute_control:(
-    itype:u1,
-    aluop:u1,
-    src1:u1,
-    src2:u2,
-    branch:u1,
-    jumptype:u2,
-    resultselect:u1,
-    wordinst:u1,
-    memop:u2,
-    toreg:u1,
-    regwrite:u1
+    ex_ctrl:(
+      itype:u1,
+      aluop:u1,
+      src1:u1,
+      src2:u2,
+      branch:u1,
+      jumptype:u2,
+      resultselect:u1,
+      wordinst:u1
+    ),
+    mem_ctrl:(memop:u2),
+    wb_ctrl:(toreg:u1, regwrite:u1)
   ) = nil
   wire b_execute:(pc:u64, instruction:u64, sextImm:u64, readdata1:u64, readdata2:u64, isValid:u1)
   wire a_execute:(pc:u64, instruction:u64, sextImm:u64, readdata1:u64, readdata2:u64, isValid:u1)
@@ -183,10 +185,10 @@ pub mod PipelinedDualIssueCPU::[timecheck = false](
   const pipeB_ex_funct3 = b_execute.instruction#[enc.funct3_lo ..= enc.funct3_hi]
   const pipeA_wb_rd = a_writeback.instruction#[enc.rd_lo ..= enc.rd_hi]
   const pipeB_wb_rd = b_writeback.instruction#[enc.rd_lo ..= enc.rd_hi]
-  const branch_enable:u1 = if b_execute.isValid != 0 { b_execute_control.branch } else {
-    a_execute_control.branch
+  const branch_enable:u1 = if b_execute.isValid != 0 { b_execute_control.ex_ctrl.branch } else {
+    a_execute_control.ex_ctrl.branch
   }
-  const jump_type:u2 = if b_execute.isValid != 0 { b_execute_control.jumptype } else { a_execute_control.jumptype }
+  const jump_type:u2 = if b_execute.isValid != 0 { b_execute_control.ex_ctrl.jumptype } else { a_execute_control.ex_ctrl.jumptype }
   const pipeA_forwarded_inputx = select_forward(
     select=forwarding_out.pipeA_forward1,
     pipe_b=false,
@@ -223,16 +225,16 @@ pub mod PipelinedDualIssueCPU::[timecheck = false](
     wb_a=pipeA_wb_writedata,
     wb_b=pipeB_wb_writedata
   )
-  const a_alu_x:u64 = if (a_execute_control.src1) != 0 { a_execute.pc#[0..=63] } else { pipeA_forwarded_inputx }
-  const b_alu_x:u64 = if (b_execute_control.src1) != 0 { b_execute.pc#[0..=63] } else { pipeB_forwarded_inputx }
-  const a_alu_y_other:u64 = if a_execute_control.src2 == enc.src2_immediate { a_execute.sextImm#[0..=63] } else {
-    (unsigned(a_execute_control.src2 == enc.src2_four) & 1) << 2
+  const a_alu_x:u64 = if (a_execute_control.ex_ctrl.src1) != 0 { a_execute.pc#[0..=63] } else { pipeA_forwarded_inputx }
+  const b_alu_x:u64 = if (b_execute_control.ex_ctrl.src1) != 0 { b_execute.pc#[0..=63] } else { pipeB_forwarded_inputx }
+  const a_alu_y_other:u64 = if a_execute_control.ex_ctrl.src2 == enc.src2_immediate { a_execute.sextImm#[0..=63] } else {
+    (unsigned(a_execute_control.ex_ctrl.src2 == enc.src2_four) & 1) << 2
   }
-  const a_alu_y:u64 = if a_execute_control.src2 == enc.src2_register { pipeA_forwarded_inputy } else { a_alu_y_other }
-  const b_alu_y_other:u64 = if b_execute_control.src2 == enc.src2_immediate { b_execute.sextImm#[0..=63] } else {
-    (unsigned(b_execute_control.src2 == enc.src2_four) & 1) << 2
+  const a_alu_y:u64 = if a_execute_control.ex_ctrl.src2 == enc.src2_register { pipeA_forwarded_inputy } else { a_alu_y_other }
+  const b_alu_y_other:u64 = if b_execute_control.ex_ctrl.src2 == enc.src2_immediate { b_execute.sextImm#[0..=63] } else {
+    (unsigned(b_execute_control.ex_ctrl.src2 == enc.src2_four) & 1) << 2
   }
-  const b_alu_y:u64 = if b_execute_control.src2 == enc.src2_register { pipeB_forwarded_inputy } else { b_alu_y_other }
+  const b_alu_y:u64 = if b_execute_control.ex_ctrl.src2 == enc.src2_register { pipeB_forwarded_inputy } else { b_alu_y_other }
   const branch_x:u64 = if b_execute.isValid != 0 { pipeB_forwarded_inputx } else { pipeA_forwarded_inputx }
   const branch_y:u64 = if b_execute.isValid != 0 { pipeB_forwarded_inputy } else { pipeA_forwarded_inputy }
   const branch_pc:u64 = if b_execute.isValid != 0 { b_execute.pc#[0..=63] } else { a_execute.pc#[0..=63] }
@@ -240,19 +242,19 @@ pub mod PipelinedDualIssueCPU::[timecheck = false](
   const branch_funct3:u3 = if b_execute.isValid != 0 { pipeB_ex_funct3 } else { pipeA_ex_funct3 }
   const a_nextpc:u64 = if b_execute.isValid != 0 { 0 } else { nextPCmod_out.nextpc }
   const b_nextpc:u64 = if b_execute.isValid != 0 { nextPCmod_out.nextpc } else { 0 }
-  const a_result:u64 = if (a_execute_control.resultselect) != 0 { a_execute.sextImm#[0..=63] } else { pipeA_alu_out.result }
-  const b_result:u64 = if (b_execute_control.resultselect) != 0 { b_execute.sextImm#[0..=63] } else { pipeB_alu_out.result }
+  const a_result:u64 = if (a_execute_control.ex_ctrl.resultselect) != 0 { a_execute.sextImm#[0..=63] } else { pipeA_alu_out.result }
+  const b_result:u64 = if (b_execute_control.ex_ctrl.resultselect) != 0 { b_execute.sextImm#[0..=63] } else { pipeB_alu_out.result }
   const pipeA_mem_funct3 = a_memory.instruction#[enc.funct3_lo ..= enc.funct3_hi]
   const pipeB_mem_funct3 = b_memory.instruction#[enc.funct3_lo ..= enc.funct3_hi]
   const memory_address:u64 = if b_memory.isValid != 0 { b_memory.ex_result#[0..=63] } else { a_memory.ex_result#[0..=63] }
-  const memory_read:u1 = if b_memory.isValid != 0 { (~(b_memory_control.memop & 1)) & 1 } else {
-    (~(a_memory_control.memop & 1)) & 1
+  const memory_read:u1 = if b_memory.isValid != 0 { (~(b_memory_control.mem_ctrl.memop & 1)) & 1 } else {
+    (~(a_memory_control.mem_ctrl.memop & 1)) & 1
   }
-  const memory_write:u1 = if b_memory.isValid != 0 { b_memory_control.memop & 1 } else {
-    a_memory_control.memop & 1
+  const memory_write:u1 = if b_memory.isValid != 0 { b_memory_control.mem_ctrl.memop & 1 } else {
+    a_memory_control.mem_ctrl.memop & 1
   }
-  const memory_valid:u1 = if b_memory.isValid != 0 { (b_memory_control.memop >> 1) & 1 } else {
-    (a_memory_control.memop >> 1) & 1
+  const memory_valid:u1 = if b_memory.isValid != 0 { (b_memory_control.mem_ctrl.memop >> 1) & 1 } else {
+    (a_memory_control.mem_ctrl.memop >> 1) & 1
   }
   const memory_mask:u2 = if b_memory.isValid != 0 { pipeB_mem_funct3#[0..=1] } else { pipeA_mem_funct3#[0..=1] }
   const memory_signed:u1 = if b_memory.isValid != 0 { (~((pipeB_mem_funct3 >> 2) & 1)) & 1 } else {
@@ -262,11 +264,11 @@ pub mod PipelinedDualIssueCPU::[timecheck = false](
     a_memory.mem_writedata#[0..=63]
   }
   const redirect_pc:u64 = if b_memory.isValid != 0 { b_memory.nextpc#[0..=63] } else { a_memory.nextpc#[0..=63] }
-  const a_writeback_data:u64 = if (a_writeback_control.toreg) != 0 { a_writeback.readdata#[0..=63] } else {
+  const a_writeback_data:u64 = if (a_writeback_control.wb_ctrl.toreg) != 0 { a_writeback.readdata#[0..=63] } else {
     a_writeback.ex_result#[0..=63]
   }
   pipeA_wb_writedata = a_writeback_data
-  const b_writeback_data:u64 = if (b_writeback_control.toreg) != 0 { b_writeback.readdata#[0..=63] } else {
+  const b_writeback_data:u64 = if (b_writeback_control.wb_ctrl.toreg) != 0 { b_writeback.readdata#[0..=63] } else {
     b_writeback.ex_result#[0..=63]
   }
   pipeB_wb_writedata = b_writeback_data
@@ -349,12 +351,12 @@ pub mod PipelinedDualIssueCPU::[timecheck = false](
     io_pipeA_readreg2=pipeA_id_rs2,
     io_pipeA_writereg=pipeA_wb_rd,
     io_pipeA_writedata=pipeA_wb_writedata,
-    io_pipeA_wen=unsigned(pipeA_wb_rd != 0) & a_writeback_control.regwrite & 1,
+    io_pipeA_wen=unsigned(pipeA_wb_rd != 0) & a_writeback_control.wb_ctrl.regwrite & 1,
     io_pipeB_readreg1=pipeB_id_rs1,
     io_pipeB_readreg2=pipeB_id_rs2,
     io_pipeB_writereg=pipeB_wb_rd,
     io_pipeB_writedata=pipeB_wb_writedata,
-    io_pipeB_wen=unsigned(pipeB_wb_rd != 0) & b_writeback_control.regwrite & 1
+    io_pipeB_wen=unsigned(pipeB_wb_rd != 0) & b_writeback_control.wb_ctrl.regwrite & 1
   )
   registers_out.pipeA_readdata1 = registers.io_pipeA_readdata1
   registers_out.pipeA_readdata2 = registers.io_pipeA_readdata2
@@ -389,18 +391,18 @@ pub mod PipelinedDualIssueCPU::[timecheck = false](
   const pipeB_immGen = ImmediateGenerator::[name=pipeB_immGen](io_instruction=b_instruction)
   pipeB_immGen_out.sextImm = pipeB_immGen
   const pipeA_aluControl = ALUControl::[name=pipeA_aluControl](
-    io_aluop=a_execute_control.aluop,
-    io_itype=a_execute_control.itype,
+    io_aluop=a_execute_control.ex_ctrl.aluop,
+    io_itype=a_execute_control.ex_ctrl.itype,
     io_funct7=a_execute.instruction#[enc.funct7_lo ..= enc.funct7_hi],
     io_funct3=pipeA_ex_funct3,
-    io_wordinst=a_execute_control.wordinst
+    io_wordinst=a_execute_control.ex_ctrl.wordinst
   )
   const pipeB_aluControl = ALUControl::[name=pipeB_aluControl](
-    io_aluop=b_execute_control.aluop,
-    io_itype=b_execute_control.itype,
+    io_aluop=b_execute_control.ex_ctrl.aluop,
+    io_itype=b_execute_control.ex_ctrl.itype,
     io_funct7=b_execute.instruction#[enc.funct7_lo ..= enc.funct7_hi],
     io_funct3=pipeB_ex_funct3,
-    io_wordinst=b_execute_control.wordinst
+    io_wordinst=b_execute_control.ex_ctrl.wordinst
   )
   const pipeA_alu = ALU::[name=pipeA_alu](io_operation=pipeA_aluControl, io_inputx=a_alu_x, io_inputy=a_alu_y)
   pipeA_alu_out.result = pipeA_alu
@@ -424,15 +426,15 @@ pub mod PipelinedDualIssueCPU::[timecheck = false](
     io_ex_pipeB_rs1=b_execute.instruction#[enc.rs1_lo ..= enc.rs1_hi],
     io_ex_pipeB_rs2=b_execute.instruction#[enc.rs2_lo ..= enc.rs2_hi],
     io_ex_pipeA_rd=pipeA_ex_rd,
-    io_ex_pipeA_rw=a_execute_control.regwrite,
+    io_ex_pipeA_rw=a_execute_control.wb_ctrl.regwrite,
     io_mem_pipeA_rd=a_memory.instruction#[enc.rd_lo ..= enc.rd_hi],
-    io_mem_pipeA_rw=a_memory_control.regwrite,
+    io_mem_pipeA_rw=a_memory_control.wb_ctrl.regwrite,
     io_mem_pipeB_rd=b_memory.instruction#[enc.rd_lo ..= enc.rd_hi],
-    io_mem_pipeB_rw=b_memory_control.regwrite,
+    io_mem_pipeB_rw=b_memory_control.wb_ctrl.regwrite,
     io_wb_pipeA_rd=pipeA_wb_rd,
-    io_wb_pipeA_rw=a_writeback_control.regwrite,
+    io_wb_pipeA_rw=a_writeback_control.wb_ctrl.regwrite,
     io_wb_pipeB_rd=pipeB_wb_rd,
-    io_wb_pipeB_rw=b_writeback_control.regwrite
+    io_wb_pipeB_rw=b_writeback_control.wb_ctrl.regwrite
   )
   forwarding_out.pipeA_forward1 = forwarding.io_pipeA_forward1
   forwarding_out.pipeA_forward2 = forwarding.io_pipeA_forward2
@@ -443,10 +445,10 @@ pub mod PipelinedDualIssueCPU::[timecheck = false](
     io_id_pipeA_rs2=pipeA_id_rs2,
     io_id_pipeB_rs1=pipeB_id_rs1,
     io_id_pipeB_rs2=pipeB_id_rs2,
-    io_pipeA_idex_memread=unsigned(a_execute_control.memop == enc.mem_load),
+    io_pipeA_idex_memread=unsigned(a_execute_control.mem_ctrl.memop == enc.mem_load),
     io_pipeA_idex_rd=pipeA_ex_rd,
     io_pipeA_exmem_taken=a_memory.taken,
-    io_pipeB_idex_memread=unsigned(b_execute_control.memop == enc.mem_load),
+    io_pipeB_idex_memread=unsigned(b_execute_control.mem_ctrl.memop == enc.mem_load),
     io_pipeB_idex_rd=b_execute.instruction#[enc.rd_lo ..= enc.rd_hi],
     io_pipeB_exmem_taken=b_memory.taken
   )
@@ -463,10 +465,7 @@ pub mod PipelinedDualIssueCPU::[timecheck = false](
     )),
     io_flush=hazard.io_if_id_flush, io_valid=(~hazard.io_if_id_stall) & 1
   )
-  const pipeA_if_id_data = unpack_fetch(bits=pipeA_if_id)
-  a_decode.instruction = pipeA_if_id_data.io_data.instruction
-  a_decode.pc = pipeA_if_id_data.io_data.pc
-  a_decode.isValid = pipeA_if_id_data.io_data.isValid
+  a_decode = unpack_fetch(bits=pipeA_if_id)
   const pipeB_if_id = StageReg<T=u97>(
     clock=clock, reset=reset,
     io_in=pack_fetch(io_in=(
@@ -476,34 +475,19 @@ pub mod PipelinedDualIssueCPU::[timecheck = false](
     )),
     io_flush=hazard.io_if_id_flush, io_valid=(~hazard.io_if_id_stall) & 1
   )
-  const pipeB_if_id_data = unpack_fetch(bits=pipeB_if_id)
-  b_decode.instruction = pipeB_if_id_data.io_data.instruction
-  b_decode.pc = pipeB_if_id_data.io_data.pc
-  b_decode.isValid = pipeB_if_id_data.io_data.isValid
+  b_decode = unpack_fetch(bits=pipeB_if_id)
   const pipeA_id_ex = StageReg<T=u321>(
     clock=clock, reset=reset,
     io_in=pack_decode(io_in=a_decode_input),
     io_flush=hazard.io_id_ex_flush, io_valid=1
   )
-  const pipeA_id_ex_data = unpack_decode(bits=pipeA_id_ex)
-  a_execute.pc = pipeA_id_ex_data.io_data.pc
-  a_execute.instruction = pipeA_id_ex_data.io_data.instruction
-  a_execute.sextImm = pipeA_id_ex_data.io_data.sextImm
-  a_execute.readdata1 = pipeA_id_ex_data.io_data.readdata1
-  a_execute.readdata2 = pipeA_id_ex_data.io_data.readdata2
-  a_execute.isValid = pipeA_id_ex_data.io_data.isValid
+  a_execute = unpack_decode(bits=pipeA_id_ex)
   const pipeB_id_ex = StageReg<T=u321>(
     clock=clock, reset=reset,
     io_in=pack_decode(io_in=b_decode_input),
     io_flush=hazard.io_id_ex_flush, io_valid=1
   )
-  const pipeB_id_ex_data = unpack_decode(bits=pipeB_id_ex)
-  b_execute.pc = pipeB_id_ex_data.io_data.pc
-  b_execute.instruction = pipeB_id_ex_data.io_data.instruction
-  b_execute.sextImm = pipeB_id_ex_data.io_data.sextImm
-  b_execute.readdata1 = pipeB_id_ex_data.io_data.readdata1
-  b_execute.readdata2 = pipeB_id_ex_data.io_data.readdata2
-  b_execute.isValid = pipeB_id_ex_data.io_data.isValid
+  b_execute = unpack_decode(bits=pipeB_id_ex)
   const pipeA_id_ex_ctrl = StageReg<T=u14>(
     clock=clock, reset=reset,
     io_in=pack_execute_control(io_in=(
@@ -521,19 +505,6 @@ pub mod PipelinedDualIssueCPU::[timecheck = false](
     )),
     io_flush=hazard.io_id_ex_flush, io_valid=1
   )
-  // Not so nice
-  // const pipeA_id_ex_ctrl_data = unpack_execute_control(bits=pipeA_id_ex_ctrl)
-  // a_execute_control.itype = pipeA_id_ex_ctrl_data.io_data.ex_ctrl.itype
-  // a_execute_control.aluop = pipeA_id_ex_ctrl_data.io_data.ex_ctrl.aluop
-  // a_execute_control.src1 = pipeA_id_ex_ctrl_data.io_data.ex_ctrl.src1
-  // a_execute_control.src2 = pipeA_id_ex_ctrl_data.io_data.ex_ctrl.src2
-  // a_execute_control.branch = pipeA_id_ex_ctrl_data.io_data.ex_ctrl.branch
-  // a_execute_control.jumptype = pipeA_id_ex_ctrl_data.io_data.ex_ctrl.jumptype
-  // a_execute_control.resultselect = pipeA_id_ex_ctrl_data.io_data.ex_ctrl.resultselect
-  // a_execute_control.wordinst = pipeA_id_ex_ctrl_data.io_data.ex_ctrl.wordinst
-  // a_execute_control.memop = pipeA_id_ex_ctrl_data.io_data.mem_ctrl.memop
-  // a_execute_control.toreg = pipeA_id_ex_ctrl_data.io_data.wb_ctrl.toreg
-  // a_execute_control.regwrite = pipeA_id_ex_ctrl_data.io_data.wb_ctrl.regwrite
   a_execute_control = unpack_execute_control(bits=pipeA_id_ex_ctrl)
 
   const pipeB_id_ex_ctrl = StageReg<T=u14>(
@@ -553,114 +524,69 @@ pub mod PipelinedDualIssueCPU::[timecheck = false](
     )),
     io_flush=hazard.io_id_ex_flush, io_valid=1
   )
-  const pipeB_id_ex_ctrl_data = unpack_execute_control(bits=pipeB_id_ex_ctrl)
-  b_execute_control.itype = pipeB_id_ex_ctrl_data.io_data.ex_ctrl.itype
-  b_execute_control.aluop = pipeB_id_ex_ctrl_data.io_data.ex_ctrl.aluop
-  b_execute_control.src1 = pipeB_id_ex_ctrl_data.io_data.ex_ctrl.src1
-  b_execute_control.src2 = pipeB_id_ex_ctrl_data.io_data.ex_ctrl.src2
-  b_execute_control.branch = pipeB_id_ex_ctrl_data.io_data.ex_ctrl.branch
-  b_execute_control.jumptype = pipeB_id_ex_ctrl_data.io_data.ex_ctrl.jumptype
-  b_execute_control.resultselect = pipeB_id_ex_ctrl_data.io_data.ex_ctrl.resultselect
-  b_execute_control.wordinst = pipeB_id_ex_ctrl_data.io_data.ex_ctrl.wordinst
-  b_execute_control.memop = pipeB_id_ex_ctrl_data.io_data.mem_ctrl.memop
-  b_execute_control.toreg = pipeB_id_ex_ctrl_data.io_data.wb_ctrl.toreg
-  b_execute_control.regwrite = pipeB_id_ex_ctrl_data.io_data.wb_ctrl.regwrite
+  b_execute_control = unpack_execute_control(bits=pipeB_id_ex_ctrl)
   const pipeA_ex_mem = StageReg<T=u322>(
     clock=clock, reset=reset,
     io_in=pack_execute(io_in=a_memory_input),
     io_flush=hazard.io_ex_mem_flush, io_valid=1
   )
-  const pipeA_ex_mem_data = unpack_execute(bits=pipeA_ex_mem)
-  a_memory.pc = pipeA_ex_mem_data.io_data.pc
-  a_memory.ex_result = pipeA_ex_mem_data.io_data.ex_result
-  a_memory.mem_writedata = pipeA_ex_mem_data.io_data.mem_writedata
-  a_memory.nextpc = pipeA_ex_mem_data.io_data.nextpc
-  a_memory.taken = pipeA_ex_mem_data.io_data.taken
-  a_memory.instruction = pipeA_ex_mem_data.io_data.instruction
-  a_memory.isValid = pipeA_ex_mem_data.io_data.isValid
+  a_memory = unpack_execute(bits=pipeA_ex_mem)
   const pipeB_ex_mem = StageReg<T=u322>(
     clock=clock, reset=reset,
     io_in=pack_execute(io_in=b_memory_input),
     io_flush=hazard.io_ex_mem_flush, io_valid=1
   )
-  const pipeB_ex_mem_data = unpack_execute(bits=pipeB_ex_mem)
-  b_memory.pc = pipeB_ex_mem_data.io_data.pc
-  b_memory.ex_result = pipeB_ex_mem_data.io_data.ex_result
-  b_memory.mem_writedata = pipeB_ex_mem_data.io_data.mem_writedata
-  b_memory.nextpc = pipeB_ex_mem_data.io_data.nextpc
-  b_memory.taken = pipeB_ex_mem_data.io_data.taken
-  b_memory.instruction = pipeB_ex_mem_data.io_data.instruction
-  b_memory.isValid = pipeB_ex_mem_data.io_data.isValid
+  b_memory = unpack_execute(bits=pipeB_ex_mem)
   const pipeA_ex_mem_ctrl = StageReg<T=u4>(
     clock=clock, reset=reset,
     io_in=pack_memory_control(io_in=(
-      const memop=a_execute_control.memop,
-      const toreg=a_execute_control.toreg,
-      const regwrite=a_execute_control.regwrite
+      const memop=a_execute_control.mem_ctrl.memop,
+      const toreg=a_execute_control.wb_ctrl.toreg,
+      const regwrite=a_execute_control.wb_ctrl.regwrite
     )),
     io_flush=hazard.io_ex_mem_flush, io_valid=1
   )
-  const pipeA_ex_mem_ctrl_data = unpack_memory_control(bits=pipeA_ex_mem_ctrl)
-  a_memory_control.memop = pipeA_ex_mem_ctrl_data.io_data.mem_ctrl.memop
-  a_memory_control.toreg = pipeA_ex_mem_ctrl_data.io_data.wb_ctrl.toreg
-  a_memory_control.regwrite = pipeA_ex_mem_ctrl_data.io_data.wb_ctrl.regwrite
+  a_memory_control = unpack_memory_control(bits=pipeA_ex_mem_ctrl)
   const pipeB_ex_mem_ctrl = StageReg<T=u4>(
     clock=clock, reset=reset,
     io_in=pack_memory_control(io_in=(
-      const memop=b_execute_control.memop,
-      const toreg=b_execute_control.toreg,
-      const regwrite=b_execute_control.regwrite
+      const memop=b_execute_control.mem_ctrl.memop,
+      const toreg=b_execute_control.wb_ctrl.toreg,
+      const regwrite=b_execute_control.wb_ctrl.regwrite
     )),
     io_flush=hazard.io_ex_mem_flush, io_valid=1
   )
-  const pipeB_ex_mem_ctrl_data = unpack_memory_control(bits=pipeB_ex_mem_ctrl)
-  b_memory_control.memop = pipeB_ex_mem_ctrl_data.io_data.mem_ctrl.memop
-  b_memory_control.toreg = pipeB_ex_mem_ctrl_data.io_data.wb_ctrl.toreg
-  b_memory_control.regwrite = pipeB_ex_mem_ctrl_data.io_data.wb_ctrl.regwrite
+  b_memory_control = unpack_memory_control(bits=pipeB_ex_mem_ctrl)
   const pipeA_mem_wb = StageReg<T=u257>(
     clock=clock, reset=reset,
     io_in=pack_memory(io_in=a_writeback_input),
     io_flush=0, io_valid=1
   )
-  const pipeA_mem_wb_data = unpack_memory(bits=pipeA_mem_wb)
-  a_writeback.pc = pipeA_mem_wb_data.io_data.pc
-  a_writeback.readdata = pipeA_mem_wb_data.io_data.readdata
-  a_writeback.ex_result = pipeA_mem_wb_data.io_data.ex_result
-  a_writeback.instruction = pipeA_mem_wb_data.io_data.instruction
-  a_writeback.isValid = pipeA_mem_wb_data.io_data.isValid
+  a_writeback = unpack_memory(bits=pipeA_mem_wb)
   const pipeB_mem_wb = StageReg<T=u257>(
     clock=clock, reset=reset,
     io_in=pack_memory(io_in=b_writeback_input),
     io_flush=0, io_valid=1
   )
-  const pipeB_mem_wb_data = unpack_memory(bits=pipeB_mem_wb)
-  b_writeback.pc = pipeB_mem_wb_data.io_data.pc
-  b_writeback.readdata = pipeB_mem_wb_data.io_data.readdata
-  b_writeback.ex_result = pipeB_mem_wb_data.io_data.ex_result
-  b_writeback.instruction = pipeB_mem_wb_data.io_data.instruction
-  b_writeback.isValid = pipeB_mem_wb_data.io_data.isValid
+  b_writeback = unpack_memory(bits=pipeB_mem_wb)
   const pipeA_mem_wb_ctrl = StageReg<T=u2>(
     clock=clock, reset=reset,
     io_in=pack_writeback_control(io_in=(
-      const toreg=a_memory_control.toreg,
-      const regwrite=a_memory_control.regwrite
+      const toreg=a_memory_control.wb_ctrl.toreg,
+      const regwrite=a_memory_control.wb_ctrl.regwrite
     )),
     io_flush=0, io_valid=1
   )
-  const pipeA_mem_wb_ctrl_data = unpack_writeback_control(bits=pipeA_mem_wb_ctrl)
-  a_writeback_control.toreg = pipeA_mem_wb_ctrl_data.io_data.wb_ctrl.toreg
-  a_writeback_control.regwrite = pipeA_mem_wb_ctrl_data.io_data.wb_ctrl.regwrite
+  a_writeback_control = unpack_writeback_control(bits=pipeA_mem_wb_ctrl)
   const pipeB_mem_wb_ctrl = StageReg<T=u2>(
     clock=clock, reset=reset,
     io_in=pack_writeback_control(io_in=(
-      const toreg=b_memory_control.toreg,
-      const regwrite=b_memory_control.regwrite
+      const toreg=b_memory_control.wb_ctrl.toreg,
+      const regwrite=b_memory_control.wb_ctrl.regwrite
     )),
     io_flush=0, io_valid=1
   )
-  const pipeB_mem_wb_ctrl_data = unpack_writeback_control(bits=pipeB_mem_wb_ctrl)
-  b_writeback_control.toreg = pipeB_mem_wb_ctrl_data.io_data.wb_ctrl.toreg
-  b_writeback_control.regwrite = pipeB_mem_wb_ctrl_data.io_data.wb_ctrl.regwrite
+  b_writeback_control = unpack_writeback_control(bits=pipeB_mem_wb_ctrl)
   io_imem_address = pc
   io_imem_valid = 1
   io_dmem_address = memory_address
