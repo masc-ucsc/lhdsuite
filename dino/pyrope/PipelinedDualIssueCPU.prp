@@ -1,3 +1,19 @@
+const enc = import("encodings")
+const StageReg = import("StageReg.StageReg")
+const pack_fetch = import("pipeline_bundles.pack_fetch")
+const unpack_fetch = import("pipeline_bundles.unpack_fetch")
+const pack_decode = import("pipeline_bundles.pack_decode")
+const unpack_decode = import("pipeline_bundles.unpack_decode")
+const pack_execute_control = import("pipeline_bundles.pack_execute_control")
+const unpack_execute_control = import("pipeline_bundles.unpack_execute_control")
+const pack_execute = import("pipeline_bundles.pack_execute")
+const unpack_execute = import("pipeline_bundles.unpack_execute")
+const pack_memory_control = import("pipeline_bundles.pack_memory_control")
+const unpack_memory_control = import("pipeline_bundles.unpack_memory_control")
+const pack_memory = import("pipeline_bundles.pack_memory")
+const unpack_memory = import("pipeline_bundles.unpack_memory")
+const pack_writeback_control = import("pipeline_bundles.pack_writeback_control")
+const unpack_writeback_control = import("pipeline_bundles.unpack_writeback_control")
 const ALU = import("ALU.ALU")
 const ALUControl = import("ALUControl.ALUControl")
 const Control = import("Control.Control")
@@ -7,357 +23,651 @@ const DualIssueIssueUnit = import("DualIssueIssueUnit.DualIssueIssueUnit")
 const DualIssueNextPC = import("DualIssueNextPC.DualIssueNextPC")
 const DualIssueRegisterFile = import("DualIssueRegisterFile.DualIssueRegisterFile")
 const ImmediateGenerator = import("ImmediateGenerator.ImmediateGenerator")
-const StageReg = import("StageReg.StageReg")
-const StageReg_10 = import("StageReg_10.StageReg_10")
-const StageReg_12 = import("StageReg_12.StageReg_12")
-const StageReg_2 = import("StageReg_2.StageReg_2")
-const StageReg_4 = import("StageReg_4.StageReg_4")
-const StageReg_6 = import("StageReg_6.StageReg_6")
-const StageReg_8 = import("StageReg_8.StageReg_8")
 
-pub mod PipelinedDualIssueCPU::[timecheck=false](clock:u1, reset:u1, io_imem_good:u1, io_imem_instruction:u64, io_imem_ready:u1, io_dmem_good:u1, io_dmem_readdata:u64) -> (io_imem_address:u64@[], io_imem_valid:u1@[], io_dmem_address:u64@[], io_dmem_valid:u1@[], io_dmem_writedata:u64@[], io_dmem_memread:u1@[], io_dmem_memwrite:u1@[], io_dmem_maskmode:u2@[], io_dmem_sext:u1@[]) {
-  wire _pipeB_mem_wb_ctrl_io_data:(wb_ctrl:u2) = nil
-  wire _pipeA_mem_wb_ctrl_io_data:(wb_ctrl:u2) = nil
-  wire _pipeB_mem_wb_io_data:(pc:u64, readdata:u64, ex_result:u64, instruction:u64, isValid:u1) = nil
-  wire _pipeA_mem_wb_io_data:(pc:u64, readdata:u64, ex_result:u64, instruction:u64, isValid:u1) = nil
-  wire _pipeB_ex_mem_ctrl_io_data:(mem_ctrl:u2, wb_ctrl:u2) = nil
-  wire _pipeA_ex_mem_ctrl_io_data:(mem_ctrl:u2, wb_ctrl:u2) = nil
-  wire _pipeB_ex_mem_io_data:(pc:u64, ex_result:u64, mem_writedata:u64, nextpc:u64, taken:u1, instruction:u64, isValid:u1) = nil
-  wire _pipeA_ex_mem_io_data:(pc:u64, ex_result:u64, mem_writedata:u64, nextpc:u64, taken:u1, instruction:u64, isValid:u1) = nil
-  wire _pipeB_id_ex_ctrl_io_data:(ex_ctrl:u10, mem_ctrl:u2, wb_ctrl:u2) = nil
-  wire _pipeA_id_ex_ctrl_io_data:(ex_ctrl:u10, mem_ctrl:u2, wb_ctrl:u2) = nil
-  wire _pipeB_id_ex_io_data:(pc:u64, instruction:u64, sextImm:u64, readdata1:u64, readdata2:u64, isValid:u1) = nil
-  wire _pipeA_id_ex_io_data:(pc:u64, instruction:u64, sextImm:u64, readdata1:u64, readdata2:u64, isValid:u1) = nil
-  wire _pipeB_if_id_io_data:(instruction:u32, pc:u64, isValid:u1) = nil
-  wire _pipeA_if_id_io_data:(instruction:u32, pc:u64, isValid:u1) = nil
-  wire io:(imem:u131, dmem:u199) = nil
-  reg pc:u64
-  reg cycleCount:u30
-  wire _hazard_io_pcfromtaken:u1
-  wire _hazard_io_pcstall:u1
-  wire _forwarding_io_pipeA_forward1:u3
-  wire _forwarding_io_pipeA_forward2:u3
-  wire _forwarding_io_pipeB_forward1:u3
-  wire _forwarding_io_pipeB_forward2:u3
-  wire _nextPCmod_io_nextpc:u64
-  wire _nextPCmod_io_taken:u1
-  wire _pipeB_alu_io_result:u64
-  wire _pipeA_alu_io_result:u64
-  wire _pipeB_immGen_io_sextImm:u64
-  wire _pipeA_immGen_io_sextImm:u64
-  wire _pipeB_control_io_itype:u1
-  wire _pipeB_control_io_aluop:u1
-  wire _pipeB_control_io_src1:u1
-  wire _pipeB_control_io_src2:u2
-  wire _pipeB_control_io_branch:u1
-  wire _pipeB_control_io_jumptype:u2
-  wire _pipeB_control_io_resultselect:u1
-  wire _pipeB_control_io_memop:u2
-  wire _pipeB_control_io_toreg:u1
-  wire _pipeB_control_io_regwrite:u1
-  wire _pipeB_control_io_wordinst:u1
-  wire _pipeA_control_io_itype:u1
-  wire _pipeA_control_io_aluop:u1
-  wire _pipeA_control_io_src1:u1
-  wire _pipeA_control_io_src2:u2
-  wire _pipeA_control_io_branch:u1
-  wire _pipeA_control_io_jumptype:u2
-  wire _pipeA_control_io_resultselect:u1
-  wire _pipeA_control_io_memop:u2
-  wire _pipeA_control_io_toreg:u1
-  wire _pipeA_control_io_regwrite:u1
-  wire _pipeA_control_io_wordinst:u1
-  wire _registers_io_pipeA_readdata1:u64
-  wire _registers_io_pipeA_readdata2:u64
-  wire _registers_io_pipeB_readdata1:u64
-  wire _registers_io_pipeB_readdata2:u64
-  wire _issueUnit_io_nextpc:u64
-  wire _issueUnit_io_pipeA_inst:u32
-  wire _issueUnit_io_pipeB_inst:u32
-  wire _issueUnit_io_pipeB_valid:u1
-  wire pipeA_wb_writedata:u64
-  wire pipeB_wb_writedata:u64
-  mut `_GEN_32.valid` = 0
-  mut `_GEN_33.isValid` = 0
-  mut `_GEN_32.address` = pc
-  mut `_GEN_32.good` = io_imem_good & 1
-  mut `_GEN_32.instruction` = io_imem_instruction
-  mut `_GEN_32.ready` = io_imem_ready & 1
-  cycleCount = if reset != 0 { 0 } else { (cycleCount + 1)#[0..=29] }
-  const pipeA_id_rs1__w1 = _pipeA_if_id_io_data.instruction#[15..=19]
-  const pipeA_id_rs2__w1 = _pipeA_if_id_io_data.instruction#[20..=24]
-  const pipeB_id_rs1__w1 = _pipeB_if_id_io_data.instruction#[15..=19]
-  const pipeB_id_rs2__w1 = _pipeB_if_id_io_data.instruction#[20..=24]
-  const _GEN__w1 = _pipeA_if_id_io_data.instruction#[0..=31]
-  const _GEN_0__w1 = _pipeB_if_id_io_data.instruction#[0..=31]
-  const pipeA_ex_funct3__w1 = _pipeA_id_ex_io_data.instruction#[12..=14]
-  const pipeA_ex_rd__w1 = _pipeA_id_ex_io_data.instruction#[7..=11]
-  const pipeB_ex_funct3__w1 = _pipeB_id_ex_io_data.instruction#[12..=14]
-  const pipeA_wb_rd__w1 = _pipeA_mem_wb_io_data.instruction#[7..=11]
-  const pipeB_wb_rd__w1 = _pipeB_mem_wb_io_data.instruction#[7..=11]
-  mut _mux_2:u1 = if _pipeB_id_ex_io_data.isValid != 0 { (_pipeB_id_ex_ctrl_io_data.ex_ctrl >> 4) & 1 } else { (_pipeA_id_ex_ctrl_io_data.ex_ctrl >> 4) & 1 }
-  mut _mux_3:u2 = if _pipeB_id_ex_io_data.isValid != 0 { _pipeB_id_ex_ctrl_io_data.ex_ctrl#[2..=3] } else { _pipeA_id_ex_ctrl_io_data.ex_ctrl#[2..=3] }
-  const pipeA_forwarded_inputx__w1 = ((((pipeB_wb_writedata << 256) | (pipeA_wb_writedata << 192) | (_pipeB_ex_mem_io_data.ex_result#[0..=63] << 128) | (_pipeA_ex_mem_io_data.ex_result#[0..=63] << 64) | _pipeA_id_ex_io_data.readdata1#[0..=63]) << 0x40) >> ((_forwarding_io_pipeA_forward1 * 0x40) + 0x40))#[0..=63]
-  const pipeA_forwarded_inputy__w1 = ((((pipeB_wb_writedata << 256) | (pipeA_wb_writedata << 192) | (_pipeB_ex_mem_io_data.ex_result#[0..=63] << 128) | (_pipeA_ex_mem_io_data.ex_result#[0..=63] << 64) | _pipeA_id_ex_io_data.readdata2#[0..=63]) << 0x40) >> ((_forwarding_io_pipeA_forward2 * 0x40) + 0x40))#[0..=63]
-  const pipeB_forwarded_inputx__w1 = ((((pipeB_wb_writedata << 320) | (pipeA_wb_writedata << 256) | (_pipeB_ex_mem_io_data.ex_result#[0..=63] << 192) | (_pipeA_ex_mem_io_data.ex_result#[0..=63] << 128) | _pipeB_id_ex_io_data.readdata1#[0..=63]) << 0x40) >> ((_forwarding_io_pipeB_forward1 * 0x40) + 0x40))#[0..=63]
-  const pipeB_forwarded_inputy__w1 = ((((pipeB_wb_writedata << 320) | (pipeA_wb_writedata << 256) | (_pipeB_ex_mem_io_data.ex_result#[0..=63] << 192) | (_pipeA_ex_mem_io_data.ex_result#[0..=63] << 128) | _pipeB_id_ex_io_data.readdata2#[0..=63]) << 0x40) >> ((_forwarding_io_pipeB_forward2 * 0x40) + 0x40))#[0..=63]
-  mut _mux_4:u64 = if ((_pipeA_id_ex_ctrl_io_data.ex_ctrl >> 7) & 1) != 0 { _pipeA_id_ex_io_data.pc#[0..=63] } else { pipeA_forwarded_inputx__w1 }
-  mut _mux_5:u64 = if ((_pipeB_id_ex_ctrl_io_data.ex_ctrl >> 7) & 1) != 0 { _pipeB_id_ex_io_data.pc#[0..=63] } else { pipeB_forwarded_inputx__w1 }
-  mut _mux_7:u64 = if _pipeA_id_ex_ctrl_io_data.ex_ctrl#[5..=6] == 1 { _pipeA_id_ex_io_data.sextImm#[0..=63] } else { (unsigned(_pipeA_id_ex_ctrl_io_data.ex_ctrl#[5..=6] == 2) & 1) << 2 }
-  mut _mux_8:u64 = if _pipeA_id_ex_ctrl_io_data.ex_ctrl#[5..=6] == 0 { pipeA_forwarded_inputy__w1 } else { _mux_7 }
-  mut _mux_10:u64 = if _pipeB_id_ex_ctrl_io_data.ex_ctrl#[5..=6] == 1 { _pipeB_id_ex_io_data.sextImm#[0..=63] } else { (unsigned(_pipeB_id_ex_ctrl_io_data.ex_ctrl#[5..=6] == 2) & 1) << 2 }
-  mut _mux_11:u64 = if _pipeB_id_ex_ctrl_io_data.ex_ctrl#[5..=6] == 0 { pipeB_forwarded_inputy__w1 } else { _mux_10 }
-  mut _mux_12:u64 = if _pipeB_id_ex_io_data.isValid != 0 { pipeB_forwarded_inputx__w1 } else { pipeA_forwarded_inputx__w1 }
-  mut _mux_13:u64 = if _pipeB_id_ex_io_data.isValid != 0 { pipeB_forwarded_inputy__w1 } else { pipeA_forwarded_inputy__w1 }
-  mut _mux_14:u64 = if _pipeB_id_ex_io_data.isValid != 0 { _pipeB_id_ex_io_data.pc#[0..=63] } else { _pipeA_id_ex_io_data.pc#[0..=63] }
-  mut _mux_15:u64 = if _pipeB_id_ex_io_data.isValid != 0 { _pipeB_id_ex_io_data.sextImm#[0..=63] } else { _pipeA_id_ex_io_data.sextImm#[0..=63] }
-  mut _mux_16:u3 = if _pipeB_id_ex_io_data.isValid != 0 { pipeB_ex_funct3__w1 } else { pipeA_ex_funct3__w1 }
-  mut _mux_17:u64 = if _pipeB_id_ex_io_data.isValid != 0 { 0 } else { _nextPCmod_io_nextpc }
-  mut _mux_18:u64 = if _pipeB_id_ex_io_data.isValid != 0 { _nextPCmod_io_nextpc } else { 0 }
-  mut _mux_19:u64 = if ((_pipeA_id_ex_ctrl_io_data.ex_ctrl >> 1) & 1) != 0 { _pipeA_id_ex_io_data.sextImm#[0..=63] } else { _pipeA_alu_io_result }
-  mut _mux_20:u64 = if ((_pipeB_id_ex_ctrl_io_data.ex_ctrl >> 1) & 1) != 0 { _pipeB_id_ex_io_data.sextImm#[0..=63] } else { _pipeB_alu_io_result }
-  const pipeA_mem_funct3__w1 = _pipeA_ex_mem_io_data.instruction#[12..=14]
-  const pipeB_mem_funct3__w1 = _pipeB_ex_mem_io_data.instruction#[12..=14]
-  mut _mux_21:u64 = if _pipeB_ex_mem_io_data.isValid != 0 { _pipeB_ex_mem_io_data.ex_result#[0..=63] } else { _pipeA_ex_mem_io_data.ex_result#[0..=63] }
-  mut _mux_22:u1 = if _pipeB_ex_mem_io_data.isValid != 0 { (~(_pipeB_ex_mem_ctrl_io_data.mem_ctrl#[0..=1] & 1)) & 1 } else { (~(_pipeA_ex_mem_ctrl_io_data.mem_ctrl#[0..=1] & 1)) & 1 }
-  mut _mux_23:u1 = if _pipeB_ex_mem_io_data.isValid != 0 { _pipeB_ex_mem_ctrl_io_data.mem_ctrl#[0..=1] & 1 } else { _pipeA_ex_mem_ctrl_io_data.mem_ctrl#[0..=1] & 1 }
-  mut _mux_24:u1 = if _pipeB_ex_mem_io_data.isValid != 0 { (_pipeB_ex_mem_ctrl_io_data.mem_ctrl#[0..=1] >> 1) & 1 } else { (_pipeA_ex_mem_ctrl_io_data.mem_ctrl#[0..=1] >> 1) & 1 }
-  mut _mux_25:u2 = if _pipeB_ex_mem_io_data.isValid != 0 { pipeB_mem_funct3__w1#[0..=1] } else { pipeA_mem_funct3__w1#[0..=1] }
-  mut _mux_26:u1 = if _pipeB_ex_mem_io_data.isValid != 0 { (~((pipeB_mem_funct3__w1 >> 2) & 1)) & 1 } else { (~((pipeA_mem_funct3__w1 >> 2) & 1)) & 1 }
-  mut _mux_27:u64 = if _pipeB_ex_mem_io_data.isValid != 0 { _pipeB_ex_mem_io_data.mem_writedata#[0..=63] } else { _pipeA_ex_mem_io_data.mem_writedata#[0..=63] }
-  mut `_GEN_21.address` = _mux_21
-  mut `_GEN_21.valid` = _mux_24 & 1
-  mut `_GEN_21.good` = io_dmem_good & 1
-  mut `_GEN_21.writedata` = _mux_27
-  mut `_GEN_21.memread` = _mux_22 & 1
-  mut `_GEN_21.memwrite` = _mux_23 & 1
-  mut `_GEN_21.maskmode` = _mux_25
-  mut `_GEN_21.sext` = _mux_26 & 1
-  mut `_GEN_21.readdata` = io_dmem_readdata
-  mut _mux_28:u64 = if _pipeB_ex_mem_io_data.isValid != 0 { _pipeB_ex_mem_io_data.nextpc#[0..=63] } else { _pipeA_ex_mem_io_data.nextpc#[0..=63] }
-  mut _mux_29:u64 = if ((_pipeA_mem_wb_ctrl_io_data.wb_ctrl >> 1) & 1) != 0 { _pipeA_mem_wb_io_data.readdata#[0..=63] } else { _pipeA_mem_wb_io_data.ex_result#[0..=63] }
-  pipeA_wb_writedata = _mux_29
-  mut _mux_30:u64 = if ((_pipeB_mem_wb_ctrl_io_data.wb_ctrl >> 1) & 1) != 0 { _pipeB_mem_wb_io_data.readdata#[0..=63] } else { _pipeB_mem_wb_io_data.ex_result#[0..=63] }
-  pipeB_wb_writedata = _mux_30
-  mut `_GEN_22.pc` = _pipeA_if_id_io_data.pc#[0..=63]
-  mut `_GEN_22.instruction` = _GEN__w1
-  mut `_GEN_22.sextImm` = _pipeA_immGen_io_sextImm
-  mut `_GEN_22.readdata1` = _registers_io_pipeA_readdata1
-  mut `_GEN_22.readdata2` = _registers_io_pipeA_readdata2
-  mut `_GEN_22.isValid` = _pipeA_if_id_io_data.isValid & 1
-  mut `_GEN_23.pc` = _pipeB_if_id_io_data.pc#[0..=63]
-  mut `_GEN_23.instruction` = _GEN_0__w1
-  mut `_GEN_23.sextImm` = _pipeB_immGen_io_sextImm
-  mut `_GEN_23.readdata1` = _registers_io_pipeB_readdata1
-  mut `_GEN_23.readdata2` = _registers_io_pipeB_readdata2
-  mut `_GEN_23.isValid` = _pipeB_if_id_io_data.isValid & 1
-  mut `_GEN_24.toreg` = _pipeA_control_io_toreg & 1
-  mut `_GEN_24.regwrite` = _pipeA_control_io_regwrite & 1
-  mut `_GEN_25.memop` = _pipeA_control_io_memop
-  mut `_GEN_26.itype` = _pipeA_control_io_itype & 1
-  mut `_GEN_26.aluop` = _pipeA_control_io_aluop & 1
-  mut `_GEN_26.src1` = _pipeA_control_io_src1 & 1
-  mut `_GEN_26.src2` = _pipeA_control_io_src2
-  mut `_GEN_26.branch` = _pipeA_control_io_branch & 1
-  mut `_GEN_26.jumptype` = _pipeA_control_io_jumptype
-  mut `_GEN_26.resultselect` = _pipeA_control_io_resultselect & 1
-  mut `_GEN_26.wordinst` = _pipeA_control_io_wordinst & 1
-  mut `_GEN_27.toreg` = _pipeB_control_io_toreg & 1
-  mut `_GEN_27.regwrite` = _pipeB_control_io_regwrite & 1
-  mut `_GEN_28.memop` = _pipeB_control_io_memop
-  mut `_GEN_29.itype` = _pipeB_control_io_itype & 1
-  mut `_GEN_29.aluop` = _pipeB_control_io_aluop & 1
-  mut `_GEN_29.src1` = _pipeB_control_io_src1 & 1
-  mut `_GEN_29.src2` = _pipeB_control_io_src2
-  mut `_GEN_29.branch` = _pipeB_control_io_branch & 1
-  mut `_GEN_29.jumptype` = _pipeB_control_io_jumptype
-  mut `_GEN_29.resultselect` = _pipeB_control_io_resultselect & 1
-  mut `_GEN_29.wordinst` = _pipeB_control_io_wordinst & 1
-  mut `_GEN_30.pc` = _pipeA_ex_mem_io_data.pc#[0..=63]
-  mut `_GEN_30.readdata` = io.dmem#[0..=63]
-  mut `_GEN_30.ex_result` = _pipeA_ex_mem_io_data.ex_result#[0..=63]
-  mut `_GEN_30.instruction` = _pipeA_ex_mem_io_data.instruction#[0..=63]
-  mut `_GEN_30.isValid` = _pipeA_ex_mem_io_data.isValid & 1
-  mut `_GEN_31.pc` = _pipeB_ex_mem_io_data.pc#[0..=63]
-  mut `_GEN_31.readdata` = io.dmem#[0..=63]
-  mut `_GEN_31.ex_result` = _pipeB_ex_mem_io_data.ex_result#[0..=63]
-  mut `_GEN_31.instruction` = _pipeB_ex_mem_io_data.instruction#[0..=63]
-  mut `_GEN_31.isValid` = _pipeB_ex_mem_io_data.isValid & 1
-  io.imem = ((`_GEN_32.address` << 0x43) | 0x40000000000000000 | (`_GEN_32.good` << 0x41) | (`_GEN_32.instruction` << 1) | `_GEN_32.ready`)#[0..=130]
-  io.dmem = ((`_GEN_21.address` << 0x87) | (`_GEN_21.valid` << 0x86) | (`_GEN_21.good` << 0x85) | (`_GEN_21.writedata` << 0x45) | (`_GEN_21.memread` << 0x44) | (`_GEN_21.memwrite` << 0x43) | (`_GEN_21.maskmode` << 0x41) | (`_GEN_21.sext` << 0x40) | `_GEN_21.readdata`)#[0..=198]
-  mut `_GEN_33.instruction` = _issueUnit_io_pipeA_inst
-  mut `_GEN_33.pc` = pc
-  mut `_GEN_34.instruction` = _issueUnit_io_pipeB_inst
-  mut `_GEN_34.pc` = (pc + 4)#[0..=63]
-  mut `_GEN_34.isValid` = _issueUnit_io_pipeB_valid & 1
-  mut `_GEN_35.ex_ctrl` = ((`_GEN_26.itype` << 9) | (`_GEN_26.aluop` << 8) | (`_GEN_26.src1` << 7) | (`_GEN_26.src2` << 5) | (`_GEN_26.branch` << 4) | (`_GEN_26.jumptype` << 2) | (`_GEN_26.resultselect` << 1) | `_GEN_26.wordinst`)#[0..=9]
-  mut `_GEN_35.mem_ctrl` = `_GEN_25.memop`#[0..=1]
-  mut `_GEN_35.wb_ctrl` = ((`_GEN_24.toreg` << 1) | `_GEN_24.regwrite`)#[0..=1]
-  mut `_GEN_36.ex_ctrl` = ((`_GEN_29.itype` << 9) | (`_GEN_29.aluop` << 8) | (`_GEN_29.src1` << 7) | (`_GEN_29.src2` << 5) | (`_GEN_29.branch` << 4) | (`_GEN_29.jumptype` << 2) | (`_GEN_29.resultselect` << 1) | `_GEN_29.wordinst`)#[0..=9]
-  mut `_GEN_36.mem_ctrl` = `_GEN_28.memop`#[0..=1]
-  mut `_GEN_36.wb_ctrl` = ((`_GEN_27.toreg` << 1) | `_GEN_27.regwrite`)#[0..=1]
-  mut `_GEN_37.pc` = _pipeA_id_ex_io_data.pc#[0..=63]
-  mut `_GEN_37.ex_result` = _mux_19
-  mut `_GEN_37.mem_writedata` = pipeA_forwarded_inputy__w1
-  mut `_GEN_37.nextpc` = _mux_17
-  mut `_GEN_37.taken` = (~_pipeB_id_ex_io_data.isValid) & 1 & _nextPCmod_io_taken & 1
-  mut `_GEN_37.instruction` = _pipeA_id_ex_io_data.instruction#[0..=63]
-  mut `_GEN_37.isValid` = _pipeA_id_ex_io_data.isValid & 1
-  mut `_GEN_38.pc` = _pipeB_id_ex_io_data.pc#[0..=63]
-  mut `_GEN_38.ex_result` = _mux_20
-  mut `_GEN_38.mem_writedata` = pipeB_forwarded_inputy__w1
-  mut `_GEN_38.nextpc` = _mux_18
-  mut `_GEN_38.taken` = _pipeB_id_ex_io_data.isValid & _nextPCmod_io_taken & 1
-  mut `_GEN_38.instruction` = _pipeB_id_ex_io_data.instruction#[0..=63]
-  mut `_GEN_38.isValid` = _pipeB_id_ex_io_data.isValid & 1
-  mut `_GEN_39.mem_ctrl` = _pipeA_id_ex_ctrl_io_data.mem_ctrl#[0..=1]
-  mut `_GEN_39.wb_ctrl` = _pipeA_id_ex_ctrl_io_data.wb_ctrl#[0..=1]
-  mut `_GEN_40.mem_ctrl` = _pipeB_id_ex_ctrl_io_data.mem_ctrl#[0..=1]
-  mut `_GEN_40.wb_ctrl` = _pipeB_id_ex_ctrl_io_data.wb_ctrl#[0..=1]
-  mut `_GEN_41.wb_ctrl` = _pipeA_ex_mem_ctrl_io_data.wb_ctrl#[0..=1]
-  mut `_GEN_42.wb_ctrl` = _pipeB_ex_mem_ctrl_io_data.wb_ctrl#[0..=1]
-  if reset != 0 {
-    pc = 0
-  } elif _hazard_io_pcfromtaken != 0 {
-    pc = _mux_28
-  } else {
-    const t610 = _hazard_io_pcstall != 0
-    if t610 {
+// Forwarding selectors differ between lanes: B reserves encoding 1 for EX-A.
+// That path is absent from this elaborated design and therefore selects zero.
+comb select_forward(
+  select:u3,
+  pipe_b:bool,
+  original:u64,
+  mem_a:u64,
+  mem_b:u64,
+  wb_a:u64,
+  wb_b:u64
+) -> (value:u64) {
+  if pipe_b {
+    match select {
+      == enc.forward_original { value = original }
+      == enc.b_forward_mem_a { value = mem_a }
+      == enc.b_forward_mem_b { value = mem_b }
+      == enc.b_forward_wb_a { value = wb_a }
+      == enc.b_forward_wb_b { value = wb_b }
+      else { value = 0 }
     }
-    if not t610 {
-      pc = _issueUnit_io_nextpc
+  } else {
+    match select {
+      == enc.forward_original { value = original }
+      == enc.a_forward_mem_a { value = mem_a }
+      == enc.a_forward_mem_b { value = mem_b }
+      == enc.a_forward_wb_a { value = wb_a }
+      == enc.a_forward_wb_b { value = wb_b }
+      else { value = 0 }
     }
   }
-  mut issueUnit = DualIssueIssueUnit::[name=issueUnit](clock = clock, reset = reset, io_pc = pc, io_inst = io.imem#[1..=64])
-  _issueUnit_io_nextpc = issueUnit.io_nextpc
-  _issueUnit_io_pipeA_inst = issueUnit.io_pipeA_inst
-  _issueUnit_io_pipeB_inst = issueUnit.io_pipeB_inst
-  _issueUnit_io_pipeB_valid = issueUnit.io_pipeB_valid
-  mut registers = DualIssueRegisterFile::[name=registers](clock = clock, io_pipeA_readreg1 = pipeA_id_rs1__w1, io_pipeA_readreg2 = pipeA_id_rs2__w1, io_pipeA_writereg = pipeA_wb_rd__w1, io_pipeA_writedata = pipeA_wb_writedata, io_pipeA_wen = unsigned(pipeA_wb_rd__w1 != 0) & _pipeA_mem_wb_ctrl_io_data.wb_ctrl & 1 & 1, io_pipeB_readreg1 = pipeB_id_rs1__w1, io_pipeB_readreg2 = pipeB_id_rs2__w1, io_pipeB_writereg = pipeB_wb_rd__w1, io_pipeB_writedata = pipeB_wb_writedata, io_pipeB_wen = unsigned(pipeB_wb_rd__w1 != 0) & _pipeB_mem_wb_ctrl_io_data.wb_ctrl & 1 & 1)
-  _registers_io_pipeA_readdata1 = registers.io_pipeA_readdata1
-  _registers_io_pipeA_readdata2 = registers.io_pipeA_readdata2
-  _registers_io_pipeB_readdata1 = registers.io_pipeB_readdata1
-  _registers_io_pipeB_readdata2 = registers.io_pipeB_readdata2
-  mut pipeA_control = Control::[name=pipeA_control](io_opcode = _pipeA_if_id_io_data.instruction#[0..=6])
-  _pipeA_control_io_itype = pipeA_control.io_itype
-  _pipeA_control_io_aluop = pipeA_control.io_aluop
-  _pipeA_control_io_src1 = pipeA_control.io_src1
-  _pipeA_control_io_src2 = pipeA_control.io_src2
-  _pipeA_control_io_branch = pipeA_control.io_branch
-  _pipeA_control_io_jumptype = pipeA_control.io_jumptype
-  _pipeA_control_io_resultselect = pipeA_control.io_resultselect
-  _pipeA_control_io_memop = pipeA_control.io_memop
-  _pipeA_control_io_toreg = pipeA_control.io_toreg
-  _pipeA_control_io_regwrite = pipeA_control.io_regwrite
-  _pipeA_control_io_wordinst = pipeA_control.io_wordinst
-  mut pipeB_control = Control::[name=pipeB_control](io_opcode = _pipeB_if_id_io_data.instruction#[0..=6])
-  _pipeB_control_io_itype = pipeB_control.io_itype
-  _pipeB_control_io_aluop = pipeB_control.io_aluop
-  _pipeB_control_io_src1 = pipeB_control.io_src1
-  _pipeB_control_io_src2 = pipeB_control.io_src2
-  _pipeB_control_io_branch = pipeB_control.io_branch
-  _pipeB_control_io_jumptype = pipeB_control.io_jumptype
-  _pipeB_control_io_resultselect = pipeB_control.io_resultselect
-  _pipeB_control_io_memop = pipeB_control.io_memop
-  _pipeB_control_io_toreg = pipeB_control.io_toreg
-  _pipeB_control_io_regwrite = pipeB_control.io_regwrite
-  _pipeB_control_io_wordinst = pipeB_control.io_wordinst
-  mut pipeA_immGen = ImmediateGenerator::[name=pipeA_immGen](io_instruction = _GEN__w1)
-  _pipeA_immGen_io_sextImm = pipeA_immGen
-  mut pipeB_immGen = ImmediateGenerator::[name=pipeB_immGen](io_instruction = _GEN_0__w1)
-  _pipeB_immGen_io_sextImm = pipeB_immGen
-  mut pipeA_aluControl = ALUControl::[name=pipeA_aluControl](io_aluop = (_pipeA_id_ex_ctrl_io_data.ex_ctrl >> 8) & 1, io_itype = (_pipeA_id_ex_ctrl_io_data.ex_ctrl >> 9) & 1, io_funct7 = _pipeA_id_ex_io_data.instruction#[25..=31], io_funct3 = pipeA_ex_funct3__w1, io_wordinst = _pipeA_id_ex_ctrl_io_data.ex_ctrl & 1)
-  mut pipeB_aluControl = ALUControl::[name=pipeB_aluControl](io_aluop = (_pipeB_id_ex_ctrl_io_data.ex_ctrl >> 8) & 1, io_itype = (_pipeB_id_ex_ctrl_io_data.ex_ctrl >> 9) & 1, io_funct7 = _pipeB_id_ex_io_data.instruction#[25..=31], io_funct3 = pipeB_ex_funct3__w1, io_wordinst = _pipeB_id_ex_ctrl_io_data.ex_ctrl & 1)
-  mut pipeA_alu = ALU::[name=pipeA_alu](io_operation = pipeA_aluControl, io_inputx = _mux_4, io_inputy = _mux_8)
-  _pipeA_alu_io_result = pipeA_alu
-  mut pipeB_alu = ALU::[name=pipeB_alu](io_operation = pipeB_aluControl, io_inputx = _mux_5, io_inputy = _mux_11)
-  _pipeB_alu_io_result = pipeB_alu
-  mut nextPCmod = DualIssueNextPC::[name=nextPCmod](io_branch = _mux_2, io_jumptype = _mux_3, io_inputx = _mux_12, io_inputy = _mux_13, io_funct3 = _mux_16, io_pc = _mux_14, io_imm = _mux_15, io_pipeB_valid = _pipeB_id_ex_io_data.isValid)
-  _nextPCmod_io_nextpc = nextPCmod.io_nextpc
-  _nextPCmod_io_taken = nextPCmod.io_taken
-  mut forwarding = DualIssueForwardingUnit::[name=forwarding](io_ex_pipeA_rs1 = _pipeA_id_ex_io_data.instruction#[15..=19], io_ex_pipeA_rs2 = _pipeA_id_ex_io_data.instruction#[20..=24], io_ex_pipeB_rs1 = _pipeB_id_ex_io_data.instruction#[15..=19], io_ex_pipeB_rs2 = _pipeB_id_ex_io_data.instruction#[20..=24], io_ex_pipeA_rd = pipeA_ex_rd__w1, io_ex_pipeA_rw = _pipeA_id_ex_ctrl_io_data.wb_ctrl & 1, io_mem_pipeA_rd = _pipeA_ex_mem_io_data.instruction#[7..=11], io_mem_pipeA_rw = _pipeA_ex_mem_ctrl_io_data.wb_ctrl & 1, io_mem_pipeB_rd = _pipeB_ex_mem_io_data.instruction#[7..=11], io_mem_pipeB_rw = _pipeB_ex_mem_ctrl_io_data.wb_ctrl & 1, io_wb_pipeA_rd = pipeA_wb_rd__w1, io_wb_pipeA_rw = _pipeA_mem_wb_ctrl_io_data.wb_ctrl & 1, io_wb_pipeB_rd = pipeB_wb_rd__w1, io_wb_pipeB_rw = _pipeB_mem_wb_ctrl_io_data.wb_ctrl & 1)
-  _forwarding_io_pipeA_forward1 = forwarding.io_pipeA_forward1
-  _forwarding_io_pipeA_forward2 = forwarding.io_pipeA_forward2
-  _forwarding_io_pipeB_forward1 = forwarding.io_pipeB_forward1
-  _forwarding_io_pipeB_forward2 = forwarding.io_pipeB_forward2
-  mut hazard = DualIssueHazardUnit::[name=hazard](io_id_pipeA_rs1 = pipeA_id_rs1__w1, io_id_pipeA_rs2 = pipeA_id_rs2__w1, io_id_pipeB_rs1 = pipeB_id_rs1__w1, io_id_pipeB_rs2 = pipeB_id_rs2__w1, io_pipeA_idex_memread = unsigned(_pipeA_id_ex_ctrl_io_data.mem_ctrl#[0..=1] == 2), io_pipeA_idex_rd = pipeA_ex_rd__w1, io_pipeA_exmem_taken = _pipeA_ex_mem_io_data.taken, io_pipeB_idex_memread = unsigned(_pipeB_id_ex_ctrl_io_data.mem_ctrl#[0..=1] == 2), io_pipeB_idex_rd = _pipeB_id_ex_io_data.instruction#[7..=11], io_pipeB_exmem_taken = _pipeB_ex_mem_io_data.taken)
-  _hazard_io_pcfromtaken = hazard.io_pcfromtaken
-  _hazard_io_pcstall = hazard.io_pcstall
-  mut pipeA_if_id = StageReg::[name=pipeA_if_id](clock = clock, reset = reset, `io_in.instruction` = `_GEN_33.instruction`, `io_in.pc` = `_GEN_33.pc`, `io_in.isValid` = 1, io_flush = hazard.io_if_id_flush, io_valid = (~hazard.io_if_id_stall) & 1)
-  _pipeA_if_id_io_data.instruction = pipeA_if_id.io_data.instruction
-  _pipeA_if_id_io_data.pc = pipeA_if_id.io_data.pc
-  _pipeA_if_id_io_data.isValid = pipeA_if_id.io_data.isValid
-  mut pipeB_if_id = StageReg::[name=pipeB_if_id](clock = clock, reset = reset, `io_in.instruction` = `_GEN_34.instruction`, `io_in.pc` = `_GEN_34.pc`, `io_in.isValid` = `_GEN_34.isValid`, io_flush = hazard.io_if_id_flush, io_valid = (~hazard.io_if_id_stall) & 1)
-  _pipeB_if_id_io_data.instruction = pipeB_if_id.io_data.instruction
-  _pipeB_if_id_io_data.pc = pipeB_if_id.io_data.pc
-  _pipeB_if_id_io_data.isValid = pipeB_if_id.io_data.isValid
-  mut pipeA_id_ex = StageReg_2::[name=pipeA_id_ex](clock = clock, reset = reset, `io_in.pc` = `_GEN_22.pc`, `io_in.instruction` = `_GEN_22.instruction`, `io_in.sextImm` = `_GEN_22.sextImm`, `io_in.readdata1` = `_GEN_22.readdata1`, `io_in.readdata2` = `_GEN_22.readdata2`, `io_in.isValid` = `_GEN_22.isValid`, io_flush = hazard.io_id_ex_flush)
-  _pipeA_id_ex_io_data.pc = pipeA_id_ex.io_data.pc
-  _pipeA_id_ex_io_data.instruction = pipeA_id_ex.io_data.instruction
-  _pipeA_id_ex_io_data.sextImm = pipeA_id_ex.io_data.sextImm
-  _pipeA_id_ex_io_data.readdata1 = pipeA_id_ex.io_data.readdata1
-  _pipeA_id_ex_io_data.readdata2 = pipeA_id_ex.io_data.readdata2
-  _pipeA_id_ex_io_data.isValid = pipeA_id_ex.io_data.isValid
-  mut pipeB_id_ex = StageReg_2::[name=pipeB_id_ex](clock = clock, reset = reset, `io_in.pc` = `_GEN_23.pc`, `io_in.instruction` = `_GEN_23.instruction`, `io_in.sextImm` = `_GEN_23.sextImm`, `io_in.readdata1` = `_GEN_23.readdata1`, `io_in.readdata2` = `_GEN_23.readdata2`, `io_in.isValid` = `_GEN_23.isValid`, io_flush = hazard.io_id_ex_flush)
-  _pipeB_id_ex_io_data.pc = pipeB_id_ex.io_data.pc
-  _pipeB_id_ex_io_data.instruction = pipeB_id_ex.io_data.instruction
-  _pipeB_id_ex_io_data.sextImm = pipeB_id_ex.io_data.sextImm
-  _pipeB_id_ex_io_data.readdata1 = pipeB_id_ex.io_data.readdata1
-  _pipeB_id_ex_io_data.readdata2 = pipeB_id_ex.io_data.readdata2
-  _pipeB_id_ex_io_data.isValid = pipeB_id_ex.io_data.isValid
-  mut pipeA_id_ex_ctrl = StageReg_4::[name=pipeA_id_ex_ctrl](clock = clock, reset = reset, `io_in.ex_ctrl.itype` = (`_GEN_35.ex_ctrl` >> 9) & 1, `io_in.ex_ctrl.aluop` = (`_GEN_35.ex_ctrl` >> 8) & 1, `io_in.ex_ctrl.src1` = (`_GEN_35.ex_ctrl` >> 7) & 1, `io_in.ex_ctrl.src2` = `_GEN_35.ex_ctrl`#[5..=6], `io_in.ex_ctrl.branch` = (`_GEN_35.ex_ctrl` >> 4) & 1, `io_in.ex_ctrl.jumptype` = `_GEN_35.ex_ctrl`#[2..=3], `io_in.ex_ctrl.resultselect` = (`_GEN_35.ex_ctrl` >> 1) & 1, `io_in.ex_ctrl.wordinst` = `_GEN_35.ex_ctrl` & 1, `io_in.mem_ctrl.memop` = `_GEN_35.mem_ctrl`, `io_in.wb_ctrl.toreg` = (`_GEN_35.wb_ctrl` >> 1) & 1, `io_in.wb_ctrl.regwrite` = `_GEN_35.wb_ctrl` & 1, io_flush = hazard.io_id_ex_flush)
-  _pipeA_id_ex_ctrl_io_data.ex_ctrl = (pipeA_id_ex_ctrl.io_data.ex_ctrl.itype << 9) | (pipeA_id_ex_ctrl.io_data.ex_ctrl.aluop << 8) | (pipeA_id_ex_ctrl.io_data.ex_ctrl.src1 << 7) | (pipeA_id_ex_ctrl.io_data.ex_ctrl.src2 << 5) | (pipeA_id_ex_ctrl.io_data.ex_ctrl.branch << 4) | (pipeA_id_ex_ctrl.io_data.ex_ctrl.jumptype << 2) | (pipeA_id_ex_ctrl.io_data.ex_ctrl.resultselect << 1) | pipeA_id_ex_ctrl.io_data.ex_ctrl.wordinst
-  _pipeA_id_ex_ctrl_io_data.mem_ctrl = pipeA_id_ex_ctrl.io_data.mem_ctrl.memop
-  _pipeA_id_ex_ctrl_io_data.wb_ctrl = (pipeA_id_ex_ctrl.io_data.wb_ctrl.toreg << 1) | pipeA_id_ex_ctrl.io_data.wb_ctrl.regwrite
-  mut pipeB_id_ex_ctrl = StageReg_4::[name=pipeB_id_ex_ctrl](clock = clock, reset = reset, `io_in.ex_ctrl.itype` = (`_GEN_36.ex_ctrl` >> 9) & 1, `io_in.ex_ctrl.aluop` = (`_GEN_36.ex_ctrl` >> 8) & 1, `io_in.ex_ctrl.src1` = (`_GEN_36.ex_ctrl` >> 7) & 1, `io_in.ex_ctrl.src2` = `_GEN_36.ex_ctrl`#[5..=6], `io_in.ex_ctrl.branch` = (`_GEN_36.ex_ctrl` >> 4) & 1, `io_in.ex_ctrl.jumptype` = `_GEN_36.ex_ctrl`#[2..=3], `io_in.ex_ctrl.resultselect` = (`_GEN_36.ex_ctrl` >> 1) & 1, `io_in.ex_ctrl.wordinst` = `_GEN_36.ex_ctrl` & 1, `io_in.mem_ctrl.memop` = `_GEN_36.mem_ctrl`, `io_in.wb_ctrl.toreg` = (`_GEN_36.wb_ctrl` >> 1) & 1, `io_in.wb_ctrl.regwrite` = `_GEN_36.wb_ctrl` & 1, io_flush = hazard.io_id_ex_flush)
-  _pipeB_id_ex_ctrl_io_data.ex_ctrl = (pipeB_id_ex_ctrl.io_data.ex_ctrl.itype << 9) | (pipeB_id_ex_ctrl.io_data.ex_ctrl.aluop << 8) | (pipeB_id_ex_ctrl.io_data.ex_ctrl.src1 << 7) | (pipeB_id_ex_ctrl.io_data.ex_ctrl.src2 << 5) | (pipeB_id_ex_ctrl.io_data.ex_ctrl.branch << 4) | (pipeB_id_ex_ctrl.io_data.ex_ctrl.jumptype << 2) | (pipeB_id_ex_ctrl.io_data.ex_ctrl.resultselect << 1) | pipeB_id_ex_ctrl.io_data.ex_ctrl.wordinst
-  _pipeB_id_ex_ctrl_io_data.mem_ctrl = pipeB_id_ex_ctrl.io_data.mem_ctrl.memop
-  _pipeB_id_ex_ctrl_io_data.wb_ctrl = (pipeB_id_ex_ctrl.io_data.wb_ctrl.toreg << 1) | pipeB_id_ex_ctrl.io_data.wb_ctrl.regwrite
-  mut pipeA_ex_mem = StageReg_6::[name=pipeA_ex_mem](clock = clock, reset = reset, `io_in.pc` = `_GEN_37.pc`, `io_in.ex_result` = `_GEN_37.ex_result`, `io_in.mem_writedata` = `_GEN_37.mem_writedata`, `io_in.nextpc` = `_GEN_37.nextpc`, `io_in.taken` = `_GEN_37.taken`, `io_in.instruction` = `_GEN_37.instruction`, `io_in.isValid` = `_GEN_37.isValid`, io_flush = hazard.io_ex_mem_flush)
-  _pipeA_ex_mem_io_data.pc = pipeA_ex_mem.io_data.pc
-  _pipeA_ex_mem_io_data.ex_result = pipeA_ex_mem.io_data.ex_result
-  _pipeA_ex_mem_io_data.mem_writedata = pipeA_ex_mem.io_data.mem_writedata
-  _pipeA_ex_mem_io_data.nextpc = pipeA_ex_mem.io_data.nextpc
-  _pipeA_ex_mem_io_data.taken = pipeA_ex_mem.io_data.taken
-  _pipeA_ex_mem_io_data.instruction = pipeA_ex_mem.io_data.instruction
-  _pipeA_ex_mem_io_data.isValid = pipeA_ex_mem.io_data.isValid
-  mut pipeB_ex_mem = StageReg_6::[name=pipeB_ex_mem](clock = clock, reset = reset, `io_in.pc` = `_GEN_38.pc`, `io_in.ex_result` = `_GEN_38.ex_result`, `io_in.mem_writedata` = `_GEN_38.mem_writedata`, `io_in.nextpc` = `_GEN_38.nextpc`, `io_in.taken` = `_GEN_38.taken`, `io_in.instruction` = `_GEN_38.instruction`, `io_in.isValid` = `_GEN_38.isValid`, io_flush = hazard.io_ex_mem_flush)
-  _pipeB_ex_mem_io_data.pc = pipeB_ex_mem.io_data.pc
-  _pipeB_ex_mem_io_data.ex_result = pipeB_ex_mem.io_data.ex_result
-  _pipeB_ex_mem_io_data.mem_writedata = pipeB_ex_mem.io_data.mem_writedata
-  _pipeB_ex_mem_io_data.nextpc = pipeB_ex_mem.io_data.nextpc
-  _pipeB_ex_mem_io_data.taken = pipeB_ex_mem.io_data.taken
-  _pipeB_ex_mem_io_data.instruction = pipeB_ex_mem.io_data.instruction
-  _pipeB_ex_mem_io_data.isValid = pipeB_ex_mem.io_data.isValid
-  mut pipeA_ex_mem_ctrl = StageReg_8::[name=pipeA_ex_mem_ctrl](clock = clock, reset = reset, `io_in.mem_ctrl.memop` = `_GEN_39.mem_ctrl`, `io_in.wb_ctrl.toreg` = (`_GEN_39.wb_ctrl` >> 1) & 1, `io_in.wb_ctrl.regwrite` = `_GEN_39.wb_ctrl` & 1, io_flush = hazard.io_ex_mem_flush)
-  _pipeA_ex_mem_ctrl_io_data.mem_ctrl = pipeA_ex_mem_ctrl.io_data.mem_ctrl.memop
-  _pipeA_ex_mem_ctrl_io_data.wb_ctrl = (pipeA_ex_mem_ctrl.io_data.wb_ctrl.toreg << 1) | pipeA_ex_mem_ctrl.io_data.wb_ctrl.regwrite
-  mut pipeB_ex_mem_ctrl = StageReg_8::[name=pipeB_ex_mem_ctrl](clock = clock, reset = reset, `io_in.mem_ctrl.memop` = `_GEN_40.mem_ctrl`, `io_in.wb_ctrl.toreg` = (`_GEN_40.wb_ctrl` >> 1) & 1, `io_in.wb_ctrl.regwrite` = `_GEN_40.wb_ctrl` & 1, io_flush = hazard.io_ex_mem_flush)
-  _pipeB_ex_mem_ctrl_io_data.mem_ctrl = pipeB_ex_mem_ctrl.io_data.mem_ctrl.memop
-  _pipeB_ex_mem_ctrl_io_data.wb_ctrl = (pipeB_ex_mem_ctrl.io_data.wb_ctrl.toreg << 1) | pipeB_ex_mem_ctrl.io_data.wb_ctrl.regwrite
-  mut pipeA_mem_wb = StageReg_10::[name=pipeA_mem_wb](clock = clock, reset = reset, `io_in.pc` = `_GEN_30.pc`, `io_in.readdata` = `_GEN_30.readdata`, `io_in.ex_result` = `_GEN_30.ex_result`, `io_in.instruction` = `_GEN_30.instruction`, `io_in.isValid` = `_GEN_30.isValid`)
-  _pipeA_mem_wb_io_data.pc = pipeA_mem_wb.io_data.pc
-  _pipeA_mem_wb_io_data.readdata = pipeA_mem_wb.io_data.readdata
-  _pipeA_mem_wb_io_data.ex_result = pipeA_mem_wb.io_data.ex_result
-  _pipeA_mem_wb_io_data.instruction = pipeA_mem_wb.io_data.instruction
-  _pipeA_mem_wb_io_data.isValid = pipeA_mem_wb.io_data.isValid
-  mut pipeB_mem_wb = StageReg_10::[name=pipeB_mem_wb](clock = clock, reset = reset, `io_in.pc` = `_GEN_31.pc`, `io_in.readdata` = `_GEN_31.readdata`, `io_in.ex_result` = `_GEN_31.ex_result`, `io_in.instruction` = `_GEN_31.instruction`, `io_in.isValid` = `_GEN_31.isValid`)
-  _pipeB_mem_wb_io_data.pc = pipeB_mem_wb.io_data.pc
-  _pipeB_mem_wb_io_data.readdata = pipeB_mem_wb.io_data.readdata
-  _pipeB_mem_wb_io_data.ex_result = pipeB_mem_wb.io_data.ex_result
-  _pipeB_mem_wb_io_data.instruction = pipeB_mem_wb.io_data.instruction
-  _pipeB_mem_wb_io_data.isValid = pipeB_mem_wb.io_data.isValid
-  mut pipeA_mem_wb_ctrl = StageReg_12::[name=pipeA_mem_wb_ctrl](clock = clock, reset = reset, `io_in.wb_ctrl.toreg` = (`_GEN_41.wb_ctrl` >> 1) & 1, `io_in.wb_ctrl.regwrite` = `_GEN_41.wb_ctrl` & 1)
-  _pipeA_mem_wb_ctrl_io_data.wb_ctrl = (pipeA_mem_wb_ctrl.io_data.wb_ctrl.toreg << 1) | pipeA_mem_wb_ctrl.io_data.wb_ctrl.regwrite
-  mut pipeB_mem_wb_ctrl = StageReg_12::[name=pipeB_mem_wb_ctrl](clock = clock, reset = reset, `io_in.wb_ctrl.toreg` = (`_GEN_42.wb_ctrl` >> 1) & 1, `io_in.wb_ctrl.regwrite` = `_GEN_42.wb_ctrl` & 1)
-  _pipeB_mem_wb_ctrl_io_data.wb_ctrl = (pipeB_mem_wb_ctrl.io_data.wb_ctrl.toreg << 1) | pipeB_mem_wb_ctrl.io_data.wb_ctrl.regwrite
-  io_imem_address = io.imem#[67..=130]
-  io_imem_valid = (io.imem >> 0x42) & 1
-  io_dmem_address = io.dmem#[135..=198]
-  io_dmem_valid = (io.dmem >> 0x86) & 1
-  io_dmem_writedata = io.dmem#[69..=132]
-  io_dmem_memread = (io.dmem >> 0x44) & 1
-  io_dmem_memwrite = (io.dmem >> 0x43) & 1
-  io_dmem_maskmode = io.dmem#[65..=66]
-  io_dmem_sext = (io.dmem >> 0x40) & 1
+}
+
+pub mod PipelinedDualIssueCPU::[timecheck = false](
+  clock:u1,
+  reset:u1,
+  io_imem_good:u1,
+  io_imem_instruction:u64,
+  io_imem_ready:u1,
+  io_dmem_good:u1,
+  io_dmem_readdata:u64
+) -> (
+  io_imem_address:u64@[],
+  io_imem_valid:u1@[],
+  io_dmem_address:u64@[],
+  io_dmem_valid:u1@[],
+  io_dmem_writedata:u64@[],
+  io_dmem_memread:u1@[],
+  io_dmem_memwrite:u1@[],
+  io_dmem_maskmode:u2@[],
+  io_dmem_sext:u1@[]
+) {
+  // Pipeline outputs are forward-declared: writeback and redirects feed earlier stages.
+  wire b_writeback_control:(toreg:u1, regwrite:u1) = nil
+  wire a_writeback_control:(toreg:u1, regwrite:u1) = nil
+  wire b_writeback:(pc:u64, readdata:u64, ex_result:u64, instruction:u64, isValid:u1)
+  wire a_writeback:(pc:u64, readdata:u64, ex_result:u64, instruction:u64, isValid:u1)
+  wire b_memory_control:(memop:u2, toreg:u1, regwrite:u1) = nil
+  wire a_memory_control:(memop:u2, toreg:u1, regwrite:u1) = nil
+  wire b_memory:(
+    pc:u64,
+    ex_result:u64,
+    mem_writedata:u64,
+    nextpc:u64,
+    taken:u1,
+    instruction:u64,
+    isValid:u1
+  )
+  wire a_memory:(
+    pc:u64,
+    ex_result:u64,
+    mem_writedata:u64,
+    nextpc:u64,
+    taken:u1,
+    instruction:u64,
+    isValid:u1
+  )
+  wire b_execute_control:(
+    itype:u1,
+    aluop:u1,
+    src1:u1,
+    src2:u2,
+    branch:u1,
+    jumptype:u2,
+    resultselect:u1,
+    wordinst:u1,
+    memop:u2,
+    toreg:u1,
+    regwrite:u1
+  ) = nil
+  reg a_execute_control:(
+    itype:u1,
+    aluop:u1,
+    src1:u1,
+    src2:u2,
+    branch:u1,
+    jumptype:u2,
+    resultselect:u1,
+    wordinst:u1,
+    memop:u2,
+    toreg:u1,
+    regwrite:u1
+  ) = nil
+  wire b_execute:(pc:u64, instruction:u64, sextImm:u64, readdata1:u64, readdata2:u64, isValid:u1)
+  wire a_execute:(pc:u64, instruction:u64, sextImm:u64, readdata1:u64, readdata2:u64, isValid:u1)
+  wire b_decode:(instruction:u32, pc:u64, isValid:u1)
+  wire a_decode:(instruction:u32, pc:u64, isValid:u1)
+  reg pc:u64:[reset_pin = ref reset] = 0
+  reg cycleCount:u30:[reset_pin = ref reset] = 0
+  wire hazard_out:(pcfromtaken:u1, pcstall:u1) = nil
+  wire forwarding_out:(pipeA_forward1:u3, pipeA_forward2:u3, pipeB_forward1:u3, pipeB_forward2:u3) = nil
+  wire nextPCmod_out:(nextpc:u64, taken:u1) = nil
+  wire pipeB_alu_out:(result:u64) = nil
+  wire pipeA_alu_out:(result:u64) = nil
+  wire pipeB_immGen_out:(sextImm:u64) = nil
+  wire pipeA_immGen_out:(sextImm:u64) = nil
+  wire pipeB_control_out:(
+    itype:u1,
+    aluop:u1,
+    src1:u1,
+    src2:u2,
+    branch:u1,
+    jumptype:u2,
+    resultselect:u1,
+    memop:u2,
+    toreg:u1,
+    regwrite:u1,
+    wordinst:u1
+  ) = nil
+  wire pipeA_control_out:(
+    itype:u1,
+    aluop:u1,
+    src1:u1,
+    src2:u2,
+    branch:u1,
+    jumptype:u2,
+    resultselect:u1,
+    memop:u2,
+    toreg:u1,
+    regwrite:u1,
+    wordinst:u1
+  ) = nil
+  wire registers_out:(pipeA_readdata1:u64, pipeA_readdata2:u64, pipeB_readdata1:u64, pipeB_readdata2:u64) = nil
+  wire issueUnit_out:(nextpc:u64, pipeA_inst:u32, pipeB_inst:u32, pipeB_valid:u1) = nil
+  wire pipeA_wb_writedata:u64 = nil
+  wire pipeB_wb_writedata:u64 = nil
+  wrap cycleCount += 1
+
+  // Decode register addresses and execute forwarding.
+  const pipeA_id_rs1 = a_decode.instruction#[enc.rs1_lo ..= enc.rs1_hi]
+  const pipeA_id_rs2 = a_decode.instruction#[enc.rs2_lo ..= enc.rs2_hi]
+  const pipeB_id_rs1 = b_decode.instruction#[enc.rs1_lo ..= enc.rs1_hi]
+  const pipeB_id_rs2 = b_decode.instruction#[enc.rs2_lo ..= enc.rs2_hi]
+  const a_instruction = a_decode.instruction#[0..=31]
+  const b_instruction = b_decode.instruction#[0..=31]
+  const pipeA_ex_funct3 = a_execute.instruction#[enc.funct3_lo ..= enc.funct3_hi]
+  const pipeA_ex_rd = a_execute.instruction#[enc.rd_lo ..= enc.rd_hi]
+  const pipeB_ex_funct3 = b_execute.instruction#[enc.funct3_lo ..= enc.funct3_hi]
+  const pipeA_wb_rd = a_writeback.instruction#[enc.rd_lo ..= enc.rd_hi]
+  const pipeB_wb_rd = b_writeback.instruction#[enc.rd_lo ..= enc.rd_hi]
+  const branch_enable:u1 = if b_execute.isValid != 0 { b_execute_control.branch } else {
+    a_execute_control.branch
+  }
+  const jump_type:u2 = if b_execute.isValid != 0 { b_execute_control.jumptype } else { a_execute_control.jumptype }
+  const pipeA_forwarded_inputx = select_forward(
+    select=forwarding_out.pipeA_forward1,
+    pipe_b=false,
+    original=a_execute.readdata1,
+    mem_a=a_memory.ex_result,
+    mem_b=b_memory.ex_result,
+    wb_a=pipeA_wb_writedata,
+    wb_b=pipeB_wb_writedata
+  )
+  const pipeA_forwarded_inputy = select_forward(
+    select=forwarding_out.pipeA_forward2,
+    pipe_b=false,
+    original=a_execute.readdata2,
+    mem_a=a_memory.ex_result,
+    mem_b=b_memory.ex_result,
+    wb_a=pipeA_wb_writedata,
+    wb_b=pipeB_wb_writedata
+  )
+  const pipeB_forwarded_inputx = select_forward(
+    select=forwarding_out.pipeB_forward1,
+    pipe_b=true,
+    original=b_execute.readdata1,
+    mem_a=a_memory.ex_result,
+    mem_b=b_memory.ex_result,
+    wb_a=pipeA_wb_writedata,
+    wb_b=pipeB_wb_writedata
+  )
+  const pipeB_forwarded_inputy = select_forward(
+    select=forwarding_out.pipeB_forward2,
+    pipe_b=true,
+    original=b_execute.readdata2,
+    mem_a=a_memory.ex_result,
+    mem_b=b_memory.ex_result,
+    wb_a=pipeA_wb_writedata,
+    wb_b=pipeB_wb_writedata
+  )
+  const a_alu_x:u64 = if (a_execute_control.src1) != 0 { a_execute.pc#[0..=63] } else { pipeA_forwarded_inputx }
+  const b_alu_x:u64 = if (b_execute_control.src1) != 0 { b_execute.pc#[0..=63] } else { pipeB_forwarded_inputx }
+  const a_alu_y_other:u64 = if a_execute_control.src2 == enc.src2_immediate { a_execute.sextImm#[0..=63] } else {
+    (unsigned(a_execute_control.src2 == enc.src2_four) & 1) << 2
+  }
+  const a_alu_y:u64 = if a_execute_control.src2 == enc.src2_register { pipeA_forwarded_inputy } else { a_alu_y_other }
+  const b_alu_y_other:u64 = if b_execute_control.src2 == enc.src2_immediate { b_execute.sextImm#[0..=63] } else {
+    (unsigned(b_execute_control.src2 == enc.src2_four) & 1) << 2
+  }
+  const b_alu_y:u64 = if b_execute_control.src2 == enc.src2_register { pipeB_forwarded_inputy } else { b_alu_y_other }
+  const branch_x:u64 = if b_execute.isValid != 0 { pipeB_forwarded_inputx } else { pipeA_forwarded_inputx }
+  const branch_y:u64 = if b_execute.isValid != 0 { pipeB_forwarded_inputy } else { pipeA_forwarded_inputy }
+  const branch_pc:u64 = if b_execute.isValid != 0 { b_execute.pc#[0..=63] } else { a_execute.pc#[0..=63] }
+  const branch_imm:u64 = if b_execute.isValid != 0 { b_execute.sextImm#[0..=63] } else { a_execute.sextImm#[0..=63] }
+  const branch_funct3:u3 = if b_execute.isValid != 0 { pipeB_ex_funct3 } else { pipeA_ex_funct3 }
+  const a_nextpc:u64 = if b_execute.isValid != 0 { 0 } else { nextPCmod_out.nextpc }
+  const b_nextpc:u64 = if b_execute.isValid != 0 { nextPCmod_out.nextpc } else { 0 }
+  const a_result:u64 = if (a_execute_control.resultselect) != 0 { a_execute.sextImm#[0..=63] } else { pipeA_alu_out.result }
+  const b_result:u64 = if (b_execute_control.resultselect) != 0 { b_execute.sextImm#[0..=63] } else { pipeB_alu_out.result }
+  const pipeA_mem_funct3 = a_memory.instruction#[enc.funct3_lo ..= enc.funct3_hi]
+  const pipeB_mem_funct3 = b_memory.instruction#[enc.funct3_lo ..= enc.funct3_hi]
+  const memory_address:u64 = if b_memory.isValid != 0 { b_memory.ex_result#[0..=63] } else { a_memory.ex_result#[0..=63] }
+  const memory_read:u1 = if b_memory.isValid != 0 { (~(b_memory_control.memop & 1)) & 1 } else {
+    (~(a_memory_control.memop & 1)) & 1
+  }
+  const memory_write:u1 = if b_memory.isValid != 0 { b_memory_control.memop & 1 } else {
+    a_memory_control.memop & 1
+  }
+  const memory_valid:u1 = if b_memory.isValid != 0 { (b_memory_control.memop >> 1) & 1 } else {
+    (a_memory_control.memop >> 1) & 1
+  }
+  const memory_mask:u2 = if b_memory.isValid != 0 { pipeB_mem_funct3#[0..=1] } else { pipeA_mem_funct3#[0..=1] }
+  const memory_signed:u1 = if b_memory.isValid != 0 { (~((pipeB_mem_funct3 >> 2) & 1)) & 1 } else {
+    (~((pipeA_mem_funct3 >> 2) & 1)) & 1
+  }
+  const memory_writedata:u64 = if b_memory.isValid != 0 { b_memory.mem_writedata#[0..=63] } else {
+    a_memory.mem_writedata#[0..=63]
+  }
+  const redirect_pc:u64 = if b_memory.isValid != 0 { b_memory.nextpc#[0..=63] } else { a_memory.nextpc#[0..=63] }
+  const a_writeback_data:u64 = if (a_writeback_control.toreg) != 0 { a_writeback.readdata#[0..=63] } else {
+    a_writeback.ex_result#[0..=63]
+  }
+  pipeA_wb_writedata = a_writeback_data
+  const b_writeback_data:u64 = if (b_writeback_control.toreg) != 0 { b_writeback.readdata#[0..=63] } else {
+    b_writeback.ex_result#[0..=63]
+  }
+  pipeB_wb_writedata = b_writeback_data
+
+  // Inputs for the next pipeline edge, grouped by stage and lane.
+  const a_decode_input = (
+    const pc = a_decode.pc#[0..=63],
+    const instruction = a_instruction,
+    const sextImm = pipeA_immGen_out.sextImm,
+    const readdata1 = registers_out.pipeA_readdata1,
+    const readdata2 = registers_out.pipeA_readdata2,
+    const isValid = a_decode.isValid & 1
+  )
+  const b_decode_input = (
+    const pc = b_decode.pc#[0..=63],
+    const instruction = b_instruction,
+    const sextImm = pipeB_immGen_out.sextImm,
+    const readdata1 = registers_out.pipeB_readdata1,
+    const readdata2 = registers_out.pipeB_readdata2,
+    const isValid = b_decode.isValid & 1
+  )
+  const a_writeback_input = (
+    const pc = a_memory.pc#[0..=63],
+    const readdata = io_dmem_readdata,
+    const ex_result = a_memory.ex_result#[0..=63],
+    const instruction = a_memory.instruction#[0..=63],
+    const isValid = a_memory.isValid & 1
+  )
+  const b_writeback_input = (
+    const pc = b_memory.pc#[0..=63],
+    const readdata = io_dmem_readdata,
+    const ex_result = b_memory.ex_result#[0..=63],
+    const instruction = b_memory.instruction#[0..=63],
+    const isValid = b_memory.isValid & 1
+  )
+  const a_fetch_input = ( const instruction = issueUnit_out.pipeA_inst, const pc = pc )
+  const b_fetch_input = (
+    const instruction = issueUnit_out.pipeB_inst,
+    const pc = (pc + enc.instruction_bytes)#[0..=63],
+    const isValid = issueUnit_out.pipeB_valid & 1
+  )
+  const a_memory_input = (
+    const pc = a_execute.pc#[0..=63],
+    const ex_result = a_result,
+    const mem_writedata = pipeA_forwarded_inputy,
+    const nextpc = a_nextpc,
+    const taken = (~b_execute.isValid) & 1 & nextPCmod_out.taken & 1,
+    const instruction = a_execute.instruction#[0..=63],
+    const isValid = a_execute.isValid & 1
+  )
+  const b_memory_input = (
+    const pc = b_execute.pc#[0..=63],
+    const ex_result = b_result,
+    const mem_writedata = pipeB_forwarded_inputy,
+    const nextpc = b_nextpc,
+    const taken = b_execute.isValid & nextPCmod_out.taken & 1,
+    const instruction = b_execute.instruction#[0..=63],
+    const isValid = b_execute.isValid & 1
+  )
+  if hazard_out.pcfromtaken != 0 {
+    pc = redirect_pc
+  } elif hazard_out.pcstall == 0 {
+    pc = issueUnit_out.nextpc
+  }
+
+  // Combinational units and the shared architectural register file.
+  const issueUnit = DualIssueIssueUnit::[name=issueUnit](
+    clock=clock,
+    reset=reset,
+    io_pc=pc,
+    io_inst=io_imem_instruction
+  )
+  issueUnit_out.nextpc = issueUnit.io_nextpc
+  issueUnit_out.pipeA_inst = issueUnit.io_pipeA_inst
+  issueUnit_out.pipeB_inst = issueUnit.io_pipeB_inst
+  issueUnit_out.pipeB_valid = issueUnit.io_pipeB_valid
+  const registers = DualIssueRegisterFile::[name=registers](
+    clock=clock,
+    io_pipeA_readreg1=pipeA_id_rs1,
+    io_pipeA_readreg2=pipeA_id_rs2,
+    io_pipeA_writereg=pipeA_wb_rd,
+    io_pipeA_writedata=pipeA_wb_writedata,
+    io_pipeA_wen=unsigned(pipeA_wb_rd != 0) & a_writeback_control.regwrite & 1,
+    io_pipeB_readreg1=pipeB_id_rs1,
+    io_pipeB_readreg2=pipeB_id_rs2,
+    io_pipeB_writereg=pipeB_wb_rd,
+    io_pipeB_writedata=pipeB_wb_writedata,
+    io_pipeB_wen=unsigned(pipeB_wb_rd != 0) & b_writeback_control.regwrite & 1
+  )
+  registers_out.pipeA_readdata1 = registers.io_pipeA_readdata1
+  registers_out.pipeA_readdata2 = registers.io_pipeA_readdata2
+  registers_out.pipeB_readdata1 = registers.io_pipeB_readdata1
+  registers_out.pipeB_readdata2 = registers.io_pipeB_readdata2
+  const pipeA_control = Control::[name=pipeA_control](io_opcode=a_decode.instruction#[enc.opcode_lo ..= enc.opcode_hi])
+  pipeA_control_out.itype = pipeA_control.io_itype
+  pipeA_control_out.aluop = pipeA_control.io_aluop
+  pipeA_control_out.src1 = pipeA_control.io_src1
+  pipeA_control_out.src2 = pipeA_control.io_src2
+  pipeA_control_out.branch = pipeA_control.io_branch
+  pipeA_control_out.jumptype = pipeA_control.io_jumptype
+  pipeA_control_out.resultselect = pipeA_control.io_resultselect
+  pipeA_control_out.memop = pipeA_control.io_memop
+  pipeA_control_out.toreg = pipeA_control.io_toreg
+  pipeA_control_out.regwrite = pipeA_control.io_regwrite
+  pipeA_control_out.wordinst = pipeA_control.io_wordinst
+  const pipeB_control = Control::[name=pipeB_control](io_opcode=b_decode.instruction#[enc.opcode_lo ..= enc.opcode_hi])
+  pipeB_control_out.itype = pipeB_control.io_itype
+  pipeB_control_out.aluop = pipeB_control.io_aluop
+  pipeB_control_out.src1 = pipeB_control.io_src1
+  pipeB_control_out.src2 = pipeB_control.io_src2
+  pipeB_control_out.branch = pipeB_control.io_branch
+  pipeB_control_out.jumptype = pipeB_control.io_jumptype
+  pipeB_control_out.resultselect = pipeB_control.io_resultselect
+  pipeB_control_out.memop = pipeB_control.io_memop
+  pipeB_control_out.toreg = pipeB_control.io_toreg
+  pipeB_control_out.regwrite = pipeB_control.io_regwrite
+  pipeB_control_out.wordinst = pipeB_control.io_wordinst
+  const pipeA_immGen = ImmediateGenerator::[name=pipeA_immGen](io_instruction=a_instruction)
+  pipeA_immGen_out.sextImm = pipeA_immGen
+  const pipeB_immGen = ImmediateGenerator::[name=pipeB_immGen](io_instruction=b_instruction)
+  pipeB_immGen_out.sextImm = pipeB_immGen
+  const pipeA_aluControl = ALUControl::[name=pipeA_aluControl](
+    io_aluop=a_execute_control.aluop,
+    io_itype=a_execute_control.itype,
+    io_funct7=a_execute.instruction#[enc.funct7_lo ..= enc.funct7_hi],
+    io_funct3=pipeA_ex_funct3,
+    io_wordinst=a_execute_control.wordinst
+  )
+  const pipeB_aluControl = ALUControl::[name=pipeB_aluControl](
+    io_aluop=b_execute_control.aluop,
+    io_itype=b_execute_control.itype,
+    io_funct7=b_execute.instruction#[enc.funct7_lo ..= enc.funct7_hi],
+    io_funct3=pipeB_ex_funct3,
+    io_wordinst=b_execute_control.wordinst
+  )
+  const pipeA_alu = ALU::[name=pipeA_alu](io_operation=pipeA_aluControl, io_inputx=a_alu_x, io_inputy=a_alu_y)
+  pipeA_alu_out.result = pipeA_alu
+  const pipeB_alu = ALU::[name=pipeB_alu](io_operation=pipeB_aluControl, io_inputx=b_alu_x, io_inputy=b_alu_y)
+  pipeB_alu_out.result = pipeB_alu
+  const nextPCmod = DualIssueNextPC::[name=nextPCmod](
+    io_branch=branch_enable,
+    io_jumptype=jump_type,
+    io_inputx=branch_x,
+    io_inputy=branch_y,
+    io_funct3=branch_funct3,
+    io_pc=branch_pc,
+    io_imm=branch_imm,
+    io_pipeB_valid=b_execute.isValid
+  )
+  nextPCmod_out.nextpc = nextPCmod.io_nextpc
+  nextPCmod_out.taken = nextPCmod.io_taken
+  const forwarding = DualIssueForwardingUnit::[name=forwarding](
+    io_ex_pipeA_rs1=a_execute.instruction#[enc.rs1_lo ..= enc.rs1_hi],
+    io_ex_pipeA_rs2=a_execute.instruction#[enc.rs2_lo ..= enc.rs2_hi],
+    io_ex_pipeB_rs1=b_execute.instruction#[enc.rs1_lo ..= enc.rs1_hi],
+    io_ex_pipeB_rs2=b_execute.instruction#[enc.rs2_lo ..= enc.rs2_hi],
+    io_ex_pipeA_rd=pipeA_ex_rd,
+    io_ex_pipeA_rw=a_execute_control.regwrite,
+    io_mem_pipeA_rd=a_memory.instruction#[enc.rd_lo ..= enc.rd_hi],
+    io_mem_pipeA_rw=a_memory_control.regwrite,
+    io_mem_pipeB_rd=b_memory.instruction#[enc.rd_lo ..= enc.rd_hi],
+    io_mem_pipeB_rw=b_memory_control.regwrite,
+    io_wb_pipeA_rd=pipeA_wb_rd,
+    io_wb_pipeA_rw=a_writeback_control.regwrite,
+    io_wb_pipeB_rd=pipeB_wb_rd,
+    io_wb_pipeB_rw=b_writeback_control.regwrite
+  )
+  forwarding_out.pipeA_forward1 = forwarding.io_pipeA_forward1
+  forwarding_out.pipeA_forward2 = forwarding.io_pipeA_forward2
+  forwarding_out.pipeB_forward1 = forwarding.io_pipeB_forward1
+  forwarding_out.pipeB_forward2 = forwarding.io_pipeB_forward2
+  const hazard = DualIssueHazardUnit::[name=hazard](
+    io_id_pipeA_rs1=pipeA_id_rs1,
+    io_id_pipeA_rs2=pipeA_id_rs2,
+    io_id_pipeB_rs1=pipeB_id_rs1,
+    io_id_pipeB_rs2=pipeB_id_rs2,
+    io_pipeA_idex_memread=unsigned(a_execute_control.memop == enc.mem_load),
+    io_pipeA_idex_rd=pipeA_ex_rd,
+    io_pipeA_exmem_taken=a_memory.taken,
+    io_pipeB_idex_memread=unsigned(b_execute_control.memop == enc.mem_load),
+    io_pipeB_idex_rd=b_execute.instruction#[enc.rd_lo ..= enc.rd_hi],
+    io_pipeB_exmem_taken=b_memory.taken
+  )
+  hazard_out.pcfromtaken = hazard.io_pcfromtaken
+  hazard_out.pcstall = hazard.io_pcstall
+
+  // Pipeline storage: fetch can stall; execute/memory can flush.
+  const pipeA_if_id = StageReg<T=u97>(
+    clock=clock, reset=reset,
+    io_in=pack_fetch(io_in=(
+      const instruction=a_fetch_input.instruction,
+      const pc=a_fetch_input.pc,
+      const isValid=1
+    )),
+    io_flush=hazard.io_if_id_flush, io_valid=(~hazard.io_if_id_stall) & 1
+  )
+  const pipeA_if_id_data = unpack_fetch(bits=pipeA_if_id)
+  a_decode.instruction = pipeA_if_id_data.io_data.instruction
+  a_decode.pc = pipeA_if_id_data.io_data.pc
+  a_decode.isValid = pipeA_if_id_data.io_data.isValid
+  const pipeB_if_id = StageReg<T=u97>(
+    clock=clock, reset=reset,
+    io_in=pack_fetch(io_in=(
+      const instruction=b_fetch_input.instruction,
+      const pc=b_fetch_input.pc,
+      const isValid=b_fetch_input.isValid
+    )),
+    io_flush=hazard.io_if_id_flush, io_valid=(~hazard.io_if_id_stall) & 1
+  )
+  const pipeB_if_id_data = unpack_fetch(bits=pipeB_if_id)
+  b_decode.instruction = pipeB_if_id_data.io_data.instruction
+  b_decode.pc = pipeB_if_id_data.io_data.pc
+  b_decode.isValid = pipeB_if_id_data.io_data.isValid
+  const pipeA_id_ex = StageReg<T=u321>(
+    clock=clock, reset=reset,
+    io_in=pack_decode(io_in=a_decode_input),
+    io_flush=hazard.io_id_ex_flush, io_valid=1
+  )
+  const pipeA_id_ex_data = unpack_decode(bits=pipeA_id_ex)
+  a_execute.pc = pipeA_id_ex_data.io_data.pc
+  a_execute.instruction = pipeA_id_ex_data.io_data.instruction
+  a_execute.sextImm = pipeA_id_ex_data.io_data.sextImm
+  a_execute.readdata1 = pipeA_id_ex_data.io_data.readdata1
+  a_execute.readdata2 = pipeA_id_ex_data.io_data.readdata2
+  a_execute.isValid = pipeA_id_ex_data.io_data.isValid
+  const pipeB_id_ex = StageReg<T=u321>(
+    clock=clock, reset=reset,
+    io_in=pack_decode(io_in=b_decode_input),
+    io_flush=hazard.io_id_ex_flush, io_valid=1
+  )
+  const pipeB_id_ex_data = unpack_decode(bits=pipeB_id_ex)
+  b_execute.pc = pipeB_id_ex_data.io_data.pc
+  b_execute.instruction = pipeB_id_ex_data.io_data.instruction
+  b_execute.sextImm = pipeB_id_ex_data.io_data.sextImm
+  b_execute.readdata1 = pipeB_id_ex_data.io_data.readdata1
+  b_execute.readdata2 = pipeB_id_ex_data.io_data.readdata2
+  b_execute.isValid = pipeB_id_ex_data.io_data.isValid
+  const pipeA_id_ex_ctrl = StageReg<T=u14>(
+    clock=clock, reset=reset,
+    io_in=pack_execute_control(io_in=(
+      const itype=pipeA_control_out.itype,
+      const aluop=pipeA_control_out.aluop,
+      const src1=pipeA_control_out.src1,
+      const src2=pipeA_control_out.src2,
+      const branch=pipeA_control_out.branch,
+      const jumptype=pipeA_control_out.jumptype,
+      const resultselect=pipeA_control_out.resultselect,
+      const wordinst=pipeA_control_out.wordinst,
+      const memop=pipeA_control_out.memop,
+      const toreg=pipeA_control_out.toreg,
+      const regwrite=pipeA_control_out.regwrite
+    )),
+    io_flush=hazard.io_id_ex_flush, io_valid=1
+  )
+  // Not so nice
+  // const pipeA_id_ex_ctrl_data = unpack_execute_control(bits=pipeA_id_ex_ctrl)
+  // a_execute_control.itype = pipeA_id_ex_ctrl_data.io_data.ex_ctrl.itype
+  // a_execute_control.aluop = pipeA_id_ex_ctrl_data.io_data.ex_ctrl.aluop
+  // a_execute_control.src1 = pipeA_id_ex_ctrl_data.io_data.ex_ctrl.src1
+  // a_execute_control.src2 = pipeA_id_ex_ctrl_data.io_data.ex_ctrl.src2
+  // a_execute_control.branch = pipeA_id_ex_ctrl_data.io_data.ex_ctrl.branch
+  // a_execute_control.jumptype = pipeA_id_ex_ctrl_data.io_data.ex_ctrl.jumptype
+  // a_execute_control.resultselect = pipeA_id_ex_ctrl_data.io_data.ex_ctrl.resultselect
+  // a_execute_control.wordinst = pipeA_id_ex_ctrl_data.io_data.ex_ctrl.wordinst
+  // a_execute_control.memop = pipeA_id_ex_ctrl_data.io_data.mem_ctrl.memop
+  // a_execute_control.toreg = pipeA_id_ex_ctrl_data.io_data.wb_ctrl.toreg
+  // a_execute_control.regwrite = pipeA_id_ex_ctrl_data.io_data.wb_ctrl.regwrite
+  a_execute_control = unpack_execute_control(bits=pipeA_id_ex_ctrl)
+
+  const pipeB_id_ex_ctrl = StageReg<T=u14>(
+    clock=clock, reset=reset,
+    io_in=pack_execute_control(io_in=(
+      const itype=pipeB_control_out.itype,
+      const aluop=pipeB_control_out.aluop,
+      const src1=pipeB_control_out.src1,
+      const src2=pipeB_control_out.src2,
+      const branch=pipeB_control_out.branch,
+      const jumptype=pipeB_control_out.jumptype,
+      const resultselect=pipeB_control_out.resultselect,
+      const wordinst=pipeB_control_out.wordinst,
+      const memop=pipeB_control_out.memop,
+      const toreg=pipeB_control_out.toreg,
+      const regwrite=pipeB_control_out.regwrite
+    )),
+    io_flush=hazard.io_id_ex_flush, io_valid=1
+  )
+  const pipeB_id_ex_ctrl_data = unpack_execute_control(bits=pipeB_id_ex_ctrl)
+  b_execute_control.itype = pipeB_id_ex_ctrl_data.io_data.ex_ctrl.itype
+  b_execute_control.aluop = pipeB_id_ex_ctrl_data.io_data.ex_ctrl.aluop
+  b_execute_control.src1 = pipeB_id_ex_ctrl_data.io_data.ex_ctrl.src1
+  b_execute_control.src2 = pipeB_id_ex_ctrl_data.io_data.ex_ctrl.src2
+  b_execute_control.branch = pipeB_id_ex_ctrl_data.io_data.ex_ctrl.branch
+  b_execute_control.jumptype = pipeB_id_ex_ctrl_data.io_data.ex_ctrl.jumptype
+  b_execute_control.resultselect = pipeB_id_ex_ctrl_data.io_data.ex_ctrl.resultselect
+  b_execute_control.wordinst = pipeB_id_ex_ctrl_data.io_data.ex_ctrl.wordinst
+  b_execute_control.memop = pipeB_id_ex_ctrl_data.io_data.mem_ctrl.memop
+  b_execute_control.toreg = pipeB_id_ex_ctrl_data.io_data.wb_ctrl.toreg
+  b_execute_control.regwrite = pipeB_id_ex_ctrl_data.io_data.wb_ctrl.regwrite
+  const pipeA_ex_mem = StageReg<T=u322>(
+    clock=clock, reset=reset,
+    io_in=pack_execute(io_in=a_memory_input),
+    io_flush=hazard.io_ex_mem_flush, io_valid=1
+  )
+  const pipeA_ex_mem_data = unpack_execute(bits=pipeA_ex_mem)
+  a_memory.pc = pipeA_ex_mem_data.io_data.pc
+  a_memory.ex_result = pipeA_ex_mem_data.io_data.ex_result
+  a_memory.mem_writedata = pipeA_ex_mem_data.io_data.mem_writedata
+  a_memory.nextpc = pipeA_ex_mem_data.io_data.nextpc
+  a_memory.taken = pipeA_ex_mem_data.io_data.taken
+  a_memory.instruction = pipeA_ex_mem_data.io_data.instruction
+  a_memory.isValid = pipeA_ex_mem_data.io_data.isValid
+  const pipeB_ex_mem = StageReg<T=u322>(
+    clock=clock, reset=reset,
+    io_in=pack_execute(io_in=b_memory_input),
+    io_flush=hazard.io_ex_mem_flush, io_valid=1
+  )
+  const pipeB_ex_mem_data = unpack_execute(bits=pipeB_ex_mem)
+  b_memory.pc = pipeB_ex_mem_data.io_data.pc
+  b_memory.ex_result = pipeB_ex_mem_data.io_data.ex_result
+  b_memory.mem_writedata = pipeB_ex_mem_data.io_data.mem_writedata
+  b_memory.nextpc = pipeB_ex_mem_data.io_data.nextpc
+  b_memory.taken = pipeB_ex_mem_data.io_data.taken
+  b_memory.instruction = pipeB_ex_mem_data.io_data.instruction
+  b_memory.isValid = pipeB_ex_mem_data.io_data.isValid
+  const pipeA_ex_mem_ctrl = StageReg<T=u4>(
+    clock=clock, reset=reset,
+    io_in=pack_memory_control(io_in=(
+      const memop=a_execute_control.memop,
+      const toreg=a_execute_control.toreg,
+      const regwrite=a_execute_control.regwrite
+    )),
+    io_flush=hazard.io_ex_mem_flush, io_valid=1
+  )
+  const pipeA_ex_mem_ctrl_data = unpack_memory_control(bits=pipeA_ex_mem_ctrl)
+  a_memory_control.memop = pipeA_ex_mem_ctrl_data.io_data.mem_ctrl.memop
+  a_memory_control.toreg = pipeA_ex_mem_ctrl_data.io_data.wb_ctrl.toreg
+  a_memory_control.regwrite = pipeA_ex_mem_ctrl_data.io_data.wb_ctrl.regwrite
+  const pipeB_ex_mem_ctrl = StageReg<T=u4>(
+    clock=clock, reset=reset,
+    io_in=pack_memory_control(io_in=(
+      const memop=b_execute_control.memop,
+      const toreg=b_execute_control.toreg,
+      const regwrite=b_execute_control.regwrite
+    )),
+    io_flush=hazard.io_ex_mem_flush, io_valid=1
+  )
+  const pipeB_ex_mem_ctrl_data = unpack_memory_control(bits=pipeB_ex_mem_ctrl)
+  b_memory_control.memop = pipeB_ex_mem_ctrl_data.io_data.mem_ctrl.memop
+  b_memory_control.toreg = pipeB_ex_mem_ctrl_data.io_data.wb_ctrl.toreg
+  b_memory_control.regwrite = pipeB_ex_mem_ctrl_data.io_data.wb_ctrl.regwrite
+  const pipeA_mem_wb = StageReg<T=u257>(
+    clock=clock, reset=reset,
+    io_in=pack_memory(io_in=a_writeback_input),
+    io_flush=0, io_valid=1
+  )
+  const pipeA_mem_wb_data = unpack_memory(bits=pipeA_mem_wb)
+  a_writeback.pc = pipeA_mem_wb_data.io_data.pc
+  a_writeback.readdata = pipeA_mem_wb_data.io_data.readdata
+  a_writeback.ex_result = pipeA_mem_wb_data.io_data.ex_result
+  a_writeback.instruction = pipeA_mem_wb_data.io_data.instruction
+  a_writeback.isValid = pipeA_mem_wb_data.io_data.isValid
+  const pipeB_mem_wb = StageReg<T=u257>(
+    clock=clock, reset=reset,
+    io_in=pack_memory(io_in=b_writeback_input),
+    io_flush=0, io_valid=1
+  )
+  const pipeB_mem_wb_data = unpack_memory(bits=pipeB_mem_wb)
+  b_writeback.pc = pipeB_mem_wb_data.io_data.pc
+  b_writeback.readdata = pipeB_mem_wb_data.io_data.readdata
+  b_writeback.ex_result = pipeB_mem_wb_data.io_data.ex_result
+  b_writeback.instruction = pipeB_mem_wb_data.io_data.instruction
+  b_writeback.isValid = pipeB_mem_wb_data.io_data.isValid
+  const pipeA_mem_wb_ctrl = StageReg<T=u2>(
+    clock=clock, reset=reset,
+    io_in=pack_writeback_control(io_in=(
+      const toreg=a_memory_control.toreg,
+      const regwrite=a_memory_control.regwrite
+    )),
+    io_flush=0, io_valid=1
+  )
+  const pipeA_mem_wb_ctrl_data = unpack_writeback_control(bits=pipeA_mem_wb_ctrl)
+  a_writeback_control.toreg = pipeA_mem_wb_ctrl_data.io_data.wb_ctrl.toreg
+  a_writeback_control.regwrite = pipeA_mem_wb_ctrl_data.io_data.wb_ctrl.regwrite
+  const pipeB_mem_wb_ctrl = StageReg<T=u2>(
+    clock=clock, reset=reset,
+    io_in=pack_writeback_control(io_in=(
+      const toreg=b_memory_control.toreg,
+      const regwrite=b_memory_control.regwrite
+    )),
+    io_flush=0, io_valid=1
+  )
+  const pipeB_mem_wb_ctrl_data = unpack_writeback_control(bits=pipeB_mem_wb_ctrl)
+  b_writeback_control.toreg = pipeB_mem_wb_ctrl_data.io_data.wb_ctrl.toreg
+  b_writeback_control.regwrite = pipeB_mem_wb_ctrl_data.io_data.wb_ctrl.regwrite
+  io_imem_address = pc
+  io_imem_valid = 1
+  io_dmem_address = memory_address
+  io_dmem_valid = memory_valid
+  io_dmem_writedata = memory_writedata
+  io_dmem_memread = memory_read
+  io_dmem_memwrite = memory_write
+  io_dmem_maskmode = memory_mask
+  io_dmem_sext = memory_signed
 }

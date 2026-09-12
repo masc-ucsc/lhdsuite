@@ -1,0 +1,53 @@
+// Compare the maintained Pyrope and the vendored Verilog, both compiled by
+// LiveHD. Also check ISA results independently so a shared simulator failure
+// cannot pass just because both models agree. Each request has a 128-cycle
+// timeout, comfortably beyond the iterative multiplier's high-product latency.
+const reference = import("lg:reference")
+const implementation = import("lg:implementation.implementation")
+
+test pcpi.arithmetic(division:bool=false) {
+  mut gold = reference
+  mut dut = implementation
+  const a = [0x0, 0x1, 0xffffffff, 0x80000000, 0x80000000, 0x7fffffff, 0x12345678, 0xffffffff]
+  const b = [0x0, 0xffffffff, 0x2, 0xffffffff, 0x2, 0x80000001, 0x87654321, 0xffffffff]
+  const products = [0x0, 0x0, 0x0, 0x0, 0xffffffff, 0xffffffff, 0x0, 0x0, 0xfffffffe, 0xffffffff, 0xffffffff, 0x1, 0x80000000, 0x0, 0x80000000, 0x7fffffff, 0x0, 0xffffffff, 0xffffffff, 0x1, 0xffffffff, 0xc0000000, 0x3fffffff, 0x3fffffff, 0x70b88d78, 0xf76c768d, 0x9a0cd05, 0x9a0cd05, 0x1, 0x0, 0xffffffff, 0xfffffffe]
+  const quotients = [0xffffffff, 0xffffffff, 0x0, 0x0, 0xffffffff, 0x0, 0x0, 0x1, 0x0, 0x7fffffff, 0xffffffff, 0x1, 0x80000000, 0x0, 0x0, 0x80000000, 0xc0000000, 0x40000000, 0x0, 0x0, 0xffffffff, 0x0, 0x0, 0x7fffffff, 0x0, 0x0, 0x12345678, 0x12345678, 0x1, 0x1, 0x0, 0x0]
+  mut done = false
+  mut completed:u8 = 0
+  tick 4096 clocks=(clk=1) {
+    const slot = clk >> 7
+    const phase = clk & 127
+    const pair = slot >> 2
+    const operation = (slot & 3) + (if division { 4 } else { 0 })
+    if phase == 0 { done = false }
+    const valid = (phase >= 4) and not done
+    const instruction = 0x02000033 | (operation << 12)
+    gold.resetn = phase >= 4
+    dut.resetn = phase >= 4
+    gold.pcpi_valid = valid
+    dut.pcpi_valid = valid
+    gold.pcpi_insn = instruction
+    dut.pcpi_insn = instruction
+    gold.pcpi_rs1 = a[pair]
+    dut.pcpi_rs1 = a[pair]
+    gold.pcpi_rs2 = b[pair]
+    dut.pcpi_rs2 = b[pair]
+    step
+    if phase >= 4 {
+      assert(dut.pcpi_wait == gold.pcpi_wait, "PCPI wait timing")
+      assert(dut.pcpi_ready == gold.pcpi_ready, "PCPI ready timing")
+      assert(dut.pcpi_wr == gold.pcpi_wr, "PCPI writeback timing")
+      if (dut.pcpi_ready != 0) and not done {
+        assert(dut.pcpi_wr == 1, "arithmetic must write its result")
+        assert(dut.pcpi_rd == gold.pcpi_rd, "Verilog/Pyrope result mismatch")
+        const expected = if division { quotients[slot] } else { products[slot] }
+        assert(dut.pcpi_rd == expected, "ISA arithmetic result")
+        done = true
+        completed += 1
+      }
+    }
+    if phase == 127 { assert(done, "PCPI request did not complete") }
+  }
+  assert(completed == 32, "every arithmetic vector must complete")
+  puts("PCPI arithmetic: completed={completed}")
+}

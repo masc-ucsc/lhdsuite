@@ -1,0 +1,362 @@
+// Architectural immediates for the five ordinary RISC-V instruction formats.
+// The caller selects a format and owns the decode pipeline registers.
+pub comb immediates(insn:u32) -> (i:u32, s:u32, b:u32, u:u32, j:u32) {
+  wrap i = insn#sext[20..=31]
+  wrap s = ((insn#[25..=31] << 5) | insn#[7..=11])#sext[0..=11]
+  wrap b = ((insn#[31] << 12) | (insn#[7] << 11) |
+    (insn#[25..=30] << 5) | (insn#[8..=11] << 1))#sext[0..=12]
+  u = insn#[12..=31] << 12
+  wrap j = ((insn#[31] << 20) | (insn#[12..=19] << 12) |
+    (insn#[20] << 11) | (insn#[21..=30] << 1))#sext[0..=20]
+}
+
+// C.J/C.JAL share a signed 12-bit displacement with an implicit low zero.
+pub comb compressed_jump(insn:u16) -> (value:u32) {
+  wrap value = ((insn#[12] << 11) | (insn#[11] << 4) | (insn#[9..=10] << 8) |
+    (insn#[8] << 10) | (insn#[7] << 6) | (insn#[6] << 7) |
+    (insn#[3..=5] << 1) | (insn#[2] << 5))#sext[0..=11]
+}
+
+// Registered instruction decoding. Inputs are the fetch/decode stage's current
+// signals; the outputs retain the upstream nonblocking register semantics.
+pub mod instruction_decoder<COMPRESSED_ISA=true, ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true>(
+  clk:u1, resetn:bool, mem_do_rinst:bool, mem_done:bool,
+  mem_rdata_latched:u32, mem_rdata_q:u32, decoder_trigger:bool, decoder_pseudo_trigger:bool
+) -> (
+  lui:bool@[], auipc:bool@[], jal:bool@[], jalr:bool@[], beq:bool@[], bne:bool@[], blt:bool@[], bge:bool@[],
+  bltu:bool@[], bgeu:bool@[], lb:bool@[], lh:bool@[], lw:bool@[], lbu:bool@[], lhu:bool@[], sb:bool@[],
+  sh:bool@[], sw:bool@[], addi:bool@[], slti:bool@[], sltiu:bool@[], xori:bool@[], ori:bool@[], andi:bool@[],
+  slli:bool@[], srli:bool@[], srai:bool@[], add:bool@[], sub:bool@[], sll:bool@[], slt:bool@[], sltu:bool@[],
+  bit_xor:bool@[], srl:bool@[], sra:bool@[], bit_or:bool@[], bit_and:bool@[], rdcycle:bool@[], rdcycleh:bool@[],
+  rdinstr:bool@[], rdinstrh:bool@[], ecall_ebreak:bool@[], fence:bool@[], getq:bool@[], setq:bool@[],
+  retirq:bool@[], maskirq:bool@[], waitirq:bool@[], timer:bool@[], rd:u5@[], rs1:u5@[], rs2:u5@[],
+  imm:u32@[], imm_j:u32@[], compressed:bool@[], is_lui_auipc_jal:bool@[], is_lb_lh_lw_lbu_lhu:bool@[],
+  is_slli_srli_srai:bool@[], is_jalr_addi_slti_sltiu_xori_ori_andi:bool@[], is_sb_sh_sw:bool@[],
+  is_sll_srl_sra:bool@[], is_lui_auipc_jal_jalr_addi_add_sub:bool@[], is_slti_blt_slt:bool@[],
+  is_sltiu_bltu_sltu:bool@[], is_beq_bne_blt_bge_bltu_bgeu:bool@[], is_lbu_lhu_lw:bool@[],
+  is_alu_reg_imm:bool@[], is_alu_reg_reg:bool@[], is_compare:bool@[]
+) {
+  reg lui:bool = nil
+  reg auipc:bool = nil
+  reg jal:bool = nil
+  reg jalr:bool = nil
+  reg beq:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg bne:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg blt:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg bge:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg bltu:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg bgeu:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg lb:bool = nil
+  reg lh:bool = nil
+  reg lw:bool = nil
+  reg lbu:bool = nil
+  reg lhu:bool = nil
+  reg sb:bool = nil
+  reg sh:bool = nil
+  reg sw:bool = nil
+  reg addi:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg slti:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg sltiu:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg xori:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg ori:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg andi:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg slli:bool = nil
+  reg srli:bool = nil
+  reg srai:bool = nil
+  reg add:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg sub:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg sll:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg slt:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg sltu:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg bit_xor:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg srl:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg sra:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg bit_or:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg bit_and:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg rdcycle:bool = nil
+  reg rdcycleh:bool = nil
+  reg rdinstr:bool = nil
+  reg rdinstrh:bool = nil
+  reg ecall_ebreak:bool = nil
+  reg fence:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg getq:bool = nil
+  reg setq:bool = nil
+  reg retirq:bool = nil
+  reg maskirq:bool = nil
+  reg waitirq:bool = nil
+  reg timer:bool = nil
+  reg rd:u5 = nil
+  reg rs1:u5 = nil
+  reg rs2:u5 = nil
+  reg imm:u32 = nil
+  reg imm_j:u32 = nil
+  reg compressed:bool = nil
+  reg is_lui_auipc_jal:bool = nil
+  reg is_lb_lh_lw_lbu_lhu:bool = nil
+  reg is_slli_srli_srai:bool = nil
+  reg is_jalr_addi_slti_sltiu_xori_ori_andi:bool = nil
+  reg is_sb_sh_sw:bool = nil
+  reg is_sll_srl_sra:bool = nil
+  reg is_lui_auipc_jal_jalr_addi_add_sub:bool = nil
+  reg is_slti_blt_slt:bool = nil
+  reg is_sltiu_bltu_sltu:bool = nil
+  reg is_beq_bne_blt_bge_bltu_bgeu:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg is_lbu_lhu_lw:bool = nil
+  reg is_alu_reg_imm:bool = nil
+  reg is_alu_reg_reg:bool = nil
+  reg is_compare:bool:[negreset=true, reset_pin=ref resetn] = false
+
+  // Instruction decoder: class decode, then registered operation decode.
+  is_lui_auipc_jal = lui or auipc or jal
+  is_lui_auipc_jal_jalr_addi_add_sub = (lui or auipc or jal or jalr or
+    addi or add or sub)
+  is_slti_blt_slt = slti or blt or slt
+  is_sltiu_bltu_sltu = sltiu or bltu or sltu
+  is_lbu_lhu_lw = lbu or lhu or lw
+  is_compare = is_beq_bne_blt_bge_bltu_bgeu or slti or slt or sltiu or sltu
+  if mem_do_rinst and mem_done {
+    lui = mem_rdata_latched#[0..=6] == 55
+    auipc = mem_rdata_latched#[0..=6] == 23
+    jal = mem_rdata_latched#[0..=6] == 0x6f
+    jalr = (mem_rdata_latched#[0..=6] == 0x67) and (mem_rdata_latched#[12..=14] == 0)
+    retirq = false
+    waitirq = false
+    is_beq_bne_blt_bge_bltu_bgeu = mem_rdata_latched#[0..=6] == 0x63
+    is_lb_lh_lw_lbu_lhu = mem_rdata_latched#[0..=6] == 3
+    is_sb_sh_sw = mem_rdata_latched#[0..=6] == 35
+    is_alu_reg_imm = mem_rdata_latched#[0..=6] == 19
+    is_alu_reg_reg = mem_rdata_latched#[0..=6] == 51
+    const fetched_immediates = immediates(insn=mem_rdata_latched)
+    imm_j = fetched_immediates.j
+    rd = mem_rdata_latched#[7..=11]
+    rs1 = mem_rdata_latched#[15..=19]
+    rs2 = mem_rdata_latched#[20..=24]
+    compressed = false
+    if COMPRESSED_ISA and (mem_rdata_latched#[0..=1] != 3) {
+      compressed = true
+      rd = 0
+      rs1 = 0
+      rs2 = 0
+
+      imm_j = compressed_jump(insn=mem_rdata_latched#[0..=15])
+
+      match mem_rdata_latched#[0..=1] {
+        == 0 {
+          match mem_rdata_latched#[13..=15] {
+            == 0 {
+              is_alu_reg_imm = mem_rdata_latched#[5..=12] != 0
+              rs1 = 2
+              rd = (8 + mem_rdata_latched#[2..=4])#[0..=4]
+            }
+            == 2 {
+              is_lb_lh_lw_lbu_lhu = true
+              rs1 = (8 + mem_rdata_latched#[7..=9])#[0..=4]
+              rd = (8 + mem_rdata_latched#[2..=4])#[0..=4]
+            }
+            == 6 {
+              is_sb_sh_sw = true
+              rs1 = (8 + mem_rdata_latched#[7..=9])#[0..=4]
+              rs2 = (8 + mem_rdata_latched#[2..=4])#[0..=4]
+            }
+            else {
+            }
+          }
+        }
+        == 1 {
+          match mem_rdata_latched#[13..=15] {
+            == 0 {
+              is_alu_reg_imm = true
+              rd = mem_rdata_latched#[7..=11]
+              rs1 = mem_rdata_latched#[7..=11]
+            }
+            == 1 {
+              jal = true
+              rd = 1
+            }
+            == 2 {
+              is_alu_reg_imm = true
+              rd = mem_rdata_latched#[7..=11]
+              rs1 = 0
+            }
+            == 3 {
+              if (mem_rdata_latched#[12] != 0) or (mem_rdata_latched#[2..=6] != 0) {
+                if mem_rdata_latched#[7..=11] == 2 {
+                  is_alu_reg_imm = true
+                  rd = mem_rdata_latched#[7..=11]
+                  rs1 = mem_rdata_latched#[7..=11]
+                } else {
+                  lui = true
+                  rd = mem_rdata_latched#[7..=11]
+                  rs1 = 0
+                }
+              }
+            }
+            == 4 {
+              if (mem_rdata_latched#[11] == 0) and (mem_rdata_latched#[12] == 0) {
+                is_alu_reg_imm = true
+                rd = (8 + mem_rdata_latched#[7..=9])#[0..=4]
+                rs1 = (8 + mem_rdata_latched#[7..=9])#[0..=4]
+                rs2 = ((mem_rdata_latched#[12] << 5) | mem_rdata_latched#[2..=6])#[0..=4]
+              }
+              if mem_rdata_latched#[10..=11] == 2 {
+                is_alu_reg_imm = true
+                rd = (8 + mem_rdata_latched#[7..=9])#[0..=4]
+                rs1 = (8 + mem_rdata_latched#[7..=9])#[0..=4]
+              }
+              if mem_rdata_latched#[10..=12] == 3 {
+                is_alu_reg_reg = true
+                rd = (8 + mem_rdata_latched#[7..=9])#[0..=4]
+                rs1 = (8 + mem_rdata_latched#[7..=9])#[0..=4]
+                rs2 = (8 + mem_rdata_latched#[2..=4])#[0..=4]
+              }
+            }
+            == 5 {
+              jal = true
+            }
+            == 6 {
+              is_beq_bne_blt_bge_bltu_bgeu = true
+              rs1 = (8 + mem_rdata_latched#[7..=9])#[0..=4]
+              rs2 = 0
+            }
+            == 7 {
+              is_beq_bne_blt_bge_bltu_bgeu = true
+              rs1 = (8 + mem_rdata_latched#[7..=9])#[0..=4]
+              rs2 = 0
+            }
+            else {
+              is_alu_reg_imm = 0ub? != 0
+              rd = 0sb?
+              rs1 = 0sb?
+              jal = 0ub? != 0
+              lui = 0ub? != 0
+              rs2 = 0sb?
+              is_alu_reg_reg = 0ub? != 0
+              is_beq_bne_blt_bge_bltu_bgeu = 0ub? != 0
+            }
+          }
+        }
+        == 2 {
+          match mem_rdata_latched#[13..=15] {
+            == 0 {
+              if mem_rdata_latched#[12] == 0 {
+                is_alu_reg_imm = true
+                rd = mem_rdata_latched#[7..=11]
+                rs1 = mem_rdata_latched#[7..=11]
+                rs2 = ((mem_rdata_latched#[12] << 5) | mem_rdata_latched#[2..=6])#[0..=4]
+              }
+            }
+            == 2 {
+              if mem_rdata_latched#[7..=11] != 0 {
+                is_lb_lh_lw_lbu_lhu = true
+                rd = mem_rdata_latched#[7..=11]
+                rs1 = 2
+              }
+            }
+            == 4 {
+              if (mem_rdata_latched#[12] == 0) and (mem_rdata_latched#[7..=11] != 0) and (mem_rdata_latched#[2..=6] == 0) {
+                jalr = true
+                rd = 0
+                rs1 = mem_rdata_latched#[7..=11]
+              }
+              if (mem_rdata_latched#[12] == 0) and (mem_rdata_latched#[2..=6] != 0) {
+                is_alu_reg_reg = true
+                rd = mem_rdata_latched#[7..=11]
+                rs1 = 0
+                rs2 = mem_rdata_latched#[2..=6]
+              }
+              if (mem_rdata_latched#[12] != 0) and (mem_rdata_latched#[7..=11] != 0) and (mem_rdata_latched#[2..=6] == 0) {
+                jalr = true
+                rd = 1
+                rs1 = mem_rdata_latched#[7..=11]
+              }
+              if (mem_rdata_latched#[12] != 0) and (mem_rdata_latched#[2..=6] != 0) {
+                is_alu_reg_reg = true
+                rd = mem_rdata_latched#[7..=11]
+                rs1 = mem_rdata_latched#[7..=11]
+                rs2 = mem_rdata_latched#[2..=6]
+              }
+            }
+            == 6 {
+              is_sb_sh_sw = true
+              rs1 = 2
+              rs2 = mem_rdata_latched#[2..=6]
+            }
+            else {
+            }
+          }
+        }
+        else {
+        }
+      }
+    }
+  }
+  if decoder_trigger and not decoder_pseudo_trigger {
+    const opcode = mem_rdata_q#[0..=6]
+    const funct3 = mem_rdata_q#[12..=14]
+    const funct7 = mem_rdata_q#[25..=31]
+    const shift_encoding = (((funct3 == 1) and (funct7 == 0)) or
+                           ((funct3 == 5) and ((funct7 == 0) or (funct7 == 32))))
+    beq = is_beq_bne_blt_bge_bltu_bgeu and (funct3 == 0)
+    bne = is_beq_bne_blt_bge_bltu_bgeu and (funct3 == 1)
+    blt = is_beq_bne_blt_bge_bltu_bgeu and (funct3 == 4)
+    bge = is_beq_bne_blt_bge_bltu_bgeu and (funct3 == 5)
+    bltu = is_beq_bne_blt_bge_bltu_bgeu and (funct3 == 6)
+    bgeu = is_beq_bne_blt_bge_bltu_bgeu and (funct3 == 7)
+    lb = is_lb_lh_lw_lbu_lhu and (funct3 == 0)
+    lh = is_lb_lh_lw_lbu_lhu and (funct3 == 1)
+    lw = is_lb_lh_lw_lbu_lhu and (funct3 == 2)
+    lbu = is_lb_lh_lw_lbu_lhu and (funct3 == 4)
+    lhu = is_lb_lh_lw_lbu_lhu and (funct3 == 5)
+    sb = is_sb_sh_sw and (funct3 == 0)
+    sh = is_sb_sh_sw and (funct3 == 1)
+    sw = is_sb_sh_sw and (funct3 == 2)
+    addi = is_alu_reg_imm and (funct3 == 0)
+    slti = is_alu_reg_imm and (funct3 == 2)
+    sltiu = is_alu_reg_imm and (funct3 == 3)
+    xori = is_alu_reg_imm and (funct3 == 4)
+    ori = is_alu_reg_imm and (funct3 == 6)
+    andi = is_alu_reg_imm and (funct3 == 7)
+    slli = is_alu_reg_imm and (funct3 == 1) and (funct7 == 0)
+    srli = is_alu_reg_imm and (funct3 == 5) and (funct7 == 0)
+    srai = is_alu_reg_imm and (funct3 == 5) and (funct7 == 32)
+    add = is_alu_reg_reg and (funct3 == 0) and (funct7 == 0)
+    sub = is_alu_reg_reg and (funct3 == 0) and (funct7 == 32)
+    sll = is_alu_reg_reg and (funct3 == 1) and (funct7 == 0)
+    slt = is_alu_reg_reg and (funct3 == 2) and (funct7 == 0)
+    sltu = is_alu_reg_reg and (funct3 == 3) and (funct7 == 0)
+    bit_xor = is_alu_reg_reg and (funct3 == 4) and (funct7 == 0)
+    srl = is_alu_reg_reg and (funct3 == 5) and (funct7 == 0)
+    sra = is_alu_reg_reg and (funct3 == 5) and (funct7 == 32)
+    bit_or = is_alu_reg_reg and (funct3 == 6) and (funct7 == 0)
+    bit_and = is_alu_reg_reg and (funct3 == 7) and (funct7 == 0)
+    rdcycle = (((opcode == 0x73) and (mem_rdata_q#[12..=31] == 0xc0002)) or
+      ((opcode == 0x73) and (mem_rdata_q#[12..=31] == 0xc0102))) and ENABLE_COUNTERS
+    rdcycleh = (((opcode == 0x73) and (mem_rdata_q#[12..=31] == 0xc8002)) or
+      ((opcode == 0x73) and (mem_rdata_q#[12..=31] == 0xc8102))) and ENABLE_COUNTERS and ENABLE_COUNTERS64
+    rdinstr = (opcode == 0x73) and (mem_rdata_q#[12..=31] == 0xc0202) and ENABLE_COUNTERS
+    rdinstrh = (opcode == 0x73) and (mem_rdata_q#[12..=31] == 0xc8202) and ENABLE_COUNTERS and ENABLE_COUNTERS64
+    ecall_ebreak = ((opcode == 0x73) and (mem_rdata_q#[21..=31] == 0) and (mem_rdata_q#[7..=19] == 0)) or
+      (COMPRESSED_ISA and (mem_rdata_q#[0..=15] == 0x9002))
+    fence = (opcode == 15) and (funct3 == 0)
+    getq = false
+    setq = false
+    maskirq = false
+    timer = false
+    is_slli_srli_srai = is_alu_reg_imm and shift_encoding
+    is_jalr_addi_slti_sltiu_xori_ori_andi = jalr or (is_alu_reg_imm and
+      ((funct3 == 0) or (funct3 == 2) or (funct3 == 3) or (funct3 == 4) or (funct3 == 6) or
+      (funct3 == 7)))
+    is_sll_srl_sra = is_alu_reg_reg and shift_encoding
+    is_lui_auipc_jal_jalr_addi_add_sub = false
+    is_compare = false
+    const formats = immediates(insn=mem_rdata_q)
+    imm = if jal { imm_j }
+      elif lui or auipc { formats.u }
+      elif jalr or is_lb_lh_lw_lbu_lhu or is_alu_reg_imm { formats.i }
+      elif is_beq_bne_blt_bge_bltu_bgeu { formats.b }
+      elif is_sb_sh_sw { formats.s }
+      else { 0ub? }
+
+  }
+
+}

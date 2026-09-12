@@ -13,17 +13,10 @@
 // here is the same discipline as cva6's tag_cmp_wrap: benchmark the real
 // configuration, not the degenerate one.
 //
-// What is deliberately left OFF, and why (each is a LiveHD gap with a
-// reproducer in the README's known-failing section, NOT a suite choice):
-//   * ENABLE_MUL / ENABLE_DIV — brings in picorv32_pcpi_mul / _pcpi_div. The
-//     emitted Pyrope for the multiplier reads `next_rdt` without declaring it
-//     (its whole-word `next_rdt = 0` seed is dropped, leaving only the
-//     per-nibble carry-chain writes), so the tree does not read back.
-//   * ENABLE_IRQ — the emitted `decoded_rs1` is declared [0,31] but the IRQ
-//     q-register path assigns it 32..35, so the round trip fails a bitwidth
-//     check.
-// Both are LOUD refusals, never silent miscompiles, so nothing here is
-// benchmarked on a design LiveHD got wrong.
+// PCPI multiply/divide and IRQ stay OFF in this benchmark configuration.
+// The maintained Pyrope now implements PCPI/M/D; ../check_configurations.py
+// checks those configurations separately without changing the benchmark.
+// IRQ remains unimplemented. See ../validation.md for current proof status.
 //
 // The port list is picorv32's simple (non-look-ahead, non-AXI) memory
 // interface plus the IRQ pins; sim/picorv32_prog_tb.prp is the memory.

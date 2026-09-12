@@ -1,17 +1,40 @@
-pub comb ALUControl::[timecheck=false](io_aluop:u1, io_itype:u1, io_funct7:u7, io_funct3:u3, io_wordinst:u1) -> (io_operation:u5) {
-  wire io:(aluop:u1, itype:u1, funct7:u7, funct3:u3, wordinst:u1, operation:u5) = nil
-  wire _GEN_3:u40
-  mut _mux_1:u5 = if io.funct7 == 32 { ((io.wordinst & 1) << 4) | 4 } else { 31 }
-  mut _mux_3:u5 = if ((io.itype | unsigned(io.funct7 == 0)) & 1) != 0 { ((io.wordinst & 1) << 4) | 7 } else { _mux_1 }
-  mut _mux_4:u5 = if io.funct7#[1..=6] == 16 { ((io.wordinst & 1) << 4) | 3 } else { 31 }
-  mut _mux_5:u5 = if io.funct7#[1..=6] == 0 { ((io.wordinst & 1) << 4) | 2 } else { _mux_4 }
-  _GEN_3 = (6 << 35) | (5 << 30) | (_mux_5 << 25) | (1 << 15) | (9 << 10) | ((((io.wordinst & 1) << 4) | 8) << 5) | _mux_3
-  mut _mux_6:u5 = if io.aluop != 0 { ((_GEN_3 << 5) >> ((io.funct3 * 5) + 5))#[0..=4] } else { 7 }
-  io.aluop = io_aluop & 1
-  io.itype = io_itype & 1
-  io.funct7 = io_funct7
-  io.funct3 = io_funct3
-  io.wordinst = io_wordinst & 1
-  io.operation = _mux_6
-  io_operation = io.operation
+const enc = import("encodings")
+comptime const funct3_add_sub = 0
+comptime const funct3_sll = 1
+comptime const funct3_slt = 2
+comptime const funct3_sltu = 3
+comptime const funct3_xor = 4
+comptime const funct3_right_shift = 5
+comptime const funct3_or = 6
+comptime const funct3_and = 7
+comptime const funct7_add = 0
+comptime const funct7_sub = 32
+comptime const shift_logical = 0
+comptime const shift_arithmetic = 16
+
+pub mod ALUControl::[timecheck = false](io_aluop:u1, io_itype:u1, io_funct7:u7, io_funct3:u3, io_wordinst:u1) -> (
+  io_operation:u5@[]
+) {
+  const word:u5 = io_wordinst << enc.alu_word_bit
+  io_operation  = enc.alu_add // Address calculation defaults to 64-bit addition.
+  if io_aluop != 0 {
+    match io_funct3 {
+      == funct3_add_sub {
+        io_operation = if io_itype != 0 or io_funct7 == funct7_add { word | enc.alu_add }
+          elif io_funct7 == funct7_sub { word | enc.alu_sub }
+          else { enc.alu_invalid }
+      }
+      == funct3_sll { io_operation = word | enc.alu_sll }
+      == funct3_slt { io_operation = enc.alu_lt }
+      == funct3_sltu { io_operation = enc.alu_ltu }
+      == funct3_xor { io_operation = enc.alu_xor }
+      == funct3_right_shift {
+        io_operation = if io_funct7#[1 ..= 6] == shift_logical { word | enc.alu_srl }
+          elif io_funct7#[1 ..= 6] == shift_arithmetic { word | enc.alu_sra }
+          else { enc.alu_invalid }
+      }
+      == funct3_or { io_operation = enc.alu_or }
+      == funct3_and { io_operation = enc.alu_and }
+    }
+  }
 }

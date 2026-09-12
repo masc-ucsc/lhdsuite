@@ -1,17 +1,31 @@
-pub comb ImmediateGenerator::[timecheck=false](io_instruction:u64) -> (io_sextImm:u64) {
-  wire io:(instruction:u64, sextImm:u64) = nil
-  const opcode__w1 = io.instruction#[0..=6]
-  mut _mux_1:u64 = if opcode__w1 == 0x73 { io.instruction#[15..=19] } else { 0 }
-  mut _mux_2:u64 = if opcode__w1 == 27 { io.instruction#[20..=31]#sext[0..=11]#[0..=63] } else { _mux_1 }
-  mut _mux_3:u64 = if opcode__w1 == 19 { io.instruction#[20..=31]#sext[0..=11]#[0..=63] } else { _mux_2 }
-  mut _mux_4:u64 = if opcode__w1 == 35 { ((io.instruction#[25..=31] << 5) | io.instruction#[7..=11])#sext[0..=11]#[0..=63] } else { _mux_3 }
-  mut _mux_5:u64 = if opcode__w1 == 3 { io.instruction#[20..=31]#sext[0..=11]#[0..=63] } else { _mux_4 }
-  mut _mux_6:u64 = if opcode__w1 == 0x63 { (((((io.instruction >> 31) & 1) << 11) | (((io.instruction >> 7) & 1) << 10) | (io.instruction#[25..=30] << 4) | io.instruction#[8..=11]) << 1)#sext[0..=12]#[0..=63] } else { _mux_5 }
-  mut _mux_7:u64 = if opcode__w1 == 0x67 { io.instruction#[20..=31]#sext[0..=11]#[0..=63] } else { _mux_6 }
-  mut _mux_8:u64 = if opcode__w1 == 0x6f { (((((io.instruction >> 31) & 1) << 19) | (io.instruction#[12..=19] << 11) | (((io.instruction >> 20) & 1) << 10) | io.instruction#[21..=30]) << 1)#sext[0..=20]#[0..=63] } else { _mux_7 }
-  mut _mux_9:u64 = if opcode__w1 == 23 { (io.instruction#[12..=31] << 12)#sext[0..=31]#[0..=63] } else { _mux_8 }
-  mut _mux_10:u64 = if opcode__w1 == 55 { (io.instruction#[12..=31] << 12)#sext[0..=31]#[0..=63] } else { _mux_9 }
-  io.instruction = io_instruction
-  io.sextImm = _mux_10
-  io_sextImm = io.sextImm
+const enc = import("encodings")
+
+pub mod ImmediateGenerator::[timecheck = false](io_instruction:u64) -> (io_sextImm:u64@[]) {
+  // Instruction layouts are the only packed encodings here.
+  match io_instruction#[enc.opcode_lo ..= enc.opcode_hi] {
+    in (enc.op_lui, enc.op_auipc) { // U: LUI / AUIPC
+      wrap io_sextImm = (io_instruction#[12 ..= 31] << 12)#sext[0 ..= 31]
+    }
+    == enc.op_jal { // J: JAL
+      const immediate:u21 = (io_instruction#[31] << 20)
+                                | (io_instruction#[12 ..= 19] << 12)
+                                | (io_instruction#[20] << 11)
+                                | (io_instruction#[21 ..= 30] << 1)
+      wrap io_sextImm = immediate#sext[0 ..= 20]
+    }
+    == enc.op_branch { // B: conditional branch
+      const immediate:u13 = (io_instruction#[31] << 12)
+                                | (io_instruction#[7] << 11)
+                                | (io_instruction#[25 ..= 30] << 5)
+                                | (io_instruction#[8 ..= 11] << 1)
+      wrap io_sextImm = immediate#sext[0 ..= 12]
+    }
+    in (enc.op_jalr, enc.op_load, enc.op_immediate, enc.op_immediate_word) { wrap  io_sextImm = io_instruction#sext[20 ..= 31] }
+    == enc.op_store { // S: store
+      const immediate:u12 = (io_instruction#[enc.funct7_lo ..= enc.funct7_hi] << 5) | io_instruction#[enc.rd_lo ..= enc.rd_hi]
+      wrap io_sextImm = immediate#sext[0 ..= 11]
+    }
+    == enc.op_system { io_sextImm = io_instruction#[enc.rs1_lo ..= enc.rs1_hi] }
+    else { io_sextImm = 0 }
+  }
 }

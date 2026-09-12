@@ -4,14 +4,12 @@
 # (https://github.com/YosysHQ/picorv32, ISC — see verilog/COPYING); the only
 # hand-written Verilog file is picorv32_top.v, a parameter-pinning wrapper
 # (its header says why). pyrope/ is a maintained translation of that same
-# configuration, with global compile-time constants; see README.md.
+# design, with per-instance constant generics; see README.md.
 #
-# SCOPE: unlike cva6, both languages here ARE the same design — the wrapper's
-# cone in Verilog and the checked-in Pyrope tree are the same two modules, and
-# `picorv32_lec` proves them equivalent. What the wrapper does NOT turn on
-# (the PCPI multiplier/divider and the IRQ path) is documented in
-# picorv32_top.v: each is a LiveHD round-trip gap with a reproducer in the
-# README, not a suite preference.
+# SCOPE: both languages here ARE the same design. The suite wrapper retains
+# its existing parameter values. Additional PCPI/M/D and ALU configurations are
+# checked by check_configurations.py; standalone arithmetic uses
+# check_arithmetic.py. validation.md distinguishes unbounded and partial proofs.
 
 filegroup(
     name = "verilog",

@@ -1,7 +1,7 @@
 # Dino dual-issue RISC-V CPU, in both source languages. The Verilog is a fork
 # of https://github.com/masc-ucsc/simplechisel (7/7/26); the Pyrope is the
-# LiveHD-generated translation of the same design (manifest.json lists the
-# per-module content hashes).
+# hand-maintained cleanup of its LiveHD translation. See README.md for
+# provenance and the equivalence validation command.
 
 filegroup(
     name = "verilog",
@@ -17,7 +17,7 @@ filegroup(
 
 filegroup(
     name = "pyrope",
-    srcs = glob(["pyrope/*.prp"]) + ["pyrope/manifest.json"],
+    srcs = glob(["pyrope/*.prp"]),
     visibility = ["//visibility:public"],
 )
 

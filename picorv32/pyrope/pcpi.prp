@@ -1,0 +1,266 @@
+// PicoRV32 PCPI arithmetic (ISC, see ../verilog/COPYING).
+// Keep the upstream cycle protocol, including unreset datapath registers.
+
+pub comb decode_m(valid:bool, insn:u32) -> (selected:bool, operation:u3) {
+  selected = valid and (insn#[0..=6] == 0x33) and (insn#[25..=31] == 1)
+  operation = insn#[12..=14]
+}
+
+// One carry-save multiply step. A nibble's carry lands in the next nibble
+// on the following step; replacing this with a full adder changes the state.
+pub comb multiply_step<CARRY_CHAIN=4>(a:u64, b:u64, sum:u64, carry:u64) -> (
+  next_a:u64, next_b:u64, next_sum:u64, next_carry:u64
+) {
+  cassert(CARRY_CHAIN == 0 or (CARRY_CHAIN > 0 and CARRY_CHAIN <= 64 and (64 % CARRY_CHAIN == 0)))
+  const addend:u64 = if a#[0] != 0 { b } else { 0 }
+  if CARRY_CHAIN == 0 {
+    next_sum = sum ^ carry ^ addend
+    wrap next_carry = ((sum & carry) | (sum & addend) | (carry & addend)) << 1
+  } else {
+    mut digits:u64 = 0
+    mut carries:u64 = 0
+    for bit in 0..<64 step CARRY_CHAIN {
+      const digit = sum#[bit..+CARRY_CHAIN] + carry#[bit..+CARRY_CHAIN] + addend#[bit..+CARRY_CHAIN]
+      digits#[bit..+CARRY_CHAIN] = digit#[0..<CARRY_CHAIN]
+      carries#[bit + CARRY_CHAIN - 1] = digit#[CARRY_CHAIN]
+    }
+    next_sum = digits
+    wrap next_carry = carries << 1
+  }
+  next_a = a#[1..=63]
+  wrap next_b = b << 1
+}
+
+pub mod picorv32_pcpi_mul<STEPS_AT_ONCE=1, CARRY_CHAIN=4>(
+  clk:u1, resetn:bool, pcpi_valid:bool, pcpi_insn:u32, pcpi_rs1:u32, pcpi_rs2:u32
+) -> (pcpi_wr:bool@[], pcpi_rd:u32@[], pcpi_wait:bool@[], pcpi_ready:bool@[]) {
+  cassert(STEPS_AT_ONCE > 0 and STEPS_AT_ONCE <= 31)
+  reg instr_mul:bool = nil
+  reg instr_mulh:bool = nil
+  reg instr_mulhsu:bool = nil
+  reg instr_mulhu:bool = nil
+  reg pcpi_wait:bool = nil
+  reg pcpi_wait_q:bool = nil
+  reg pcpi_wr:bool = nil
+  reg pcpi_rd:u32 = nil
+  reg pcpi_ready:bool = nil
+  reg rs1:u64 = nil
+  reg rs2:u64 = nil
+  reg rd:u64 = nil
+  reg rdx:u64 = nil
+  reg mul_counter:u7 = nil
+  reg mul_waiting:bool:[negreset=true, reset_pin=ref resetn] = true
+  reg mul_finish:bool = nil
+  const high = instr_mulh or instr_mulhsu or instr_mulhu
+  const any_mul = instr_mul or high
+  const start = pcpi_wait and not pcpi_wait_q
+  const decoded = decode_m(valid=pcpi_valid, insn=pcpi_insn)
+  const enabled = resetn and decoded.selected
+  instr_mul = enabled and (decoded.operation == 0)
+  instr_mulh = enabled and (decoded.operation == 1)
+  instr_mulhsu = enabled and (decoded.operation == 2)
+  instr_mulhu = enabled and (decoded.operation == 3)
+  pcpi_wait = any_mul
+  pcpi_wait_q = pcpi_wait
+
+  mut accum = (mut next_a:u64=rs1, mut next_b:u64=rs2, mut next_sum:u64=rd, mut next_carry:u64=rdx)
+  for iteration in 0..<STEPS_AT_ONCE {
+    accum = multiply_step<CARRY_CHAIN=CARRY_CHAIN>(
+      a=accum.next_a, b=accum.next_b, sum=accum.next_sum, carry=accum.next_carry)
+  }
+  mul_finish = false
+  // Unreset datapath registers hold their contents while reset is asserted.
+  if resetn {
+    if mul_waiting {
+      wrap rs1 = if instr_mulh or instr_mulhsu { pcpi_rs1#sext[0..=31] } else { pcpi_rs1 }
+      wrap rs2 = if instr_mulh { pcpi_rs2#sext[0..=31] } else { pcpi_rs2 }
+      rd = 0
+      rdx = 0
+      wrap mul_counter = if high { 63 - STEPS_AT_ONCE } else { 31 - STEPS_AT_ONCE }
+      mul_waiting = not start
+    } else {
+      rd = accum.next_sum
+      rdx = accum.next_carry
+      rs1 = accum.next_a
+      rs2 = accum.next_b
+      wrap mul_counter = mul_counter - STEPS_AT_ONCE
+      if mul_counter#[6] != 0 {
+        mul_finish = true
+        mul_waiting = true
+      }
+    }
+  }
+  pcpi_wr = false
+  pcpi_ready = false
+  if mul_finish and resetn {
+    pcpi_wr = true
+    pcpi_ready = true
+    pcpi_rd = if high { rd#[32..=63] } else { rd#[0..=31] }
+  }
+}
+
+pub mod picorv32_pcpi_fast_mul<EXTRA_MUL_FFS=false, EXTRA_INSN_FFS=false, MUL_CLKGATE=false>(
+  clk:u1, resetn:bool, pcpi_valid:bool, pcpi_insn:u32, pcpi_rs1:u32, pcpi_rs2:u32
+) -> (pcpi_wr:bool@[], pcpi_rd:u32@[], pcpi_wait:bool@[], pcpi_ready:bool@[]) {
+  reg active:u4:[negreset=true, reset_pin=ref resetn] = 0
+  reg shift_out:bool = nil
+  reg rs1:i33 = nil
+  reg rs2:i33 = nil
+  reg rs1_q:i33 = nil
+  reg rs2_q:i33 = nil
+  reg rd:u64 = nil
+  reg rd_q:u64 = nil
+  reg pcpi_insn_valid_q:bool = nil
+  const decoded = decode_m(valid=pcpi_valid, insn=pcpi_insn)
+  const valid = if EXTRA_INSN_FFS { pcpi_insn_valid_q } else { decoded.selected }
+  const selected = resetn and valid and (decoded.operation < 4)
+  const high = selected and (decoded.operation != 0)
+  const signed_a = selected and ((decoded.operation == 1) or (decoded.operation == 2))
+  const signed_b = selected and (decoded.operation == 1)
+  pcpi_insn_valid_q = decoded.selected
+  if not MUL_CLKGATE or (active#[0] != 0) {
+    rs1_q = rs1
+    rs2_q = rs2
+  }
+  if not MUL_CLKGATE or (active#[1] != 0) {
+    const a:i33 = if EXTRA_MUL_FFS { rs1_q } else { rs1 }
+    const b:i33 = if EXTRA_MUL_FFS { rs2_q } else { rs2 }
+    wrap rd = a * b
+  }
+  if not MUL_CLKGATE or (active#[2] != 0) { rd_q = rd }
+  const busy = if EXTRA_MUL_FFS { active != 0 } else { active#[0..=1] != 0 }
+  wrap active = active << 1
+  if selected and not busy {
+    rs1 = if signed_a { pcpi_rs1#sext[0..=31] } else { pcpi_rs1 }
+    rs2 = if signed_b { pcpi_rs2#sext[0..=31] } else { pcpi_rs2 }
+    active#[0] = 1
+  }
+  shift_out = high
+  pcpi_wr = boolean(if EXTRA_MUL_FFS { active#[3] } else { active#[1] })
+  pcpi_ready = pcpi_wr
+  pcpi_wait = false
+  const result:u64 = if EXTRA_MUL_FFS { rd_q } else { rd }
+  pcpi_rd = if shift_out { result#[32..=63] } else { result#[0..=31] }
+}
+
+pub mod picorv32_pcpi_div(
+  clk:u1, resetn:bool, pcpi_valid:bool, pcpi_insn:u32, pcpi_rs1:u32, pcpi_rs2:u32
+) -> (pcpi_wr:bool@[], pcpi_rd:u32@[], pcpi_wait:bool@[], pcpi_ready:bool@[]) {
+  reg instr_div:bool = nil
+  reg instr_divu:bool = nil
+  reg instr_rem:bool = nil
+  reg instr_remu:bool = nil
+  reg pcpi_wait:bool = nil
+  reg pcpi_wait_q:bool = nil
+  reg pcpi_wr:bool = nil
+  reg pcpi_rd:u32 = nil
+  reg pcpi_ready:bool = nil
+  reg dividend:u32 = nil
+  reg divisor:u63 = nil
+  reg quotient:u32 = nil
+  reg quotient_msk:u32 = nil
+  reg running:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg outsign:bool = nil
+  const start = pcpi_wait and not pcpi_wait_q
+  const decoded = decode_m(valid=pcpi_valid, insn=pcpi_insn)
+  const enabled = resetn and not pcpi_ready and decoded.selected
+  instr_div = enabled and (decoded.operation == 4)
+  instr_divu = enabled and (decoded.operation == 5)
+  instr_rem = enabled and (decoded.operation == 6)
+  instr_remu = enabled and (decoded.operation == 7)
+  pcpi_wait = (instr_div or instr_divu or instr_rem or instr_remu) and resetn
+  pcpi_wait_q = pcpi_wait and resetn
+  pcpi_wr = false
+  pcpi_ready = false
+  pcpi_rd = 0sb?
+  // Unreset datapath registers hold their contents while reset is asserted.
+  if resetn {
+    if start {
+      const signed_op = instr_div or instr_rem
+      running = true
+      wrap dividend = if signed_op and (pcpi_rs1#[31] != 0) { -pcpi_rs1 } else { pcpi_rs1 }
+      // Verilog extends the negation to the 63-bit destination BEFORE shifting.
+      wrap divisor = (if signed_op and (pcpi_rs2#[31] != 0) { -pcpi_rs2 } else { pcpi_rs2 }) << 31
+      outsign = (instr_div and (pcpi_rs1#[31] != pcpi_rs2#[31]) and (pcpi_rs2 != 0)) or
+        (instr_rem and (pcpi_rs1#[31] != 0))
+      quotient = 0
+      quotient_msk = 0x80000000
+    } elif (quotient_msk == 0) and running {
+      running = false
+      pcpi_ready = true
+      pcpi_wr = true
+      const result:u32 = if instr_div or instr_divu { quotient } else { dividend }
+      wrap pcpi_rd = if outsign { -result } else { result }
+    } else {
+      if divisor <= dividend {
+        wrap dividend = dividend - divisor
+        quotient = quotient | quotient_msk
+      }
+      divisor = divisor#[1..=62]
+      quotient_msk = quotient_msk#[1..=31]
+    }
+  }
+
+}
+
+// A single multiplication interface, with the implementation chosen at elaboration.
+pub mod multiply<FAST=false>(
+  clk:u1, resetn:bool, pcpi_valid:bool, pcpi_insn:u32, pcpi_rs1:u32, pcpi_rs2:u32
+) -> (pcpi_wr:bool@[], pcpi_rd:u32@[], pcpi_wait:bool@[], pcpi_ready:bool@[]) {
+  if FAST {
+    const product = picorv32_pcpi_fast_mul(clk=clk, resetn=resetn,
+      pcpi_valid=pcpi_valid, pcpi_insn=pcpi_insn, pcpi_rs1=pcpi_rs1, pcpi_rs2=pcpi_rs2)
+    pcpi_wr = product.pcpi_wr
+    pcpi_rd = product.pcpi_rd
+    pcpi_wait = product.pcpi_wait
+    pcpi_ready = product.pcpi_ready
+  } else {
+    const serial = picorv32_pcpi_mul(clk=clk, resetn=resetn,
+      pcpi_valid=pcpi_valid, pcpi_insn=pcpi_insn, pcpi_rs1=pcpi_rs1, pcpi_rs2=pcpi_rs2)
+    pcpi_wr = serial.pcpi_wr
+    pcpi_rd = serial.pcpi_rd
+    pcpi_wait = serial.pcpi_wait
+    pcpi_ready = serial.pcpi_ready
+  }
+}
+
+// Instantiate only selected arithmetic engines; external PCPI wins a collision.
+pub mod arbitrate<ENABLE_PCPI=false, ENABLE_MUL=false, ENABLE_FAST_MUL=false, ENABLE_DIV=false>(
+  clk:u1, resetn:bool, pcpi_valid:bool, pcpi_insn:u32, pcpi_rs1:u32, pcpi_rs2:u32,
+  pcpi_wr:bool, pcpi_rd:u32, pcpi_wait:bool, pcpi_ready:bool
+) -> (waiting:bool@[], ready:bool@[], writeback:bool@[], result:u32@[]) {
+  // Internal and external PCPI responders share the upstream priority order.
+  mut mul_wr:bool = false
+  mut mul_rd:u32 = 0sb?
+  mut mul_wait:bool = false
+  mut mul_ready:bool = false
+  if ENABLE_FAST_MUL or ENABLE_MUL {
+    const product = multiply<FAST=ENABLE_FAST_MUL>(
+      clk=clk, resetn=resetn, pcpi_valid=pcpi_valid, pcpi_insn=pcpi_insn,
+      pcpi_rs1=pcpi_rs1, pcpi_rs2=pcpi_rs2)
+    mul_wr = product.pcpi_wr
+    mul_rd = product.pcpi_rd
+    mul_wait = product.pcpi_wait
+    mul_ready = product.pcpi_ready
+  }
+  mut div_wr:bool = false
+  mut div_rd:u32 = 0sb?
+  mut div_wait:bool = false
+  mut div_ready:bool = false
+  if ENABLE_DIV {
+    const divide = picorv32_pcpi_div(
+      clk=clk, resetn=resetn, pcpi_valid=pcpi_valid, pcpi_insn=pcpi_insn,
+      pcpi_rs1=pcpi_rs1, pcpi_rs2=pcpi_rs2)
+    div_wr = divide.pcpi_wr
+    div_rd = divide.pcpi_rd
+    div_wait = divide.pcpi_wait
+    div_ready = divide.pcpi_ready
+  }
+  waiting = (ENABLE_PCPI and pcpi_wait) or (mul_wait or div_wait)
+  ready = (ENABLE_PCPI and pcpi_ready) or (mul_ready or div_ready)
+  writeback = if ENABLE_PCPI and pcpi_ready { pcpi_wr }
+    elif mul_ready { mul_wr } elif div_ready { div_wr } else { false }
+  result = if ENABLE_PCPI and pcpi_ready { pcpi_rd }
+    elif mul_ready { mul_rd } elif div_ready { div_rd } else { 0sb? }
+
+}

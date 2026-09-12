@@ -1,0 +1,38 @@
+// Execute all eight RV32M operations and observe architectural stores.
+// Same one-cycle memory response contract as picorv32_prog_tb.prp.
+const core = import("lg:configuration.configuration")
+
+test picorv32.rv32m(cycles:u20=2000) {
+  mut dut = core
+  const rom = [0xff900093, 0x300113, 0x22081b3, 0x10302023, 0x22091b3, 0x10302223, 0x220a1b3, 0x10302423, 0x220b1b3, 0x10302623, 0x220c1b3, 0x10302823, 0x220d1b3, 0x10302a23, 0x220e1b3, 0x10302c23, 0x220f1b3, 0x10302e23, 0x6f, 0x13, 0x13, 0x13, 0x13, 0x13, 0x13, 0x13, 0x13, 0x13, 0x13, 0x13, 0x13, 0x13]
+  const expected = [0xffffffeb, 0xffffffff, 0xffffffff, 2,
+                    0xfffffffe, 0x55555553, 0xffffffff, 0]
+  mut req_valid = 0
+  mut req_addr = 0
+  mut seen:u8 = 0
+  mut trapped = false
+  tick cycles clocks=(clk=1) {
+    dut.resetn = clk >= 4
+    dut.irq = 0
+    dut.pcpi_wr = 0
+    dut.pcpi_rd = 0
+    dut.pcpi_wait = 0
+    dut.pcpi_ready = 0
+    dut.mem_ready = req_valid
+    dut.mem_rdata = rom[(req_addr >> 2) & 31]
+    step
+    if dut.trap != 0 { trapped = true }
+    if (dut.mem_valid != 0) and (dut.mem_wstrb != 0) {
+      assert(dut.mem_wstrb == 15, "RV32M program stores full words")
+      assert((dut.mem_addr >= 256) and (dut.mem_addr < 288), "unexpected store address")
+      const index = (dut.mem_addr >> 2) & 7
+      assert(dut.mem_wdata == expected[index], "RV32M architectural result")
+      seen = seen | (1 << index)
+    }
+    req_valid = dut.mem_valid
+    req_addr = dut.mem_addr
+  }
+  assert(not trapped, "RV32M program must not trap")
+  assert(seen == 255, "all eight RV32M results must reach memory")
+  puts("picorv32 RV32M: result mask={seen}")
+}
