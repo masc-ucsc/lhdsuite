@@ -2,9 +2,9 @@
 #
 # verilog/picorv32.v is vendored VERBATIM from upstream
 # (https://github.com/YosysHQ/picorv32, ISC — see verilog/COPYING); the only
-# hand-written file here is verilog/picorv32_top.v, a parameter-pinning
-# wrapper (its header says why). pyrope/ is the LiveHD-generated translation
-# of that same configuration.
+# hand-written Verilog file is picorv32_top.v, a parameter-pinning wrapper
+# (its header says why). pyrope/ is a maintained translation of that same
+# configuration, with global compile-time constants; see README.md.
 #
 # SCOPE: unlike cva6, both languages here ARE the same design — the wrapper's
 # cone in Verilog and the checked-in Pyrope tree are the same two modules, and
@@ -62,8 +62,8 @@ filegroup(
 
 # This core uses GENERATED variants (see the CORES entry): bug1 and comment1
 # are one-line mutations of pyrope/picorv32.prp made by bench/common.sh, not
-# checked-in copies — the unit is a 1352-line whole CPU, and a second copy of
-# it would have to be regenerated in lockstep with the tree. The glob stays so
+# checked-in copies — a second copy of the whole CPU would have to be updated
+# in lockstep with the tree. The glob stays so
 # the filegroup exists and a future checked-in variant needs no BUILD edit.
 filegroup(
     name = "tests",
