@@ -7,6 +7,7 @@ const DualIssueIssueUnit = import("DualIssueIssueUnit.DualIssueIssueUnit")
 const DualIssueNextPC = import("DualIssueNextPC.DualIssueNextPC")
 const DualIssueRegisterFile = import("DualIssueRegisterFile.DualIssueRegisterFile")
 const ImmediateGenerator = import("ImmediateGenerator.ImmediateGenerator")
+const PipeSelMux = import("PipeSelMux.PipeSelMux")
 const StageReg = import("StageReg.StageReg")
 const StageReg_10 = import("StageReg_10.StageReg_10")
 const StageReg_12 = import("StageReg_12.StageReg_12")
@@ -32,7 +33,6 @@ pub mod PipelinedDualIssueCPU::[timecheck=false](clock:u1, reset:u1, io_imem_goo
   wire _pipeA_if_id_io_data:(instruction:u32, pc:u64, isValid:u1) = nil
   wire io:(imem:u131, dmem:u199) = nil
   reg pc:u64
-  reg cycleCount:u30
   wire _hazard_io_pcfromtaken:u1
   wire _hazard_io_pcstall:u1
   wire _forwarding_io_pipeA_forward1:u3
@@ -84,7 +84,6 @@ pub mod PipelinedDualIssueCPU::[timecheck=false](clock:u1, reset:u1, io_imem_goo
   mut `_GEN_32.good` = io_imem_good & 1
   mut `_GEN_32.instruction` = io_imem_instruction
   mut `_GEN_32.ready` = io_imem_ready & 1
-  cycleCount = if reset != 0 { 0 } else { (cycleCount + 1)#[0..=29] }
   const pipeA_id_rs1__w1 = _pipeA_if_id_io_data.instruction#[15..=19]
   const pipeA_id_rs2__w1 = _pipeA_if_id_io_data.instruction#[20..=24]
   const pipeB_id_rs1__w1 = _pipeB_if_id_io_data.instruction#[15..=19]
@@ -96,18 +95,22 @@ pub mod PipelinedDualIssueCPU::[timecheck=false](clock:u1, reset:u1, io_imem_goo
   const pipeB_ex_funct3__w1 = _pipeB_id_ex_io_data.instruction#[12..=14]
   const pipeA_wb_rd__w1 = _pipeA_mem_wb_io_data.instruction#[7..=11]
   const pipeB_wb_rd__w1 = _pipeB_mem_wb_io_data.instruction#[7..=11]
-  mut _mux_2:u1 = if _pipeB_id_ex_io_data.isValid != 0 { (_pipeB_id_ex_ctrl_io_data.ex_ctrl >> 4) & 1 } else { (_pipeA_id_ex_ctrl_io_data.ex_ctrl >> 4) & 1 }
-  mut _mux_3:u2 = if _pipeB_id_ex_io_data.isValid != 0 { _pipeB_id_ex_ctrl_io_data.ex_ctrl#[2..=3] } else { _pipeA_id_ex_ctrl_io_data.ex_ctrl#[2..=3] }
-  const pipeA_forwarded_inputx__w1 = ((((pipeB_wb_writedata << 256) | (pipeA_wb_writedata << 192) | (_pipeB_ex_mem_io_data.ex_result#[0..=63] << 128) | (_pipeA_ex_mem_io_data.ex_result#[0..=63] << 64) | _pipeA_id_ex_io_data.readdata1#[0..=63]) << 0x40) >> ((_forwarding_io_pipeA_forward1 * 0x40) + 0x40))#[0..=63]
-  const pipeA_forwarded_inputy__w1 = ((((pipeB_wb_writedata << 256) | (pipeA_wb_writedata << 192) | (_pipeB_ex_mem_io_data.ex_result#[0..=63] << 128) | (_pipeA_ex_mem_io_data.ex_result#[0..=63] << 64) | _pipeA_id_ex_io_data.readdata2#[0..=63]) << 0x40) >> ((_forwarding_io_pipeA_forward2 * 0x40) + 0x40))#[0..=63]
-  const pipeB_forwarded_inputx__w1 = ((((pipeB_wb_writedata << 320) | (pipeA_wb_writedata << 256) | (_pipeB_ex_mem_io_data.ex_result#[0..=63] << 192) | (_pipeA_ex_mem_io_data.ex_result#[0..=63] << 128) | _pipeB_id_ex_io_data.readdata1#[0..=63]) << 0x40) >> ((_forwarding_io_pipeB_forward1 * 0x40) + 0x40))#[0..=63]
-  const pipeB_forwarded_inputy__w1 = ((((pipeB_wb_writedata << 320) | (pipeA_wb_writedata << 256) | (_pipeB_ex_mem_io_data.ex_result#[0..=63] << 192) | (_pipeA_ex_mem_io_data.ex_result#[0..=63] << 128) | _pipeB_id_ex_io_data.readdata2#[0..=63]) << 0x40) >> ((_forwarding_io_pipeB_forward2 * 0x40) + 0x40))#[0..=63]
-  mut _mux_4:u64 = if ((_pipeA_id_ex_ctrl_io_data.ex_ctrl >> 7) & 1) != 0 { _pipeA_id_ex_io_data.pc#[0..=63] } else { pipeA_forwarded_inputx__w1 }
-  mut _mux_5:u64 = if ((_pipeB_id_ex_ctrl_io_data.ex_ctrl >> 7) & 1) != 0 { _pipeB_id_ex_io_data.pc#[0..=63] } else { pipeB_forwarded_inputx__w1 }
-  mut _mux_7:u64 = if _pipeA_id_ex_ctrl_io_data.ex_ctrl#[5..=6] == 1 { _pipeA_id_ex_io_data.sextImm#[0..=63] } else { (unsigned(_pipeA_id_ex_ctrl_io_data.ex_ctrl#[5..=6] == 2) & 1) << 2 }
-  mut _mux_8:u64 = if _pipeA_id_ex_ctrl_io_data.ex_ctrl#[5..=6] == 0 { pipeA_forwarded_inputy__w1 } else { _mux_7 }
-  mut _mux_10:u64 = if _pipeB_id_ex_ctrl_io_data.ex_ctrl#[5..=6] == 1 { _pipeB_id_ex_io_data.sextImm#[0..=63] } else { (unsigned(_pipeB_id_ex_ctrl_io_data.ex_ctrl#[5..=6] == 2) & 1) << 2 }
-  mut _mux_11:u64 = if _pipeB_id_ex_ctrl_io_data.ex_ctrl#[5..=6] == 0 { pipeB_forwarded_inputy__w1 } else { _mux_10 }
+  const pipeA_ex_ctrl = _pipeA_id_ex_ctrl_io_data.ex_ctrl
+  const pipeB_ex_ctrl = _pipeB_id_ex_ctrl_io_data.ex_ctrl
+  const pipeA_ex_result = _pipeA_ex_mem_io_data.ex_result
+  const pipeB_ex_result = _pipeB_ex_mem_io_data.ex_result
+  mut _mux_2:u1 = if _pipeB_id_ex_io_data.isValid != 0 { (pipeB_ex_ctrl >> 4) & 1 } else { (pipeA_ex_ctrl >> 4) & 1 }
+  mut _mux_3:u2 = if _pipeB_id_ex_io_data.isValid != 0 { pipeB_ex_ctrl#[2..=3] } else { pipeA_ex_ctrl#[2..=3] }
+  const pipeA_forwarded_inputx__w1 = ((((pipeB_wb_writedata << 256) | (pipeA_wb_writedata << 192) | (pipeB_ex_result#[0..=63] << 128) | (pipeA_ex_result#[0..=63] << 64) | _pipeA_id_ex_io_data.readdata1#[0..=63]) << 0x40) >> ((_forwarding_io_pipeA_forward1 * 0x40) + 0x40))#[0..=63]
+  const pipeA_forwarded_inputy__w1 = ((((pipeB_wb_writedata << 256) | (pipeA_wb_writedata << 192) | (pipeB_ex_result#[0..=63] << 128) | (pipeA_ex_result#[0..=63] << 64) | _pipeA_id_ex_io_data.readdata2#[0..=63]) << 0x40) >> ((_forwarding_io_pipeA_forward2 * 0x40) + 0x40))#[0..=63]
+  const pipeB_forwarded_inputx__w1 = ((((pipeB_wb_writedata << 320) | (pipeA_wb_writedata << 256) | (pipeB_ex_result#[0..=63] << 192) | (pipeA_ex_result#[0..=63] << 128) | _pipeB_id_ex_io_data.readdata1#[0..=63]) << 0x40) >> ((_forwarding_io_pipeB_forward1 * 0x40) + 0x40))#[0..=63]
+  const pipeB_forwarded_inputy__w1 = ((((pipeB_wb_writedata << 320) | (pipeA_wb_writedata << 256) | (pipeB_ex_result#[0..=63] << 192) | (pipeA_ex_result#[0..=63] << 128) | _pipeB_id_ex_io_data.readdata2#[0..=63]) << 0x40) >> ((_forwarding_io_pipeB_forward2 * 0x40) + 0x40))#[0..=63]
+  mut _mux_4:u64 = PipeSelMux::[name=_mux_4_inst](io_sel = (pipeA_ex_ctrl >> 7) & 1, io_tv = _pipeA_id_ex_io_data.pc#[0..=63], io_fv = pipeA_forwarded_inputx__w1)
+  mut _mux_5:u64 = PipeSelMux::[name=_mux_5_inst](io_sel = (pipeB_ex_ctrl >> 7) & 1, io_tv = _pipeB_id_ex_io_data.pc#[0..=63], io_fv = pipeB_forwarded_inputx__w1)
+  mut _mux_7:u64 = if pipeA_ex_ctrl#[5..=6] == 1 { _pipeA_id_ex_io_data.sextImm#[0..=63] } else { (unsigned(pipeA_ex_ctrl#[5..=6] == 2) & 1) << 2 }
+  mut _mux_8:u64 = if pipeA_ex_ctrl#[5..=6] == 0 { pipeA_forwarded_inputy__w1 } else { _mux_7 }
+  mut _mux_10:u64 = if pipeB_ex_ctrl#[5..=6] == 1 { _pipeB_id_ex_io_data.sextImm#[0..=63] } else { (unsigned(pipeB_ex_ctrl#[5..=6] == 2) & 1) << 2 }
+  mut _mux_11:u64 = if pipeB_ex_ctrl#[5..=6] == 0 { pipeB_forwarded_inputy__w1 } else { _mux_10 }
   mut _mux_12:u64 = if _pipeB_id_ex_io_data.isValid != 0 { pipeB_forwarded_inputx__w1 } else { pipeA_forwarded_inputx__w1 }
   mut _mux_13:u64 = if _pipeB_id_ex_io_data.isValid != 0 { pipeB_forwarded_inputy__w1 } else { pipeA_forwarded_inputy__w1 }
   mut _mux_14:u64 = if _pipeB_id_ex_io_data.isValid != 0 { _pipeB_id_ex_io_data.pc#[0..=63] } else { _pipeA_id_ex_io_data.pc#[0..=63] }
@@ -115,11 +118,11 @@ pub mod PipelinedDualIssueCPU::[timecheck=false](clock:u1, reset:u1, io_imem_goo
   mut _mux_16:u3 = if _pipeB_id_ex_io_data.isValid != 0 { pipeB_ex_funct3__w1 } else { pipeA_ex_funct3__w1 }
   mut _mux_17:u64 = if _pipeB_id_ex_io_data.isValid != 0 { 0 } else { _nextPCmod_io_nextpc }
   mut _mux_18:u64 = if _pipeB_id_ex_io_data.isValid != 0 { _nextPCmod_io_nextpc } else { 0 }
-  mut _mux_19:u64 = if ((_pipeA_id_ex_ctrl_io_data.ex_ctrl >> 1) & 1) != 0 { _pipeA_id_ex_io_data.sextImm#[0..=63] } else { _pipeA_alu_io_result }
-  mut _mux_20:u64 = if ((_pipeB_id_ex_ctrl_io_data.ex_ctrl >> 1) & 1) != 0 { _pipeB_id_ex_io_data.sextImm#[0..=63] } else { _pipeB_alu_io_result }
+  mut _mux_19:u64 = PipeSelMux::[name=_mux_19_inst](io_sel = (pipeA_ex_ctrl >> 1) & 1, io_tv = _pipeA_id_ex_io_data.sextImm#[0..=63], io_fv = _pipeA_alu_io_result)
+  mut _mux_20:u64 = PipeSelMux::[name=_mux_20_inst](io_sel = (pipeB_ex_ctrl >> 1) & 1, io_tv = _pipeB_id_ex_io_data.sextImm#[0..=63], io_fv = _pipeB_alu_io_result)
   const pipeA_mem_funct3__w1 = _pipeA_ex_mem_io_data.instruction#[12..=14]
   const pipeB_mem_funct3__w1 = _pipeB_ex_mem_io_data.instruction#[12..=14]
-  mut _mux_21:u64 = if _pipeB_ex_mem_io_data.isValid != 0 { _pipeB_ex_mem_io_data.ex_result#[0..=63] } else { _pipeA_ex_mem_io_data.ex_result#[0..=63] }
+  mut _mux_21:u64 = if _pipeB_ex_mem_io_data.isValid != 0 { pipeB_ex_result#[0..=63] } else { pipeA_ex_result#[0..=63] }
   mut _mux_22:u1 = if _pipeB_ex_mem_io_data.isValid != 0 { (~(_pipeB_ex_mem_ctrl_io_data.mem_ctrl#[0..=1] & 1)) & 1 } else { (~(_pipeA_ex_mem_ctrl_io_data.mem_ctrl#[0..=1] & 1)) & 1 }
   mut _mux_23:u1 = if _pipeB_ex_mem_io_data.isValid != 0 { _pipeB_ex_mem_ctrl_io_data.mem_ctrl#[0..=1] & 1 } else { _pipeA_ex_mem_ctrl_io_data.mem_ctrl#[0..=1] & 1 }
   mut _mux_24:u1 = if _pipeB_ex_mem_io_data.isValid != 0 { (_pipeB_ex_mem_ctrl_io_data.mem_ctrl#[0..=1] >> 1) & 1 } else { (_pipeA_ex_mem_ctrl_io_data.mem_ctrl#[0..=1] >> 1) & 1 }
@@ -136,9 +139,9 @@ pub mod PipelinedDualIssueCPU::[timecheck=false](clock:u1, reset:u1, io_imem_goo
   mut `_GEN_21.sext` = _mux_26 & 1
   mut `_GEN_21.readdata` = io_dmem_readdata
   mut _mux_28:u64 = if _pipeB_ex_mem_io_data.isValid != 0 { _pipeB_ex_mem_io_data.nextpc#[0..=63] } else { _pipeA_ex_mem_io_data.nextpc#[0..=63] }
-  mut _mux_29:u64 = if ((_pipeA_mem_wb_ctrl_io_data.wb_ctrl >> 1) & 1) != 0 { _pipeA_mem_wb_io_data.readdata#[0..=63] } else { _pipeA_mem_wb_io_data.ex_result#[0..=63] }
+  mut _mux_29:u64 = PipeSelMux::[name=_mux_29_inst](io_sel = (_pipeA_mem_wb_ctrl_io_data.wb_ctrl >> 1) & 1, io_tv = _pipeA_mem_wb_io_data.readdata#[0..=63], io_fv = _pipeA_mem_wb_io_data.ex_result#[0..=63])
   pipeA_wb_writedata = _mux_29
-  mut _mux_30:u64 = if ((_pipeB_mem_wb_ctrl_io_data.wb_ctrl >> 1) & 1) != 0 { _pipeB_mem_wb_io_data.readdata#[0..=63] } else { _pipeB_mem_wb_io_data.ex_result#[0..=63] }
+  mut _mux_30:u64 = PipeSelMux::[name=_mux_30_inst](io_sel = (_pipeB_mem_wb_ctrl_io_data.wb_ctrl >> 1) & 1, io_tv = _pipeB_mem_wb_io_data.readdata#[0..=63], io_fv = _pipeB_mem_wb_io_data.ex_result#[0..=63])
   pipeB_wb_writedata = _mux_30
   mut `_GEN_22.pc` = _pipeA_if_id_io_data.pc#[0..=63]
   mut `_GEN_22.instruction` = _GEN__w1
@@ -176,12 +179,12 @@ pub mod PipelinedDualIssueCPU::[timecheck=false](clock:u1, reset:u1, io_imem_goo
   mut `_GEN_29.wordinst` = _pipeB_control_io_wordinst & 1
   mut `_GEN_30.pc` = _pipeA_ex_mem_io_data.pc#[0..=63]
   mut `_GEN_30.readdata` = io.dmem#[0..=63]
-  mut `_GEN_30.ex_result` = _pipeA_ex_mem_io_data.ex_result#[0..=63]
+  mut `_GEN_30.ex_result` = pipeA_ex_result#[0..=63]
   mut `_GEN_30.instruction` = _pipeA_ex_mem_io_data.instruction#[0..=63]
   mut `_GEN_30.isValid` = _pipeA_ex_mem_io_data.isValid & 1
   mut `_GEN_31.pc` = _pipeB_ex_mem_io_data.pc#[0..=63]
   mut `_GEN_31.readdata` = io.dmem#[0..=63]
-  mut `_GEN_31.ex_result` = _pipeB_ex_mem_io_data.ex_result#[0..=63]
+  mut `_GEN_31.ex_result` = pipeB_ex_result#[0..=63]
   mut `_GEN_31.instruction` = _pipeB_ex_mem_io_data.instruction#[0..=63]
   mut `_GEN_31.isValid` = _pipeB_ex_mem_io_data.isValid & 1
   io.imem = ((`_GEN_32.address` << 0x43) | 0x40000000000000000 | (`_GEN_32.good` << 0x41) | (`_GEN_32.instruction` << 1) | `_GEN_32.ready`)#[0..=130]
@@ -267,8 +270,8 @@ pub mod PipelinedDualIssueCPU::[timecheck=false](clock:u1, reset:u1, io_imem_goo
   _pipeA_immGen_io_sextImm = pipeA_immGen
   mut pipeB_immGen = ImmediateGenerator::[name=pipeB_immGen](io_instruction = _GEN_0__w1)
   _pipeB_immGen_io_sextImm = pipeB_immGen
-  mut pipeA_aluControl = ALUControl::[name=pipeA_aluControl](io_aluop = (_pipeA_id_ex_ctrl_io_data.ex_ctrl >> 8) & 1, io_itype = (_pipeA_id_ex_ctrl_io_data.ex_ctrl >> 9) & 1, io_funct7 = _pipeA_id_ex_io_data.instruction#[25..=31], io_funct3 = pipeA_ex_funct3__w1, io_wordinst = _pipeA_id_ex_ctrl_io_data.ex_ctrl & 1)
-  mut pipeB_aluControl = ALUControl::[name=pipeB_aluControl](io_aluop = (_pipeB_id_ex_ctrl_io_data.ex_ctrl >> 8) & 1, io_itype = (_pipeB_id_ex_ctrl_io_data.ex_ctrl >> 9) & 1, io_funct7 = _pipeB_id_ex_io_data.instruction#[25..=31], io_funct3 = pipeB_ex_funct3__w1, io_wordinst = _pipeB_id_ex_ctrl_io_data.ex_ctrl & 1)
+  mut pipeA_aluControl = ALUControl::[name=pipeA_aluControl](io_aluop = (pipeA_ex_ctrl >> 8) & 1, io_itype = (pipeA_ex_ctrl >> 9) & 1, io_funct7 = _pipeA_id_ex_io_data.instruction#[25..=31], io_funct3 = pipeA_ex_funct3__w1, io_wordinst = pipeA_ex_ctrl & 1)
+  mut pipeB_aluControl = ALUControl::[name=pipeB_aluControl](io_aluop = (pipeB_ex_ctrl >> 8) & 1, io_itype = (pipeB_ex_ctrl >> 9) & 1, io_funct7 = _pipeB_id_ex_io_data.instruction#[25..=31], io_funct3 = pipeB_ex_funct3__w1, io_wordinst = pipeB_ex_ctrl & 1)
   mut pipeA_alu = ALU::[name=pipeA_alu](io_operation = pipeA_aluControl, io_inputx = _mux_4, io_inputy = _mux_8)
   _pipeA_alu_io_result = pipeA_alu
   mut pipeB_alu = ALU::[name=pipeB_alu](io_operation = pipeB_aluControl, io_inputx = _mux_5, io_inputy = _mux_11)

@@ -86,146 +86,162 @@
 
 module MaxPeriodFibonacciLFSR(
   input  clock,
-  input  reset,
-  input  io_increment,
-  output io_out_0,
-  output io_out_1,
-  output io_out_2,
-  output io_out_3,
-  output io_out_4,
-  output io_out_5,
-  output io_out_6,
-  output io_out_7,
-  output io_out_8,
-  output io_out_9,
-  output io_out_10,
-  output io_out_11,
-  output io_out_12,
-  output io_out_13,
-  output io_out_14,
-  output io_out_15
+         reset,
+         io_increment,	// src/main/scala/chisel3/util/random/PRNG.scala:42:22
+  output io_out_0,	// src/main/scala/chisel3/util/random/PRNG.scala:42:22
+         io_out_1,	// src/main/scala/chisel3/util/random/PRNG.scala:42:22
+         io_out_2,	// src/main/scala/chisel3/util/random/PRNG.scala:42:22
+         io_out_3,	// src/main/scala/chisel3/util/random/PRNG.scala:42:22
+         io_out_4,	// src/main/scala/chisel3/util/random/PRNG.scala:42:22
+         io_out_5,	// src/main/scala/chisel3/util/random/PRNG.scala:42:22
+         io_out_6,	// src/main/scala/chisel3/util/random/PRNG.scala:42:22
+         io_out_7,	// src/main/scala/chisel3/util/random/PRNG.scala:42:22
+         io_out_8,	// src/main/scala/chisel3/util/random/PRNG.scala:42:22
+         io_out_9,	// src/main/scala/chisel3/util/random/PRNG.scala:42:22
+         io_out_10,	// src/main/scala/chisel3/util/random/PRNG.scala:42:22
+         io_out_11,	// src/main/scala/chisel3/util/random/PRNG.scala:42:22
+         io_out_12,	// src/main/scala/chisel3/util/random/PRNG.scala:42:22
+         io_out_13,	// src/main/scala/chisel3/util/random/PRNG.scala:42:22
+         io_out_14,	// src/main/scala/chisel3/util/random/PRNG.scala:42:22
+         io_out_15	// src/main/scala/chisel3/util/random/PRNG.scala:42:22
 );
 
-  reg state_0;
-  reg state_1;
-  reg state_2;
-  reg state_3;
-  reg state_4;
-  reg state_5;
-  reg state_6;
-  reg state_7;
-  reg state_8;
-  reg state_9;
-  reg state_10;
-  reg state_11;
-  reg state_12;
-  reg state_13;
-  reg state_14;
-  reg state_15;
-  always @(posedge clock or posedge reset) begin
+  wire io_increment_0 = io_increment;
+  wire io_seed_valid = 1'h0;
+  wire io_seed_bits_0 = 1'h0;
+  wire io_seed_bits_1 = 1'h0;
+  wire io_seed_bits_2 = 1'h0;
+  wire io_seed_bits_3 = 1'h0;
+  wire io_seed_bits_4 = 1'h0;
+  wire io_seed_bits_5 = 1'h0;
+  wire io_seed_bits_6 = 1'h0;
+  wire io_seed_bits_7 = 1'h0;
+  wire io_seed_bits_8 = 1'h0;
+  wire io_seed_bits_9 = 1'h0;
+  wire io_seed_bits_10 = 1'h0;
+  wire io_seed_bits_11 = 1'h0;
+  wire io_seed_bits_12 = 1'h0;
+  wire io_seed_bits_13 = 1'h0;
+  wire io_seed_bits_14 = 1'h0;
+  wire io_seed_bits_15 = 1'h0;
+  reg  state_0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  wire io_out_0_0 = state_0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  reg  state_1;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  wire io_out_1_0 = state_1;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  reg  state_2;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  wire io_out_2_0 = state_2;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  reg  state_3;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  wire io_out_3_0 = state_3;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  reg  state_4;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  wire io_out_4_0 = state_4;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  reg  state_5;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  wire io_out_5_0 = state_5;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  reg  state_6;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  wire io_out_6_0 = state_6;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  reg  state_7;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  wire io_out_7_0 = state_7;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  reg  state_8;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  wire io_out_8_0 = state_8;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  reg  state_9;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  wire io_out_9_0 = state_9;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  reg  state_10;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  wire io_out_10_0 = state_10;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  reg  state_11;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  wire io_out_11_0 = state_11;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  reg  state_12;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  wire io_out_12_0 = state_12;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  reg  state_13;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  wire io_out_13_0 = state_13;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  reg  state_14;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  wire io_out_14_0 = state_14;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  reg  state_15;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  wire io_out_15_0 = state_15;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+  always @(posedge clock) begin
     if (reset) begin
-      state_0 <= 1'h1;
-      state_1 <= 1'h0;
-      state_2 <= 1'h0;
-      state_3 <= 1'h0;
-      state_4 <= 1'h0;
-      state_5 <= 1'h0;
-      state_6 <= 1'h0;
-      state_7 <= 1'h0;
-      state_8 <= 1'h0;
-      state_9 <= 1'h0;
-      state_10 <= 1'h0;
-      state_11 <= 1'h0;
-      state_12 <= 1'h0;
-      state_13 <= 1'h0;
-      state_14 <= 1'h0;
-      state_15 <= 1'h0;
+      state_0 <= 1'h1;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_1 <= 1'h0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_2 <= 1'h0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_3 <= 1'h0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_4 <= 1'h0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_5 <= 1'h0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_6 <= 1'h0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_7 <= 1'h0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_8 <= 1'h0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_9 <= 1'h0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_10 <= 1'h0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_11 <= 1'h0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_12 <= 1'h0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_13 <= 1'h0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_14 <= 1'h0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_15 <= 1'h0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
     end
-    else if (io_increment) begin
-      state_0 <= state_15 ^ state_13 ^ state_12 ^ state_10;
-      state_1 <= state_0;
-      state_2 <= state_1;
-      state_3 <= state_2;
-      state_4 <= state_3;
-      state_5 <= state_4;
-      state_6 <= state_5;
-      state_7 <= state_6;
-      state_8 <= state_7;
-      state_9 <= state_8;
-      state_10 <= state_9;
-      state_11 <= state_10;
-      state_12 <= state_11;
-      state_13 <= state_12;
-      state_14 <= state_13;
-      state_15 <= state_14;
+    else if (io_increment_0) begin
+      state_0 <= state_15 ^ state_13 ^ state_12 ^ state_10;	// src/main/scala/chisel3/util/random/LFSR.scala:15:41, src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_1 <= state_0;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_2 <= state_1;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_3 <= state_2;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_4 <= state_3;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_5 <= state_4;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_6 <= state_5;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_7 <= state_6;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_8 <= state_7;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_9 <= state_8;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_10 <= state_9;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_11 <= state_10;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_12 <= state_11;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_13 <= state_12;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_14 <= state_13;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+      state_15 <= state_14;	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
     end
-  end // always @(posedge, posedge)
+  end // always @(posedge)
   `ifdef ENABLE_INITIAL_REG_
     `ifdef FIRRTL_BEFORE_INITIAL
       `FIRRTL_BEFORE_INITIAL
     `endif // FIRRTL_BEFORE_INITIAL
-    logic [31:0] _RANDOM[0:0];
     initial begin
+      automatic logic [31:0] _RANDOM[0:0];
       `ifdef INIT_RANDOM_PROLOG_
         `INIT_RANDOM_PROLOG_
       `endif // INIT_RANDOM_PROLOG_
       `ifdef RANDOMIZE_REG_INIT
         _RANDOM[/*Zero width*/ 1'b0] = `RANDOM;
-        state_0 = _RANDOM[/*Zero width*/ 1'b0][0];
-        state_1 = _RANDOM[/*Zero width*/ 1'b0][1];
-        state_2 = _RANDOM[/*Zero width*/ 1'b0][2];
-        state_3 = _RANDOM[/*Zero width*/ 1'b0][3];
-        state_4 = _RANDOM[/*Zero width*/ 1'b0][4];
-        state_5 = _RANDOM[/*Zero width*/ 1'b0][5];
-        state_6 = _RANDOM[/*Zero width*/ 1'b0][6];
-        state_7 = _RANDOM[/*Zero width*/ 1'b0][7];
-        state_8 = _RANDOM[/*Zero width*/ 1'b0][8];
-        state_9 = _RANDOM[/*Zero width*/ 1'b0][9];
-        state_10 = _RANDOM[/*Zero width*/ 1'b0][10];
-        state_11 = _RANDOM[/*Zero width*/ 1'b0][11];
-        state_12 = _RANDOM[/*Zero width*/ 1'b0][12];
-        state_13 = _RANDOM[/*Zero width*/ 1'b0][13];
-        state_14 = _RANDOM[/*Zero width*/ 1'b0][14];
-        state_15 = _RANDOM[/*Zero width*/ 1'b0][15];
+        state_0 = _RANDOM[/*Zero width*/ 1'b0][0];	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+        state_1 = _RANDOM[/*Zero width*/ 1'b0][1];	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+        state_2 = _RANDOM[/*Zero width*/ 1'b0][2];	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+        state_3 = _RANDOM[/*Zero width*/ 1'b0][3];	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+        state_4 = _RANDOM[/*Zero width*/ 1'b0][4];	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+        state_5 = _RANDOM[/*Zero width*/ 1'b0][5];	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+        state_6 = _RANDOM[/*Zero width*/ 1'b0][6];	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+        state_7 = _RANDOM[/*Zero width*/ 1'b0][7];	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+        state_8 = _RANDOM[/*Zero width*/ 1'b0][8];	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+        state_9 = _RANDOM[/*Zero width*/ 1'b0][9];	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+        state_10 = _RANDOM[/*Zero width*/ 1'b0][10];	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+        state_11 = _RANDOM[/*Zero width*/ 1'b0][11];	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+        state_12 = _RANDOM[/*Zero width*/ 1'b0][12];	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+        state_13 = _RANDOM[/*Zero width*/ 1'b0][13];	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+        state_14 = _RANDOM[/*Zero width*/ 1'b0][14];	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
+        state_15 = _RANDOM[/*Zero width*/ 1'b0][15];	// src/main/scala/chisel3/util/random/PRNG.scala:55:49
       `endif // RANDOMIZE_REG_INIT
-      if (reset) begin
-        state_0 = 1'h1;
-        state_1 = 1'h0;
-        state_2 = 1'h0;
-        state_3 = 1'h0;
-        state_4 = 1'h0;
-        state_5 = 1'h0;
-        state_6 = 1'h0;
-        state_7 = 1'h0;
-        state_8 = 1'h0;
-        state_9 = 1'h0;
-        state_10 = 1'h0;
-        state_11 = 1'h0;
-        state_12 = 1'h0;
-        state_13 = 1'h0;
-        state_14 = 1'h0;
-        state_15 = 1'h0;
-      end
     end // initial
     `ifdef FIRRTL_AFTER_INITIAL
       `FIRRTL_AFTER_INITIAL
     `endif // FIRRTL_AFTER_INITIAL
   `endif // ENABLE_INITIAL_REG_
-  assign io_out_0 = state_0;
-  assign io_out_1 = state_1;
-  assign io_out_2 = state_2;
-  assign io_out_3 = state_3;
-  assign io_out_4 = state_4;
-  assign io_out_5 = state_5;
-  assign io_out_6 = state_6;
-  assign io_out_7 = state_7;
-  assign io_out_8 = state_8;
-  assign io_out_9 = state_9;
-  assign io_out_10 = state_10;
-  assign io_out_11 = state_11;
-  assign io_out_12 = state_12;
-  assign io_out_13 = state_13;
-  assign io_out_14 = state_14;
-  assign io_out_15 = state_15;
+  assign io_out_0 = io_out_0_0;
+  assign io_out_1 = io_out_1_0;
+  assign io_out_2 = io_out_2_0;
+  assign io_out_3 = io_out_3_0;
+  assign io_out_4 = io_out_4_0;
+  assign io_out_5 = io_out_5_0;
+  assign io_out_6 = io_out_6_0;
+  assign io_out_7 = io_out_7_0;
+  assign io_out_8 = io_out_8_0;
+  assign io_out_9 = io_out_9_0;
+  assign io_out_10 = io_out_10_0;
+  assign io_out_11 = io_out_11_0;
+  assign io_out_12 = io_out_12_0;
+  assign io_out_13 = io_out_13_0;
+  assign io_out_14 = io_out_14_0;
+  assign io_out_15 = io_out_15_0;
 endmodule
 
