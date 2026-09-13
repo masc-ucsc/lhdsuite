@@ -1,0 +1,75 @@
+// BusyTable.scala: ready bits and three two-cycle load-dependency histories.
+pub comb dependency_shift(dependency:u6) -> (shifted:u6) { shifted = (dependency << 1) & 0x2a }
+pub comb dependency_cancel(dependency:u6, cancel:u6) -> (cancelled:bool) {
+  // Cancel lanes are ordered opposite to the two history-age bits.
+  const reversed:u6 = ((cancel & 0x15) << 1) | ((cancel >> 1) & 0x15)
+  cancelled         = (dependency & reversed) != 0
+}
+
+pub mod busy_table<PREGS=224, READ_PORTS=16, WRITE_PORTS=9, WAKE_PORTS=9, ZERO_READY=true, Writebacks, WakeValid, WakeDest, WakeDeps, ReadAddresses, Ready, Dependencies>::[
+  timecheck = false
+](
+  clock:u1,
+  reset:u1,
+  allocations:u72,
+  writebacks:Writebacks,
+  wake_valid:WakeValid,
+  wake_dest:WakeDest,
+  wake_dependency:WakeDeps,
+  wake_shifted:WakeDeps,
+  cancel:u6,
+  addresses:ReadAddresses
+) -> (ready:Ready@[], dependency:Dependencies@[]) {
+  comptime const ALLOC_PORTS = 8
+  comptime const REQUEST_BITS = 9
+  comptime const DEPENDENCY_BITS = 6
+  reg busy:unsigned(bits=PREGS):[reset_pin = ref reset, async = true] = 0
+  reg loadDependency:unsigned(bits=PREGS * DEPENDENCY_BITS):[reset_pin = ref reset, async = true] = 0
+  mut allocation_mask:unsigned(bits=PREGS) = 0
+  mut writeback_mask:unsigned(bits=PREGS) = 0
+  for lane in 0 ..< ALLOC_PORTS {
+    const allocation = allocations#[(lane*REQUEST_BITS) ..+ REQUEST_BITS]
+    if allocation#[8] != 0 { allocation_mask = allocation_mask | ((1 << allocation#[0 ..= 7])#[0 ..< PREGS]) }
+  }
+  for lane in 0 ..< WRITE_PORTS {
+    const writeback = writebacks#[(lane*REQUEST_BITS) ..+ REQUEST_BITS]
+    if writeback#[8] != 0 { writeback_mask = writeback_mask | ((1 << writeback#[0 ..= 7])#[0 ..< PREGS]) }
+  }
+  mut eligible:unsigned(bits=WAKE_PORTS) = 0
+  for lane in 0 ..< WAKE_PORTS {
+    eligible#[lane] = unsigned(wake_valid#[lane] != 0
+      and not dependency_cancel(
+        dependency=wake_dependency#[(lane*DEPENDENCY_BITS) ..+ DEPENDENCY_BITS], cancel=cancel
+      ))
+  }
+  for preg in 0 ..< PREGS {
+    const old_dependency:u6    = loadDependency#[(preg*DEPENDENCY_BITS) ..+ DEPENDENCY_BITS]
+    mut awakened:bool          = false
+    mut incoming_dependency:u6 = 0
+    // Mux1H is an OR even if multiple wakes name the same destination.
+    for lane in 0 ..< WAKE_PORTS {
+      if eligible#[lane] != 0 and wake_dest#[(lane*8) ..+ 8] == preg {
+        awakened            = true
+        incoming_dependency = incoming_dependency | wake_shifted#[(lane*DEPENDENCY_BITS) ..+ DEPENDENCY_BITS]
+      }
+    }
+    if awakened { loadDependency#[(preg*DEPENDENCY_BITS) ..+ DEPENDENCY_BITS] = incoming_dependency }
+    elif old_dependency != 0 { loadDependency#[(preg*DEPENDENCY_BITS) ..+ DEPENDENCY_BITS] = dependency_shift(old_dependency) }
+    const cancelled = dependency_cancel(dependency=old_dependency, cancel=cancel)
+    if awakened or writeback_mask#[preg] != 0 { busy#[preg] = 0 }
+    elif allocation_mask#[preg] != 0 or cancelled { busy#[preg] = if ZERO_READY and preg == 0 { 0 } else { 1 } }
+  }
+  ready      = 0
+  dependency = 0
+  for port in 0 ..< READ_PORTS {
+    const address       = addresses#[(port*8) ..+ 8]
+    mut allocating:bool = false
+    for lane in 0 ..< ALLOC_PORTS {
+      const allocation = allocations#[(lane*REQUEST_BITS) ..+ REQUEST_BITS]
+      if allocation#[8] != 0 and allocation#[0 ..= 7] == address { allocating = true }
+    }
+    // Packed shifts preserve zero padding for the integer table's 224..255.
+    ready#[port] = unsigned(busy#[address] == 0 and not allocating)
+    dependency#[(port*DEPENDENCY_BITS) ..+ DEPENDENCY_BITS] = (loadDependency >> (address*DEPENDENCY_BITS))#[0 ..< DEPENDENCY_BITS]
+  }
+}
