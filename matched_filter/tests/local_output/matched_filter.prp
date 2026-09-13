@@ -1,78 +1,2013 @@
-// INCREMENTAL EDIT: invert only the final result bit so one output cone changes.
-// Streaming one-dimensional SAR matched filter.
-//
-// Signed 8-bit return samples enter continuously and walk down the SIZE-tap x
-// chain. Signed 8-bit reference samples use an independent serial chain which
-// advances only under ref_load, then remains fixed during operation. Every x
-// sample starts a new dot product. The LOG2_SIZE-level registered adder tree
-// returns one result per cycle after its deterministic pipeline delay.
-const tap      = import("tap.tap")
+// Incremental edit: invert the low result bit during valid cycles.
 const add_node = import("add_node.add_node")
-const valid_stage = import("valid_stage.valid_stage")
+const tap = import("tap.tap")
 
-comptime const SIZE       = 64
-comptime const LOG2_SIZE  = 6
-comptime const MULT_WIDTH = 4
-comptime const SUM_WIDTH  = MULT_WIDTH + LOG2_SIZE
-
-type Product_T = signed(bits=MULT_WIDTH)
-type Sum_T     = signed(bits=SUM_WIDTH)
-
-cassert(SIZE == (1 << LOG2_SIZE), "SIZE must equal 2**LOG2_SIZE")
-cassert(LOG2_SIZE > 0, "LOG2_SIZE must be positive")
-cassert(MULT_WIDTH > 0 and MULT_WIDTH <= 16,
-        "MULT_WIDTH must be in 1..=16 for signed 8-bit inputs")
-
-// `timecheck=false`: the sample chain, held reference state, and registered
-// reduction deliberately mix cycle ages.
-pub mod matched_filter::[timecheck=false](x:s8, ref_in:s8, ref_load:bool) -> (y:Sum_T@[0], y_valid:bool@[0]) {
-  mut xs:s8 = x
-  mut refs:s8 = ref_in
-  mut current:[SIZE]Sum_T = 0
-
-  for i in 0..<SIZE {
-    const t = tap(x_in=xs, ref_in=refs, ref_load=ref_load)
-    xs   = t.x_out
-    refs = t.ref_out
-
-    // Always retain the MSB side. At 8..=16 bits, multiply the full s8
-    // operands and retain the upper MULT_WIDTH product bits. Below 8 bits,
-    // first retain the upper MULT_WIDTH bits of each operand, multiply those
-    // signed values, then retain the upper MULT_WIDTH product bits. Width 4:
-    //   (x#[4..=7] * ref#[4..=7])#[4..=7]
-    // #sext selects those same bits while declaring the selected MSB as sign.
-    mut product:Product_T = 0
-    if MULT_WIDTH >= 8 {
-      const full_product:s16 = t.x_out * t.ref_out
-      product = full_product#sext[(16 - MULT_WIDTH)..=15]
-    } else {
-      mut x_msb:Product_T = 0
-      mut ref_msb:Product_T = 0
-      x_msb = t.x_out#sext[(8 - MULT_WIDTH)..=7]
-      ref_msb = t.ref_out#sext[(8 - MULT_WIDTH)..=7]
-      const narrow_product = x_msb * ref_msb
-      product = narrow_product#sext[MULT_WIDTH..=((2 * MULT_WIDTH) - 1)]
-    }
-    current[i] = product
-  }
-
-  // Each registered level reads one vector and writes a distinct next vector.
-  // After the level is complete, current advances to that new pipeline stage.
-  mut tree_valid:bool = not ref_load
-  for lvl in 0..<LOG2_SIZE {
-    mut next:[SIZE]Sum_T = 0
-    for j in 0..<(SIZE >> (lvl + 1)) {
-      // Keep the structural type here: passing Sum_T through the generic
-      // currently loses a.[bits] inside add_node.
-      next[j] = add_node<signed(bits=SUM_WIDTH)>(
-        a=current[2 * j],
-        b=current[2 * j + 1],
-      )
-    }
-    current = next
-    tree_valid = valid_stage(in_valid=tree_valid, clear=ref_load)
-  }
-
-  y_valid = tree_valid and not ref_load
-  y = if y_valid { current[0] ^ 1 } else { 0 }
+pub mod matched_filter<SIZE=0x40, LOG2_SIZE=6, MULT_WIDTH=4>::[timecheck=false](clock:u1, reset:u1, x:s8, ref_in:s8, ref_load:u1) -> (y:s10@[], y_valid:u1@[]) {
+  reg valid_pipe:u6
+  mut xs:u520 = 0sb?
+  mut refs:u520 = 0sb?
+  mut level:u4480 = 0sb?
+  xs#[512..=519] = x#[0..=7]
+  refs#[512..=519] = ref_in#[0..=7]
+  mut taps_0_t = tap::[name=taps_0_t](clock = clock, reset = reset, x_in = xs#[512..=519]#sext[0..=7], ref_in = refs#[512..=519]#sext[0..=7], ref_load = ref_load)
+  mut xs__w1 = xs
+  xs__w1#[504..=511] = taps_0_t.x_out#[0..=7]
+  mut refs__w1 = refs
+  refs__w1#[504..=511] = taps_0_t.ref_out#[0..=7]
+  level#[3840..=3849] = (xs__w1#[504..=511]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w1#[504..=511]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]#[0..=9]
+  mut taps_1_t = tap::[name=taps_1_t](clock = clock, reset = reset, x_in = xs__w1#[504..=511]#sext[0..=7], ref_in = refs__w1#[504..=511]#sext[0..=7], ref_load = ref_load)
+  mut xs__w2 = xs__w1
+  xs__w2#[496..=503] = taps_1_t.x_out#[0..=7]
+  mut refs__w2 = refs__w1
+  refs__w2#[496..=503] = taps_1_t.ref_out#[0..=7]
+  mut level__w1 = level
+  level__w1#[3850..=3859] = (xs__w2#[496..=503]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w2#[496..=503]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]#[0..=9]
+  mut taps_2_t = tap::[name=taps_2_t](clock = clock, reset = reset, x_in = xs__w2#[496..=503]#sext[0..=7], ref_in = refs__w2#[496..=503]#sext[0..=7], ref_load = ref_load)
+  mut xs__w3 = xs__w2
+  xs__w3#[488..=495] = taps_2_t.x_out#[0..=7]
+  mut refs__w3 = refs__w2
+  refs__w3#[488..=495] = taps_2_t.ref_out#[0..=7]
+  mut level__w2 = level__w1
+  level__w2#[3860..=3869] = (xs__w3#[488..=495]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w3#[488..=495]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]#[0..=9]
+  mut taps_3_t = tap::[name=taps_3_t](clock = clock, reset = reset, x_in = xs__w3#[488..=495]#sext[0..=7], ref_in = refs__w3#[488..=495]#sext[0..=7], ref_load = ref_load)
+  mut xs__w4 = xs__w3
+  xs__w4#[480..=487] = taps_3_t.x_out#[0..=7]
+  mut refs__w4 = refs__w3
+  refs__w4#[480..=487] = taps_3_t.ref_out#[0..=7]
+  mut level__w3 = level__w2
+  level__w3#[3870..=3879] = (xs__w4#[480..=487]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w4#[480..=487]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]#[0..=9]
+  mut taps_4_t = tap::[name=taps_4_t](clock = clock, reset = reset, x_in = xs__w4#[480..=487]#sext[0..=7], ref_in = refs__w4#[480..=487]#sext[0..=7], ref_load = ref_load)
+  mut xs__w5 = xs__w4
+  xs__w5#[472..=479] = taps_4_t.x_out#[0..=7]
+  mut refs__w5 = refs__w4
+  refs__w5#[472..=479] = taps_4_t.ref_out#[0..=7]
+  mut level__w4 = level__w3
+  level__w4#[3880..=3889] = (xs__w5#[472..=479]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w5#[472..=479]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]#[0..=9]
+  mut taps_5_t = tap::[name=taps_5_t](clock = clock, reset = reset, x_in = xs__w5#[472..=479]#sext[0..=7], ref_in = refs__w5#[472..=479]#sext[0..=7], ref_load = ref_load)
+  mut xs__w6 = xs__w5
+  xs__w6#[464..=471] = taps_5_t.x_out#[0..=7]
+  mut refs__w6 = refs__w5
+  refs__w6#[464..=471] = taps_5_t.ref_out#[0..=7]
+  mut level__w5 = level__w4
+  level__w5#[3890..=3899] = (xs__w6#[464..=471]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w6#[464..=471]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]#[0..=9]
+  mut taps_6_t = tap::[name=taps_6_t](clock = clock, reset = reset, x_in = xs__w6#[464..=471]#sext[0..=7], ref_in = refs__w6#[464..=471]#sext[0..=7], ref_load = ref_load)
+  mut xs__w7 = xs__w6
+  xs__w7#[456..=463] = taps_6_t.x_out#[0..=7]
+  mut refs__w7 = refs__w6
+  refs__w7#[456..=463] = taps_6_t.ref_out#[0..=7]
+  mut level__w6 = level__w5
+  level__w6#[3900..=3909] = (xs__w7#[456..=463]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w7#[456..=463]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]#[0..=9]
+  mut taps_7_t = tap::[name=taps_7_t](clock = clock, reset = reset, x_in = xs__w7#[456..=463]#sext[0..=7], ref_in = refs__w7#[456..=463]#sext[0..=7], ref_load = ref_load)
+  mut xs__w8 = xs__w7
+  xs__w8#[448..=455] = taps_7_t.x_out#[0..=7]
+  mut refs__w8 = refs__w7
+  refs__w8#[448..=455] = taps_7_t.ref_out#[0..=7]
+  mut level__w7 = level__w6
+  level__w7#[3910..=3919] = (xs__w8#[448..=455]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w8#[448..=455]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]#[0..=9]
+  mut taps_8_t = tap::[name=taps_8_t](clock = clock, reset = reset, x_in = xs__w8#[448..=455]#sext[0..=7], ref_in = refs__w8#[448..=455]#sext[0..=7], ref_load = ref_load)
+  mut xs__w9 = xs__w8
+  xs__w9#[440..=447] = taps_8_t.x_out#[0..=7]
+  mut refs__w9 = refs__w8
+  refs__w9#[440..=447] = taps_8_t.ref_out#[0..=7]
+  mut level__w8 = level__w7
+  level__w8#[3920..=3929] = (xs__w9#[440..=447]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w9#[440..=447]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]#[0..=9]
+  mut taps_9_t = tap::[name=taps_9_t](clock = clock, reset = reset, x_in = xs__w9#[440..=447]#sext[0..=7], ref_in = refs__w9#[440..=447]#sext[0..=7], ref_load = ref_load)
+  mut xs__w10 = xs__w9
+  xs__w10#[432..=439] = taps_9_t.x_out#[0..=7]
+  mut refs__w10 = refs__w9
+  refs__w10#[432..=439] = taps_9_t.ref_out#[0..=7]
+  mut level__w9 = level__w8
+  level__w9#[3930..=3939] = (xs__w10#[432..=439]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w10#[432..=439]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]#[0..=9]
+  mut taps_10_t = tap::[name=taps_10_t](clock = clock, reset = reset, x_in = xs__w10#[432..=439]#sext[0..=7], ref_in = refs__w10#[432..=439]#sext[0..=7], ref_load = ref_load)
+  mut xs__w11 = xs__w10
+  xs__w11#[424..=431] = taps_10_t.x_out#[0..=7]
+  mut refs__w11 = refs__w10
+  refs__w11#[424..=431] = taps_10_t.ref_out#[0..=7]
+  mut level__w10 = level__w9
+  level__w10#[3940..=3949] = (xs__w11#[424..=431]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w11#[424..=431]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]#[0..=9]
+  mut taps_11_t = tap::[name=taps_11_t](clock = clock, reset = reset, x_in = xs__w11#[424..=431]#sext[0..=7], ref_in = refs__w11#[424..=431]#sext[0..=7], ref_load = ref_load)
+  mut xs__w12 = xs__w11
+  xs__w12#[416..=423] = taps_11_t.x_out#[0..=7]
+  mut refs__w12 = refs__w11
+  refs__w12#[416..=423] = taps_11_t.ref_out#[0..=7]
+  mut level__w11 = level__w10
+  level__w11#[3950..=3959] = (xs__w12#[416..=423]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w12#[416..=423]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]#[0..=9]
+  mut taps_12_t = tap::[name=taps_12_t](clock = clock, reset = reset, x_in = xs__w12#[416..=423]#sext[0..=7], ref_in = refs__w12#[416..=423]#sext[0..=7], ref_load = ref_load)
+  mut xs__w13 = xs__w12
+  xs__w13#[408..=415] = taps_12_t.x_out#[0..=7]
+  mut refs__w13 = refs__w12
+  refs__w13#[408..=415] = taps_12_t.ref_out#[0..=7]
+  mut level__w12 = level__w11
+  level__w12#[3960..=3969] = (xs__w13#[408..=415]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w13#[408..=415]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]#[0..=9]
+  mut taps_13_t = tap::[name=taps_13_t](clock = clock, reset = reset, x_in = xs__w13#[408..=415]#sext[0..=7], ref_in = refs__w13#[408..=415]#sext[0..=7], ref_load = ref_load)
+  mut xs__w14 = xs__w13
+  xs__w14#[400..=407] = taps_13_t.x_out#[0..=7]
+  mut refs__w14 = refs__w13
+  refs__w14#[400..=407] = taps_13_t.ref_out#[0..=7]
+  mut level__w13 = level__w12
+  level__w13#[3970..=3979] = (xs__w14#[400..=407]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w14#[400..=407]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]#[0..=9]
+  mut taps_14_t = tap::[name=taps_14_t](clock = clock, reset = reset, x_in = xs__w14#[400..=407]#sext[0..=7], ref_in = refs__w14#[400..=407]#sext[0..=7], ref_load = ref_load)
+  mut xs__w15 = xs__w14
+  xs__w15#[392..=399] = taps_14_t.x_out#[0..=7]
+  mut refs__w15 = refs__w14
+  refs__w15#[392..=399] = taps_14_t.ref_out#[0..=7]
+  mut level__w14 = level__w13
+  level__w14#[3980..=3989] = (xs__w15#[392..=399]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w15#[392..=399]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]#[0..=9]
+  mut taps_15_t = tap::[name=taps_15_t](clock = clock, reset = reset, x_in = xs__w15#[392..=399]#sext[0..=7], ref_in = refs__w15#[392..=399]#sext[0..=7], ref_load = ref_load)
+  mut xs__w16 = xs__w15
+  xs__w16#[384..=391] = taps_15_t.x_out#[0..=7]
+  mut refs__w16 = refs__w15
+  refs__w16#[384..=391] = taps_15_t.ref_out#[0..=7]
+  mut level__w15 = level__w14
+  level__w15#[3990..=3999] = (xs__w16#[384..=391]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w16#[384..=391]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]#[0..=9]
+  mut taps_16_t = tap::[name=taps_16_t](clock = clock, reset = reset, x_in = xs__w16#[384..=391]#sext[0..=7], ref_in = refs__w16#[384..=391]#sext[0..=7], ref_load = ref_load)
+  mut xs__w17 = xs__w16
+  xs__w17#[376..=383] = taps_16_t.x_out#[0..=7]
+  mut refs__w17 = refs__w16
+  refs__w17#[376..=383] = taps_16_t.ref_out#[0..=7]
+  const t427 = (xs__w17#[376..=383]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w17#[376..=383]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]#[0..=9]
+  mut level__w16 = level__w15
+  level__w16#[4000..=4009] = t427
+  mut taps_17_t = tap::[name=taps_17_t](clock = clock, reset = reset, x_in = xs__w17#[376..=383]#sext[0..=7], ref_in = refs__w17#[376..=383]#sext[0..=7], ref_load = ref_load)
+  mut xs__w18 = xs__w17
+  xs__w18#[368..=375] = taps_17_t.x_out#[0..=7]
+  mut refs__w18 = refs__w17
+  refs__w18#[368..=375] = taps_17_t.ref_out#[0..=7]
+  const t451 = (xs__w18#[368..=375]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w18#[368..=375]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]#sext[0..=3]
+  const t452 = t451#[0..=9]
+  mut level__w17 = level__w16
+  level__w17#[4010..=4019] = t452
+  mut taps_18_t = tap::[name=taps_18_t](clock = clock, reset = reset, x_in = xs__w18#[368..=375]#sext[0..=7], ref_in = refs__w18#[368..=375]#sext[0..=7], ref_load = ref_load)
+  mut xs__w19 = xs__w18
+  xs__w19#[360..=367] = taps_18_t.x_out#[0..=7]
+  mut refs__w19 = refs__w18
+  refs__w19#[360..=367] = taps_18_t.ref_out#[0..=7]
+  const t475 = (xs__w19#[360..=367]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w19#[360..=367]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]#[0..=3]
+  const t476 = t475#sext[0..=3]
+  const t477 = t476#[0..=9]
+  mut level__w18 = level__w17
+  level__w18#[4020..=4029] = t477
+  mut taps_19_t = tap::[name=taps_19_t](clock = clock, reset = reset, x_in = xs__w19#[360..=367]#sext[0..=7], ref_in = refs__w19#[360..=367]#sext[0..=7], ref_load = ref_load)
+  mut xs__w20 = xs__w19
+  xs__w20#[352..=359] = taps_19_t.x_out#[0..=7]
+  mut refs__w20 = refs__w19
+  refs__w20#[352..=359] = taps_19_t.ref_out#[0..=7]
+  const taps_19_narrow_operand_product_product__w1 = (xs__w20#[352..=359]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w20#[352..=359]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]
+  const t500 = taps_19_narrow_operand_product_product__w1#[0..=3]
+  const t501 = t500#sext[0..=3]
+  const t502 = t501#[0..=9]
+  mut level__w19 = level__w18
+  level__w19#[4030..=4039] = t502
+  mut taps_20_t = tap::[name=taps_20_t](clock = clock, reset = reset, x_in = xs__w20#[352..=359]#sext[0..=7], ref_in = refs__w20#[352..=359]#sext[0..=7], ref_load = ref_load)
+  mut xs__w21 = xs__w20
+  xs__w21#[344..=351] = taps_20_t.x_out#[0..=7]
+  mut refs__w21 = refs__w20
+  refs__w21#[344..=351] = taps_20_t.ref_out#[0..=7]
+  const t524 = (xs__w21#[344..=351]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w21#[344..=351]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]#sext[0..=3]
+  const taps_20_narrow_operand_product_product__w1 = t524
+  const t525 = taps_20_narrow_operand_product_product__w1#[0..=3]
+  const t526 = t525#sext[0..=3]
+  const t527 = t526#[0..=9]
+  mut level__w20 = level__w19
+  level__w20#[4040..=4049] = t527
+  mut taps_21_t = tap::[name=taps_21_t](clock = clock, reset = reset, x_in = xs__w21#[344..=351]#sext[0..=7], ref_in = refs__w21#[344..=351]#sext[0..=7], ref_load = ref_load)
+  mut xs__w22 = xs__w21
+  xs__w22#[336..=343] = taps_21_t.x_out#[0..=7]
+  mut refs__w22 = refs__w21
+  refs__w22#[336..=343] = taps_21_t.ref_out#[0..=7]
+  const t548 = (xs__w22#[336..=343]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w22#[336..=343]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]#[4..=7]
+  const t549 = t548#sext[0..=3]
+  const taps_21_narrow_operand_product_product__w1 = t549
+  const t550 = taps_21_narrow_operand_product_product__w1#[0..=3]
+  const t551 = t550#sext[0..=3]
+  const t552 = t551#[0..=9]
+  mut level__w21 = level__w20
+  level__w21#[4050..=4059] = t552
+  mut taps_22_t = tap::[name=taps_22_t](clock = clock, reset = reset, x_in = xs__w22#[336..=343]#sext[0..=7], ref_in = refs__w22#[336..=343]#sext[0..=7], ref_load = ref_load)
+  mut xs__w23 = xs__w22
+  xs__w23#[328..=335] = taps_22_t.x_out#[0..=7]
+  mut refs__w23 = refs__w22
+  refs__w23#[328..=335] = taps_22_t.ref_out#[0..=7]
+  const t572 = (xs__w23#[328..=335]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w23#[328..=335]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3])#[0..=7]
+  const t573 = t572#[4..=7]
+  const t574 = t573#sext[0..=3]
+  const taps_22_narrow_operand_product_product__w1 = t574
+  const t575 = taps_22_narrow_operand_product_product__w1#[0..=3]
+  const t576 = t575#sext[0..=3]
+  const t577 = t576#[0..=9]
+  mut level__w22 = level__w21
+  level__w22#[4060..=4069] = t577
+  mut taps_23_t = tap::[name=taps_23_t](clock = clock, reset = reset, x_in = xs__w23#[328..=335]#sext[0..=7], ref_in = refs__w23#[328..=335]#sext[0..=7], ref_load = ref_load)
+  mut xs__w24 = xs__w23
+  xs__w24#[320..=327] = taps_23_t.x_out#[0..=7]
+  mut refs__w24 = refs__w23
+  refs__w24#[320..=327] = taps_23_t.ref_out#[0..=7]
+  const taps_23_narrow_operand_product_full_product__w1 = xs__w24#[320..=327]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w24#[320..=327]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3]
+  const t597 = taps_23_narrow_operand_product_full_product__w1#[0..=7]
+  const t598 = t597#[4..=7]
+  const t599 = t598#sext[0..=3]
+  const taps_23_narrow_operand_product_product__w1 = t599
+  const t600 = taps_23_narrow_operand_product_product__w1#[0..=3]
+  const t601 = t600#sext[0..=3]
+  const t602 = t601#[0..=9]
+  mut level__w23 = level__w22
+  level__w23#[4070..=4079] = t602
+  mut taps_24_t = tap::[name=taps_24_t](clock = clock, reset = reset, x_in = xs__w24#[320..=327]#sext[0..=7], ref_in = refs__w24#[320..=327]#sext[0..=7], ref_load = ref_load)
+  mut xs__w25 = xs__w24
+  xs__w25#[312..=319] = taps_24_t.x_out#[0..=7]
+  mut refs__w25 = refs__w24
+  refs__w25#[312..=319] = taps_24_t.ref_out#[0..=7]
+  const t621 = xs__w25#[312..=319]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3] * refs__w25#[312..=319]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3]
+  const taps_24_narrow_operand_product_full_product__w1 = t621
+  const t622 = taps_24_narrow_operand_product_full_product__w1#[0..=7]
+  const t623 = t622#[4..=7]
+  const t624 = t623#sext[0..=3]
+  const taps_24_narrow_operand_product_product__w1 = t624
+  const t625 = taps_24_narrow_operand_product_product__w1#[0..=3]
+  const t626 = t625#sext[0..=3]
+  const t627 = t626#[0..=9]
+  mut level__w24 = level__w23
+  level__w24#[4080..=4089] = t627
+  mut taps_25_t = tap::[name=taps_25_t](clock = clock, reset = reset, x_in = xs__w25#[312..=319]#sext[0..=7], ref_in = refs__w25#[312..=319]#sext[0..=7], ref_load = ref_load)
+  mut xs__w26 = xs__w25
+  xs__w26#[304..=311] = taps_25_t.x_out#[0..=7]
+  mut refs__w26 = refs__w25
+  refs__w26#[304..=311] = taps_25_t.ref_out#[0..=7]
+  const taps_25_narrow_operand_product_x_msb__w1 = xs__w26#[304..=311]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3]
+  const taps_25_narrow_operand_product_ref_msb__w1 = refs__w26#[304..=311]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3]
+  const t646 = taps_25_narrow_operand_product_x_msb__w1 * taps_25_narrow_operand_product_ref_msb__w1
+  const taps_25_narrow_operand_product_full_product__w1 = t646
+  const t647 = taps_25_narrow_operand_product_full_product__w1#[0..=7]
+  const t648 = t647#[4..=7]
+  const t649 = t648#sext[0..=3]
+  const taps_25_narrow_operand_product_product__w1 = t649
+  const t650 = taps_25_narrow_operand_product_product__w1#[0..=3]
+  const t651 = t650#sext[0..=3]
+  const t652 = t651#[0..=9]
+  mut level__w25 = level__w24
+  level__w25#[4090..=4099] = t652
+  mut taps_26_t = tap::[name=taps_26_t](clock = clock, reset = reset, x_in = xs__w26#[304..=311]#sext[0..=7], ref_in = refs__w26#[304..=311]#sext[0..=7], ref_load = ref_load)
+  mut xs__w27 = xs__w26
+  xs__w27#[296..=303] = taps_26_t.x_out#[0..=7]
+  mut refs__w27 = refs__w26
+  refs__w27#[296..=303] = taps_26_t.ref_out#[0..=7]
+  const t665 = xs__w27#[296..=303]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3]
+  const taps_26_narrow_operand_product_x_msb__w1 = t665
+  const t670 = refs__w27#[296..=303]#sext[0..=7]#[0..=7]#[4..=7]#sext[0..=3]
+  const taps_26_narrow_operand_product_ref_msb__w1 = t670
+  const t671 = taps_26_narrow_operand_product_x_msb__w1 * taps_26_narrow_operand_product_ref_msb__w1
+  const taps_26_narrow_operand_product_full_product__w1 = t671
+  const t672 = taps_26_narrow_operand_product_full_product__w1#[0..=7]
+  const t673 = t672#[4..=7]
+  const t674 = t673#sext[0..=3]
+  const taps_26_narrow_operand_product_product__w1 = t674
+  const t675 = taps_26_narrow_operand_product_product__w1#[0..=3]
+  const t676 = t675#sext[0..=3]
+  const t677 = t676#[0..=9]
+  mut level__w26 = level__w25
+  level__w26#[4100..=4109] = t677
+  mut taps_27_t = tap::[name=taps_27_t](clock = clock, reset = reset, x_in = xs__w27#[296..=303]#sext[0..=7], ref_in = refs__w27#[296..=303]#sext[0..=7], ref_load = ref_load)
+  mut xs__w28 = xs__w27
+  xs__w28#[288..=295] = taps_27_t.x_out#[0..=7]
+  mut refs__w28 = refs__w27
+  refs__w28#[288..=295] = taps_27_t.ref_out#[0..=7]
+  const t689 = xs__w28#[288..=295]#sext[0..=7]#[0..=7]#[4..=7]
+  const t690 = t689#sext[0..=3]
+  const taps_27_narrow_operand_product_x_msb__w1 = t690
+  const t694 = refs__w28#[288..=295]#sext[0..=7]#[0..=7]#[4..=7]
+  const t695 = t694#sext[0..=3]
+  const taps_27_narrow_operand_product_ref_msb__w1 = t695
+  const t696 = taps_27_narrow_operand_product_x_msb__w1 * taps_27_narrow_operand_product_ref_msb__w1
+  const taps_27_narrow_operand_product_full_product__w1 = t696
+  const t697 = taps_27_narrow_operand_product_full_product__w1#[0..=7]
+  const t698 = t697#[4..=7]
+  const t699 = t698#sext[0..=3]
+  const taps_27_narrow_operand_product_product__w1 = t699
+  const t700 = taps_27_narrow_operand_product_product__w1#[0..=3]
+  const t701 = t700#sext[0..=3]
+  const t702 = t701#[0..=9]
+  mut level__w27 = level__w26
+  level__w27#[4110..=4119] = t702
+  mut taps_28_t = tap::[name=taps_28_t](clock = clock, reset = reset, x_in = xs__w28#[288..=295]#sext[0..=7], ref_in = refs__w28#[288..=295]#sext[0..=7], ref_load = ref_load)
+  mut xs__w29 = xs__w28
+  xs__w29#[280..=287] = taps_28_t.x_out#[0..=7]
+  mut refs__w29 = refs__w28
+  refs__w29#[280..=287] = taps_28_t.ref_out#[0..=7]
+  const t713 = xs__w29#[280..=287]#sext[0..=7]#[0..=7]
+  const t714 = t713#[4..=7]
+  const t715 = t714#sext[0..=3]
+  const taps_28_narrow_operand_product_x_msb__w1 = t715
+  const t718 = refs__w29#[280..=287]#sext[0..=7]#[0..=7]
+  const t719 = t718#[4..=7]
+  const t720 = t719#sext[0..=3]
+  const taps_28_narrow_operand_product_ref_msb__w1 = t720
+  const t721 = taps_28_narrow_operand_product_x_msb__w1 * taps_28_narrow_operand_product_ref_msb__w1
+  const taps_28_narrow_operand_product_full_product__w1 = t721
+  const t722 = taps_28_narrow_operand_product_full_product__w1#[0..=7]
+  const t723 = t722#[4..=7]
+  const t724 = t723#sext[0..=3]
+  const taps_28_narrow_operand_product_product__w1 = t724
+  const t725 = taps_28_narrow_operand_product_product__w1#[0..=3]
+  const t726 = t725#sext[0..=3]
+  const t727 = t726#[0..=9]
+  mut level__w28 = level__w27
+  level__w28#[4120..=4129] = t727
+  mut taps_29_t = tap::[name=taps_29_t](clock = clock, reset = reset, x_in = xs__w29#[280..=287]#sext[0..=7], ref_in = refs__w29#[280..=287]#sext[0..=7], ref_load = ref_load)
+  mut xs__w30 = xs__w29
+  xs__w30#[272..=279] = taps_29_t.x_out#[0..=7]
+  mut refs__w30 = refs__w29
+  refs__w30#[272..=279] = taps_29_t.ref_out#[0..=7]
+  const t737 = xs__w30#[272..=279]#sext[0..=7]
+  const t738 = t737#[0..=7]
+  const t739 = t738#[4..=7]
+  const t740 = t739#sext[0..=3]
+  const taps_29_narrow_operand_product_x_msb__w1 = t740
+  const t742 = refs__w30#[272..=279]#sext[0..=7]
+  const t743 = t742#[0..=7]
+  const t744 = t743#[4..=7]
+  const t745 = t744#sext[0..=3]
+  const taps_29_narrow_operand_product_ref_msb__w1 = t745
+  const t746 = taps_29_narrow_operand_product_x_msb__w1 * taps_29_narrow_operand_product_ref_msb__w1
+  const taps_29_narrow_operand_product_full_product__w1 = t746
+  const t747 = taps_29_narrow_operand_product_full_product__w1#[0..=7]
+  const t748 = t747#[4..=7]
+  const t749 = t748#sext[0..=3]
+  const taps_29_narrow_operand_product_product__w1 = t749
+  const t750 = taps_29_narrow_operand_product_product__w1#[0..=3]
+  const t751 = t750#sext[0..=3]
+  const t752 = t751#[0..=9]
+  mut level__w29 = level__w28
+  level__w29#[4130..=4139] = t752
+  const t754 = xs__w30#[272..=279]#sext[0..=7]
+  const t756 = refs__w30#[272..=279]#sext[0..=7]
+  mut taps_30_t = tap::[name=taps_30_t](clock = clock, reset = reset, x_in = t754, ref_in = t756, ref_load = ref_load)
+  mut xs__w31 = xs__w30
+  xs__w31#[264..=271] = taps_30_t.x_out#[0..=7]
+  mut refs__w31 = refs__w30
+  refs__w31#[264..=271] = taps_30_t.ref_out#[0..=7]
+  const t761 = xs__w31#[264..=271]
+  const t762 = t761#sext[0..=7]
+  const t763 = t762#[0..=7]
+  const t764 = t763#[4..=7]
+  const t765 = t764#sext[0..=3]
+  const taps_30_narrow_operand_product_x_msb__w1 = t765
+  const t766 = refs__w31#[264..=271]
+  const t767 = t766#sext[0..=7]
+  const t768 = t767#[0..=7]
+  const t769 = t768#[4..=7]
+  const t770 = t769#sext[0..=3]
+  const taps_30_narrow_operand_product_ref_msb__w1 = t770
+  const t771 = taps_30_narrow_operand_product_x_msb__w1 * taps_30_narrow_operand_product_ref_msb__w1
+  const taps_30_narrow_operand_product_full_product__w1 = t771
+  const t772 = taps_30_narrow_operand_product_full_product__w1#[0..=7]
+  const t773 = t772#[4..=7]
+  const t774 = t773#sext[0..=3]
+  const taps_30_narrow_operand_product_product__w1 = t774
+  const t775 = taps_30_narrow_operand_product_product__w1#[0..=3]
+  const t776 = t775#sext[0..=3]
+  const t777 = t776#[0..=9]
+  mut level__w30 = level__w29
+  level__w30#[4140..=4149] = t777
+  const t778 = xs__w31#[264..=271]
+  const t779 = t778#sext[0..=7]
+  const t780 = refs__w31#[264..=271]
+  const t781 = t780#sext[0..=7]
+  mut taps_31_t = tap::[name=taps_31_t](clock = clock, reset = reset, x_in = t779, ref_in = t781, ref_load = ref_load)
+  mut xs__w32 = xs__w31
+  xs__w32#[256..=263] = taps_31_t.x_out#[0..=7]
+  mut refs__w32 = refs__w31
+  refs__w32#[256..=263] = taps_31_t.ref_out#[0..=7]
+  const t786 = xs__w32#[256..=263]
+  const t787 = t786#sext[0..=7]
+  const t788 = t787#[0..=7]
+  const t789 = t788#[4..=7]
+  const t790 = t789#sext[0..=3]
+  const taps_31_narrow_operand_product_x_msb__w1 = t790
+  const t791 = refs__w32#[256..=263]
+  const t792 = t791#sext[0..=7]
+  const t793 = t792#[0..=7]
+  const t794 = t793#[4..=7]
+  const t795 = t794#sext[0..=3]
+  const taps_31_narrow_operand_product_ref_msb__w1 = t795
+  const t796 = taps_31_narrow_operand_product_x_msb__w1 * taps_31_narrow_operand_product_ref_msb__w1
+  const taps_31_narrow_operand_product_full_product__w1 = t796
+  const t797 = taps_31_narrow_operand_product_full_product__w1#[0..=7]
+  const t798 = t797#[4..=7]
+  const t799 = t798#sext[0..=3]
+  const taps_31_narrow_operand_product_product__w1 = t799
+  const t800 = taps_31_narrow_operand_product_product__w1#[0..=3]
+  const t801 = t800#sext[0..=3]
+  const t802 = t801#[0..=9]
+  mut level__w31 = level__w30
+  level__w31#[4150..=4159] = t802
+  const t803 = xs__w32#[256..=263]
+  const t804 = t803#sext[0..=7]
+  const t805 = refs__w32#[256..=263]
+  const t806 = t805#sext[0..=7]
+  mut taps_32_t = tap::[name=taps_32_t](clock = clock, reset = reset, x_in = t804, ref_in = t806, ref_load = ref_load)
+  mut xs__w33 = xs__w32
+  xs__w33#[248..=255] = taps_32_t.x_out#[0..=7]
+  mut refs__w33 = refs__w32
+  refs__w33#[248..=255] = taps_32_t.ref_out#[0..=7]
+  const t811 = xs__w33#[248..=255]
+  const t812 = t811#sext[0..=7]
+  const t813 = t812#[0..=7]
+  const t814 = t813#[4..=7]
+  const t815 = t814#sext[0..=3]
+  const taps_32_narrow_operand_product_x_msb__w1 = t815
+  const t816 = refs__w33#[248..=255]
+  const t817 = t816#sext[0..=7]
+  const t818 = t817#[0..=7]
+  const t819 = t818#[4..=7]
+  const t820 = t819#sext[0..=3]
+  const taps_32_narrow_operand_product_ref_msb__w1 = t820
+  const t821 = taps_32_narrow_operand_product_x_msb__w1 * taps_32_narrow_operand_product_ref_msb__w1
+  const taps_32_narrow_operand_product_full_product__w1 = t821
+  const t822 = taps_32_narrow_operand_product_full_product__w1#[0..=7]
+  const t823 = t822#[4..=7]
+  const t824 = t823#sext[0..=3]
+  const taps_32_narrow_operand_product_product__w1 = t824
+  const t825 = taps_32_narrow_operand_product_product__w1#[0..=3]
+  const t826 = t825#sext[0..=3]
+  const t827 = t826#[0..=9]
+  mut level__w32 = level__w31
+  level__w32#[4160..=4169] = t827
+  const t828 = xs__w33#[248..=255]
+  const t829 = t828#sext[0..=7]
+  const t830 = refs__w33#[248..=255]
+  const t831 = t830#sext[0..=7]
+  mut taps_33_t = tap::[name=taps_33_t](clock = clock, reset = reset, x_in = t829, ref_in = t831, ref_load = ref_load)
+  mut xs__w34 = xs__w33
+  xs__w34#[240..=247] = taps_33_t.x_out#[0..=7]
+  mut refs__w34 = refs__w33
+  refs__w34#[240..=247] = taps_33_t.ref_out#[0..=7]
+  const t836 = xs__w34#[240..=247]
+  const t837 = t836#sext[0..=7]
+  const t838 = t837#[0..=7]
+  const t839 = t838#[4..=7]
+  const t840 = t839#sext[0..=3]
+  const taps_33_narrow_operand_product_x_msb__w1 = t840
+  const t841 = refs__w34#[240..=247]
+  const t842 = t841#sext[0..=7]
+  const t843 = t842#[0..=7]
+  const t844 = t843#[4..=7]
+  const t845 = t844#sext[0..=3]
+  const taps_33_narrow_operand_product_ref_msb__w1 = t845
+  const t846 = taps_33_narrow_operand_product_x_msb__w1 * taps_33_narrow_operand_product_ref_msb__w1
+  const taps_33_narrow_operand_product_full_product__w1 = t846
+  const t847 = taps_33_narrow_operand_product_full_product__w1#[0..=7]
+  const t848 = t847#[4..=7]
+  const t849 = t848#sext[0..=3]
+  const taps_33_narrow_operand_product_product__w1 = t849
+  const t850 = taps_33_narrow_operand_product_product__w1#[0..=3]
+  const t851 = t850#sext[0..=3]
+  const t852 = t851#[0..=9]
+  mut level__w33 = level__w32
+  level__w33#[4170..=4179] = t852
+  const t853 = xs__w34#[240..=247]
+  const t854 = t853#sext[0..=7]
+  const t855 = refs__w34#[240..=247]
+  const t856 = t855#sext[0..=7]
+  mut taps_34_t = tap::[name=taps_34_t](clock = clock, reset = reset, x_in = t854, ref_in = t856, ref_load = ref_load)
+  mut xs__w35 = xs__w34
+  xs__w35#[232..=239] = taps_34_t.x_out#[0..=7]
+  mut refs__w35 = refs__w34
+  refs__w35#[232..=239] = taps_34_t.ref_out#[0..=7]
+  const t861 = xs__w35#[232..=239]
+  const t862 = t861#sext[0..=7]
+  const t863 = t862#[0..=7]
+  const t864 = t863#[4..=7]
+  const t865 = t864#sext[0..=3]
+  const taps_34_narrow_operand_product_x_msb__w1 = t865
+  const t866 = refs__w35#[232..=239]
+  const t867 = t866#sext[0..=7]
+  const t868 = t867#[0..=7]
+  const t869 = t868#[4..=7]
+  const t870 = t869#sext[0..=3]
+  const taps_34_narrow_operand_product_ref_msb__w1 = t870
+  const t871 = taps_34_narrow_operand_product_x_msb__w1 * taps_34_narrow_operand_product_ref_msb__w1
+  const taps_34_narrow_operand_product_full_product__w1 = t871
+  const t872 = taps_34_narrow_operand_product_full_product__w1#[0..=7]
+  const t873 = t872#[4..=7]
+  const t874 = t873#sext[0..=3]
+  const taps_34_narrow_operand_product_product__w1 = t874
+  const t875 = taps_34_narrow_operand_product_product__w1#[0..=3]
+  const t876 = t875#sext[0..=3]
+  const t877 = t876#[0..=9]
+  mut level__w34 = level__w33
+  level__w34#[4180..=4189] = t877
+  const t878 = xs__w35#[232..=239]
+  const t879 = t878#sext[0..=7]
+  const t880 = refs__w35#[232..=239]
+  const t881 = t880#sext[0..=7]
+  mut taps_35_t = tap::[name=taps_35_t](clock = clock, reset = reset, x_in = t879, ref_in = t881, ref_load = ref_load)
+  mut xs__w36 = xs__w35
+  xs__w36#[224..=231] = taps_35_t.x_out#[0..=7]
+  mut refs__w36 = refs__w35
+  refs__w36#[224..=231] = taps_35_t.ref_out#[0..=7]
+  const t886 = xs__w36#[224..=231]
+  const t887 = t886#sext[0..=7]
+  const t888 = t887#[0..=7]
+  const t889 = t888#[4..=7]
+  const t890 = t889#sext[0..=3]
+  const taps_35_narrow_operand_product_x_msb__w1 = t890
+  const t891 = refs__w36#[224..=231]
+  const t892 = t891#sext[0..=7]
+  const t893 = t892#[0..=7]
+  const t894 = t893#[4..=7]
+  const t895 = t894#sext[0..=3]
+  const taps_35_narrow_operand_product_ref_msb__w1 = t895
+  const t896 = taps_35_narrow_operand_product_x_msb__w1 * taps_35_narrow_operand_product_ref_msb__w1
+  const taps_35_narrow_operand_product_full_product__w1 = t896
+  const t897 = taps_35_narrow_operand_product_full_product__w1#[0..=7]
+  const t898 = t897#[4..=7]
+  const t899 = t898#sext[0..=3]
+  const taps_35_narrow_operand_product_product__w1 = t899
+  const t900 = taps_35_narrow_operand_product_product__w1#[0..=3]
+  const t901 = t900#sext[0..=3]
+  const t902 = t901#[0..=9]
+  mut level__w35 = level__w34
+  level__w35#[4190..=4199] = t902
+  const t903 = xs__w36#[224..=231]
+  const t904 = t903#sext[0..=7]
+  const t905 = refs__w36#[224..=231]
+  const t906 = t905#sext[0..=7]
+  mut taps_36_t = tap::[name=taps_36_t](clock = clock, reset = reset, x_in = t904, ref_in = t906, ref_load = ref_load)
+  mut xs__w37 = xs__w36
+  xs__w37#[216..=223] = taps_36_t.x_out#[0..=7]
+  mut refs__w37 = refs__w36
+  refs__w37#[216..=223] = taps_36_t.ref_out#[0..=7]
+  const t911 = xs__w37#[216..=223]
+  const t912 = t911#sext[0..=7]
+  const t913 = t912#[0..=7]
+  const t914 = t913#[4..=7]
+  const t915 = t914#sext[0..=3]
+  const taps_36_narrow_operand_product_x_msb__w1 = t915
+  const t916 = refs__w37#[216..=223]
+  const t917 = t916#sext[0..=7]
+  const t918 = t917#[0..=7]
+  const t919 = t918#[4..=7]
+  const t920 = t919#sext[0..=3]
+  const taps_36_narrow_operand_product_ref_msb__w1 = t920
+  const t921 = taps_36_narrow_operand_product_x_msb__w1 * taps_36_narrow_operand_product_ref_msb__w1
+  const taps_36_narrow_operand_product_full_product__w1 = t921
+  const t922 = taps_36_narrow_operand_product_full_product__w1#[0..=7]
+  const t923 = t922#[4..=7]
+  const t924 = t923#sext[0..=3]
+  const taps_36_narrow_operand_product_product__w1 = t924
+  const t925 = taps_36_narrow_operand_product_product__w1#[0..=3]
+  const t926 = t925#sext[0..=3]
+  const t927 = t926#[0..=9]
+  mut level__w36 = level__w35
+  level__w36#[4200..=4209] = t927
+  const t928 = xs__w37#[216..=223]
+  const t929 = t928#sext[0..=7]
+  const t930 = refs__w37#[216..=223]
+  const t931 = t930#sext[0..=7]
+  mut taps_37_t = tap::[name=taps_37_t](clock = clock, reset = reset, x_in = t929, ref_in = t931, ref_load = ref_load)
+  mut xs__w38 = xs__w37
+  xs__w38#[208..=215] = taps_37_t.x_out#[0..=7]
+  mut refs__w38 = refs__w37
+  refs__w38#[208..=215] = taps_37_t.ref_out#[0..=7]
+  const t936 = xs__w38#[208..=215]
+  const t937 = t936#sext[0..=7]
+  const t938 = t937#[0..=7]
+  const t939 = t938#[4..=7]
+  const t940 = t939#sext[0..=3]
+  const taps_37_narrow_operand_product_x_msb__w1 = t940
+  const t941 = refs__w38#[208..=215]
+  const t942 = t941#sext[0..=7]
+  const t943 = t942#[0..=7]
+  const t944 = t943#[4..=7]
+  const t945 = t944#sext[0..=3]
+  const taps_37_narrow_operand_product_ref_msb__w1 = t945
+  const t946 = taps_37_narrow_operand_product_x_msb__w1 * taps_37_narrow_operand_product_ref_msb__w1
+  const taps_37_narrow_operand_product_full_product__w1 = t946
+  const t947 = taps_37_narrow_operand_product_full_product__w1#[0..=7]
+  const t948 = t947#[4..=7]
+  const t949 = t948#sext[0..=3]
+  const taps_37_narrow_operand_product_product__w1 = t949
+  const t950 = taps_37_narrow_operand_product_product__w1#[0..=3]
+  const t951 = t950#sext[0..=3]
+  const t952 = t951#[0..=9]
+  mut level__w37 = level__w36
+  level__w37#[4210..=4219] = t952
+  const t953 = xs__w38#[208..=215]
+  const t954 = t953#sext[0..=7]
+  const t955 = refs__w38#[208..=215]
+  const t956 = t955#sext[0..=7]
+  mut taps_38_t = tap::[name=taps_38_t](clock = clock, reset = reset, x_in = t954, ref_in = t956, ref_load = ref_load)
+  mut xs__w39 = xs__w38
+  xs__w39#[200..=207] = taps_38_t.x_out#[0..=7]
+  mut refs__w39 = refs__w38
+  refs__w39#[200..=207] = taps_38_t.ref_out#[0..=7]
+  const t961 = xs__w39#[200..=207]
+  const t962 = t961#sext[0..=7]
+  const t963 = t962#[0..=7]
+  const t964 = t963#[4..=7]
+  const t965 = t964#sext[0..=3]
+  const taps_38_narrow_operand_product_x_msb__w1 = t965
+  const t966 = refs__w39#[200..=207]
+  const t967 = t966#sext[0..=7]
+  const t968 = t967#[0..=7]
+  const t969 = t968#[4..=7]
+  const t970 = t969#sext[0..=3]
+  const taps_38_narrow_operand_product_ref_msb__w1 = t970
+  const t971 = taps_38_narrow_operand_product_x_msb__w1 * taps_38_narrow_operand_product_ref_msb__w1
+  const taps_38_narrow_operand_product_full_product__w1 = t971
+  const t972 = taps_38_narrow_operand_product_full_product__w1#[0..=7]
+  const t973 = t972#[4..=7]
+  const t974 = t973#sext[0..=3]
+  const taps_38_narrow_operand_product_product__w1 = t974
+  const t975 = taps_38_narrow_operand_product_product__w1#[0..=3]
+  const t976 = t975#sext[0..=3]
+  const t977 = t976#[0..=9]
+  mut level__w38 = level__w37
+  level__w38#[4220..=4229] = t977
+  const t978 = xs__w39#[200..=207]
+  const t979 = t978#sext[0..=7]
+  const t980 = refs__w39#[200..=207]
+  const t981 = t980#sext[0..=7]
+  mut taps_39_t = tap::[name=taps_39_t](clock = clock, reset = reset, x_in = t979, ref_in = t981, ref_load = ref_load)
+  mut xs__w40 = xs__w39
+  xs__w40#[192..=199] = taps_39_t.x_out#[0..=7]
+  mut refs__w40 = refs__w39
+  refs__w40#[192..=199] = taps_39_t.ref_out#[0..=7]
+  const t986 = xs__w40#[192..=199]
+  const t987 = t986#sext[0..=7]
+  const t988 = t987#[0..=7]
+  const t989 = t988#[4..=7]
+  const t990 = t989#sext[0..=3]
+  const taps_39_narrow_operand_product_x_msb__w1 = t990
+  const t991 = refs__w40#[192..=199]
+  const t992 = t991#sext[0..=7]
+  const t993 = t992#[0..=7]
+  const t994 = t993#[4..=7]
+  const t995 = t994#sext[0..=3]
+  const taps_39_narrow_operand_product_ref_msb__w1 = t995
+  const t996 = taps_39_narrow_operand_product_x_msb__w1 * taps_39_narrow_operand_product_ref_msb__w1
+  const taps_39_narrow_operand_product_full_product__w1 = t996
+  const t997 = taps_39_narrow_operand_product_full_product__w1#[0..=7]
+  const t998 = t997#[4..=7]
+  const t999 = t998#sext[0..=3]
+  const taps_39_narrow_operand_product_product__w1 = t999
+  const t1000 = taps_39_narrow_operand_product_product__w1#[0..=3]
+  const t1001 = t1000#sext[0..=3]
+  const t1002 = t1001#[0..=9]
+  mut level__w39 = level__w38
+  level__w39#[4230..=4239] = t1002
+  const t1003 = xs__w40#[192..=199]
+  const t1004 = t1003#sext[0..=7]
+  const t1005 = refs__w40#[192..=199]
+  const t1006 = t1005#sext[0..=7]
+  mut taps_40_t = tap::[name=taps_40_t](clock = clock, reset = reset, x_in = t1004, ref_in = t1006, ref_load = ref_load)
+  mut xs__w41 = xs__w40
+  xs__w41#[184..=191] = taps_40_t.x_out#[0..=7]
+  mut refs__w41 = refs__w40
+  refs__w41#[184..=191] = taps_40_t.ref_out#[0..=7]
+  const t1011 = xs__w41#[184..=191]
+  const t1012 = t1011#sext[0..=7]
+  const t1013 = t1012#[0..=7]
+  const t1014 = t1013#[4..=7]
+  const t1015 = t1014#sext[0..=3]
+  const taps_40_narrow_operand_product_x_msb__w1 = t1015
+  const t1016 = refs__w41#[184..=191]
+  const t1017 = t1016#sext[0..=7]
+  const t1018 = t1017#[0..=7]
+  const t1019 = t1018#[4..=7]
+  const t1020 = t1019#sext[0..=3]
+  const taps_40_narrow_operand_product_ref_msb__w1 = t1020
+  const t1021 = taps_40_narrow_operand_product_x_msb__w1 * taps_40_narrow_operand_product_ref_msb__w1
+  const taps_40_narrow_operand_product_full_product__w1 = t1021
+  const t1022 = taps_40_narrow_operand_product_full_product__w1#[0..=7]
+  const t1023 = t1022#[4..=7]
+  const t1024 = t1023#sext[0..=3]
+  const taps_40_narrow_operand_product_product__w1 = t1024
+  const t1025 = taps_40_narrow_operand_product_product__w1#[0..=3]
+  const t1026 = t1025#sext[0..=3]
+  const t1027 = t1026#[0..=9]
+  mut level__w40 = level__w39
+  level__w40#[4240..=4249] = t1027
+  const t1028 = xs__w41#[184..=191]
+  const t1029 = t1028#sext[0..=7]
+  const t1030 = refs__w41#[184..=191]
+  const t1031 = t1030#sext[0..=7]
+  mut taps_41_t = tap::[name=taps_41_t](clock = clock, reset = reset, x_in = t1029, ref_in = t1031, ref_load = ref_load)
+  mut xs__w42 = xs__w41
+  xs__w42#[176..=183] = taps_41_t.x_out#[0..=7]
+  mut refs__w42 = refs__w41
+  refs__w42#[176..=183] = taps_41_t.ref_out#[0..=7]
+  const t1036 = xs__w42#[176..=183]
+  const t1037 = t1036#sext[0..=7]
+  const t1038 = t1037#[0..=7]
+  const t1039 = t1038#[4..=7]
+  const t1040 = t1039#sext[0..=3]
+  const taps_41_narrow_operand_product_x_msb__w1 = t1040
+  const t1041 = refs__w42#[176..=183]
+  const t1042 = t1041#sext[0..=7]
+  const t1043 = t1042#[0..=7]
+  const t1044 = t1043#[4..=7]
+  const t1045 = t1044#sext[0..=3]
+  const taps_41_narrow_operand_product_ref_msb__w1 = t1045
+  const t1046 = taps_41_narrow_operand_product_x_msb__w1 * taps_41_narrow_operand_product_ref_msb__w1
+  const taps_41_narrow_operand_product_full_product__w1 = t1046
+  const t1047 = taps_41_narrow_operand_product_full_product__w1#[0..=7]
+  const t1048 = t1047#[4..=7]
+  const t1049 = t1048#sext[0..=3]
+  const taps_41_narrow_operand_product_product__w1 = t1049
+  const t1050 = taps_41_narrow_operand_product_product__w1#[0..=3]
+  const t1051 = t1050#sext[0..=3]
+  const t1052 = t1051#[0..=9]
+  mut level__w41 = level__w40
+  level__w41#[4250..=4259] = t1052
+  const t1053 = xs__w42#[176..=183]
+  const t1054 = t1053#sext[0..=7]
+  const t1055 = refs__w42#[176..=183]
+  const t1056 = t1055#sext[0..=7]
+  mut taps_42_t = tap::[name=taps_42_t](clock = clock, reset = reset, x_in = t1054, ref_in = t1056, ref_load = ref_load)
+  mut xs__w43 = xs__w42
+  xs__w43#[168..=175] = taps_42_t.x_out#[0..=7]
+  mut refs__w43 = refs__w42
+  refs__w43#[168..=175] = taps_42_t.ref_out#[0..=7]
+  const t1061 = xs__w43#[168..=175]
+  const t1062 = t1061#sext[0..=7]
+  const t1063 = t1062#[0..=7]
+  const t1064 = t1063#[4..=7]
+  const t1065 = t1064#sext[0..=3]
+  const taps_42_narrow_operand_product_x_msb__w1 = t1065
+  const t1066 = refs__w43#[168..=175]
+  const t1067 = t1066#sext[0..=7]
+  const t1068 = t1067#[0..=7]
+  const t1069 = t1068#[4..=7]
+  const t1070 = t1069#sext[0..=3]
+  const taps_42_narrow_operand_product_ref_msb__w1 = t1070
+  const t1071 = taps_42_narrow_operand_product_x_msb__w1 * taps_42_narrow_operand_product_ref_msb__w1
+  const taps_42_narrow_operand_product_full_product__w1 = t1071
+  const t1072 = taps_42_narrow_operand_product_full_product__w1#[0..=7]
+  const t1073 = t1072#[4..=7]
+  const t1074 = t1073#sext[0..=3]
+  const taps_42_narrow_operand_product_product__w1 = t1074
+  const t1075 = taps_42_narrow_operand_product_product__w1#[0..=3]
+  const t1076 = t1075#sext[0..=3]
+  const t1077 = t1076#[0..=9]
+  mut level__w42 = level__w41
+  level__w42#[4260..=4269] = t1077
+  const t1078 = xs__w43#[168..=175]
+  const t1079 = t1078#sext[0..=7]
+  const t1080 = refs__w43#[168..=175]
+  const t1081 = t1080#sext[0..=7]
+  mut taps_43_t = tap::[name=taps_43_t](clock = clock, reset = reset, x_in = t1079, ref_in = t1081, ref_load = ref_load)
+  mut xs__w44 = xs__w43
+  xs__w44#[160..=167] = taps_43_t.x_out#[0..=7]
+  mut refs__w44 = refs__w43
+  refs__w44#[160..=167] = taps_43_t.ref_out#[0..=7]
+  const t1086 = xs__w44#[160..=167]
+  const t1087 = t1086#sext[0..=7]
+  const t1088 = t1087#[0..=7]
+  const t1089 = t1088#[4..=7]
+  const t1090 = t1089#sext[0..=3]
+  const taps_43_narrow_operand_product_x_msb__w1 = t1090
+  const t1091 = refs__w44#[160..=167]
+  const t1092 = t1091#sext[0..=7]
+  const t1093 = t1092#[0..=7]
+  const t1094 = t1093#[4..=7]
+  const t1095 = t1094#sext[0..=3]
+  const taps_43_narrow_operand_product_ref_msb__w1 = t1095
+  const t1096 = taps_43_narrow_operand_product_x_msb__w1 * taps_43_narrow_operand_product_ref_msb__w1
+  const taps_43_narrow_operand_product_full_product__w1 = t1096
+  const t1097 = taps_43_narrow_operand_product_full_product__w1#[0..=7]
+  const t1098 = t1097#[4..=7]
+  const t1099 = t1098#sext[0..=3]
+  const taps_43_narrow_operand_product_product__w1 = t1099
+  const t1100 = taps_43_narrow_operand_product_product__w1#[0..=3]
+  const t1101 = t1100#sext[0..=3]
+  const t1102 = t1101#[0..=9]
+  mut level__w43 = level__w42
+  level__w43#[4270..=4279] = t1102
+  const t1103 = xs__w44#[160..=167]
+  const t1104 = t1103#sext[0..=7]
+  const t1105 = refs__w44#[160..=167]
+  const t1106 = t1105#sext[0..=7]
+  mut taps_44_t = tap::[name=taps_44_t](clock = clock, reset = reset, x_in = t1104, ref_in = t1106, ref_load = ref_load)
+  mut xs__w45 = xs__w44
+  xs__w45#[152..=159] = taps_44_t.x_out#[0..=7]
+  mut refs__w45 = refs__w44
+  refs__w45#[152..=159] = taps_44_t.ref_out#[0..=7]
+  const t1111 = xs__w45#[152..=159]
+  const t1112 = t1111#sext[0..=7]
+  const t1113 = t1112#[0..=7]
+  const t1114 = t1113#[4..=7]
+  const t1115 = t1114#sext[0..=3]
+  const taps_44_narrow_operand_product_x_msb__w1 = t1115
+  const t1116 = refs__w45#[152..=159]
+  const t1117 = t1116#sext[0..=7]
+  const t1118 = t1117#[0..=7]
+  const t1119 = t1118#[4..=7]
+  const t1120 = t1119#sext[0..=3]
+  const taps_44_narrow_operand_product_ref_msb__w1 = t1120
+  const t1121 = taps_44_narrow_operand_product_x_msb__w1 * taps_44_narrow_operand_product_ref_msb__w1
+  const taps_44_narrow_operand_product_full_product__w1 = t1121
+  const t1122 = taps_44_narrow_operand_product_full_product__w1#[0..=7]
+  const t1123 = t1122#[4..=7]
+  const t1124 = t1123#sext[0..=3]
+  const taps_44_narrow_operand_product_product__w1 = t1124
+  const t1125 = taps_44_narrow_operand_product_product__w1#[0..=3]
+  const t1126 = t1125#sext[0..=3]
+  const t1127 = t1126#[0..=9]
+  mut level__w44 = level__w43
+  level__w44#[4280..=4289] = t1127
+  const t1128 = xs__w45#[152..=159]
+  const t1129 = t1128#sext[0..=7]
+  const t1130 = refs__w45#[152..=159]
+  const t1131 = t1130#sext[0..=7]
+  mut taps_45_t = tap::[name=taps_45_t](clock = clock, reset = reset, x_in = t1129, ref_in = t1131, ref_load = ref_load)
+  mut xs__w46 = xs__w45
+  xs__w46#[144..=151] = taps_45_t.x_out#[0..=7]
+  mut refs__w46 = refs__w45
+  refs__w46#[144..=151] = taps_45_t.ref_out#[0..=7]
+  const t1136 = xs__w46#[144..=151]
+  const t1137 = t1136#sext[0..=7]
+  const t1138 = t1137#[0..=7]
+  const t1139 = t1138#[4..=7]
+  const t1140 = t1139#sext[0..=3]
+  const taps_45_narrow_operand_product_x_msb__w1 = t1140
+  const t1141 = refs__w46#[144..=151]
+  const t1142 = t1141#sext[0..=7]
+  const t1143 = t1142#[0..=7]
+  const t1144 = t1143#[4..=7]
+  const t1145 = t1144#sext[0..=3]
+  const taps_45_narrow_operand_product_ref_msb__w1 = t1145
+  const t1146 = taps_45_narrow_operand_product_x_msb__w1 * taps_45_narrow_operand_product_ref_msb__w1
+  const taps_45_narrow_operand_product_full_product__w1 = t1146
+  const t1147 = taps_45_narrow_operand_product_full_product__w1#[0..=7]
+  const t1148 = t1147#[4..=7]
+  const t1149 = t1148#sext[0..=3]
+  const taps_45_narrow_operand_product_product__w1 = t1149
+  const t1150 = taps_45_narrow_operand_product_product__w1#[0..=3]
+  const t1151 = t1150#sext[0..=3]
+  const t1152 = t1151#[0..=9]
+  mut level__w45 = level__w44
+  level__w45#[4290..=4299] = t1152
+  const t1153 = xs__w46#[144..=151]
+  const t1154 = t1153#sext[0..=7]
+  const t1155 = refs__w46#[144..=151]
+  const t1156 = t1155#sext[0..=7]
+  mut taps_46_t = tap::[name=taps_46_t](clock = clock, reset = reset, x_in = t1154, ref_in = t1156, ref_load = ref_load)
+  mut xs__w47 = xs__w46
+  xs__w47#[136..=143] = taps_46_t.x_out#[0..=7]
+  mut refs__w47 = refs__w46
+  refs__w47#[136..=143] = taps_46_t.ref_out#[0..=7]
+  const t1161 = xs__w47#[136..=143]
+  const t1162 = t1161#sext[0..=7]
+  const t1163 = t1162#[0..=7]
+  const t1164 = t1163#[4..=7]
+  const t1165 = t1164#sext[0..=3]
+  const taps_46_narrow_operand_product_x_msb__w1 = t1165
+  const t1166 = refs__w47#[136..=143]
+  const t1167 = t1166#sext[0..=7]
+  const t1168 = t1167#[0..=7]
+  const t1169 = t1168#[4..=7]
+  const t1170 = t1169#sext[0..=3]
+  const taps_46_narrow_operand_product_ref_msb__w1 = t1170
+  const t1171 = taps_46_narrow_operand_product_x_msb__w1 * taps_46_narrow_operand_product_ref_msb__w1
+  const taps_46_narrow_operand_product_full_product__w1 = t1171
+  const t1172 = taps_46_narrow_operand_product_full_product__w1#[0..=7]
+  const t1173 = t1172#[4..=7]
+  const t1174 = t1173#sext[0..=3]
+  const taps_46_narrow_operand_product_product__w1 = t1174
+  const t1175 = taps_46_narrow_operand_product_product__w1#[0..=3]
+  const t1176 = t1175#sext[0..=3]
+  const t1177 = t1176#[0..=9]
+  mut level__w46 = level__w45
+  level__w46#[4300..=4309] = t1177
+  const t1178 = xs__w47#[136..=143]
+  const t1179 = t1178#sext[0..=7]
+  const t1180 = refs__w47#[136..=143]
+  const t1181 = t1180#sext[0..=7]
+  mut taps_47_t = tap::[name=taps_47_t](clock = clock, reset = reset, x_in = t1179, ref_in = t1181, ref_load = ref_load)
+  mut xs__w48 = xs__w47
+  xs__w48#[128..=135] = taps_47_t.x_out#[0..=7]
+  mut refs__w48 = refs__w47
+  refs__w48#[128..=135] = taps_47_t.ref_out#[0..=7]
+  const t1186 = xs__w48#[128..=135]
+  const t1187 = t1186#sext[0..=7]
+  const t1188 = t1187#[0..=7]
+  const t1189 = t1188#[4..=7]
+  const t1190 = t1189#sext[0..=3]
+  const taps_47_narrow_operand_product_x_msb__w1 = t1190
+  const t1191 = refs__w48#[128..=135]
+  const t1192 = t1191#sext[0..=7]
+  const t1193 = t1192#[0..=7]
+  const t1194 = t1193#[4..=7]
+  const t1195 = t1194#sext[0..=3]
+  const taps_47_narrow_operand_product_ref_msb__w1 = t1195
+  const t1196 = taps_47_narrow_operand_product_x_msb__w1 * taps_47_narrow_operand_product_ref_msb__w1
+  const taps_47_narrow_operand_product_full_product__w1 = t1196
+  const t1197 = taps_47_narrow_operand_product_full_product__w1#[0..=7]
+  const t1198 = t1197#[4..=7]
+  const t1199 = t1198#sext[0..=3]
+  const taps_47_narrow_operand_product_product__w1 = t1199
+  const t1200 = taps_47_narrow_operand_product_product__w1#[0..=3]
+  const t1201 = t1200#sext[0..=3]
+  const t1202 = t1201#[0..=9]
+  mut level__w47 = level__w46
+  level__w47#[4310..=4319] = t1202
+  const t1203 = xs__w48#[128..=135]
+  const t1204 = t1203#sext[0..=7]
+  const t1205 = refs__w48#[128..=135]
+  const t1206 = t1205#sext[0..=7]
+  mut taps_48_t = tap::[name=taps_48_t](clock = clock, reset = reset, x_in = t1204, ref_in = t1206, ref_load = ref_load)
+  mut xs__w49 = xs__w48
+  xs__w49#[120..=127] = taps_48_t.x_out#[0..=7]
+  mut refs__w49 = refs__w48
+  refs__w49#[120..=127] = taps_48_t.ref_out#[0..=7]
+  const t1211 = xs__w49#[120..=127]
+  const t1212 = t1211#sext[0..=7]
+  const t1213 = t1212#[0..=7]
+  const t1214 = t1213#[4..=7]
+  const t1215 = t1214#sext[0..=3]
+  const taps_48_narrow_operand_product_x_msb__w1 = t1215
+  const t1216 = refs__w49#[120..=127]
+  const t1217 = t1216#sext[0..=7]
+  const t1218 = t1217#[0..=7]
+  const t1219 = t1218#[4..=7]
+  const t1220 = t1219#sext[0..=3]
+  const taps_48_narrow_operand_product_ref_msb__w1 = t1220
+  const t1221 = taps_48_narrow_operand_product_x_msb__w1 * taps_48_narrow_operand_product_ref_msb__w1
+  const taps_48_narrow_operand_product_full_product__w1 = t1221
+  const t1222 = taps_48_narrow_operand_product_full_product__w1#[0..=7]
+  const t1223 = t1222#[4..=7]
+  const t1224 = t1223#sext[0..=3]
+  const taps_48_narrow_operand_product_product__w1 = t1224
+  const t1225 = taps_48_narrow_operand_product_product__w1#[0..=3]
+  const t1226 = t1225#sext[0..=3]
+  const t1227 = t1226#[0..=9]
+  mut level__w48 = level__w47
+  level__w48#[4320..=4329] = t1227
+  const t1228 = xs__w49#[120..=127]
+  const t1229 = t1228#sext[0..=7]
+  const t1230 = refs__w49#[120..=127]
+  const t1231 = t1230#sext[0..=7]
+  mut taps_49_t = tap::[name=taps_49_t](clock = clock, reset = reset, x_in = t1229, ref_in = t1231, ref_load = ref_load)
+  mut xs__w50 = xs__w49
+  xs__w50#[112..=119] = taps_49_t.x_out#[0..=7]
+  mut refs__w50 = refs__w49
+  refs__w50#[112..=119] = taps_49_t.ref_out#[0..=7]
+  const t1236 = xs__w50#[112..=119]
+  const t1237 = t1236#sext[0..=7]
+  const t1238 = t1237#[0..=7]
+  const t1239 = t1238#[4..=7]
+  const t1240 = t1239#sext[0..=3]
+  const taps_49_narrow_operand_product_x_msb__w1 = t1240
+  const t1241 = refs__w50#[112..=119]
+  const t1242 = t1241#sext[0..=7]
+  const t1243 = t1242#[0..=7]
+  const t1244 = t1243#[4..=7]
+  const t1245 = t1244#sext[0..=3]
+  const taps_49_narrow_operand_product_ref_msb__w1 = t1245
+  const t1246 = taps_49_narrow_operand_product_x_msb__w1 * taps_49_narrow_operand_product_ref_msb__w1
+  const taps_49_narrow_operand_product_full_product__w1 = t1246
+  const t1247 = taps_49_narrow_operand_product_full_product__w1#[0..=7]
+  const t1248 = t1247#[4..=7]
+  const t1249 = t1248#sext[0..=3]
+  const taps_49_narrow_operand_product_product__w1 = t1249
+  const t1250 = taps_49_narrow_operand_product_product__w1#[0..=3]
+  const t1251 = t1250#sext[0..=3]
+  const t1252 = t1251#[0..=9]
+  mut level__w49 = level__w48
+  level__w49#[4330..=4339] = t1252
+  const t1253 = xs__w50#[112..=119]
+  const t1254 = t1253#sext[0..=7]
+  const t1255 = refs__w50#[112..=119]
+  const t1256 = t1255#sext[0..=7]
+  mut taps_50_t = tap::[name=taps_50_t](clock = clock, reset = reset, x_in = t1254, ref_in = t1256, ref_load = ref_load)
+  mut xs__w51 = xs__w50
+  xs__w51#[104..=111] = taps_50_t.x_out#[0..=7]
+  mut refs__w51 = refs__w50
+  refs__w51#[104..=111] = taps_50_t.ref_out#[0..=7]
+  const t1261 = xs__w51#[104..=111]
+  const t1262 = t1261#sext[0..=7]
+  const t1263 = t1262#[0..=7]
+  const t1264 = t1263#[4..=7]
+  const t1265 = t1264#sext[0..=3]
+  const taps_50_narrow_operand_product_x_msb__w1 = t1265
+  const t1266 = refs__w51#[104..=111]
+  const t1267 = t1266#sext[0..=7]
+  const t1268 = t1267#[0..=7]
+  const t1269 = t1268#[4..=7]
+  const t1270 = t1269#sext[0..=3]
+  const taps_50_narrow_operand_product_ref_msb__w1 = t1270
+  const t1271 = taps_50_narrow_operand_product_x_msb__w1 * taps_50_narrow_operand_product_ref_msb__w1
+  const taps_50_narrow_operand_product_full_product__w1 = t1271
+  const t1272 = taps_50_narrow_operand_product_full_product__w1#[0..=7]
+  const t1273 = t1272#[4..=7]
+  const t1274 = t1273#sext[0..=3]
+  const taps_50_narrow_operand_product_product__w1 = t1274
+  const t1275 = taps_50_narrow_operand_product_product__w1#[0..=3]
+  const t1276 = t1275#sext[0..=3]
+  const t1277 = t1276#[0..=9]
+  mut level__w50 = level__w49
+  level__w50#[4340..=4349] = t1277
+  const t1278 = xs__w51#[104..=111]
+  const t1279 = t1278#sext[0..=7]
+  const t1280 = refs__w51#[104..=111]
+  const t1281 = t1280#sext[0..=7]
+  mut taps_51_t = tap::[name=taps_51_t](clock = clock, reset = reset, x_in = t1279, ref_in = t1281, ref_load = ref_load)
+  mut xs__w52 = xs__w51
+  xs__w52#[96..=103] = taps_51_t.x_out#[0..=7]
+  mut refs__w52 = refs__w51
+  refs__w52#[96..=103] = taps_51_t.ref_out#[0..=7]
+  const t1286 = xs__w52#[96..=103]
+  const t1287 = t1286#sext[0..=7]
+  const t1288 = t1287#[0..=7]
+  const t1289 = t1288#[4..=7]
+  const t1290 = t1289#sext[0..=3]
+  const taps_51_narrow_operand_product_x_msb__w1 = t1290
+  const t1291 = refs__w52#[96..=103]
+  const t1292 = t1291#sext[0..=7]
+  const t1293 = t1292#[0..=7]
+  const t1294 = t1293#[4..=7]
+  const t1295 = t1294#sext[0..=3]
+  const taps_51_narrow_operand_product_ref_msb__w1 = t1295
+  const t1296 = taps_51_narrow_operand_product_x_msb__w1 * taps_51_narrow_operand_product_ref_msb__w1
+  const taps_51_narrow_operand_product_full_product__w1 = t1296
+  const t1297 = taps_51_narrow_operand_product_full_product__w1#[0..=7]
+  const t1298 = t1297#[4..=7]
+  const t1299 = t1298#sext[0..=3]
+  const taps_51_narrow_operand_product_product__w1 = t1299
+  const t1300 = taps_51_narrow_operand_product_product__w1#[0..=3]
+  const t1301 = t1300#sext[0..=3]
+  const t1302 = t1301#[0..=9]
+  mut level__w51 = level__w50
+  level__w51#[4350..=4359] = t1302
+  const t1303 = xs__w52#[96..=103]
+  const t1304 = t1303#sext[0..=7]
+  const t1305 = refs__w52#[96..=103]
+  const t1306 = t1305#sext[0..=7]
+  mut taps_52_t = tap::[name=taps_52_t](clock = clock, reset = reset, x_in = t1304, ref_in = t1306, ref_load = ref_load)
+  mut xs__w53 = xs__w52
+  xs__w53#[88..=95] = taps_52_t.x_out#[0..=7]
+  mut refs__w53 = refs__w52
+  refs__w53#[88..=95] = taps_52_t.ref_out#[0..=7]
+  const t1311 = xs__w53#[88..=95]
+  const t1312 = t1311#sext[0..=7]
+  const t1313 = t1312#[0..=7]
+  const t1314 = t1313#[4..=7]
+  const t1315 = t1314#sext[0..=3]
+  const taps_52_narrow_operand_product_x_msb__w1 = t1315
+  const t1316 = refs__w53#[88..=95]
+  const t1317 = t1316#sext[0..=7]
+  const t1318 = t1317#[0..=7]
+  const t1319 = t1318#[4..=7]
+  const t1320 = t1319#sext[0..=3]
+  const taps_52_narrow_operand_product_ref_msb__w1 = t1320
+  const t1321 = taps_52_narrow_operand_product_x_msb__w1 * taps_52_narrow_operand_product_ref_msb__w1
+  const taps_52_narrow_operand_product_full_product__w1 = t1321
+  const t1322 = taps_52_narrow_operand_product_full_product__w1#[0..=7]
+  const t1323 = t1322#[4..=7]
+  const t1324 = t1323#sext[0..=3]
+  const taps_52_narrow_operand_product_product__w1 = t1324
+  const t1325 = taps_52_narrow_operand_product_product__w1#[0..=3]
+  const t1326 = t1325#sext[0..=3]
+  const t1327 = t1326#[0..=9]
+  mut level__w52 = level__w51
+  level__w52#[4360..=4369] = t1327
+  const t1328 = xs__w53#[88..=95]
+  const t1329 = t1328#sext[0..=7]
+  const t1330 = refs__w53#[88..=95]
+  const t1331 = t1330#sext[0..=7]
+  mut taps_53_t = tap::[name=taps_53_t](clock = clock, reset = reset, x_in = t1329, ref_in = t1331, ref_load = ref_load)
+  mut xs__w54 = xs__w53
+  xs__w54#[80..=87] = taps_53_t.x_out#[0..=7]
+  mut refs__w54 = refs__w53
+  refs__w54#[80..=87] = taps_53_t.ref_out#[0..=7]
+  const t1336 = xs__w54#[80..=87]
+  const t1337 = t1336#sext[0..=7]
+  const t1338 = t1337#[0..=7]
+  const t1339 = t1338#[4..=7]
+  const t1340 = t1339#sext[0..=3]
+  const taps_53_narrow_operand_product_x_msb__w1 = t1340
+  const t1341 = refs__w54#[80..=87]
+  const t1342 = t1341#sext[0..=7]
+  const t1343 = t1342#[0..=7]
+  const t1344 = t1343#[4..=7]
+  const t1345 = t1344#sext[0..=3]
+  const taps_53_narrow_operand_product_ref_msb__w1 = t1345
+  const t1346 = taps_53_narrow_operand_product_x_msb__w1 * taps_53_narrow_operand_product_ref_msb__w1
+  const taps_53_narrow_operand_product_full_product__w1 = t1346
+  const t1347 = taps_53_narrow_operand_product_full_product__w1#[0..=7]
+  const t1348 = t1347#[4..=7]
+  const t1349 = t1348#sext[0..=3]
+  const taps_53_narrow_operand_product_product__w1 = t1349
+  const t1350 = taps_53_narrow_operand_product_product__w1#[0..=3]
+  const t1351 = t1350#sext[0..=3]
+  const t1352 = t1351#[0..=9]
+  mut level__w53 = level__w52
+  level__w53#[4370..=4379] = t1352
+  const t1353 = xs__w54#[80..=87]
+  const t1354 = t1353#sext[0..=7]
+  const t1355 = refs__w54#[80..=87]
+  const t1356 = t1355#sext[0..=7]
+  mut taps_54_t = tap::[name=taps_54_t](clock = clock, reset = reset, x_in = t1354, ref_in = t1356, ref_load = ref_load)
+  mut xs__w55 = xs__w54
+  xs__w55#[72..=79] = taps_54_t.x_out#[0..=7]
+  mut refs__w55 = refs__w54
+  refs__w55#[72..=79] = taps_54_t.ref_out#[0..=7]
+  const t1361 = xs__w55#[72..=79]
+  const t1362 = t1361#sext[0..=7]
+  const t1363 = t1362#[0..=7]
+  const t1364 = t1363#[4..=7]
+  const t1365 = t1364#sext[0..=3]
+  const taps_54_narrow_operand_product_x_msb__w1 = t1365
+  const t1366 = refs__w55#[72..=79]
+  const t1367 = t1366#sext[0..=7]
+  const t1368 = t1367#[0..=7]
+  const t1369 = t1368#[4..=7]
+  const t1370 = t1369#sext[0..=3]
+  const taps_54_narrow_operand_product_ref_msb__w1 = t1370
+  const t1371 = taps_54_narrow_operand_product_x_msb__w1 * taps_54_narrow_operand_product_ref_msb__w1
+  const taps_54_narrow_operand_product_full_product__w1 = t1371
+  const t1372 = taps_54_narrow_operand_product_full_product__w1#[0..=7]
+  const t1373 = t1372#[4..=7]
+  const t1374 = t1373#sext[0..=3]
+  const taps_54_narrow_operand_product_product__w1 = t1374
+  const t1375 = taps_54_narrow_operand_product_product__w1#[0..=3]
+  const t1376 = t1375#sext[0..=3]
+  const t1377 = t1376#[0..=9]
+  mut level__w54 = level__w53
+  level__w54#[4380..=4389] = t1377
+  const t1378 = xs__w55#[72..=79]
+  const t1379 = t1378#sext[0..=7]
+  const t1380 = refs__w55#[72..=79]
+  const t1381 = t1380#sext[0..=7]
+  mut taps_55_t = tap::[name=taps_55_t](clock = clock, reset = reset, x_in = t1379, ref_in = t1381, ref_load = ref_load)
+  mut xs__w56 = xs__w55
+  xs__w56#[64..=71] = taps_55_t.x_out#[0..=7]
+  mut refs__w56 = refs__w55
+  refs__w56#[64..=71] = taps_55_t.ref_out#[0..=7]
+  const t1386 = xs__w56#[64..=71]
+  const t1387 = t1386#sext[0..=7]
+  const t1388 = t1387#[0..=7]
+  const t1389 = t1388#[4..=7]
+  const t1390 = t1389#sext[0..=3]
+  const taps_55_narrow_operand_product_x_msb__w1 = t1390
+  const t1391 = refs__w56#[64..=71]
+  const t1392 = t1391#sext[0..=7]
+  const t1393 = t1392#[0..=7]
+  const t1394 = t1393#[4..=7]
+  const t1395 = t1394#sext[0..=3]
+  const taps_55_narrow_operand_product_ref_msb__w1 = t1395
+  const t1396 = taps_55_narrow_operand_product_x_msb__w1 * taps_55_narrow_operand_product_ref_msb__w1
+  const taps_55_narrow_operand_product_full_product__w1 = t1396
+  const t1397 = taps_55_narrow_operand_product_full_product__w1#[0..=7]
+  const t1398 = t1397#[4..=7]
+  const t1399 = t1398#sext[0..=3]
+  const taps_55_narrow_operand_product_product__w1 = t1399
+  const t1400 = taps_55_narrow_operand_product_product__w1#[0..=3]
+  const t1401 = t1400#sext[0..=3]
+  const t1402 = t1401#[0..=9]
+  mut level__w55 = level__w54
+  level__w55#[4390..=4399] = t1402
+  const t1403 = xs__w56#[64..=71]
+  const t1404 = t1403#sext[0..=7]
+  const t1405 = refs__w56#[64..=71]
+  const t1406 = t1405#sext[0..=7]
+  mut taps_56_t = tap::[name=taps_56_t](clock = clock, reset = reset, x_in = t1404, ref_in = t1406, ref_load = ref_load)
+  mut xs__w57 = xs__w56
+  xs__w57#[56..=63] = taps_56_t.x_out#[0..=7]
+  mut refs__w57 = refs__w56
+  refs__w57#[56..=63] = taps_56_t.ref_out#[0..=7]
+  const t1411 = xs__w57#[56..=63]
+  const t1412 = t1411#sext[0..=7]
+  const t1413 = t1412#[0..=7]
+  const t1414 = t1413#[4..=7]
+  const t1415 = t1414#sext[0..=3]
+  const taps_56_narrow_operand_product_x_msb__w1 = t1415
+  const t1416 = refs__w57#[56..=63]
+  const t1417 = t1416#sext[0..=7]
+  const t1418 = t1417#[0..=7]
+  const t1419 = t1418#[4..=7]
+  const t1420 = t1419#sext[0..=3]
+  const taps_56_narrow_operand_product_ref_msb__w1 = t1420
+  const t1421 = taps_56_narrow_operand_product_x_msb__w1 * taps_56_narrow_operand_product_ref_msb__w1
+  const taps_56_narrow_operand_product_full_product__w1 = t1421
+  const t1422 = taps_56_narrow_operand_product_full_product__w1#[0..=7]
+  const t1423 = t1422#[4..=7]
+  const t1424 = t1423#sext[0..=3]
+  const taps_56_narrow_operand_product_product__w1 = t1424
+  const t1425 = taps_56_narrow_operand_product_product__w1#[0..=3]
+  const t1426 = t1425#sext[0..=3]
+  const t1427 = t1426#[0..=9]
+  mut level__w56 = level__w55
+  level__w56#[4400..=4409] = t1427
+  const t1428 = xs__w57#[56..=63]
+  const t1429 = t1428#sext[0..=7]
+  const t1430 = refs__w57#[56..=63]
+  const t1431 = t1430#sext[0..=7]
+  mut taps_57_t = tap::[name=taps_57_t](clock = clock, reset = reset, x_in = t1429, ref_in = t1431, ref_load = ref_load)
+  mut xs__w58 = xs__w57
+  xs__w58#[48..=55] = taps_57_t.x_out#[0..=7]
+  mut refs__w58 = refs__w57
+  refs__w58#[48..=55] = taps_57_t.ref_out#[0..=7]
+  const t1436 = xs__w58#[48..=55]
+  const t1437 = t1436#sext[0..=7]
+  const t1438 = t1437#[0..=7]
+  const t1439 = t1438#[4..=7]
+  const t1440 = t1439#sext[0..=3]
+  const taps_57_narrow_operand_product_x_msb__w1 = t1440
+  const t1441 = refs__w58#[48..=55]
+  const t1442 = t1441#sext[0..=7]
+  const t1443 = t1442#[0..=7]
+  const t1444 = t1443#[4..=7]
+  const t1445 = t1444#sext[0..=3]
+  const taps_57_narrow_operand_product_ref_msb__w1 = t1445
+  const t1446 = taps_57_narrow_operand_product_x_msb__w1 * taps_57_narrow_operand_product_ref_msb__w1
+  const taps_57_narrow_operand_product_full_product__w1 = t1446
+  const t1447 = taps_57_narrow_operand_product_full_product__w1#[0..=7]
+  const t1448 = t1447#[4..=7]
+  const t1449 = t1448#sext[0..=3]
+  const taps_57_narrow_operand_product_product__w1 = t1449
+  const t1450 = taps_57_narrow_operand_product_product__w1#[0..=3]
+  const t1451 = t1450#sext[0..=3]
+  const t1452 = t1451#[0..=9]
+  mut level__w57 = level__w56
+  level__w57#[4410..=4419] = t1452
+  const t1453 = xs__w58#[48..=55]
+  const t1454 = t1453#sext[0..=7]
+  const t1455 = refs__w58#[48..=55]
+  const t1456 = t1455#sext[0..=7]
+  mut taps_58_t = tap::[name=taps_58_t](clock = clock, reset = reset, x_in = t1454, ref_in = t1456, ref_load = ref_load)
+  mut xs__w59 = xs__w58
+  xs__w59#[40..=47] = taps_58_t.x_out#[0..=7]
+  mut refs__w59 = refs__w58
+  refs__w59#[40..=47] = taps_58_t.ref_out#[0..=7]
+  const t1461 = xs__w59#[40..=47]
+  const t1462 = t1461#sext[0..=7]
+  const t1463 = t1462#[0..=7]
+  const t1464 = t1463#[4..=7]
+  const t1465 = t1464#sext[0..=3]
+  const taps_58_narrow_operand_product_x_msb__w1 = t1465
+  const t1466 = refs__w59#[40..=47]
+  const t1467 = t1466#sext[0..=7]
+  const t1468 = t1467#[0..=7]
+  const t1469 = t1468#[4..=7]
+  const t1470 = t1469#sext[0..=3]
+  const taps_58_narrow_operand_product_ref_msb__w1 = t1470
+  const t1471 = taps_58_narrow_operand_product_x_msb__w1 * taps_58_narrow_operand_product_ref_msb__w1
+  const taps_58_narrow_operand_product_full_product__w1 = t1471
+  const t1472 = taps_58_narrow_operand_product_full_product__w1#[0..=7]
+  const t1473 = t1472#[4..=7]
+  const t1474 = t1473#sext[0..=3]
+  const taps_58_narrow_operand_product_product__w1 = t1474
+  const t1475 = taps_58_narrow_operand_product_product__w1#[0..=3]
+  const t1476 = t1475#sext[0..=3]
+  const t1477 = t1476#[0..=9]
+  mut level__w58 = level__w57
+  level__w58#[4420..=4429] = t1477
+  const t1478 = xs__w59#[40..=47]
+  const t1479 = t1478#sext[0..=7]
+  const t1480 = refs__w59#[40..=47]
+  const t1481 = t1480#sext[0..=7]
+  mut taps_59_t = tap::[name=taps_59_t](clock = clock, reset = reset, x_in = t1479, ref_in = t1481, ref_load = ref_load)
+  mut xs__w60 = xs__w59
+  xs__w60#[32..=39] = taps_59_t.x_out#[0..=7]
+  mut refs__w60 = refs__w59
+  refs__w60#[32..=39] = taps_59_t.ref_out#[0..=7]
+  const t1486 = xs__w60#[32..=39]
+  const t1487 = t1486#sext[0..=7]
+  const t1488 = t1487#[0..=7]
+  const t1489 = t1488#[4..=7]
+  const t1490 = t1489#sext[0..=3]
+  const taps_59_narrow_operand_product_x_msb__w1 = t1490
+  const t1491 = refs__w60#[32..=39]
+  const t1492 = t1491#sext[0..=7]
+  const t1493 = t1492#[0..=7]
+  const t1494 = t1493#[4..=7]
+  const t1495 = t1494#sext[0..=3]
+  const taps_59_narrow_operand_product_ref_msb__w1 = t1495
+  const t1496 = taps_59_narrow_operand_product_x_msb__w1 * taps_59_narrow_operand_product_ref_msb__w1
+  const taps_59_narrow_operand_product_full_product__w1 = t1496
+  const t1497 = taps_59_narrow_operand_product_full_product__w1#[0..=7]
+  const t1498 = t1497#[4..=7]
+  const t1499 = t1498#sext[0..=3]
+  const taps_59_narrow_operand_product_product__w1 = t1499
+  const t1500 = taps_59_narrow_operand_product_product__w1#[0..=3]
+  const t1501 = t1500#sext[0..=3]
+  const t1502 = t1501#[0..=9]
+  mut level__w59 = level__w58
+  level__w59#[4430..=4439] = t1502
+  const t1503 = xs__w60#[32..=39]
+  const t1504 = t1503#sext[0..=7]
+  const t1505 = refs__w60#[32..=39]
+  const t1506 = t1505#sext[0..=7]
+  mut taps_60_t = tap::[name=taps_60_t](clock = clock, reset = reset, x_in = t1504, ref_in = t1506, ref_load = ref_load)
+  mut xs__w61 = xs__w60
+  xs__w61#[24..=31] = taps_60_t.x_out#[0..=7]
+  mut refs__w61 = refs__w60
+  refs__w61#[24..=31] = taps_60_t.ref_out#[0..=7]
+  const t1511 = xs__w61#[24..=31]
+  const t1512 = t1511#sext[0..=7]
+  const t1513 = t1512#[0..=7]
+  const t1514 = t1513#[4..=7]
+  const t1515 = t1514#sext[0..=3]
+  const taps_60_narrow_operand_product_x_msb__w1 = t1515
+  const t1516 = refs__w61#[24..=31]
+  const t1517 = t1516#sext[0..=7]
+  const t1518 = t1517#[0..=7]
+  const t1519 = t1518#[4..=7]
+  const t1520 = t1519#sext[0..=3]
+  const taps_60_narrow_operand_product_ref_msb__w1 = t1520
+  const t1521 = taps_60_narrow_operand_product_x_msb__w1 * taps_60_narrow_operand_product_ref_msb__w1
+  const taps_60_narrow_operand_product_full_product__w1 = t1521
+  const t1522 = taps_60_narrow_operand_product_full_product__w1#[0..=7]
+  const t1523 = t1522#[4..=7]
+  const t1524 = t1523#sext[0..=3]
+  const taps_60_narrow_operand_product_product__w1 = t1524
+  const t1525 = taps_60_narrow_operand_product_product__w1#[0..=3]
+  const t1526 = t1525#sext[0..=3]
+  const t1527 = t1526#[0..=9]
+  mut level__w60 = level__w59
+  level__w60#[4440..=4449] = t1527
+  const t1528 = xs__w61#[24..=31]
+  const t1529 = t1528#sext[0..=7]
+  const t1530 = refs__w61#[24..=31]
+  const t1531 = t1530#sext[0..=7]
+  mut taps_61_t = tap::[name=taps_61_t](clock = clock, reset = reset, x_in = t1529, ref_in = t1531, ref_load = ref_load)
+  mut xs__w62 = xs__w61
+  xs__w62#[16..=23] = taps_61_t.x_out#[0..=7]
+  mut refs__w62 = refs__w61
+  refs__w62#[16..=23] = taps_61_t.ref_out#[0..=7]
+  const t1536 = xs__w62#[16..=23]
+  const t1537 = t1536#sext[0..=7]
+  const t1538 = t1537#[0..=7]
+  const t1539 = t1538#[4..=7]
+  const t1540 = t1539#sext[0..=3]
+  const taps_61_narrow_operand_product_x_msb__w1 = t1540
+  const t1541 = refs__w62#[16..=23]
+  const t1542 = t1541#sext[0..=7]
+  const t1543 = t1542#[0..=7]
+  const t1544 = t1543#[4..=7]
+  const t1545 = t1544#sext[0..=3]
+  const taps_61_narrow_operand_product_ref_msb__w1 = t1545
+  const t1546 = taps_61_narrow_operand_product_x_msb__w1 * taps_61_narrow_operand_product_ref_msb__w1
+  const taps_61_narrow_operand_product_full_product__w1 = t1546
+  const t1547 = taps_61_narrow_operand_product_full_product__w1#[0..=7]
+  const t1548 = t1547#[4..=7]
+  const t1549 = t1548#sext[0..=3]
+  const taps_61_narrow_operand_product_product__w1 = t1549
+  const t1550 = taps_61_narrow_operand_product_product__w1#[0..=3]
+  const t1551 = t1550#sext[0..=3]
+  const t1552 = t1551#[0..=9]
+  mut level__w61 = level__w60
+  level__w61#[4450..=4459] = t1552
+  const t1553 = xs__w62#[16..=23]
+  const t1554 = t1553#sext[0..=7]
+  const t1555 = refs__w62#[16..=23]
+  const t1556 = t1555#sext[0..=7]
+  mut taps_62_t = tap::[name=taps_62_t](clock = clock, reset = reset, x_in = t1554, ref_in = t1556, ref_load = ref_load)
+  mut xs__w63 = xs__w62
+  xs__w63#[8..=15] = taps_62_t.x_out#[0..=7]
+  mut refs__w63 = refs__w62
+  refs__w63#[8..=15] = taps_62_t.ref_out#[0..=7]
+  const t1561 = xs__w63#[8..=15]
+  const t1562 = t1561#sext[0..=7]
+  const t1563 = t1562#[0..=7]
+  const t1564 = t1563#[4..=7]
+  const t1565 = t1564#sext[0..=3]
+  const taps_62_narrow_operand_product_x_msb__w1 = t1565
+  const t1566 = refs__w63#[8..=15]
+  const t1567 = t1566#sext[0..=7]
+  const t1568 = t1567#[0..=7]
+  const t1569 = t1568#[4..=7]
+  const t1570 = t1569#sext[0..=3]
+  const taps_62_narrow_operand_product_ref_msb__w1 = t1570
+  const t1571 = taps_62_narrow_operand_product_x_msb__w1 * taps_62_narrow_operand_product_ref_msb__w1
+  const taps_62_narrow_operand_product_full_product__w1 = t1571
+  const t1572 = taps_62_narrow_operand_product_full_product__w1#[0..=7]
+  const t1573 = t1572#[4..=7]
+  const t1574 = t1573#sext[0..=3]
+  const taps_62_narrow_operand_product_product__w1 = t1574
+  const t1575 = taps_62_narrow_operand_product_product__w1#[0..=3]
+  const t1576 = t1575#sext[0..=3]
+  const t1577 = t1576#[0..=9]
+  mut level__w62 = level__w61
+  level__w62#[4460..=4469] = t1577
+  const t1578 = xs__w63#[8..=15]
+  const t1579 = t1578#sext[0..=7]
+  const t1580 = refs__w63#[8..=15]
+  const t1581 = t1580#sext[0..=7]
+  mut taps_63_t = tap::[name=taps_63_t](clock = clock, reset = reset, x_in = t1579, ref_in = t1581, ref_load = ref_load)
+  mut xs__w64 = xs__w63
+  xs__w64#[0..=7] = taps_63_t.x_out#[0..=7]
+  mut refs__w64 = refs__w63
+  refs__w64#[0..=7] = taps_63_t.ref_out#[0..=7]
+  const t1586 = xs__w64#[0..=7]
+  const t1587 = t1586#sext[0..=7]
+  const t1588 = t1587#[0..=7]
+  const t1589 = t1588#[4..=7]
+  const t1590 = t1589#sext[0..=3]
+  const taps_63_narrow_operand_product_x_msb__w1 = t1590
+  const t1591 = refs__w64#[0..=7]
+  const t1592 = t1591#sext[0..=7]
+  const t1593 = t1592#[0..=7]
+  const t1594 = t1593#[4..=7]
+  const t1595 = t1594#sext[0..=3]
+  const taps_63_narrow_operand_product_ref_msb__w1 = t1595
+  const t1596 = taps_63_narrow_operand_product_x_msb__w1 * taps_63_narrow_operand_product_ref_msb__w1
+  const taps_63_narrow_operand_product_full_product__w1 = t1596
+  const t1597 = taps_63_narrow_operand_product_full_product__w1#[0..=7]
+  const t1598 = t1597#[4..=7]
+  const t1599 = t1598#sext[0..=3]
+  const taps_63_narrow_operand_product_product__w1 = t1599
+  const t1600 = taps_63_narrow_operand_product_product__w1#[0..=3]
+  const t1601 = t1600#sext[0..=3]
+  const t1602 = t1601#[0..=9]
+  mut level__w63 = level__w62
+  level__w63#[4470..=4479] = t1602
+  const t1603 = level__w63#[3840..=4479]
+  const t1604 = t1603#[0..=9]
+  const t1605 = t1604#sext[0..=9]
+  const t1606 = level__w63#[3840..=4479]
+  const t1607 = t1606#[10..=19]
+  const t1608 = t1607#sext[0..=9]
+  mut levels_0_nodes_0_n = add_node::[name=levels_0_nodes_0_n](clock = clock, reset = reset, a = t1605, b = t1608)
+  mut level__w64 = level__w63
+  level__w64#[3200..=3209] = levels_0_nodes_0_n#[0..=9]
+  const t1610 = level__w64#[3840..=4479]
+  const t1611 = t1610#[20..=29]
+  const t1612 = t1611#sext[0..=9]
+  const t1613 = level__w64#[3840..=4479]
+  const t1614 = t1613#[30..=39]
+  const t1615 = t1614#sext[0..=9]
+  mut levels_0_nodes_1_n = add_node::[name=levels_0_nodes_1_n](clock = clock, reset = reset, a = t1612, b = t1615)
+  mut level__w65 = level__w64
+  level__w65#[3210..=3219] = levels_0_nodes_1_n#[0..=9]
+  const t1617 = level__w65#[3840..=4479]
+  const t1618 = t1617#[40..=49]
+  const t1619 = t1618#sext[0..=9]
+  const t1620 = level__w65#[3840..=4479]
+  const t1621 = t1620#[50..=59]
+  const t1622 = t1621#sext[0..=9]
+  mut levels_0_nodes_2_n = add_node::[name=levels_0_nodes_2_n](clock = clock, reset = reset, a = t1619, b = t1622)
+  mut level__w66 = level__w65
+  level__w66#[3220..=3229] = levels_0_nodes_2_n#[0..=9]
+  const t1624 = level__w66#[3840..=4479]
+  const t1625 = t1624#[60..=69]
+  const t1626 = t1625#sext[0..=9]
+  const t1627 = level__w66#[3840..=4479]
+  const t1628 = t1627#[70..=79]
+  const t1629 = t1628#sext[0..=9]
+  mut levels_0_nodes_3_n = add_node::[name=levels_0_nodes_3_n](clock = clock, reset = reset, a = t1626, b = t1629)
+  mut level__w67 = level__w66
+  level__w67#[3230..=3239] = levels_0_nodes_3_n#[0..=9]
+  const t1631 = level__w67#[3840..=4479]
+  const t1632 = t1631#[80..=89]
+  const t1633 = t1632#sext[0..=9]
+  const t1634 = level__w67#[3840..=4479]
+  const t1635 = t1634#[90..=99]
+  const t1636 = t1635#sext[0..=9]
+  mut levels_0_nodes_4_n = add_node::[name=levels_0_nodes_4_n](clock = clock, reset = reset, a = t1633, b = t1636)
+  mut level__w68 = level__w67
+  level__w68#[3240..=3249] = levels_0_nodes_4_n#[0..=9]
+  const t1638 = level__w68#[3840..=4479]
+  const t1639 = t1638#[100..=109]
+  const t1640 = t1639#sext[0..=9]
+  const t1641 = level__w68#[3840..=4479]
+  const t1642 = t1641#[110..=119]
+  const t1643 = t1642#sext[0..=9]
+  mut levels_0_nodes_5_n = add_node::[name=levels_0_nodes_5_n](clock = clock, reset = reset, a = t1640, b = t1643)
+  mut level__w69 = level__w68
+  level__w69#[3250..=3259] = levels_0_nodes_5_n#[0..=9]
+  const t1645 = level__w69#[3840..=4479]
+  const t1646 = t1645#[120..=129]
+  const t1647 = t1646#sext[0..=9]
+  const t1648 = level__w69#[3840..=4479]
+  const t1649 = t1648#[130..=139]
+  const t1650 = t1649#sext[0..=9]
+  mut levels_0_nodes_6_n = add_node::[name=levels_0_nodes_6_n](clock = clock, reset = reset, a = t1647, b = t1650)
+  mut level__w70 = level__w69
+  level__w70#[3260..=3269] = levels_0_nodes_6_n#[0..=9]
+  const t1652 = level__w70#[3840..=4479]
+  const t1653 = t1652#[140..=149]
+  const t1654 = t1653#sext[0..=9]
+  const t1655 = level__w70#[3840..=4479]
+  const t1656 = t1655#[150..=159]
+  const t1657 = t1656#sext[0..=9]
+  mut levels_0_nodes_7_n = add_node::[name=levels_0_nodes_7_n](clock = clock, reset = reset, a = t1654, b = t1657)
+  mut level__w71 = level__w70
+  level__w71#[3270..=3279] = levels_0_nodes_7_n#[0..=9]
+  const t1659 = level__w71#[3840..=4479]
+  const t1660 = t1659#[160..=169]
+  const t1661 = t1660#sext[0..=9]
+  const t1662 = level__w71#[3840..=4479]
+  const t1663 = t1662#[170..=179]
+  const t1664 = t1663#sext[0..=9]
+  mut levels_0_nodes_8_n = add_node::[name=levels_0_nodes_8_n](clock = clock, reset = reset, a = t1661, b = t1664)
+  mut level__w72 = level__w71
+  level__w72#[3280..=3289] = levels_0_nodes_8_n#[0..=9]
+  const t1666 = level__w72#[3840..=4479]
+  const t1667 = t1666#[180..=189]
+  const t1668 = t1667#sext[0..=9]
+  const t1669 = level__w72#[3840..=4479]
+  const t1670 = t1669#[190..=199]
+  const t1671 = t1670#sext[0..=9]
+  mut levels_0_nodes_9_n = add_node::[name=levels_0_nodes_9_n](clock = clock, reset = reset, a = t1668, b = t1671)
+  mut level__w73 = level__w72
+  level__w73#[3290..=3299] = levels_0_nodes_9_n#[0..=9]
+  const t1673 = level__w73#[3840..=4479]
+  const t1674 = t1673#[200..=209]
+  const t1675 = t1674#sext[0..=9]
+  const t1676 = level__w73#[3840..=4479]
+  const t1677 = t1676#[210..=219]
+  const t1678 = t1677#sext[0..=9]
+  mut levels_0_nodes_10_n = add_node::[name=levels_0_nodes_10_n](clock = clock, reset = reset, a = t1675, b = t1678)
+  mut level__w74 = level__w73
+  level__w74#[3300..=3309] = levels_0_nodes_10_n#[0..=9]
+  const t1680 = level__w74#[3840..=4479]
+  const t1681 = t1680#[220..=229]
+  const t1682 = t1681#sext[0..=9]
+  const t1683 = level__w74#[3840..=4479]
+  const t1684 = t1683#[230..=239]
+  const t1685 = t1684#sext[0..=9]
+  mut levels_0_nodes_11_n = add_node::[name=levels_0_nodes_11_n](clock = clock, reset = reset, a = t1682, b = t1685)
+  mut level__w75 = level__w74
+  level__w75#[3310..=3319] = levels_0_nodes_11_n#[0..=9]
+  const t1687 = level__w75#[3840..=4479]
+  const t1688 = t1687#[240..=249]
+  const t1689 = t1688#sext[0..=9]
+  const t1690 = level__w75#[3840..=4479]
+  const t1691 = t1690#[250..=259]
+  const t1692 = t1691#sext[0..=9]
+  mut levels_0_nodes_12_n = add_node::[name=levels_0_nodes_12_n](clock = clock, reset = reset, a = t1689, b = t1692)
+  mut level__w76 = level__w75
+  level__w76#[3320..=3329] = levels_0_nodes_12_n#[0..=9]
+  const t1694 = level__w76#[3840..=4479]
+  const t1695 = t1694#[260..=269]
+  const t1696 = t1695#sext[0..=9]
+  const t1697 = level__w76#[3840..=4479]
+  const t1698 = t1697#[270..=279]
+  const t1699 = t1698#sext[0..=9]
+  mut levels_0_nodes_13_n = add_node::[name=levels_0_nodes_13_n](clock = clock, reset = reset, a = t1696, b = t1699)
+  mut level__w77 = level__w76
+  level__w77#[3330..=3339] = levels_0_nodes_13_n#[0..=9]
+  const t1701 = level__w77#[3840..=4479]
+  const t1702 = t1701#[280..=289]
+  const t1703 = t1702#sext[0..=9]
+  const t1704 = level__w77#[3840..=4479]
+  const t1705 = t1704#[290..=299]
+  const t1706 = t1705#sext[0..=9]
+  mut levels_0_nodes_14_n = add_node::[name=levels_0_nodes_14_n](clock = clock, reset = reset, a = t1703, b = t1706)
+  mut level__w78 = level__w77
+  level__w78#[3340..=3349] = levels_0_nodes_14_n#[0..=9]
+  const t1708 = level__w78#[3840..=4479]
+  const t1709 = t1708#[300..=309]
+  const t1710 = t1709#sext[0..=9]
+  const t1711 = level__w78#[3840..=4479]
+  const t1712 = t1711#[310..=319]
+  const t1713 = t1712#sext[0..=9]
+  mut levels_0_nodes_15_n = add_node::[name=levels_0_nodes_15_n](clock = clock, reset = reset, a = t1710, b = t1713)
+  mut level__w79 = level__w78
+  level__w79#[3350..=3359] = levels_0_nodes_15_n#[0..=9]
+  const t1715 = level__w79#[3840..=4479]
+  const t1716 = t1715#[320..=329]
+  const t1717 = t1716#sext[0..=9]
+  const t1718 = level__w79#[3840..=4479]
+  const t1719 = t1718#[330..=339]
+  const t1720 = t1719#sext[0..=9]
+  mut levels_0_nodes_16_n = add_node::[name=levels_0_nodes_16_n](clock = clock, reset = reset, a = t1717, b = t1720)
+  mut level__w80 = level__w79
+  level__w80#[3360..=3369] = levels_0_nodes_16_n#[0..=9]
+  const t1722 = level__w80#[3840..=4479]
+  const t1723 = t1722#[340..=349]
+  const t1724 = t1723#sext[0..=9]
+  const t1725 = level__w80#[3840..=4479]
+  const t1726 = t1725#[350..=359]
+  const t1727 = t1726#sext[0..=9]
+  mut levels_0_nodes_17_n = add_node::[name=levels_0_nodes_17_n](clock = clock, reset = reset, a = t1724, b = t1727)
+  mut level__w81 = level__w80
+  level__w81#[3370..=3379] = levels_0_nodes_17_n#[0..=9]
+  const t1729 = level__w81#[3840..=4479]
+  const t1730 = t1729#[360..=369]
+  const t1731 = t1730#sext[0..=9]
+  const t1732 = level__w81#[3840..=4479]
+  const t1733 = t1732#[370..=379]
+  const t1734 = t1733#sext[0..=9]
+  mut levels_0_nodes_18_n = add_node::[name=levels_0_nodes_18_n](clock = clock, reset = reset, a = t1731, b = t1734)
+  mut level__w82 = level__w81
+  level__w82#[3380..=3389] = levels_0_nodes_18_n#[0..=9]
+  const t1736 = level__w82#[3840..=4479]
+  const t1737 = t1736#[380..=389]
+  const t1738 = t1737#sext[0..=9]
+  const t1739 = level__w82#[3840..=4479]
+  const t1740 = t1739#[390..=399]
+  const t1741 = t1740#sext[0..=9]
+  mut levels_0_nodes_19_n = add_node::[name=levels_0_nodes_19_n](clock = clock, reset = reset, a = t1738, b = t1741)
+  mut level__w83 = level__w82
+  level__w83#[3390..=3399] = levels_0_nodes_19_n#[0..=9]
+  const t1743 = level__w83#[3840..=4479]
+  const t1744 = t1743#[400..=409]
+  const t1745 = t1744#sext[0..=9]
+  const t1746 = level__w83#[3840..=4479]
+  const t1747 = t1746#[410..=419]
+  const t1748 = t1747#sext[0..=9]
+  mut levels_0_nodes_20_n = add_node::[name=levels_0_nodes_20_n](clock = clock, reset = reset, a = t1745, b = t1748)
+  mut level__w84 = level__w83
+  level__w84#[3400..=3409] = levels_0_nodes_20_n#[0..=9]
+  const t1750 = level__w84#[3840..=4479]
+  const t1751 = t1750#[420..=429]
+  const t1752 = t1751#sext[0..=9]
+  const t1753 = level__w84#[3840..=4479]
+  const t1754 = t1753#[430..=439]
+  const t1755 = t1754#sext[0..=9]
+  mut levels_0_nodes_21_n = add_node::[name=levels_0_nodes_21_n](clock = clock, reset = reset, a = t1752, b = t1755)
+  mut level__w85 = level__w84
+  level__w85#[3410..=3419] = levels_0_nodes_21_n#[0..=9]
+  const t1757 = level__w85#[3840..=4479]
+  const t1758 = t1757#[440..=449]
+  const t1759 = t1758#sext[0..=9]
+  const t1760 = level__w85#[3840..=4479]
+  const t1761 = t1760#[450..=459]
+  const t1762 = t1761#sext[0..=9]
+  mut levels_0_nodes_22_n = add_node::[name=levels_0_nodes_22_n](clock = clock, reset = reset, a = t1759, b = t1762)
+  mut level__w86 = level__w85
+  level__w86#[3420..=3429] = levels_0_nodes_22_n#[0..=9]
+  const t1764 = level__w86#[3840..=4479]
+  const t1765 = t1764#[460..=469]
+  const t1766 = t1765#sext[0..=9]
+  const t1767 = level__w86#[3840..=4479]
+  const t1768 = t1767#[470..=479]
+  const t1769 = t1768#sext[0..=9]
+  mut levels_0_nodes_23_n = add_node::[name=levels_0_nodes_23_n](clock = clock, reset = reset, a = t1766, b = t1769)
+  mut level__w87 = level__w86
+  level__w87#[3430..=3439] = levels_0_nodes_23_n#[0..=9]
+  const t1771 = level__w87#[3840..=4479]
+  const t1772 = t1771#[480..=489]
+  const t1773 = t1772#sext[0..=9]
+  const t1774 = level__w87#[3840..=4479]
+  const t1775 = t1774#[490..=499]
+  const t1776 = t1775#sext[0..=9]
+  mut levels_0_nodes_24_n = add_node::[name=levels_0_nodes_24_n](clock = clock, reset = reset, a = t1773, b = t1776)
+  mut level__w88 = level__w87
+  level__w88#[3440..=3449] = levels_0_nodes_24_n#[0..=9]
+  const t1778 = level__w88#[3840..=4479]
+  const t1779 = t1778#[500..=509]
+  const t1780 = t1779#sext[0..=9]
+  const t1781 = level__w88#[3840..=4479]
+  const t1782 = t1781#[510..=519]
+  const t1783 = t1782#sext[0..=9]
+  mut levels_0_nodes_25_n = add_node::[name=levels_0_nodes_25_n](clock = clock, reset = reset, a = t1780, b = t1783)
+  mut level__w89 = level__w88
+  level__w89#[3450..=3459] = levels_0_nodes_25_n#[0..=9]
+  const t1785 = level__w89#[3840..=4479]
+  const t1786 = t1785#[520..=529]
+  const t1787 = t1786#sext[0..=9]
+  const t1788 = level__w89#[3840..=4479]
+  const t1789 = t1788#[530..=539]
+  const t1790 = t1789#sext[0..=9]
+  mut levels_0_nodes_26_n = add_node::[name=levels_0_nodes_26_n](clock = clock, reset = reset, a = t1787, b = t1790)
+  mut level__w90 = level__w89
+  level__w90#[3460..=3469] = levels_0_nodes_26_n#[0..=9]
+  const t1792 = level__w90#[3840..=4479]
+  const t1793 = t1792#[540..=549]
+  const t1794 = t1793#sext[0..=9]
+  const t1795 = level__w90#[3840..=4479]
+  const t1796 = t1795#[550..=559]
+  const t1797 = t1796#sext[0..=9]
+  mut levels_0_nodes_27_n = add_node::[name=levels_0_nodes_27_n](clock = clock, reset = reset, a = t1794, b = t1797)
+  mut level__w91 = level__w90
+  level__w91#[3470..=3479] = levels_0_nodes_27_n#[0..=9]
+  const t1799 = level__w91#[3840..=4479]
+  const t1800 = t1799#[560..=569]
+  const t1801 = t1800#sext[0..=9]
+  const t1802 = level__w91#[3840..=4479]
+  const t1803 = t1802#[570..=579]
+  const t1804 = t1803#sext[0..=9]
+  mut levels_0_nodes_28_n = add_node::[name=levels_0_nodes_28_n](clock = clock, reset = reset, a = t1801, b = t1804)
+  mut level__w92 = level__w91
+  level__w92#[3480..=3489] = levels_0_nodes_28_n#[0..=9]
+  const t1806 = level__w92#[3840..=4479]
+  const t1807 = t1806#[580..=589]
+  const t1808 = t1807#sext[0..=9]
+  const t1809 = level__w92#[3840..=4479]
+  const t1810 = t1809#[590..=599]
+  const t1811 = t1810#sext[0..=9]
+  mut levels_0_nodes_29_n = add_node::[name=levels_0_nodes_29_n](clock = clock, reset = reset, a = t1808, b = t1811)
+  mut level__w93 = level__w92
+  level__w93#[3490..=3499] = levels_0_nodes_29_n#[0..=9]
+  const t1813 = level__w93#[3840..=4479]
+  const t1814 = t1813#[600..=609]
+  const t1815 = t1814#sext[0..=9]
+  const t1816 = level__w93#[3840..=4479]
+  const t1817 = t1816#[610..=619]
+  const t1818 = t1817#sext[0..=9]
+  mut levels_0_nodes_30_n = add_node::[name=levels_0_nodes_30_n](clock = clock, reset = reset, a = t1815, b = t1818)
+  mut level__w94 = level__w93
+  level__w94#[3500..=3509] = levels_0_nodes_30_n#[0..=9]
+  const t1820 = level__w94#[3840..=4479]
+  const t1821 = t1820#[620..=629]
+  const t1822 = t1821#sext[0..=9]
+  const t1823 = level__w94#[3840..=4479]
+  const t1824 = t1823#[630..=639]
+  const t1825 = t1824#sext[0..=9]
+  mut levels_0_nodes_31_n = add_node::[name=levels_0_nodes_31_n](clock = clock, reset = reset, a = t1822, b = t1825)
+  mut level__w95 = level__w94
+  level__w95#[3510..=3519] = levels_0_nodes_31_n#[0..=9]
+  mut level__w96 = level__w95
+  level__w96#[3520..=3839] = 0
+  const t1827 = level__w96#[3200..=3839]
+  const t1828 = t1827#[0..=9]
+  const t1829 = t1828#sext[0..=9]
+  const t1830 = level__w96#[3200..=3839]
+  const t1831 = t1830#[10..=19]
+  const t1832 = t1831#sext[0..=9]
+  mut levels_1_nodes_0_n = add_node::[name=levels_1_nodes_0_n](clock = clock, reset = reset, a = t1829, b = t1832)
+  mut level__w97 = level__w96
+  level__w97#[2560..=2569] = levels_1_nodes_0_n#[0..=9]
+  const t1834 = level__w97#[3200..=3839]
+  const t1835 = t1834#[20..=29]
+  const t1836 = t1835#sext[0..=9]
+  const t1837 = level__w97#[3200..=3839]
+  const t1838 = t1837#[30..=39]
+  const t1839 = t1838#sext[0..=9]
+  mut levels_1_nodes_1_n = add_node::[name=levels_1_nodes_1_n](clock = clock, reset = reset, a = t1836, b = t1839)
+  mut level__w98 = level__w97
+  level__w98#[2570..=2579] = levels_1_nodes_1_n#[0..=9]
+  const t1841 = level__w98#[3200..=3839]
+  const t1842 = t1841#[40..=49]
+  const t1843 = t1842#sext[0..=9]
+  const t1844 = level__w98#[3200..=3839]
+  const t1845 = t1844#[50..=59]
+  const t1846 = t1845#sext[0..=9]
+  mut levels_1_nodes_2_n = add_node::[name=levels_1_nodes_2_n](clock = clock, reset = reset, a = t1843, b = t1846)
+  mut level__w99 = level__w98
+  level__w99#[2580..=2589] = levels_1_nodes_2_n#[0..=9]
+  const t1848 = level__w99#[3200..=3839]
+  const t1849 = t1848#[60..=69]
+  const t1850 = t1849#sext[0..=9]
+  const t1851 = level__w99#[3200..=3839]
+  const t1852 = t1851#[70..=79]
+  const t1853 = t1852#sext[0..=9]
+  mut levels_1_nodes_3_n = add_node::[name=levels_1_nodes_3_n](clock = clock, reset = reset, a = t1850, b = t1853)
+  mut level__w100 = level__w99
+  level__w100#[2590..=2599] = levels_1_nodes_3_n#[0..=9]
+  const t1855 = level__w100#[3200..=3839]
+  const t1856 = t1855#[80..=89]
+  const t1857 = t1856#sext[0..=9]
+  const t1858 = level__w100#[3200..=3839]
+  const t1859 = t1858#[90..=99]
+  const t1860 = t1859#sext[0..=9]
+  mut levels_1_nodes_4_n = add_node::[name=levels_1_nodes_4_n](clock = clock, reset = reset, a = t1857, b = t1860)
+  mut level__w101 = level__w100
+  level__w101#[2600..=2609] = levels_1_nodes_4_n#[0..=9]
+  const t1862 = level__w101#[3200..=3839]
+  const t1863 = t1862#[100..=109]
+  const t1864 = t1863#sext[0..=9]
+  const t1865 = level__w101#[3200..=3839]
+  const t1866 = t1865#[110..=119]
+  const t1867 = t1866#sext[0..=9]
+  mut levels_1_nodes_5_n = add_node::[name=levels_1_nodes_5_n](clock = clock, reset = reset, a = t1864, b = t1867)
+  mut level__w102 = level__w101
+  level__w102#[2610..=2619] = levels_1_nodes_5_n#[0..=9]
+  const t1869 = level__w102#[3200..=3839]
+  const t1870 = t1869#[120..=129]
+  const t1871 = t1870#sext[0..=9]
+  const t1872 = level__w102#[3200..=3839]
+  const t1873 = t1872#[130..=139]
+  const t1874 = t1873#sext[0..=9]
+  mut levels_1_nodes_6_n = add_node::[name=levels_1_nodes_6_n](clock = clock, reset = reset, a = t1871, b = t1874)
+  mut level__w103 = level__w102
+  level__w103#[2620..=2629] = levels_1_nodes_6_n#[0..=9]
+  const t1876 = level__w103#[3200..=3839]
+  const t1877 = t1876#[140..=149]
+  const t1878 = t1877#sext[0..=9]
+  const t1879 = level__w103#[3200..=3839]
+  const t1880 = t1879#[150..=159]
+  const t1881 = t1880#sext[0..=9]
+  mut levels_1_nodes_7_n = add_node::[name=levels_1_nodes_7_n](clock = clock, reset = reset, a = t1878, b = t1881)
+  mut level__w104 = level__w103
+  level__w104#[2630..=2639] = levels_1_nodes_7_n#[0..=9]
+  const t1883 = level__w104#[3200..=3839]
+  const t1884 = t1883#[160..=169]
+  const t1885 = t1884#sext[0..=9]
+  const t1886 = level__w104#[3200..=3839]
+  const t1887 = t1886#[170..=179]
+  const t1888 = t1887#sext[0..=9]
+  mut levels_1_nodes_8_n = add_node::[name=levels_1_nodes_8_n](clock = clock, reset = reset, a = t1885, b = t1888)
+  mut level__w105 = level__w104
+  level__w105#[2640..=2649] = levels_1_nodes_8_n#[0..=9]
+  const t1890 = level__w105#[3200..=3839]
+  const t1891 = t1890#[180..=189]
+  const t1892 = t1891#sext[0..=9]
+  const t1893 = level__w105#[3200..=3839]
+  const t1894 = t1893#[190..=199]
+  const t1895 = t1894#sext[0..=9]
+  mut levels_1_nodes_9_n = add_node::[name=levels_1_nodes_9_n](clock = clock, reset = reset, a = t1892, b = t1895)
+  mut level__w106 = level__w105
+  level__w106#[2650..=2659] = levels_1_nodes_9_n#[0..=9]
+  const t1897 = level__w106#[3200..=3839]
+  const t1898 = t1897#[200..=209]
+  const t1899 = t1898#sext[0..=9]
+  const t1900 = level__w106#[3200..=3839]
+  const t1901 = t1900#[210..=219]
+  const t1902 = t1901#sext[0..=9]
+  mut levels_1_nodes_10_n = add_node::[name=levels_1_nodes_10_n](clock = clock, reset = reset, a = t1899, b = t1902)
+  mut level__w107 = level__w106
+  level__w107#[2660..=2669] = levels_1_nodes_10_n#[0..=9]
+  const t1904 = level__w107#[3200..=3839]
+  const t1905 = t1904#[220..=229]
+  const t1906 = t1905#sext[0..=9]
+  const t1907 = level__w107#[3200..=3839]
+  const t1908 = t1907#[230..=239]
+  const t1909 = t1908#sext[0..=9]
+  mut levels_1_nodes_11_n = add_node::[name=levels_1_nodes_11_n](clock = clock, reset = reset, a = t1906, b = t1909)
+  mut level__w108 = level__w107
+  level__w108#[2670..=2679] = levels_1_nodes_11_n#[0..=9]
+  const t1911 = level__w108#[3200..=3839]
+  const t1912 = t1911#[240..=249]
+  const t1913 = t1912#sext[0..=9]
+  const t1914 = level__w108#[3200..=3839]
+  const t1915 = t1914#[250..=259]
+  const t1916 = t1915#sext[0..=9]
+  mut levels_1_nodes_12_n = add_node::[name=levels_1_nodes_12_n](clock = clock, reset = reset, a = t1913, b = t1916)
+  mut level__w109 = level__w108
+  level__w109#[2680..=2689] = levels_1_nodes_12_n#[0..=9]
+  const t1918 = level__w109#[3200..=3839]
+  const t1919 = t1918#[260..=269]
+  const t1920 = t1919#sext[0..=9]
+  const t1921 = level__w109#[3200..=3839]
+  const t1922 = t1921#[270..=279]
+  const t1923 = t1922#sext[0..=9]
+  mut levels_1_nodes_13_n = add_node::[name=levels_1_nodes_13_n](clock = clock, reset = reset, a = t1920, b = t1923)
+  mut level__w110 = level__w109
+  level__w110#[2690..=2699] = levels_1_nodes_13_n#[0..=9]
+  const t1925 = level__w110#[3200..=3839]
+  const t1926 = t1925#[280..=289]
+  const t1927 = t1926#sext[0..=9]
+  const t1928 = level__w110#[3200..=3839]
+  const t1929 = t1928#[290..=299]
+  const t1930 = t1929#sext[0..=9]
+  mut levels_1_nodes_14_n = add_node::[name=levels_1_nodes_14_n](clock = clock, reset = reset, a = t1927, b = t1930)
+  mut level__w111 = level__w110
+  level__w111#[2700..=2709] = levels_1_nodes_14_n#[0..=9]
+  const t1932 = level__w111#[3200..=3839]
+  const t1933 = t1932#[300..=309]
+  const t1934 = t1933#sext[0..=9]
+  const t1935 = level__w111#[3200..=3839]
+  const t1936 = t1935#[310..=319]
+  const t1937 = t1936#sext[0..=9]
+  mut levels_1_nodes_15_n = add_node::[name=levels_1_nodes_15_n](clock = clock, reset = reset, a = t1934, b = t1937)
+  mut level__w112 = level__w111
+  level__w112#[2710..=2719] = levels_1_nodes_15_n#[0..=9]
+  mut level__w113 = level__w112
+  level__w113#[2720..=3199] = 0
+  const t1939 = level__w113#[2560..=3199]
+  const t1940 = t1939#[0..=9]
+  const t1941 = t1940#sext[0..=9]
+  const t1942 = level__w113#[2560..=3199]
+  const t1943 = t1942#[10..=19]
+  const t1944 = t1943#sext[0..=9]
+  mut levels_2_nodes_0_n = add_node::[name=levels_2_nodes_0_n](clock = clock, reset = reset, a = t1941, b = t1944)
+  mut level__w114 = level__w113
+  level__w114#[1920..=1929] = levels_2_nodes_0_n#[0..=9]
+  const t1946 = level__w114#[2560..=3199]
+  const t1947 = t1946#[20..=29]
+  const t1948 = t1947#sext[0..=9]
+  const t1949 = level__w114#[2560..=3199]
+  const t1950 = t1949#[30..=39]
+  const t1951 = t1950#sext[0..=9]
+  mut levels_2_nodes_1_n = add_node::[name=levels_2_nodes_1_n](clock = clock, reset = reset, a = t1948, b = t1951)
+  mut level__w115 = level__w114
+  level__w115#[1930..=1939] = levels_2_nodes_1_n#[0..=9]
+  const t1953 = level__w115#[2560..=3199]
+  const t1954 = t1953#[40..=49]
+  const t1955 = t1954#sext[0..=9]
+  const t1956 = level__w115#[2560..=3199]
+  const t1957 = t1956#[50..=59]
+  const t1958 = t1957#sext[0..=9]
+  mut levels_2_nodes_2_n = add_node::[name=levels_2_nodes_2_n](clock = clock, reset = reset, a = t1955, b = t1958)
+  mut level__w116 = level__w115
+  level__w116#[1940..=1949] = levels_2_nodes_2_n#[0..=9]
+  const t1960 = level__w116#[2560..=3199]
+  const t1961 = t1960#[60..=69]
+  const t1962 = t1961#sext[0..=9]
+  const t1963 = level__w116#[2560..=3199]
+  const t1964 = t1963#[70..=79]
+  const t1965 = t1964#sext[0..=9]
+  mut levels_2_nodes_3_n = add_node::[name=levels_2_nodes_3_n](clock = clock, reset = reset, a = t1962, b = t1965)
+  mut level__w117 = level__w116
+  level__w117#[1950..=1959] = levels_2_nodes_3_n#[0..=9]
+  const t1967 = level__w117#[2560..=3199]
+  const t1968 = t1967#[80..=89]
+  const t1969 = t1968#sext[0..=9]
+  const t1970 = level__w117#[2560..=3199]
+  const t1971 = t1970#[90..=99]
+  const t1972 = t1971#sext[0..=9]
+  mut levels_2_nodes_4_n = add_node::[name=levels_2_nodes_4_n](clock = clock, reset = reset, a = t1969, b = t1972)
+  mut level__w118 = level__w117
+  level__w118#[1960..=1969] = levels_2_nodes_4_n#[0..=9]
+  const t1974 = level__w118#[2560..=3199]
+  const t1975 = t1974#[100..=109]
+  const t1976 = t1975#sext[0..=9]
+  const t1977 = level__w118#[2560..=3199]
+  const t1978 = t1977#[110..=119]
+  const t1979 = t1978#sext[0..=9]
+  mut levels_2_nodes_5_n = add_node::[name=levels_2_nodes_5_n](clock = clock, reset = reset, a = t1976, b = t1979)
+  mut level__w119 = level__w118
+  level__w119#[1970..=1979] = levels_2_nodes_5_n#[0..=9]
+  const t1981 = level__w119#[2560..=3199]
+  const t1982 = t1981#[120..=129]
+  const t1983 = t1982#sext[0..=9]
+  const t1984 = level__w119#[2560..=3199]
+  const t1985 = t1984#[130..=139]
+  const t1986 = t1985#sext[0..=9]
+  mut levels_2_nodes_6_n = add_node::[name=levels_2_nodes_6_n](clock = clock, reset = reset, a = t1983, b = t1986)
+  mut level__w120 = level__w119
+  level__w120#[1980..=1989] = levels_2_nodes_6_n#[0..=9]
+  const t1988 = level__w120#[2560..=3199]
+  const t1989 = t1988#[140..=149]
+  const t1990 = t1989#sext[0..=9]
+  const t1991 = level__w120#[2560..=3199]
+  const t1992 = t1991#[150..=159]
+  const t1993 = t1992#sext[0..=9]
+  mut levels_2_nodes_7_n = add_node::[name=levels_2_nodes_7_n](clock = clock, reset = reset, a = t1990, b = t1993)
+  mut level__w121 = level__w120
+  level__w121#[1990..=1999] = levels_2_nodes_7_n#[0..=9]
+  mut level__w122 = level__w121
+  level__w122#[2000..=2559] = 0
+  const t1995 = level__w122#[1920..=2559]
+  const t1996 = t1995#[0..=9]
+  const t1997 = t1996#sext[0..=9]
+  const t1998 = level__w122#[1920..=2559]
+  const t1999 = t1998#[10..=19]
+  const t2000 = t1999#sext[0..=9]
+  mut levels_3_nodes_0_n = add_node::[name=levels_3_nodes_0_n](clock = clock, reset = reset, a = t1997, b = t2000)
+  mut level__w123 = level__w122
+  level__w123#[1280..=1289] = levels_3_nodes_0_n#[0..=9]
+  const t2002 = level__w123#[1920..=2559]
+  const t2003 = t2002#[20..=29]
+  const t2004 = t2003#sext[0..=9]
+  const t2005 = level__w123#[1920..=2559]
+  const t2006 = t2005#[30..=39]
+  const t2007 = t2006#sext[0..=9]
+  mut levels_3_nodes_1_n = add_node::[name=levels_3_nodes_1_n](clock = clock, reset = reset, a = t2004, b = t2007)
+  mut level__w124 = level__w123
+  level__w124#[1290..=1299] = levels_3_nodes_1_n#[0..=9]
+  const t2009 = level__w124#[1920..=2559]
+  const t2010 = t2009#[40..=49]
+  const t2011 = t2010#sext[0..=9]
+  const t2012 = level__w124#[1920..=2559]
+  const t2013 = t2012#[50..=59]
+  const t2014 = t2013#sext[0..=9]
+  mut levels_3_nodes_2_n = add_node::[name=levels_3_nodes_2_n](clock = clock, reset = reset, a = t2011, b = t2014)
+  mut level__w125 = level__w124
+  level__w125#[1300..=1309] = levels_3_nodes_2_n#[0..=9]
+  const t2016 = level__w125#[1920..=2559]
+  const t2017 = t2016#[60..=69]
+  const t2018 = t2017#sext[0..=9]
+  const t2019 = level__w125#[1920..=2559]
+  const t2020 = t2019#[70..=79]
+  const t2021 = t2020#sext[0..=9]
+  mut levels_3_nodes_3_n = add_node::[name=levels_3_nodes_3_n](clock = clock, reset = reset, a = t2018, b = t2021)
+  mut level__w126 = level__w125
+  level__w126#[1310..=1319] = levels_3_nodes_3_n#[0..=9]
+  mut level__w127 = level__w126
+  level__w127#[1320..=1919] = 0
+  const t2023 = level__w127#[1280..=1919]
+  const t2024 = t2023#[0..=9]
+  const t2025 = t2024#sext[0..=9]
+  const t2026 = level__w127#[1280..=1919]
+  const t2027 = t2026#[10..=19]
+  const t2028 = t2027#sext[0..=9]
+  mut levels_4_nodes_0_n = add_node::[name=levels_4_nodes_0_n](clock = clock, reset = reset, a = t2025, b = t2028)
+  mut level__w128 = level__w127
+  level__w128#[640..=649] = levels_4_nodes_0_n#[0..=9]
+  const t2030 = level__w128#[1280..=1919]
+  const t2031 = t2030#[20..=29]
+  const t2032 = t2031#sext[0..=9]
+  const t2033 = level__w128#[1280..=1919]
+  const t2034 = t2033#[30..=39]
+  const t2035 = t2034#sext[0..=9]
+  mut levels_4_nodes_1_n = add_node::[name=levels_4_nodes_1_n](clock = clock, reset = reset, a = t2032, b = t2035)
+  mut level__w129 = level__w128
+  level__w129#[650..=659] = levels_4_nodes_1_n#[0..=9]
+  mut level__w130 = level__w129
+  level__w130#[660..=1279] = 0
+  const t2037 = level__w130#[640..=1279]
+  const t2038 = t2037#[0..=9]
+  const t2039 = t2038#sext[0..=9]
+  const t2040 = level__w130#[640..=1279]
+  const t2041 = t2040#[10..=19]
+  const t2042 = t2041#sext[0..=9]
+  mut levels_5_nodes_0_n = add_node::[name=levels_5_nodes_0_n](clock = clock, reset = reset, a = t2039, b = t2042)
+  mut level__w131 = level__w130
+  level__w131#[0..=9] = levels_5_nodes_0_n#[0..=9]
+  mut level__w132 = level__w131
+  level__w132#[10..=639] = 0
+  valid_pipe = if (reset != 0) or (ref_load != 0) { 0 } else { (valid_pipe << 1)#[0..=5] | 1 }
+  const y_valid__w1 = unsigned((ref_load == 0) and (((valid_pipe >> 5) & 1) != 0))
+  const t2057 = level__w132#[0..=639]
+  const t2058 = t2057#[0..=9]
+  mut _mux_2:u10 = if y_valid__w1 != 0 { t2058 ^ 1 } else { 0 }
+  y = _mux_2#sext[0..=9]
+  y_valid = y_valid__w1
 }

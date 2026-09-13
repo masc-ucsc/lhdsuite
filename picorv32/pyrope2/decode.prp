@@ -1,3 +1,15 @@
+comptime const op_auipc:u7 = 0x17
+comptime const op_branch:u7 = 0x63
+comptime const op_fence:u7 = 0x0f
+comptime const op_immediate:u7 = 0x13
+comptime const op_jal:u7 = 0x6f
+comptime const op_jalr:u7 = 0x67
+comptime const op_load:u7 = 0x03
+comptime const op_lui:u7 = 0x37
+comptime const op_register:u7 = 0x33
+comptime const op_store:u7 = 0x23
+comptime const op_system:u7 = 0x73
+
 // Architectural immediates for the five ordinary RISC-V instruction formats.
 // The caller selects a format and owns the decode pipeline registers.
 pub comb immediates(insn:u32) -> (i:u32, s:u32, b:u32, u:u32, j:u32) {
@@ -115,17 +127,17 @@ pub mod instruction_decoder<COMPRESSED_ISA=true, ENABLE_COUNTERS=true, ENABLE_CO
   is_lbu_lhu_lw = lbu or lhu or lw
   is_compare = is_beq_bne_blt_bge_bltu_bgeu or slti or slt or sltiu or sltu
   if mem_do_rinst and mem_done {
-    lui = mem_rdata_latched#[0..=6] == 55
-    auipc = mem_rdata_latched#[0..=6] == 23
-    jal = mem_rdata_latched#[0..=6] == 0x6f
-    jalr = (mem_rdata_latched#[0..=6] == 0x67) and (mem_rdata_latched#[12..=14] == 0)
+    lui = mem_rdata_latched#[0..=6] == op_lui
+    auipc = mem_rdata_latched#[0..=6] == op_auipc
+    jal = mem_rdata_latched#[0..=6] == op_jal
+    jalr = (mem_rdata_latched#[0..=6] == op_jalr) and (mem_rdata_latched#[12..=14] == 0)
     retirq = false
     waitirq = false
-    is_beq_bne_blt_bge_bltu_bgeu = mem_rdata_latched#[0..=6] == 0x63
-    is_lb_lh_lw_lbu_lhu = mem_rdata_latched#[0..=6] == 3
-    is_sb_sh_sw = mem_rdata_latched#[0..=6] == 35
-    is_alu_reg_imm = mem_rdata_latched#[0..=6] == 19
-    is_alu_reg_reg = mem_rdata_latched#[0..=6] == 51
+    is_beq_bne_blt_bge_bltu_bgeu = mem_rdata_latched#[0..=6] == op_branch
+    is_lb_lh_lw_lbu_lhu = mem_rdata_latched#[0..=6] == op_load
+    is_sb_sh_sw = mem_rdata_latched#[0..=6] == op_store
+    is_alu_reg_imm = mem_rdata_latched#[0..=6] == op_immediate
+    is_alu_reg_reg = mem_rdata_latched#[0..=6] == op_register
     const fetched_immediates = immediates(insn=mem_rdata_latched)
     imm_j = fetched_immediates.j
     rd = mem_rdata_latched#[7..=11]
@@ -329,15 +341,15 @@ pub mod instruction_decoder<COMPRESSED_ISA=true, ENABLE_COUNTERS=true, ENABLE_CO
     sra = is_alu_reg_reg and (funct3 == 5) and (funct7 == 32)
     bit_or = is_alu_reg_reg and (funct3 == 6) and (funct7 == 0)
     bit_and = is_alu_reg_reg and (funct3 == 7) and (funct7 == 0)
-    rdcycle = (((opcode == 0x73) and (mem_rdata_q#[12..=31] == 0xc0002)) or
-      ((opcode == 0x73) and (mem_rdata_q#[12..=31] == 0xc0102))) and ENABLE_COUNTERS
-    rdcycleh = (((opcode == 0x73) and (mem_rdata_q#[12..=31] == 0xc8002)) or
-      ((opcode == 0x73) and (mem_rdata_q#[12..=31] == 0xc8102))) and ENABLE_COUNTERS and ENABLE_COUNTERS64
-    rdinstr = (opcode == 0x73) and (mem_rdata_q#[12..=31] == 0xc0202) and ENABLE_COUNTERS
-    rdinstrh = (opcode == 0x73) and (mem_rdata_q#[12..=31] == 0xc8202) and ENABLE_COUNTERS and ENABLE_COUNTERS64
-    ecall_ebreak = ((opcode == 0x73) and (mem_rdata_q#[21..=31] == 0) and (mem_rdata_q#[7..=19] == 0)) or
+    rdcycle = (((opcode == op_system) and (mem_rdata_q#[12..=31] == 0xc0002)) or
+      ((opcode == op_system) and (mem_rdata_q#[12..=31] == 0xc0102))) and ENABLE_COUNTERS
+    rdcycleh = (((opcode == op_system) and (mem_rdata_q#[12..=31] == 0xc8002)) or
+      ((opcode == op_system) and (mem_rdata_q#[12..=31] == 0xc8102))) and ENABLE_COUNTERS and ENABLE_COUNTERS64
+    rdinstr = (opcode == op_system) and (mem_rdata_q#[12..=31] == 0xc0202) and ENABLE_COUNTERS
+    rdinstrh = (opcode == op_system) and (mem_rdata_q#[12..=31] == 0xc8202) and ENABLE_COUNTERS and ENABLE_COUNTERS64
+    ecall_ebreak = ((opcode == op_system) and (mem_rdata_q#[21..=31] == 0) and (mem_rdata_q#[7..=19] == 0)) or
       (COMPRESSED_ISA and (mem_rdata_q#[0..=15] == 0x9002))
-    fence = (opcode == 15) and (funct3 == 0)
+    fence = (opcode == op_fence) and (funct3 == 0)
     getq = false
     setq = false
     maskirq = false

@@ -1,0 +1,50 @@
+// Four-entry snapshot queue. Payload storage is deliberately unreset.
+// Flush/dequeue wins over enqueue for validity; flush also rewinds the tail.
+pub comb snapshot_next<WIDTH>(
+  enqueue:bool, data:unsigned(bits=WIDTH), dequeue:bool,
+  redirect:bool, flush:u4,
+  snapshots:unsigned(bits=4 * WIDTH), snptEnqPtr:u3, snptDeqPtr:u3, snptValids:u4
+) -> (
+  payloads:unsigned(bits=4 * WIDTH), enq_ptr:u3, deq_ptr:u3, valids:u4
+) {
+  mut next_payloads:unsigned(bits=4 * WIDTH) = snapshots
+  mut next_valids:u4 = snptValids
+
+  const head:u2 = snptDeqPtr#[0..=1]
+  const tail:u2 = snptEnqPtr#[0..=1]
+  const full:bool = (head == tail) and (snptEnqPtr#[2] != snptDeqPtr#[2])
+  const push:bool = enqueue and not redirect and not full
+  const pop:bool = dequeue and not redirect
+
+  for slot in 0..<4 {
+    if push and (tail == slot) {
+      next_payloads#[(slot * WIDTH)..+WIDTH] = data
+    }
+    next_valids#[slot] = unsigned(
+      (flush#[slot] == 0) and not (pop and (head == slot)) and
+      ((push and (tail == slot)) or (snptValids#[slot] != 0)))
+  }
+
+  // Preserve the RTL's asymmetric qualification: candidate zero accepts an
+  // invalid slot, while later candidates require a valid, flushed slot.
+  const candidate0:u3 = snptDeqPtr
+  const candidate1:u3 = (snptDeqPtr + 1)#[0..=2]
+  const candidate2:u3 = (snptDeqPtr + 2)#[0..=2]
+  const candidate3:u3 = (snptDeqPtr + 3)#[0..=2]
+  const qualify0:bool = (snptValids#[head] == 0) or (flush#[head] != 0)
+  const qualify1:bool = (snptValids#[candidate1#[0..=1]] != 0) and (flush#[candidate1#[0..=1]] != 0)
+  const qualify2:bool = (snptValids#[candidate2#[0..=1]] != 0) and (flush#[candidate2#[0..=1]] != 0)
+  const rewind:u3 = if qualify0 { candidate0 } elif qualify1 { candidate1 }
+    elif qualify2 { candidate2 } else { candidate3 }
+  enq_ptr = if (flush & snptValids) != 0 {
+    rewind
+  } elif push {
+    (snptEnqPtr + 1)#[0..=2]
+  } else {
+    snptEnqPtr
+  }
+  deq_ptr = if pop { (snptDeqPtr + 1)#[0..=2] } else { snptDeqPtr }
+
+  payloads = next_payloads
+  valids = next_valids
+}

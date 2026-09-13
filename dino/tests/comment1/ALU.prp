@@ -1,41 +1,46 @@
-// Comment-only incremental variant: hardware must remain identical.
-const enc = import("encodings")
-comptime const full_msb = 63
-comptime const word_msb = 31
-comptime const full_shamt_msb = 5
-comptime const word_shamt_msb = 4
-comptime const operation_msb = 3
-
-pub mod ALU::[timecheck = false](io_operation:u5, io_inputx:u64, io_inputy:u64) -> (io_result:u64@[]) {
-  const word:bool      = io_operation#[enc.alu_word_bit] != 0
-  mut sum:u64          = 0
-  mut difference:u64   = 0
-  mut left_shift:u64   = 0
-  mut signed_shift:u64 = 0
-  wrap sum = io_inputx + io_inputy
-  wrap difference = io_inputx - io_inputy
-  wrap left_shift = if word { io_inputx#[0 ..= word_msb] << io_inputy#[0 ..= word_shamt_msb] } else { io_inputx << io_inputy#[0 ..= full_shamt_msb] }
-  wrap signed_shift     = if word { io_inputx#sext[0 ..= word_msb] >> io_inputy#[0 ..= word_shamt_msb] } else {
-    io_inputx#sext[0 ..= full_msb] >> io_inputy#[0 ..= full_shamt_msb]
-  }
-  const right_shift:u64 = if word { io_inputx#[0 ..= word_msb] >> io_inputy#[0 ..= word_shamt_msb] } else { io_inputx >> io_inputy#[0 ..= full_shamt_msb] }
-  // The word flag only affects add/subtract and shifts, as in the reference.
-  match io_operation#[0 ..= operation_msb] {
-    == enc.alu_xor { io_result = io_inputx ^ io_inputy }
-    == enc.alu_ltu { io_result = unsigned(io_inputx < io_inputy) }
-    == enc.alu_srl { wrap  io_result = if word { right_shift#sext[0 ..= word_msb] } else { right_shift } }
-    == enc.alu_sra { wrap  io_result = if word { signed_shift#sext[0 ..= word_msb] } else { signed_shift } }
-    == enc.alu_sub { wrap  io_result = if word { difference#sext[0 ..= word_msb] } else { difference } }
-    == enc.alu_or { io_result = io_inputx | io_inputy }
-    == enc.alu_and { io_result = io_inputx & io_inputy }
-    == enc.alu_add { wrap  io_result = if word { sum#sext[0 ..= word_msb] } else { sum } }
-    == enc.alu_sll { wrap  io_result = if word { left_shift#sext[0 ..= word_msb] } else { left_shift } }
-    == enc.alu_lt { io_result = unsigned(io_inputx#sext[0 ..= full_msb] < io_inputy#sext[0 ..= full_msb]) }
-    == enc.alu_nor { wrap  io_result = ~(io_inputx | io_inputy) }
-    == enc.alu_ge { io_result = unsigned(io_inputx#sext[0 ..= full_msb] >= io_inputy#sext[0 ..= full_msb]) }
-    == enc.alu_geu { io_result = unsigned(io_inputx >= io_inputy) }
-    == enc.alu_eq { io_result = unsigned(io_inputx == io_inputy) }
-    == enc.alu_ne { io_result = unsigned(io_inputx != io_inputy) }
-    else { io_result = 0 }
-  }
+// Comment-only incremental cache check.
+pub comb ALU::[timecheck=false](io_operation:u5, io_inputx:u64, io_inputy:u64) -> (io_result:u64) {
+  wire io:(operation:u5, inputx:u64, inputy:u64, result:u64) = nil
+  wire wordinst:u1
+  wire aluop:u4
+  wire operand1_32:u32
+  wire operand2_32:u32
+  wire _io_result_T_2:u32
+  wire _GEN:u64
+  wire _io_result_T_10:u32
+  wire _GEN_0:u64
+  wire _io_result_T_20:u32
+  wire _GEN_1:u64
+  wire _io_result_T_36:u32
+  wire _GEN_2:u64
+  wire _io_result_T_44:u63
+  wire _io_result_T_50:u127
+  wire _GEN_3:u64
+  wire _GEN_4:u1024
+  wordinst = (io.operation >> 4) & 1
+  aluop = io.operation#[0..=3]
+  operand1_32 = io.inputx#[0..=31]
+  operand2_32 = io.inputy#[0..=31]
+  _io_result_T_2 = (operand1_32 + operand2_32)#[0..=31]
+  mut _mux_1:u64 = if wordinst != 0 { _io_result_T_2#sext[0..=31]#[0..=63] } else { (io.inputx + io.inputy)#[0..=63] }
+  _GEN = _mux_1
+  _io_result_T_10 = (operand1_32 - operand2_32)#[0..=31]
+  mut _mux_2:u64 = if wordinst != 0 { _io_result_T_10#sext[0..=31]#[0..=63] } else { (io.inputx - io.inputy)#[0..=63] }
+  _GEN_0 = _mux_2
+  _io_result_T_20 = (operand1_32#sext[0..=31] >> operand2_32#[0..=4])#[0..=31]#sext[0..=31]#[0..=31]
+  mut _mux_3:u64 = if wordinst != 0 { _io_result_T_20#sext[0..=31]#[0..=63] } else { (io.inputx#sext[0..=63] >> io.inputy#[0..=5])#[0..=63]#sext[0..=63]#[0..=63] }
+  _GEN_1 = _mux_3
+  _io_result_T_36 = operand1_32 >> operand2_32#[0..=4]
+  mut _mux_4:u64 = if wordinst != 0 { _io_result_T_36#sext[0..=31]#[0..=63] } else { (io.inputx >> io.inputy#[0..=5])#[0..=63] }
+  _GEN_2 = _mux_4
+  _io_result_T_44 = (operand1_32 << operand2_32#[0..=4])#[0..=62]
+  _io_result_T_50 = (io.inputx#[0..=63] << io.inputy#[0..=5])#[0..=126]
+  mut _mux_5:u64 = if wordinst != 0 { _io_result_T_44#[0..=31]#sext[0..=31]#[0..=63] } else { _io_result_T_50#[0..=63] }
+  _GEN_3 = _mux_5
+  _GEN_4 = ((unsigned(io.inputx != io.inputy) & 1) << 896) | ((unsigned(io.inputx == io.inputy) & 1) << 832) | ((unsigned(io.inputx >= io.inputy) & 1) << 768) | ((unsigned(io.inputx#sext[0..=63] >= io.inputy#sext[0..=63]) & 1) << 704) | ((~(io.inputx | io.inputy)#[0..=63])#[0..=63] << 640) | ((unsigned(io.inputx#sext[0..=63] < io.inputy#sext[0..=63]) & 1) << 576) | (_GEN_3 << 512) | (_GEN << 448) | ((io.inputx & io.inputy)#[0..=63] << 384) | ((io.inputx | io.inputy)#[0..=63] << 320) | (_GEN_0 << 256) | (_GEN_1 << 192) | (_GEN_2 << 128) | ((unsigned(io.inputx < io.inputy) & 1) << 64) | (io.inputx ^ io.inputy)#[0..=63]
+  io.operation = io_operation
+  io.inputx = io_inputx
+  io.inputy = io_inputy
+  io.result = ((_GEN_4 << 0x40) >> ((aluop * 0x40) + 0x40))#[0..=63]
+  io_result = io.result
 }

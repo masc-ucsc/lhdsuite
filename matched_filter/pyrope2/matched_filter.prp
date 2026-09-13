@@ -7,7 +7,6 @@
 // returns one result per cycle after its deterministic pipeline delay.
 const tap      = import("tap.tap")
 const add_node = import("add_node.add_node")
-const valid_stage = import("valid_stage.valid_stage")
 
 comptime const SIZE       = 64
 comptime const LOG2_SIZE  = 6
@@ -24,7 +23,7 @@ cassert(MULT_WIDTH > 0 and MULT_WIDTH <= 16,
 
 // `timecheck=false`: the sample chain, held reference state, and registered
 // reduction deliberately mix cycle ages.
-pub mod matched_filter::[timecheck=false](x:s8, ref_in:s8, ref_load:bool) -> (y:Sum_T@[0], y_valid:bool@[0]) {
+pub mod matched_filter::[timecheck=false](clock:u1, reset:u1, x:s8, ref_in:s8, ref_load:bool) -> (y:Sum_T@[0], y_valid:bool@[0]) {
   mut xs:s8 = x
   mut refs:s8 = ref_in
   mut current:[SIZE]Sum_T = 0
@@ -40,38 +39,35 @@ pub mod matched_filter::[timecheck=false](x:s8, ref_in:s8, ref_load:bool) -> (y:
     // signed values, then retain the upper MULT_WIDTH product bits. Width 4:
     //   (x#[4..=7] * ref#[4..=7])#[4..=7]
     // #sext selects those same bits while declaring the selected MSB as sign.
-    mut product:Product_T = 0
-    if MULT_WIDTH >= 8 {
+    const product:Product_T = if MULT_WIDTH >= 8 {
       const full_product:s16 = t.x_out * t.ref_out
-      product = full_product#sext[(16 - MULT_WIDTH)..=15]
+      full_product#sext[(16 - MULT_WIDTH)..=15]
     } else {
-      mut x_msb:Product_T = 0
-      mut ref_msb:Product_T = 0
-      x_msb = t.x_out#sext[(8 - MULT_WIDTH)..=7]
-      ref_msb = t.ref_out#sext[(8 - MULT_WIDTH)..=7]
-      const narrow_product = x_msb * ref_msb
-      product = narrow_product#sext[MULT_WIDTH..=((2 * MULT_WIDTH) - 1)]
+      const x_msb:Product_T = (t.x_out >> (8 - MULT_WIDTH))#sext[0..<MULT_WIDTH]
+      const ref_msb:Product_T = (t.ref_out >> (8 - MULT_WIDTH))#sext[0..<MULT_WIDTH]
+      const narrow_product:signed(bits=2 * MULT_WIDTH) = x_msb * ref_msb
+      (narrow_product >> MULT_WIDTH)#sext[0..<MULT_WIDTH]
     }
     current[i] = product
   }
 
   // Each registered level reads one vector and writes a distinct next vector.
   // After the level is complete, current advances to that new pipeline stage.
-  mut tree_valid:bool = not ref_load
+  reg valid_pipe:unsigned(bits=LOG2_SIZE):[reset_pin=ref reset] = 0
   for lvl in 0..<LOG2_SIZE {
     mut next:[SIZE]Sum_T = 0
     for j in 0..<(SIZE >> (lvl + 1)) {
-      // Keep the structural type here: passing Sum_T through the generic
-      // currently loses a.[bits] inside add_node.
-      next[j] = add_node<signed(bits=SUM_WIDTH)>(
+      // Bind the structural type: named aliases are not resolved at this generic call.
+      const node = add_node<Sum_T>(
         a=current[2 * j],
         b=current[2 * j + 1],
       )
+      next[j] = node
     }
     current = next
-    tree_valid = valid_stage(in_valid=tree_valid, clear=ref_load)
   }
 
-  y_valid = tree_valid and not ref_load
+  y_valid = (valid_pipe#[LOG2_SIZE - 1] != 0) and not ref_load
+  wrap valid_pipe = if ref_load { 0 } else { (valid_pipe << 1) | 1 }
   y = if y_valid { current[0] } else { 0 }
 }

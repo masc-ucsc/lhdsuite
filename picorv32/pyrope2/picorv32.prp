@@ -3,38 +3,41 @@
 // Feature bindings are per-instance constant generics. Defaults match the suite.
 // Keep nonblocking register reads and old-data register-file ordering intact.
 const instruction_decoder = import("decode.instruction_decoder")
-const arbitrate = import("pcpi.arbitrate")
-const alu_operands = import("datapath.alu_operands")
-const shift_word = import("datapath.shift_word")
+const arbitrate           = import("pcpi.arbitrate")
+const alu_operands        = import("datapath.alu_operands")
+const shift_word          = import("datapath.shift_word")
 
-comptime const CPU_TRAP:u8 = 0x80
-comptime const CPU_FETCH:u8 = 0x40
+comptime const CPU_TRAP:u8   = 0x80
+comptime const CPU_FETCH:u8  = 0x40
 comptime const CPU_LD_RS1:u8 = 0x20
 comptime const CPU_LD_RS2:u8 = 0x10
-comptime const CPU_EXEC:u8 = 0x08
-comptime const CPU_SHIFT:u8 = 0x04
-comptime const CPU_STMEM:u8 = 0x02
-comptime const CPU_LDMEM:u8 = 0x01
+comptime const CPU_EXEC:u8   = 0x08
+comptime const CPU_SHIFT:u8  = 0x04
+comptime const CPU_STMEM:u8  = 0x02
+comptime const CPU_LDMEM:u8  = 0x01
 
-pub mod picorv32<
-  ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALPORT=true,
-  TWO_CYCLE_ALU=false, TWO_CYCLE_COMPARE=false,
-  LATCHED_MEM_RDATA=false, TWO_STAGE_SHIFT=true, BARREL_SHIFTER=true,
-  COMPRESSED_ISA=true, CATCH_MISALIGN=true, CATCH_ILLINSN=true,
-  ENABLE_PCPI=false, ENABLE_MUL=false, ENABLE_FAST_MUL=false, ENABLE_DIV=false,
-  PROGADDR_RESET=0, STACKADDR=0xffffffff, DEBUG=false
->::[timecheck=false](
-  clk:u1, resetn:bool, mem_ready:bool, mem_rdata:u32,
-  pcpi_wr:bool, pcpi_rd:u32, pcpi_wait:bool, pcpi_ready:bool, irq:u32
-) -> (
-  trap:bool@[], mem_valid:bool@[], mem_instr:bool@[],
-  mem_addr:u32@[], mem_wdata:u32@[], mem_wstrb:u4@[],
-  mem_la_read:bool@[], mem_la_write:bool@[], mem_la_addr:u32@[],
-  mem_la_wdata:u32@[], mem_la_wstrb:u4@[],
-  pcpi_valid:bool@[], pcpi_insn:u32@[], pcpi_rs1:u32@[], pcpi_rs2:u32@[],
-  eoi:u32@[], trace_valid:bool@[], trace_data:u36@[]
+pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALPORT=true, TWO_CYCLE_ALU=false, TWO_CYCLE_COMPARE=false, LATCHED_MEM_RDATA=false, TWO_STAGE_SHIFT=true, BARREL_SHIFTER=true, COMPRESSED_ISA=true, CATCH_MISALIGN=true, CATCH_ILLINSN=true, ENABLE_PCPI=false, ENABLE_MUL=false, ENABLE_FAST_MUL=false, ENABLE_DIV=false, PROGADDR_RESET=0, STACKADDR=0xffffffff, DEBUG=false>::[
+  timecheck = false
+](clk:u1, resetn:bool, mem_ready:bool, mem_rdata:u32, pcpi_wr:bool, pcpi_rd:u32, pcpi_wait:bool, pcpi_ready:bool, irq:u32) -> (
+  trap:bool@[],
+  mem_valid:bool@[],
+  mem_instr:bool@[],
+  mem_addr:u32@[],
+  mem_wdata:u32@[],
+  mem_wstrb:u4@[],
+  mem_la_read:bool@[],
+  mem_la_write:bool@[],
+  mem_la_addr:u32@[],
+  mem_la_wdata:u32@[],
+  mem_la_wstrb:u4@[],
+  pcpi_valid:bool@[],
+  pcpi_insn:u32@[],
+  pcpi_rs1:u32@[],
+  pcpi_rs2:u32@[],
+  eoi:u32@[],
+  trace_valid:bool@[],
+  trace_data:u36@[]
 ) {
-
   comptime const WITH_PCPI = ENABLE_PCPI or ENABLE_MUL or ENABLE_FAST_MUL or ENABLE_DIV
 
   cassert(PROGADDR_RESET >= 0 and PROGADDR_RESET <= 0xffffffff)
@@ -42,41 +45,41 @@ pub mod picorv32<
 
   // State. Registers without a reset keep their original unknown power-on value.
   reg trap:bool = nil
-  reg pcpi_valid:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg pcpi_valid:bool:[negreset = true, reset_pin = ref resetn]     = false
   reg pcpi_insn:u32 = nil
-  reg eoi:u32:[negreset=true, reset_pin=ref resetn] = 0
+  reg eoi:u32:[negreset = true, reset_pin = ref resetn]             = 0
   reg trace_valid:bool = nil
   reg trace_data:u36 = nil
   reg count_cycle:u64 = nil
   reg count_instr:u64 = nil
-  reg reg_pc:u32:[negreset=true, reset_pin=ref resetn] = PROGADDR_RESET
-  reg reg_next_pc:u32:[negreset=true, reset_pin=ref resetn] = PROGADDR_RESET
+  reg reg_pc:u32:[negreset = true, reset_pin = ref resetn]          = PROGADDR_RESET
+  reg reg_next_pc:u32:[negreset = true, reset_pin = ref resetn]     = PROGADDR_RESET
   reg reg_op1:u32 = nil
   reg reg_op2:u32 = nil
   reg reg_out:u32 = nil
   reg reg_sh:u5 = nil
   reg next_insn_opcode:u32 = nil
-  reg irq_active:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg irq_mask:u32:[negreset=true, reset_pin=ref resetn] = 0xffffffff
+  reg irq_active:bool:[negreset = true, reset_pin = ref resetn]     = false
+  reg irq_mask:u32:[negreset = true, reset_pin = ref resetn]        = 0xffffffff
   reg irq_pending:u32 = nil
-  reg timer:u32:[negreset=true, reset_pin=ref resetn] = 0
-  reg cpuregs:[32]u32:[ordering="old"] = nil
+  reg timer:u32:[negreset = true, reset_pin = ref resetn]           = 0
+  reg cpuregs:[32]u32:[ordering = "old"] = nil
   reg decoder_trigger:bool = nil
   reg decoder_trigger_q:bool = nil
   reg decoder_pseudo_trigger:bool = nil
   reg decoder_pseudo_trigger_q:bool = nil
-  reg cpu_state:u8:[negreset=true, reset_pin=ref resetn] = CPU_FETCH
-  reg irq_state:u2:[negreset=true, reset_pin=ref resetn] = 0
-  reg latched_store:bool:[negreset=true, reset_pin=ref resetn] = STACKADDR != 0xffffffff
-  reg latched_stalu:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg latched_branch:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg cpu_state:u8:[negreset = true, reset_pin = ref resetn]        = CPU_FETCH
+  reg irq_state:u2:[negreset = true, reset_pin = ref resetn]        = 0
+  reg latched_store:bool:[negreset = true, reset_pin = ref resetn]  = STACKADDR != 0xffffffff
+  reg latched_stalu:bool:[negreset = true, reset_pin = ref resetn]  = false
+  reg latched_branch:bool:[negreset = true, reset_pin = ref resetn] = false
   reg latched_compr:bool = nil
-  reg latched_is_lu:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg latched_is_lh:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg latched_is_lb:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg latched_is_lu:bool:[negreset = true, reset_pin = ref resetn]  = false
+  reg latched_is_lh:bool:[negreset = true, reset_pin = ref resetn]  = false
+  reg latched_is_lb:bool:[negreset = true, reset_pin = ref resetn]  = false
   reg latched_rd:u5 = nil
   reg pcpi_timeout_counter:u4 = nil
-  reg pcpi_timeout:bool:[negreset=true, reset_pin=ref resetn] = false
+  reg pcpi_timeout:bool:[negreset = true, reset_pin = ref resetn]   = false
   reg do_waitirq:bool = nil
   reg alu_wait:bool = nil
   reg alu_wait_2:bool = nil
@@ -97,15 +100,21 @@ pub mod picorv32<
   mut clear_prefetched_high_word:bool = 0ub? != 0
   mut alu_out:u32 = 0sb?
 
-  const coprocessor = arbitrate<ENABLE_PCPI=ENABLE_PCPI, ENABLE_MUL=ENABLE_MUL,
-    ENABLE_FAST_MUL=ENABLE_FAST_MUL, ENABLE_DIV=ENABLE_DIV>(
-      clk=clk, resetn=resetn, pcpi_valid=pcpi_valid, pcpi_insn=pcpi_insn,
-      pcpi_rs1=reg_op1, pcpi_rs2=reg_op2, pcpi_wr=pcpi_wr, pcpi_rd=pcpi_rd,
-      pcpi_wait=pcpi_wait, pcpi_ready=pcpi_ready)
-  const pcpi_int_wait = coprocessor.waiting
-  const pcpi_int_ready = coprocessor.ready
-  const pcpi_int_wr = coprocessor.writeback
-  const pcpi_int_rd = coprocessor.result
+  // No engine is elaborated when PCPI and all arithmetic extensions are disabled.
+  mut pcpi_int_wait:bool  = false
+  mut pcpi_int_ready:bool = false
+  mut pcpi_int_wr:bool    = false
+  mut pcpi_int_rd:u32     = 0sb?
+  if ENABLE_PCPI or ENABLE_MUL or ENABLE_FAST_MUL or ENABLE_DIV {
+    const coprocessor = arbitrate<ENABLE_PCPI=ENABLE_PCPI,ENABLE_MUL=ENABLE_MUL,ENABLE_FAST_MUL=ENABLE_FAST_MUL,ENABLE_DIV=ENABLE_DIV>(
+      clk=clk, resetn=resetn, pcpi_valid=pcpi_valid, pcpi_insn=pcpi_insn, pcpi_rs1=reg_op1, pcpi_rs2=reg_op2, pcpi_wr=pcpi_wr, pcpi_rd=pcpi_rd,
+      pcpi_wait=pcpi_wait, pcpi_ready=pcpi_ready
+    )
+    pcpi_int_wait  = coprocessor.waiting
+    pcpi_int_ready = coprocessor.ready
+    pcpi_int_wr    = coprocessor.writeback
+    pcpi_int_rd    = coprocessor.result
+  }
 
   // Memory transaction state.
   reg mem_valid:bool = nil
@@ -113,173 +122,180 @@ pub mod picorv32<
   reg mem_addr:u32 = nil
   reg mem_wdata:u32 = nil
   reg mem_wstrb:u4 = nil
-  reg mem_la_wdata:u32:[latch=true] = nil
-  reg mem_la_wstrb:u4:[latch=true] = nil
+  reg mem_la_wdata:u32:[latch = true]   = nil
+  reg mem_la_wstrb:u4:[latch = true]    = nil
   reg mem_state:u2 = nil
   reg mem_wordsize:u2 = nil
-  reg mem_rdata_word:u32:[latch=true] = nil
+  reg mem_rdata_word:u32:[latch = true] = nil
   reg mem_rdata_q:u32 = nil
-  reg mem_do_prefetch:bool = nil
+  reg mem_do_prefetch:bool              = nil
   reg mem_do_rinst:bool = nil
   reg mem_do_rdata:bool = nil
   reg mem_do_wdata:bool = nil
-  reg mem_la_secondword:bool = nil
-  reg mem_la_firstword_reg:bool = nil
-  reg last_mem_valid:bool = nil
-  reg prefetched_high_word:bool = nil
-  reg mem_16bit_buffer:u16 = nil
+  reg mem_la_secondword:bool            = nil
+  reg mem_la_firstword_reg:bool         = nil
+  reg last_mem_valid:bool               = nil
+  reg prefetched_high_word:bool         = nil
+  reg mem_16bit_buffer:u16              = nil
 
   // The decoder owns instruction state; forward wires connect later fetch logic.
   wire decode_mem_done:bool = nil
-  wire decode_rdata:u32 = nil
-  const instr = instruction_decoder<COMPRESSED_ISA=COMPRESSED_ISA,
-    ENABLE_COUNTERS=ENABLE_COUNTERS, ENABLE_COUNTERS64=ENABLE_COUNTERS64>(
-      clk=clk, resetn=resetn, mem_do_rinst=mem_do_rinst, mem_done=decode_mem_done,
-      mem_rdata_latched=decode_rdata, mem_rdata_q=mem_rdata_q,
-      decoder_trigger=decoder_trigger, decoder_pseudo_trigger=decoder_pseudo_trigger)
+  wire decode_rdata:u32     = nil
+  const instr               = instruction_decoder<COMPRESSED_ISA=COMPRESSED_ISA,ENABLE_COUNTERS=ENABLE_COUNTERS,ENABLE_COUNTERS64=ENABLE_COUNTERS64>(
+    clk=clk, resetn=resetn, mem_do_rinst=mem_do_rinst, mem_done=decode_mem_done, mem_rdata_latched=decode_rdata, mem_rdata_q=mem_rdata_q,
+    decoder_trigger=decoder_trigger, decoder_pseudo_trigger=decoder_pseudo_trigger
+  )
 
   // Memory byte lanes and instruction validity.
-  const next_pcpi_rs1 = reg_op1
-  const next_pcpi_rs2 = reg_op2
+  const next_pcpi_rs1     = reg_op1
+  const next_pcpi_rs2     = reg_op2
   const next_mem_la_write = resetn and (mem_state == 0) and mem_do_wdata
   match mem_wordsize {
     == 0 {
-      mem_la_wdata = reg_op2
-      mem_la_wstrb = 15
+      mem_la_wdata   = reg_op2
+      mem_la_wstrb   = 15
       mem_rdata_word = mem_rdata
     }
     == 1 {
-      const store_halfword = reg_op2#[0..=15]
-      mem_la_wdata = store_halfword | (store_halfword << 16)
-      mem_la_wstrb = if reg_op1#[1] != 0 { 12 } else { 3 }
-      const halfword_lane = reg_op1#[1]
-      mem_rdata_word = unique if halfword_lane == 0 {
-        mem_rdata#[0..=15]
-      } elif halfword_lane == 1 {
-        mem_rdata#[16..=31]
-      } else {
+      const store_halfword = reg_op2#[0 ..= 15]
+      mem_la_wdata         = store_halfword | (store_halfword << 16)
+      mem_la_wstrb         = if reg_op1#[1] != 0 { 12 } else { 3 }
+      const halfword_lane  = reg_op1#[1]
+      mem_rdata_word       = unique if halfword_lane == 0 { mem_rdata#[0 ..= 15] } elif halfword_lane == 1 { mem_rdata#[16 ..= 31] } else {
         0sb?
       }
     }
     == 2 {
-      const store_byte = reg_op2#[0..=7]
-      mem_la_wdata = store_byte | (store_byte << 8) | (store_byte << 16) | (store_byte << 24)
-      mem_la_wstrb = 1 << reg_op1#[0..=1]
-      mem_rdata_word = unique if reg_op1#[0..=1] == 0 {
-        mem_rdata#[0..=7]
-      } elif reg_op1#[0..=1] == 1 {
-        mem_rdata#[8..=15]
-      } elif reg_op1#[0..=1] == 2 {
-        mem_rdata#[16..=23]
-      } elif reg_op1#[0..=1] == 3 {
-        mem_rdata#[24..=31]
-      } else {
-        0sb?
-      }
+      const store_byte = reg_op2#[0 ..= 7]
+      mem_la_wdata     = store_byte | (store_byte << 8) | (store_byte << 16) | (store_byte << 24)
+      mem_la_wstrb     = 1 << reg_op1#[0 ..= 1]
+      mem_rdata_word   = unique if reg_op1#[0 ..= 1] == 0 { mem_rdata#[0 ..= 7] } elif reg_op1#[0 ..= 1] == 1 { mem_rdata#[8 ..= 15] } elif reg_op1#[0
+                                                                                                                                                  ..= 1]
+                                                                                                                                                  == 2 {
+        mem_rdata#[16 ..= 23]
+      } elif reg_op1#[0 ..= 1] == 3 { mem_rdata#[24 ..= 31] } else { 0sb? }
     }
     else {
-      mem_la_wdata = 0sb?
-      mem_la_wstrb = 0sb?
+      mem_la_wdata   = 0sb?
+      mem_la_wstrb   = 0sb?
       mem_rdata_word = 0sb?
     }
   }
-  const instr_trap = (CATCH_ILLINSN or WITH_PCPI) and not (
-    instr.lui or instr.auipc or instr.jal or instr.jalr or instr.beq or instr.bne or
-    instr.blt or instr.bge or instr.bltu or instr.bgeu or instr.lb or instr.lh or
-    instr.lw or instr.lbu or instr.lhu or instr.sb or instr.sh or instr.sw or
-    instr.addi or instr.slti or instr.sltiu or instr.xori or instr.ori or instr.andi or
-    instr.slli or instr.srli or instr.srai or instr.add or instr.sub or instr.sll or
-    instr.slt or instr.sltu or instr.bit_xor or instr.srl or instr.sra or instr.bit_or or
-    instr.bit_and or instr.rdcycle or instr.rdcycleh or instr.rdinstr or instr.rdinstrh or instr.fence or
-    instr.getq or instr.setq or instr.retirq or instr.maskirq or instr.waitirq or instr.timer)
+  const instr_trap = (CATCH_ILLINSN or WITH_PCPI)
+                     and not (
+    instr.lui
+    or instr.auipc
+    or instr.jal
+    or instr.jalr
+    or instr.beq
+    or instr.bne
+    or instr.blt
+    or instr.bge
+    or instr.bltu
+    or instr.bgeu
+    or instr.lb
+    or instr.lh
+    or instr.lw
+    or instr.lbu
+    or instr.lhu
+    or instr.sb
+    or instr.sh
+    or instr.sw
+    or instr.addi
+    or instr.slti
+    or instr.sltiu
+    or instr.xori
+    or instr.ori
+    or instr.andi
+    or instr.slli
+    or instr.srli
+    or instr.srai
+    or instr.add
+    or instr.sub
+    or instr.sll
+    or instr.slt
+    or instr.sltu
+    or instr.bit_xor
+    or instr.srl
+    or instr.sra
+    or instr.bit_or
+    or instr.bit_and
+    or instr.rdcycle
+    or instr.rdcycleh
+    or instr.rdinstr
+    or instr.rdinstrh
+    or instr.fence
+    or instr.getq
+    or instr.setq
+    or instr.retirq
+    or instr.maskirq
+    or instr.waitirq
+    or instr.timer
+  )
 
   // ALU and register-file writeback.
-  const next_pc:u32 = if latched_store and latched_branch {
-    reg_out & 0xfffffffe
-  } else {
-    reg_next_pc
-  }
-  const operands = alu_operands(a=reg_op1, b=reg_op2, subtract=instr.sub,
-    arithmetic=(instr.sra or instr.srai))
+  const next_pc:u32     = if latched_store and latched_branch { reg_out & 0xfffffffe } else { reg_next_pc }
+  const operands        = alu_operands(a=reg_op1, b=reg_op2, subtract=instr.sub, arithmetic=(instr.sra or instr.srai))
   reg alu_add_sub_q:u32 = nil
-  reg alu_eq_q:bool = nil
-  reg alu_lts_q:bool = nil
-  reg alu_ltu_q:bool = nil
-  reg alu_shl_q:u32 = nil
-  reg alu_shr_q:u32 = nil
+  reg alu_eq_q:bool     = nil
+  reg alu_lts_q:bool    = nil
+  reg alu_ltu_q:bool    = nil
+  reg alu_shl_q:u32     = nil
+  reg alu_shr_q:u32     = nil
   if TWO_CYCLE_ALU {
     alu_add_sub_q = operands.add_sub
-    alu_eq_q = operands.eq
-    alu_lts_q = operands.lts
-    alu_ltu_q = operands.ltu
-    alu_shl_q = operands.shl
-    alu_shr_q = operands.shr
+    alu_eq_q      = operands.eq
+    alu_lts_q     = operands.lts
+    alu_ltu_q     = operands.ltu
+    alu_shl_q     = operands.shl
+    alu_shr_q     = operands.shr
   }
   const alu_add_sub:u32 = if TWO_CYCLE_ALU { alu_add_sub_q } else { operands.add_sub }
-  const alu_eq:bool = if TWO_CYCLE_ALU { alu_eq_q } else { operands.eq }
-  const alu_lts:bool = if TWO_CYCLE_ALU { alu_lts_q } else { operands.lts }
-  const alu_ltu:bool = if TWO_CYCLE_ALU { alu_ltu_q } else { operands.ltu }
-  const alu_shl:u32 = if TWO_CYCLE_ALU { alu_shl_q } else { operands.shl }
-  const alu_shr:u32 = if TWO_CYCLE_ALU { alu_shr_q } else { operands.shr }
-  alu_out_0 = 0ub? != 0
-  if instr.beq {
-    alu_out_0 = alu_eq
-  } elif instr.bne {
-    alu_out_0 = not alu_eq
-  } elif instr.bge {
-    alu_out_0 = not alu_lts
-  } elif instr.bgeu {
-    alu_out_0 = not alu_ltu
-  } elif instr.is_slti_blt_slt {
-    alu_out_0 = alu_lts
-  } elif instr.is_sltiu_bltu_sltu {
-    alu_out_0 = alu_ltu
-  } else {
-    alu_out_0 = 0ub? != 0
-  }
-  alu_out = if instr.is_lui_auipc_jal_jalr_addi_add_sub {
-    alu_add_sub
-  } elif instr.is_compare {
-    unsigned(alu_out_0)
-  } elif instr.xori or instr.bit_xor {
+  const alu_eq:bool     = if TWO_CYCLE_ALU { alu_eq_q } else { operands.eq }
+  const alu_lts:bool    = if TWO_CYCLE_ALU { alu_lts_q } else { operands.lts }
+  const alu_ltu:bool    = if TWO_CYCLE_ALU { alu_ltu_q } else { operands.ltu }
+  const alu_shl:u32     = if TWO_CYCLE_ALU { alu_shl_q } else { operands.shl }
+  const alu_shr:u32     = if TWO_CYCLE_ALU { alu_shr_q } else { operands.shr }
+  alu_out_0             = unique if instr.beq { alu_eq } elif instr.bne { not alu_eq } elif instr.bge { not alu_lts } elif instr.bgeu {
+    not alu_ltu
+  } elif instr.is_slti_blt_slt { alu_lts } elif instr.is_sltiu_bltu_sltu { alu_ltu } else { 0ub? != 0 }
+  alu_out = unique if instr.is_lui_auipc_jal_jalr_addi_add_sub { alu_add_sub } elif instr.is_compare { unsigned(alu_out_0) } elif instr
+                                                                                                                                    .xori
+                                                                                                                                    or instr
+                                                                                                                                    .bit_xor {
     reg_op1 ^ reg_op2
-  } elif instr.ori or instr.bit_or {
-    reg_op1 | reg_op2
-  } elif instr.andi or instr.bit_and {
-    reg_op1 & reg_op2
-  } elif (BARREL_SHIFTER and (instr.sll or instr.slli)) {
+  } elif instr.ori or instr.bit_or { reg_op1 | reg_op2 } elif instr.andi or instr.bit_and { reg_op1 & reg_op2 } elif (BARREL_SHIFTER
+                                                                                                                        and (instr
+                                                                                                                               .sll
+                                                                                                                               or instr
+                                                                                                                               .slli)) {
     alu_shl
-  } elif (BARREL_SHIFTER and (instr.srl or instr.srli or instr.sra or instr.srai)) {
-    alu_shr
-  } else {
-    0sb?
-  }
+  } elif (BARREL_SHIFTER and (instr.srl or instr.srli or instr.sra or instr.srai)) { alu_shr } else { 0sb? }
   clear_prefetched_high_word = if not prefetched_high_word { false } else { clear_prefetched_high_word_q }
   if latched_branch or (irq_state != 0) or not resetn {
     clear_prefetched_high_word = COMPRESSED_ISA
   }
   cpuregs_wrdata = 0sb?
-  cpuregs_write = false
+  cpuregs_write  = false
   if cpu_state == CPU_FETCH {
     if latched_branch {
       const return_offset = if latched_compr { 2 } else { 4 }
       wrap cpuregs_wrdata = reg_pc + return_offset
-      cpuregs_write = true
+      cpuregs_write  = true
     } elif latched_store and not latched_branch {
       cpuregs_wrdata = if latched_stalu { alu_out_q } else { reg_out }
-      cpuregs_write = true
+      cpuregs_write  = true
     }
   }
   if resetn and cpuregs_write and (latched_rd != 0) {
     cpuregs[latched_rd] = cpuregs_wrdata
   }
-  if ENABLE_REGS_DUALPORT {
-    cpuregs_rs1 = if instr.rs1 != 0 { cpuregs[instr.rs1] } else { 0 }
-    cpuregs_rs2 = if instr.rs2 != 0 { cpuregs[instr.rs2] } else { 0 }
+  const decoded_rs = if ENABLE_REGS_DUALPORT or (cpu_state != CPU_LD_RS2) { instr.rs1 } else { instr.rs2 }
+  cpuregs_rs1 = if decoded_rs != 0 { cpuregs[decoded_rs] } else { 0 }
+  cpuregs_rs2 = if ENABLE_REGS_DUALPORT {
+    if instr.rs2 != 0 { cpuregs[instr.rs2] } else { 0 }
   } else {
-    const decoded_rs = if cpu_state == CPU_LD_RS2 { instr.rs2 } else { instr.rs1 }
-    cpuregs_rs1 = if decoded_rs != 0 { cpuregs[decoded_rs] } else { 0 }
-    cpuregs_rs2 = cpuregs_rs1
+    cpuregs_rs1
   }
 
   // Instruction fetch and compressed-word assembly.
@@ -287,35 +303,25 @@ pub mod picorv32<
   if DEBUG and launch_next_insn {
     puts("picorv32 decode: pc={reg_pc} opcode={next_insn_opcode} rd={instr.rd} rs1={instr.rs1} rs2={instr.rs2}")
   }
-  const mem_la_firstword = COMPRESSED_ISA and (mem_do_prefetch or mem_do_rinst) and
-    (next_pc#[1] != 0) and not mem_la_secondword
-  const mem_la_use_prefetched_high_word = COMPRESSED_ISA and mem_la_firstword and
-    prefetched_high_word and not clear_prefetched_high_word
-  const mem_xfer = (mem_valid and mem_ready) or (mem_la_use_prefetched_high_word and
-    mem_do_rinst)
-  const mem_rdata_latched_noshuffle:u32 = if mem_xfer or LATCHED_MEM_RDATA {
-    mem_rdata
-  } else {
-    mem_rdata_q
-  }
-  const firstword_rdata:u32 = if COMPRESSED_ISA and mem_la_firstword {
-    (0sb?#[0..=15] << 16) | mem_rdata_latched_noshuffle#[16..=31]
-  } else {
-    mem_rdata_latched_noshuffle
-  }
+  const mem_la_firstword                = COMPRESSED_ISA and (mem_do_prefetch or mem_do_rinst) and (next_pc#[1] != 0) and not mem_la_secondword
+  const mem_la_use_prefetched_high_word = COMPRESSED_ISA
+                                          and mem_la_firstword
+                                          and prefetched_high_word
+                                          and not clear_prefetched_high_word
+  const mem_xfer = (mem_valid and mem_ready) or (mem_la_use_prefetched_high_word and mem_do_rinst)
+  const mem_rdata_latched_noshuffle:u32 = if mem_xfer or LATCHED_MEM_RDATA { mem_rdata } else { mem_rdata_q }
+  const firstword_rdata:u32             = if COMPRESSED_ISA and mem_la_firstword {
+    (0sb?#[0 ..= 15] << 16) | mem_rdata_latched_noshuffle#[16 ..= 31]
+  } else { mem_rdata_latched_noshuffle }
   const secondword_rdata:u32 = if COMPRESSED_ISA and mem_la_secondword {
-    (mem_rdata_latched_noshuffle#[0..=15] << 16) | mem_16bit_buffer
-  } else {
-    firstword_rdata
-  }
-  const mem_rdata_latched:u32 = if COMPRESSED_ISA and mem_la_use_prefetched_high_word {
-    (0sb?#[0..=15] << 16) | mem_16bit_buffer
-  } else {
+    (mem_rdata_latched_noshuffle#[0 ..= 15] << 16) | mem_16bit_buffer
+  } else { firstword_rdata }
+  const mem_rdata_latched:u32 = if COMPRESSED_ISA and mem_la_use_prefetched_high_word { (0sb?#[0 ..= 15] << 16) | mem_16bit_buffer } else {
     secondword_rdata
   }
   if not resetn {
     mem_la_firstword_reg = false
-    last_mem_valid = false
+    last_mem_valid       = false
   } else {
     if not last_mem_valid {
       mem_la_firstword_reg = mem_la_firstword
@@ -323,161 +329,223 @@ pub mod picorv32<
     last_mem_valid = mem_valid and not mem_ready
   }
   clear_prefetched_high_word_q = clear_prefetched_high_word
-  const firstword_pending:bool = if not last_mem_valid {
-    mem_la_firstword
-  } else {
-    mem_la_firstword_reg
-  }
-  const mem_done = resetn and ((mem_xfer and (mem_state != 0) and (mem_do_rinst or
-    mem_do_rdata or mem_do_wdata)) or ((mem_state == 3) and mem_do_rinst)) and
-    (not mem_la_firstword or ((mem_rdata_latched#[0..=1] != 3) and mem_xfer))
-  const next_mem_la_read = resetn and ((not mem_la_use_prefetched_high_word and
-    (mem_state == 0) and (mem_do_rinst or mem_do_prefetch or mem_do_rdata)) or
-    (COMPRESSED_ISA and mem_xfer and firstword_pending and not mem_la_secondword and
-    (mem_rdata_latched#[0..=1] == 3)))
+  const firstword_pending:bool = if not last_mem_valid { mem_la_firstword } else { mem_la_firstword_reg }
+  const mem_done               = resetn
+                                 and ((mem_xfer and (mem_state != 0) and (mem_do_rinst or mem_do_rdata or mem_do_wdata))
+                                        or ((mem_state == 3) and mem_do_rinst))
+                                 and (not mem_la_firstword or ((mem_rdata_latched#[0 ..= 1] != 3) and mem_xfer))
+  const next_mem_la_read = resetn
+                           and ((not mem_la_use_prefetched_high_word
+                                   and (mem_state == 0)
+                                   and (mem_do_rinst or mem_do_prefetch or mem_do_rdata))
+                                  or (COMPRESSED_ISA
+                                        and mem_xfer
+                                        and firstword_pending
+                                        and not mem_la_secondword
+                                        and (mem_rdata_latched#[0 ..= 1] == 3)))
   const next_mem_la_addr:u32 = if mem_do_prefetch or mem_do_rinst {
-    (next_pc#[2..=31] + unsigned(COMPRESSED_ISA and mem_xfer and firstword_pending))#[0..=29] << 2
-  } else {
-    reg_op1#[2..=31] << 2
-  }
+    (next_pc#[2 ..= 31] + unsigned(COMPRESSED_ISA and mem_xfer and firstword_pending))#[0 ..= 29] << 2
+  } else { reg_op1#[2 ..= 31] << 2 }
   if mem_xfer {
-    mem_rdata_q = if COMPRESSED_ISA { mem_rdata_latched } else { mem_rdata }
+    mem_rdata_q      = if COMPRESSED_ISA { mem_rdata_latched } else { mem_rdata }
     next_insn_opcode = if COMPRESSED_ISA { mem_rdata_latched } else { mem_rdata }
   }
 
   decode_mem_done = mem_done
-  decode_rdata = mem_rdata_latched
+  decode_rdata    = mem_rdata_latched
 
   // Expand RVC encodings into the ordinary decoder fields.
   if COMPRESSED_ISA and mem_done and (mem_do_prefetch or mem_do_rinst) {
-    match mem_rdata_latched#[0..=1] {
+    match mem_rdata_latched#[0 ..= 1] {
       == 0 {
-        match mem_rdata_latched#[13..=15] {
+        match mem_rdata_latched#[13 ..= 15] {
           == 0 {
-            mem_rdata_q#[12..=14] = 0
-            mem_rdata_q#[20..=31] = (mem_rdata_latched#[7..=10] << 6) | (mem_rdata_latched#[11..=12] << 4) | (mem_rdata_latched#[5] << 3) | (mem_rdata_latched#[6] << 2)
+            mem_rdata_q#[12 ..= 14] = 0
+            mem_rdata_q#[20
+            ..= 31] = (mem_rdata_latched#[7 ..= 10] << 6)
+                                | (mem_rdata_latched#[11 ..= 12] << 4)
+                                | (mem_rdata_latched#[5] << 3)
+                                | (mem_rdata_latched#[6] << 2)
           }
           == 2 {
-            mem_rdata_q#[20..=31] = (mem_rdata_latched#[5] << 6) | (mem_rdata_latched#[10..=12] << 3) | (mem_rdata_latched#[6] << 2)
-            mem_rdata_q#[12..=14] = 2
+            mem_rdata_q#[20 ..= 31] = (mem_rdata_latched#[5] << 6)
+                                                | (mem_rdata_latched#[10 ..= 12] << 3)
+                                                | (mem_rdata_latched#[6] << 2)
+            mem_rdata_q#[12 ..= 14] = 2
           }
           == 6 {
-            const compressed_load_offset = (mem_rdata_latched#[5] << 6) | (mem_rdata_latched#[10..=12] << 3) | (mem_rdata_latched#[6] << 2)
-            mem_rdata_q#[7..=11] = compressed_load_offset#[0..=4]
-            mem_rdata_q#[25..=31] = (compressed_load_offset >> 5)#[0..=6]
-            mem_rdata_q#[12..=14] = 2
+            const compressed_load_offset = (mem_rdata_latched#[5] << 6)
+                                                     | (mem_rdata_latched#[10 ..= 12] << 3)
+                                                     | (mem_rdata_latched#[6] << 2)
+            mem_rdata_q#[7 ..= 11]  = compressed_load_offset#[0 ..= 4]
+            mem_rdata_q#[25 ..= 31] = (compressed_load_offset >> 5)#[0 ..= 6]
+            mem_rdata_q#[12 ..= 14] = 2
           }
           else {
           }
         }
       }
       == 1 {
-        match mem_rdata_latched#[13..=15] {
+        match mem_rdata_latched#[13 ..= 15] {
           == 0 {
-            mem_rdata_q#[12..=14] = 0
-            mem_rdata_q#[20..=31] = ((mem_rdata_latched#[12] << 5) | mem_rdata_latched#[2..=6])#sext[0..=5]#[0..=11]
+            mem_rdata_q#[12 ..= 14] = 0
+            mem_rdata_q#[20 ..= 31] = ((mem_rdata_latched#[12] << 5) | mem_rdata_latched#[2 ..= 6])#sext[0 ..= 5]#[0 ..= 11]
           }
           == 2 {
-            mem_rdata_q#[12..=14] = 0
-            mem_rdata_q#[20..=31] = ((mem_rdata_latched#[12] << 5) | mem_rdata_latched#[2..=6])#sext[0..=5]#[0..=11]
+            mem_rdata_q#[12 ..= 14] = 0
+            mem_rdata_q#[20 ..= 31] = ((mem_rdata_latched#[12] << 5) | mem_rdata_latched#[2 ..= 6])#sext[0 ..= 5]#[0 ..= 11]
           }
           == 3 {
-            if mem_rdata_latched#[7..=11] == 2 {
-              mem_rdata_q#[12..=14] = 0
-              mem_rdata_q#[20..=31] = ((mem_rdata_latched#[12] << 9) | (mem_rdata_latched#[3..=4] << 7) |
-                (mem_rdata_latched#[5] << 6) | (mem_rdata_latched#[2] << 5) | (mem_rdata_latched#[6] << 4))#sext[0..=9]#[0..=11]
+            if mem_rdata_latched#[7 ..= 11] == 2 {
+              mem_rdata_q#[12 ..= 14] = 0
+              mem_rdata_q#[20
+              ..= 31] = ((mem_rdata_latched#[12] << 9)
+                                      | (mem_rdata_latched#[3 ..= 4] << 7)
+                                      | (mem_rdata_latched#[5] << 6)
+                                      | (mem_rdata_latched#[2] << 5)
+                                      | (mem_rdata_latched#[6] << 4))#sext[0
+                                    ..= 9]#[0
+                                    ..= 11]
             } else {
-              mem_rdata_q#[12..=31] = ((mem_rdata_latched#[12] << 5) | mem_rdata_latched#[2..=6])#sext[0..=5]#[0..=19]
+              mem_rdata_q#[12 ..= 31] = ((mem_rdata_latched#[12] << 5) | mem_rdata_latched#[2 ..= 6])#sext[0 ..= 5]#[0 ..= 19]
             }
           }
           == 4 {
-            if mem_rdata_latched#[10..=11] == 0 {
-              mem_rdata_q#[25..=31] = 0
-              mem_rdata_q#[12..=14] = 5
+            if mem_rdata_latched#[10 ..= 11] == 0 {
+              mem_rdata_q#[25 ..= 31] = 0
+              mem_rdata_q#[12 ..= 14] = 5
             }
-            if mem_rdata_latched#[10..=11] == 1 {
-              mem_rdata_q#[25..=31] = 32
-              mem_rdata_q#[12..=14] = 5
+            if mem_rdata_latched#[10 ..= 11] == 1 {
+              mem_rdata_q#[25 ..= 31] = 32
+              mem_rdata_q#[12 ..= 14] = 5
             }
-            if mem_rdata_latched#[10..=11] == 2 {
-              mem_rdata_q#[12..=14] = 7
-              mem_rdata_q#[20..=31] = ((mem_rdata_latched#[12] << 5) | mem_rdata_latched#[2..=6])#sext[0..=5]#[0..=11]
+            if mem_rdata_latched#[10 ..= 11] == 2 {
+              mem_rdata_q#[12 ..= 14] = 7
+              mem_rdata_q#[20 ..= 31] = ((mem_rdata_latched#[12] << 5) | mem_rdata_latched#[2 ..= 6])#sext[0 ..= 5]#[0 ..= 11]
             }
-            if mem_rdata_latched#[10..=12] == 3 {
-              if mem_rdata_latched#[5..=6] == 0 {
-                mem_rdata_q#[12..=14] = 0
+            if mem_rdata_latched#[10 ..= 12] == 3 {
+              if mem_rdata_latched#[5 ..= 6] == 0 {
+                mem_rdata_q#[12 ..= 14] = 0
               }
-              if mem_rdata_latched#[5..=6] == 1 {
-                mem_rdata_q#[12..=14] = 4
+              if mem_rdata_latched#[5 ..= 6] == 1 {
+                mem_rdata_q#[12 ..= 14] = 4
               }
-              if mem_rdata_latched#[5..=6] == 2 {
-                mem_rdata_q#[12..=14] = 6
+              if mem_rdata_latched#[5 ..= 6] == 2 {
+                mem_rdata_q#[12 ..= 14] = 6
               }
-              if mem_rdata_latched#[5..=6] == 3 {
-                mem_rdata_q#[12..=14] = 7
+              if mem_rdata_latched#[5 ..= 6] == 3 {
+                mem_rdata_q#[12 ..= 14] = 7
               }
-              mem_rdata_q#[25..=31] = if mem_rdata_latched#[5..=6] == 0 { 32 } else { 0 }
+              mem_rdata_q#[25 ..= 31] = if mem_rdata_latched#[5 ..= 6] == 0 { 32 } else { 0 }
             }
           }
           == 6 {
-            mem_rdata_q#[12..=14] = 0
-            mem_rdata_q#[8..=11] = ((mem_rdata_latched#[12] << 7) | (mem_rdata_latched#[5..=6] << 5) |
-              (mem_rdata_latched#[2] << 4) | (mem_rdata_latched#[10..=11] << 2) | mem_rdata_latched#[3..=4])#sext[0..=7]#[0..=11]#[0..=3]
-            mem_rdata_q#[25..=30] = (((mem_rdata_latched#[12] << 7) | (mem_rdata_latched#[5..=6] << 5) |
-              (mem_rdata_latched#[2] << 4) | (mem_rdata_latched#[10..=11] << 2) | mem_rdata_latched#[3..=4])#sext[0..=7]#[0..=11] >> 4)#[0..=5]
-            mem_rdata_q#[7] = (((mem_rdata_latched#[12] << 7) | (mem_rdata_latched#[5..=6] << 5) |
-              (mem_rdata_latched#[2] << 4) | (mem_rdata_latched#[10..=11] << 2) | mem_rdata_latched#[3..=4])#sext[0..=7]#[0..=11] >> 10) & 1
-            mem_rdata_q#[31] = (((mem_rdata_latched#[12] << 7) | (mem_rdata_latched#[5..=6] << 5) |
-              (mem_rdata_latched#[2] << 4) | (mem_rdata_latched#[10..=11] << 2) | mem_rdata_latched#[3..=4])#sext[0..=7]#[0..=11] >> 11) & 1
+            mem_rdata_q#[12 ..= 14] = 0
+            mem_rdata_q#[8
+            ..= 11] = ((mem_rdata_latched#[12] << 7)
+                                  | (mem_rdata_latched#[5 ..= 6] << 5)
+                                  | (mem_rdata_latched#[2] << 4)
+                                  | (mem_rdata_latched#[10 ..= 11] << 2)
+                                  | mem_rdata_latched#[3 ..= 4])#sext[0
+                                ..= 7]#[0
+                                ..= 11]#[0
+                                ..= 3]
+            mem_rdata_q#[25
+            ..= 30] = (((mem_rdata_latched#[12] << 7)
+                                | (mem_rdata_latched#[5 ..= 6] << 5)
+                                | (mem_rdata_latched#[2] << 4)
+                                | (mem_rdata_latched#[10 ..= 11] << 2)
+                                | mem_rdata_latched#[3 ..= 4])#sext[0 ..= 7]#[0 ..= 11]
+                                 >> 4)#[0
+                                ..= 5]
+            mem_rdata_q#[7] = (((mem_rdata_latched#[12] << 7)
+                                           | (mem_rdata_latched#[5 ..= 6] << 5)
+                                           | (mem_rdata_latched#[2] << 4)
+                                           | (mem_rdata_latched#[10 ..= 11] << 2)
+                                           | mem_rdata_latched#[3 ..= 4])#sext[0 ..= 7]#[0 ..= 11]
+                                           >> 10)
+                                        & 1
+            mem_rdata_q#[31] = (((mem_rdata_latched#[12] << 7)
+                                            | (mem_rdata_latched#[5 ..= 6] << 5)
+                                            | (mem_rdata_latched#[2] << 4)
+                                            | (mem_rdata_latched#[10 ..= 11] << 2)
+                                            | mem_rdata_latched#[3 ..= 4])#sext[0 ..= 7]#[0 ..= 11]
+                                            >> 11)
+                                         & 1
           }
           == 7 {
-            mem_rdata_q#[12..=14] = 1
-            mem_rdata_q#[8..=11] = ((mem_rdata_latched#[12] << 7) | (mem_rdata_latched#[5..=6] << 5) |
-              (mem_rdata_latched#[2] << 4) | (mem_rdata_latched#[10..=11] << 2) | mem_rdata_latched#[3..=4])#sext[0..=7]#[0..=11]#[0..=3]
-            mem_rdata_q#[25..=30] = (((mem_rdata_latched#[12] << 7) | (mem_rdata_latched#[5..=6] << 5) |
-              (mem_rdata_latched#[2] << 4) | (mem_rdata_latched#[10..=11] << 2) | mem_rdata_latched#[3..=4])#sext[0..=7]#[0..=11] >> 4)#[0..=5]
-            mem_rdata_q#[7] = (((mem_rdata_latched#[12] << 7) | (mem_rdata_latched#[5..=6] << 5) |
-              (mem_rdata_latched#[2] << 4) | (mem_rdata_latched#[10..=11] << 2) | mem_rdata_latched#[3..=4])#sext[0..=7]#[0..=11] >> 10) & 1
-            mem_rdata_q#[31] = (((mem_rdata_latched#[12] << 7) | (mem_rdata_latched#[5..=6] << 5) |
-              (mem_rdata_latched#[2] << 4) | (mem_rdata_latched#[10..=11] << 2) | mem_rdata_latched#[3..=4])#sext[0..=7]#[0..=11] >> 11) & 1
+            mem_rdata_q#[12 ..= 14] = 1
+            mem_rdata_q#[8
+            ..= 11] = ((mem_rdata_latched#[12] << 7)
+                                  | (mem_rdata_latched#[5 ..= 6] << 5)
+                                  | (mem_rdata_latched#[2] << 4)
+                                  | (mem_rdata_latched#[10 ..= 11] << 2)
+                                  | mem_rdata_latched#[3 ..= 4])#sext[0
+                                ..= 7]#[0
+                                ..= 11]#[0
+                                ..= 3]
+            mem_rdata_q#[25
+            ..= 30] = (((mem_rdata_latched#[12] << 7)
+                                | (mem_rdata_latched#[5 ..= 6] << 5)
+                                | (mem_rdata_latched#[2] << 4)
+                                | (mem_rdata_latched#[10 ..= 11] << 2)
+                                | mem_rdata_latched#[3 ..= 4])#sext[0 ..= 7]#[0 ..= 11]
+                                 >> 4)#[0
+                                ..= 5]
+            mem_rdata_q#[7] = (((mem_rdata_latched#[12] << 7)
+                                           | (mem_rdata_latched#[5 ..= 6] << 5)
+                                           | (mem_rdata_latched#[2] << 4)
+                                           | (mem_rdata_latched#[10 ..= 11] << 2)
+                                           | mem_rdata_latched#[3 ..= 4])#sext[0 ..= 7]#[0 ..= 11]
+                                           >> 10)
+                                        & 1
+            mem_rdata_q#[31] = (((mem_rdata_latched#[12] << 7)
+                                            | (mem_rdata_latched#[5 ..= 6] << 5)
+                                            | (mem_rdata_latched#[2] << 4)
+                                            | (mem_rdata_latched#[10 ..= 11] << 2)
+                                            | mem_rdata_latched#[3 ..= 4])#sext[0 ..= 7]#[0 ..= 11]
+                                            >> 11)
+                                         & 1
           }
           else {
           }
         }
       }
       == 2 {
-        match mem_rdata_latched#[13..=15] {
+        match mem_rdata_latched#[13 ..= 15] {
           == 0 {
-            mem_rdata_q#[25..=31] = 0
-            mem_rdata_q#[12..=14] = 1
+            mem_rdata_q#[25 ..= 31] = 0
+            mem_rdata_q#[12 ..= 14] = 1
           }
           == 2 {
-            mem_rdata_q#[20..=31] = (mem_rdata_latched#[2..=3] << 6) | (mem_rdata_latched#[12] << 5) | (mem_rdata_latched#[4..=6] << 2)
-            mem_rdata_q#[12..=14] = 2
+            mem_rdata_q#[20 ..= 31] = (mem_rdata_latched#[2 ..= 3] << 6)
+                                                | (mem_rdata_latched#[12] << 5)
+                                                | (mem_rdata_latched#[4 ..= 6] << 2)
+            mem_rdata_q#[12 ..= 14] = 2
           }
           == 4 {
-            if (mem_rdata_latched#[12] == 0) and (mem_rdata_latched#[2..=6] == 0) {
-              mem_rdata_q#[12..=14] = 0
-              mem_rdata_q#[20..=31] = 0
+            if (mem_rdata_latched#[12] == 0) and (mem_rdata_latched#[2 ..= 6] == 0) {
+              mem_rdata_q#[12 ..= 14] = 0
+              mem_rdata_q#[20 ..= 31] = 0
             }
-            if (mem_rdata_latched#[12] == 0) and (mem_rdata_latched#[2..=6] != 0) {
-              mem_rdata_q#[12..=14] = 0
-              mem_rdata_q#[25..=31] = 0
+            if (mem_rdata_latched#[12] == 0) and (mem_rdata_latched#[2 ..= 6] != 0) {
+              mem_rdata_q#[12 ..= 14] = 0
+              mem_rdata_q#[25 ..= 31] = 0
             }
-            if (mem_rdata_latched#[12] != 0) and (mem_rdata_latched#[7..=11] != 0) and (mem_rdata_latched#[2..=6] == 0) {
-              mem_rdata_q#[12..=14] = 0
-              mem_rdata_q#[20..=31] = 0
+            if (mem_rdata_latched#[12] != 0) and (mem_rdata_latched#[7 ..= 11] != 0) and (mem_rdata_latched#[2 ..= 6] == 0) {
+              mem_rdata_q#[12 ..= 14] = 0
+              mem_rdata_q#[20 ..= 31] = 0
             }
-            if (mem_rdata_latched#[12] != 0) and (mem_rdata_latched#[2..=6] != 0) {
-              mem_rdata_q#[12..=14] = 0
-              mem_rdata_q#[25..=31] = 0
+            if (mem_rdata_latched#[12] != 0) and (mem_rdata_latched#[2 ..= 6] != 0) {
+              mem_rdata_q#[12 ..= 14] = 0
+              mem_rdata_q#[25 ..= 31] = 0
             }
           }
           == 6 {
-            const compressed_store_offset = (mem_rdata_latched#[7..=8] << 6) | (mem_rdata_latched#[9..=12] << 2)
-            mem_rdata_q#[7..=11] = compressed_store_offset#[0..=4]
-            mem_rdata_q#[25..=31] = (compressed_store_offset >> 5)#[0..=6]
-            mem_rdata_q#[12..=14] = 2
+            const compressed_store_offset = (mem_rdata_latched#[7 ..= 8] << 6) | (mem_rdata_latched#[9 ..= 12] << 2)
+            mem_rdata_q#[7 ..= 11]        = compressed_store_offset#[0 ..= 4]
+            mem_rdata_q#[25 ..= 31]       = (compressed_store_offset >> 5)#[0 ..= 6]
+            mem_rdata_q#[12 ..= 14]       = 2
           }
           else {
           }
@@ -496,13 +564,13 @@ pub mod picorv32<
     if not resetn or mem_ready {
       mem_valid = false
     }
-    mem_la_secondword = false
+    mem_la_secondword    = false
     prefetched_high_word = false
   } else {
     if next_mem_la_read or next_mem_la_write {
-      mem_addr = next_mem_la_addr
+      mem_addr         = next_mem_la_addr
       const write_mask = if next_mem_la_write { 15 } else { 0 }
-      mem_wstrb = mem_la_wstrb & write_mask
+      mem_wstrb        = mem_la_wstrb & write_mask
     }
     if next_mem_la_write {
       mem_wdata = mem_la_wdata
@@ -524,17 +592,17 @@ pub mod picorv32<
       == 1 {
         if mem_xfer {
           if COMPRESSED_ISA and next_mem_la_read {
-            mem_valid = true
+            mem_valid         = true
             mem_la_secondword = true
             if not mem_la_use_prefetched_high_word {
-              mem_16bit_buffer = mem_rdata#[16..=31]
+              mem_16bit_buffer = mem_rdata#[16 ..= 31]
             }
           } else {
-            mem_valid = false
+            mem_valid         = false
             mem_la_secondword = false
             if COMPRESSED_ISA and not mem_do_rdata {
-              if (mem_rdata#[0..=1] != 3) or mem_la_secondword {
-                mem_16bit_buffer = mem_rdata#[16..=31]
+              if (mem_rdata#[0 ..= 1] != 3) or mem_la_secondword {
+                mem_16bit_buffer     = mem_rdata#[16 ..= 31]
                 prefetched_high_word = true
               } else {
                 prefetched_high_word = false
@@ -556,12 +624,12 @@ pub mod picorv32<
         }
       }
       else {
-        mem_valid = 0ub? != 0
-        mem_instr = 0ub? != 0
-        mem_wstrb = 0sb?
-        mem_state = 0sb?
-        mem_la_secondword = 0ub? != 0
-        mem_16bit_buffer = 0sb?
+        mem_valid            = 0ub? != 0
+        mem_instr            = 0ub? != 0
+        mem_wstrb            = 0sb?
+        mem_state            = 0sb?
+        mem_la_secondword    = 0ub? != 0
+        mem_16bit_buffer     = 0sb?
         prefetched_high_word = 0ub? != 0
       }
     }
@@ -573,47 +641,47 @@ pub mod picorv32<
   if decoder_trigger and not decoder_pseudo_trigger {
     pcpi_insn = if WITH_PCPI { mem_rdata_q } else { 0sb? }
   }
-  trap = false
-  reg_sh = 0sb?
+  trap    = false
+  reg_sh  = 0sb?
   reg_out = 0sb?
 
   // CPU state machine and counter maintenance.
   if WITH_PCPI and CATCH_ILLINSN {
     if resetn and pcpi_valid and not pcpi_int_wait {
-      if pcpi_timeout_counter != 0 { wrap pcpi_timeout_counter -= 1 }
+      if pcpi_timeout_counter != 0 { wrap  pcpi_timeout_counter -= 1 }
     } else {
       pcpi_timeout_counter = 15
     }
     pcpi_timeout = pcpi_timeout_counter == 0
   }
-  alu_wait = false
-  alu_wait_2 = false
+  alu_wait    = false
+  alu_wait_2  = false
   alu_out_0_q = alu_out_0
-  alu_out_q = alu_out
+  alu_out_q   = alu_out
   if ENABLE_COUNTERS {
     wrap count_cycle = if resetn { count_cycle + 1 } else { 0 }
-    if not ENABLE_COUNTERS64 { count_cycle#[32..=63] = 0 }
+    if not ENABLE_COUNTERS64 { count_cycle#[32 ..= 63] = 0 }
   } else {
     count_cycle = 0sb?
     count_instr = 0sb?
   }
-  decoder_trigger = mem_do_rinst and mem_done
-  decoder_trigger_q = decoder_trigger
-  decoder_pseudo_trigger = false
+  decoder_trigger          = mem_do_rinst and mem_done
+  decoder_trigger_q        = decoder_trigger
+  decoder_pseudo_trigger   = false
   decoder_pseudo_trigger_q = decoder_pseudo_trigger
-  do_waitirq = false
-  trace_valid = false
-  trace_data = 0sb?
-  set_mem_do_wdata = false
-  set_mem_do_rdata = false
-  next_irq_pending = 0sb?
-  set_mem_do_rinst = false
+  do_waitirq               = false
+  trace_valid              = false
+  trace_data               = 0sb?
+  set_mem_do_wdata         = false
+  set_mem_do_rdata         = false
+  next_irq_pending         = 0sb?
+  set_mem_do_rinst         = false
   if not resetn {
     if ENABLE_COUNTERS { count_instr = 0 }
     next_irq_pending = 0
     if STACKADDR != 0xffffffff {
       latched_rd = 2
-      reg_out = STACKADDR
+      reg_out    = STACKADDR
     }
   } else {
     match cpu_state {
@@ -623,36 +691,36 @@ pub mod picorv32<
       == CPU_FETCH {
         mem_do_rinst = not decoder_trigger and not do_waitirq
         mem_wordsize = 0
-        current_pc = reg_next_pc
+        current_pc   = reg_next_pc
         if latched_branch {
           const branch_target = if latched_stalu { alu_out_q } else { reg_out }
-          current_pc = if latched_store { branch_target & 0xfffffffe } else { reg_next_pc }
+          current_pc          = if latched_store { branch_target & 0xfffffffe } else { reg_next_pc }
         }
-        reg_pc = current_pc
-        reg_next_pc = current_pc
-        latched_store = false
-        latched_stalu = false
+        reg_pc         = current_pc
+        reg_next_pc    = current_pc
+        latched_store  = false
+        latched_stalu  = false
         latched_branch = false
-        latched_is_lu = false
-        latched_is_lh = false
-        latched_is_lb = false
-        latched_rd = instr.rd
-        latched_compr = instr.compressed
+        latched_is_lu  = false
+        latched_is_lh  = false
+        latched_is_lb  = false
+        latched_rd     = instr.rd
+        latched_compr  = instr.compressed
         if decoder_trigger {
           const instruction_bytes = if instr.compressed { 2 } else { 4 }
           wrap reg_next_pc = current_pc + instruction_bytes
           if ENABLE_COUNTERS {
             wrap count_instr = count_instr + 1
-            if not ENABLE_COUNTERS64 { count_instr#[32..=63] = 0 }
+            if not ENABLE_COUNTERS64 { count_instr#[32 ..= 63] = 0 }
           }
           if instr.jal {
             mem_do_rinst = true
             wrap reg_next_pc = current_pc + instr.imm_j
             latched_branch = true
           } else {
-            mem_do_rinst = false
+            mem_do_rinst    = false
             mem_do_prefetch = not instr.jalr and not instr.retirq
-            cpu_state = CPU_LD_RS1
+            cpu_state       = CPU_LD_RS1
           }
         }
       }
@@ -663,18 +731,18 @@ pub mod picorv32<
           if WITH_PCPI {
             reg_op1 = cpuregs_rs1
             if ENABLE_REGS_DUALPORT {
-              reg_sh = cpuregs_rs2#[0..=4]
-              reg_op2 = cpuregs_rs2
+              reg_sh     = cpuregs_rs2#[0 ..= 4]
+              reg_op2    = cpuregs_rs2
               pcpi_valid = true
               if pcpi_int_ready {
-                mem_do_rinst = true
-                pcpi_valid = false
-                reg_out = pcpi_int_rd
+                mem_do_rinst  = true
+                pcpi_valid    = false
+                reg_out       = pcpi_int_rd
                 latched_store = pcpi_int_wr
-                cpu_state = CPU_FETCH
+                cpu_state     = CPU_FETCH
               } elif CATCH_ILLINSN and (pcpi_timeout or instr.ecall_ebreak) {
                 pcpi_valid = false
-                cpu_state = CPU_TRAP
+                cpu_state  = CPU_TRAP
               }
             } else {
               cpu_state = CPU_LD_RS2
@@ -683,19 +751,13 @@ pub mod picorv32<
             cpu_state = CPU_TRAP
           }
         } elif (ENABLE_COUNTERS and (instr.rdcycle or instr.rdcycleh or instr.rdinstr or instr.rdinstrh)) {
-          reg_out = if instr.rdcycle {
-            count_cycle#[0..=31]
-          } elif instr.rdcycleh and ENABLE_COUNTERS64 {
-            count_cycle#[32..=63]
-          } elif instr.rdinstr {
-            count_instr#[0..=31]
-          } elif instr.rdinstrh and ENABLE_COUNTERS64 {
-            count_instr#[32..=63]
-          } else {
+          reg_out = if instr.rdcycle { count_cycle#[0 ..= 31] } elif instr.rdcycleh and ENABLE_COUNTERS64 {
+            count_cycle#[32 ..= 63]
+          } elif instr.rdinstr { count_instr#[0 ..= 31] } elif instr.rdinstrh and ENABLE_COUNTERS64 { count_instr#[32 ..= 63] } else {
             0sb?
           }
           latched_store = true
-          cpu_state = CPU_FETCH
+          cpu_state     = CPU_FETCH
         } elif instr.is_lui_auipc_jal {
           reg_op1 = if instr.lui { 0 } else { reg_pc }
           reg_op2 = instr.imm
@@ -706,12 +768,12 @@ pub mod picorv32<
           }
           cpu_state = CPU_EXEC
         } elif instr.is_lb_lh_lw_lbu_lhu and not instr_trap {
-          reg_op1 = cpuregs_rs1
-          cpu_state = CPU_LDMEM
+          reg_op1      = cpuregs_rs1
+          cpu_state    = CPU_LDMEM
           mem_do_rinst = true
         } elif instr.is_slli_srli_srai and not BARREL_SHIFTER {
-          reg_op1 = cpuregs_rs1
-          reg_sh = instr.rs2
+          reg_op1   = cpuregs_rs1
+          reg_sh    = instr.rs2
           cpu_state = CPU_SHIFT
         } elif instr.is_jalr_addi_slti_sltiu_xori_ori_andi or (instr.is_slli_srli_srai and BARREL_SHIFTER) {
           reg_op1 = cpuregs_rs1
@@ -725,16 +787,16 @@ pub mod picorv32<
         } else {
           reg_op1 = cpuregs_rs1
           if ENABLE_REGS_DUALPORT {
-            reg_sh = cpuregs_rs2#[0..=4]
+            reg_sh  = cpuregs_rs2#[0 ..= 4]
             reg_op2 = cpuregs_rs2
             if instr.is_sb_sh_sw {
-              cpu_state = CPU_STMEM
+              cpu_state    = CPU_STMEM
               mem_do_rinst = true
             } elif instr.is_sll_srl_sra and not BARREL_SHIFTER {
               cpu_state = CPU_SHIFT
             } else {
               if TWO_CYCLE_ALU or (TWO_CYCLE_COMPARE and instr.is_beq_bne_blt_bge_bltu_bgeu) {
-                alu_wait = true
+                alu_wait   = true
                 alu_wait_2 = TWO_CYCLE_ALU and TWO_CYCLE_COMPARE and instr.is_beq_bne_blt_bge_bltu_bgeu
               } else {
                 mem_do_rinst = mem_do_prefetch
@@ -747,28 +809,28 @@ pub mod picorv32<
         }
       }
       == CPU_LD_RS2 {
-        reg_sh = cpuregs_rs2#[0..=4]
+        reg_sh  = cpuregs_rs2#[0 ..= 4]
         reg_op2 = cpuregs_rs2
         if WITH_PCPI and instr_trap {
           pcpi_valid = true
           if pcpi_int_ready {
-            mem_do_rinst = true
-            pcpi_valid = false
-            reg_out = pcpi_int_rd
+            mem_do_rinst  = true
+            pcpi_valid    = false
+            reg_out       = pcpi_int_rd
             latched_store = pcpi_int_wr
-            cpu_state = CPU_FETCH
+            cpu_state     = CPU_FETCH
           } elif CATCH_ILLINSN and (pcpi_timeout or instr.ecall_ebreak) {
             pcpi_valid = false
-            cpu_state = CPU_TRAP
+            cpu_state  = CPU_TRAP
           }
         } elif instr.is_sb_sh_sw {
-          cpu_state = CPU_STMEM
+          cpu_state    = CPU_STMEM
           mem_do_rinst = true
         } elif instr.is_sll_srl_sra and not BARREL_SHIFTER {
           cpu_state = CPU_SHIFT
         } else {
           if TWO_CYCLE_ALU or (TWO_CYCLE_COMPARE and instr.is_beq_bne_blt_bge_bltu_bgeu) {
-            alu_wait = true
+            alu_wait   = true
             alu_wait_2 = TWO_CYCLE_ALU and TWO_CYCLE_COMPARE and instr.is_beq_bne_blt_bge_bltu_bgeu
           } else {
             mem_do_rinst = mem_do_prefetch
@@ -780,43 +842,42 @@ pub mod picorv32<
         wrap reg_out = reg_pc + instr.imm
         if (TWO_CYCLE_ALU or TWO_CYCLE_COMPARE) and (alu_wait or alu_wait_2) {
           mem_do_rinst = mem_do_prefetch and not alu_wait_2
-          alu_wait = alu_wait_2
+          alu_wait     = alu_wait_2
         } elif instr.is_beq_bne_blt_bge_bltu_bgeu {
-          latched_rd = 0
-          latched_store = if TWO_CYCLE_COMPARE { alu_out_0_q } else { alu_out_0 }
+          latched_rd     = 0
+          latched_store  = if TWO_CYCLE_COMPARE { alu_out_0_q } else { alu_out_0 }
           latched_branch = if TWO_CYCLE_COMPARE { alu_out_0_q } else { alu_out_0 }
           if mem_done {
             cpu_state = CPU_FETCH
           }
           const branch_taken = if TWO_CYCLE_COMPARE { alu_out_0_q } else { alu_out_0 }
           if branch_taken {
-            decoder_trigger = false
+            decoder_trigger  = false
             set_mem_do_rinst = true
           }
         } else {
           latched_branch = instr.jalr
-          latched_store = true
-          latched_stalu = true
-          cpu_state = CPU_FETCH
+          latched_store  = true
+          latched_stalu  = true
+          cpu_state      = CPU_FETCH
         }
       }
       == CPU_SHIFT {
         latched_store = true
         if reg_sh == 0 {
-          reg_out = reg_op1
+          reg_out      = reg_op1
           mem_do_rinst = mem_do_prefetch
-          cpu_state = CPU_FETCH
+          cpu_state    = CPU_FETCH
         } else {
           const shift_amount:u5 = if TWO_STAGE_SHIFT and (reg_sh >= 4) { 4 } else { 1 }
-          if instr.slli or instr.sll or instr.srli or instr.srl or instr.srai or instr.sra {
+          reg_op1 = if instr.slli or instr.sll or instr.srli or instr.srl or instr.srai or instr.sra {
             // Upstream priority is left, logical right, then arithmetic right.
             // Preserve it even if an inductive cut sets conflicting decode flags.
             const logical_right = instr.srli or instr.srl
-            reg_op1 = shift_word(value=reg_op1, amount=shift_amount,
-              left=(instr.slli or instr.sll),
-              arithmetic=not logical_right and (instr.srai or instr.sra))
+            shift_word(value=reg_op1, amount=shift_amount, left=(instr.slli or instr.sll), arithmetic=not logical_right
+                                                         and (instr.srai or instr.sra))
           } else {
-            reg_op1 = 0sb?
+            0sb?
           }
           wrap reg_sh = reg_sh - shift_amount
         }
@@ -824,21 +885,13 @@ pub mod picorv32<
       == CPU_STMEM {
         if not mem_do_prefetch or mem_done {
           if not mem_do_wdata {
-            mem_wordsize = if instr.sb {
-              2
-            } elif instr.sh {
-              1
-            } elif instr.sw {
-              0
-            } else {
-              0sb?
-            }
-            wrap reg_op1 = reg_op1 + instr.imm
+            mem_wordsize = if instr.sb { 2 } elif instr.sh { 1 } elif instr.sw { 0 } else { 0sb? }
+            wrap reg_op1     = reg_op1 + instr.imm
             set_mem_do_wdata = true
           }
           if not mem_do_prefetch and mem_done {
-            cpu_state = CPU_FETCH
-            decoder_trigger = true
+            cpu_state              = CPU_FETCH
+            decoder_trigger        = true
             decoder_pseudo_trigger = true
           }
         }
@@ -847,96 +900,82 @@ pub mod picorv32<
         latched_store = true
         if not mem_do_prefetch or mem_done {
           if not mem_do_rdata {
-            mem_wordsize = if instr.lb or instr.lbu {
-              2
-            } elif instr.lh or instr.lhu {
-              1
-            } elif instr.lw {
-              0
-            } else {
-              0sb?
-            }
+            mem_wordsize  = if instr.lb or instr.lbu { 2 } elif instr.lh or instr.lhu { 1 } elif instr.lw { 0 } else { 0sb? }
             latched_is_lu = instr.is_lbu_lhu_lw
             latched_is_lh = instr.lh
             latched_is_lb = instr.lb
-            wrap reg_op1 = reg_op1 + instr.imm
+            wrap reg_op1     = reg_op1 + instr.imm
             set_mem_do_rdata = true
           }
           if not mem_do_prefetch and mem_done {
-            wrap reg_out = if latched_is_lu {
-              mem_rdata_word
-            } elif latched_is_lh {
-              mem_rdata_word#sext[0..=15]
-            } elif latched_is_lb {
-              mem_rdata_word#sext[0..=7]
-            } else {
-              0sb?
-            }
-            decoder_trigger = true
+            wrap reg_out = if latched_is_lu { mem_rdata_word } elif latched_is_lh { mem_rdata_word#sext[0 ..= 15] } elif latched_is_lb {
+              mem_rdata_word#sext[0 ..= 7]
+            } else { 0sb? }
+            decoder_trigger        = true
             decoder_pseudo_trigger = true
-            cpu_state = CPU_FETCH
+            cpu_state              = CPU_FETCH
           }
         }
       }
       else {
         trap = 0ub? != 0
-        mem_do_rinst = 0ub? != 0
-        mem_wordsize = 0sb?
-        current_pc = 0sb?
-        irq_active = 0ub? != 0
+        mem_do_rinst           = 0ub? != 0
+        mem_wordsize           = 0sb?
+        current_pc             = 0sb?
+        irq_active             = 0ub? != 0
         eoi = 0sb?
-        next_irq_pending = 0sb?
-        trace_valid = 0ub? != 0
-        trace_data = 0sb?
+        next_irq_pending       = 0sb?
+        trace_valid            = 0ub? != 0
+        trace_data             = 0sb?
         reg_pc = 0sb?
-        reg_next_pc = 0sb?
-        latched_store = 0ub? != 0
-        latched_stalu = 0ub? != 0
-        latched_branch = 0ub? != 0
-        latched_is_lu = 0ub? != 0
-        latched_is_lh = 0ub? != 0
-        latched_is_lb = 0ub? != 0
-        latched_rd = 0sb?
-        latched_compr = 0ub? != 0
-        irq_state = 0sb?
-        reg_out = 0sb?
-        do_waitirq = 0ub? != 0
-        count_instr = 0sb?
-        mem_do_prefetch = 0ub? != 0
-        cpu_state = 0sb?
-        reg_op1 = 0sb?
-        reg_op2 = 0sb?
-        pcpi_valid = 0ub? != 0
+        reg_next_pc            = 0sb?
+        latched_store          = 0ub? != 0
+        latched_stalu          = 0ub? != 0
+        latched_branch         = 0ub? != 0
+        latched_is_lu          = 0ub? != 0
+        latched_is_lh          = 0ub? != 0
+        latched_is_lb          = 0ub? != 0
+        latched_rd             = 0sb?
+        latched_compr          = 0ub? != 0
+        irq_state              = 0sb?
+        reg_out                = 0sb?
+        do_waitirq             = 0ub? != 0
+        count_instr            = 0sb?
+        mem_do_prefetch        = 0ub? != 0
+        cpu_state              = 0sb?
+        reg_op1                = 0sb?
+        reg_op2                = 0sb?
+        pcpi_valid             = 0ub? != 0
         reg_sh = 0sb?
-        irq_mask = 0sb?
+        irq_mask               = 0sb?
         timer = 0sb?
-        decoder_trigger = 0ub? != 0
-        set_mem_do_rinst = 0ub? != 0
-        set_mem_do_wdata = 0ub? != 0
+        decoder_trigger        = 0ub? != 0
+        set_mem_do_rinst       = 0ub? != 0
+        set_mem_do_wdata       = 0ub? != 0
         decoder_pseudo_trigger = 0ub? != 0
-        set_mem_do_rdata = 0ub? != 0
+        set_mem_do_rdata       = 0ub? != 0
       }
     }
   }
 
   // Alignment and illegal-instruction traps.
   if CATCH_MISALIGN and resetn and (mem_do_rdata or mem_do_wdata) {
-    if (mem_wordsize == 0) and (reg_op1#[0..=1] != 0) {
+    if (mem_wordsize == 0) and (reg_op1#[0 ..= 1] != 0) {
       cpu_state = CPU_TRAP
     }
     if (mem_wordsize == 1) and ((reg_op1 & 1) != 0) {
       cpu_state = CPU_TRAP
     }
   }
-  const pc_misaligned = if COMPRESSED_ISA { boolean(reg_pc#[0]) } else { reg_pc#[0..=1] != 0 }
+  const pc_misaligned = if COMPRESSED_ISA { boolean(reg_pc#[0]) } else { reg_pc#[0 ..= 1] != 0 }
   if CATCH_MISALIGN and resetn and mem_do_rinst and pc_misaligned {
     cpu_state = CPU_TRAP
   }
   if not resetn or mem_done {
     mem_do_prefetch = false
-    mem_do_rinst = false
-    mem_do_rdata = false
-    mem_do_wdata = false
+    mem_do_rinst    = false
+    mem_do_rdata    = false
+    mem_do_wdata    = false
   }
   if set_mem_do_rinst {
     mem_do_rinst = true
@@ -952,17 +991,17 @@ pub mod picorv32<
   }
   if not CATCH_MISALIGN {
     if COMPRESSED_ISA {
-      reg_pc#[0] = 0
+      reg_pc#[0]      = 0
       reg_next_pc#[0] = 0
     } else {
-      reg_pc#[0..=1] = 0
-      reg_next_pc#[0..=1] = 0
+      reg_pc#[0 ..= 1]      = 0
+      reg_next_pc#[0 ..= 1] = 0
     }
   }
-  irq_pending = next_irq_pending
-  mem_la_read = next_mem_la_read
+  irq_pending  = next_irq_pending
+  mem_la_read  = next_mem_la_read
   mem_la_write = next_mem_la_write
-  mem_la_addr = next_mem_la_addr
-  pcpi_rs1 = next_pcpi_rs1
-  pcpi_rs2 = next_pcpi_rs2
+  mem_la_addr  = next_mem_la_addr
+  pcpi_rs1     = next_pcpi_rs1
+  pcpi_rs2     = next_pcpi_rs2
 }

@@ -1,0 +1,27 @@
+// Full period, holds, and reset priority at the unchanged external interface.
+const lfsr = import("lg:MaxPeriodFibonacciLFSR")
+
+test lfsr.cleanup {
+  mut dut = lfsr
+  mut expected:u16 = 1
+  tick 66000 clocks=(clock=1) {
+    const resetting:bool = (clock < 2) or (clock == 65560)
+    const enabled:bool = (clock < 65537) or (clock >= 65543)
+    dut.reset = resetting
+    dut.io_increment = enabled
+    if resetting {
+      expected = 1
+    } elif enabled {
+      const feedback = ((expected >> 15) ^ (expected >> 13) ^ (expected >> 12) ^ (expected >> 10)) & 1
+      expected = ((expected << 1) & 0xffff) | feedback
+    }
+    step
+    const actual = dut.io_out_0 | (dut.io_out_1 << 1) | (dut.io_out_2 << 2) | (dut.io_out_3 << 3) |
+      (dut.io_out_4 << 4) | (dut.io_out_5 << 5) | (dut.io_out_6 << 6) | (dut.io_out_7 << 7) |
+      (dut.io_out_8 << 8) | (dut.io_out_9 << 9) | (dut.io_out_10 << 10) | (dut.io_out_11 << 11) |
+      (dut.io_out_12 << 12) | (dut.io_out_13 << 13) | (dut.io_out_14 << 14) | (dut.io_out_15 << 15)
+    assert(actual == expected, "LFSR recurrence, reset, or hold mismatch")
+    if clock == 65536 { assert(actual == 1, "LFSR did not complete its maximal period") }
+  }
+  puts("LFSR: 66000 cycles checked")
+}

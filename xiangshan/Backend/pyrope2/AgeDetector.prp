@@ -6,9 +6,7 @@
 //   - 4 issue lanes; each computes a per-slot "oldest-to-issue" mask against a
 //     per-lane can-issue vector.
 // firtool unrolled three per-slot loops that we re-roll here:
-//   Pass 1: strict-upper-triangular nextAge (i<j).
-//   Pass 2: full 6x6 next-age assembly (diag / upper / lower cases).
-//   Pass 3: 4 lanes x 6 candidates x 6 pairwise comparisons.
+// Pairwise age update followed by four independent oldest-ready selections.
 // State is kept as 36 individual u1 regs (matches the SV name-for-name) so the
 // LEC tier-2 matcher can pair state cleanly; the loop computes a packed u36
 // `next_age` accumulator and fans out to 36 assignments at the end.
@@ -19,42 +17,42 @@ pub mod AgeDetector::[timecheck=false](
   io_canIssue:u24
 ) -> (io_out:u24@[]) {
 
-  reg age_0_0:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_0_1:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_0_2:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_0_3:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_0_4:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_0_5:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_1_0:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_1_1:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_1_2:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_1_3:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_1_4:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_1_5:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_2_0:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_2_1:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_2_2:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_2_3:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_2_4:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_2_5:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_3_0:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_3_1:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_3_2:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_3_3:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_3_4:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_3_5:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_4_0:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_4_1:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_4_2:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_4_3:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_4_4:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_4_5:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_5_0:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_5_1:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_5_2:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_5_3:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_5_4:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg age_5_5:u1:[initial=0, reset_pin=ref reset, async=true]
+  reg age_0_0:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_0_1:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_0_2:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_0_3:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_0_4:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_0_5:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_1_0:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_1_1:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_1_2:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_1_3:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_1_4:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_1_5:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_2_0:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_2_1:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_2_2:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_2_3:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_2_4:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_2_5:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_3_0:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_3_1:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_3_2:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_3_3:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_3_4:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_3_5:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_4_0:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_4_1:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_4_2:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_4_3:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_4_4:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_4_5:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_5_0:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_5_1:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_5_2:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_5_3:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_5_4:u1:[reset_pin=ref reset, async=true] = 0
+  reg age_5_5:u1:[reset_pin=ref reset, async=true] = 0
 
   // Pack current age state into a u36 (bit i*6+j = age_i_j) so the loops
   // can index by (i,j) via shifts. The individual regs are still what LEC
@@ -69,49 +67,27 @@ pub mod AgeDetector::[timecheck=false](
 
   const enq0:u6 = io_enq#[0..=5]
   const enq1:u6 = io_enq#[6..=11]
+  const enqueued:u6 = enq0 | enq1
 
-  // Pass 1: nextAge for strict upper triangular (i<j) cells.
-  mut nextAge_up:u36 = 0
-  for i in 0..<6 {
-    for j in 0..<6 {
-      const ei_0:u1 = (enq0 >> i) & 1
-      const ei_1:u1 = (enq1 >> i) & 1
-      const ej_0:u1 = (enq0 >> j) & 1
-      const ej_1:u1 = (enq1 >> j) & 1
-      const any_i:u1 = ei_0 | ei_1
-      const any_j:u1 = ej_0 | ej_1
-      const both:u1  = any_i & any_j
-      const not_i:u1 = (~any_i) & 1
-      const cur:u1   = (age >> (i*6+j)) & 1
-      const nAij:u1 = if both != 0 { (~(ei_1 & ej_0)) & 1 } else { not_i & (any_j | cur) }
-      const upper_bit:u1 = if i < j { nAij } else { 0 }
-      nextAge_up = nextAge_up | (upper_bit << (i*6+j))
-    }
-  }
-
-  // Pass 2: assemble next-cycle full u36 age vector.
+  // The first enqueue lane is older than the second; existing instructions
+  // precede newly inserted ones. Lower-triangle cells mirror the upper half.
   mut next_age:u36 = 0
-  for i in 0..<6 {
-    for j in 0..<6 {
-      const ei_0:u1 = (enq0 >> i) & 1
-      const ei_1:u1 = (enq1 >> i) & 1
-      const ej_0:u1 = (enq0 >> j) & 1
-      const ej_1:u1 = (enq1 >> j) & 1
-      const any_i:u1 = ei_0 | ei_1
-      const any_j:u1 = ej_0 | ej_1
-      const enq_detected:u1 = any_i | any_j
-      const cur:u1 = (age >> (i*6+j)) & 1
-      const nAij:u1 = (nextAge_up >> (i*6+j)) & 1
-      const nAji:u1 = (nextAge_up >> (j*6+i)) & 1
-      const upper_bit:u1 = if enq_detected != 0 { nAij } else { cur }
-      const lower_bit:u1 = if enq_detected != 0 { ((~nAji) & 1) } else { cur }
-      const diag_bit:u1  = (any_i | cur) & 1
-      const bit:u1 = if i == j {
-        diag_bit
+  for row in 0..<6 {
+    for col in 0..<6 {
+      const low = if row < col { row } else { col }
+      const high = if row < col { col } else { row }
+      const insert_low:bool = enqueued#[low] != 0
+      const insert_high:bool = enqueued#[high] != 0
+      const older:bool = if insert_low and insert_high {
+        not ((enq1#[low] != 0) and (enq0#[high] != 0))
       } else {
-        if i < j { upper_bit } else { lower_bit }
+        not insert_low and (insert_high or (age#[(low * 6) + high] != 0))
       }
-      next_age = next_age | (bit << (i*6+j))
+      const previous:u1 = age#[(row * 6) + col]
+      const updated:u1 = if row == col { enqueued#[row] | previous }
+        elif insert_low or insert_high { unsigned(if row < col { older } else { not older }) }
+        else { previous }
+      next_age = next_age | (updated << ((row * 6) + col))
     }
   }
 

@@ -2,30 +2,30 @@ const enc = import("encodings")
 
 pub mod ImmediateGenerator::[timecheck = false](io_instruction:u64) -> (io_sextImm:u64@[]) {
   // Instruction layouts are the only packed encodings here.
-  match io_instruction#[enc.opcode_lo ..= enc.opcode_hi] {
+  wrap io_sextImm = match io_instruction#[enc.opcode_lo ..= enc.opcode_hi] {
     in (enc.op_lui, enc.op_auipc) { // U: LUI / AUIPC
-      wrap io_sextImm = (io_instruction#[12 ..= 31] << 12)#sext[0 ..= 31]
+      (io_instruction#[12 ..= 31] << 12)#sext[0 ..= 31]
     }
     == enc.op_jal { // J: JAL
       const immediate:u21 = (io_instruction#[31] << 20)
                                 | (io_instruction#[12 ..= 19] << 12)
                                 | (io_instruction#[20] << 11)
                                 | (io_instruction#[21 ..= 30] << 1)
-      wrap io_sextImm = immediate#sext[0 ..= 20]
+      immediate#sext[0 ..= 20]
     }
     == enc.op_branch { // B: conditional branch
       const immediate:u13 = (io_instruction#[31] << 12)
                                 | (io_instruction#[7] << 11)
                                 | (io_instruction#[25 ..= 30] << 5)
                                 | (io_instruction#[8 ..= 11] << 1)
-      wrap io_sextImm = immediate#sext[0 ..= 12]
+      immediate#sext[0 ..= 12]
     }
-    in (enc.op_jalr, enc.op_load, enc.op_immediate, enc.op_immediate_word) { wrap  io_sextImm = io_instruction#sext[20 ..= 31] }
+    in (enc.op_jalr, enc.op_load, enc.op_immediate, enc.op_immediate_word) { io_instruction#sext[20 ..= 31] }
     == enc.op_store { // S: store
       const immediate:u12 = (io_instruction#[enc.funct7_lo ..= enc.funct7_hi] << 5) | io_instruction#[enc.rd_lo ..= enc.rd_hi]
-      wrap io_sextImm = immediate#sext[0 ..= 11]
+      immediate#sext[0 ..= 11]
     }
-    == enc.op_system { io_sextImm = io_instruction#[enc.rs1_lo ..= enc.rs1_hi] }
-    else { io_sextImm = 0 }
+    == enc.op_system { io_instruction#[enc.rs1_lo ..= enc.rs1_hi] }
+    else { 0 }
   }
 }

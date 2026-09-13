@@ -1,0 +1,18 @@
+// One update for the eight ROB dispatch pointers, including their wrap flags.
+pub comb advance<PTR_BITS, CAPACITY=(1 << (PTR_BITS - 1))>(
+  current:unsigned(bits=8 * PTR_BITS), target:unsigned(bits=PTR_BITS),
+  redirect:bool, skip_target:bool, dispatch_count:u4
+) -> (next:unsigned(bits=8 * PTR_BITS)) {
+  mut pointers:unsigned(bits=8 * PTR_BITS) = current
+  for lane in 0..<8 {
+    const old_pointer = current#[(lane * PTR_BITS)..+PTR_BITS]
+    const base = if redirect { target } else { old_pointer }
+    const increment = if redirect { lane + unsigned(skip_target) } else { dispatch_count }
+    const sum = base#[0..<(PTR_BITS - 1)] + increment
+    const wrapped:bool = sum >= CAPACITY
+    const value = if wrapped { sum - CAPACITY } else { sum }
+    const flag = base#[PTR_BITS - 1] ^ unsigned(wrapped)
+    pointers#[(lane * PTR_BITS)..+PTR_BITS] = (flag << (PTR_BITS - 1)) | value#[0..<(PTR_BITS - 1)]
+  }
+  next = pointers
+}

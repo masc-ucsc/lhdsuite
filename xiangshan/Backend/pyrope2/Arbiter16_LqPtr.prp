@@ -34,23 +34,25 @@ pub mod Arbiter16_LqPtr::[timecheck=false](
   io_in_12_ready:u1@[], io_in_13_ready:u1@[], io_in_14_ready:u1@[], io_in_15_ready:u1@[],
   io_out_valid:u1@[], io_out_bits:(flag:u1, value:u7)@[], io_chosen:u4@[]
 ) {
-  // Pack the 16 per-slot signals into wide vectors so the loop can index them
-  // via compile-time-constant slice ranges.
-  const valids:u16 =
-      io_in_0_valid        | (io_in_1_valid  << 1)  | (io_in_2_valid  << 2)  | (io_in_3_valid  << 3)
-    | (io_in_4_valid  << 4) | (io_in_5_valid  << 5)  | (io_in_6_valid  << 6)  | (io_in_7_valid  << 7)
-    | (io_in_8_valid  << 8) | (io_in_9_valid  << 9)  | (io_in_10_valid << 10) | (io_in_11_valid << 11)
-    | (io_in_12_valid << 12)| (io_in_13_valid << 13) | (io_in_14_valid << 14) | (io_in_15_valid << 15)
-  const flags:u16 =
-      io_in_0_bits.flag        | (io_in_1_bits.flag  << 1)  | (io_in_2_bits.flag  << 2)  | (io_in_3_bits.flag  << 3)
-    | (io_in_4_bits.flag  << 4) | (io_in_5_bits.flag  << 5)  | (io_in_6_bits.flag  << 6)  | (io_in_7_bits.flag  << 7)
-    | (io_in_8_bits.flag  << 8) | (io_in_9_bits.flag  << 9)  | (io_in_10_bits.flag << 10) | (io_in_11_bits.flag << 11)
-    | (io_in_12_bits.flag << 12)| (io_in_13_bits.flag << 13) | (io_in_14_bits.flag << 14) | (io_in_15_bits.flag << 15)
-  const values:u112 =
-      io_in_0_bits.value          | (io_in_1_bits.value  << 7)  | (io_in_2_bits.value  << 14) | (io_in_3_bits.value  << 21)
-    | (io_in_4_bits.value  << 28) | (io_in_5_bits.value  << 35) | (io_in_6_bits.value  << 42) | (io_in_7_bits.value  << 49)
-    | (io_in_8_bits.value  << 56) | (io_in_9_bits.value  << 63) | (io_in_10_bits.value << 70) | (io_in_11_bits.value << 77)
-    | (io_in_12_bits.value << 84) | (io_in_13_bits.value << 91) | (io_in_14_bits.value << 98) | (io_in_15_bits.value << 105)
+  // Ordered lanes make bit order explicit: lane zero occupies the low bits.
+  const valids:u16 = (
+    io_in_0_valid, io_in_1_valid, io_in_2_valid, io_in_3_valid,
+    io_in_4_valid, io_in_5_valid, io_in_6_valid, io_in_7_valid,
+    io_in_8_valid, io_in_9_valid, io_in_10_valid, io_in_11_valid,
+    io_in_12_valid, io_in_13_valid, io_in_14_valid, io_in_15_valid
+  )#[..]
+  const flags:u16 = (
+    io_in_0_bits.flag, io_in_1_bits.flag, io_in_2_bits.flag, io_in_3_bits.flag,
+    io_in_4_bits.flag, io_in_5_bits.flag, io_in_6_bits.flag, io_in_7_bits.flag,
+    io_in_8_bits.flag, io_in_9_bits.flag, io_in_10_bits.flag, io_in_11_bits.flag,
+    io_in_12_bits.flag, io_in_13_bits.flag, io_in_14_bits.flag, io_in_15_bits.flag
+  )#[..]
+  const values:u112 = (
+    io_in_0_bits.value, io_in_1_bits.value, io_in_2_bits.value, io_in_3_bits.value,
+    io_in_4_bits.value, io_in_5_bits.value, io_in_6_bits.value, io_in_7_bits.value,
+    io_in_8_bits.value, io_in_9_bits.value, io_in_10_bits.value, io_in_11_bits.value,
+    io_in_12_bits.value, io_in_13_bits.value, io_in_14_bits.value, io_in_15_bits.value
+  )#[..]
 
   // Priority mux, default = index 15 (lowest priority when nothing else is valid).
   // Iterate j from 14 down to 0; whenever slot j is valid, take it (overriding any
@@ -70,33 +72,32 @@ pub mod Arbiter16_LqPtr::[timecheck=false](
 
   // Grant / ready mask: grant_j = ~(any valid at index < j). ready_j = grant_j & io_out_ready.
   // Full-width OR accumulator (no bit-slice write to a mut, to dodge encoder gaps).
-  mut cum:u1         = 0
+  mut earlier_valid:bool = false
   mut ready_mask:u16 = 0
   for j in 0..<16 {
-    const g:u1 = if cum == 0 { 1 } else { 0 }
-    const r:u1 = g & io_out_ready
+    const r:u1 = unsigned(not earlier_valid and (io_out_ready != 0))
     ready_mask = ready_mask | (r << j)
-    cum        = cum | ((valids >> j) & 1)
+    earlier_valid = earlier_valid or (valids#[j] != 0)
   }
 
   const any_valid:u1 = if valids != 0 { 1 } else { 0 }
 
-  io_in_0_ready  = (ready_mask >> 0)  & 1
-  io_in_1_ready  = (ready_mask >> 1)  & 1
-  io_in_2_ready  = (ready_mask >> 2)  & 1
-  io_in_3_ready  = (ready_mask >> 3)  & 1
-  io_in_4_ready  = (ready_mask >> 4)  & 1
-  io_in_5_ready  = (ready_mask >> 5)  & 1
-  io_in_6_ready  = (ready_mask >> 6)  & 1
-  io_in_7_ready  = (ready_mask >> 7)  & 1
-  io_in_8_ready  = (ready_mask >> 8)  & 1
-  io_in_9_ready  = (ready_mask >> 9)  & 1
-  io_in_10_ready = (ready_mask >> 10) & 1
-  io_in_11_ready = (ready_mask >> 11) & 1
-  io_in_12_ready = (ready_mask >> 12) & 1
-  io_in_13_ready = (ready_mask >> 13) & 1
-  io_in_14_ready = (ready_mask >> 14) & 1
-  io_in_15_ready = (ready_mask >> 15) & 1
+  io_in_0_ready  = ready_mask#[0]
+  io_in_1_ready  = ready_mask#[1]
+  io_in_2_ready  = ready_mask#[2]
+  io_in_3_ready  = ready_mask#[3]
+  io_in_4_ready  = ready_mask#[4]
+  io_in_5_ready  = ready_mask#[5]
+  io_in_6_ready  = ready_mask#[6]
+  io_in_7_ready  = ready_mask#[7]
+  io_in_8_ready  = ready_mask#[8]
+  io_in_9_ready  = ready_mask#[9]
+  io_in_10_ready = ready_mask#[10]
+  io_in_11_ready = ready_mask#[11]
+  io_in_12_ready = ready_mask#[12]
+  io_in_13_ready = ready_mask#[13]
+  io_in_14_ready = ready_mask#[14]
+  io_in_15_ready = ready_mask#[15]
 
   io_out_valid      = any_valid
   io_out_bits.flag  = sel_flag

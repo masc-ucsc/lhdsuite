@@ -1,7 +1,5 @@
-// Loop-form Pyrope for XiangShan RobEnqPtrWrapper at N=RobSize=32.
-// Diff vs the N=16 loop file: robIdx.value:u4->u5, reg u40->u48,
-// slot spacing 5->6 bits, reset 0x398a418820 -> 0x1c61440c2040,
-// io_out u40->u48. Everything else identical.
+// Public 32-entry ROB interface; both sizes use the same pointer update.
+const advance = import("enqueue_pointers.advance")
 
 pub mod RobEnqPtrWrapper::[timecheck=false](
   clock:u1,
@@ -11,28 +9,15 @@ pub mod RobEnqPtrWrapper::[timecheck=false](
   io_hasBlockBackward:u1,
   io_enq:u8
 ) -> (io_out:u48@[]) {
-  reg enqPtrVec:u48:[reset_pin=ref reset, async=true] = 0x1c61440c2040
-
-  const canAccept:u1   = io_allowEnqueue & ~io_hasBlockBackward
-  const disp_pc:u4     = io_enq#+[..]
-  const dispatchNum:u4 = if canAccept != 0 { disp_pc } else { 0 }
-  const rd_flag:u1     = io_redirect.bits.robIdx.flag
-  const rd_val:u5      = io_redirect.bits.robIdx.value
-  const rd_level:u1    = io_redirect.bits.level
-  const rd_valid:u1    = io_redirect.valid
-  const base:u6        = (rd_flag << 5) | rd_val
-
-  for i in 0..<8 {
-    const new_ptr:u6   = (base + i)#[0..=5]
-    const new_ptr_1:u6 = (base + i + 1)#[0..=5]
-    const cur:u6       = enqPtrVec#[(i*6)..=(i*6+5)]
-    const new_ptr_2:u6 = (cur + dispatchNum)#[0..=5]
-
-    const t1:u6  = if rd_level != 0 { new_ptr } else { new_ptr_1 }
-    const nxt:u6 = if rd_valid != 0 { t1 }      else { new_ptr_2 }
-
-    enqPtrVec#[(i*6)..=(i*6+5)] = nxt
-  }
-
+  comptime const PTR_BITS = 6
+  comptime const RESET_POINTERS = (1 << PTR_BITS) | (2 << (2 * PTR_BITS)) |
+    (3 << (3 * PTR_BITS)) | (4 << (4 * PTR_BITS)) | (5 << (5 * PTR_BITS)) |
+    (6 << (6 * PTR_BITS)) | (7 << (7 * PTR_BITS))
+  reg enqPtrVec:u48:[reset_pin=ref reset, async=true] = RESET_POINTERS
+  const target:u6 = (io_redirect.bits.robIdx.flag << (PTR_BITS - 1)) | io_redirect.bits.robIdx.value
+  const can_accept:bool = (io_allowEnqueue != 0) and (io_hasBlockBackward == 0)
+  const count:u4 = if can_accept { io_enq#+[..] } else { 0 }
+  enqPtrVec = advance<PTR_BITS=PTR_BITS>(current=enqPtrVec, target=target,
+    redirect=io_redirect.valid != 0, skip_target=io_redirect.bits.level == 0, dispatch_count=count)
   io_out = enqPtrVec
 }

@@ -1,98 +1,24 @@
-// Loop-form Pyrope for XiangShan SnapshotGenerator.
-// Reference: XiangShan/build/rtl_rob16/SnapshotGenerator.sv (170 SV lines).
-// Design cone: 4-slot circular snapshot buffer of {flag:u1, value:u9},
-// with enq/deq pointers (flag+value) and per-slot valid mask.
-//
-// Structure: one for-loop over 4 slots handles snapshot writeback and valid update.
-// The qualified-candidate check + priority mux stay outside the loop (mimicking
-// the source Pyrope's fully-unrolled shape to keep the LEC encoder happy).
+// Public RTL-compatible entry; payload layout belongs to this boundary.
+const snapshot_next = import("snapshot_queue.snapshot_next")
 
-pub mod SnapshotGenerator::[timecheck=false](
-  clock:u1,
-  reset:u1,
-  io_enq:u1,
-  io_enqData:(flag:u1, value:u9),
-  io_deq:u1,
-  io_redirect:u1,
-  io_flushVec:u4
-) -> (io_snapshots:u40@[], io_enqPtr:(flag:u1, value:u2)@[], io_deqPtr:(flag:u1, value:u2)@[], io_valids:u4@[]) {
-
-  reg snapshots:u40
-  reg snptEnqPtr:u3:[initial=0, reset_pin=ref reset, async=true]
-  reg snptDeqPtr:u3:[initial=0, reset_pin=ref reset, async=true]
-  reg snptValids:u4:[initial=0, reset_pin=ref reset, async=true]
-
-  const enqPtrFlag:u1 = (snptEnqPtr >> 2) & 1
-  const enqPtrVal:u2  = snptEnqPtr#[0..=1]
-  const deqPtrFlag:u1 = (snptDeqPtr >> 2) & 1
-  const deqPtrVal:u2  = snptDeqPtr#[0..=1]
-
-  const collision:u1 = unsigned(enqPtrFlag != deqPtrFlag) & unsigned(enqPtrVal == deqPtrVal)
-  const canEnq:u1    = (~io_redirect) & 1 & ((~collision) & 1) & io_enq
-  const canDeq:u1    = (~io_redirect) & 1 & io_deq
-
-  const enqData_bits:u10 = io_enqData.value | (io_enqData.flag << 9)
-  const enqPtrPlus1:u3 = (snptEnqPtr + 1)#[0..=2]
-  const deqPtrPlus1:u3 = (snptDeqPtr + 1)#[0..=2]
-
-  // Main loop: 4 slots — snapshot slot writeback + per-slot valid update.
-  for i in 0..<4 {
-    const enq_i:u1 = canEnq & unsigned(enqPtrVal == i)
-
-    const cur:u10 = snapshots#[(i*10)..=(i*10+9)]
-    const nxt:u10 = if enq_i != 0 { enqData_bits#[0..=9] } else { cur }
-    snapshots#[(i*10)..=(i*10+9)] = nxt
-
-    const valid_i:u1     = snptValids#[i..=i]
-    const flush_i:u1     = io_flushVec#[i..=i]
-    const deq_matches:u1 = unsigned(deqPtrVal == i) & canDeq
-    snptValids#[i..=i]   = ((~(flush_i | deq_matches)) & 1) & (enq_i | valid_i)
-  }
-
-  // Candidate enq pointers = deqPtr + {0,1,2,3}, extract v/flush at each candidate's value.
-  const cand0:u3 = snptDeqPtr#[0..=2]
-  const cand1:u3 = (snptDeqPtr + 1)#[0..=2]
-  const cand2:u3 = (snptDeqPtr + 2)#[0..=2]
-  const cand3:u3 = (snptDeqPtr + 3)#[0..=2]
-  const c0v:u2 = cand0#[0..=1]
-  const c1v:u2 = cand1#[0..=1]
-  const c2v:u2 = cand2#[0..=1]
-  const c3v:u2 = cand3#[0..=1]
-  const v0:u1 = ((snptValids << 1) >> (c0v + 1)) & 1
-  const v1:u1 = ((snptValids << 1) >> (c1v + 1)) & 1
-  const v2:u1 = ((snptValids << 1) >> (c2v + 1)) & 1
-  const v3:u1 = ((snptValids << 1) >> (c3v + 1)) & 1
-  const f0:u1 = ((io_flushVec << 1) >> (c0v + 1)) & 1
-  const f1:u1 = ((io_flushVec << 1) >> (c1v + 1)) & 1
-  const f2:u1 = ((io_flushVec << 1) >> (c2v + 1)) & 1
-  const f3:u1 = ((io_flushVec << 1) >> (c3v + 1)) & 1
-  const q0:u1 = ((~v0) & 1) | f0
-  const q1:u1 = v1 & (((~v1) & 1) | f1)
-  const q2:u1 = v2 & (((~v2) & 1) | f2)
-  const q3:u1 = v3 & (((~v3) & 1) | f3)
-
-  // Priority mux for next enq pointer: pick lowest-index qualified cand, default cand3.
-  const sel_23:u3   = if q2 != 0 { cand2 } else { cand3 }
-  const sel_123:u3  = if q1 != 0 { cand1 } else { sel_23 }
-  const sel_0123:u3 = if q0 != 0 { cand0 } else { sel_123 }
-
-  // Any flush hitting a currently-valid slot?
-  const anyFlushValid:u1 = if (io_flushVec & snptValids) != 0 { 1 } else { 0 }
-
-  // Enq-pointer next: priority mux if flush, else steady +1 if enq, else hold
-  const enq_next:u3 = if anyFlushValid != 0 { sel_0123 } else {
-    if canEnq != 0 { enqPtrPlus1 } else { snptEnqPtr#[0..=2] }
-  }
-  snptEnqPtr = enq_next
-
-  // Deq-pointer next: +1 if deq, else hold
-  const deq_next:u3 = if canDeq != 0 { deqPtrPlus1 } else { snptDeqPtr#[0..=2] }
-  snptDeqPtr = deq_next
-
-  io_snapshots    = snapshots
-  io_enqPtr.flag  = enqPtrFlag
-  io_enqPtr.value = enqPtrVal
-  io_deqPtr.flag  = deqPtrFlag
-  io_deqPtr.value = deqPtrVal
-  io_valids       = snptValids
+pub mod SnapshotGenerator::[timecheck=false](clock:u1, reset:u1, io_enq:u1, io_enqData:(flag:u1, value:u9), io_deq:u1, io_redirect:u1, io_flushVec:u4) -> (io_snapshots:u40@[], io_enqPtr:(flag:u1, value:u2)@[], io_deqPtr:(flag:u1, value:u2)@[], io_valids:u4@[]) {
+  reg snapshots:u40 = nil
+  reg snptEnqPtr:u3:[reset_pin=ref reset, async=true] = 0
+  reg snptDeqPtr:u3:[reset_pin=ref reset, async=true] = 0
+  reg snptValids:u4:[reset_pin=ref reset, async=true] = 0
+  const payload:u10 = (io_enqData.value, io_enqData.flag)#[..]
+  const queue = snapshot_next<WIDTH=10>(
+    enqueue=io_enq != 0, data=payload, dequeue=io_deq != 0,
+    redirect=io_redirect != 0, flush=io_flushVec, snapshots=snapshots,
+    snptEnqPtr=snptEnqPtr, snptDeqPtr=snptDeqPtr, snptValids=snptValids)
+  io_snapshots = snapshots
+  io_enqPtr.flag = snptEnqPtr#[2]
+  io_enqPtr.value = snptEnqPtr#[0..=1]
+  io_deqPtr.flag = snptDeqPtr#[2]
+  io_deqPtr.value = snptDeqPtr#[0..=1]
+  io_valids = snptValids
+  snapshots = queue.payloads
+  snptEnqPtr = queue.enq_ptr
+  snptDeqPtr = queue.deq_ptr
+  snptValids = queue.valids
 }

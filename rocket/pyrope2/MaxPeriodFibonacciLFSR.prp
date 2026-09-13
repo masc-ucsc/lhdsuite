@@ -1,25 +1,23 @@
-// Loop-form Pyrope for Rocket MaxPeriodFibonacciLFSR.
-// Reference: lhdsuite/rocket/verilog/MaxPeriodFibonacciLFSR.sv (16-bit Fibonacci LFSR, taps at 15/13/12/10).
-// Retains 16 individual state regs matching SV names for tier-2 pairing (AgeDetector pattern).
-// Uses a for-loop to compute the next packed state, then fans out to the 16 scalar regs.
+// Scalar state preserves automatic correspondence with the RTL flops.
+const advance = import("lfsr_step.advance")
 
 pub mod MaxPeriodFibonacciLFSR::[timecheck=false](clock:u1, reset:u1, io_increment:u1) -> (io_out_0:u1@[], io_out_1:u1@[], io_out_2:u1@[], io_out_3:u1@[], io_out_4:u1@[], io_out_5:u1@[], io_out_6:u1@[], io_out_7:u1@[], io_out_8:u1@[], io_out_9:u1@[], io_out_10:u1@[], io_out_11:u1@[], io_out_12:u1@[], io_out_13:u1@[], io_out_14:u1@[], io_out_15:u1@[]) {
-  reg state_0:u1
-  reg state_1:u1
-  reg state_2:u1
-  reg state_3:u1
-  reg state_4:u1
-  reg state_5:u1
-  reg state_6:u1
-  reg state_7:u1
-  reg state_8:u1
-  reg state_9:u1
-  reg state_10:u1
-  reg state_11:u1
-  reg state_12:u1
-  reg state_13:u1
-  reg state_14:u1
-  reg state_15:u1
+  reg state_0:u1:[reset_pin=ref reset, async=true] = 1
+  reg state_1:u1:[reset_pin=ref reset, async=true] = 0
+  reg state_2:u1:[reset_pin=ref reset, async=true] = 0
+  reg state_3:u1:[reset_pin=ref reset, async=true] = 0
+  reg state_4:u1:[reset_pin=ref reset, async=true] = 0
+  reg state_5:u1:[reset_pin=ref reset, async=true] = 0
+  reg state_6:u1:[reset_pin=ref reset, async=true] = 0
+  reg state_7:u1:[reset_pin=ref reset, async=true] = 0
+  reg state_8:u1:[reset_pin=ref reset, async=true] = 0
+  reg state_9:u1:[reset_pin=ref reset, async=true] = 0
+  reg state_10:u1:[reset_pin=ref reset, async=true] = 0
+  reg state_11:u1:[reset_pin=ref reset, async=true] = 0
+  reg state_12:u1:[reset_pin=ref reset, async=true] = 0
+  reg state_13:u1:[reset_pin=ref reset, async=true] = 0
+  reg state_14:u1:[reset_pin=ref reset, async=true] = 0
+  reg state_15:u1:[reset_pin=ref reset, async=true] = 0
 
   // Direct output fan-out (16 lines, one per port)
   io_out_0 = state_0
@@ -39,54 +37,26 @@ pub mod MaxPeriodFibonacciLFSR::[timecheck=false](clock:u1, reset:u1, io_increme
   io_out_14 = state_14
   io_out_15 = state_15
 
-  // Pack the current state into a u16 for loop-friendly indexing
-  const st_pack:u16 = state_0 | (state_1 << 1) | (state_2 << 2) | (state_3 << 3) | (state_4 << 4) | (state_5 << 5) | (state_6 << 6) | (state_7 << 7) | (state_8 << 8) | (state_9 << 9) | (state_10 << 10) | (state_11 << 11) | (state_12 << 12) | (state_13 << 13) | (state_14 << 14) | (state_15 << 15)
+  const state:u16 = (state_0, state_1, state_2, state_3, state_4, state_5, state_6, state_7, state_8, state_9, state_10, state_11, state_12, state_13, state_14, state_15)#[..]
 
-  if reset != 0 {
-    state_0 = 1
-    state_1 = 0
-    state_2 = 0
-    state_3 = 0
-    state_4 = 0
-    state_5 = 0
-    state_6 = 0
-    state_7 = 0
-    state_8 = 0
-    state_9 = 0
-    state_10 = 0
-    state_11 = 0
-    state_12 = 0
-    state_13 = 0
-    state_14 = 0
-    state_15 = 0
-  } elif io_increment != 0 {
-    // Fibonacci LFSR feedback: XOR of taps at bit positions 15, 13, 12, 10
-    const fb:u1 = ((st_pack >> 15) & 1) ^ ((st_pack >> 13) & 1) ^ ((st_pack >> 12) & 1) ^ ((st_pack >> 10) & 1)
-
-    // Compute next state via a for-loop.
-    // Bit 0 = feedback; bit i+1 = bit i (shift by one)
-    mut next_st:u16 = 0
-    next_st = next_st | (fb & 1)
-    for i in 0..<15 {
-      next_st = next_st | (((st_pack >> i) & 1) << (i + 1))
-    }
-
+  if io_increment != 0 {
+    const next_state:u16 = advance(state=state)
     // Fan out the packed next-state to the 16 individual regs
-    state_0 = next_st#[0..=0]
-    state_1 = next_st#[1..=1]
-    state_2 = next_st#[2..=2]
-    state_3 = next_st#[3..=3]
-    state_4 = next_st#[4..=4]
-    state_5 = next_st#[5..=5]
-    state_6 = next_st#[6..=6]
-    state_7 = next_st#[7..=7]
-    state_8 = next_st#[8..=8]
-    state_9 = next_st#[9..=9]
-    state_10 = next_st#[10..=10]
-    state_11 = next_st#[11..=11]
-    state_12 = next_st#[12..=12]
-    state_13 = next_st#[13..=13]
-    state_14 = next_st#[14..=14]
-    state_15 = next_st#[15..=15]
+    state_0 = next_state#[0]
+    state_1 = next_state#[1]
+    state_2 = next_state#[2]
+    state_3 = next_state#[3]
+    state_4 = next_state#[4]
+    state_5 = next_state#[5]
+    state_6 = next_state#[6]
+    state_7 = next_state#[7]
+    state_8 = next_state#[8]
+    state_9 = next_state#[9]
+    state_10 = next_state#[10]
+    state_11 = next_state#[11]
+    state_12 = next_state#[12]
+    state_13 = next_state#[13]
+    state_14 = next_state#[14]
+    state_15 = next_state#[15]
   }
 }
