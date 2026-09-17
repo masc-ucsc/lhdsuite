@@ -4,7 +4,7 @@ const vpu_tensorreduce = import("vpu_tensorreduce.vpu_tensorreduce")
 const vpu_defs_pkg = import("vpu_defs_pkg")
 
 pub mod vpu_ml::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tensorfma_start:u1, tensorfma_ctrl:(is_conv:u1, padding3:u6, cols_b:u2, rows_a:u4, cols_a:u4, start_a:u4, padding2:u19, to_vrf:u1, u_b:u1, u_a:u1, ten_b:u1, padding1:u2, scp_b:u6, padding0:u2, scp_a:u6, mode:u3, first_pass:u1), tensorfma_conv_bits_ready:u1, tensorfma_conv_bits:u16, reduce_start:u1, tensorstore_start:u1, reduce_ctrl:u64, tensorquant_start:u1, tensorquant_ctrl:(padding2:u2, start_reg:u5, cols:u2, rows:u4, scp_src:u6, padding:u5, trans:u40), pending_scoreboard_t0:u1), dcache_scp_resp:(fill_is_tenb_early:u1, fill_is_tenb:u1, tenb_flush:u1, tenb_line:u4), dcache_scp_data:vpu_defs_pkg.DCACHE_DATA_SIZE_T, dcache_reduce_ctrl:(send_reg:u1, exec_op:u1, nothing:u1), id_inst:vpu_defs_pkg.INST_SIZE_T) -> (tfma_enabled:u1@[], tfma_wrrf_enabled:u1@[], tquant_enabled:u1@[], tstore_reduce_enabled:u1@[], dcache_ctrl:(scp_req:(read_en:u1, way:u2, addr:u10, size64:u1, size256:u1, bid:u1), tenb_credit:u1, tenb_credit_entry:u2, tfma_enabled:u1, reduce_wait:u1, tfma_rf_write:u1)@[], reduce_load_ctrl:(wen:u1, thread_id:u1, broadcast_sel:u3, waddr:u5)@[], tensorfma_load_ctrl:(wen:u1, thread_id:u1, broadcast_sel:u3, waddr:u5)@[], load_ctrl_pre_tena_wen:u1@[], load_ctrl_pre_tenb_wen:u1@[], id_inst_en_next:u1@[], id_inst_next:vpu_defs_pkg.INST_SIZE_T@[], id_mask_next:vpu_defs_pkg.VPU_LANE_NUM_T@[], id_inst_en:u1@[], id_inst_fma_en:u1@[], id_inst_tena_quant_en:u1@[], f2_tentmp_wen_early:u1@[], f3_tentmp_wen:u1@[], f3_tentmp_waddr:vpu_defs_pkg.VPU_TENTMP_ADDR_W_T@[], ex_tentmp_ren:u1@[], ex_tentmp_raddr:vpu_defs_pkg.VPU_TENTMP_ADDR_W_T@[], ex_tquant_ren:u1@[], ex_tquant_rdata:u256@[], ex_tima_valid:u1@[], ex_tima_mask:u16@[], ex_tima_tena_raddr:u1@[], ex_tima_tenb_raddr:vpu_defs_pkg.VPU_TENB_ADDR_W_T@[], ex_tima_last_pass:u1@[], ex_tima_ren3:u1@[], ex_tima_sa:u1@[], ex_tima_sb:u1@[], ex_tena_rdata_mask:u1@[], f2_tima_ren3:u1@[], f2_tima_tenc_raddr:u4@[], f2_tima_tenc_wen:u16@[], f2_tima_rf_wen:u16@[], f3_tima_tenc_wen:u16@[], f3_tima_tenc_waddr:u4@[], f3_tima_rf_wen:u16@[], io_events_wait_tenb:u1@[], vpu_tensorquant_debug:u11@[], vpu_tensorreduce_debug:u25@[], vpu_tensorfma_debug:u25@[]) {
-  reg id_inst_en:u1
+  reg id_inst_en:u1:[initial=0, reset_pin=ref reset, async=false]
   wire tfma_wrtenc_wrrf_enabled:u1
   wire tquant_enabled:u1
   mut `dcache_ctrl__bpo.scp_req.read_en` = 0
@@ -56,10 +56,10 @@ pub mod vpu_ml::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tensorfma_st
   const `dcache_ctrl__bpo.scp_req.bid__w1` = unsigned(((tensorfma_dcache_ctrl__w1#[6..=21] & 1) != 0) or (tensorquant.dcache_scp_req.bid != 0))
   const `dcache_ctrl__bpo.reduce_wait__w1` = tensorreduce.reduce_wait
   const id_inst_en_next__w1 = unsigned((tensorfma.fma_en_next != 0) or (tensorreduce.reduce_inst_en_next != 0) or (tensorquant.quant_en_next != 0))
-  if reset != 0 {
-    id_inst_en = 0
-  } elif unsigned((tensorfma.enabled != 0) or (tensorreduce.enabled != 0) or (tquant_enabled != 0)) != 0 {
-    id_inst_en = id_inst_en_next__w1
+  if not (reset != 0) {
+    if unsigned((tensorfma.enabled != 0) or (tensorreduce.enabled != 0) or (tquant_enabled != 0)) != 0 {
+      id_inst_en = id_inst_en_next__w1
+    }
   }
   dcache_ctrl.scp_req.read_en = `dcache_ctrl__bpo.scp_req.read_en`
   dcache_ctrl.scp_req.way = `dcache_ctrl__bpo.scp_req.way`

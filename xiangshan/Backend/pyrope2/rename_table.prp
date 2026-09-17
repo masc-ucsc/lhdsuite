@@ -1,19 +1,17 @@
 // RenameTable.scala: speculative, architectural, and differential mappings.
 const snapshot_next = import("snapshot_queue.snapshot_next")
 
-pub mod rename_table<ENTRIES=32, ADDRESS_BITS=5, READ_PORTS=16, IDENTITY_RESET=false, DIFF_FIRST=0, DIFF_COUNT=32, Holds, AddressBus, Writes, DiffWrites, ReadData, DiffData>::[
-  timecheck = false
-](
+pub mod rename_table<ENTRIES, ADDRESS_BITS=5, READ_PORTS=16, IDENTITY_RESET=false, DIFF_FIRST=0, DIFF_COUNT=32, DIFF_PORTS=520>::[timecheck = false](
   clock:u1,
   reset:u1,
   redirect:u1,
-  read_hold:Holds,
-  read_addr:AddressBus,
-  spec_writes:Writes,
-  arch_writes:Writes,
-  diff_writes:DiffWrites,
+  read_hold,
+  read_addr,
+  spec_writes,
+  arch_writes,
+  diff_writes,
   snpt:(snptEnq:u1, snptDeq:u1, useSnpt:u1, snptSelect:u2, flushVec:u4)
-) -> (read_data:ReadData@[], old_data:u64@[], free:u8@[], diff_data:DiffData@[]) {
+) -> (read_data@[], old_data:u64@[], free:u8@[], diff_data@[]) {
   comptime const LANES = 8
   comptime const DATA_BITS               = 8
   comptime const WRITE_BITS              = DATA_BITS + ADDRESS_BITS + 1
@@ -33,7 +31,9 @@ pub mod rename_table<ENTRIES=32, ADDRESS_BITS=5, READ_PORTS=16, IDENTITY_RESET=f
   reg t1_wSpec:unsigned(bits=LANES * WRITE_BITS) = nil
   reg t1_snpt:u9:[reset_pin = ref reset, async = true] = 0
   reg t2_snpt:u9:[reset_pin = ref reset, async = true] = 0
-  reg read_addresses:unsigned(bits=READ_PORTS * ADDRESS_BITS) = nil
+  // Single-entry tables have no address port or address state.
+  comptime const READ_ADDRESS_BITS = if ADDRESS_BITS == 0 { 1 } else { READ_PORTS*ADDRESS_BITS }
+  reg read_addresses:unsigned(bits=READ_ADDRESS_BITS) = nil
   reg bypass:unsigned(bits=READ_PORTS * LANES) = nil
 
   // The RTL tables are packed, asynchronously reset registers. Array reset
@@ -62,10 +62,10 @@ pub mod rename_table<ENTRIES=32, ADDRESS_BITS=5, READ_PORTS=16, IDENTITY_RESET=f
     for lane in 0 ..< LANES {
       const speculative   = t1_wSpec#[(lane*WRITE_BITS) ..+ WRITE_BITS]
       const architectural = arch_writes#[(lane*WRITE_BITS) ..+ WRITE_BITS]
-      if speculative#[VALID] != 0 and speculative#[DATA_BITS ..+ ADDRESS_BITS] == entry {
+      if speculative#[VALID] != 0 and (if ADDRESS_BITS == 0 { 0 } else { speculative#[DATA_BITS ..+ ADDRESS_BITS] }) == entry {
         next_spec = speculative#[0 ..< DATA_BITS]
       }
-      if architectural#[VALID] != 0 and architectural#[DATA_BITS ..+ ADDRESS_BITS] == entry {
+      if architectural#[VALID] != 0 and (if ADDRESS_BITS == 0 { 0 } else { architectural#[DATA_BITS ..+ ADDRESS_BITS] }) == entry {
         next_arch = architectural#[0 ..< DATA_BITS]
       }
     }
@@ -73,9 +73,9 @@ pub mod rename_table<ENTRIES=32, ADDRESS_BITS=5, READ_PORTS=16, IDENTITY_RESET=f
       next_spec = if t2_snpt#[6] != 0 { selected_snapshot#[(entry*DATA_BITS) ..+ DATA_BITS] }
         else { arch_table#[(entry*DATA_BITS) ..+ DATA_BITS] }
     }
-    for lane in 0 ..< 520 {
+    for lane in 0 ..< DIFF_PORTS {
       const differential = diff_writes#[(lane*WRITE_BITS) ..+ WRITE_BITS]
-      if differential#[VALID] != 0 and differential#[DATA_BITS ..+ ADDRESS_BITS] == entry {
+      if differential#[VALID] != 0 and (if ADDRESS_BITS == 0 { 0 } else { differential#[DATA_BITS ..+ ADDRESS_BITS] }) == entry {
         next_diff = differential#[0 ..< DATA_BITS]
       }
     }
@@ -87,8 +87,8 @@ pub mod rename_table<ENTRIES=32, ADDRESS_BITS=5, READ_PORTS=16, IDENTITY_RESET=f
   // Reads hold their address independently; yesterday's writes bypass today.
   read_data = 0
   for port in 0 ..< READ_PORTS {
-    const address      = read_addresses#[(port*ADDRESS_BITS) ..+ ADDRESS_BITS]
-    const next_address = if read_hold#[port] != 0 { address } else { read_addr#[(port*ADDRESS_BITS) ..+ ADDRESS_BITS] }
+    const address      = if ADDRESS_BITS == 0 { 0 } else { read_addresses#[(port*ADDRESS_BITS) ..+ ADDRESS_BITS] }
+    const next_address = if ADDRESS_BITS == 0 { 0 } elif read_hold#[port] != 0 { address } else { read_addr#[(port*ADDRESS_BITS) ..+ ADDRESS_BITS] }
     mut data:u8        = spec_table#[(address*DATA_BITS) ..+ DATA_BITS]
     mut next_bypass:u8 = 0
     for lane in 0 ..< LANES {
@@ -97,10 +97,10 @@ pub mod rename_table<ENTRIES=32, ADDRESS_BITS=5, READ_PORTS=16, IDENTITY_RESET=f
       if bypass#[port*LANES + lane] != 0 { data = prior#[0 ..< DATA_BITS] }
       next_bypass#[lane] = unsigned(redirect == 0
         and incoming#[VALID] != 0
-        and incoming#[DATA_BITS ..+ ADDRESS_BITS] == next_address)
+        and (if ADDRESS_BITS == 0 { 0 } else { incoming#[DATA_BITS ..+ ADDRESS_BITS] }) == next_address)
     }
     read_data#[(port*DATA_BITS) ..+ DATA_BITS]            = data
-    read_addresses#[(port*ADDRESS_BITS) ..+ ADDRESS_BITS] = next_address
+    if ADDRESS_BITS != 0 { read_addresses#[(port*ADDRESS_BITS) ..+ ADDRESS_BITS] = next_address }
     bypass#[(port*LANES) ..+ LANES] = next_bypass
   }
 
@@ -110,11 +110,11 @@ pub mod rename_table<ENTRIES=32, ADDRESS_BITS=5, READ_PORTS=16, IDENTITY_RESET=f
   free     = need_free
   for lane in 0 ..< LANES {
     const write     = arch_writes#[(lane*WRITE_BITS) ..+ WRITE_BITS]
-    const address   = write#[DATA_BITS ..+ ADDRESS_BITS]
+    const address   = if ADDRESS_BITS == 0 { 0 } else { write#[DATA_BITS ..+ ADDRESS_BITS] }
     mut previous:u8 = arch_table#[(address*DATA_BITS) ..+ DATA_BITS]
     for earlier in 0 ..< lane {
       const older = arch_writes#[(earlier*WRITE_BITS) ..+ WRITE_BITS]
-      if older#[VALID] != 0 and older#[DATA_BITS ..+ ADDRESS_BITS] == address { previous = older#[0 ..< DATA_BITS] }
+      if older#[VALID] != 0 and (if ADDRESS_BITS == 0 { 0 } else { older#[DATA_BITS ..+ ADDRESS_BITS] }) == address { previous = older#[0 ..< DATA_BITS] }
     }
     old_pdest#[(lane*DATA_BITS) ..+ DATA_BITS] = if write#[VALID] != 0 { previous } else { 0 }
     const retiring = old_pdest#[(lane*DATA_BITS) ..+ DATA_BITS]

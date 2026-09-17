@@ -54,6 +54,7 @@ load("//bench:defs.bzl", "CORES")
         srcs = ["genprp.sh"],
         data = [
             "@livehd//lhd:lhd",
+            ":lec_verdict.py",
             CORES[core]["pkg"] + ":verilog",
             CORES[core]["pkg"] + ":verilog_filelist",
         ],
@@ -162,6 +163,7 @@ _XS_TOPS = [
         srcs = ["genprp.sh"],
         data = [
             "@livehd//lhd:lhd",
+            ":lec_verdict.py",
             "//xiangshan/Backend:verilog",
             "//xiangshan/Backend:verilog_filelist",
         ],
@@ -220,6 +222,8 @@ _V2V_CORES = [
         srcs = ["v2v.sh"],
         data = [
             "@livehd//lhd:lhd",
+            "@livehd//inou/yosys:scripts",
+            ":lec_verdict.py",
             CORES[core]["pkg"] + ":verilog",
             CORES[core]["pkg"] + ":verilog_filelist",
         ],
@@ -250,6 +254,8 @@ _V2V_CORES = [
         srcs = ["v2v.sh"],
         data = [
             "@livehd//lhd:lhd",
+            "@livehd//inou/yosys:scripts",
+            ":lec_verdict.py",
             CORES[core]["pkg"] + ":verilog",
             CORES[core]["pkg"] + ":verilog_filelist",
         ],
@@ -268,4 +274,10 @@ _V2V_CORES = [
 test_suite(
     name = "v2v",
     tests = [":v2v_" + core for core in _V2V_CORES],
+)
+
+sh_test(
+    name = "lec_verdict_test",
+    srcs = ["lec_verdict_test.py"],
+    data = [":lec_verdict.py"],
 )

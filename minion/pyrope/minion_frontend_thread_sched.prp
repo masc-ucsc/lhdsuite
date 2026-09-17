@@ -1,17 +1,20 @@
-pub mod minion_frontend_thread_sched::[timecheck=false](clk_i:u1, rst_ni:u1, f7_valid_tid_i:u2, f0_thread_enabled_i:u2, id_core_stall_i:u2) -> (f7_thread_awake_o:u2@[], f7_thread_id_o:u1@[]) {
+pub mod minion_frontend_thread_sched<NrThreads=2>::[timecheck=false](clk_i:u1, rst_ni:u1, f7_valid_tid_i:u2, f0_thread_enabled_i:u2, id_core_stall_i:u2) -> (f7_thread_awake_o:u2@[], f7_thread_id_o:u1@[]) {
   reg thread_id_prev_q:u1:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
   reg thread_awake_q:u2:[initial=3, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
+  wire valid_tid_qual:u2
   f7_thread_id_o = 0ub?
-  const valid_tid_qual__w1 = f7_valid_tid_i & thread_awake_q
-  if ((valid_tid_qual__w1 >> 1) & 1) == 0 {
+  valid_tid_qual = f7_valid_tid_i & thread_awake_q
+  if ((valid_tid_qual >> 1) & 1) == 0 {
     f7_thread_id_o = 0
   } else {
-    f7_thread_id_o = if (valid_tid_qual__w1 & 1) == 0 { 1 } else { (~thread_id_prev_q) & 1 }
+    f7_thread_id_o = if (valid_tid_qual & 1) == 0 { 1 } else { (~thread_id_prev_q) & 1 }
   }
   const f7_thread_awake_o__w1 = thread_awake_q
-  if valid_tid_qual__w1 != 0 {
-    thread_id_prev_q = f7_thread_id_o
+  if rst_ni != 0 {
+    if valid_tid_qual != 0 {
+      thread_id_prev_q = f7_thread_id_o
+    }
+    thread_awake_q = f0_thread_enabled_i & (~id_core_stall_i)#[0..=1]
   }
-  thread_awake_q = f0_thread_enabled_i & (~id_core_stall_i)#[0..=1]
   f7_thread_awake_o = f7_thread_awake_o__w1
 }

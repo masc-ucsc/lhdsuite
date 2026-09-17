@@ -190,10 +190,13 @@ esac
 # the exact host build `lhd sim --run-only` would perform, but stopping at its
 # default drv.bin target guarantees that no testbench cycles execute.
 if [ "$MODE" = incr ]; then
-  ninja_path=$(type -P ninja || true)
+  # find_ninja also PREPENDS its directory to PATH: the lookup that matters is
+  # the one `lhd sim` does, not this one.
+  ninja_path=
+  if find_ninja; then ninja_path=$NINJA_BIN; fi
   metric sim_ninja_present "$([ -n "$ninja_path" ] && echo 1 || echo 0)" bool
   [ -n "$ninja_path" ] \
-    || { echo "FAIL: sim_incremental needs ninja to compile without executing drv.bin" >&2; exit 1; }
+    || { echo "FAIL: sim_incremental needs ninja to compile without executing drv.bin (not found on PATH nor in the usual install prefixes)" >&2; exit 1; }
 
   # sim_pass TAG [INCREMENTAL] — generate, then compile+link drv.bin. It never
   # launches the binary.
@@ -203,7 +206,7 @@ if [ "$MODE" = incr ]; then
     [ "$incremental" != false ] || incr_args=(--set lhd.incremental=false)
     # shellcheck disable=SC2086  # CORE_SIM_SETS is a token LIST, split on purpose
     run_timed "sim_setup_$tag" lhd sim "${SIM_INPUTS[@]}" --setup-only \
-      --set sim.vcd=false $CORE_SIM_SETS --workdir SW \
+    --set sim.vcd=false $CORE_SIM_SETS --workdir SW \
       ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
       ${incr_args[@]+"${incr_args[@]}"} || return 1
     # shellcheck disable=SC2086
@@ -276,7 +279,7 @@ fi
 # timed leg keeps the tracer out.
 # shellcheck disable=SC2086  # CORE_SIM_SETS is a token LIST, split on purpose
 run_timed sim_setup lhd sim "${SIM_INPUTS[@]}" --setup-only \
-  --set sim.vcd=false $CORE_SIM_SETS --workdir SW \
+    --set sim.vcd=false $CORE_SIM_SETS --workdir SW \
   ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"}
 # sim.ninja=false PINS the build path. `lhd sim` uses ninja when it finds one on
 # PATH and its own parallel compile otherwise — great for a developer's warm

@@ -6,48 +6,51 @@ pub mod intpipe_csr_file_conv::[timecheck=false](clk_i:u1, rst_ni:u1, tensorconv
   reg pending_q:u1:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
   reg conv_col_offset:u16:[clock_pin=ref clk_i]
   reg conv_row_offset:u16:[clock_pin=ref clk_i]
+  wire trigger:u1
+  wire conv_col_pos:u18
+  wire conv_row_pos:u18
+  mut compute_done_d:u1 = 0
   mut conv_col_offset_d:u16 = 0
   mut conv_row_offset_d:u16 = 0
-  mut compute_done_d:u1 = 0
-  const can_accept_new_write__w1 = unsigned(pending_q == 0)
+  compute_done_d = 0ub?
   mut pending_d = 0ub?
+  conv_col_offset_d = 0sb?
+  conv_row_offset_d = 0sb?
+  mut conv_idx_d:u4 = 0sb?
+  mut conv_pass_result = 0ub?
+  const can_accept_new_write__w1 = unsigned(pending_q == 0)
   pending_d = if ((tensorload_wen != 0) or (tensorfma_wen != 0) or (cacheop_wen != 0)) and (compute_done_q == 0) { 1 } else { pending_q }
   if compute_done_q != 0 {
     pending_d = 0
   }
-  const trigger__w1 = unsigned(((tensorconv_size_wen != 0) or (tensorconv_ctrl_wen != 0)) and (can_accept_new_write__w1 != 0))
-  mut conv_idx_d:u4 = 0sb?
-  conv_idx_d = if trigger__w1 != 0 { 0 } else { (conv_idx + 1)#[0..=3] }
-  conv_col_offset_d = 0sb?
-  conv_row_offset_d = 0sb?
+  trigger = unsigned(((tensorconv_size_wen != 0) or (tensorconv_ctrl_wen != 0)) and (can_accept_new_write__w1 != 0))
+  conv_idx_d = if trigger != 0 { 0 } else { (conv_idx + 1)#[0..=3] }
   conv_col_offset_d = (conv_col_offset + tensorconv_size_data.col_step_offset#[0..=7]#sext[0..=7]#[0..=15])#[0..=15]
   conv_row_offset_d = (conv_row_offset + tensorconv_size_data.row_step_offset#[0..=7]#sext[0..=7]#[0..=15])#[0..=15]
-  if trigger__w1 != 0 {
+  if trigger != 0 {
     conv_col_offset_d = 0
     conv_row_offset_d = 0
   }
-  const conv_col_pos__w1 = (tensorconv_ctrl_data.col_pos#[0..=15]#sext[0..=15]#[0..=17] + conv_col_offset#sext[0..=15]#[0..=17])#[0..=17]
-  const conv_row_pos__w1 = (tensorconv_ctrl_data.row_pos#[0..=15]#sext[0..=15]#[0..=17] + conv_row_offset#sext[0..=15]#[0..=17])#[0..=17]
-  mut conv_pass_result = 0ub?
-  conv_pass_result = if ((conv_col_pos__w1 >> 17) & 1) != 0 { 0 } else { 1 }
-  if ((conv_row_pos__w1 >> 17) & 1) != 0 {
+  conv_col_pos = (tensorconv_ctrl_data.col_pos#[0..=15]#sext[0..=15]#[0..=17] + conv_col_offset#sext[0..=15]#[0..=17])#[0..=17]
+  conv_row_pos = (tensorconv_ctrl_data.row_pos#[0..=15]#sext[0..=15]#[0..=17] + conv_row_offset#sext[0..=15]#[0..=17])#[0..=17]
+  conv_pass_result = if ((conv_col_pos >> 17) & 1) != 0 { 0 } else { 1 }
+  if ((conv_row_pos >> 17) & 1) != 0 {
     conv_pass_result = 0
   }
-  if conv_col_pos__w1 >= tensorconv_size_data.col_size#[0..=15] {
+  if conv_col_pos >= tensorconv_size_data.col_size#[0..=15] {
     conv_pass_result = 0
   }
-  if conv_row_pos__w1 >= tensorconv_size_data.row_size#[0..=15] {
+  if conv_row_pos >= tensorconv_size_data.row_size#[0..=15] {
     conv_pass_result = 0
   }
   const conv_bits_ready__w1 = compute_done_q
-  compute_done_d = 0ub?
   compute_done_d = compute_done_q
-  if trigger__w1 != 0 {
+  if trigger != 0 {
     compute_done_d = 0
   } elif conv_idx == 15 {
     compute_done_d = 1
   }
-  const clk_en__w1 = unsigned((trigger__w1 != 0) or (compute_done_q == 0) or (pending_q != 0))
+  const clk_en__w1 = unsigned((trigger != 0) or (compute_done_q == 0) or (pending_q != 0))
   mut _mux_4:u1 = if conv_save_mask != 0 { 0 } else { conv_save_mask & 1 }
   mut _mux_5:u1 = if (compute_done_d != 0) and (compute_done_q == 0) { 1 } else { _mux_4 & 1 }
   if clk_en__w1 != 0 {
@@ -56,13 +59,19 @@ pub mod intpipe_csr_file_conv::[timecheck=false](clk_i:u1, rst_ni:u1, tensorconv
     conv_col_offset = conv_col_offset_d
     conv_row_offset = conv_row_offset_d
   }
-  if clk_en__w1 != 0 {
-    compute_done_q = compute_done_d
+  if rst_ni != 0 {
+    if clk_en__w1 != 0 {
+      compute_done_q = compute_done_d
+    }
   }
-  if clk_en__w1 != 0 {
-    pending_q = pending_d
+  if rst_ni != 0 {
+    if clk_en__w1 != 0 {
+      pending_q = pending_d
+    }
   }
-  conv_save_mask = _mux_5
+  if rst_ni != 0 {
+    conv_save_mask = _mux_5
+  }
   can_accept_new_write = can_accept_new_write__w1
   conv_bits_ready = conv_bits_ready__w1
 }

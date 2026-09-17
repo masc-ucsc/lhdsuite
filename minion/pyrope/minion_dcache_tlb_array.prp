@@ -2,35 +2,34 @@ const minion_tlb = import("minion_tlb.minion_tlb")
 
 pub mod minion_dcache_tlb_array::[timecheck=false](clk_i:u1, rst_ni:u1, dft_i:(scanmode:u1, scan_reset_n:u1, sram_clk_override:u1, ram_rei:u1, ram_wei:u1), esr_vmspagesize_i:u2, req_data_i:(status:(prv:u2, mprv:u1, mpp:u2, sum:u1, mxr:u1, debug:u1), vpn:u36, passthrough:u1, store:u1, msb_err:u1), req_valid_i:u1, satp_info_i:(mode:u4, ppn:u28), matp_info_i:(mode:u4, ppn:u28), satp_info_en_i:u1, matp_info_en_i:u1, tlb_invalidate_i:u1, ptw_req_ready_i:u1, ptw_resp_data_i:(canceled_req:u1, access_fault:u1, rsvd_for_hw:u8, ppn:u44, rsvd_for_sw:u2, d:u1, a:u1, g:u1, u:u1, x:u1, w:u1, r:u1, v:u1), ptw_resp_valid_i:u1) -> (resp_data_o:(fill_pending:u1, miss:u1, ppn:u28, xcpt_ld:u1, xcpt_st:u1, access_fault:u1)@[], ptw_req_data_o:(satp_mode:u4, satp_ppn:u28, prv:u2, addr:u36)@[], ptw_req_valid_o:u1@[], vm_enabled_o:u1@[]) {
   wire tlb_resp_data:(fill_pending:u1, miss:u1, ppn:u28, xcpt_ld:u1, xcpt_st:u1, xcpt_if:u1, access_fault:u1) = nil
-  reg satp_info_en_del_q:u1:[clock_pin=ref clk_i]
-  reg matp_info_en_del_q:u1:[clock_pin=ref clk_i]
-  reg satp_info_reg_q:u32:[clock_pin=ref clk_i]
-  reg matp_info_reg_q:u32:[clock_pin=ref clk_i]
+  reg satp_info_en_del_q:u1:[initial=0, reset_pin=ref rst_ni, async=false, negreset=true, clock_pin=ref clk_i]
+  reg matp_info_en_del_q:u1:[initial=0, reset_pin=ref rst_ni, async=false, negreset=true, clock_pin=ref clk_i]
+  reg satp_info_reg_q:u32:[initial=0, reset_pin=ref rst_ni, async=false, negreset=true, clock_pin=ref clk_i]
+  reg matp_info_reg_q:u32:[initial=0, reset_pin=ref rst_ni, async=false, negreset=true, clock_pin=ref clk_i]
   mut satp_info:u32 = 0sb?
   mut matp_info:u32 = 0sb?
+  if rst_ni != 0 {
+    if unsigned((satp_info_en_del_q != 0) or (satp_info_en_i != 0) or (matp_info_en_del_q != 0) or (matp_info_en_i != 0)) != 0 {
+      satp_info_en_del_q = satp_info_en_i
+      matp_info_en_del_q = matp_info_en_i
+    }
+  }
+  if rst_ni != 0 {
+    if satp_info_en_del_q != 0 {
+      satp_info_reg_q = (satp_info_i.mode << 28) | satp_info_i.ppn
+    }
+  }
+  if rst_ni != 0 {
+    if matp_info_en_del_q != 0 {
+      matp_info_reg_q = (matp_info_i.mode << 28) | matp_info_i.ppn
+    }
+  }
   mut `tlb_req_data.status` = 0
   mut `tlb_req_data.vpn` = 0
   mut `tlb_req_data.passthrough` = 0
   mut `tlb_req_data.instruction` = 0
   mut `tlb_req_data.store` = 0
   mut `tlb_req_data.msb_err` = 0
-  if rst_ni == 0 {
-    satp_info_en_del_q = 0
-    matp_info_en_del_q = 0
-  } elif unsigned((satp_info_en_del_q != 0) or (satp_info_en_i != 0) or (matp_info_en_del_q != 0) or (matp_info_en_i != 0)) != 0 {
-    satp_info_en_del_q = satp_info_en_i
-    matp_info_en_del_q = matp_info_en_i
-  }
-  if rst_ni == 0 {
-    satp_info_reg_q = 0
-  } elif satp_info_en_del_q != 0 {
-    satp_info_reg_q = (satp_info_i.mode << 28) | satp_info_i.ppn
-  }
-  if rst_ni == 0 {
-    matp_info_reg_q = 0
-  } elif matp_info_en_del_q != 0 {
-    matp_info_reg_q = (matp_info_i.mode << 28) | matp_info_i.ppn
-  }
   const `tlb_req_data.status__w1` = ((req_data_i.status.prv << 45) | (req_data_i.status.mprv << 44) | (req_data_i.status.mpp << 42) | (req_data_i.status.sum << 41) | (req_data_i.status.mxr << 40) | (req_data_i.status.debug << 39) | (req_data_i.vpn << 3) | (req_data_i.passthrough << 2) | (req_data_i.store << 1) | req_data_i.msb_err)#[39..=46]
   const `tlb_req_data.vpn__w1` = req_data_i.vpn#[0..=35]
   const `tlb_req_data.passthrough__w1` = req_data_i.passthrough & 1

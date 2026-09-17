@@ -571,19 +571,19 @@ if [[ " $PHASES " == *" sim "* ]]; then
       local setup_ms run_ms
       group_begin
       step sim "$mode" "sim_${mode}_setup.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
-        "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --setup-only --set sim.vcd=false \
+        "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --setup-only \
         --workdir "$wd" --result-json "sim_${mode}_setup.json"
       setup_ms=$GRP_MS
       step sim "$mode" "sim_${mode}_run.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
         "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --run-only --arg "cycles=$SIM_CYCLES" \
-        --set sim.vcd=false --diag-fmt pretty --workdir "$wd" \
+ --diag-fmt pretty --workdir "$wd" \
         --result-json "sim_${mode}_run.json"
       run_ms=$((GRP_MS - setup_ms))
       group_end sim "$mode" "$(sim_extra "$wd" "$setup_ms" "$run_ms")"
     }
     rm -rf SW_warm0
     warm_phase sim "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} "tree/$SIM_UNIT.prp" "tree/$SIM_TB" \
-      --arg "cycles=$SIM_CYCLES" --set sim.vcd=false --workdir SW_warm0
+      --arg "cycles=$SIM_CYCLES" --workdir SW_warm0
     rm -rf SW_warm0
     rm -rf SW_full; sim_group full SW_full
     rm -rf SW_warm; sim_group cold SW_warm
@@ -609,19 +609,19 @@ if [[ " $PHASES " == *" sim_llvm "* ]]; then
       local setup_ms run_ms
       group_begin
       step sim_llvm "$mode" "siml_${mode}_setup.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
-        "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --setup-only --set sim.vcd=false \
+        "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --setup-only \
         --set sim.backend=llvm --workdir "$wd" --result-json "siml_${mode}_setup.json"
       setup_ms=$GRP_MS
       step sim_llvm "$mode" "siml_${mode}_run.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
         "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --run-only --arg "cycles=$SIM_CYCLES" \
-        --set sim.vcd=false --set sim.backend=llvm --diag-fmt pretty \
+ --set sim.backend=llvm --diag-fmt pretty \
         --workdir "$wd" --result-json "siml_${mode}_run.json"
       run_ms=$((GRP_MS - setup_ms))
       group_end sim_llvm "$mode" "$(sim_extra "$wd" "$setup_ms" "$run_ms")"
     }
     rm -rf SL_warm0
     warm_phase sim_llvm "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} "tree/$SIM_UNIT.prp" "tree/$SIM_TB" \
-      --arg "cycles=$SIM_CYCLES" --set sim.vcd=false --set sim.backend=llvm \
+      --arg "cycles=$SIM_CYCLES" --set sim.backend=llvm \
       --workdir SL_warm0
     rm -rf SL_warm0
     rm -rf SL_full; simllvm_group full SL_full

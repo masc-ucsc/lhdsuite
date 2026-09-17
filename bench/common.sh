@@ -251,6 +251,88 @@ step_failed() {
 # visibly advance without exposing warnings or verbose ABC internals. Set
 # BENCH_PROGRESS=0 to retain the old silent console behavior; the records still
 # remain in the complete step log.
+# TWO SEPARATE BUDGETS. They were one variable until 2026-09-16 and that was
+# wrong (owner: "by timeout I mean formal timeout, not total time timeout").
+#
+# LEC_BUDGET_S -- the SOLVER budget, passed as `--set formal.timeout=`. It is
+#   PER SOLVE. `lhd lec` is hierarchical and bottom-up, so one leg issues many
+#   solves and its honest wall clock is a multiple of this, not equal to it.
+#   Owner ruling 2026-09-15: a LEC that does not REFUTE within the budget found
+#   no issue, so the gate accepts it.
+#
+# LEC_WALL_S -- a HARD wall-clock stop for the whole leg, purely a hang guard.
+#   0 (the default) means NO wall-clock stop: bazel's own test timeout is the
+#   backstop. Setting it equal to LEC_BUDGET_S -- which is what the single
+#   variable used to do -- truncates a legitimate multi-solve run and reports it
+#   as "reached the budget without refuting", hiding how little was actually
+#   examined.
+LEC_BUDGET_S=${LEC_BUDGET_S:-300}
+LEC_WALL_S=${LEC_WALL_S:-0}
+
+# run_deadline SECONDS LOGFILE CMD... -- run CMD with a HARD wall-clock limit,
+# returning 124 when it had to be killed.
+#
+# Not `timeout(1)`: the bazel test PATH has no homebrew, so that binary is
+# absent in the sandbox and every call would silently fall back to no limit at
+# all (the same trap lgcheck's watchdog hit). Background-and-poll needs nothing
+# but bash.
+# kill_tree PID SIG — signal PID and every descendant. A bare `kill $pid` reaches
+# only the direct child: pass/lec forks one solver per proof method and they all
+# live until the first trustworthy result kills the rest, so a deadline that
+# signals just the wrapper ORPHANS those solvers. They keep cores busy for the
+# rest of the suite, which corrupts every timing measured after them. (The same
+# helper, for the same reason, is in verif/genprp.sh and verif/v2v.sh.)
+kill_tree() {
+  local pid=$1 sig=$2 child
+  for child in $(pgrep -P "$pid" 2>/dev/null); do
+    kill_tree "$child" "$sig"
+  done
+  kill "-$sig" "$pid" 2>/dev/null || true
+}
+
+run_deadline() {
+  local secs=$1 logfile=$2
+  shift 2
+  # secs <= 0 => no wall-clock stop; just run it and report its own status.
+  if [ "${secs:-0}" -le 0 ] 2>/dev/null; then
+    local rc0=0
+    "$@" >"$logfile" 2>&1 || rc0=$?
+    return "$rc0"
+  fi
+  "$@" >"$logfile" 2>&1 &
+  local pid=$! waited=0
+  while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt "$secs" ]; do
+    sleep 5
+    waited=$((waited + 5))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill_tree "$pid" TERM
+    sleep 2
+    kill_tree "$pid" KILL
+    wait "$pid" 2>/dev/null || true
+    return 124
+  fi
+  local rc=0
+  wait "$pid" || rc=$?
+  return "$rc"
+}
+
+# run_timed_deadline LABEL SECONDS cmd... -- run_timed with a hard wall-clock
+# limit. Sets LAST_RC (124 on a kill) and, unlike run_timed, does NOT fail the
+# step: the caller decides what a deadline means for its own gate.
+run_timed_deadline() {
+  local label=$1 secs=$2
+  shift 2
+  local t0 t1
+  CURRENT_STEP=$label
+  t0=$(now_ms)
+  LAST_RC=0
+  run_deadline "$secs" "step_${label}.log" "$@" || LAST_RC=$?
+  t1=$(now_ms)
+  LAST_MS=$((t1 - t0))
+  metric "${label}_ms" "$LAST_MS" ms
+}
+
 run_timed() {
   local label=$1
   shift
@@ -441,6 +523,37 @@ find_verilator() {
     done
   fi
   [ -n "$VERILATOR_BIN" ] && "$VERILATOR_BIN" --version >/dev/null 2>&1
+}
+
+# find_ninja — put a ninja on PATH for `lhd sim`, or return non-zero.
+#
+# `lhd sim` picks its build path by looking for ninja ON PATH, and bazel's test
+# PATH does not carry /opt/homebrew/bin — so `type -P ninja` fails inside the
+# sandbox even on a machine that has ninja installed, and sim_incremental (which
+# NEEDS the ninja path, because only its default target stops at drv.bin without
+# executing it) failed for a host-state reason with no hint that the extension
+# was PATH. Same trap and same fix as find_verilator above; this one also EXPORTS
+# the directory, because the consumer is lhd rather than this script.
+find_ninja() {
+  NINJA_BIN=${NINJA:-}
+  if [ -z "$NINJA_BIN" ]; then
+    NINJA_BIN=$(type -P ninja || true)
+  fi
+  if [ -z "$NINJA_BIN" ]; then
+    local c
+    for c in /opt/homebrew/bin/ninja /usr/local/bin/ninja /usr/bin/ninja; do
+      if [ -x "$c" ]; then
+        NINJA_BIN=$c
+        break
+      fi
+    done
+  fi
+  [ -n "$NINJA_BIN" ] || return 1
+  "$NINJA_BIN" --version >/dev/null 2>&1 || return 1
+  case ":$PATH:" in
+    *":$(dirname "$NINJA_BIN"):"*) ;;
+    *) PATH="$(dirname "$NINJA_BIN"):$PATH"; export PATH ;;
+  esac
 }
 
 # abc_incr_counts RESULT_JSON — echo "hits misses hit_ms miss_ms store_failed"

@@ -28,6 +28,10 @@ an explicit maintenance step. Benchmark runs use scratch directories and do
 not rewrite it. Keep agent cleanup in `pyrope2/`; the files selected by each
 core's `BUILD` determine which version a benchmark consumes.
 
+Except for `pyrope2/` and the `match*` tests, Pyrope design sources are generated.
+When generated code is wrong, fix the generation defect and refresh the
+affected files in `pyrope/`, checking them against the reference RTL.
+
 The tests in verif, should run with both `pyrope/` and `pyrope2/`
 
 ## Designs

@@ -1,11 +1,13 @@
 const minion_pkg = import("minion_pkg")
 
-pub mod intpipe_csr_replay::[timecheck=false](clk_i:u1, rst_ni:u1, wb_wdata:minion_pkg.XregSize_T, wb_thread_id:u1, io_interrupt:minion_pkg.NrThreads_T, io_redirect:minion_pkg.NrThreads_T, reg_co_evict_va_en:u1, reg_co_flush_va_en:u1, reg_co_lock_va_en_qual:u1, reg_co_unlock_va_en_qual:u1, reg_co_lock_sw_en:u1, reg_co_unlock_sw_en:u1, reg_co_prefetch_va_en:u1, reg_co_evict_sw_en:u1, reg_co_flush_sw_en:u1, reg_tensor_load_l2scp_en:u1, reg_flb_en:u1, reg_tensor_load_en:u1, reg_tensor_fma_en:u1, reg_tensor_quant_en:u1, reg_tensor_reduce_en:u1, reg_tensor_store_en:u1, reg_tensor_conv_ctrl_en:minion_pkg.NrThreads_T, reg_tensor_conv_size_en:minion_pkg.NrThreads_T, reg_fcc_en:minion_pkg.NrThreads_T, reg_tensor_wait_en:minion_pkg.NrThreads_T, reg_tex_send_en:u1, reg_tensor_mask_read_invalid:u1, pmu_read_en_wb:u1, pmu_read_mem_ready:minion_pkg.NrThreads_T, dcache_ctrl_resp:(cache_op_ready:u1, cache_op_busy_changed:u2, cache_op_complete_l1:u4, cache_op_complete_l2:u4, tl_ready_0:u1, tl_ready_1:u1, ts_ready:u1, tl_complete_0:u2, reduce_ready:u1, tex_send_ready:u1, gsc_progress_save:u2, gsc_progress:u3), fl_barrier_ready:u1, tensor_fma_replay_condition:u1, tensor_quant_replay_condition:u1, vpu_treduce_enabled:u1, tenb_tl_pend_tfma_en:u1, tenb_restart_process:u1, tload_is_for_tenb:u1, conv_can_accept_new_write:minion_pkg.NrThreads_T, fcc_ready:u4, wb_fcc_addr:u2, msg_port_pget_block:u1, msg_port_stall:u8, reg_tensor_mask_ready:minion_pkg.NrThreads_T) -> (io_replay:u1@[], io_replay_stall:minion_pkg.NrThreads_T@[]) {
-  reg csr_replay_stall:u48:[clock_pin=ref clk_i, clock_pin=ref clk_i, clock_pin=ref clk_i, clock_pin=ref clk_i, clock_pin=ref clk_i, clock_pin=ref clk_i]
-  mut wb_csr_replay:u24 = 0
+pub mod intpipe_csr_replay<VpuEn=1>::[timecheck=false](clk_i:u1, rst_ni:u1, wb_wdata:minion_pkg.XregSize_T, wb_thread_id:u1, io_interrupt:minion_pkg.NrThreads_T, io_redirect:minion_pkg.NrThreads_T, reg_co_evict_va_en:u1, reg_co_flush_va_en:u1, reg_co_lock_va_en_qual:u1, reg_co_unlock_va_en_qual:u1, reg_co_lock_sw_en:u1, reg_co_unlock_sw_en:u1, reg_co_prefetch_va_en:u1, reg_co_evict_sw_en:u1, reg_co_flush_sw_en:u1, reg_tensor_load_l2scp_en:u1, reg_flb_en:u1, reg_tensor_load_en:u1, reg_tensor_fma_en:u1, reg_tensor_quant_en:u1, reg_tensor_reduce_en:u1, reg_tensor_store_en:u1, reg_tensor_conv_ctrl_en:minion_pkg.NrThreads_T, reg_tensor_conv_size_en:minion_pkg.NrThreads_T, reg_fcc_en:minion_pkg.NrThreads_T, reg_tensor_wait_en:minion_pkg.NrThreads_T, reg_tex_send_en:u1, reg_tensor_mask_read_invalid:u1, pmu_read_en_wb:u1, pmu_read_mem_ready:minion_pkg.NrThreads_T, dcache_ctrl_resp:(cache_op_ready:u1, cache_op_busy_changed:u2, cache_op_complete_l1:u4, cache_op_complete_l2:u4, tl_ready_0:u1, tl_ready_1:u1, ts_ready:u1, tl_complete_0:u2, reduce_ready:u1, tex_send_ready:u1, gsc_progress_save:u2, gsc_progress:u3), fl_barrier_ready:u1, tensor_fma_replay_condition:u1, tensor_quant_replay_condition:u1, vpu_treduce_enabled:u1, tenb_tl_pend_tfma_en:u1, tenb_restart_process:u1, tload_is_for_tenb:u1, conv_can_accept_new_write:minion_pkg.NrThreads_T, fcc_ready:u4, wb_fcc_addr:u2, msg_port_pget_block:u1, msg_port_stall:u8, reg_tensor_mask_ready:minion_pkg.NrThreads_T) -> (io_replay:u1@[], io_replay_stall:minion_pkg.NrThreads_T@[]) {
+  reg csr_replay_stall:u48:[clock_pin=ref clk_i, clock_pin=ref clk_i, clock_pin=ref clk_i, clock_pin=ref clk_i, clock_pin=ref clk_i, clock_pin=ref clk_i, initial=0, reset_pin=ref rst_ni, async=true, negreset=true]
+  wire wb_replay_tensor_wait_cond:u4
   mut clear_stall:u48 = 0
-  io_replay_stall = 0sb?
+  mut wb_csr_replay:u24 = 0
+  clear_stall = 0sb?
   wb_csr_replay = 0sb?
+  io_replay_stall = 0sb?
   wb_csr_replay = 0
   if (reg_co_evict_va_en != 0) and (dcache_ctrl_resp.cache_op_ready == 0) {
     wb_csr_replay = 1
@@ -35,16 +37,16 @@ pub mod intpipe_csr_replay::[timecheck=false](clk_i:u1, rst_ni:u1, wb_wdata:mini
   if (reg_co_flush_sw_en != 0) and (dcache_ctrl_resp.cache_op_ready == 0) {
     wb_csr_replay#[0] = 1
   }
-  if true and (reg_tensor_load_l2scp_en != 0) and (dcache_ctrl_resp.cache_op_ready == 0) {
+  if (VpuEn != 0) and (reg_tensor_load_l2scp_en != 0) and (dcache_ctrl_resp.cache_op_ready == 0) {
     wb_csr_replay#[0] = 1
   }
   if (reg_flb_en != 0) and (fl_barrier_ready == 0) {
     wb_csr_replay#[1] = 1
   }
-  if true and (reg_tensor_load_en != 0) and (dcache_ctrl_resp.tl_ready_0 == 0) and (tload_is_for_tenb == 0) {
+  if (VpuEn != 0) and (reg_tensor_load_en != 0) and (dcache_ctrl_resp.tl_ready_0 == 0) and (tload_is_for_tenb == 0) {
     wb_csr_replay#[2] = 1
   }
-  if true and (reg_tensor_load_en != 0) and ((dcache_ctrl_resp.tl_ready_1 == 0) or (tenb_tl_pend_tfma_en != 0)) and (tload_is_for_tenb != 0) {
+  if (VpuEn != 0) and (reg_tensor_load_en != 0) and ((dcache_ctrl_resp.tl_ready_1 == 0) or (tenb_tl_pend_tfma_en != 0)) and (tload_is_for_tenb != 0) {
     wb_csr_replay#[3] = 1
   }
   if (reg_tensor_fma_en != 0) and ((tensor_fma_replay_condition != 0) or (tenb_restart_process != 0)) {
@@ -53,10 +55,10 @@ pub mod intpipe_csr_replay::[timecheck=false](clk_i:u1, rst_ni:u1, wb_wdata:mini
   if (reg_tensor_quant_en != 0) and (tensor_quant_replay_condition != 0) {
     wb_csr_replay#[5] = 1
   }
-  if true and (reg_tensor_reduce_en != 0) and ((dcache_ctrl_resp.reduce_ready == 0) or (vpu_treduce_enabled != 0)) {
+  if (VpuEn != 0) and (reg_tensor_reduce_en != 0) and ((dcache_ctrl_resp.reduce_ready == 0) or (vpu_treduce_enabled != 0)) {
     wb_csr_replay#[6] = 1
   }
-  if true and (reg_tensor_store_en != 0) and ((dcache_ctrl_resp.ts_ready == 0) or (vpu_treduce_enabled != 0)) {
+  if (VpuEn != 0) and (reg_tensor_store_en != 0) and ((dcache_ctrl_resp.ts_ready == 0) or (vpu_treduce_enabled != 0)) {
     wb_csr_replay#[7] = 1
   }
   if (reg_tensor_conv_ctrl_en != 0) and ((((conv_can_accept_new_write << 1) >> (wb_thread_id + 1)) & 1) == 0) {
@@ -77,47 +79,46 @@ pub mod intpipe_csr_replay::[timecheck=false](clk_i:u1, rst_ni:u1, wb_wdata:mini
   if (pmu_read_en_wb != 0) and ((((pmu_read_mem_ready << 1) >> (wb_thread_id + 1)) & 1) == 0) {
     wb_csr_replay#[13] = 1
   }
-  if true and (reg_tex_send_en != 0) and (dcache_ctrl_resp.tex_send_ready == 0) {
+  if (VpuEn != 0) and (reg_tex_send_en != 0) and (dcache_ctrl_resp.tex_send_ready == 0) {
     wb_csr_replay#[14] = 1
   }
   mut wb_csr_replay__w2 = wb_csr_replay
   wb_csr_replay__w2#[9] = msg_port_pget_block & 1
-  const wb_replay_tensor_wait_cond__w1 = wb_wdata#[0..=3]
+  wb_replay_tensor_wait_cond = wb_wdata#[0..=3]
   wb_csr_replay = wb_csr_replay__w2
-  if true and (reg_tensor_wait_en != 0) and ((dcache_ctrl_resp.tl_complete_0 & 1) == 0) and (wb_thread_id == 0) and (wb_replay_tensor_wait_cond__w1 == 0) {
+  if (VpuEn != 0) and (reg_tensor_wait_en != 0) and ((dcache_ctrl_resp.tl_complete_0 & 1) == 0) and (wb_thread_id == 0) and (wb_replay_tensor_wait_cond == 0) {
     wb_csr_replay#[15] = 1
   }
-  if true and (reg_tensor_wait_en != 0) and (((dcache_ctrl_resp.tl_complete_0 >> 1) & 1) == 0) and (wb_thread_id == 0) and (wb_replay_tensor_wait_cond__w1 == 1) {
+  if (VpuEn != 0) and (reg_tensor_wait_en != 0) and (((dcache_ctrl_resp.tl_complete_0 >> 1) & 1) == 0) and (wb_thread_id == 0) and (wb_replay_tensor_wait_cond == 1) {
     wb_csr_replay#[16] = 1
   }
-  if true and (reg_tensor_wait_en != 0) and ((((dcache_ctrl_resp.cache_op_complete_l2 << 2) >> ((wb_thread_id * 2) + 2))#[0..=1] & 1) == 0) and (wb_replay_tensor_wait_cond__w1 == 2) {
+  if (VpuEn != 0) and (reg_tensor_wait_en != 0) and ((((dcache_ctrl_resp.cache_op_complete_l2 << 2) >> ((wb_thread_id * 2) + 2))#[0..=1] & 1) == 0) and (wb_replay_tensor_wait_cond == 2) {
     wb_csr_replay#[17] = 1
   }
-  if true and (reg_tensor_wait_en != 0) and (((((dcache_ctrl_resp.cache_op_complete_l2 << 2) >> ((wb_thread_id * 2) + 2))#[0..=1] >> 1) & 1) == 0) and (wb_replay_tensor_wait_cond__w1 == 3) {
+  if (VpuEn != 0) and (reg_tensor_wait_en != 0) and (((((dcache_ctrl_resp.cache_op_complete_l2 << 2) >> ((wb_thread_id * 2) + 2))#[0..=1] >> 1) & 1) == 0) and (wb_replay_tensor_wait_cond == 3) {
     wb_csr_replay#[18] = 1
   }
-  if true and (reg_tensor_wait_en != 0) and ((((dcache_ctrl_resp.cache_op_complete_l2 << 2) >> ((wb_thread_id * 2) + 2))#[0..=1] & 1) == 0) and (wb_replay_tensor_wait_cond__w1 == 4) {
+  if (VpuEn != 0) and (reg_tensor_wait_en != 0) and ((((dcache_ctrl_resp.cache_op_complete_l2 << 2) >> ((wb_thread_id * 2) + 2))#[0..=1] & 1) == 0) and (wb_replay_tensor_wait_cond == 4) {
     wb_csr_replay#[17] = 1
   }
-  if true and (reg_tensor_wait_en != 0) and (((((dcache_ctrl_resp.cache_op_complete_l2 << 2) >> ((wb_thread_id * 2) + 2))#[0..=1] >> 1) & 1) == 0) and (wb_replay_tensor_wait_cond__w1 == 5) {
+  if (VpuEn != 0) and (reg_tensor_wait_en != 0) and (((((dcache_ctrl_resp.cache_op_complete_l2 << 2) >> ((wb_thread_id * 2) + 2))#[0..=1] >> 1) & 1) == 0) and (wb_replay_tensor_wait_cond == 5) {
     wb_csr_replay#[18] = 1
   }
-  if true and (reg_tensor_wait_en != 0) and ((unsigned(((dcache_ctrl_resp.cache_op_complete_l2 << 2) >> ((wb_thread_id * 2) + 2))#[0..=1] == 3) == 0) or (unsigned(((dcache_ctrl_resp.cache_op_complete_l1 << 2) >> ((wb_thread_id * 2) + 2))#[0..=1] == 3) == 0)) and (wb_replay_tensor_wait_cond__w1 == 6) {
+  if (VpuEn != 0) and (reg_tensor_wait_en != 0) and ((unsigned(((dcache_ctrl_resp.cache_op_complete_l2 << 2) >> ((wb_thread_id * 2) + 2))#[0..=1] == 3) == 0) or (unsigned(((dcache_ctrl_resp.cache_op_complete_l1 << 2) >> ((wb_thread_id * 2) + 2))#[0..=1] == 3) == 0)) and (wb_replay_tensor_wait_cond == 6) {
     wb_csr_replay#[19] = 1
   }
-  if (reg_tensor_wait_en != 0) and (tensor_fma_replay_condition != 0) and (wb_thread_id == 0) and (wb_replay_tensor_wait_cond__w1 == 7) {
+  if (reg_tensor_wait_en != 0) and (tensor_fma_replay_condition != 0) and (wb_thread_id == 0) and (wb_replay_tensor_wait_cond == 7) {
     wb_csr_replay#[20] = 1
   }
-  if true and (reg_tensor_wait_en != 0) and (dcache_ctrl_resp.ts_ready == 0) and (wb_thread_id == 0) and (wb_replay_tensor_wait_cond__w1 == 8) {
+  if (VpuEn != 0) and (reg_tensor_wait_en != 0) and (dcache_ctrl_resp.ts_ready == 0) and (wb_thread_id == 0) and (wb_replay_tensor_wait_cond == 8) {
     wb_csr_replay#[21] = 1
   }
-  if true and (reg_tensor_wait_en != 0) and (dcache_ctrl_resp.reduce_ready == 0) and (wb_thread_id == 0) and (wb_replay_tensor_wait_cond__w1 == 9) {
+  if (VpuEn != 0) and (reg_tensor_wait_en != 0) and (dcache_ctrl_resp.reduce_ready == 0) and (wb_thread_id == 0) and (wb_replay_tensor_wait_cond == 9) {
     wb_csr_replay#[22] = 1
   }
-  if (reg_tensor_wait_en != 0) and (tensor_quant_replay_condition != 0) and (wb_thread_id == 0) and (wb_replay_tensor_wait_cond__w1 == 10) {
+  if (reg_tensor_wait_en != 0) and (tensor_quant_replay_condition != 0) and (wb_thread_id == 0) and (wb_replay_tensor_wait_cond == 10) {
     wb_csr_replay#[23] = 1
   }
-  clear_stall = 0sb?
   clear_stall = 0
   if (dcache_ctrl_resp.cache_op_busy_changed & 1) != 0 {
     clear_stall = 1
@@ -126,10 +127,10 @@ pub mod intpipe_csr_replay::[timecheck=false](clk_i:u1, rst_ni:u1, wb_wdata:mini
   if fl_barrier_ready != 0 {
     clear_stall#[1] = 1
   }
-  if false or (dcache_ctrl_resp.tl_ready_0 != 0) {
+  if (VpuEn == 0) or (dcache_ctrl_resp.tl_ready_0 != 0) {
     clear_stall#[2] = 1
   }
-  if false or (dcache_ctrl_resp.tl_ready_1 != 0) {
+  if (VpuEn == 0) or (dcache_ctrl_resp.tl_ready_1 != 0) {
     clear_stall#[3] = 1
   }
   if tensor_fma_replay_condition == 0 {
@@ -138,10 +139,10 @@ pub mod intpipe_csr_replay::[timecheck=false](clk_i:u1, rst_ni:u1, wb_wdata:mini
   if tensor_quant_replay_condition == 0 {
     clear_stall#[5] = 1
   }
-  if (false or (dcache_ctrl_resp.reduce_ready != 0)) and (vpu_treduce_enabled == 0) {
+  if ((VpuEn == 0) or (dcache_ctrl_resp.reduce_ready != 0)) and (vpu_treduce_enabled == 0) {
     clear_stall#[6] = 1
   }
-  if (false or (dcache_ctrl_resp.ts_ready != 0)) and (vpu_treduce_enabled == 0) {
+  if ((VpuEn == 0) or (dcache_ctrl_resp.ts_ready != 0)) and (vpu_treduce_enabled == 0) {
     clear_stall#[7] = 1
   }
   if (conv_can_accept_new_write & 1) != 0 {
@@ -162,31 +163,31 @@ pub mod intpipe_csr_replay::[timecheck=false](clk_i:u1, rst_ni:u1, wb_wdata:mini
   if (pmu_read_mem_ready & 1) != 0 {
     clear_stall#[13] = 1
   }
-  if false or (dcache_ctrl_resp.tex_send_ready != 0) {
+  if (VpuEn == 0) or (dcache_ctrl_resp.tex_send_ready != 0) {
     clear_stall#[14] = 1
   }
-  if (false or ((dcache_ctrl_resp.tl_complete_0 & 1) != 0)) and true {
+  if ((VpuEn == 0) or ((dcache_ctrl_resp.tl_complete_0 & 1) != 0)) and true {
     clear_stall#[15] = 1
   }
-  if (false or (((dcache_ctrl_resp.tl_complete_0 >> 1) & 1) != 0)) and true {
+  if ((VpuEn == 0) or (((dcache_ctrl_resp.tl_complete_0 >> 1) & 1) != 0)) and true {
     clear_stall#[16] = 1
   }
-  if false or ((dcache_ctrl_resp.cache_op_complete_l2#[0..=1] & 1) != 0) {
+  if (VpuEn == 0) or ((dcache_ctrl_resp.cache_op_complete_l2#[0..=1] & 1) != 0) {
     clear_stall#[17] = 1
   }
-  if false or (((dcache_ctrl_resp.cache_op_complete_l2#[0..=1] >> 1) & 1) != 0) {
+  if (VpuEn == 0) or (((dcache_ctrl_resp.cache_op_complete_l2#[0..=1] >> 1) & 1) != 0) {
     clear_stall#[18] = 1
   }
-  if false or ((dcache_ctrl_resp.cache_op_complete_l2#[0..=1] == 3) and (dcache_ctrl_resp.cache_op_complete_l1#[0..=1] == 3)) {
+  if (VpuEn == 0) or ((dcache_ctrl_resp.cache_op_complete_l2#[0..=1] == 3) and (dcache_ctrl_resp.cache_op_complete_l1#[0..=1] == 3)) {
     clear_stall#[19] = 1
   }
   if (tensor_fma_replay_condition == 0) and true {
     clear_stall#[20] = 1
   }
-  if (false or (dcache_ctrl_resp.ts_ready != 0)) and true {
+  if ((VpuEn == 0) or (dcache_ctrl_resp.ts_ready != 0)) and true {
     clear_stall#[21] = 1
   }
-  if (false or (dcache_ctrl_resp.reduce_ready != 0)) and true {
+  if ((VpuEn == 0) or (dcache_ctrl_resp.reduce_ready != 0)) and true {
     clear_stall#[22] = 1
   }
   if (tensor_quant_replay_condition == 0) and true {
@@ -201,10 +202,10 @@ pub mod intpipe_csr_replay::[timecheck=false](clk_i:u1, rst_ni:u1, wb_wdata:mini
   if fl_barrier_ready != 0 {
     clear_stall#[25] = 1
   }
-  if false or (dcache_ctrl_resp.tl_ready_0 != 0) {
+  if (VpuEn == 0) or (dcache_ctrl_resp.tl_ready_0 != 0) {
     clear_stall#[26] = 1
   }
-  if false or (dcache_ctrl_resp.tl_ready_1 != 0) {
+  if (VpuEn == 0) or (dcache_ctrl_resp.tl_ready_1 != 0) {
     clear_stall#[27] = 1
   }
   if tensor_fma_replay_condition == 0 {
@@ -213,10 +214,10 @@ pub mod intpipe_csr_replay::[timecheck=false](clk_i:u1, rst_ni:u1, wb_wdata:mini
   if tensor_quant_replay_condition == 0 {
     clear_stall#[29] = 1
   }
-  if (false or (dcache_ctrl_resp.reduce_ready != 0)) and (vpu_treduce_enabled == 0) {
+  if ((VpuEn == 0) or (dcache_ctrl_resp.reduce_ready != 0)) and (vpu_treduce_enabled == 0) {
     clear_stall#[30] = 1
   }
-  if (false or (dcache_ctrl_resp.ts_ready != 0)) and (vpu_treduce_enabled == 0) {
+  if ((VpuEn == 0) or (dcache_ctrl_resp.ts_ready != 0)) and (vpu_treduce_enabled == 0) {
     clear_stall#[31] = 1
   }
   if ((conv_can_accept_new_write >> 1) & 1) != 0 {
@@ -237,31 +238,31 @@ pub mod intpipe_csr_replay::[timecheck=false](clk_i:u1, rst_ni:u1, wb_wdata:mini
   if ((pmu_read_mem_ready >> 1) & 1) != 0 {
     clear_stall#[37] = 1
   }
-  if false or (dcache_ctrl_resp.tex_send_ready != 0) {
+  if (VpuEn == 0) or (dcache_ctrl_resp.tex_send_ready != 0) {
     clear_stall#[38] = 1
   }
-  if (false or ((dcache_ctrl_resp.tl_complete_0 & 1) != 0)) and false {
+  if ((VpuEn == 0) or ((dcache_ctrl_resp.tl_complete_0 & 1) != 0)) and false {
     clear_stall#[39] = 1
   }
-  if (false or (((dcache_ctrl_resp.tl_complete_0 >> 1) & 1) != 0)) and false {
+  if ((VpuEn == 0) or (((dcache_ctrl_resp.tl_complete_0 >> 1) & 1) != 0)) and false {
     clear_stall#[40] = 1
   }
-  if false or ((dcache_ctrl_resp.cache_op_complete_l2#[2..=3] & 1) != 0) {
+  if (VpuEn == 0) or ((dcache_ctrl_resp.cache_op_complete_l2#[2..=3] & 1) != 0) {
     clear_stall#[41] = 1
   }
-  if false or (((dcache_ctrl_resp.cache_op_complete_l2#[2..=3] >> 1) & 1) != 0) {
+  if (VpuEn == 0) or (((dcache_ctrl_resp.cache_op_complete_l2#[2..=3] >> 1) & 1) != 0) {
     clear_stall#[42] = 1
   }
-  if false or ((dcache_ctrl_resp.cache_op_complete_l2#[2..=3] == 3) and (dcache_ctrl_resp.cache_op_complete_l1#[2..=3] == 3)) {
+  if (VpuEn == 0) or ((dcache_ctrl_resp.cache_op_complete_l2#[2..=3] == 3) and (dcache_ctrl_resp.cache_op_complete_l1#[2..=3] == 3)) {
     clear_stall#[43] = 1
   }
   if (tensor_fma_replay_condition == 0) and false {
     clear_stall#[44] = 1
   }
-  if (false or (dcache_ctrl_resp.ts_ready != 0)) and false {
+  if ((VpuEn == 0) or (dcache_ctrl_resp.ts_ready != 0)) and false {
     clear_stall#[45] = 1
   }
-  if (false or (dcache_ctrl_resp.reduce_ready != 0)) and false {
+  if ((VpuEn == 0) or (dcache_ctrl_resp.reduce_ready != 0)) and false {
     clear_stall#[46] = 1
   }
   if (tensor_quant_replay_condition == 0) and false {
@@ -277,35 +278,35 @@ pub mod intpipe_csr_replay::[timecheck=false](clk_i:u1, rst_ni:u1, wb_wdata:mini
   io_replay_stall__w1#[0] = unsigned(csr_replay_stall#[0..=23] != 0) & 1
   mut io_replay_stall__w2 = io_replay_stall__w1
   io_replay_stall__w2#[1] = unsigned(csr_replay_stall#[24..=47] != 0) & 1
-  if rst_ni == 0 {
-    csr_replay_stall#[0..=7] = 0
-  } elif unsigned((csr_replay_stall#[0..=23]#[0..=7] ^ csr_replay_stall_next__w2#[0..=23]#[0..=7]) != 0) != 0 {
-    csr_replay_stall#[0..=7] = csr_replay_stall_next__w2#[0..=23]#[0..=7]
+  if rst_ni != 0 {
+    if unsigned((csr_replay_stall#[0..=23]#[0..=7] ^ csr_replay_stall_next__w2#[0..=23]#[0..=7]) != 0) != 0 {
+      csr_replay_stall#[0..=7] = csr_replay_stall_next__w2#[0..=23]#[0..=7]
+    }
   }
-  if rst_ni == 0 {
-    csr_replay_stall#[8..=15] = 0
-  } elif unsigned((csr_replay_stall#[0..=23]#[8..=15] ^ csr_replay_stall_next__w2#[0..=23]#[8..=15]) != 0) != 0 {
-    csr_replay_stall#[8..=15] = csr_replay_stall_next__w2#[0..=23]#[8..=15]
+  if rst_ni != 0 {
+    if unsigned((csr_replay_stall#[0..=23]#[8..=15] ^ csr_replay_stall_next__w2#[0..=23]#[8..=15]) != 0) != 0 {
+      csr_replay_stall#[8..=15] = csr_replay_stall_next__w2#[0..=23]#[8..=15]
+    }
   }
-  if rst_ni == 0 {
-    csr_replay_stall#[16..=23] = 0
-  } elif unsigned((csr_replay_stall#[0..=23]#[16..=23] ^ csr_replay_stall_next__w2#[0..=23]#[16..=23]) != 0) != 0 {
-    csr_replay_stall#[16..=23] = csr_replay_stall_next__w2#[0..=23]#[16..=23]
+  if rst_ni != 0 {
+    if unsigned((csr_replay_stall#[0..=23]#[16..=23] ^ csr_replay_stall_next__w2#[0..=23]#[16..=23]) != 0) != 0 {
+      csr_replay_stall#[16..=23] = csr_replay_stall_next__w2#[0..=23]#[16..=23]
+    }
   }
-  if rst_ni == 0 {
-    csr_replay_stall#[24..=31] = 0
-  } elif unsigned((csr_replay_stall#[24..=47]#[0..=7] ^ csr_replay_stall_next__w2#[24..=47]#[0..=7]) != 0) != 0 {
-    csr_replay_stall#[24..=31] = csr_replay_stall_next__w2#[24..=47]#[0..=7]
+  if rst_ni != 0 {
+    if unsigned((csr_replay_stall#[24..=47]#[0..=7] ^ csr_replay_stall_next__w2#[24..=47]#[0..=7]) != 0) != 0 {
+      csr_replay_stall#[24..=31] = csr_replay_stall_next__w2#[24..=47]#[0..=7]
+    }
   }
-  if rst_ni == 0 {
-    csr_replay_stall#[32..=39] = 0
-  } elif unsigned((csr_replay_stall#[24..=47]#[8..=15] ^ csr_replay_stall_next__w2#[24..=47]#[8..=15]) != 0) != 0 {
-    csr_replay_stall#[32..=39] = csr_replay_stall_next__w2#[24..=47]#[8..=15]
+  if rst_ni != 0 {
+    if unsigned((csr_replay_stall#[24..=47]#[8..=15] ^ csr_replay_stall_next__w2#[24..=47]#[8..=15]) != 0) != 0 {
+      csr_replay_stall#[32..=39] = csr_replay_stall_next__w2#[24..=47]#[8..=15]
+    }
   }
-  if rst_ni == 0 {
-    csr_replay_stall#[40..=47] = 0
-  } elif unsigned((csr_replay_stall#[24..=47]#[16..=23] ^ csr_replay_stall_next__w2#[24..=47]#[16..=23]) != 0) != 0 {
-    csr_replay_stall#[40..=47] = csr_replay_stall_next__w2#[24..=47]#[16..=23]
+  if rst_ni != 0 {
+    if unsigned((csr_replay_stall#[24..=47]#[16..=23] ^ csr_replay_stall_next__w2#[24..=47]#[16..=23]) != 0) != 0 {
+      csr_replay_stall#[40..=47] = csr_replay_stall_next__w2#[24..=47]#[16..=23]
+    }
   }
   io_replay = unsigned(wb_csr_replay != 0)
   io_replay_stall = io_replay_stall__w2

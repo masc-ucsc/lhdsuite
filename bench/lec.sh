@@ -48,17 +48,82 @@ lec_run() {  # IMPL_LG [WORKDIR] [INCREMENTAL]
   # under `set -u` in the sandbox's bash.
   if [ -n "$CORE_LEC_TRUST" ]; then
     lhd lec --impl "lg:$impl" --ref lg:ref.lg --top "$CORE_TOP" --workdir "$wd" \
+      --set "formal.timeout=$LEC_BUDGET_S" \
       --set "formal.lec.trust=$CORE_LEC_TRUST" ${incr_args[@]+"${incr_args[@]}"}
   else
     lhd lec --impl "lg:$impl" --ref lg:ref.lg --top "$CORE_TOP" --workdir "$wd" \
-      ${incr_args[@]+"${incr_args[@]}"}
+      --set "formal.timeout=$LEC_BUDGET_S" ${incr_args[@]+"${incr_args[@]}"}
   fi
+}
+
+# lec_refuted LOGFILE — true when the log carries an AUTHORITATIVE refutation.
+#
+# Two forms count, and one deliberately does not:
+#   `^lec: '<top>' ... REFUTED`            the whole-design verdict.
+#   `^lec[hier]: '<def>' REFUTED (...)`    a per-def verdict. This one MATTERS:
+#       lhd proves bottom-up, so a def can refute at t=40s while the TOP then
+#       runs out the budget and reports UNKNOWN. Scoring only the top verdict
+#       let that land in the deadline-accepted arm -- a real counterexample,
+#       reported green. dino_lec_bug is the witness: `lec[hier]: 'ALU' REFUTED`
+#       with the top UNKNOWN on the formal budget.
+#   `REFUTED under collapse (N box def(s)) -> flat confirmation` is SPECULATIVE
+#       and is excluded: a collapsed-box attempt may refute and then be
+#       flat-confirmed PROVEN. Minion's dcache metadata array takes that path,
+#       and it emits a SECOND, plain `REFUTED (N child collapse)` line when the
+#       refutation is real -- so excluding the speculative spelling loses nothing.
+lec_refuted() {
+  grep -qaE "^lec: .* REFUTED" "$1" && return 0
+  grep -aE "^lec\[hier\]: '[^']*' REFUTED" "$1" | grep -qv "under collapse" && return 0
+  return 1
+}
+
+# lec_timed_out LOGFILE — true when lhd's OWN formal.timeout fired. lhd maps that
+# to a fatal UNKNOWN (pass/lec/pass_lec.cpp: `lec-unknown` ... .fatal()), so it
+# exits NON-ZERO and would otherwise be scored a hard failure — while a harness
+# kill at the very same budget scored a pass. Same event, opposite verdict,
+# decided by which of the two timers happened to fire first.
+lec_timed_out() { grep -qa "hit formal.timeout=" "$1"; }
+
+# A LEC leg that must not REFUTE. Under the budget (owner ruling 2026-09-15) a
+# deadline is a PASS: the solver examined what it could and produced no
+# counterexample. A REFUTATION is a failure, and an UNKNOWN for any reason OTHER
+# than the budget is still a hard failure -- the ruling covers timeouts, not
+# inconclusive proofs.
+lec_no_refutation() {  # LABEL IMPL_LG [WORKDIR] [INCREMENTAL]
+  local label=$1
+  shift
+  # WALL clock, not the solver budget: LEC_BUDGET_S already went to
+  # `--set formal.timeout=` inside lec_run. See bench/common.sh.
+  run_timed_deadline "$label" "$LEC_WALL_S" lec_run "$@"
+  local log="step_${label}.log"
+  # Check the LOG before the exit code. A run that PRINTED a refutation and was
+  # then killed at the deadline exits 124, and scoring on $LAST_RC alone reported
+  # it as "budget reached, no refutation" -- silently passing the one verdict
+  # this gate exists to catch.
+  if lec_refuted "$log"; then
+    step_failed "$label" "lec REFUTED (not equivalent); a refutation is a failure whether or not the budget also expired"
+    exit 1
+  fi
+  if [ "$LAST_RC" = 124 ] || lec_timed_out "$log"; then
+    metric "${label}_timeout" 1 bool
+    echo "NOTE: $label reached the ${LEC_BUDGET_S}s LEC budget without refuting -- accepted (owner ruling)"
+    return 124
+  fi
+  if [ "$LAST_RC" != 0 ]; then
+    step_failed "$label" "step '$label' exited $LAST_RC"
+    exit "$LAST_RC"
+  fi
+  metric "${label}_timeout" 0 bool
+  return 0
 }
 
 case "${MODE:?}" in
 pass)
   run_timed compile_impl compile_impl impl1
-  run_timed lec_pass lec_run impl1
+  if ! lec_no_refutation lec_pass impl1; then
+    echo "PASS: pyrope impl == verilog ref, as far as the ${LEC_BUDGET_S}s budget reached (no refutation)"
+    exit 0
+  fi
   # A collapsed-box attempt may refute speculatively and then be flat-confirmed
   # PROVEN. Only the final whole-design verdict is authoritative here; matching
   # any occurrence of "refut" turns that successful fallback into a false test
@@ -87,7 +152,17 @@ bug)
   core_variant bug1 src/pyrope
   run_timed compile_bug compile_impl implb
   run_expect_fail lec_bug lec_run implb
-  if ! grep -qiaE "refut|equiv_fail" step_lec_bug.log; then
+  # Match a VERDICT line, not the word "refut". Two traps, one on each side:
+  #  - too loose: lhd prints `lec[hier]: ESCALATE '<def>' — ... (0 refuted, 1
+  #    inconclusive)` while PROVING, and that contains "refuted" with a ZERO
+  #    count, so `-i refut` passes a run that caught nothing.
+  #  - too strict: matching only the top-level `^lec: ... REFUTED` misses a
+  #    HIERARCHICAL catch. On dino the injected ALU bug yields
+  #    `lec[hier]: 'ALU' REFUTED` while the top goes UNKNOWN on the formal
+  #    budget -- the bug WAS caught, at the def that carries it.
+  # Requiring a quoted def name right after the label excludes the ESCALATE
+  # line (which spells `ESCALATE '<def>'`) while accepting both verdict forms.
+  if ! grep -qaE "\"code\":\"not-equivalent\"|is NOT equivalent|^lec(\[hier\])?: '[^']*' REFUTED" step_lec_bug.log; then
     step_failed lec_bug "lec failed on bug1 but not as a refutation"
     exit 1
   fi
@@ -95,7 +170,10 @@ bug)
   ;;
 incr)
   run_timed compile_p1 compile_impl impl1
-  run_timed lec_full lec_run impl1 LF false
+  if ! lec_no_refutation lec_full impl1 LF false; then
+    echo "PASS: lec_incremental reached the ${LEC_BUDGET_S}s budget on the full leg without refuting"
+    exit 0
+  fi
   run_timed lec_cold lec_run impl1
   run_timed lec_warm lec_run impl1
   grep -qa "lec\[cache\]" step_lec_warm.log \

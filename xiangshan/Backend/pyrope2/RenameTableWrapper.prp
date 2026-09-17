@@ -1,0 +1,533 @@
+// RenameTable.scala, fixed Backend configuration: eight rename/retire lanes.
+// The external generated interface is preserved for Backend and its testbench.
+const table = import("rename_table.rename_table")
+
+comptime const LANES       = 8
+comptime const DIFF_LANES  = 520
+comptime const COMMIT_BITS = 20
+comptime const DATA_BITS   = 8
+comptime const RF_WEN      = 5
+comptime const FP_WEN      = 4
+comptime const VEC_WEN     = 3
+comptime const V0_WEN      = 2
+
+// External packed lanes are least-significant first. A commit lane is
+// {ldest[19:14], pdest[13:6], rf/fp/vec/v0 enables[5:2], other flags[1:0]}.
+// The existing table consumes {wen, address, data} lanes in the same order.
+// v0 has one entry and carries no address bits.
+comb commit_writes<ADDRESS_BITS, ENABLE_BIT, SINGLE=false>(
+  rename,
+  commits:(isCommit:u1, commitValid:u8, isWalk:u1, walkValid:u8, info:u160),
+  differential:(isCommit:u1, commitValid:u520, info:u10400)
+) -> (spec, arch, diff) {
+  comptime const WRITE_BITS = ADDRESS_BITS + DATA_BITS + 1
+  comptime const VALID = WRITE_BITS - 1
+  mut speculative:unsigned(bits=LANES*WRITE_BITS)      = 0
+  mut architectural:unsigned(bits=LANES*WRITE_BITS)    = 0
+  mut diff_writes:unsigned(bits=DIFF_LANES*WRITE_BITS) = 0
+  for lane in 0 ..< LANES {
+    const info = commits.info#[(lane*COMMIT_BITS) ..+ COMMIT_BITS]
+    const address = if SINGLE { 0 } else { info#[14 ..+ ADDRESS_BITS] }
+    const payload = (address << DATA_BITS) | info#[6 ..+ DATA_BITS]
+    const retiring = commits.isCommit != 0 and commits.commitValid#[lane] != 0 and info#[ENABLE_BIT] != 0
+    const walking = commits.isWalk != 0 and commits.walkValid#[lane] != 0 and info#[ENABLE_BIT] != 0
+    const incoming = rename#[(lane*WRITE_BITS) ..+ WRITE_BITS]
+    architectural#[(lane*WRITE_BITS) ..+ WRITE_BITS] = (unsigned(retiring) << VALID) | payload
+    // Rename wins over the walk write in the same lane.
+    speculative#[(lane*WRITE_BITS)
+      ..+ WRITE_BITS] = if incoming#[VALID] != 0 { incoming } else { (unsigned(walking) << VALID) | payload }
+  }
+  for lane in 0 ..< DIFF_LANES {
+    const info = differential.info#[(lane*COMMIT_BITS) ..+ COMMIT_BITS]
+    const address = if SINGLE { 0 } else { info#[14 ..+ ADDRESS_BITS] }
+    const enabled = differential.isCommit != 0 and differential.commitValid#[lane] != 0 and info#[ENABLE_BIT] != 0
+    diff_writes#[(lane*WRITE_BITS) ..+ WRITE_BITS] = (unsigned(enabled) << VALID) | (address << DATA_BITS) | info#[6 ..+ DATA_BITS]
+  }
+  spec = speculative
+  arch = architectural
+  diff = diff_writes
+}
+
+pub mod RenameTableWrapper::[timecheck = false](
+  clock:u1,
+  reset:u1,
+  io_hartId:u8,
+  io_redirect:u1,
+  io_rabCommits:(isCommit:u1, commitValid:u8, isWalk:u1, walkValid:u8, info:u160),
+  io_vlCommits:(isCommit:u1, commitValid:u8, isWalk:u1, walkValid:u8, pdestVl:u40),
+  io_diffCommits:(isCommit:u1, commitValid:u520, info:u10400),
+  io_diffVlCommits:(commitValid:u8, pdestVl:u40),
+  io_intReadPorts_0_0_hold:u1,
+  io_intReadPorts_0_0_addr:u5,
+  io_intReadPorts_0_1_hold:u1,
+  io_intReadPorts_0_1_addr:u5,
+  io_intReadPorts_1_0_hold:u1,
+  io_intReadPorts_1_0_addr:u5,
+  io_intReadPorts_1_1_hold:u1,
+  io_intReadPorts_1_1_addr:u5,
+  io_intReadPorts_2_0_hold:u1,
+  io_intReadPorts_2_0_addr:u5,
+  io_intReadPorts_2_1_hold:u1,
+  io_intReadPorts_2_1_addr:u5,
+  io_intReadPorts_3_0_hold:u1,
+  io_intReadPorts_3_0_addr:u5,
+  io_intReadPorts_3_1_hold:u1,
+  io_intReadPorts_3_1_addr:u5,
+  io_intReadPorts_4_0_hold:u1,
+  io_intReadPorts_4_0_addr:u5,
+  io_intReadPorts_4_1_hold:u1,
+  io_intReadPorts_4_1_addr:u5,
+  io_intReadPorts_5_0_hold:u1,
+  io_intReadPorts_5_0_addr:u5,
+  io_intReadPorts_5_1_hold:u1,
+  io_intReadPorts_5_1_addr:u5,
+  io_intReadPorts_6_0_hold:u1,
+  io_intReadPorts_6_0_addr:u5,
+  io_intReadPorts_6_1_hold:u1,
+  io_intReadPorts_6_1_addr:u5,
+  io_intReadPorts_7_0_hold:u1,
+  io_intReadPorts_7_0_addr:u5,
+  io_intReadPorts_7_1_hold:u1,
+  io_intReadPorts_7_1_addr:u5,
+  io_intRenamePorts:u112,
+  io_fpReadPorts_0_0_hold:u1,
+  io_fpReadPorts_0_0_addr:u6,
+  io_fpReadPorts_0_1_hold:u1,
+  io_fpReadPorts_0_1_addr:u6,
+  io_fpReadPorts_0_2_hold:u1,
+  io_fpReadPorts_0_2_addr:u6,
+  io_fpReadPorts_1_0_hold:u1,
+  io_fpReadPorts_1_0_addr:u6,
+  io_fpReadPorts_1_1_hold:u1,
+  io_fpReadPorts_1_1_addr:u6,
+  io_fpReadPorts_1_2_hold:u1,
+  io_fpReadPorts_1_2_addr:u6,
+  io_fpReadPorts_2_0_hold:u1,
+  io_fpReadPorts_2_0_addr:u6,
+  io_fpReadPorts_2_1_hold:u1,
+  io_fpReadPorts_2_1_addr:u6,
+  io_fpReadPorts_2_2_hold:u1,
+  io_fpReadPorts_2_2_addr:u6,
+  io_fpReadPorts_3_0_hold:u1,
+  io_fpReadPorts_3_0_addr:u6,
+  io_fpReadPorts_3_1_hold:u1,
+  io_fpReadPorts_3_1_addr:u6,
+  io_fpReadPorts_3_2_hold:u1,
+  io_fpReadPorts_3_2_addr:u6,
+  io_fpReadPorts_4_0_hold:u1,
+  io_fpReadPorts_4_0_addr:u6,
+  io_fpReadPorts_4_1_hold:u1,
+  io_fpReadPorts_4_1_addr:u6,
+  io_fpReadPorts_4_2_hold:u1,
+  io_fpReadPorts_4_2_addr:u6,
+  io_fpReadPorts_5_0_hold:u1,
+  io_fpReadPorts_5_0_addr:u6,
+  io_fpReadPorts_5_1_hold:u1,
+  io_fpReadPorts_5_1_addr:u6,
+  io_fpReadPorts_5_2_hold:u1,
+  io_fpReadPorts_5_2_addr:u6,
+  io_fpReadPorts_6_0_hold:u1,
+  io_fpReadPorts_6_0_addr:u6,
+  io_fpReadPorts_6_1_hold:u1,
+  io_fpReadPorts_6_1_addr:u6,
+  io_fpReadPorts_6_2_hold:u1,
+  io_fpReadPorts_6_2_addr:u6,
+  io_fpReadPorts_7_0_hold:u1,
+  io_fpReadPorts_7_0_addr:u6,
+  io_fpReadPorts_7_1_hold:u1,
+  io_fpReadPorts_7_1_addr:u6,
+  io_fpReadPorts_7_2_hold:u1,
+  io_fpReadPorts_7_2_addr:u6,
+  io_fpRenamePorts:u120,
+  io_vecReadPorts_0_0_hold:u1,
+  io_vecReadPorts_0_0_addr:u6,
+  io_vecReadPorts_0_1_hold:u1,
+  io_vecReadPorts_0_1_addr:u6,
+  io_vecReadPorts_0_2_hold:u1,
+  io_vecReadPorts_0_2_addr:u6,
+  io_vecReadPorts_1_0_hold:u1,
+  io_vecReadPorts_1_0_addr:u6,
+  io_vecReadPorts_1_1_hold:u1,
+  io_vecReadPorts_1_1_addr:u6,
+  io_vecReadPorts_1_2_hold:u1,
+  io_vecReadPorts_1_2_addr:u6,
+  io_vecReadPorts_2_0_hold:u1,
+  io_vecReadPorts_2_0_addr:u6,
+  io_vecReadPorts_2_1_hold:u1,
+  io_vecReadPorts_2_1_addr:u6,
+  io_vecReadPorts_2_2_hold:u1,
+  io_vecReadPorts_2_2_addr:u6,
+  io_vecReadPorts_3_0_hold:u1,
+  io_vecReadPorts_3_0_addr:u6,
+  io_vecReadPorts_3_1_hold:u1,
+  io_vecReadPorts_3_1_addr:u6,
+  io_vecReadPorts_3_2_hold:u1,
+  io_vecReadPorts_3_2_addr:u6,
+  io_vecReadPorts_4_0_hold:u1,
+  io_vecReadPorts_4_0_addr:u6,
+  io_vecReadPorts_4_1_hold:u1,
+  io_vecReadPorts_4_1_addr:u6,
+  io_vecReadPorts_4_2_hold:u1,
+  io_vecReadPorts_4_2_addr:u6,
+  io_vecReadPorts_5_0_hold:u1,
+  io_vecReadPorts_5_0_addr:u6,
+  io_vecReadPorts_5_1_hold:u1,
+  io_vecReadPorts_5_1_addr:u6,
+  io_vecReadPorts_5_2_hold:u1,
+  io_vecReadPorts_5_2_addr:u6,
+  io_vecReadPorts_6_0_hold:u1,
+  io_vecReadPorts_6_0_addr:u6,
+  io_vecReadPorts_6_1_hold:u1,
+  io_vecReadPorts_6_1_addr:u6,
+  io_vecReadPorts_6_2_hold:u1,
+  io_vecReadPorts_6_2_addr:u6,
+  io_vecReadPorts_7_0_hold:u1,
+  io_vecReadPorts_7_0_addr:u6,
+  io_vecReadPorts_7_1_hold:u1,
+  io_vecReadPorts_7_1_addr:u6,
+  io_vecReadPorts_7_2_hold:u1,
+  io_vecReadPorts_7_2_addr:u6,
+  io_vecRenamePorts:u120,
+  io_v0ReadPorts_0_hold:u1,
+  io_v0ReadPorts_1_hold:u1,
+  io_v0ReadPorts_2_hold:u1,
+  io_v0ReadPorts_3_hold:u1,
+  io_v0ReadPorts_4_hold:u1,
+  io_v0ReadPorts_5_hold:u1,
+  io_v0ReadPorts_6_hold:u1,
+  io_v0ReadPorts_7_hold:u1,
+  io_v0RenamePorts_0_wen:u1,
+  io_v0RenamePorts_0_data:u8,
+  io_v0RenamePorts_1_wen:u1,
+  io_v0RenamePorts_1_data:u8,
+  io_v0RenamePorts_2_wen:u1,
+  io_v0RenamePorts_2_data:u8,
+  io_v0RenamePorts_3_wen:u1,
+  io_v0RenamePorts_3_data:u8,
+  io_v0RenamePorts_4_wen:u1,
+  io_v0RenamePorts_4_data:u8,
+  io_v0RenamePorts_5_wen:u1,
+  io_v0RenamePorts_5_data:u8,
+  io_v0RenamePorts_6_wen:u1,
+  io_v0RenamePorts_6_data:u8,
+  io_v0RenamePorts_7_wen:u1,
+  io_v0RenamePorts_7_data:u8,
+  io_vlReadPorts_0_hold:u1,
+  io_vlReadPorts_1_hold:u1,
+  io_vlReadPorts_2_hold:u1,
+  io_vlReadPorts_3_hold:u1,
+  io_vlReadPorts_4_hold:u1,
+  io_vlReadPorts_5_hold:u1,
+  io_vlReadPorts_6_hold:u1,
+  io_vlReadPorts_7_hold:u1,
+  io_vlRenamePorts_0_wen:u1,
+  io_vlRenamePorts_0_data:u8,
+  io_vlRenamePorts_1_wen:u1,
+  io_vlRenamePorts_1_data:u8,
+  io_vlRenamePorts_2_wen:u1,
+  io_vlRenamePorts_2_data:u8,
+  io_vlRenamePorts_3_wen:u1,
+  io_vlRenamePorts_3_data:u8,
+  io_vlRenamePorts_4_wen:u1,
+  io_vlRenamePorts_4_data:u8,
+  io_vlRenamePorts_5_wen:u1,
+  io_vlRenamePorts_5_data:u8,
+  io_vlRenamePorts_6_wen:u1,
+  io_vlRenamePorts_6_data:u8,
+  io_vlRenamePorts_7_wen:u1,
+  io_vlRenamePorts_7_data:u8,
+  io_snpt:(snptEnq:u1, snptDeq:u1, useSnpt:u1, snptSelect:u2, flushVec:u4)
+) -> (
+  io_intReadPorts_0_0_data:u8@[],
+  io_intReadPorts_0_1_data:u8@[],
+  io_intReadPorts_1_0_data:u8@[],
+  io_intReadPorts_1_1_data:u8@[],
+  io_intReadPorts_2_0_data:u8@[],
+  io_intReadPorts_2_1_data:u8@[],
+  io_intReadPorts_3_0_data:u8@[],
+  io_intReadPorts_3_1_data:u8@[],
+  io_intReadPorts_4_0_data:u8@[],
+  io_intReadPorts_4_1_data:u8@[],
+  io_intReadPorts_5_0_data:u8@[],
+  io_intReadPorts_5_1_data:u8@[],
+  io_intReadPorts_6_0_data:u8@[],
+  io_intReadPorts_6_1_data:u8@[],
+  io_intReadPorts_7_0_data:u8@[],
+  io_intReadPorts_7_1_data:u8@[],
+  io_fpReadPorts_0_0_data:u8@[],
+  io_fpReadPorts_0_1_data:u8@[],
+  io_fpReadPorts_0_2_data:u8@[],
+  io_fpReadPorts_1_0_data:u8@[],
+  io_fpReadPorts_1_1_data:u8@[],
+  io_fpReadPorts_1_2_data:u8@[],
+  io_fpReadPorts_2_0_data:u8@[],
+  io_fpReadPorts_2_1_data:u8@[],
+  io_fpReadPorts_2_2_data:u8@[],
+  io_fpReadPorts_3_0_data:u8@[],
+  io_fpReadPorts_3_1_data:u8@[],
+  io_fpReadPorts_3_2_data:u8@[],
+  io_fpReadPorts_4_0_data:u8@[],
+  io_fpReadPorts_4_1_data:u8@[],
+  io_fpReadPorts_4_2_data:u8@[],
+  io_fpReadPorts_5_0_data:u8@[],
+  io_fpReadPorts_5_1_data:u8@[],
+  io_fpReadPorts_5_2_data:u8@[],
+  io_fpReadPorts_6_0_data:u8@[],
+  io_fpReadPorts_6_1_data:u8@[],
+  io_fpReadPorts_6_2_data:u8@[],
+  io_fpReadPorts_7_0_data:u8@[],
+  io_fpReadPorts_7_1_data:u8@[],
+  io_fpReadPorts_7_2_data:u8@[],
+  io_vecReadPorts_0_0_data:u8@[],
+  io_vecReadPorts_0_1_data:u8@[],
+  io_vecReadPorts_0_2_data:u8@[],
+  io_vecReadPorts_1_0_data:u8@[],
+  io_vecReadPorts_1_1_data:u8@[],
+  io_vecReadPorts_1_2_data:u8@[],
+  io_vecReadPorts_2_0_data:u8@[],
+  io_vecReadPorts_2_1_data:u8@[],
+  io_vecReadPorts_2_2_data:u8@[],
+  io_vecReadPorts_3_0_data:u8@[],
+  io_vecReadPorts_3_1_data:u8@[],
+  io_vecReadPorts_3_2_data:u8@[],
+  io_vecReadPorts_4_0_data:u8@[],
+  io_vecReadPorts_4_1_data:u8@[],
+  io_vecReadPorts_4_2_data:u8@[],
+  io_vecReadPorts_5_0_data:u8@[],
+  io_vecReadPorts_5_1_data:u8@[],
+  io_vecReadPorts_5_2_data:u8@[],
+  io_vecReadPorts_6_0_data:u8@[],
+  io_vecReadPorts_6_1_data:u8@[],
+  io_vecReadPorts_6_2_data:u8@[],
+  io_vecReadPorts_7_0_data:u8@[],
+  io_vecReadPorts_7_1_data:u8@[],
+  io_vecReadPorts_7_2_data:u8@[],
+  io_v0ReadPorts_0_data:u8@[],
+  io_v0ReadPorts_1_data:u8@[],
+  io_v0ReadPorts_2_data:u8@[],
+  io_v0ReadPorts_3_data:u8@[],
+  io_v0ReadPorts_4_data:u8@[],
+  io_v0ReadPorts_5_data:u8@[],
+  io_v0ReadPorts_6_data:u8@[],
+  io_v0ReadPorts_7_data:u8@[],
+  io_vlReadPorts_0_data:u8@[],
+  io_vlReadPorts_1_data:u8@[],
+  io_vlReadPorts_2_data:u8@[],
+  io_vlReadPorts_3_data:u8@[],
+  io_vlReadPorts_4_data:u8@[],
+  io_vlReadPorts_5_data:u8@[],
+  io_vlReadPorts_6_data:u8@[],
+  io_vlReadPorts_7_data:u8@[],
+  io_int_old_pdest:u64@[],
+  io_fp_old_pdest:u64@[],
+  io_vec_old_pdest:u64@[],
+  io_v0_old_pdest:u64@[],
+  io_vl_old_pdest:u64@[],
+  io_int_need_free:u8@[],
+  io_diff_vl_rat:u8@[]
+) {
+  const int_hold:u16 = (
+    io_intReadPorts_0_0_hold, io_intReadPorts_0_1_hold, io_intReadPorts_1_0_hold, io_intReadPorts_1_1_hold, io_intReadPorts_2_0_hold,
+    io_intReadPorts_2_1_hold, io_intReadPorts_3_0_hold, io_intReadPorts_3_1_hold, io_intReadPorts_4_0_hold, io_intReadPorts_4_1_hold,
+    io_intReadPorts_5_0_hold, io_intReadPorts_5_1_hold, io_intReadPorts_6_0_hold, io_intReadPorts_6_1_hold, io_intReadPorts_7_0_hold,
+    io_intReadPorts_7_1_hold
+  )#[..]
+  const int_addr:u80 = (
+    io_intReadPorts_0_0_addr, io_intReadPorts_0_1_addr, io_intReadPorts_1_0_addr, io_intReadPorts_1_1_addr, io_intReadPorts_2_0_addr,
+    io_intReadPorts_2_1_addr, io_intReadPorts_3_0_addr, io_intReadPorts_3_1_addr, io_intReadPorts_4_0_addr, io_intReadPorts_4_1_addr,
+    io_intReadPorts_5_0_addr, io_intReadPorts_5_1_addr, io_intReadPorts_6_0_addr, io_intReadPorts_6_1_addr, io_intReadPorts_7_0_addr,
+    io_intReadPorts_7_1_addr
+  )#[..]
+
+  const fp_hold:u24 = (
+    io_fpReadPorts_0_0_hold, io_fpReadPorts_0_1_hold, io_fpReadPorts_0_2_hold, io_fpReadPorts_1_0_hold, io_fpReadPorts_1_1_hold, io_fpReadPorts_1_2_hold,
+    io_fpReadPorts_2_0_hold, io_fpReadPorts_2_1_hold, io_fpReadPorts_2_2_hold, io_fpReadPorts_3_0_hold, io_fpReadPorts_3_1_hold, io_fpReadPorts_3_2_hold,
+    io_fpReadPorts_4_0_hold, io_fpReadPorts_4_1_hold, io_fpReadPorts_4_2_hold, io_fpReadPorts_5_0_hold, io_fpReadPorts_5_1_hold, io_fpReadPorts_5_2_hold,
+    io_fpReadPorts_6_0_hold, io_fpReadPorts_6_1_hold, io_fpReadPorts_6_2_hold, io_fpReadPorts_7_0_hold, io_fpReadPorts_7_1_hold, io_fpReadPorts_7_2_hold
+  )#[..]
+  const fp_addr:u144 = (
+    io_fpReadPorts_0_0_addr, io_fpReadPorts_0_1_addr, io_fpReadPorts_0_2_addr, io_fpReadPorts_1_0_addr, io_fpReadPorts_1_1_addr, io_fpReadPorts_1_2_addr,
+    io_fpReadPorts_2_0_addr, io_fpReadPorts_2_1_addr, io_fpReadPorts_2_2_addr, io_fpReadPorts_3_0_addr, io_fpReadPorts_3_1_addr, io_fpReadPorts_3_2_addr,
+    io_fpReadPorts_4_0_addr, io_fpReadPorts_4_1_addr, io_fpReadPorts_4_2_addr, io_fpReadPorts_5_0_addr, io_fpReadPorts_5_1_addr, io_fpReadPorts_5_2_addr,
+    io_fpReadPorts_6_0_addr, io_fpReadPorts_6_1_addr, io_fpReadPorts_6_2_addr, io_fpReadPorts_7_0_addr, io_fpReadPorts_7_1_addr, io_fpReadPorts_7_2_addr
+  )#[..]
+
+  const vec_hold:u24 = (
+    io_vecReadPorts_0_0_hold, io_vecReadPorts_0_1_hold, io_vecReadPorts_0_2_hold, io_vecReadPorts_1_0_hold, io_vecReadPorts_1_1_hold,
+    io_vecReadPorts_1_2_hold, io_vecReadPorts_2_0_hold, io_vecReadPorts_2_1_hold, io_vecReadPorts_2_2_hold, io_vecReadPorts_3_0_hold,
+    io_vecReadPorts_3_1_hold, io_vecReadPorts_3_2_hold, io_vecReadPorts_4_0_hold, io_vecReadPorts_4_1_hold, io_vecReadPorts_4_2_hold,
+    io_vecReadPorts_5_0_hold, io_vecReadPorts_5_1_hold, io_vecReadPorts_5_2_hold, io_vecReadPorts_6_0_hold, io_vecReadPorts_6_1_hold,
+    io_vecReadPorts_6_2_hold, io_vecReadPorts_7_0_hold, io_vecReadPorts_7_1_hold, io_vecReadPorts_7_2_hold
+  )#[..]
+  const vec_addr:u144 = (
+    io_vecReadPorts_0_0_addr, io_vecReadPorts_0_1_addr, io_vecReadPorts_0_2_addr, io_vecReadPorts_1_0_addr, io_vecReadPorts_1_1_addr,
+    io_vecReadPorts_1_2_addr, io_vecReadPorts_2_0_addr, io_vecReadPorts_2_1_addr, io_vecReadPorts_2_2_addr, io_vecReadPorts_3_0_addr,
+    io_vecReadPorts_3_1_addr, io_vecReadPorts_3_2_addr, io_vecReadPorts_4_0_addr, io_vecReadPorts_4_1_addr, io_vecReadPorts_4_2_addr,
+    io_vecReadPorts_5_0_addr, io_vecReadPorts_5_1_addr, io_vecReadPorts_5_2_addr, io_vecReadPorts_6_0_addr, io_vecReadPorts_6_1_addr,
+    io_vecReadPorts_6_2_addr, io_vecReadPorts_7_0_addr, io_vecReadPorts_7_1_addr, io_vecReadPorts_7_2_addr
+  )#[..]
+
+  // v0/vl each have one entry and therefore carry no address bits.
+  // Their read holds have no effect: the sole logical address is always zero.
+  const v0_rename_data:u64 = (io_v0RenamePorts_0_data, io_v0RenamePorts_1_data, io_v0RenamePorts_2_data, io_v0RenamePorts_3_data, io_v0RenamePorts_4_data,
+                              io_v0RenamePorts_5_data, io_v0RenamePorts_6_data, io_v0RenamePorts_7_data)#[..]
+  const v0_rename_enable:u8 = (io_v0RenamePorts_0_wen, io_v0RenamePorts_1_wen, io_v0RenamePorts_2_wen, io_v0RenamePorts_3_wen, io_v0RenamePorts_4_wen,
+                               io_v0RenamePorts_5_wen, io_v0RenamePorts_6_wen, io_v0RenamePorts_7_wen)#[..]
+  mut v0_rename:u72        = 0
+  const vl_rename_data:u64 = (io_vlRenamePorts_0_data, io_vlRenamePorts_1_data, io_vlRenamePorts_2_data, io_vlRenamePorts_3_data, io_vlRenamePorts_4_data,
+                              io_vlRenamePorts_5_data, io_vlRenamePorts_6_data, io_vlRenamePorts_7_data)#[..]
+  const vl_rename_enable:u8 = (io_vlRenamePorts_0_wen, io_vlRenamePorts_1_wen, io_vlRenamePorts_2_wen, io_vlRenamePorts_3_wen, io_vlRenamePorts_4_wen,
+                               io_vlRenamePorts_5_wen, io_vlRenamePorts_6_wen, io_vlRenamePorts_7_wen)#[..]
+  mut vl_rename:u72 = 0
+  mut vl_spec:u72   = 0
+  mut vl_arch:u72   = 0
+  mut vl_diff:u72   = 0
+  for lane in 0 ..< LANES {
+    v0_rename#[(lane*9) ..+ 9] = (v0_rename_enable#[lane] << 8) | v0_rename_data#[(lane*DATA_BITS) ..+ DATA_BITS]
+    vl_rename#[(lane*9) ..+ 9] = (vl_rename_enable#[lane] << 8) | vl_rename_data#[(lane*DATA_BITS) ..+ DATA_BITS]
+    const pdest                = io_vlCommits.pdestVl#[(lane*5) ..+ 5]
+    const walking              = io_vlCommits.isWalk != 0 and io_vlCommits.walkValid#[lane] != 0
+    const retiring             = io_vlCommits.isCommit != 0 and io_vlCommits.commitValid#[lane] != 0
+    vl_spec#[(lane*9) ..+ 9]   = if vl_rename_enable#[lane] != 0 { vl_rename#[(lane*9) ..+ 9] }
+      else { (unsigned(walking) << 8) | pdest }
+    vl_arch#[(lane*9) ..+ 9]   = (unsigned(retiring) << 8) | pdest
+    // VL's differential channel has eight lanes and no isCommit qualifier.
+    vl_diff#[(lane*9) ..+ 9] = (io_diffVlCommits.commitValid#[lane] << 8) | io_diffVlCommits.pdestVl#[(lane*5) ..+ 5]
+  }
+
+  const int_writes = commit_writes<ADDRESS_BITS=5,ENABLE_BIT=RF_WEN,SINGLE=false>(
+    rename=io_intRenamePorts, commits=io_rabCommits, differential=io_diffCommits
+  )
+  const fp_writes = commit_writes<ADDRESS_BITS=6,ENABLE_BIT=FP_WEN,SINGLE=false>(
+    rename=io_fpRenamePorts, commits=io_rabCommits, differential=io_diffCommits
+  )
+  const vec_writes = commit_writes<ADDRESS_BITS=6,ENABLE_BIT=VEC_WEN,SINGLE=false>(
+    rename=io_vecRenamePorts, commits=io_rabCommits, differential=io_diffCommits
+  )
+  const v0_writes = commit_writes<ADDRESS_BITS=0,ENABLE_BIT=V0_WEN,SINGLE=true>(
+    rename=v0_rename, commits=io_rabCommits, differential=io_diffCommits
+  )
+
+  const int_rat = table<ENTRIES=32,ADDRESS_BITS=5,READ_PORTS=16,IDENTITY_RESET=false,DIFF_FIRST=0,DIFF_COUNT=32>(
+    clock=clock, reset=reset, redirect=io_redirect, snpt=io_snpt, read_hold=int_hold, read_addr=int_addr, spec_writes=int_writes.spec,
+    arch_writes=int_writes.arch, diff_writes=int_writes.diff
+  )
+
+  const fp_rat = table<ENTRIES=34,ADDRESS_BITS=6,READ_PORTS=24,IDENTITY_RESET=true,DIFF_FIRST=0,DIFF_COUNT=32>(
+    clock=clock, reset=reset, redirect=io_redirect, snpt=io_snpt, read_hold=fp_hold, read_addr=fp_addr, spec_writes=fp_writes.spec, arch_writes=fp_writes.arch,
+    diff_writes=fp_writes.diff
+  )
+
+  const vec_rat = table<ENTRIES=47,ADDRESS_BITS=6,READ_PORTS=24,IDENTITY_RESET=true,DIFF_FIRST=1,DIFF_COUNT=31>(
+    clock=clock, reset=reset, redirect=io_redirect, snpt=io_snpt, read_hold=vec_hold, read_addr=vec_addr, spec_writes=vec_writes.spec,
+    arch_writes=vec_writes.arch, diff_writes=vec_writes.diff
+  )
+
+  const v0_rat = table<ENTRIES=1,ADDRESS_BITS=0,READ_PORTS=8,IDENTITY_RESET=false,DIFF_FIRST=0,DIFF_COUNT=1>(
+    clock=clock, reset=reset, redirect=io_redirect, snpt=io_snpt, read_hold=u8(0), read_addr=u8(0), spec_writes=v0_writes.spec, arch_writes=v0_writes.arch,
+    diff_writes=v0_writes.diff
+  )
+
+  const vl_rat = table<ENTRIES=1,ADDRESS_BITS=0,READ_PORTS=8,IDENTITY_RESET=false,DIFF_FIRST=0,DIFF_COUNT=1,DIFF_PORTS=LANES>(
+    clock=clock, reset=reset, redirect=io_redirect, snpt=io_snpt, read_hold=u8(0), read_addr=u8(0), spec_writes=vl_spec, arch_writes=vl_arch,
+    diff_writes=vl_diff
+  )
+
+  // Scalar assignments exist only at the required external read-port boundary.
+  io_intReadPorts_0_0_data = int_rat.read_data#[(0*DATA_BITS) ..+ DATA_BITS]
+  io_intReadPorts_0_1_data = int_rat.read_data#[(1*DATA_BITS) ..+ DATA_BITS]
+  io_intReadPorts_1_0_data = int_rat.read_data#[(2*DATA_BITS) ..+ DATA_BITS]
+  io_intReadPorts_1_1_data = int_rat.read_data#[(3*DATA_BITS) ..+ DATA_BITS]
+  io_intReadPorts_2_0_data = int_rat.read_data#[(4*DATA_BITS) ..+ DATA_BITS]
+  io_intReadPorts_2_1_data = int_rat.read_data#[(5*DATA_BITS) ..+ DATA_BITS]
+  io_intReadPorts_3_0_data = int_rat.read_data#[(6*DATA_BITS) ..+ DATA_BITS]
+  io_intReadPorts_3_1_data = int_rat.read_data#[(7*DATA_BITS) ..+ DATA_BITS]
+  io_intReadPorts_4_0_data = int_rat.read_data#[(8*DATA_BITS) ..+ DATA_BITS]
+  io_intReadPorts_4_1_data = int_rat.read_data#[(9*DATA_BITS) ..+ DATA_BITS]
+  io_intReadPorts_5_0_data = int_rat.read_data#[(10*DATA_BITS) ..+ DATA_BITS]
+  io_intReadPorts_5_1_data = int_rat.read_data#[(11*DATA_BITS) ..+ DATA_BITS]
+  io_intReadPorts_6_0_data = int_rat.read_data#[(12*DATA_BITS) ..+ DATA_BITS]
+  io_intReadPorts_6_1_data = int_rat.read_data#[(13*DATA_BITS) ..+ DATA_BITS]
+  io_intReadPorts_7_0_data = int_rat.read_data#[(14*DATA_BITS) ..+ DATA_BITS]
+  io_intReadPorts_7_1_data = int_rat.read_data#[(15*DATA_BITS) ..+ DATA_BITS]
+  io_int_old_pdest         = int_rat.old_data
+
+  io_fpReadPorts_0_0_data = fp_rat.read_data#[(0*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_0_1_data = fp_rat.read_data#[(1*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_0_2_data = fp_rat.read_data#[(2*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_1_0_data = fp_rat.read_data#[(3*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_1_1_data = fp_rat.read_data#[(4*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_1_2_data = fp_rat.read_data#[(5*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_2_0_data = fp_rat.read_data#[(6*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_2_1_data = fp_rat.read_data#[(7*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_2_2_data = fp_rat.read_data#[(8*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_3_0_data = fp_rat.read_data#[(9*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_3_1_data = fp_rat.read_data#[(10*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_3_2_data = fp_rat.read_data#[(11*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_4_0_data = fp_rat.read_data#[(12*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_4_1_data = fp_rat.read_data#[(13*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_4_2_data = fp_rat.read_data#[(14*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_5_0_data = fp_rat.read_data#[(15*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_5_1_data = fp_rat.read_data#[(16*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_5_2_data = fp_rat.read_data#[(17*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_6_0_data = fp_rat.read_data#[(18*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_6_1_data = fp_rat.read_data#[(19*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_6_2_data = fp_rat.read_data#[(20*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_7_0_data = fp_rat.read_data#[(21*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_7_1_data = fp_rat.read_data#[(22*DATA_BITS) ..+ DATA_BITS]
+  io_fpReadPorts_7_2_data = fp_rat.read_data#[(23*DATA_BITS) ..+ DATA_BITS]
+  io_fp_old_pdest         = fp_rat.old_data
+
+  io_vecReadPorts_0_0_data = vec_rat.read_data#[(0*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_0_1_data = vec_rat.read_data#[(1*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_0_2_data = vec_rat.read_data#[(2*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_1_0_data = vec_rat.read_data#[(3*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_1_1_data = vec_rat.read_data#[(4*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_1_2_data = vec_rat.read_data#[(5*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_2_0_data = vec_rat.read_data#[(6*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_2_1_data = vec_rat.read_data#[(7*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_2_2_data = vec_rat.read_data#[(8*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_3_0_data = vec_rat.read_data#[(9*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_3_1_data = vec_rat.read_data#[(10*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_3_2_data = vec_rat.read_data#[(11*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_4_0_data = vec_rat.read_data#[(12*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_4_1_data = vec_rat.read_data#[(13*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_4_2_data = vec_rat.read_data#[(14*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_5_0_data = vec_rat.read_data#[(15*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_5_1_data = vec_rat.read_data#[(16*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_5_2_data = vec_rat.read_data#[(17*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_6_0_data = vec_rat.read_data#[(18*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_6_1_data = vec_rat.read_data#[(19*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_6_2_data = vec_rat.read_data#[(20*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_7_0_data = vec_rat.read_data#[(21*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_7_1_data = vec_rat.read_data#[(22*DATA_BITS) ..+ DATA_BITS]
+  io_vecReadPorts_7_2_data = vec_rat.read_data#[(23*DATA_BITS) ..+ DATA_BITS]
+  io_vec_old_pdest         = vec_rat.old_data
+
+  io_v0ReadPorts_0_data = v0_rat.read_data#[(0*DATA_BITS) ..+ DATA_BITS]
+  io_v0ReadPorts_1_data = v0_rat.read_data#[(1*DATA_BITS) ..+ DATA_BITS]
+  io_v0ReadPorts_2_data = v0_rat.read_data#[(2*DATA_BITS) ..+ DATA_BITS]
+  io_v0ReadPorts_3_data = v0_rat.read_data#[(3*DATA_BITS) ..+ DATA_BITS]
+  io_v0ReadPorts_4_data = v0_rat.read_data#[(4*DATA_BITS) ..+ DATA_BITS]
+  io_v0ReadPorts_5_data = v0_rat.read_data#[(5*DATA_BITS) ..+ DATA_BITS]
+  io_v0ReadPorts_6_data = v0_rat.read_data#[(6*DATA_BITS) ..+ DATA_BITS]
+  io_v0ReadPorts_7_data = v0_rat.read_data#[(7*DATA_BITS) ..+ DATA_BITS]
+  io_v0_old_pdest       = v0_rat.old_data
+
+  io_vlReadPorts_0_data = vl_rat.read_data#[(0*DATA_BITS) ..+ DATA_BITS]
+  io_vlReadPorts_1_data = vl_rat.read_data#[(1*DATA_BITS) ..+ DATA_BITS]
+  io_vlReadPorts_2_data = vl_rat.read_data#[(2*DATA_BITS) ..+ DATA_BITS]
+  io_vlReadPorts_3_data = vl_rat.read_data#[(3*DATA_BITS) ..+ DATA_BITS]
+  io_vlReadPorts_4_data = vl_rat.read_data#[(4*DATA_BITS) ..+ DATA_BITS]
+  io_vlReadPorts_5_data = vl_rat.read_data#[(5*DATA_BITS) ..+ DATA_BITS]
+  io_vlReadPorts_6_data = vl_rat.read_data#[(6*DATA_BITS) ..+ DATA_BITS]
+  io_vlReadPorts_7_data = vl_rat.read_data#[(7*DATA_BITS) ..+ DATA_BITS]
+  io_vl_old_pdest       = vl_rat.old_data
+
+  io_int_need_free = int_rat.free
+  io_diff_vl_rat   = vl_rat.diff_data
+
+  // The generated DummyDPICWrapper_Arch*RenameTable bodies are empty combs
+  // with no outputs or effects. Their private delay chains are consequently
+  // unobservable; the externally visible differential VL mapping stays above.
+}

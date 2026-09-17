@@ -1,19 +1,20 @@
 const vpu_defs_pkg = import("vpu_defs_pkg")
 
 pub mod vpu_tensorquant::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(tensorfma_start:u1, tensorfma_ctrl:(is_conv:u1, padding3:u6, cols_b:u2, rows_a:u4, cols_a:u4, start_a:u4, padding2:u19, to_vrf:u1, u_b:u1, u_a:u1, ten_b:u1, padding1:u2, scp_b:u6, padding0:u2, scp_a:u6, mode:u3, first_pass:u1), tensorfma_conv_bits_ready:u1, tensorfma_conv_bits:u16, reduce_start:u1, tensorstore_start:u1, reduce_ctrl:u64, tensorquant_start:u1, tensorquant_ctrl:(padding2:u2, start_reg:u5, cols:u2, rows:u4, scp_src:u6, padding:u5, trans:u40), pending_scoreboard_t0:u1), tensorfma_pend:u1, tensorstore_pend:u1, dcache_scp_available:u1, dcache_scp_data:vpu_defs_pkg.DCACHE_DATA_SIZE_T) -> (enabled:u1@[], dcache_scp_req:(read_en:u1, way:u2, addr:u10, size64:u1, size256:u1, bid:u1)@[], quant_en_next:u1@[], quant_inst_next:vpu_defs_pkg.INST_SIZE_T@[], quant_mask_next:vpu_defs_pkg.VPU_LANE_NUM_T@[], quant_tena_en:u1@[], ex_ren:u1@[], ex_rdata:u256@[], vpu_tensorquant_debug:u11@[]) {
-  mut _mux_32:u8 = 0
-  reg enabled:u1
-  reg ex_ren:u1
-  reg tensorquant_ctrl:u64
-  reg scoreboard_pend_sticky:u1
-  reg tfma_pend_sticky:u1
-  reg tstore_pend_sticky:u1
-  reg tensorquant_last:u1
-  reg scp_read_pending:u1
+  mut _function_returned_6 = 0
+  mut _mux_34:u8 = 0
+  reg enabled:u1:[initial=0, reset_pin=ref reset, async=false]
+  reg ex_ren:u1:[initial=0, reset_pin=ref reset, async=false]
+  reg tensorquant_ctrl:u64:[initial=0, reset_pin=ref reset, async=false]
+  reg scoreboard_pend_sticky:u1:[initial=0, reset_pin=ref reset, async=false]
+  reg tfma_pend_sticky:u1:[initial=0, reset_pin=ref reset, async=false]
+  reg tstore_pend_sticky:u1:[initial=0, reset_pin=ref reset, async=false]
+  reg tensorquant_last:u1:[initial=0, reset_pin=ref reset, async=false]
+  reg scp_read_pending:u1:[initial=0, reset_pin=ref reset, async=false]
   reg scp_data:[2]u256:[ordering="old"]
-  reg scp_data_en_s1:u2
-  reg scp_data_en_s2:u2
-  reg scp_read_set_pending:u2
+  reg scp_data_en_s1:u2:[initial=0, reset_pin=ref reset, async=false]
+  reg scp_data_en_s2:u2:[initial=0, reset_pin=ref reset, async=false]
+  reg scp_read_set_pending:u2:[initial=0, reset_pin=ref reset, async=false]
   reg scp_read_buf:u1
   reg exec_b_col:u1
   reg exec_a_row:u4
@@ -21,14 +22,14 @@ pub mod vpu_tensorquant::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(ten
   reg id_a_row:u4
   reg ex_b_col:u1
   reg ex_a_row:u4
-  reg ex_rdata_zero:u1
-  reg ex_rdata_col:u1
-  reg exec_hazard_wait:u3
-  reg prev_is_txfma:u1
-  reg prev_is_shsw:u1
-  reg quant_tena_scp_en:u1
-  reg quant_tena_zero_en:u1
-  reg quant_rdata_col:u1
+  reg ex_rdata_zero:u1:[initial=0, reset_pin=ref reset, async=false]
+  reg ex_rdata_col:u1:[initial=0, reset_pin=ref reset, async=false]
+  reg exec_hazard_wait:u3:[initial=0, reset_pin=ref reset, async=false]
+  reg prev_is_txfma:u1:[initial=0, reset_pin=ref reset, async=false]
+  reg prev_is_shsw:u1:[initial=0, reset_pin=ref reset, async=false]
+  reg quant_tena_scp_en:u1:[initial=0, reset_pin=ref reset, async=false]
+  reg quant_tena_zero_en:u1:[initial=0, reset_pin=ref reset, async=false]
+  reg quant_rdata_col:u1:[initial=0, reset_pin=ref reset, async=false]
   mut `tensorquant_ctrl_next.padding2` = 0
   mut `tensorquant_ctrl_next.start_reg` = 0
   mut `tensorquant_ctrl_next.cols` = 0
@@ -36,19 +37,27 @@ pub mod vpu_tensorquant::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(ten
   mut `tensorquant_ctrl_next.scp_src` = 0
   mut `tensorquant_ctrl_next.padding` = 0
   mut `tensorquant_ctrl_next.trans` = 0
-  mut `dcache_scp_req__bpo.size64` = 0
-  mut `dcache_scp_req__bpo.size256` = 0
-  mut `dcache_scp_req__bpo.bid` = 0
-  mut quant_tena_en__wtmp:u1 = 0sb?
+  wire tensorquant_ctrl_en:u1
+  wire clock_en:u1
+  wire new_req:u1
+  wire tensorquant_last_next:u1
+  wire dcache_scp_raddr:u12
+  wire dcache_scp_dest:u6
+  wire dcache_scp_dest_set:u4
+  wire dcache_scp_dest_way:u2
+  wire exec_curr_transform:u4
+  wire exec_dest_reg:u5
+  wire exec_adv:u1
+  wire exec_is_txfma:u1
+  wire exec_is_shsw:u1
+  wire exec_hazard_txfma_to_short:u1
+  wire exec_hazard_txfma_to_txfma:u1
+  wire quant_rdata_col_next:u1
   wire quant_tena_en:u1
   mut exec_hazard_wait_next__wtmp:u3 = 0sb?
   wire exec_hazard_wait_next:u3
-  mut tensorquant_ctrl_en__wtmp:u1 = 0sb?
-  wire tensorquant_ctrl_en:u1
   mut enabled_next__wtmp:u1 = 0sb?
   wire enabled_next:u1
-  mut clock_en__wtmp:u1 = 0sb?
-  wire clock_en:u1
   mut exec_last_op_trans__wtmp:u1 = 0sb?
   wire exec_last_op_trans:u1
   mut scoreboard_pend_sticky_next__wtmp:u1 = 0sb?
@@ -59,8 +68,6 @@ pub mod vpu_tensorquant::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(ten
   wire tstore_pend_sticky_next:u1
   mut quant_tena_scp_en_next__wtmp:u1 = 0sb?
   wire quant_tena_scp_en_next:u1
-  mut tensorquant_last_next__wtmp:u1 = 0sb?
-  wire tensorquant_last_next:u1
   mut scp_read_pending_next__wtmp:u1 = 0sb?
   wire scp_read_pending_next:u1
   mut scp_data_en_s0__wtmp:u2 = 0sb?
@@ -73,16 +80,9 @@ pub mod vpu_tensorquant::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(ten
   wire exec_a_row_next:u4
   mut exec_b_col_next__wtmp:u1 = 0sb?
   wire exec_b_col_next:u1
-  mut exec_adv__wtmp:u1 = 0sb?
-  wire exec_adv:u1
-  mut exec_is_txfma__wtmp:u1 = 0sb?
-  wire exec_is_txfma:u1
-  mut exec_is_shsw__wtmp:u1 = 0sb?
-  wire exec_is_shsw:u1
   mut quant_tena_zero_en_next__wtmp:u1 = 0sb?
   wire quant_tena_zero_en_next:u1
-  mut quant_rdata_col_next__wtmp:u1 = 0sb?
-  wire quant_rdata_col_next:u1
+  mut get_way_from_scp_dest:u2 = 0
   quant_en_next = 0ub?
   quant_inst_next = 0sb?
   quant_mask_next = 0sb?
@@ -149,28 +149,24 @@ pub mod vpu_tensorquant::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(ten
   } else {
     ex_rdata#[224..=255] = scp_data[ex_b_col]#[224..=255]
   }
-  if reset != 0 {
-    enabled = 0
-    tensorquant_last = 0
-    scoreboard_pend_sticky = 0
-    tfma_pend_sticky = 0
-    tstore_pend_sticky = 0
-  } elif clock_en != 0 {
-    enabled = enabled_next
-    tensorquant_last = tensorquant_last_next
-    scoreboard_pend_sticky = scoreboard_pend_sticky_next
-    tfma_pend_sticky = tfma_pend_sticky_next
-    tstore_pend_sticky = tstore_pend_sticky_next
+  if not (reset != 0) {
+    if clock_en != 0 {
+      enabled = enabled_next
+      tensorquant_last = tensorquant_last_next
+      scoreboard_pend_sticky = scoreboard_pend_sticky_next
+      tfma_pend_sticky = tfma_pend_sticky_next
+      tstore_pend_sticky = tstore_pend_sticky_next
+    }
   }
-  if reset != 0 {
-    tensorquant_ctrl = 0
-  } elif tensorquant_ctrl_en != 0 {
-    tensorquant_ctrl = (`tensorquant_ctrl_next.padding2` << 62) | (`tensorquant_ctrl_next.start_reg` << 57) | (`tensorquant_ctrl_next.cols` << 55) | (`tensorquant_ctrl_next.rows` << 51) | (`tensorquant_ctrl_next.scp_src` << 45) | (`tensorquant_ctrl_next.padding` << 40) | `tensorquant_ctrl_next.trans`
+  if not (reset != 0) {
+    if tensorquant_ctrl_en != 0 {
+      tensorquant_ctrl = (`tensorquant_ctrl_next.padding2` << 62) | (`tensorquant_ctrl_next.start_reg` << 57) | (`tensorquant_ctrl_next.cols` << 55) | (`tensorquant_ctrl_next.rows` << 51) | (`tensorquant_ctrl_next.scp_src` << 45) | (`tensorquant_ctrl_next.padding` << 40) | `tensorquant_ctrl_next.trans`
+    }
   }
-  clock_en__wtmp = unsigned((enabled != 0) or (f0_core_ctrl.tensorquant_start != 0) or (tensorquant_last != 0) or (scp_read_pending != 0))
+  clock_en = unsigned((enabled != 0) or (f0_core_ctrl.tensorquant_start != 0) or (tensorquant_last != 0) or (scp_read_pending != 0))
   enabled_next__wtmp = enabled
-  const new_req__w1 = unsigned((f0_core_ctrl.tensorquant_start != 0) and (f0_core_ctrl.tensorquant_ctrl.trans#[0..=3] != 0))
-  tensorquant_last_next__wtmp = unsigned((tensorquant_ctrl#[0..=3] == vpu_defs_pkg.TQUANT_LAST) and (exec_hazard_wait_next == 0) and (enabled != 0))
+  new_req = unsigned((f0_core_ctrl.tensorquant_start != 0) and (f0_core_ctrl.tensorquant_ctrl.trans#[0..=3] != 0))
+  tensorquant_last_next = unsigned((tensorquant_ctrl#[0..=3] == vpu_defs_pkg.TQUANT_LAST) and (exec_hazard_wait_next == 0) and (enabled != 0))
   `tensorquant_ctrl_next.padding2` = tensorquant_ctrl#[62..=63]
   `tensorquant_ctrl_next.start_reg` = tensorquant_ctrl#[57..=61]
   `tensorquant_ctrl_next.cols` = tensorquant_ctrl#[55..=56]
@@ -178,23 +174,23 @@ pub mod vpu_tensorquant::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(ten
   `tensorquant_ctrl_next.scp_src` = tensorquant_ctrl#[45..=50]
   `tensorquant_ctrl_next.padding` = tensorquant_ctrl#[40..=44]
   `tensorquant_ctrl_next.trans` = tensorquant_ctrl#[0..=39]
-  tensorquant_ctrl_en__wtmp = unsigned((f0_core_ctrl.tensorquant_start != 0) or (exec_last_op_trans != 0))
+  tensorquant_ctrl_en = unsigned((f0_core_ctrl.tensorquant_start != 0) or (exec_last_op_trans != 0))
   if f0_core_ctrl.tensorquant_start != 0 {
-    const t273 = ((f0_core_ctrl.tensorfma_start << 0xd5) | (f0_core_ctrl.tensorfma_ctrl.is_conv << 0xd4) | (f0_core_ctrl.tensorfma_ctrl.padding3 << 0xce) | (f0_core_ctrl.tensorfma_ctrl.cols_b << 0xcc) | (f0_core_ctrl.tensorfma_ctrl.rows_a << 0xc8) | (f0_core_ctrl.tensorfma_ctrl.cols_a << 0xc4) | (f0_core_ctrl.tensorfma_ctrl.start_a << 0xc0) | (f0_core_ctrl.tensorfma_ctrl.padding2 << 0xad) | (f0_core_ctrl.tensorfma_ctrl.to_vrf << 0xac) | (f0_core_ctrl.tensorfma_ctrl.u_b << 0xab) | (f0_core_ctrl.tensorfma_ctrl.u_a << 0xaa) | (f0_core_ctrl.tensorfma_ctrl.ten_b << 0xa9) | (f0_core_ctrl.tensorfma_ctrl.padding1 << 0xa7) | (f0_core_ctrl.tensorfma_ctrl.scp_b << 0xa1) | (f0_core_ctrl.tensorfma_ctrl.padding0 << 0x9f) | (f0_core_ctrl.tensorfma_ctrl.scp_a << 0x99) | (f0_core_ctrl.tensorfma_ctrl.mode << 0x96) | (f0_core_ctrl.tensorfma_ctrl.first_pass << 0x95) | (f0_core_ctrl.tensorfma_conv_bits_ready << 0x94) | (f0_core_ctrl.tensorfma_conv_bits << 0x84) | (f0_core_ctrl.reduce_start << 0x83) | (f0_core_ctrl.tensorstore_start << 0x82) | (f0_core_ctrl.reduce_ctrl << 0x42) | (f0_core_ctrl.tensorquant_start << 0x41) | (f0_core_ctrl.tensorquant_ctrl.padding2 << 63) | (f0_core_ctrl.tensorquant_ctrl.start_reg << 58) | (f0_core_ctrl.tensorquant_ctrl.cols << 56) | (f0_core_ctrl.tensorquant_ctrl.rows << 52) | (f0_core_ctrl.tensorquant_ctrl.scp_src << 46) | (f0_core_ctrl.tensorquant_ctrl.padding << 41) | (f0_core_ctrl.tensorquant_ctrl.trans << 1) | f0_core_ctrl.pending_scoreboard_t0)#[1..=64]
-    const t274 = t273#[62..=63]
-    `tensorquant_ctrl_next.padding2` = t274
-    const t275 = t273#[57..=61]
-    `tensorquant_ctrl_next.start_reg` = t275
-    const t276 = t273#[55..=56]
-    `tensorquant_ctrl_next.cols` = t276
-    const t277 = t273#[51..=54]
-    `tensorquant_ctrl_next.rows` = t277
-    const t278 = t273#[45..=50]
-    `tensorquant_ctrl_next.scp_src` = t278
-    const t279 = t273#[40..=44]
-    `tensorquant_ctrl_next.padding` = t279
-    const t280 = t273#[0..=39]
-    `tensorquant_ctrl_next.trans` = t280
+    const t275 = ((f0_core_ctrl.tensorfma_start << 0xd5) | (f0_core_ctrl.tensorfma_ctrl.is_conv << 0xd4) | (f0_core_ctrl.tensorfma_ctrl.padding3 << 0xce) | (f0_core_ctrl.tensorfma_ctrl.cols_b << 0xcc) | (f0_core_ctrl.tensorfma_ctrl.rows_a << 0xc8) | (f0_core_ctrl.tensorfma_ctrl.cols_a << 0xc4) | (f0_core_ctrl.tensorfma_ctrl.start_a << 0xc0) | (f0_core_ctrl.tensorfma_ctrl.padding2 << 0xad) | (f0_core_ctrl.tensorfma_ctrl.to_vrf << 0xac) | (f0_core_ctrl.tensorfma_ctrl.u_b << 0xab) | (f0_core_ctrl.tensorfma_ctrl.u_a << 0xaa) | (f0_core_ctrl.tensorfma_ctrl.ten_b << 0xa9) | (f0_core_ctrl.tensorfma_ctrl.padding1 << 0xa7) | (f0_core_ctrl.tensorfma_ctrl.scp_b << 0xa1) | (f0_core_ctrl.tensorfma_ctrl.padding0 << 0x9f) | (f0_core_ctrl.tensorfma_ctrl.scp_a << 0x99) | (f0_core_ctrl.tensorfma_ctrl.mode << 0x96) | (f0_core_ctrl.tensorfma_ctrl.first_pass << 0x95) | (f0_core_ctrl.tensorfma_conv_bits_ready << 0x94) | (f0_core_ctrl.tensorfma_conv_bits << 0x84) | (f0_core_ctrl.reduce_start << 0x83) | (f0_core_ctrl.tensorstore_start << 0x82) | (f0_core_ctrl.reduce_ctrl << 0x42) | (f0_core_ctrl.tensorquant_start << 0x41) | (f0_core_ctrl.tensorquant_ctrl.padding2 << 63) | (f0_core_ctrl.tensorquant_ctrl.start_reg << 58) | (f0_core_ctrl.tensorquant_ctrl.cols << 56) | (f0_core_ctrl.tensorquant_ctrl.rows << 52) | (f0_core_ctrl.tensorquant_ctrl.scp_src << 46) | (f0_core_ctrl.tensorquant_ctrl.padding << 41) | (f0_core_ctrl.tensorquant_ctrl.trans << 1) | f0_core_ctrl.pending_scoreboard_t0)#[1..=64]
+    const t276 = t275#[62..=63]
+    `tensorquant_ctrl_next.padding2` = t276
+    const t277 = t275#[57..=61]
+    `tensorquant_ctrl_next.start_reg` = t277
+    const t278 = t275#[55..=56]
+    `tensorquant_ctrl_next.cols` = t278
+    const t279 = t275#[51..=54]
+    `tensorquant_ctrl_next.rows` = t279
+    const t280 = t275#[45..=50]
+    `tensorquant_ctrl_next.scp_src` = t280
+    const t281 = t275#[40..=44]
+    `tensorquant_ctrl_next.padding` = t281
+    const t282 = t275#[0..=39]
+    `tensorquant_ctrl_next.trans` = t282
   } else {
     `tensorquant_ctrl_next.trans`#[0..=3] = tensorquant_ctrl#[0..=39]#[4..=7]
     `tensorquant_ctrl_next.trans`#[4..=7] = tensorquant_ctrl#[0..=39]#[8..=11]
@@ -216,13 +212,13 @@ pub mod vpu_tensorquant::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(ten
   if (tensorquant_ctrl#[0..=3] == vpu_defs_pkg.TQUANT_LAST) and (exec_hazard_wait_next == 0) {
     enabled_next__wtmp = 0
   }
-  if new_req__w1 != 0 {
+  if new_req != 0 {
     enabled_next__wtmp = 1
   }
   scoreboard_pend_sticky_next__wtmp = scoreboard_pend_sticky
   tfma_pend_sticky_next__wtmp = tfma_pend_sticky
   tstore_pend_sticky_next__wtmp = tstore_pend_sticky
-  if new_req__w1 != 0 {
+  if new_req != 0 {
     scoreboard_pend_sticky_next__wtmp = f0_core_ctrl.pending_scoreboard_t0
     tfma_pend_sticky_next__wtmp = tensorfma_pend
     tstore_pend_sticky_next__wtmp = tensorstore_pend
@@ -237,16 +233,13 @@ pub mod vpu_tensorquant::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(ten
       tstore_pend_sticky_next__wtmp = 0
     }
   }
-  if reset != 0 {
-    scp_data_en_s1 = 0
-    scp_data_en_s2 = 0
-    scp_read_pending = 0
-    scp_read_set_pending = 0
-  } elif clock_en != 0 {
-    scp_data_en_s1 = scp_data_en_s0
-    scp_data_en_s2 = scp_data_en_s1
-    scp_read_pending = scp_read_pending_next
-    scp_read_set_pending = scp_read_set_pending_next
+  if not (reset != 0) {
+    if clock_en != 0 {
+      scp_data_en_s1 = scp_data_en_s0
+      scp_data_en_s2 = scp_data_en_s1
+      scp_read_pending = scp_read_pending_next
+      scp_read_set_pending = scp_read_set_pending_next
+    }
   }
   if clock_en != 0 {
     scp_read_buf = scp_read_buf_next
@@ -255,8 +248,8 @@ pub mod vpu_tensorquant::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(ten
     ex_b_col = id_b_col
     ex_a_row = id_a_row
   }
-  const dcache_scp_dest__w1 = tensorquant_ctrl#[45..=50]
-  const dest__w1 = dcache_scp_dest__w1
+  dcache_scp_dest = tensorquant_ctrl#[45..=50]
+  const dest__w1 = dcache_scp_dest
   mut dest_wrap:u6 = 0sb?
   if dest__w1 < 12 {
     dest_wrap = dest__w1
@@ -269,21 +262,41 @@ pub mod vpu_tensorquant::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(ten
   } else {
     dest_wrap = if dest__w1 < 60 { (dest__w1 - 48)#[0..=5] } else { (dest__w1 - 60)#[0..=5] }
   }
-  const dest_s1__w1 = dcache_scp_dest__w1
+  dcache_scp_dest_set = dest_wrap#[0..=3]
+  const dest_s1__w1 = dcache_scp_dest
+  get_way_from_scp_dest = 0sb?
   if dest_s1__w1 < 12 {
+    get_way_from_scp_dest = 0
+    _function_returned_6 = 1
   } elif dest_s1__w1 < 24 {
+    get_way_from_scp_dest = 1
+    _function_returned_6 = 1
   } elif dest_s1__w1 < 36 {
+    get_way_from_scp_dest = 2
+    _function_returned_6 = 1
   } elif dest_s1__w1 < 48 {
+    get_way_from_scp_dest = 3
+    _function_returned_6 = 1
   } elif dest_s1__w1 < 60 {
+    get_way_from_scp_dest = 0
+    _function_returned_6 = 1
   }
-  const dcache_scp_raddr__w1 = (1 << 10) | (dest_wrap#[0..=3] << 6) | ((scp_read_buf & 1) << 5)
+  if _function_returned_6 == 0 {
+    get_way_from_scp_dest = 1
+    _function_returned_6 = 1
+  }
+  dcache_scp_dest_way = get_way_from_scp_dest
+  dcache_scp_raddr = (dcache_scp_dest_way << 10) | (dcache_scp_dest_set << 6) | ((scp_read_buf & 1) << 5)
   mut `dcache_scp_req__bpo.read_en` = scp_read_pending
-  mut `dcache_scp_req__bpo.addr` = dcache_scp_raddr__w1#[0..=9]
-  mut `dcache_scp_req__bpo.way` = (dcache_scp_raddr__w1 >> vpu_defs_pkg.DCACHE_LRAM_ADDR_SIZE)#[0..=1]
+  mut `dcache_scp_req__bpo.addr` = dcache_scp_raddr#[0..=9]
+  mut `dcache_scp_req__bpo.way` = (dcache_scp_raddr >> vpu_defs_pkg.DCACHE_LRAM_ADDR_SIZE)#[0..=1]
+  mut `dcache_scp_req__bpo.size64` = 0
+  mut `dcache_scp_req__bpo.size256` = 1
+  mut `dcache_scp_req__bpo.bid` = 0
   scp_read_pending_next__wtmp = scp_read_pending
   scp_read_buf_next__wtmp = scp_read_buf
   scp_data_en_s0__wtmp = 0
-  if new_req__w1 != 0 {
+  if new_req != 0 {
     scp_read_pending_next__wtmp = 1
     scp_read_buf_next__wtmp = 0
   } elif (`dcache_scp_req__bpo.read_en` != 0) and (dcache_scp_available != 0) {
@@ -299,101 +312,96 @@ pub mod vpu_tensorquant::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(ten
   if (exec_last_op_trans != 0) and (quant_tena_scp_en_next != 0) and (exec_hazard_wait_next != 0) {
     scp_read_set_pending_next__wtmp = 2
   }
-  if reset != 0 {
-    quant_tena_scp_en = 0
-    quant_tena_zero_en = 0
-    quant_rdata_col = 0
-    ex_rdata_zero = 0
-    ex_rdata_col = 0
-    exec_hazard_wait = 0
-    prev_is_txfma = 0
-    prev_is_shsw = 0
-  } elif clock_en != 0 {
-    quant_tena_scp_en = quant_tena_scp_en_next
-    quant_tena_zero_en = quant_tena_zero_en_next
-    quant_rdata_col = quant_rdata_col_next
-    ex_rdata_zero = quant_tena_zero_en
-    ex_rdata_col = quant_rdata_col
-    exec_hazard_wait = exec_hazard_wait_next
-    prev_is_txfma = exec_is_txfma
-    prev_is_shsw = exec_is_shsw
+  if not (reset != 0) {
+    if clock_en != 0 {
+      quant_tena_scp_en = quant_tena_scp_en_next
+      quant_tena_zero_en = quant_tena_zero_en_next
+      quant_rdata_col = quant_rdata_col_next
+      ex_rdata_zero = quant_tena_zero_en
+      ex_rdata_col = quant_rdata_col
+      exec_hazard_wait = exec_hazard_wait_next
+      prev_is_txfma = exec_is_txfma
+      prev_is_shsw = exec_is_shsw
+    }
   }
   if exec_adv != 0 {
     exec_a_row = exec_a_row_next
     exec_b_col = exec_b_col_next
   }
-  ex_ren = if reset != 0 { 0 } else { quant_tena_en }
-  quant_tena_en__wtmp = unsigned(((quant_tena_scp_en != 0) or (quant_tena_zero_en != 0)) and (enabled != 0))
-  const exec_curr_transform__w1 = tensorquant_ctrl#[0..=39]#[0..=3]
+  if not (reset != 0) {
+    ex_ren = quant_tena_en
+  }
+  quant_tena_en = unsigned(((quant_tena_scp_en != 0) or (quant_tena_zero_en != 0)) and (enabled != 0))
+  exec_curr_transform = tensorquant_ctrl#[0..=39]#[0..=3]
   quant_tena_scp_en_next__wtmp = 0
   quant_tena_zero_en_next__wtmp = 0
-  quant_rdata_col_next__wtmp = exec_curr_transform__w1 & 1
+  quant_rdata_col_next = exec_curr_transform & 1
   {
   }
-  mut _rep_11:u4 = if ((~(unsigned(tensorquant_ctrl#[55..=56] < 2) & exec_b_col & 1)) & 1) != 0 { 15 } else { 0 }
+  mut _rep_13:u4 = if ((~(unsigned(tensorquant_ctrl#[55..=56] < 2) & exec_b_col & 1)) & 1) != 0 { 15 } else { 0 }
   mut quant_mask_next__w2 = 0xff
-  quant_mask_next__w2#[0..=3] = 15 & _rep_11
-  mut _rep_16:u4 = if ((~unsigned(((unsigned(tensorquant_ctrl#[55..=56] == 0) & unsigned(exec_b_col == 0) & 1) != 0) or ((unsigned(tensorquant_ctrl#[55..=56] < 3) & exec_b_col & 1) != 0))) & 1) != 0 { 15 } else { 0 }
+  quant_mask_next__w2#[0..=3] = 15 & _rep_13
+  mut _rep_18:u4 = if ((~unsigned(((unsigned(tensorquant_ctrl#[55..=56] == 0) & unsigned(exec_b_col == 0) & 1) != 0) or ((unsigned(tensorquant_ctrl#[55..=56] < 3) & exec_b_col & 1) != 0))) & 1) != 0 { 15 } else { 0 }
   mut quant_mask_next__w3 = quant_mask_next__w2
-  quant_mask_next__w3#[4..=7] = quant_mask_next__w2#[4..=7] & _rep_16
-  const exec_dest_reg__w1 = (((exec_a_row << 1) | (exec_b_col & 1)) + tensorquant_ctrl#[57..=61])#[0..=4]
-  exec_is_txfma__wtmp = unsigned((exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_INT32_TO_FP32_CVT) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_FP32_TO_INT32_CVT) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_FP32_MUL_ROW) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_FP32_MUL_COL))
-  exec_is_shsw__wtmp = unsigned((exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_RELU) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_INT32_ADD_ROW) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_INT32_ADD_COL) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_SAT_INT8) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_SAT_UINT8) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_PACK_128B))
-  const exec_hazard_txfma_to_short__w1 = unsigned(exec_hazard_wait == 1)
-  const exec_hazard_txfma_to_txfma__w1 = unsigned(exec_hazard_wait != 0)
-  quant_en_next = unsigned((enabled != 0) and (scoreboard_pend_sticky == 0) and (tfma_pend_sticky == 0) and (tstore_pend_sticky == 0) and (exec_hazard_wait == 0) and (exec_curr_transform__w1 != vpu_defs_pkg.TQUANT_LAST))
+  quant_mask_next__w3#[4..=7] = quant_mask_next__w2#[4..=7] & _rep_18
+  exec_dest_reg = (((exec_a_row << 1) | (exec_b_col & 1)) + tensorquant_ctrl#[57..=61])#[0..=4]
+  exec_is_txfma = unsigned((exec_curr_transform == vpu_defs_pkg.TQUANT_INT32_TO_FP32_CVT) or (exec_curr_transform == vpu_defs_pkg.TQUANT_FP32_TO_INT32_CVT) or (exec_curr_transform == vpu_defs_pkg.TQUANT_FP32_MUL_ROW) or (exec_curr_transform == vpu_defs_pkg.TQUANT_FP32_MUL_COL))
+  exec_is_shsw = unsigned((exec_curr_transform == vpu_defs_pkg.TQUANT_RELU) or (exec_curr_transform == vpu_defs_pkg.TQUANT_INT32_ADD_ROW) or (exec_curr_transform == vpu_defs_pkg.TQUANT_INT32_ADD_COL) or (exec_curr_transform == vpu_defs_pkg.TQUANT_SAT_INT8) or (exec_curr_transform == vpu_defs_pkg.TQUANT_SAT_UINT8) or (exec_curr_transform == vpu_defs_pkg.TQUANT_PACK_128B))
+  exec_hazard_txfma_to_short = unsigned(exec_hazard_wait == 1)
+  exec_hazard_txfma_to_txfma = unsigned(exec_hazard_wait != 0)
   quant_mask_next = quant_mask_next__w3
-  if exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_INT32_TO_FP32_CVT {
+  quant_en_next = unsigned((enabled != 0) and (scoreboard_pend_sticky == 0) and (tfma_pend_sticky == 0) and (tstore_pend_sticky == 0) and (exec_hazard_wait == 0) and (exec_curr_transform != vpu_defs_pkg.TQUANT_LAST))
+  if exec_curr_transform == vpu_defs_pkg.TQUANT_INT32_TO_FP32_CVT {
     quant_inst_next = 0ub110100000000?????????????1111011
     quant_inst_next#[12..=14] = 7
-    quant_inst_next#[7..=11] = exec_dest_reg__w1
-    quant_inst_next#[15..=19] = exec_dest_reg__w1
-    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_txfma__w1 == 0))
-  } elif exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_FP32_TO_INT32_CVT {
+    quant_inst_next#[7..=11] = exec_dest_reg
+    quant_inst_next#[15..=19] = exec_dest_reg
+    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_txfma == 0))
+  } elif exec_curr_transform == vpu_defs_pkg.TQUANT_FP32_TO_INT32_CVT {
     quant_inst_next = 0ub110000000000?????????????1111011
     quant_inst_next#[12..=14] = 7
-    quant_inst_next#[7..=11] = exec_dest_reg__w1
-    quant_inst_next#[15..=19] = exec_dest_reg__w1
-    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_txfma__w1 == 0))
-  } elif exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_RELU {
+    quant_inst_next#[7..=11] = exec_dest_reg
+    quant_inst_next#[15..=19] = exec_dest_reg
+    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_txfma == 0))
+  } elif exec_curr_transform == vpu_defs_pkg.TQUANT_RELU {
     quant_inst_next = 0ub10111??????????001?????1111011
-    quant_inst_next#[7..=11] = exec_dest_reg__w1
-    quant_inst_next#[15..=19] = exec_dest_reg__w1
-    quant_inst_next#[20..=24] = exec_dest_reg__w1
-    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_short__w1 == 0))
+    quant_inst_next#[7..=11] = exec_dest_reg
+    quant_inst_next#[15..=19] = exec_dest_reg
+    quant_inst_next#[20..=24] = exec_dest_reg
+    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_short == 0))
     quant_tena_zero_en_next__wtmp = quant_en_next
-  } elif (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_INT32_ADD_ROW) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_INT32_ADD_COL) {
+  } elif (exec_curr_transform == vpu_defs_pkg.TQUANT_INT32_ADD_ROW) or (exec_curr_transform == vpu_defs_pkg.TQUANT_INT32_ADD_COL) {
     quant_inst_next = 0ub11??????????000?????1111011
-    quant_inst_next#[7..=11] = exec_dest_reg__w1
-    quant_inst_next#[15..=19] = exec_dest_reg__w1
-    quant_inst_next#[20..=24] = exec_dest_reg__w1
-    quant_en_next = unsigned((quant_en_next != 0) and (scp_read_pending == 0) and (exec_hazard_txfma_to_txfma__w1 == 0))
+    quant_inst_next#[7..=11] = exec_dest_reg
+    quant_inst_next#[15..=19] = exec_dest_reg
+    quant_inst_next#[20..=24] = exec_dest_reg
+    quant_en_next = unsigned((quant_en_next != 0) and (scp_read_pending == 0) and (exec_hazard_txfma_to_txfma == 0))
     quant_tena_scp_en_next__wtmp = quant_en_next
-  } elif (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_FP32_MUL_ROW) or (exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_FP32_MUL_COL) {
+  } elif (exec_curr_transform == vpu_defs_pkg.TQUANT_FP32_MUL_ROW) or (exec_curr_transform == vpu_defs_pkg.TQUANT_FP32_MUL_COL) {
     quant_inst_next = 0ub1000??????????????????1111011
     quant_inst_next#[12..=14] = 7
-    quant_inst_next#[7..=11] = exec_dest_reg__w1
-    quant_inst_next#[15..=19] = exec_dest_reg__w1
-    quant_inst_next#[20..=24] = exec_dest_reg__w1
-    quant_en_next = unsigned((quant_en_next != 0) and (scp_read_pending == 0) and (exec_hazard_txfma_to_txfma__w1 == 0))
+    quant_inst_next#[7..=11] = exec_dest_reg
+    quant_inst_next#[15..=19] = exec_dest_reg
+    quant_inst_next#[20..=24] = exec_dest_reg
+    quant_en_next = unsigned((quant_en_next != 0) and (scp_read_pending == 0) and (exec_hazard_txfma_to_txfma == 0))
     quant_tena_scp_en_next__wtmp = quant_en_next
-  } elif exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_SAT_INT8 {
+  } elif exec_curr_transform == vpu_defs_pkg.TQUANT_SAT_INT8 {
     quant_inst_next = 0ub1100000?????011?????1111011
-    quant_inst_next#[7..=11] = exec_dest_reg__w1
-    quant_inst_next#[15..=19] = exec_dest_reg__w1
-    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_short__w1 == 0))
-  } elif exec_curr_transform__w1 == vpu_defs_pkg.TQUANT_SAT_UINT8 {
+    quant_inst_next#[7..=11] = exec_dest_reg
+    quant_inst_next#[15..=19] = exec_dest_reg
+    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_short == 0))
+  } elif exec_curr_transform == vpu_defs_pkg.TQUANT_SAT_UINT8 {
     quant_inst_next = 0ub1100001?????011?????1111011
-    quant_inst_next#[7..=11] = exec_dest_reg__w1
-    quant_inst_next#[15..=19] = exec_dest_reg__w1
-    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_short__w1 == 0))
+    quant_inst_next#[7..=11] = exec_dest_reg
+    quant_inst_next#[15..=19] = exec_dest_reg
+    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_short == 0))
   } else {
     quant_inst_next = 0ub1001100000?????000?????1111011
-    quant_inst_next#[7..=11] = (((exec_dest_reg__w1#[1..=4] << 1) | (tensorquant_ctrl#[57..=61] & 1 & (~exec_b_col) & 1 & 1)) - (tensorquant_ctrl#[57..=61] & 1 & exec_b_col & 1))#[0..=4]
-    quant_inst_next#[15..=19] = exec_dest_reg__w1
-    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_short__w1 == 0))
-    _mux_32 = if exec_b_col != 0 { ((unsigned(tensorquant_ctrl#[55..=56] == 3) & 1) << 3) | ((unsigned(tensorquant_ctrl#[55..=56] >= 2) & 1) << 2) } else { ((unsigned(tensorquant_ctrl#[55..=56] >= 1) & 1) << 1) | 1 }
-    quant_mask_next = _mux_32
+    quant_inst_next#[7..=11] = (((exec_dest_reg#[1..=4] << 1) | (tensorquant_ctrl#[57..=61] & 1 & (~exec_b_col) & 1 & 1)) - (tensorquant_ctrl#[57..=61] & 1 & exec_b_col & 1))#[0..=4]
+    quant_inst_next#[15..=19] = exec_dest_reg
+    quant_en_next = unsigned((quant_en_next != 0) and (exec_hazard_txfma_to_short == 0))
+    _mux_34 = if exec_b_col != 0 { ((unsigned(tensorquant_ctrl#[55..=56] == 3) & 1) << 3) | ((unsigned(tensorquant_ctrl#[55..=56] >= 2) & 1) << 2) } else { ((unsigned(tensorquant_ctrl#[55..=56] >= 1) & 1) << 1) | 1 }
+    quant_mask_next = _mux_34
   }
   if exec_hazard_wait != 0 {
     quant_tena_scp_en_next__wtmp = quant_tena_scp_en
@@ -416,39 +424,31 @@ pub mod vpu_tensorquant::[timecheck=false](clock:u1, reset:u1, f0_core_ctrl:(ten
   exec_hazard_wait_next__wtmp = exec_hazard_wait
   if exec_hazard_wait != 0 {
     exec_hazard_wait_next__wtmp = (exec_hazard_wait_next__wtmp - 1)#[0..=2]
-  } elif ((quant_en_next != 0) and (prev_is_txfma != 0) and (exec_last_op_trans__wtmp != 0) and ((`tensorquant_ctrl_next.rows` < 7) or (new_req__w1 != 0))) or (((prev_is_txfma != 0) or (prev_is_shsw != 0)) and (tensorquant_ctrl#[0..=3] == vpu_defs_pkg.TQUANT_LAST)) {
+  } elif ((quant_en_next != 0) and (prev_is_txfma != 0) and (exec_last_op_trans__wtmp != 0) and ((`tensorquant_ctrl_next.rows` < 7) or (new_req != 0))) or (((prev_is_txfma != 0) or (prev_is_shsw != 0)) and (tensorquant_ctrl#[0..=3] == vpu_defs_pkg.TQUANT_LAST)) {
     exec_hazard_wait_next__wtmp = 7
-  } elif (((quant_en_next != 0) and (exec_last_op_trans__wtmp != 0)) or (new_req__w1 != 0)) and (`tensorquant_ctrl_next.rows` < 2) {
+  } elif (((quant_en_next != 0) and (exec_last_op_trans__wtmp != 0)) or (new_req != 0)) and (`tensorquant_ctrl_next.rows` < 2) {
     exec_hazard_wait_next__wtmp = 4
   }
-  exec_adv__wtmp = unsigned((quant_en_next != 0) or (new_req__w1 != 0))
-  quant_tena_en = quant_tena_en__wtmp
+  exec_adv = unsigned((quant_en_next != 0) or (new_req != 0))
   exec_hazard_wait_next = exec_hazard_wait_next__wtmp
-  tensorquant_ctrl_en = tensorquant_ctrl_en__wtmp
   enabled_next = enabled_next__wtmp
-  clock_en = clock_en__wtmp
   exec_last_op_trans = exec_last_op_trans__wtmp
   scoreboard_pend_sticky_next = scoreboard_pend_sticky_next__wtmp
   tfma_pend_sticky_next = tfma_pend_sticky_next__wtmp
   tstore_pend_sticky_next = tstore_pend_sticky_next__wtmp
   quant_tena_scp_en_next = quant_tena_scp_en_next__wtmp
-  tensorquant_last_next = tensorquant_last_next__wtmp
   scp_read_pending_next = scp_read_pending_next__wtmp
   scp_data_en_s0 = scp_data_en_s0__wtmp
   scp_read_set_pending_next = scp_read_set_pending_next__wtmp
   scp_read_buf_next = scp_read_buf_next__wtmp
   exec_a_row_next = exec_a_row_next__wtmp
   exec_b_col_next = exec_b_col_next__wtmp
-  exec_adv = exec_adv__wtmp
-  exec_is_txfma = exec_is_txfma__wtmp
-  exec_is_shsw = exec_is_shsw__wtmp
   quant_tena_zero_en_next = quant_tena_zero_en_next__wtmp
-  quant_rdata_col_next = quant_rdata_col_next__wtmp
   dcache_scp_req.read_en = `dcache_scp_req__bpo.read_en`
   dcache_scp_req.way = `dcache_scp_req__bpo.way`
   dcache_scp_req.addr = `dcache_scp_req__bpo.addr`
   dcache_scp_req.size64 = 0
   dcache_scp_req.size256 = 1
   dcache_scp_req.bid = 0
-  vpu_tensorquant_debug = ((enabled & 1) << 10) | ((scoreboard_pend_sticky & 1) << 9) | ((tfma_pend_sticky & 1) << 8) | ((tstore_pend_sticky & 1) << 7) | (exec_hazard_wait#[0..=1] << 5) | (exec_curr_transform__w1 << 1) | (dcache_scp_available & 1)
+  vpu_tensorquant_debug = ((enabled & 1) << 10) | ((scoreboard_pend_sticky & 1) << 9) | ((tfma_pend_sticky & 1) << 8) | ((tstore_pend_sticky & 1) << 7) | (exec_hazard_wait#[0..=1] << 5) | (exec_curr_transform << 1) | (dcache_scp_available & 1)
 }

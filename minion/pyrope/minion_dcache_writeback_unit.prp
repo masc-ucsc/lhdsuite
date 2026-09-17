@@ -1,18 +1,22 @@
 const minion_dcache_pkg = import("minion_dcache_pkg")
 
 pub mod minion_dcache_writeback_unit::[timecheck=false](clk_i:u1, rst_ni:u1, req_valid_i:u1, req_data_i:(tag:u33, set:u4, way_en:u4, is_tbox:u1, mem_idx:u1, addr_low:u7), data_req_grant_i:u1, data_req_nack_i:u1, data_resp_i:u256, l2_req_ready_i:u1) -> (req_ready_o:u1@[], data_req_bid_o:u1@[], data_req_valid_o:u1@[], data_req_o:(valid_l:u1, valid_h:u1, way:u2, addr:u10)@[], l2_req_valid_o:u1@[], l2_req_data_o:(id:u5, source:u1, wdata:u1, opcode:u5, address:u40, data:u256, size:u3, qwen:u4, subopcode:u7)@[]) {
-  reg data_req_valid_o:u1:[clock_pin=ref clk_i]
+  reg data_req_valid_o:u1:[initial=0, reset_pin=ref rst_ni, async=false, negreset=true, clock_pin=ref clk_i]
   reg req_q:u50:[clock_pin=ref clk_i]
   reg data_req_cnt_q:u2:[clock_pin=ref clk_i]
   reg data_req_cnt_idx_q:u1:[clock_pin=ref clk_i]
-  reg active_q:u1:[clock_pin=ref clk_i]
-  reg r1_data_req_fired_q:u1:[clock_pin=ref clk_i]
-  reg r2_data_req_fired_q:u1:[clock_pin=ref clk_i]
-  reg r3_data_req_fired_q:u1:[clock_pin=ref clk_i]
-  reg r2_invalid_q:u1:[clock_pin=ref clk_i]
-  reg r3_invalid_q:u1:[clock_pin=ref clk_i]
-  mut `data_req_o__bpo.valid_l` = 0
-  mut `data_req_o__bpo.valid_h` = 0
+  reg active_q:u1:[initial=0, reset_pin=ref rst_ni, async=false, negreset=true, clock_pin=ref clk_i]
+  reg r1_data_req_fired_q:u1:[initial=0, reset_pin=ref rst_ni, async=false, negreset=true, clock_pin=ref clk_i]
+  reg r2_data_req_fired_q:u1:[initial=0, reset_pin=ref rst_ni, async=false, negreset=true, clock_pin=ref clk_i]
+  reg r3_data_req_fired_q:u1:[initial=0, reset_pin=ref rst_ni, async=false, negreset=true, clock_pin=ref clk_i]
+  reg r2_invalid_q:u1:[initial=0, reset_pin=ref rst_ni, async=false, negreset=true, clock_pin=ref clk_i]
+  reg r3_invalid_q:u1:[initial=0, reset_pin=ref rst_ni, async=false, negreset=true, clock_pin=ref clk_i]
+  mut data_req_cnt_d:u2 = 0
+  mut active_d:u1 = 0
+  mut data_req_valid_d:u1 = 0
+  mut r1_data_req_fired_d:u1 = 0
+  mut r2_data_req_fired_d:u1 = 0
+  mut r3_data_req_fired_d:u1 = 0
   mut `data_req_o__bpo.addr` = 0
   mut `l2_req_data_o__bpo.id` = 0
   mut `l2_req_data_o__bpo.source` = 0
@@ -23,17 +27,19 @@ pub mod minion_dcache_writeback_unit::[timecheck=false](clk_i:u1, rst_ni:u1, req
   mut `l2_req_data_o__bpo.size` = 0
   mut `l2_req_data_o__bpo.qwen` = 0
   mut `l2_req_data_o__bpo.subopcode` = 0
-  mut r1_data_req_fired_d:u1 = 0
-  mut r2_data_req_fired_d:u1 = 0
-  mut r3_data_req_fired_d:u1 = 0
-  mut data_req_cnt_d:u2 = 0
-  mut data_req_valid_d:u1 = 0
-  mut active_d:u1 = 0
+  data_req_cnt_d = 0sb?
+  active_d = 0ub?
+  data_req_valid_d = 0ub?
+  r1_data_req_fired_d = 0ub?
+  r2_data_req_fired_d = 0ub?
+  r3_data_req_fired_d = 0ub?
   data_req_bid_o = 0ub?
   l2_req_valid_o = 0ub?
   const req_ready_o__w1 = unsigned(active_q == 0)
   mut _mux_2:u2 = if ((req_q >> 8) & 1) != 0 { 1 } else { minion_dcache_pkg.CoreL2BlockExtPasses#[0..=1] }
   const data_req_cnt_limit__w1 = _mux_2
+  mut `data_req_o__bpo.valid_l` = 1
+  mut `data_req_o__bpo.valid_h` = 1
   const ways__w1 = req_q#[9..=12]
   mut dcache_way_encode:u2 = 0sb?
   dcache_way_encode = if (ways__w1 & 1) != 0 { 0 } else { 0 }
@@ -52,6 +58,15 @@ pub mod minion_dcache_writeback_unit::[timecheck=false](clk_i:u1, rst_ni:u1, req
   } else {
     `data_req_o__bpo.addr` = (req_q#[13..=16] << 6) | (((req_q >> 7) & 1) << 5)
   }
+  `l2_req_data_o__bpo.id` = 0
+  `l2_req_data_o__bpo.source` = 0
+  `l2_req_data_o__bpo.wdata` = 0
+  `l2_req_data_o__bpo.opcode` = 0
+  `l2_req_data_o__bpo.address` = 0
+  `l2_req_data_o__bpo.data` = 0
+  `l2_req_data_o__bpo.size` = 0
+  `l2_req_data_o__bpo.qwen` = 0
+  `l2_req_data_o__bpo.subopcode` = 0
   if ((req_q >> 8) & 1) == 0 {
     `l2_req_data_o__bpo.id` = minion_dcache_pkg.EtLinkCoreMissIdWriteBack
     `l2_req_data_o__bpo.source` = 0
@@ -74,20 +89,14 @@ pub mod minion_dcache_writeback_unit::[timecheck=false](clk_i:u1, rst_ni:u1, req
     `l2_req_data_o__bpo.qwen` = 3
   }
   const new_req__w1 = unsigned((req_ready_o__w1 != 0) and (req_valid_i != 0))
-  r1_data_req_fired_d = 0ub?
-  r2_data_req_fired_d = 0ub?
-  r3_data_req_fired_d = 0ub?
-  data_req_cnt_d = 0sb?
-  data_req_valid_d = 0ub?
-  active_d = 0ub?
   active_d = active_q
+  l2_req_valid_o = 0
   r2_data_req_fired_d = 0
   data_req_bid_o = 0
   r1_data_req_fired_d = 0
-  l2_req_valid_o = 0
   data_req_cnt_d = data_req_cnt_q
-  data_req_valid_d = data_req_grant_i
   r3_data_req_fired_d = 0
+  data_req_valid_d = data_req_grant_i
   if new_req__w1 != 0 {
     active_d = 1
     data_req_cnt_d = 0
@@ -118,20 +127,15 @@ pub mod minion_dcache_writeback_unit::[timecheck=false](clk_i:u1, rst_ni:u1, req
       }
     }
   }
-  active_q = if rst_ni == 0 { 0 } else { active_d }
+  if rst_ni != 0 {
+    active_q = active_d
+  }
   data_req_cnt_q = data_req_cnt_d
   data_req_cnt_idx_q = data_req_cnt_q & 1
   if new_req__w1 != 0 {
     req_q = (req_data_i.tag << 17) | (req_data_i.set << 13) | (req_data_i.way_en << 9) | (req_data_i.is_tbox << 8) | (req_data_i.mem_idx << 7) | req_data_i.addr_low
   }
-  if rst_ni == 0 {
-    r1_data_req_fired_q = 0
-    r2_data_req_fired_q = 0
-    r3_data_req_fired_q = 0
-    data_req_valid_o = 0
-    r2_invalid_q = 0
-    r3_invalid_q = 0
-  } else {
+  if rst_ni != 0 {
     r1_data_req_fired_q = r1_data_req_fired_d
     r2_data_req_fired_q = r2_data_req_fired_d
     r3_data_req_fired_q = r3_data_req_fired_d
