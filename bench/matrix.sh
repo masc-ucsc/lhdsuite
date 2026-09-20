@@ -561,6 +561,13 @@ fi
 # build plus the simulation. One row, because the rebuild an edit costs is their
 # sum; the per-pass breakdown separates them again (inou.cgen.sim vs
 # sim.hostbuild vs sim.run).
+#
+# Every sim and sim_llvm command pins sim.tune.profile=off. The cold and
+# incremental rows share ONE workdir, and under lhd's default `auto` a cold run
+# long enough to qualify (minion's 20k cycles can) may leave a sim.tune TRIAL
+# for the next setup, which regenerates the color root: the incremental row
+# would then time a trial rebuild and read as a cache regression. `off` keeps
+# every row on lhd's built-in vector.
 if [[ " $PHASES " == *" sim "* ]]; then
   if [ ! -f "$SIM_DIR/$SIM_TB" ]; then
     echo "  [$CORE sim] SKIPPED: no driver at $SIM_DIR/$SIM_TB" >&2
@@ -571,19 +578,19 @@ if [[ " $PHASES " == *" sim "* ]]; then
       local setup_ms run_ms
       group_begin
       step sim "$mode" "sim_${mode}_setup.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
-        "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --setup-only \
+        "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --setup-only --set sim.tune.profile=off \
         --workdir "$wd" --result-json "sim_${mode}_setup.json"
       setup_ms=$GRP_MS
       step sim "$mode" "sim_${mode}_run.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
         "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --run-only --arg "cycles=$SIM_CYCLES" \
- --diag-fmt pretty --workdir "$wd" \
+ --set sim.tune.profile=off --diag-fmt pretty --workdir "$wd" \
         --result-json "sim_${mode}_run.json"
       run_ms=$((GRP_MS - setup_ms))
       group_end sim "$mode" "$(sim_extra "$wd" "$setup_ms" "$run_ms")"
     }
     rm -rf SW_warm0
     warm_phase sim "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} "tree/$SIM_UNIT.prp" "tree/$SIM_TB" \
-      --arg "cycles=$SIM_CYCLES" --workdir SW_warm0
+      --arg "cycles=$SIM_CYCLES" --set sim.tune.profile=off --workdir SW_warm0
     rm -rf SW_warm0
     rm -rf SW_full; sim_group full SW_full
     rm -rf SW_warm; sim_group cold SW_warm
@@ -594,7 +601,7 @@ fi
 
 # --------------------------------------------------------------- sim_llvm ----
 # The SECOND simulator backend, as its own (target, phase) row rather than a
-# variant of `sim`. It is not a knob on the same flow: `sim.backend=llvm`
+# variant of `sim`. It is not a knob on the same flow: `sim.tune.backend=llvm`
 # replaces the per-color Slop C++ with a native object plus an ABI adapter, so
 # its codegen cost, its host build and its cycles/s are all different numbers
 # and belong in different cells. Reuse has to hold for BOTH backends or the
@@ -610,18 +617,19 @@ if [[ " $PHASES " == *" sim_llvm "* ]]; then
       group_begin
       step sim_llvm "$mode" "siml_${mode}_setup.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
         "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --setup-only \
-        --set sim.backend=llvm --workdir "$wd" --result-json "siml_${mode}_setup.json"
+        --set sim.tune.backend=llvm --set sim.tune.profile=off \
+        --workdir "$wd" --result-json "siml_${mode}_setup.json"
       setup_ms=$GRP_MS
       step sim_llvm "$mode" "siml_${mode}_run.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
         "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --run-only --arg "cycles=$SIM_CYCLES" \
- --set sim.backend=llvm --diag-fmt pretty \
+ --set sim.tune.backend=llvm --set sim.tune.profile=off --diag-fmt pretty \
         --workdir "$wd" --result-json "siml_${mode}_run.json"
       run_ms=$((GRP_MS - setup_ms))
       group_end sim_llvm "$mode" "$(sim_extra "$wd" "$setup_ms" "$run_ms")"
     }
     rm -rf SL_warm0
     warm_phase sim_llvm "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} "tree/$SIM_UNIT.prp" "tree/$SIM_TB" \
-      --arg "cycles=$SIM_CYCLES" --set sim.backend=llvm \
+      --arg "cycles=$SIM_CYCLES" --set sim.tune.backend=llvm --set sim.tune.profile=off \
       --workdir SL_warm0
     rm -rf SL_warm0
     rm -rf SL_full; simllvm_group full SL_full

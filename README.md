@@ -98,7 +98,7 @@ Run one synthesis job at a time.
 | `synth`, `synth_incremental` | Mapping time, reuse, gate count, area, and timing with sky130. Minion also runs a flat-mapping comparison. |
 | `synth_lec_synth`, `synth_lec_flat` | Synthesized netlist equivalence, including reuse after a comment edit; flat is Minion-only. |
 | `sim_verilog`, `sim_pyrope`, `sim_verilator` | Simulation with checked output values; host compilation and execution are timed separately. |
-| `sim_incremental`, `sim_incremental_llvm` | Simulator build reuse across edits, using C++ or LLVM; these scenarios do not execute the driver. |
+| `sim_incremental`, `sim_incremental_llvm` | Simulator build reuse across edits, using C++ or LLVM. Only the builds are timed; each rebuilt driver is then executed once and must behave exactly like a caches-off build of the same tree (cold, comment-only, and the one-module edit against a from-scratch build of the edited tree). |
 | `lec`, `lec_bug`, `lec_incremental` | Cross-language equivalence, injected-bug detection, and proof-cache reuse. |
 | `verify`, `verify_bug`, `verify_temporal`, `verify_incremental` | Formal sidecar properties, mutant refutation, sequential properties, and reuse where supported. |
 
@@ -134,9 +134,7 @@ selected LiveHD checkout. Re-run the relevant target to establish its status.
 
 | Targets | Previously reported limitation |
 | --- | --- |
-| `//bench:picorv32_sim_verilog`, `picorv32_sim_pyrope` | Missing program store; architectural readback fails. |
 | `//bench:picorv32_lec`, `picorv32_lec_bug` | A six-cycle bounded result misses behavior beyond reset and cannot establish equivalence or detect the mutant. |
-| `//bench:cva6_sim_pyrope` | Generated icache prevents the whole-core program from retiring instructions. |
 | `//bench:minion_lec`, `minion_lec_incremental`, `minion_synth_lec_synth` | Unresolved state, memory, and hierarchical proof obligations. |
 | `//verif:genprp_minion` | Slang driver-order failure during generation. |
 | `//verif:genprp_xs_enqentry_4` | Excessive front-end memory use. |
@@ -144,7 +142,8 @@ selected LiveHD checkout. Re-run the relevant target to establish its status.
 
 Keep these checks live. Fix compiler defects in LiveHD; fix harness defects
 in the suite. Preserve the expected simulation data and proof requirements.
-CVA6 must execute the whole-core program before that gate passes.
+CVA6 now executes the whole-core program with its architectural gate intact;
+see [the external RTL comparison](cva6/README) for reproduction and proof limits.
 
 ## Adding or maintaining a core
 

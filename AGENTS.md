@@ -216,9 +216,9 @@ Every core shares one shape (`<core>/` = `dino/`, `minion/` or `cva6/`):
 
 Some targets fail because of LiveHD gaps, not suite misconfiguration. See the
 "Known-failing scenarios" table in `README.md` for the current list. In
-particular, CVA6's asserted whole-core program simulation is intentionally red
-while the generated icache cannot retire an instruction. Do not weaken the
-program assertions or substitute the old tag_cmp smoke to make it green.
+particular, preserve CVA6's asserted whole-core program simulation, now passing
+with regenerated Pyrope and matching external RTL. Do not weaken the program
+assertions or substitute the old tag_cmp smoke. See cva6/README to reproduce.
 Before changing a testbench, a gate, or a `CORES` entry to make one of these
 pass, check that table — fixing them belongs in livehd.
 

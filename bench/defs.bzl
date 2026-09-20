@@ -105,11 +105,15 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             would otherwise go green). "" = marker gate only.
 #   sim_sets  extra `--set k=v` flags for THIS core's `lhd sim` invocations
 #             (both the timed benchmark and the correctness drivers), space
-#             separated, each already spelled `--set k=v`. "" = none. It exists
-#             for a driver whose contract needs a knob the shared script cannot
-#             infer. No current core needs one: Minion's architectural state is
-#             initialized by its boot ROM and its control bookkeeping resets in
-#             hardware, so it runs correctly with randomized startup.
+#             separated, each already spelled `--set k=v`. "" = none. Two uses:
+#             a driver whose contract needs a knob the shared script cannot
+#             infer (xs_rob's sim.unknown_zero=true), and a pinned
+#             `sim.tune.*` speed vector (xs_renametable). Every target runs in
+#             a fresh workdir, so lhd's sim.tune learning loop can never
+#             converge here; a measured vector is pinned by hand instead.
+#             Minion needs neither: its architectural state is initialized by
+#             its boot ROM and its control bookkeeping resets in hardware, so
+#             it runs correctly with randomized startup.
 #   lec_trust  comma-separated module-def names the LEC scenarios ASSUME
 #             equivalent WITHOUT proving them (`--set formal.lec.trust=…`) —
 #             the escape hatch for defs holding a latch or negedge flop the LEC
@@ -238,9 +242,8 @@ CORES = {
         # observable progress, as is already done for XS Backend below.
         "color_max_ge": 8000,
         # A real RISC-V program on the full core over its AXI interface. Keep
-        # the architectural readback gate live: the generated icache currently
-        # prevents retirement, so this target remains red until LiveHD's
-        # emitted Pyrope is fixed.
+        # the architectural readback gate live. The regenerated core agrees
+        # with external full RTL in LHD and Verilator (see cva6/README).
         "sim_tb": "cva6_prog_tb.prp",
         "sim_tb_unit": "cva6",
         "sim_cycles": 50000,
@@ -293,13 +296,12 @@ CORES = {
         "v_flags": "-Dassert(assert_expr)=",
         "color_algs": ["synth"],
         # A real RISC-V program with the testbench acting as the CPU's memory,
-        # checked architecturally through the program's own store.
-        #
-        # BOTH sim targets are RED, and not because of this driver: Icarus
-        # Verilog runs the identical program on the identical RTL and issues
-        # the store (a=256 wstrb=15 wdata=5), while `lhd sim` never drives a
-        # write strobe at all. See the README's known-failing table for the
-        # reproducer. Keep the architectural gate live.
+        # checked architecturally through the program's own store (`stored=30`).
+        # Both sim targets were red for a long time (the missing write strobe,
+        # then two livehd defects on the Pyrope side: a doubly specialized
+        # default-parameter `picorv32` unit, and three always-open latches the
+        # sim color planner could not lower). Green since 2026-09-19; keep the
+        # architectural gate live.
         "sim_tb": "picorv32_prog_tb.prp",
         "sim_cycles": 500000,
         "sim_tb_unit": "picorv32_top",
@@ -310,9 +312,10 @@ CORES = {
         "sim_prog_tb_unit": "",
         "sim_prog_cycles": "",
         "lec_trust": "",
-        # No Verilator twin yet. The Icarus run above is a one-off reproducer
-        # in the README, not a suite target.
-        "verilator_tb": "",
+        # Same ROM and one-cycle memory response as the Pyrope testbench.
+        "verilator_tb": "picorv32_prog_tb_verilator.cpp",
+        "verilator_flags": "-Dassert(assert_expr)=",
+        "verilator_cycles": 500000,
     },
     "minion": {
         "pkg": "//minion",
@@ -560,6 +563,17 @@ CORES = {
         # 4x is the comparison, not an accident of the count.
         "sim_cycles": 40000,
         "sim_tb_unit": "RenameTableWrapper",
+        # Per-benchmark tuning of livehd's idle-module gating. The driver only
+        # exercises read ports, so the rename tables idle and gating them pays,
+        # but only with dirty tracking on (fences exist to be skipped; without
+        # dirty gating they are pure cost). Instructions for 60k cycles, then
+        # default (dirty off) -> both: pyrope2 20.3G -> 12.1G
+        # (sim.tune.fence=0 alone 33.5G), verilog 114G -> 20.4G, pyrope 116G
+        # -> 18.6G; Verilator 19.8G. Measured 2026-09-18, mascm1, under the
+        # pre-rename spellings sim.color_dirty=true / sim.fence_ratio=0. lhd's
+        # default became dirty on / fence 16 on 2026-09-19; fence=0 (L2) is
+        # still the pinned vector here (pyrope2: ~1.4x fewer instructions than L1).
+        "sim_sets": "--set sim.tune.dirty=on --set sim.tune.fence=0",
         "sim_marker": "xs_renametable:",
         # Verified identical from ALL THREE simulators at 40k cycles, which is
         # what makes it safe to pin: the .prp tree, `lhd compile verilog --top
@@ -642,7 +656,11 @@ _SCENARIOS = [
     ("sim_pyrope", "sim.sh", "pyrope", "long", "", "sim_tb"),
     # The sim counterpart of synth_incremental: four compiled-driver builds
     # over one workdir and emit dir, reporting setup/codegen and host C++
-    # compile+link separately. The driver is not executed in this scenario.
+    # compile+link separately. No TIMED step executes the driver; each built
+    # drv.bin is then run once, untimed, and held to ONE contract, incremental
+    # == non-incremental: cold and the comment-only rebuild must behave exactly
+    # like the caches-off build, the one-module edit exactly like a from-scratch
+    # build of the edited tree. (Absolute correctness stays sim_pyrope's gate.)
     ("sim_incremental", "sim.sh", "incr", "eternal", "", "sim_tb"),
     ("sim_incremental_llvm", "sim.sh", "incr", "eternal", "", "sim_tb"),
     # The same benchmark under Verilator, for cores carrying a C++ twin of
@@ -810,7 +828,7 @@ def core_benches(core):
         if suffix == "sim_incremental_llvm":
             scenario_cfg = dict(cfg)
             scenario_cfg["sim_sets"] = (cfg.get("sim_sets", "") +
-                                         " --set sim.backend=llvm").strip()
+                                         " --set sim.tune.backend=llvm").strip()
         _lhd_bench(name, core, scenario_cfg, script, mode, timeout)
         names.append(":" + name)
 

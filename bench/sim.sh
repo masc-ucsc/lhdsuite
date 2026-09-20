@@ -155,15 +155,27 @@ SIM_INPUTS=("$BENCH_INPUT" "tree/$SIM_TB")
 
 # Make the selected execution engine part of the scraped benchmark identity.
 # Historical rows predate this metric and remain under phase `sim`; new rows
-# are rendered as `sim_slop` or `sim_llvm` by bench/ledger.py.
+# are rendered as `sim_slop` or `sim_llvm` by bench/ledger.py. `auto` is lhd's
+# built-in default, slop: lhd's tuner never moves the backend on its own.
 SIM_BACKEND=slop
 for kv in ${CORE_SIM_SETS:-}; do
-  case "$kv" in sim.backend=*) SIM_BACKEND=${kv#sim.backend=} ;; esac
+  case "$kv" in sim.tune.backend=*) SIM_BACKEND=${kv#sim.tune.backend=} ;; esac
 done
 case "$SIM_BACKEND" in
-  slop) metric sim_backend_llvm 0 bool ;;
+  slop | auto) metric sim_backend_llvm 0 bool ;;
   llvm) metric sim_backend_llvm 1 bool ;;
   *) echo "FAIL: unsupported simulator backend '$SIM_BACKEND'" >&2; exit 2 ;;
+esac
+
+# Hermetic benchmark legs measure a PINNED tune vector: the core's own sim_sets
+# (explicit sim.tune.* knobs) or lhd's defaults. SW is a fresh workdir every
+# run, so lhd's default sim.tune.profile=auto would profile the --run-only leg
+# (sampler, run-time zero-filled `?`, no checkpoints) and never converge,
+# while the separately timed drv.bin exec below would not. A core may still
+# choose its own mode in sim_sets.
+case " ${CORE_SIM_SETS:-} " in
+  *"sim.tune.profile="*) ;;
+  *) CORE_SIM_SETS="--set sim.tune.profile=off ${CORE_SIM_SETS:-}" ;;
 esac
 
 # ---- MODE=incr: full plus the three-pass rebuild over ONE workdir ------------
@@ -188,7 +200,26 @@ esac
 #
 # Ninja is invoked directly after `--setup-only`: the generated build.ninja is
 # the exact host build `lhd sim --run-only` would perform, but stopping at its
-# default drv.bin target guarantees that no testbench cycles execute.
+# default drv.bin target guarantees that no testbench cycles execute INSIDE a
+# timed step.
+#
+# EXECUTED, UNTIMED. Every drv.bin this scenario links is then run once,
+# outside the timed steps, because a rebuild that compiles is not a rebuild
+# that is right: this scenario used to stop at "drv.bin linked", so an
+# incremental build that reused a stale unit (or a warm `lhd sim` that died on
+# the edit) could only ever be caught by a human. The contract checked here is
+# ONE thing — incremental == non-incremental — and nothing else:
+#   cold, comment   must behave exactly like `full`, the caches-off build of the
+#                   same tree: same exit status, same printed lines.
+#   edit            must behave exactly like `oracle`, the SAME edited tree
+#                   built from scratch with caches off in a workdir of its own.
+#                   (bug1 may legitimately break the testbench's own assert, so
+#                   "passes" is not the question; "same as from scratch" is.)
+# Whether the simulation is RIGHT in absolute terms — $CORE_SIM_MARKER /
+# $CORE_SIM_EXPECT, the Verilator-agreed readback — stays sim_pyrope's gate. It
+# is reported here as METRIC sim_exec_gate_ok and never fails this target: a
+# core whose cold simulation is red for its own reason must show up once, not
+# three times.
 if [ "$MODE" = incr ]; then
   # find_ninja also PREPENDS its directory to PATH: the lookup that matters is
   # the one `lhd sim` does, not this one.
@@ -198,24 +229,56 @@ if [ "$MODE" = incr ]; then
   [ -n "$ninja_path" ] \
     || { echo "FAIL: sim_incremental needs ninja to compile without executing drv.bin (not found on PATH nor in the usual install prefixes)" >&2; exit 1; }
 
-  # sim_pass TAG [INCREMENTAL] — generate, then compile+link drv.bin. It never
-  # launches the binary.
+  # sim_pass TAG [INCREMENTAL] [WORKDIR] — generate, then compile+link drv.bin.
+  # It never launches the binary (sim_exec_built does, untimed).
   sim_pass() {
-    local tag=$1 incremental=${2:-true}
+    local tag=$1 incremental=${2:-true} wd=${3:-SW}
     local incr_args=()
     [ "$incremental" != false ] || incr_args=(--set lhd.incremental=false)
     # shellcheck disable=SC2086  # CORE_SIM_SETS is a token LIST, split on purpose
     run_timed "sim_setup_$tag" lhd sim "${SIM_INPUTS[@]}" --setup-only \
-    --set sim.vcd=false $CORE_SIM_SETS --workdir SW \
+    --set sim.vcd=false $CORE_SIM_SETS --workdir "$wd" \
       ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
       ${incr_args[@]+"${incr_args[@]}"} || return 1
     # shellcheck disable=SC2086
     run_timed "sim_cc_$tag" lhd sim "${SIM_INPUTS[@]}" --run-only \
       --set sim.compile_only=true --set "sim.ninja=$ninja_path" \
-      $CORE_SIM_SETS --diag-fmt pretty --workdir SW \
+      $CORE_SIM_SETS --diag-fmt pretty --workdir "$wd" \
       ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
       ${incr_args[@]+"${incr_args[@]}"} || return 1
-    metric "workdir_bytes_$tag" "$(dir_bytes SW)" bytes
+    metric "workdir_bytes_$tag" "$(dir_bytes "$wd")" bytes
+  }
+
+  # sim_exec_built TAG [WORKDIR] — run the drv.bin sim_pass TAG just linked, once
+  # and untimed. Leaves its output in step_sim_exec_TAG.log and its exit status
+  # in SIM_EXEC_RC; it does not judge either (the caller knows whether this tree
+  # is supposed to pass).
+  sim_exec_built() {
+    local tag=$1 wd=${2:-SW}
+    local drv=$wd/sim/drv.bin
+    [ -x "$drv" ] \
+      || { echo "FAIL: sim_pass $tag linked no $drv" >&2; return 1; }
+    log_cmd "sim_exec_$tag" "$drv --cycles $CYCLES --result-json $wd/sim/exec_tests.json"
+    SIM_EXEC_RC=0
+    CURRENT_STEP=sim_exec_$tag "$drv" --cycles "$CYCLES" \
+      --result-json "$wd/sim/exec_tests.json" >"step_sim_exec_$tag.log" 2>&1 || SIM_EXEC_RC=$?
+  }
+
+  # sim_exec_same TAG REF [WORKDIR] — run TAG's drv.bin and require the exit
+  # status and every printed line REF's run produced.
+  sim_exec_same() {
+    local tag=$1 ref=$2 wd=${3:-SW}
+    sim_exec_built "$tag" "$wd" || exit 1
+    echo "$SIM_EXEC_RC" >"rc_sim_exec_$tag"
+    if [ "$SIM_EXEC_RC" -eq "$(cat "rc_sim_exec_$ref")" ] \
+      && cmp -s "step_sim_exec_$tag.log" "step_sim_exec_$ref.log"; then
+      metric "sim_exec_${tag}_equals_${ref}" 1 bool
+    else
+      metric "sim_exec_${tag}_equals_${ref}" 0 bool
+      echo "FAIL: the $tag build (exit $SIM_EXEC_RC) simulates differently from the $ref build (exit $(cat "rc_sim_exec_$ref")):" >&2
+      diff "step_sim_exec_$ref.log" "step_sim_exec_$tag.log" | head -20 >&2
+      exit 1
+    fi
   }
 
   # generated_newer MARKER — the generated C++/objects touched since MARKER.
@@ -230,10 +293,23 @@ if [ "$MODE" = incr ]; then
 
   rm -rf SW
   sim_pass full false || exit 1
+  # The reference behavior of the unedited tree. Informational absolute gate:
+  # sim_pyrope owns "is the simulation right".
+  sim_exec_built full || exit 1
+  echo "$SIM_EXEC_RC" >rc_sim_exec_full
+  gate_ok=0
+  if [ "$SIM_EXEC_RC" -eq 0 ] && grep -qa -- "$CORE_SIM_MARKER" step_sim_exec_full.log \
+    && { [ -z "$CORE_SIM_EXPECT" ] || grep -qa -- "$CORE_SIM_EXPECT" step_sim_exec_full.log; }; then
+    gate_ok=1
+  else
+    echo "NOTE: the from-scratch simulation itself fails the sim gate (exit $SIM_EXEC_RC); see ${CORE}_sim_pyrope. Incremental builds are still held to behaving identically."
+  fi
+  metric sim_exec_gate_ok "$gate_ok" bool
 
   rm -rf SW
   sim_pass cold || exit 1
   tree_fingerprint SW/sim -name '*.cpp' -o -name '*.hpp' -o -name '*.iface.json' >fp_cold.txt
+  sim_exec_same cold full
 
   # Some old checked-in comment1 fixtures have drifted into structurally
   # different (though equivalent) implementations.  This pass measures a true
@@ -262,6 +338,10 @@ if [ "$MODE" = incr ]; then
     exit 1
   fi
 
+  # The comment-only rebuild must still BE the from-scratch simulator, not just
+  # look like it on disk.
+  sim_exec_same comment full
+
   core_variant bug1 tree || exit 1
   touch marker
   sim_pass edit || exit 1
@@ -270,7 +350,26 @@ if [ "$MODE" = incr ]; then
   [ -n "$rewritten" ] \
     || { echo "FAIL: a real one-line edit rewrote NO generated file — stale cache" >&2; exit 1; }
 
-  echo "PASS: sim_incremental compiled drv.bin for full/cold/no-change/edit; no simulation executed"
+  # The oracle for the edited tree: the SAME sources, from scratch, caches off,
+  # in a workdir of its own. One module changed or the whole tree rebuilt, the
+  # simulator must behave the same — exit status and every printed line.
+  rm -rf SW_oracle
+  sim_pass oracle false SW_oracle || exit 1
+  sim_exec_built oracle SW_oracle || exit 1
+  echo "$SIM_EXEC_RC" >rc_sim_exec_oracle
+  sim_exec_same edit oracle
+  # Informational: byte-identical generated sources would make the equality
+  # above true by construction. Not a gate — an incremental compile may order
+  # equivalent nodes differently — but a 0 here next to a 1 above is worth a look.
+  tree_fingerprint SW/sim -name '*.cpp' -o -name '*.hpp' -o -name '*.iface.json' >fp_edit.txt
+  tree_fingerprint SW_oracle/sim -name '*.cpp' -o -name '*.hpp' -o -name '*.iface.json' >fp_oracle.txt
+  if cmp -s fp_edit.txt fp_oracle.txt; then
+    metric sim_edit_tree_equals_oracle 1 bool
+  else
+    metric sim_edit_tree_equals_oracle 0 bool
+  fi
+
+  echo "PASS: sim_incremental built drv.bin for full/cold/no-change/edit; cold and no-change simulate exactly like the caches-off build, the edit exactly like a from-scratch build of the edited tree"
   exit 0
 fi
 

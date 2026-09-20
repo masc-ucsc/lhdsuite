@@ -1,18 +1,16 @@
 # CVA6 (OpenHW Group): whole generated Pyrope core plus local Verilog cone.
 #
 # SCOPE: the two languages are NOT the same design here, and that is deliberate.
-#   verilog/  the tag_cmp cone only. The full core does not read yet (unpacked
-#             '{...} assignment patterns, non-constant **, and non-const loop
-#             bounds are still unsupported by --reader slang). It is retained
-#             for local cone work, not used as the benchmark design.
+#   verilog/  the tag_cmp cone only, retained for local cone work.
+#             Full RTL is external; cva6/README records its revision and patches.
 #   pyrope/   the WHOLE CVA6 core, generated from an upstream checkout by the
 #             recipe in cva6/README (a different, larger config than verilog/:
 #             cv64a6_imafdc_sv39_wb). The main bench uses this whole core for
 #             Pyrope compile, synthesis, and simulation. Cross-language
 #             Verilog/LEC legs are omitted until the Verilog tree can carry the
 #             same top; they are never redirected to the tag_cmp cone.
-# Widen verilog/ as those reader gaps close — the point of the core is that
-# lhdsuite tracks a third real CPU.
+# cva6/check_sim.py compares both whole-core input paths with Verilator using
+# that external checkout; local bench Verilog targets remain omitted.
 #
 # WHY tag_cmp_wrap STILL EXISTS. tag_cmp takes cache-line types as module
 # parameters. Elaborated standalone from Verilog they default to `logic`, so
@@ -49,8 +47,8 @@ filegroup(
 
 # Simulation drivers.
 #   cva6_prog_tb.prp  the asserted, timed benchmark: a whole RISC-V program on
-#                     the FULL core over AXI. Its DUT exists only in pyrope/,
-#                     so there is no Verilog or Verilator twin.
+#                     the FULL core over AXI. The Verilator twin uses the
+#                     matching external RTL via cva6/check_sim.py.
 #   tag_cmp_tb.prp    retained as local cone collateral, not used by //bench.
 filegroup(
     name = "sim",

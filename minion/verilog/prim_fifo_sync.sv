@@ -126,6 +126,10 @@ module prim_fifo_sync #(
         $warning("prim_fifo_sync: read while empty");
     end
   end
+`elsif SYNTHESIS
+  // The translate_off pragmas above are comments to slang, so -DSYNTHESIS is
+  // what keeps these temporal properties (|->) out of the lhd flows, which
+  // refuse an unsupported property instead of dropping it.
 `else
   assert property (@(posedge clk_i) disable iff (!rst_ni)
     wvalid_i |-> wready_o)

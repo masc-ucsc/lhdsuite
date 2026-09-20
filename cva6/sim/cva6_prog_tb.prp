@@ -2,43 +2,10 @@
 // dino/sim/dino_prog_tb.prp and minion/sim/minion_prog_tb.prp, against CVA6's
 // AXI memory interface.
 //
-// ============================================================================
-// STATUS 2026-08-21: this driver does NOT pass yet, and the fault is in the
-// GENERATED PYROPE, not here. See the "Known-failing scenarios" table in
-// README.md. The short version: the core resets, its frontend computes the
-// right next PC (`i_frontend.npc_q` == boot_addr_i), the icache finishes its
-// 256-entry flush and issues an AXI read — and then nothing retires, because
-// `cva6/pyrope/cva6_icache.prp` mistranslates the fetch address. Two root
-// causes are confirmed by simulation, a third is not yet root-caused:
-//
-//   1. `dreq_o.ready` is emitted as a `mut` seeded 0 at the top of the body,
-//      READ at the `vaddr_d` / `cl_offset_d` muxes, and only ASSIGNED later
-//      inside the FSM. Pyrope `mut` is last-write-in-PROGRAM-ORDER, so those
-//      reads always see 0, `vaddr_q` never latches `dreq_i.vaddr`, and the
-//      icache asks the MMU to translate address 0. In the SystemVerilog these
-//      are continuous assigns that see the settled value; the emitted net
-//      needed to be a `wire` (which may be read above its driver), the way
-//      `mem_data_req_o` in the same file correctly is.
-//   2. `address`, the argument of the inlined `is_inside_cacheable_regions`
-//      check, is assigned `0sb?` and never bound to `{cl_tag_d, 12'b0}`, so
-//      the cacheable-region test is unknown and every fetch takes the
-//      non-cacheable path.
-//   3. With both patched in a scratch tree the fetch address and the burst
-//      shape become correct (addr 0x8000_0000, len 1 = a 128-bit line), the
-//      testbench delivers both beats, and the icache still re-requests
-//      forever with `icache_valid_q` stuck at 0. At least one more defect
-//      remains in the line-fill path.
-//
-// Also observed, not root-caused and NOT what blocks this driver (this model
-// ignores both fields): `cva6_icache_axi_wrapper` drives ar.size=3 / a valid
-// burst at its own `axi_req_o`, but at the cva6 top `noc_req_o.ar_size` and
-// `ar_burst` read 0 while `ar_id`, `ar_len` and `ar_addr` come through — i.e.
-// bits 80..84 of the packed AR are lost across `std_cache_subsystem`'s
-// stream_arbiter, and bits 85+ are not.
-//
-// Fixing any of this belongs in livehd, not here. Do NOT weaken the asserts
-// below to make the target green — they are plain RISC-V semantics.
-// ============================================================================
+// Regenerated 2026-09-19 after LiveHD translation and simulation fixes.
+// At 50,000 cycles, original RTL, regenerated Pyrope and Verilator agree:
+// x2=100, x3=-100, marker=0x5a5, retired=43443, completion cycle=738.
+// The assertions below remain the architectural correctness gate.
 //
 // WHY THE INTERFACE IS DIFFERENT FROM dino AND minion. dino exposes a
 // combinational `io_imem_*` pair and minion a fixed-latency cache-line port;
@@ -61,10 +28,8 @@
 // immediately. That keeps the check architectural, the way dino's does —
 // the testbench reads the program's own stores, not internal register taps.
 //
-// NO VERILATOR TWIN. cva6/verilog/ carries only the tag_cmp cone, not the
-// whole core (see cva6/README), so there is no reference simulator for this
-// design and no `*_verilator.cpp` counterpart. That is also why the CORES
-// entry marks the driver pyrope-only.
+// The Verilator twin uses the external full CVA6 checkout documented in
+// cva6/README; the vendored verilog/ directory remains a tag_cmp cone.
 //
 // THE PROGRAM. Assembled from source with a real toolchain, not hand-encoded:
 //

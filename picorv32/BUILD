@@ -1,15 +1,16 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
 # PicoRV32, a size-optimized RISC-V CPU, in both source languages.
 #
 # verilog/picorv32.v is vendored VERBATIM from upstream
 # (https://github.com/YosysHQ/picorv32, ISC — see verilog/COPYING); the only
 # hand-written Verilog file is picorv32_top.v, a parameter-pinning wrapper
-# (its header says why). pyrope/ is a maintained translation of that same
-# design, with per-instance constant generics; see README.md.
+# (its header says why). pyrope/ is the generated benchmark translation;
+# pyrope2/ retains configurable shift/ALU parameters.
 #
-# SCOPE: both languages here ARE the same design. The suite wrapper retains
-# its existing parameter values. Additional PCPI/M/D and ALU configurations are
-# checked by check_configurations.py; standalone arithmetic uses
-# check_arithmetic.py. validation.md distinguishes unbounded and partial proofs.
+# SCOPE: the suite wrapper retains its existing parameter values. sim_configs
+# compares four shift/ALU configurations against Verilator, using pyrope2 and
+# scratch wrapper edits. See sim/README.md for the workload and reuse checks.
 
 filegroup(
     name = "verilog",
@@ -36,10 +37,9 @@ filegroup(
 )
 
 # Simulation drivers. picorv32_prog_tb.prp runs a real RISC-V program with the
-# testbench acting as the CPU's memory; there is no Verilator twin yet.
+# testbench acting as the CPU's memory; the C++ twin checks the same workload.
 filegroup(
     name = "sim",
-    # No Verilator twin yet, so the .cpp glob is allow_empty.
     srcs = glob(
         [
             "sim/*.prp",
@@ -67,4 +67,20 @@ filegroup(
     name = "tests",
     srcs = glob(["tests/**"], allow_empty = True),
     visibility = ["//visibility:public"],
+)
+
+# Exercise both parameter values, partial compile reuse, and fresh simulation
+# against the same Verilator instruction program and completion cycle.
+sh_test(
+    name = "sim_configs",
+    size = "large",
+    timeout = "long",
+    srcs = ["check_sim_configs.py"],
+    args = ["--lhd", "$(rlocationpath @livehd//lhd:lhd)"],
+    data = glob(["pyrope2/*.prp"]) + [
+        ":sim",
+        ":verilog",
+        "@livehd//lhd:lhd",
+    ],
+    tags = ["exclusive"],
 )

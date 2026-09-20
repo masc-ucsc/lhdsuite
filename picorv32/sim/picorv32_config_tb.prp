@@ -1,0 +1,59 @@
+// Configuration twin: BARREL_SHIFTER and TWO_CYCLE_ALU must change timing,
+// not instruction results. x2=96, x3=24, x5=-16; the shift/ALU chain stores 58.
+// The C++ twin uses the same instruction image with --config-test.
+const cpu = import("lg:picorv32_top")
+
+test picorv32.prog(cycles:u20 = 2000) {
+  mut acc = cpu
+  mut rom = [0x00300093,  // addi x1, x0, 3
+             0x00509113,  // slli x2, x1, 5       -> 96
+             0x00215193,  // srli x3, x2, 2       -> 24
+             0xF8000213,  // addi x4, x0, -128
+             0x40325293,  // srai x5, x4, 3       -> -16
+             0x00518333,  // add  x6, x3, x5      -> 8
+             0x40130333,  // sub  x6, x6, x1      -> 5
+             0x001093B3,  // sll  x7, x1, x1      -> 24
+             0x00730333,  // add  x6, x6, x7      -> 29
+             0x001153B3,  // srl  x7, x2, x1      -> 12
+             0x00730333,  // add  x6, x6, x7      -> 41
+             0x401253B3,  // sra  x7, x4, x1      -> -16
+             0x40730333,  // sub  x6, x6, x7      -> 57
+             0x0002A393,  // slti x7, x5, 0       -> 1
+             0x00730333,  // add  x6, x6, x7      -> 58
+             0x10602023,  // sw   x6, 256(x0)
+             0x0000006F,  // jal  x0, 0
+             0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013,
+             0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013,
+             0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013]
+  mut req_valid = false     // the request latched below the previous step
+  mut req_addr  = 0
+  mut stored    = 0     // data of the `sw` to 0x100
+  mut got       = 0
+  mut trapped   = 0
+  mut done_cycle = 0
+  tick cycles clocks=(clk=1) {
+    acc.resetn = clk >= 4       // active LOW reset, held for the first cycles
+    acc.irq    = 0
+    // Answer last cycle's request. The ROM is 32 words; the program never reads
+    // data, so aliasing the store address into it is harmless.
+    acc.mem_ready = req_valid
+    acc.mem_rdata = rom[(req_addr >> 2) & 31]
+    step
+    if acc.mem_valid and acc.mem_wstrb != 0 and acc.mem_addr == 0x100 {
+      if got == 0 {
+        stored = acc.mem_wdata
+        got = 1
+        done_cycle = clk
+      }
+    }
+    if acc.trap {
+      trapped = 1
+    }
+    req_valid = acc.mem_valid
+    req_addr  = acc.mem_addr
+  }
+  assert(trapped == 0, "picorv32 must not trap on this program")
+  assert(got == 1, "the program's store to 0x100 never appeared on the bus")
+  assert(stored == 58, "shift and ALU configuration workload must store 58")
+  puts("picorv32 prog: stored={stored} at cycle {done_cycle} of {cycles}")
+}

@@ -1,22 +1,44 @@
+Full-core Pyrope and external RTL comparison
+=============================================
 
-The Pyrope is a generated version of CVA6 using:
+The 2026-09-19 regeneration uses CVA6 commit
+6cb200105fb9441d170e45786125a737fab98e91, configuration
+cv64a6_imafdc_sv39_wb. generation/provenance.json records the CVFPU revision;
+generation/source.patch and generation/cvfpu.patch capture the existing
+Slang-compatible source rewrites used for generation. Apply those patches to
+the matching external checkout (the second patch inside core/cvfpu).
+The suite's verilog/ directory contains only the tag_cmp cone, not this core.
 
-export CVA6_REPO_DIR=$(pwd)/YOU_SELECT/cva6
-export HPDCACHE_DIR=${CVA6_REPO_DIR}/core/cache_subsystem/hpdcache/
-export TARGET_CFG=cv64a6_imafdc_sv39_wb
+Generate with a LiveHD build containing the September 19 simulation/translation
+repairs:
 
-The following files need to be used to replace Verilog contructs from CVA6 that mix loops + assigns + bitfield which is not supported by inou/slang:
-        verilog/fpnew_cast_multi.sv
-        verilog/fpnew_divsqrt_th_64_multi.sv
-        verilog/fpnew_fma.sv
-        verilog/fpnew_noncomp.sv
-        verilog/fpnew_opgroup_block.sv
-        verilog/fpnew_opgroup_multifmt_slice.sv
-        verilog/lzc.sv
-        verilog/rr_arb_tree.sv
+  export CVA6_REPO_DIR=/absolute/path/to/cva6
+  export HPDCACHE_DIR=$CVA6_REPO_DIR/core/cache_subsystem/hpdcache
+  export TARGET_CFG=cv64a6_imafdc_sv39_wb
+  lhd compile --top cva6 --emit-dir pyrope:tmp_cva6 --workdir tmp_generate -- \
+    --allow-use-before-declare -DSYNTHESIS \
+    --translate-off-format=pragma,translate_off,translate_on \
+    "$CVA6_REPO_DIR/core/include/${TARGET_CFG}_config_pkg.sv" \
+    -F "$CVA6_REPO_DIR/core/Flist.cva6"
 
-lhd compile --top cva6 --emit-dir pyrope:tmp_cva6 -- --allow-use-before-declare $CVA6_REPO_DIR/core/include/cv64a6_imafdc_sv39_wb_config_pkg.sv -F$CVA6_REPO_DIR/core/Flist.cva6
+Refresh tag_cmp_wrap separately from verilog/filelist.f (NR_PORTS=5), retaining
+the full core's tag_cmp implementation. Refresh tests/comment1 and tests/bug1
+against the new tag_cmp; the bug ignores way zero's valid bit.
 
-The last pyrope regeneration used "Date:   Fri Aug 14 10:56:27 2026 +0100" CVA6 checkout
+Run the independent whole-core Verilator twin, both LHD input paths, and a
+one-module semantic incremental edit against a cache-disabled oracle:
 
-The verilog directory, only has a small section, so not enough to reproduce the full CVA6
+  python3 cva6/check_sim.py --lhd /absolute/path/to/lhd \
+    --rtl "$CVA6_REPO_DIR" --suite . --work /tmp/cva6-comparison
+
+Use a new --work directory. Requires Verilator, make, and a C++ compiler.
+The runner records commands, wall times, LHD phase reports and the binary hash
+in statistics.json. Setup, host compilation, and three execution samples are
+separate; tuning and VCD are disabled. It mutates only a copied source tree.
+The existing architectural assertions stay enabled.
+
+At 50,000 cycles all three paths produce x2=100, x3=-100, marker=1445,
+43,443 retirements, zero exceptions, and completion at cycle 738. This is
+program simulation evidence, not a whole-core formal equivalence proof.
+Focused RTL-to-Pyrope regressions and individual core modules prove with CVC5;
+whole-core LEC remains limited by unsupported FPU proof structure/timeouts.
