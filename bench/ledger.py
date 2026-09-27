@@ -187,7 +187,7 @@ STRUCTURAL = {
 # the remaining identity fields that must match before two numeric cells may be
 # compared.  The optional diff hashes are included when either row carries one.
 IDENTITY_KEYS = ("lhd_git_sha", "lhdsuite_git_sha", "pdk_version")
-OPTIONAL_IDENTITY_KEYS = ("lhd_diff_sha256", "lhdsuite_diff_sha256")
+OPTIONAL_IDENTITY_KEYS = ("lhd_diff_sha256", "lhdsuite_diff_sha256", "lhd_binary_sha256")
 
 
 def same_build_identity(a, b):
@@ -1732,6 +1732,8 @@ def render_flat_host(out, hrows, base_id, cur_id, eps, synth):
 STYLE = """
 body{font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;margin:2rem;max-width:82rem}
 table{border-collapse:collapse;margin:1rem 0;width:100%}
+@media(max-width:1100px){table{display:block;overflow-x:auto}}
+td:last-child{overflow-wrap:anywhere}
 th,td{border:1px solid #bbb;padding:.25rem .5rem;text-align:right}
 th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
 th{background:#eee}
@@ -1841,7 +1843,7 @@ work as <code>full</code> <b>plus the cost of populating the caches</b>. The
 difference is the price of admission for incrementality, charged on every clean
 build.</dd>
 <dt>no-change incremental</dt><dd>&mdash; The <b>identical command again</b> over that
-workdir, after a comment-only touch to the source. Nothing semantic changed, so
+workdir, with identical source or after a comment-only touch. Nothing semantic changed, so
 every content-keyed cache must hit. This is the number the loop exists to
 move.</dd>
 <dt>one-file edit</dt><dd>&mdash; One small semantic edit, built over the same
@@ -2039,8 +2041,19 @@ def glance_rows(hrows, cid):
         # is appended under the same id, preserve the original cell instead of
         # silently changing the published result; intentional reruns need a
         # new config_id.
-        data.setdefault((r.get("target"), r.get("phase")), {}).setdefault(
-            r["mode"], r)
+        modes = data.setdefault((r.get("target"), r.get("phase")), {})
+        original = modes.setdefault(r["mode"], r)
+        # Progress is a status snapshot, never a replacement for measured cells.
+        if r.get("phase") == "synth_progress":
+            modes[r["mode"]] = r
+        # Explicit diagnosis corrections may clarify a scenario's signal exit,
+        # but cannot replace timings, pass status, or measured build identity.
+        if (r.get("phase") == "synth_validation" and r.get("correction")
+                and r.get("wall_ms") == original.get("wall_ms")
+                and r.get("passed") == original.get("passed")
+                and same_build_identity(r, original)):
+            modes[r["mode"]] = dict(original, **{
+                k: r[k] for k in ("measurement_status", "scenario_status") if k in r})
     return data
 
 
@@ -2120,7 +2133,7 @@ def timing_cell(cells, mode, metric):
     value = timing_value(cells, mode, metric)
     if not usable(row):
         failed_value = row.get("wall_ms") if metric == "wall" else None
-        text = (ms(failed_value) + " " if is_num(failed_value) else "") + "FAILED"
+        text = (ms(failed_value) + " " if is_num(failed_value) else "") + row.get("measurement_status", "FAILED").upper()
         return sortable_cell(text, cls="worse")
     if not is_num(value):
         return sortable_cell("-", cls="miss")
@@ -2154,6 +2167,128 @@ def geometric_mean(values):
     return math.exp(sum(math.log(v) for v in values) / len(values))
 
 
+def section_execution(out, data):
+    """Independent execution evidence: keep setup/build/run and proof scope apart."""
+    rows = []
+    for (target, phase), modes in sorted(data.items()):
+        if phase not in ("sim_pyrope", "sim_verilog", "sim_verilator"):
+            continue
+        for mode, row in modes.items():
+            if row.get("sim_exec_ms") is not None:
+                rows.append((target, phase, mode, row))
+    if not rows:
+        return
+    out.append("<h2>Simulation: setup, host compilation, and execution</h2>")
+    out.append("<p>Each row uses the stated cycle count. Verilog setup includes RTL import. "
+               "Execution excludes host compilation and tracing. A matching workload is "
+               "simulation evidence, not a whole-design LEC proof. Samples and provenance "
+               "remain in the linked reports; these local timings may include background load.</p>")
+    out.append('<table class="sortable-table"><thead><tr><th>design</th><th>input / simulator</th>'
+               '<th>cycles</th><th>setup (ms)</th><th>host compile (ms)</th><th>execution (ms)</th>'
+               '<th>workload comparison</th><th>evidence</th></tr></thead><tbody>')
+    labels = {"sim_pyrope": "Pyrope / LHD Slop", "sim_verilog": "Verilog / LHD Slop",
+              "sim_verilator": "Verilog / Verilator"}
+    for target, phase, mode, row in rows:
+        values = "".join(sortable_cell(num(row.get(k)), value=row.get(k),
+                                      cls="miss" if row.get(k) is None else "")
+                         for k in ("sim_cycles", "sim_setup_ms", "sim_cc_ms", "sim_exec_ms"))
+        comparison = row.get("comparison_status", "not recorded")
+        link = row.get("evidence_path", "")
+        evidence = '<a href="%s">report</a>' % esc(link) if link else "-"
+        out.append('<tr><td>%s</td><td>%s</td>%s<td class="%s">%s</td><td>%s</td></tr>' %
+                   (esc(target), esc(labels[phase]), values,
+                    "warn" if "mismatch" in comparison.lower() else "",
+                    esc(comparison), evidence))
+    out.append('</tbody></table>')
+
+
+def section_validation(out, data):
+    rows = [(target, modes["full"]) for (target, phase), modes in sorted(data.items())
+            if phase == "validation" and "full" in modes]
+    if not rows:
+        return
+    out.append("<h2>Correctness scope</h2>")
+    out.append('<table><thead><tr><th>design / configuration</th><th>simulation</th>'
+               '<th>incremental versus fresh</th><th>formal scope and limits</th></tr></thead><tbody>')
+    for target, row in rows:
+        out.append('<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' % tuple(
+            esc(str(value)) for value in (target, row.get("simulation_status", "not run"),
+                                          row.get("incremental_status", "not run"),
+                                          row.get("lec_status", "not run"))))
+    out.append('</tbody></table>')
+
+
+def section_measurement_identity(out, data):
+    identities = sorted({(r.get("lhd_binary_sha256", ""), r.get("pdk_version", ""))
+                         for modes in data.values() for r in modes.values()
+                         if r.get("lhd_binary_sha256")})
+    if identities:
+        out.append("<details><summary>Measured binary and PDK identities</summary><ul>")
+        for binary, pdk in identities:
+            out.append("<li>LHD SHA-256: <code>%s</code>; PDK: <code>%s</code></li>" %
+                       (esc(binary), esc(pdk or "not used")))
+        out.append("</ul></details>")
+
+
+def section_synthesis_validation(out, data):
+    scenarios = {target: modes["full"] for (target, phase), modes in data.items()
+                 if phase == "synth_progress" and "full" in modes}
+    scenarios.update({target: modes["full"] for (target, phase), modes in data.items()
+                      if phase == "synth_validation" and "full" in modes})
+    rows = sorted(scenarios.items())
+    if not rows:
+        return
+    out.append("<h2>Synthesis scenario gates</h2>")
+    out.append("<p>Full, pass1, pass2 and pass3 mean caches off, cold, comment-only "
+               "and semantic edit. A gate failure stops subsequent stages; those stages "
+               "remain unmeasured. Running and queued entries are snapshots; completed invocations "
+               "are published independently of their unfinished scenario. Successful mapping alone does not pass these gates. "
+               "Peak tree memory uses max(RSS, physical footprint) per process, summed over "
+               "the whole scenario. Phase timers exclude driver overhead and need not sum to wall time.</p>")
+    out.append("<table><tr><th>design</th><th>finished invocations</th><th>scenario result</th><th>elapsed / time to stop (s)</th><th>peak tree / limit (GiB)</th><th>evidence</th></tr>")
+    for target, row in rows:
+        resource = data.get((target, "synth_resources"), {}).get("full", {})
+        peak, limit = resource.get("peak_tree_bytes"), resource.get("limit_bytes")
+        memory = ("%.3f / %.0f" % (peak / 2**30, limit / 2**30)
+                  if is_num(peak) and is_num(limit) else "-")
+        out.append('<tr><td>%s</td><td>%s</td><td class="%s">%s</td><td>%s</td><td>%s</td><td><a href="%s">log</a></td></tr>' %
+                   (esc(target), esc(row.get("completed_modes", "")),
+                    "" if row.get("passed") else ("warn" if row.get("measurement_status") in ("interrupted", "running", "queued") else "worse"), esc(row.get("scenario_status", "") + (" (as of " + row["observed_at"] + ")" if row.get("observed_at") else "")),
+                    num(row["wall_ms"] / 1000) if is_num(row.get("wall_ms")) else "-",
+                    memory, esc(row.get("evidence_path", ""))))
+    out.append("</table>")
+
+
+def section_synthesis_details(out, data):
+    rows = [(target, modes["full"]) for (target, phase), modes in sorted(data.items())
+            if phase == "synth" and "full" in modes]
+    if not rows:
+        return
+    out.append("<h2>Synthesis: cache-disabled result and resource use</h2>")
+    out.append("<p>Compile, color, ABC and STA are separate phases. The ABC phase includes "
+               "its proof-based preprocessing and graph import. Per-region mapping timers do not cover the whole phase. A completed mapping "
+               "does not prove netlist equivalence. A failed or resource-stopped run is "
+               "excluded from speedups; missing values are not zero. Area and timing "
+               "are unavailable when synthesis fails or the design contains unmapped divider cones.</p>")
+    out.append('<table class="sortable-table"><thead><tr><th>design</th><th>status</th>'
+               '<th>compile (ms)</th><th>color (ms)</th><th>ABC (ms)</th><th>STA (ms)</th>'
+               '<th>gates</th><th>area (um²)</th><th>STA delay (ns)</th><th>peak RSS (MiB)</th>'
+               '<th>details</th></tr></thead><tbody>')
+    for target, row in rows:
+        cells = []
+        invalid = bool(row.get("div_blackbox")) or not usable(row)
+        for k in ("compile_ms", "color_ms", "abc_ms", "sta_ms", "gates", "area", "sta_delay", "synth_peak_rss_kb"):
+            value = row.get(k)
+            if invalid and k in ("gates", "area", "sta_delay"): value = None
+            if k == "synth_peak_rss_kb" and is_num(value): value /= 1024
+            cells.append(sortable_cell(num(value), value=value, cls="miss" if value is None else ""))
+        status = row.get("measurement_status") or ("completed" if usable(row) else "failed")
+        details = row.get("failure_reason", "") or row.get("measurement_note", "")
+        out.append('<tr><td>%s</td><td>%s</td>%s<td>%s</td></tr>' %
+                   (esc(target), esc(status), "".join(cells), esc(details)))
+    out.append('</tbody></table>')
+
+
 def section_glance(out, data, show_host=None, previous=None, previous_label=""):
     """The incremental dashboard: one sortable table per requested flow.
 
@@ -2166,6 +2301,11 @@ def section_glance(out, data, show_host=None, previous=None, previous_label=""):
     if show_host:
         out.append("<h3>host: %s</h3>" % esc(show_host))
 
+    section_measurement_identity(out, data)
+    section_validation(out, data)
+    section_synthesis_validation(out, data)
+    section_execution(out, data)
+    section_synthesis_details(out, data)
     for title, phases, metric, changed_metric in SUMMARY_TABLES:
         keys = sorted((key for key in data if key[1] in phases),
                       key=lambda key: (key[0], phase_key(key[1])))
@@ -2179,7 +2319,7 @@ def section_glance(out, data, show_host=None, previous=None, previous_label=""):
                    "<th>design</th>" + ("<th>backend</th>" if show_backend else "") +
                    "<th>full<br><small>caches off (ms)</small></th>"
                    "<th>cold incremental<br><small>fresh cache (ms)</small></th>"
-                   "<th>no-change incremental<br><small>comment edit (ms)</small></th>"
+                   "<th>no-change incremental<br><small>unchanged / comment edit (ms)</small></th>"
                    "<th>no-change speedup<br><small>full / no-change</small></th>"
                    "<th>one-file edit<br><small>warm cache (ms)</small></th>"
                    "<th>edit speedup<br><small>full / edit</small></th>"
@@ -2317,17 +2457,24 @@ def cmd_render(args, root: Path):
            report_rule, len(by_host)),
     ]
     if args.flow == "incr":
-        out.append("<p>Synthesis resource policy: one shared color sizing for "
-                   "every design; ABC uses soft per-color guards of "
-                   "<b>16 GiB peak RSS</b> and <b>15 minutes</b>. "
-                   "<code>abc_peak_rss_kb</code> is the maximum conservative per-color RSS growth before STA; "
-                   "<code>synth_peak_rss_kb</code> is the conservative whole-process "
-                   "diagnostic and is <b>not</b> a benchmark rejection threshold. "
-                   "Whole-process RSS may exceed 16 GiB during STA; only an actual "
-                   "tool failure marks the run failed. Incremental simulation stops "
-                   "after compiling and linking <code>drv.bin</code>; it does not run "
-                   "the testbench. Its wall clock is setup/codegen plus the generated "
-                   "host build.</p>")
+        out.append("<p>Measurements are grouped by configuration and host. "
+                   "Incremental simulation timing is setup/codegen plus host compilation; "
+                   "the generated drivers are also executed for correctness, outside that "
+                   "build timer. Execution timings are reported separately below. Missing "
+                   "cells have no completed measurement; earlier results are shown only under their "
+                   "original configuration.</p>")
+        refresh_ids = {"validated-eight-opt-20260919", "synthesis-completion-opt-20260919",
+                       "simulation-validation-opt-20260919"}
+        if refresh_ids.intersection(requested_currents):
+            out.append("<p>The September 19–20 Pyrope synthesis sweep serializes complete process trees "
+                       "with default cones coloring (30,000 predicted-AIG soft limit), one "
+                       "synthesis worker, 16-GiB per-color and 15-minute per-color budgets, "
+                       "and a 48-GiB process-tree cap with 16 GiB reserved for the system. "
+                       "The requested color.max_ge=8000 is inactive in cones mode. Historical "
+                       "configurations retain their recorded settings. See the "
+                       '<a href="../repros/opt_loop_refresh_20260919/README.md">method and provenance</a> '
+                       'and <a href="../repros/opt_loop_refresh_20260919/synthesis_observations.md">'
+                       "synthesis diagnoses</a>.</p>")
 
     # THE HEADLINE, before any methodology. One block per host, because a
     # cross-host summary is exactly the comparison I11 forbids; with a single

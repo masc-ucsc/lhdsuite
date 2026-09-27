@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Reproduce the whole-core comparison using the external, patched CVA6 checkout."""
+"""Generate fresh Pyrope and compare the whole core with the external CVA6 RTL."""
 import argparse
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import time
 
@@ -47,7 +46,10 @@ def run(cmd, name, allow_failure=False):
 
 flags = ['--allow-use-before-declare', '-DSYNTHESIS', '--translate-off-format=pragma,translate_off,translate_on', a.rtl/'core/include/cv64a6_imafdc_sv39_wb_config_pkg.sv', '-F', a.rtl/'core/Flist.cva6']
 run([a.lhd, 'compile', '--top', 'cva6', '--emit-dir', f'lg:{a.work}/lg', '--workdir', a.work/'import', '--set', 'lhd.incremental=false', '--', *flags], 'rtl-import')
-shutil.copytree(a.suite/'cva6/pyrope', a.work/'tree')
+# Match the documented source-generation flow (before graph optimization).
+run([a.lhd, 'compile', '--top', 'cva6', '--emit-dir', f'pyrope:{a.work}/tree', '--workdir', a.work/'generate', '--set', 'lhd.incremental=false', '--', *flags], 'pyrope-generate')
+# Use the writer output directly: no checked-in Pyrope or post-generation fixes.
+assert (a.work/'tree/cva6.prp').is_file(), 'generation did not emit the whole-core top'
 tb = a.suite/'cva6/sim/cva6_prog_tb.prp'
 common = ['--set', 'sim.tune.profile=off', '--set', 'sim.vcd=false', '--arg', f'cycles={a.cycles}']
 

@@ -87,16 +87,16 @@ ABC_ARGS+=(--set "abc.memory_budget_mb=${BENCH_ABC_MEMORY_BUDGET_MB:-16384}")
 ABC_ARGS+=(--set "abc.time_budget_ms=${BENCH_ABC_TIME_BUDGET_MS:-900000}")
 ABC_ARGS+=(--set "abc.verbose=${BENCH_ABC_VERBOSE:-true}")
 COLOR_ARGS=()
-[ -z "${BENCH_COLOR_CTRL_CONES:-}" ] || COLOR_ARGS+=(--set "color.ctrl_cones=$BENCH_COLOR_CTRL_CONES")
-[ -z "${BENCH_COLOR_SYNTH_ALG:-}" ] || COLOR_ARGS+=(--set "color.synth_alg=$BENCH_COLOR_SYNTH_ALG")
-[ -z "${BENCH_COLOR_MAX_GE:-}" ] || COLOR_ARGS+=(--set "color.max_ge=$BENCH_COLOR_MAX_GE")
+[ -z "${BENCH_COLOR_CTRL_CONES:-}" ] || COLOR_ARGS+=(--set "color.synth.ctrl_cones=$BENCH_COLOR_CTRL_CONES")
+[ -z "${BENCH_COLOR_SYNTH_ALG:-}" ] || COLOR_ARGS+=(--set "color.synth.mode=$BENCH_COLOR_SYNTH_ALG")
+[ -z "${BENCH_COLOR_MAX_GE:-}" ] || COLOR_ARGS+=(--set "color.synth.max_ge=$BENCH_COLOR_MAX_GE")
 # cones mode's clustering threshold, in PREDICTED generic-AIG size. A different
 # unit from max_ge (which is synthesis GE and shapes the synth/pipe size
 # window), so both can be set in one run without one overriding the other.
-[ -z "${BENCH_COLOR_MAX_GATE:-}" ] || COLOR_ARGS+=(--set "color.max_gate=$BENCH_COLOR_MAX_GATE")
+[ -z "${BENCH_COLOR_MAX_GATE:-}" ] || COLOR_ARGS+=(--set "color.synth.max_gate=$BENCH_COLOR_MAX_GATE")
 # cones phase 2: false|pair|all -- merge a register's color FORWARD across its Q
 # after the backward overlap merge has taken its share of the budget.
-[ -z "${BENCH_COLOR_FORWARD:-}" ] || COLOR_ARGS+=(--set "color.forward=$BENCH_COLOR_FORWARD")
+[ -z "${BENCH_COLOR_FORWARD:-}" ] || COLOR_ARGS+=(--set "color.synth.forward=$BENCH_COLOR_FORWARD")
 # BENCH_PYROPE_SETS="k=v k=v": `--set` flags for every Pyrope compile in this
 # benchmark configuration — e.g. `compile.unroll=true` to
 # measure a loop benchmark with its source loops unrolled (the default keeps
@@ -282,7 +282,7 @@ EOF
     metric "${1}_max_region_ms" "$q_max_region_ms" ms
     [ "$q_max_region_ms" -le "${BENCH_ABC_TIME_BUDGET_MS:-900000}" ] || {
       step_failed "${1}_abc" \
-        "$1: one ABC color took ${q_max_region_ms}ms (soft limit ${BENCH_ABC_TIME_BUDGET_MS:-900000}ms); reduce color.max_ge"
+        "$1: one ABC color took ${q_max_region_ms}ms (soft limit ${BENCH_ABC_TIME_BUDGET_MS:-900000}ms); reduce color.synth.max_ge"
       exit 1
     }
   }

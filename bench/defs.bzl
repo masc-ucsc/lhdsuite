@@ -228,8 +228,8 @@ CORES = {
         # architectural leaf while synth/sim exercise the complete hierarchy.
         "unit": "alu",
         "generated_variants": True,
-        "variant_bug_find": "      result_o = adder_result__w1",
-        "variant_bug_replace": "      result_o = operand_a__w1 - operand_b__w1",
+        "variant_bug_find": "  const adder_result__w1 = (((operand_a_bitmanip << 1) | 1) + operand_b_neg__w1)#[1..=64]",
+        "variant_bug_replace": "  const adder_result__w1 = operand_a__w1 - operand_b__w1",
         # No separate temporal sidecar yet.
         "seq_unit": "",
         # CVA6 packages reference identifiers across files, so one compilation
