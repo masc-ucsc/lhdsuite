@@ -1,0 +1,244 @@
+diff --git a/core/csr_regfile.sv b/core/csr_regfile.sv
+index fe429d050..83fc3d998 100644
+--- a/core/csr_regfile.sv
++++ b/core/csr_regfile.sv
+@@ -1167,7 +1167,8 @@ module csr_regfile
+         riscv::CSR_FCSR: begin
+           if (CVA6Cfg.FpPresent && !(mstatus_q.fs == riscv::Off || (CVA6Cfg.RVH && v_q && vsstatus_q.fs == riscv::Off))) begin
+             dirty_fp_state_csr = 1'b1;
+-            fcsr_d[7:0] = csr_wdata[7:0];  // ignore writes to reserved space
++            fcsr_d.frm = csr_wdata[7:5];  // ignore writes to reserved space
++            fcsr_d.fflags = csr_wdata[4:0];  // ignore writes to reserved space
+             // this instruction has side-effects
+             flush_o = 1'b1;
+           end else begin
+diff --git a/core/cvfpu b/core/cvfpu
+--- a/core/cvfpu
++++ b/core/cvfpu
+@@ -1 +1 @@
+-Subproject commit 3eb6afeab2cb33f7d8689222955d0171aeb3a801
++Subproject commit 3eb6afeab2cb33f7d8689222955d0171aeb3a801-dirty
+diff --git a/vendor/pulp-platform/common_cells/src/lzc.sv b/vendor/pulp-platform/common_cells/src/lzc.sv
+index 424eb2ef6..cee328b1b 100644
+--- a/vendor/pulp-platform/common_cells/src/lzc.sv
++++ b/vendor/pulp-platform/common_cells/src/lzc.sv
+@@ -55,10 +55,6 @@ module lzc #(
+     end
+     // pragma translate_on
+ 
+-    logic [WIDTH-1:0][NumLevels-1:0] index_lut;
+-    logic [2**NumLevels-1:0] sel_nodes;
+-    logic [2**NumLevels-1:0][NumLevels-1:0] index_nodes;
+-
+     logic [WIDTH-1:0] in_tmp;
+ 
+     // reverse vector if required
+@@ -68,45 +64,43 @@ module lzc #(
+       end
+     end
+ 
+-    for (genvar j = 0; unsigned'(j) < WIDTH; j++) begin : g_index_lut
+-      assign index_lut[j] = (NumLevels)'(unsigned'(j));
+-    end
++    // The reduction tree this replaces was written as continuous assigns over
++    // ONE `sel_nodes` / `index_nodes` array, where level L reads the slices
++    // level L+1 writes. Continuous assigns are order-free, so that is perfectly
++    // legal Verilog -- but a front end that linearizes them into ordered
++    // statements has to pick an order, and the net is both read and written by
++    // the same drivers, so there is no per-net ordering to pick. LiveHD's
++    // --reader slang silently emitted the ROOT first and folded the whole tree
++    // to X; it now refuses with `unsupported-driver-order`. (Reversing the
++    // generate loop does not help: the sort reorders the root forward again on
++    // its `sel_nodes` edges.)
++    //
++    // With no bit set, the tree took every `else` branch down to its RIGHTMOST
++    // leaf, so the answer is that leaf's index_lut entry -- which is WIDTH-1
++    // only when WIDTH is a power of two. For WIDTH=5 the rightmost leaf is out
++    // of range and the tree answers 0. Derive it rather than assume it.
++    localparam int unsigned RightLeaf = 2 ** NumLevels - 2;         // its low input index
++    localparam int unsigned EmptyCnt  = (RightLeaf < WIDTH - 1)  ? RightLeaf + 1  // g_reduce -> lut[2k+1]
++                                      : (RightLeaf == WIDTH - 1) ? RightLeaf      // g_base   -> lut[2k]
++                                                                 : 0;             // g_out_of_range -> '0
+ 
+-    for (genvar level = 0; unsigned'(level) < NumLevels; level++) begin : g_levels
+-      if (unsigned'(level) == NumLevels - 1) begin : g_last_level
+-        for (genvar k = 0; k < 2 ** level; k++) begin : g_level
+-          // if two successive indices are still in the vector...
+-          if (unsigned'(k) * 2 < WIDTH - 1) begin : g_reduce
+-            assign sel_nodes[2 ** level - 1 + k] = in_tmp[k * 2] | in_tmp[k * 2 + 1];
+-            assign index_nodes[2 ** level - 1 + k] = (in_tmp[k * 2] == 1'b1)
+-              ? index_lut[k * 2] :
+-                index_lut[k * 2 + 1];
+-          end
+-          // if only the first index is still in the vector...
+-          if (unsigned'(k) * 2 == WIDTH - 1) begin : g_base
+-            assign sel_nodes[2 ** level - 1 + k] = in_tmp[k * 2];
+-            assign index_nodes[2 ** level - 1 + k] = index_lut[k * 2];
+-          end
+-          // if index is out of range
+-          if (unsigned'(k) * 2 > WIDTH - 1) begin : g_out_of_range
+-            assign sel_nodes[2 ** level - 1 + k] = 1'b0;
+-            assign index_nodes[2 ** level - 1 + k] = '0;
+-          end
+-        end
+-      end else begin : g_not_last_level
+-        for (genvar l = 0; l < 2 ** level; l++) begin : g_level
+-          assign sel_nodes[2 ** level - 1 + l] =
+-              sel_nodes[2 ** (level + 1) - 1 + l * 2] | sel_nodes[2 ** (level + 1) - 1 + l * 2 + 1];
+-          assign index_nodes[2 ** level - 1 + l] = (sel_nodes[2 ** (level + 1) - 1 + l * 2] == 1'b1)
+-            ? index_nodes[2 ** (level + 1) - 1 + l * 2] :
+-              index_nodes[2 ** (level + 1) - 1 + l * 2 + 1];
++    // One procedural block instead. It reads only `in_tmp` and writes only the
++    // outputs, so nothing is both read and written, and a process orders its
++    // own statements by definition. Last-write-wins over a descending scan
++    // leaves `cnt_o` at the LOWEST set index of `in_tmp`, which is the same
++    // function the tree computed; `EmptyCnt` above reproduces its all-zero
++    // answer. LEC-proven against the original tree for WIDTH 2,3,5,6,7,8,9,12,16
++    // x MODE 0,1.
++    always_comb begin : lzc_scan
++      cnt_o   = CNT_WIDTH'(EmptyCnt);
++      empty_o = ~(|in_tmp);
++      for (int unsigned i = WIDTH; i > 0; i--) begin
++        if (in_tmp[i-1]) begin
++          cnt_o = CNT_WIDTH'(i - 1);
+         end
+       end
+     end
+ 
+-    assign cnt_o = NumLevels > unsigned'(0) ? index_nodes[0] : {($clog2(WIDTH)) {1'b0}};
+-    assign empty_o = NumLevels > unsigned'(0) ? ~sel_nodes[0] : ~(|in_i);
+-
+   end : gen_lzc
+ 
+ endmodule : lzc
+diff --git a/vendor/pulp-platform/common_cells/src/rr_arb_tree.sv b/vendor/pulp-platform/common_cells/src/rr_arb_tree.sv
+index 90301c822..af2bb1ec8 100644
+--- a/vendor/pulp-platform/common_cells/src/rr_arb_tree.sv
++++ b/vendor/pulp-platform/common_cells/src/rr_arb_tree.sv
+@@ -129,18 +129,27 @@ module rr_arb_tree #(
+     localparam int unsigned NumLevels = unsigned'($clog2(NumIn));
+ 
+     /* verilator lint_off UNOPTFLAT */
+-    idx_t    [2**NumLevels-2:0] index_nodes; // used to propagate the indices
+-    DataType [2**NumLevels-2:0] data_nodes;  // used to propagate the data
+-    logic    [2**NumLevels-2:0] gnt_nodes;   // used to propagate the grant to masters
+-    logic    [2**NumLevels-2:0] req_nodes;   // used to propagate the requests to slave
++    // req/index/data/gnt used to be four module-wide arrays indexed by node.
++    // req/index/data flow child->parent while gnt flows parent->child, so with
++    // ONE array each there is no single generate order that writes every
++    // element before the element that reads it -- and the loop runs root-first,
++    // which is backwards for three of the four. Concurrent assigns make that
++    // legal, but a front end that linearizes them has no per-net order to pick
++    // (LiveHD's --reader slang refuses it: `unsupported-driver-order`).
++    //
++    // Each node now owns its four nets inside gen_level, so every cross-level
++    // reference names a DIFFERENT net and the dependencies are explicit in both
++    // directions. Note all four must move together: making only req/index/data
++    // per-node reorders the tree leaves-first, which then breaks the gnt array
++    // the other way (LEC-refuted for NumIn >= 5).
+     /* lint_off */
+     idx_t                       rr_q;
+     logic [NumIn-1:0]           req_d;
+ 
+     // the final arbitration decision can be taken from the root of the tree
+-    assign req_o        = req_nodes[0];
+-    assign data_o       = data_nodes[0];
+-    assign idx_o        = index_nodes[0];
++    assign req_o        = gen_levels[0].gen_level[0].req;
++    assign data_o       = gen_levels[0].gen_level[0].data;
++    assign idx_o        = gen_levels[0].gen_level[0].index;
+ 
+     if (ExtPrio) begin : gen_ext_rr
+       assign rr_q       = rr_i;
+@@ -249,13 +258,26 @@ module rr_arb_tree #(
+       end
+     end
+ 
+-    assign gnt_nodes[0] = gnt_i;
+ 
+     // arbiter tree
+     for (genvar level = 0; unsigned'(level) < NumLevels; level++) begin : gen_levels
+       for (genvar l = 0; l < 2**level; l++) begin : gen_level
+         // local select signal
+         logic sel;
++        // this node's own request / index / data / grant (see the declarations note)
++        logic    req;
++        idx_t    index;
++        DataType data;
++        logic    gnt;
++        // this node's grant comes from its parent, which granted it iff the
++        // parent's `sel` picked this side. Level 0 is the root: gnt_i itself.
++        if (level == 0) begin : gen_root_gnt
++          assign gnt = gnt_i;
++        end else begin : gen_child_gnt
++          assign gnt = gen_levels[level-1].gen_level[l/2].gnt &
++                       ((l % 2) ? gen_levels[level-1].gen_level[l/2].sel
++                                : ~gen_levels[level-1].gen_level[l/2].sel);
++        end
+         // index calcs
+         localparam int unsigned Idx0 = 2**level-1+l;// current node
+         localparam int unsigned Idx1 = 2**(level+1)-1+l*2;
+@@ -264,44 +286,43 @@ module rr_arb_tree #(
+         if (unsigned'(level) == NumLevels-1) begin : gen_first_level
+           // if two successive indices are still in the vector...
+           if (unsigned'(l) * 2 < NumIn-1) begin : gen_reduce
+-            assign req_nodes[Idx0]   = req_d[l*2] | req_d[l*2+1];
++            assign req   = req_d[l*2] | req_d[l*2+1];
+ 
+             // arbitration: round robin
+             assign sel =  ~req_d[l*2] | req_d[l*2+1] & rr_q[NumLevels-1-level];
+ 
+-            assign index_nodes[Idx0] = idx_t'(sel);
+-            assign data_nodes[Idx0]  = (sel) ? data_i[l*2+1] : data_i[l*2];
+-            assign gnt_o[l*2]        = gnt_nodes[Idx0] & (AxiVldRdy | req_d[l*2])   & ~sel;
+-            assign gnt_o[l*2+1]      = gnt_nodes[Idx0] & (AxiVldRdy | req_d[l*2+1]) & sel;
++            assign index = idx_t'(sel);
++            assign data  = (sel) ? data_i[l*2+1] : data_i[l*2];
++            assign gnt_o[l*2]        = gnt & (AxiVldRdy | req_d[l*2])   & ~sel;
++            assign gnt_o[l*2+1]      = gnt & (AxiVldRdy | req_d[l*2+1]) & sel;
+           end
+           // if only the first index is still in the vector...
+           if (unsigned'(l) * 2 == NumIn-1) begin : gen_first
+-            assign req_nodes[Idx0]   = req_d[l*2];
+-            assign index_nodes[Idx0] = '0;// always zero in this case
+-            assign data_nodes[Idx0]  = data_i[l*2];
+-            assign gnt_o[l*2]        = gnt_nodes[Idx0] & (AxiVldRdy | req_d[l*2]);
++            assign req   = req_d[l*2];
++            assign index = '0;// always zero in this case
++            assign data  = data_i[l*2];
++            assign gnt_o[l*2]        = gnt & (AxiVldRdy | req_d[l*2]);
+           end
+           // if index is out of range, fill up with zeros (will get pruned)
+           if (unsigned'(l) * 2 > NumIn-1) begin : gen_out_of_range
+-            assign req_nodes[Idx0]   = 1'b0;
+-            assign index_nodes[Idx0] = idx_t'('0);
+-            assign data_nodes[Idx0]  = DataType'('0);
++            assign req   = 1'b0;
++            assign index = idx_t'('0);
++            assign data  = DataType'('0);
+           end
+         //////////////////////////////////////////////////////////////
+         // general case for other levels within the tree
+         end else begin : gen_other_levels
+-          assign req_nodes[Idx0]   = req_nodes[Idx1] | req_nodes[Idx1+1];
++          assign req   = gen_levels[level+1].gen_level[l*2].req | gen_levels[level+1].gen_level[l*2+1].req;
+ 
+           // arbitration: round robin
+-          assign sel =  ~req_nodes[Idx1] | req_nodes[Idx1+1] & rr_q[NumLevels-1-level];
++          assign sel =  ~gen_levels[level+1].gen_level[l*2].req | gen_levels[level+1].gen_level[l*2+1].req & rr_q[NumLevels-1-level];
+ 
+-          assign index_nodes[Idx0] = (sel) ?
+-            idx_t'({1'b1, index_nodes[Idx1+1][NumLevels-unsigned'(level)-2:0]}) :
+-            idx_t'({1'b0, index_nodes[Idx1][NumLevels-unsigned'(level)-2:0]});
++          assign index = (sel) ?
++            idx_t'({1'b1, gen_levels[level+1].gen_level[l*2+1].index[NumLevels-unsigned'(level)-2:0]}) :
++            idx_t'({1'b0, gen_levels[level+1].gen_level[l*2].index[NumLevels-unsigned'(level)-2:0]});
+ 
+-          assign data_nodes[Idx0]  = (sel) ? data_nodes[Idx1+1] : data_nodes[Idx1];
+-          assign gnt_nodes[Idx1]   = gnt_nodes[Idx0] & ~sel;
+-          assign gnt_nodes[Idx1+1] = gnt_nodes[Idx0] & sel;
++          assign data  = (sel) ? gen_levels[level+1].gen_level[l*2+1].data : gen_levels[level+1].gen_level[l*2].data;
++          // the children read this node's `gnt`/`sel` themselves (gen_child_gnt)
+         end
+         //////////////////////////////////////////////////////////////
+       end

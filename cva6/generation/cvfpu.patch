@@ -1,0 +1,375 @@
+diff --git a/src/fpnew_cast_multi.sv b/src/fpnew_cast_multi.sv
+index a04e0e2..b2bab9d 100644
+--- a/src/fpnew_cast_multi.sv
++++ b/src/fpnew_cast_multi.sv
+@@ -151,7 +151,9 @@ module fpnew_cast_multi #(
+     // Determine the ready signal of the current stage - advance the pipeline:
+     // 1. if the next stage is ready for our data
+     // 2. if the next stage only holds a bubble (not valid) -> we can pop it
+-    assign inp_pipe_ready[i] = inp_pipe_ready[i+1] | ~inp_pipe_valid_q[i+1];
++    // (computed in the `inp_pipe_ready_chain` process below: element i reads
++    // element i+1, which a LATER iteration produced, so as concurrent
++    // assigns there is no order a linearizing front end can follow.)
+     // Valid: enabled by ready signal, synchronous clear with the flush signal
+     `FFLARNC(inp_pipe_valid_q[i+1], inp_pipe_valid_q[i], inp_pipe_ready[i], flush_i, 1'b0, clk_i, rst_ni)
+     // Enable register if pipleine ready and a valid data item is present
+@@ -367,7 +369,15 @@ module fpnew_cast_multi #(
+   assign mid_pipe_aux_q[0]        = inp_pipe_aux_q[NUM_INP_REGS];
+   assign mid_pipe_valid_q[0]      = inp_pipe_valid_q[NUM_INP_REGS];
+   // Input stage: Propagate pipeline ready signal to input pipe
+-  assign inp_pipe_ready[NUM_INP_REGS] = mid_pipe_ready[0];
++  // The whole inp_pipe_ready chain as ONE process: a process orders its own
++  // statements, so the descending scan writes each element before the
++  // one that reads it -- the same fixpoint, in a followable order.
++  always_comb begin : inp_pipe_ready_chain
++    inp_pipe_ready[NUM_INP_REGS] = mid_pipe_ready[0];
++    for (int unsigned i = NUM_INP_REGS; i > 0; i--) begin
++      inp_pipe_ready[i-1] = inp_pipe_ready[i] | ~inp_pipe_valid_q[i];
++    end
++  end
+ 
+   // Generate the register stages
+   for (genvar i = 0; i < NUM_MID_REGS; i++) begin : gen_inside_pipeline
+@@ -376,7 +386,9 @@ module fpnew_cast_multi #(
+     // Determine the ready signal of the current stage - advance the pipeline:
+     // 1. if the next stage is ready for our data
+     // 2. if the next stage only holds a bubble (not valid) -> we can pop it
+-    assign mid_pipe_ready[i] = mid_pipe_ready[i+1] | ~mid_pipe_valid_q[i+1];
++    // (computed in the `mid_pipe_ready_chain` process below: element i reads
++    // element i+1, which a LATER iteration produced, so as concurrent
++    // assigns there is no order a linearizing front end can follow.)
+     // Valid: enabled by ready signal, synchronous clear with the flush signal
+     `FFLARNC(mid_pipe_valid_q[i+1], mid_pipe_valid_q[i], mid_pipe_ready[i], flush_i, 1'b0, clk_i, rst_ni)
+     // Enable register if pipleine ready and a valid data item is present
+@@ -802,7 +814,15 @@ module fpnew_cast_multi #(
+   assign out_pipe_aux_q[0]     = mid_pipe_aux_q[NUM_MID_REGS];
+   assign out_pipe_valid_q[0]   = mid_pipe_valid_q[NUM_MID_REGS];
+   // Input stage: Propagate pipeline ready signal to inside pipe
+-  assign mid_pipe_ready[NUM_MID_REGS] = out_pipe_ready[0];
++  // The whole mid_pipe_ready chain as ONE process: a process orders its own
++  // statements, so the descending scan writes each element before the
++  // one that reads it -- the same fixpoint, in a followable order.
++  always_comb begin : mid_pipe_ready_chain
++    mid_pipe_ready[NUM_MID_REGS] = out_pipe_ready[0];
++    for (int unsigned i = NUM_MID_REGS; i > 0; i--) begin
++      mid_pipe_ready[i-1] = mid_pipe_ready[i] | ~mid_pipe_valid_q[i];
++    end
++  end
+   // Generate the register stages
+   for (genvar i = 0; i < NUM_OUT_REGS; i++) begin : gen_output_pipeline
+     // Internal register enable for this stage
+@@ -810,7 +830,9 @@ module fpnew_cast_multi #(
+     // Determine the ready signal of the current stage - advance the pipeline:
+     // 1. if the next stage is ready for our data
+     // 2. if the next stage only holds a bubble (not valid) -> we can pop it
+-    assign out_pipe_ready[i] = out_pipe_ready[i+1] | ~out_pipe_valid_q[i+1];
++    // (computed in the `out_pipe_ready_chain` process below: element i reads
++    // element i+1, which a LATER iteration produced, so as concurrent
++    // assigns there is no order a linearizing front end can follow.)
+     // Valid: enabled by ready signal, synchronous clear with the flush signal
+     `FFLARNC(out_pipe_valid_q[i+1], out_pipe_valid_q[i], out_pipe_ready[i], flush_i, 1'b0, clk_i, rst_ni)
+     // Enable register if pipleine ready and a valid data item is present
+@@ -824,7 +846,15 @@ module fpnew_cast_multi #(
+     `FFL(out_pipe_aux_q[i+1],     out_pipe_aux_q[i],     reg_ena, AuxType'('0))
+   end
+   // Output stage: Ready travels backwards from output side, driven by downstream circuitry
+-  assign out_pipe_ready[NUM_OUT_REGS] = out_ready_i;
++  // The whole out_pipe_ready chain as ONE process: a process orders its own
++  // statements, so the descending scan writes each element before the
++  // one that reads it -- the same fixpoint, in a followable order.
++  always_comb begin : out_pipe_ready_chain
++    out_pipe_ready[NUM_OUT_REGS] = out_ready_i;
++    for (int unsigned i = NUM_OUT_REGS; i > 0; i--) begin
++      out_pipe_ready[i-1] = out_pipe_ready[i] | ~out_pipe_valid_q[i];
++    end
++  end
+   // Output stage: assign module outputs
+   assign result_o        = out_pipe_result_q[NUM_OUT_REGS];
+   assign status_o        = out_pipe_status_q[NUM_OUT_REGS];
+diff --git a/src/fpnew_divsqrt_th_64_multi.sv b/src/fpnew_divsqrt_th_64_multi.sv
+index 170d928..aa17339 100644
+--- a/src/fpnew_divsqrt_th_64_multi.sv
++++ b/src/fpnew_divsqrt_th_64_multi.sv
+@@ -124,7 +124,9 @@ module fpnew_divsqrt_th_64_multi #(
+     // Determine the ready signal of the current stage - advance the pipeline:
+     // 1. if the next stage is ready for our data
+     // 2. if the next stage only holds a bubble (not valid) -> we can pop it
+-    assign inp_pipe_ready[i] = inp_pipe_ready[i+1] | ~inp_pipe_valid_q[i+1];
++    // (computed in the `inp_pipe_ready_chain` process below: element i reads
++    // element i+1, which a LATER iteration produced, so as concurrent
++    // assigns there is no order a linearizing front end can follow.)
+     // Valid: enabled by ready signal, synchronous clear with the flush signal
+     `FFLARNC(inp_pipe_valid_q[i+1], inp_pipe_valid_q[i], inp_pipe_ready[i], flush_i, 1'b0, clk_i, rst_ni)
+     // Enable register if pipleine ready and a valid data item is present
+@@ -242,7 +244,15 @@ module fpnew_divsqrt_th_64_multi #(
+   // Bring the FSM-generated ready outside the unit, to synchronize it with the other lanes
+   assign divsqrt_ready_o = in_ready;
+   // Upstream ready comes from sanitization FSM, and it is synched among all the lanes
+-  assign inp_pipe_ready[NUM_INP_REGS] = result_vec_op_q ? simd_synch_rdy_i : in_ready;
++  // The whole inp_pipe_ready chain as ONE process: a process orders its own
++  // statements, so the descending scan writes each element before the
++  // one that reads it -- the same fixpoint, in a followable order.
++  always_comb begin : inp_pipe_ready_chain
++    inp_pipe_ready[NUM_INP_REGS] = result_vec_op_q ? simd_synch_rdy_i : in_ready;
++    for (int unsigned i = NUM_INP_REGS; i > 0; i--) begin
++      inp_pipe_ready[i-1] = inp_pipe_ready[i] | ~inp_pipe_valid_q[i];
++    end
++  end
+ 
+   // FSM to safely apply and receive data from DIVSQRT unit
+   always_comb begin : flag_fsm
+@@ -420,7 +430,9 @@ module fpnew_divsqrt_th_64_multi #(
+     // Determine the ready signal of the current stage - advance the pipeline:
+     // 1. if the next stage is ready for our data
+     // 2. if the next stage only holds a bubble (not valid) -> we can pop it
+-    assign out_pipe_ready[i] = out_pipe_ready[i+1] | ~out_pipe_valid_q[i+1];
++    // (computed in the `out_pipe_ready_chain` process below: element i reads
++    // element i+1, which a LATER iteration produced, so as concurrent
++    // assigns there is no order a linearizing front end can follow.)
+     // Valid: enabled by ready signal, synchronous clear with the flush signal
+     `FFLARNC(out_pipe_valid_q[i+1], out_pipe_valid_q[i], out_pipe_ready[i], flush_i, 1'b0, clk_i, rst_ni)
+     // Enable register if pipleine ready and a valid data item is present
+@@ -433,7 +445,15 @@ module fpnew_divsqrt_th_64_multi #(
+     `FFL(out_pipe_aux_q[i+1],    out_pipe_aux_q[i],    reg_ena, AuxType'('0))
+   end
+   // Output stage: Ready travels backwards from output side, driven by downstream circuitry
+-  assign out_pipe_ready[NUM_OUT_REGS] = out_ready_i;
++  // The whole out_pipe_ready chain as ONE process: a process orders its own
++  // statements, so the descending scan writes each element before the
++  // one that reads it -- the same fixpoint, in a followable order.
++  always_comb begin : out_pipe_ready_chain
++    out_pipe_ready[NUM_OUT_REGS] = out_ready_i;
++    for (int unsigned i = NUM_OUT_REGS; i > 0; i--) begin
++      out_pipe_ready[i-1] = out_pipe_ready[i] | ~out_pipe_valid_q[i];
++    end
++  end
+   // Output stage: assign module outputs
+   assign result_o        = out_pipe_result_q[NUM_OUT_REGS];
+   assign status_o        = out_pipe_status_q[NUM_OUT_REGS];
+diff --git a/src/fpnew_fma.sv b/src/fpnew_fma.sv
+index d93d6e3..32301aa 100644
+--- a/src/fpnew_fma.sv
++++ b/src/fpnew_fma.sv
+@@ -136,7 +136,9 @@ module fpnew_fma #(
+     // Determine the ready signal of the current stage - advance the pipeline:
+     // 1. if the next stage is ready for our data
+     // 2. if the next stage only holds a bubble (not valid) -> we can pop it
+-    assign inp_pipe_ready[i] = inp_pipe_ready[i+1] | ~inp_pipe_valid_q[i+1];
++    // (computed in the `inp_pipe_ready_chain` process below: element i reads
++    // element i+1, which a LATER iteration produced, so as concurrent
++    // assigns there is no order a linearizing front end can follow.)
+     // Valid: enabled by ready signal, synchronous clear with the flush signal
+     `FFLARNC(inp_pipe_valid_q[i+1], inp_pipe_valid_q[i], inp_pipe_ready[i], flush_i, 1'b0, clk_i, rst_ni)
+     // Enable register if pipleine ready and a valid data item is present
+@@ -448,7 +450,15 @@ module fpnew_fma #(
+   assign mid_pipe_aux_q[0]         = inp_pipe_aux_q[NUM_INP_REGS];
+   assign mid_pipe_valid_q[0]       = inp_pipe_valid_q[NUM_INP_REGS];
+   // Input stage: Propagate pipeline ready signal to input pipe
+-  assign inp_pipe_ready[NUM_INP_REGS] = mid_pipe_ready[0];
++  // The whole inp_pipe_ready chain as ONE process: a process orders its own
++  // statements, so the descending scan writes each element before the
++  // one that reads it -- the same fixpoint, in a followable order.
++  always_comb begin : inp_pipe_ready_chain
++    inp_pipe_ready[NUM_INP_REGS] = mid_pipe_ready[0];
++    for (int unsigned i = NUM_INP_REGS; i > 0; i--) begin
++      inp_pipe_ready[i-1] = inp_pipe_ready[i] | ~inp_pipe_valid_q[i];
++    end
++  end
+ 
+   // Generate the register stages
+   for (genvar i = 0; i < NUM_MID_REGS; i++) begin : gen_inside_pipeline
+@@ -457,7 +467,9 @@ module fpnew_fma #(
+     // Determine the ready signal of the current stage - advance the pipeline:
+     // 1. if the next stage is ready for our data
+     // 2. if the next stage only holds a bubble (not valid) -> we can pop it
+-    assign mid_pipe_ready[i] = mid_pipe_ready[i+1] | ~mid_pipe_valid_q[i+1];
++    // (computed in the `mid_pipe_ready_chain` process below: element i reads
++    // element i+1, which a LATER iteration produced, so as concurrent
++    // assigns there is no order a linearizing front end can follow.)
+     // Valid: enabled by ready signal, synchronous clear with the flush signal
+     `FFLARNC(mid_pipe_valid_q[i+1], mid_pipe_valid_q[i], mid_pipe_ready[i], flush_i, 1'b0, clk_i, rst_ni)
+     // Enable register if pipleine ready and a valid data item is present
+@@ -669,7 +681,15 @@ module fpnew_fma #(
+   assign out_pipe_aux_q[0]    = mid_pipe_aux_q[NUM_MID_REGS];
+   assign out_pipe_valid_q[0]  = mid_pipe_valid_q[NUM_MID_REGS];
+   // Input stage: Propagate pipeline ready signal to inside pipe
+-  assign mid_pipe_ready[NUM_MID_REGS] = out_pipe_ready[0];
++  // The whole mid_pipe_ready chain as ONE process: a process orders its own
++  // statements, so the descending scan writes each element before the
++  // one that reads it -- the same fixpoint, in a followable order.
++  always_comb begin : mid_pipe_ready_chain
++    mid_pipe_ready[NUM_MID_REGS] = out_pipe_ready[0];
++    for (int unsigned i = NUM_MID_REGS; i > 0; i--) begin
++      mid_pipe_ready[i-1] = mid_pipe_ready[i] | ~mid_pipe_valid_q[i];
++    end
++  end
+   // Generate the register stages
+   for (genvar i = 0; i < NUM_OUT_REGS; i++) begin : gen_output_pipeline
+     // Internal register enable for this stage
+@@ -677,7 +697,9 @@ module fpnew_fma #(
+     // Determine the ready signal of the current stage - advance the pipeline:
+     // 1. if the next stage is ready for our data
+     // 2. if the next stage only holds a bubble (not valid) -> we can pop it
+-    assign out_pipe_ready[i] = out_pipe_ready[i+1] | ~out_pipe_valid_q[i+1];
++    // (computed in the `out_pipe_ready_chain` process below: element i reads
++    // element i+1, which a LATER iteration produced, so as concurrent
++    // assigns there is no order a linearizing front end can follow.)
+     // Valid: enabled by ready signal, synchronous clear with the flush signal
+     `FFLARNC(out_pipe_valid_q[i+1], out_pipe_valid_q[i], out_pipe_ready[i], flush_i, 1'b0, clk_i, rst_ni)
+     // Enable register if pipleine ready and a valid data item is present
+@@ -690,7 +712,15 @@ module fpnew_fma #(
+     `FFL(out_pipe_aux_q[i+1],    out_pipe_aux_q[i],    reg_ena, AuxType'('0))
+   end
+   // Output stage: Ready travels backwards from output side, driven by downstream circuitry
+-  assign out_pipe_ready[NUM_OUT_REGS] = out_ready_i;
++  // The whole out_pipe_ready chain as ONE process: a process orders its own
++  // statements, so the descending scan writes each element before the
++  // one that reads it -- the same fixpoint, in a followable order.
++  always_comb begin : out_pipe_ready_chain
++    out_pipe_ready[NUM_OUT_REGS] = out_ready_i;
++    for (int unsigned i = NUM_OUT_REGS; i > 0; i--) begin
++      out_pipe_ready[i-1] = out_pipe_ready[i] | ~out_pipe_valid_q[i];
++    end
++  end
+   // Output stage: assign module outputs
+   assign result_o        = out_pipe_result_q[NUM_OUT_REGS];
+   assign status_o        = out_pipe_status_q[NUM_OUT_REGS];
+diff --git a/src/fpnew_noncomp.sv b/src/fpnew_noncomp.sv
+index 3e41a97..a82d0e6 100644
+--- a/src/fpnew_noncomp.sv
++++ b/src/fpnew_noncomp.sv
+@@ -121,7 +121,9 @@ module fpnew_noncomp #(
+     // Determine the ready signal of the current stage - advance the pipeline:
+     // 1. if the next stage is ready for our data
+     // 2. if the next stage only holds a bubble (not valid) -> we can pop it
+-    assign inp_pipe_ready[i] = inp_pipe_ready[i+1] | ~inp_pipe_valid_q[i+1];
++    // (computed in the `inp_pipe_ready_chain` process below: element i reads
++    // element i+1, which a LATER iteration produced, so as concurrent
++    // assigns there is no order a linearizing front end can follow.)
+     // Valid: enabled by ready signal, synchronous clear with the flush signal
+     `FFLARNC(inp_pipe_valid_q[i+1], inp_pipe_valid_q[i], inp_pipe_ready[i], flush_i, 1'b0, clk_i, rst_ni)
+     // Enable register if pipleine ready and a valid data item is present
+@@ -383,7 +385,15 @@ module fpnew_noncomp #(
+   assign out_pipe_aux_q[0]           = inp_pipe_aux_q[NUM_INP_REGS];
+   assign out_pipe_valid_q[0]         = inp_pipe_valid_q[NUM_INP_REGS];
+   // Input stage: Propagate pipeline ready signal to inside pipe
+-  assign inp_pipe_ready[NUM_INP_REGS] = out_pipe_ready[0];
++  // The whole inp_pipe_ready chain as ONE process: a process orders its own
++  // statements, so the descending scan writes each element before the
++  // one that reads it -- the same fixpoint, in a followable order.
++  always_comb begin : inp_pipe_ready_chain
++    inp_pipe_ready[NUM_INP_REGS] = out_pipe_ready[0];
++    for (int unsigned i = NUM_INP_REGS; i > 0; i--) begin
++      inp_pipe_ready[i-1] = inp_pipe_ready[i] | ~inp_pipe_valid_q[i];
++    end
++  end
+   // Generate the register stages
+   for (genvar i = 0; i < NUM_OUT_REGS; i++) begin : gen_output_pipeline
+     // Internal register enable for this stage
+@@ -391,7 +401,9 @@ module fpnew_noncomp #(
+     // Determine the ready signal of the current stage - advance the pipeline:
+     // 1. if the next stage is ready for our data
+     // 2. if the next stage only holds a bubble (not valid) -> we can pop it
+-    assign out_pipe_ready[i] = out_pipe_ready[i+1] | ~out_pipe_valid_q[i+1];
++    // (computed in the `out_pipe_ready_chain` process below: element i reads
++    // element i+1, which a LATER iteration produced, so as concurrent
++    // assigns there is no order a linearizing front end can follow.)
+     // Valid: enabled by ready signal, synchronous clear with the flush signal
+     `FFLARNC(out_pipe_valid_q[i+1], out_pipe_valid_q[i], out_pipe_ready[i], flush_i, 1'b0, clk_i, rst_ni)
+     // Enable register if pipleine ready and a valid data item is present
+@@ -407,7 +419,15 @@ module fpnew_noncomp #(
+     `FFL(out_pipe_aux_q[i+1],           out_pipe_aux_q[i],           reg_ena, AuxType'('0))
+   end
+   // Output stage: Ready travels backwards from output side, driven by downstream circuitry
+-  assign out_pipe_ready[NUM_OUT_REGS] = out_ready_i;
++  // The whole out_pipe_ready chain as ONE process: a process orders its own
++  // statements, so the descending scan writes each element before the
++  // one that reads it -- the same fixpoint, in a followable order.
++  always_comb begin : out_pipe_ready_chain
++    out_pipe_ready[NUM_OUT_REGS] = out_ready_i;
++    for (int unsigned i = NUM_OUT_REGS; i > 0; i--) begin
++      out_pipe_ready[i-1] = out_pipe_ready[i] | ~out_pipe_valid_q[i];
++    end
++  end
+   // Output stage: assign module outputs
+   assign result_o        = out_pipe_result_q[NUM_OUT_REGS];
+   assign status_o        = out_pipe_status_q[NUM_OUT_REGS];
+diff --git a/src/fpnew_opgroup_block.sv b/src/fpnew_opgroup_block.sv
+index e0aee28..356b201 100644
+--- a/src/fpnew_opgroup_block.sv
++++ b/src/fpnew_opgroup_block.sv
+@@ -75,6 +75,15 @@ module fpnew_opgroup_block #(
+ 
+   // Handshake signals for the slices
+   logic [NUM_FORMATS-1:0] fmt_in_ready, fmt_out_valid, fmt_out_ready, fmt_busy;
++  // The merged slice's own ready, on its own net. It used to drive
++  // `fmt_in_ready[FMT]` directly, and the `merged_unused` formats then did
++  // `assign fmt_in_ready[fmt] = fmt_in_ready[int'(FMT)];` -- one of the net's
++  // OWN writers reading it, and reading an element produced further down the
++  // file. Concurrent assigns make that legal, but a front end that linearizes
++  // them has no order to pick (LiveHD's --reader slang refuses it with
++  // `unsupported-driver-order`). Routing both through this net means no writer
++  // of `fmt_in_ready` reads `fmt_in_ready`.
++  logic                   merged_in_ready;
+   logic [NUM_FORMATS-1:0] early_valid;
+   output_t [NUM_FORMATS-1:0] fmt_outputs;
+ 
+@@ -143,7 +152,7 @@ module fpnew_opgroup_block #(
+ 
+       localparam FMT = fpnew_pkg::get_first_enabled_multi(FmtUnitTypes, FpFmtMask);
+       // Ready is split up into formats
+-      assign fmt_in_ready[fmt]  = fmt_in_ready[int'(FMT)];
++      assign fmt_in_ready[fmt]  = merged_in_ready;  // not fmt_in_ready[FMT]: see merged_in_ready
+ 
+       assign fmt_out_valid[fmt] = 1'b0; // don't emit values
+       assign fmt_busy[fmt]      = 1'b0; // never busy
+@@ -204,7 +213,7 @@ module fpnew_opgroup_block #(
+       .tag_i,
+       .simd_mask_i      ( simd_mask_i              ),
+       .in_valid_i       ( in_valid                 ),
+-      .in_ready_o       ( fmt_in_ready[FMT]        ),
++      .in_ready_o       ( merged_in_ready          ),
+       .flush_i,
+       .result_o         ( fmt_outputs[FMT].result  ),
+       .status_o         ( fmt_outputs[FMT].status  ),
+@@ -217,6 +226,8 @@ module fpnew_opgroup_block #(
+       .early_out_valid_o( early_valid[FMT]         )
+     );
+ 
++    assign fmt_in_ready[FMT] = merged_in_ready;
++
+   end
+ 
+   // ------------------
+diff --git a/src/fpnew_opgroup_multifmt_slice.sv b/src/fpnew_opgroup_multifmt_slice.sv
+index 25b6525..d9d27eb 100644
+--- a/src/fpnew_opgroup_multifmt_slice.sv
++++ b/src/fpnew_opgroup_multifmt_slice.sv
+@@ -516,7 +516,9 @@ FP8. Please use the PULP DivSqrt unit when in need of div/sqrt operations on FP8
+       // Determine the ready signal of the current stage - advance the pipeline:
+       // 1. if the next stage is ready for our data
+       // 2. if the next stage only holds a bubble (not valid) -> we can pop it
+-      assign byp_pipe_ready[i] = byp_pipe_ready[i+1] | ~byp_pipe_valid_q[i+1];
++      // (computed in the `byp_pipe_ready_chain` process below: element i reads
++      // element i+1, which a LATER iteration produced, so as concurrent
++      // assigns there is no order a linearizing front end can follow.)
+       // Valid: enabled by ready signal, synchronous clear with the flush signal
+       `FFLARNC(byp_pipe_valid_q[i+1], byp_pipe_valid_q[i], byp_pipe_ready[i], flush_i, 1'b0, clk_i, rst_ni)
+       // Enable register if pipleine ready and a valid data item is present
+@@ -526,7 +528,15 @@ FP8. Please use the PULP DivSqrt unit when in need of div/sqrt operations on FP8
+       `FFL(byp_pipe_aux_q[i+1],     byp_pipe_aux_q[i],     reg_ena, '0)
+     end
+     // Output stage: Ready travels backwards from output side, driven by downstream circuitry
+-    assign byp_pipe_ready[NumPipeRegs] = out_ready_i & result_is_vector;
++    // The whole byp_pipe_ready chain as ONE process: a process orders its own
++    // statements, so the descending scan writes each element before the
++    // one that reads it -- the same fixpoint, in a followable order.
++    always_comb begin : byp_pipe_ready_chain
++      byp_pipe_ready[NumPipeRegs] = out_ready_i & result_is_vector;
++      for (int unsigned i = NumPipeRegs; i > 0; i--) begin
++        byp_pipe_ready[i-1] = byp_pipe_ready[i] | ~byp_pipe_valid_q[i];
++      end
++    end
+     // Output stage: assign module outputs
+     assign conv_target_q = byp_pipe_target_q[NumPipeRegs];
+ 
