@@ -1,114 +1,174 @@
 // PicoRV32, maintained Pyrope translation of ../verilog/picorv32.v (ISC).
 // Defaults reproduce picorv32_top.v, including RVC and the barrel shifter.
-// Feature bindings are per-instance constant generics. Defaults match the suite.
-// Keep nonblocking register reads and old-data register-file ordering intact.
+// Feature bindings are per-instance constant generics; IRQ (ENABLE_IRQ) is not
+// implemented. Keep nonblocking register reads and the old-data register-file
+// ordering intact: registers without a reset keep their unknown power-on value.
 const instruction_decoder = import("decode.instruction_decoder")
 const arbitrate           = import("pcpi.arbitrate")
 const alu_operands        = import("datapath.alu_operands")
 const shift_word          = import("datapath.shift_word")
 
-comptime const CPU_TRAP:u8   = 0x80
-comptime const CPU_FETCH:u8  = 0x40
-comptime const CPU_LD_RS1:u8 = 0x20
-comptime const CPU_LD_RS2:u8 = 0x10
-comptime const CPU_EXEC:u8   = 0x08
-comptime const CPU_SHIFT:u8  = 0x04
-comptime const CPU_STMEM:u8  = 0x02
-comptime const CPU_LDMEM:u8  = 0x01
+// One-hot CPU state encoding (as upstream).
+comptime const CPU_TRAP:U8   = 0x80
+comptime const CPU_FETCH:U8  = 0x40
+comptime const CPU_LD_RS1:U8 = 0x20
+comptime const CPU_LD_RS2:U8 = 0x10
+comptime const CPU_EXEC:U8   = 0x08
+comptime const CPU_SHIFT:U8  = 0x04
+comptime const CPU_STMEM:U8  = 0x02
+comptime const CPU_LDMEM:U8  = 0x01
 
-pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALPORT=true, TWO_CYCLE_ALU=false, TWO_CYCLE_COMPARE=false, LATCHED_MEM_RDATA=false, TWO_STAGE_SHIFT=true, BARREL_SHIFTER=true, COMPRESSED_ISA=true, CATCH_MISALIGN=true, CATCH_ILLINSN=true, ENABLE_PCPI=false, ENABLE_MUL=false, ENABLE_FAST_MUL=false, ENABLE_DIV=false, PROGADDR_RESET=0, STACKADDR=0xffffffff, DEBUG=false>::[
-  timecheck = false
-](clk:u1, resetn:bool, mem_ready:bool, mem_rdata:u32, pcpi_wr:bool, pcpi_rd:u32, pcpi_wait:bool, pcpi_ready:bool, irq:u32) -> (
-  trap:bool@[],
-  mem_valid:bool@[],
-  mem_instr:bool@[],
-  mem_addr:u32@[],
-  mem_wdata:u32@[],
-  mem_wstrb:u4@[],
-  mem_la_read:bool@[],
-  mem_la_write:bool@[],
-  mem_la_addr:u32@[],
-  mem_la_wdata:u32@[],
-  mem_la_wstrb:u4@[],
-  pcpi_valid:bool@[],
-  pcpi_insn:u32@[],
-  pcpi_rs1:u32@[],
-  pcpi_rs2:u32@[],
-  eoi:u32@[],
-  trace_valid:bool@[],
-  trace_data:u36@[]
+// Simple (non-lookahead, non-AXI) memory interface. mem_la_* are the lookahead
+// signals, pcpi_* the external coprocessor port.
+pub mod picorv32<
+  ENABLE_COUNTERS=true,
+  ENABLE_COUNTERS64=true,
+  ENABLE_REGS_DUALPORT=true,
+  TWO_CYCLE_ALU=false,
+  TWO_CYCLE_COMPARE=false,
+  LATCHED_MEM_RDATA=false,
+  TWO_STAGE_SHIFT=true,
+  BARREL_SHIFTER=true,
+  COMPRESSED_ISA=true,
+  CATCH_MISALIGN=true,
+  CATCH_ILLINSN=true,
+  ENABLE_PCPI=false,
+  ENABLE_MUL=false,
+  ENABLE_FAST_MUL=false,
+  ENABLE_DIV=false,
+  PROGADDR_RESET=0,
+  STACKADDR=0xffffffff,
+  DEBUG=false,
+>::[
+  timecheck=false
+](
+  clk:Clock,
+  irq:U32,
+  mem_rdata:U32,
+  mem_ready:Bool,
+  pcpi_rd:U32,
+  pcpi_ready:Bool,
+  pcpi_wait:Bool,
+  pcpi_wr:Bool,
+  resetn:Bool,
+) -> (
+  reg trap:Bool@[]=nil,
+  reg mem_valid:Bool@[]=nil,
+  reg mem_instr:Bool@[]=nil,
+  reg mem_addr:U32@[]=nil,
+  reg mem_wdata:U32@[]=nil,
+  reg mem_wstrb:U4@[]=nil,
+  mem_la_read:Bool@[],
+  mem_la_write:Bool@[],
+  mem_la_addr:U32@[],
+  reg mem_la_wdata:U32@[]:[latch=true]=nil,
+  reg mem_la_wstrb:U4@[]:[latch=true]=nil,
+  reg pcpi_valid:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg pcpi_insn:U32@[]=nil,
+  pcpi_rs1:U32@[],
+  pcpi_rs2:U32@[],
+  reg eoi:U32@[]:[negreset=true, reset_pin=resetn]=0,
+  reg trace_valid:Bool@[]=nil,
+  reg trace_data:U36@[]=nil,
 ) {
   comptime const WITH_PCPI = ENABLE_PCPI or ENABLE_MUL or ENABLE_FAST_MUL or ENABLE_DIV
 
   cassert(PROGADDR_RESET >= 0 and PROGADDR_RESET <= 0xffffffff)
   cassert(STACKADDR >= 0 and STACKADDR <= 0xffffffff)
 
-  // State. Registers without a reset keep their original unknown power-on value.
-  reg trap:bool = nil
-  reg pcpi_valid:bool:[negreset = true, reset_pin = ref resetn]     = false
-  reg pcpi_insn:u32 = nil
-  reg eoi:u32:[negreset = true, reset_pin = ref resetn]             = 0
-  reg trace_valid:bool = nil
-  reg trace_data:u36 = nil
-  reg count_cycle:u64 = nil
-  reg count_instr:u64 = nil
-  reg reg_pc:u32:[negreset = true, reset_pin = ref resetn]          = PROGADDR_RESET
-  reg reg_next_pc:u32:[negreset = true, reset_pin = ref resetn]     = PROGADDR_RESET
-  reg reg_op1:u32 = nil
-  reg reg_op2:u32 = nil
-  reg reg_out:u32 = nil
-  reg reg_sh:u5 = nil
-  reg next_insn_opcode:u32 = nil
-  reg irq_active:bool:[negreset = true, reset_pin = ref resetn]     = false
-  reg irq_mask:u32:[negreset = true, reset_pin = ref resetn]        = 0xffffffff
-  reg irq_pending:u32 = nil
-  reg timer:u32:[negreset = true, reset_pin = ref resetn]           = 0
-  reg cpuregs:[32]u32:[ordering = "old"] = nil
-  reg decoder_trigger:bool = nil
-  reg decoder_trigger_q:bool = nil
-  reg decoder_pseudo_trigger:bool = nil
-  reg decoder_pseudo_trigger_q:bool = nil
-  reg cpu_state:u8:[negreset = true, reset_pin = ref resetn]        = CPU_FETCH
-  reg irq_state:u2:[negreset = true, reset_pin = ref resetn]        = 0
-  reg latched_store:bool:[negreset = true, reset_pin = ref resetn]  = STACKADDR != 0xffffffff
-  reg latched_stalu:bool:[negreset = true, reset_pin = ref resetn]  = false
-  reg latched_branch:bool:[negreset = true, reset_pin = ref resetn] = false
-  reg latched_compr:bool = nil
-  reg latched_is_lu:bool:[negreset = true, reset_pin = ref resetn]  = false
-  reg latched_is_lh:bool:[negreset = true, reset_pin = ref resetn]  = false
-  reg latched_is_lb:bool:[negreset = true, reset_pin = ref resetn]  = false
-  reg latched_rd:u5 = nil
-  reg pcpi_timeout_counter:u4 = nil
-  reg pcpi_timeout:bool:[negreset = true, reset_pin = ref resetn]   = false
-  reg do_waitirq:bool = nil
-  reg alu_wait:bool = nil
-  reg alu_wait_2:bool = nil
-  reg alu_out_q:u32 = nil
-  reg alu_out_0_q:bool = nil
-  reg clear_prefetched_high_word_q:bool = nil
-  mut set_mem_do_rinst:bool = false
-  mut set_mem_do_rdata:bool = false
-  mut set_mem_do_wdata:bool = false
-  mut current_pc:u32 = 0
-  mut next_irq_pending:u32 = 0
-  mut alu_out_0:bool = false
-  mut cpuregs_write:bool = false
-  mut cpuregs_wrdata:u32 = 0
-  mut cpuregs_rs1:u32 = 0
-  mut cpuregs_rs2:u32 = 0
-  // Unknown booleans use an unknown-bit comparison; nil means no initializer.
-  mut clear_prefetched_high_word:bool = 0ub? != 0
-  mut alu_out:u32 = 0sb?
+  // ---- Architectural state ----------------------------------------------------
+  reg cpu_state:U8:[negreset=true, reset_pin=resetn]    = CPU_FETCH
+  reg reg_pc:U32:[negreset=true, reset_pin=resetn]      = PROGADDR_RESET
+  reg reg_next_pc:U32:[negreset=true, reset_pin=resetn] = PROGADDR_RESET
+  reg reg_op1:U32                                       = nil
+  reg reg_op2:U32                                       = nil
+  reg reg_out:U32                                       = nil
+  reg reg_sh:U5                                         = nil
+  // The register file reads old data while it is written: ordering="old".
+  reg cpuregs:[32]U32:[ordering="old"]                  = nil
+  reg count_cycle:U64                                   = nil
+  reg count_instr:U64                                   = nil
+  reg irq_active:Bool:[negreset=true, reset_pin=resetn] = false
+  reg irq_mask:U32:[negreset=true, reset_pin=resetn]    = 0xffffffff
+  reg irq_pending:U32                                   = nil
+  reg irq_state:U2:[negreset=true, reset_pin=resetn]    = 0
+  reg timer:U32:[negreset=true, reset_pin=resetn]       = 0
+  reg next_insn_opcode:U32                              = nil
 
-  // No engine is elaborated when PCPI and all arithmetic extensions are disabled.
-  mut pcpi_int_wait:bool  = false
-  mut pcpi_int_ready:bool = false
-  mut pcpi_int_wr:bool    = false
-  mut pcpi_int_rd:u32     = 0sb?
-  if ENABLE_PCPI or ENABLE_MUL or ENABLE_FAST_MUL or ENABLE_DIV {
-    const coprocessor = arbitrate<ENABLE_PCPI=ENABLE_PCPI,ENABLE_MUL=ENABLE_MUL,ENABLE_FAST_MUL=ENABLE_FAST_MUL,ENABLE_DIV=ENABLE_DIV>(
-      clk=clk, resetn=resetn, pcpi_valid=pcpi_valid, pcpi_insn=pcpi_insn, pcpi_rs1=reg_op1, pcpi_rs2=reg_op2, pcpi_wr=pcpi_wr, pcpi_rd=pcpi_rd,
-      pcpi_wait=pcpi_wait, pcpi_ready=pcpi_ready
+  // Facts latched by the instruction in flight, consumed when it writes back.
+  reg latched_store:Bool:[negreset=true, reset_pin=resetn]  = STACKADDR != 0xffffffff
+  reg latched_stalu:Bool:[negreset=true, reset_pin=resetn]  = false
+  reg latched_branch:Bool:[negreset=true, reset_pin=resetn] = false
+  reg latched_compr:Bool                                    = nil
+  reg latched_is_lu:Bool:[negreset=true, reset_pin=resetn]  = false
+  reg latched_is_lh:Bool:[negreset=true, reset_pin=resetn]  = false
+  reg latched_is_lb:Bool:[negreset=true, reset_pin=resetn]  = false
+  reg latched_rd:U5                                         = nil
+
+  reg decoder_trigger:Bool          = nil
+  reg decoder_trigger_q:Bool        = nil
+  reg decoder_pseudo_trigger:Bool   = nil
+  reg decoder_pseudo_trigger_q:Bool = nil
+  reg do_waitirq:Bool               = nil
+  reg alu_wait:Bool                 = nil
+  reg alu_wait_2:Bool               = nil
+  reg alu_out_q:U32                 = nil
+  reg alu_out_0_q:Bool              = nil
+
+  // ---- Memory transaction state -------------------------------------------------
+  reg mem_state:U2                      = nil
+  reg mem_wordsize:U2                   = nil
+  reg mem_rdata_word:U32:[latch=true]   = nil
+  reg mem_rdata_q:U32                   = nil
+  reg mem_do_prefetch:Bool              = nil
+  reg mem_do_rinst:Bool                 = nil
+  reg mem_do_rdata:Bool                 = nil
+  reg mem_do_wdata:Bool                 = nil
+  reg mem_la_secondword:Bool            = nil
+  reg mem_la_firstword_reg:Bool         = nil
+  reg last_mem_valid:Bool               = nil
+  reg prefetched_high_word:Bool         = nil
+  reg mem_16bit_buffer:U16              = nil
+  reg clear_prefetched_high_word_q:Bool = nil
+
+  // Same-cycle scratch: requests raised by the CPU state machine, applied after it.
+  mut set_mem_do_rinst:Bool = false
+  mut set_mem_do_rdata:Bool = false
+  mut set_mem_do_wdata:Bool = false
+  mut current_pc:U32        = 0
+  mut next_irq_pending:U32  = 0
+  mut alu_out_0:Bool        = false
+  mut cpuregs_write:Bool    = false
+  mut cpuregs_wrdata:U32    = 0
+  mut cpuregs_rs1:U32       = 0
+  mut cpuregs_rs2:U32       = 0
+  // Unknown booleans use an unknown-bit comparison; nil means no initializer.
+  mut clear_prefetched_high_word:Bool = 0ub? != 0
+  mut alu_out:U32                     = 0sb?
+
+  // ---- PCPI: external coprocessor plus the internal multiply/divide engines -------
+  reg pcpi_timeout_counter:U4                             = nil
+  reg pcpi_timeout:Bool:[negreset=true, reset_pin=resetn] = false
+  mut pcpi_int_wait:Bool  = false
+  mut pcpi_int_ready:Bool = false
+  mut pcpi_int_wr:Bool    = false
+  mut pcpi_int_rd:U32     = 0sb?
+  if WITH_PCPI {
+    const coprocessor = arbitrate<
+      ENABLE_DIV=ENABLE_DIV,
+      ENABLE_FAST_MUL=ENABLE_FAST_MUL,
+      ENABLE_MUL=ENABLE_MUL,
+      ENABLE_PCPI=ENABLE_PCPI,
+    >(
+      resetn=resetn,
+      pcpi_valid=pcpi_valid,
+      pcpi_insn=pcpi_insn,
+      pcpi_rs1=reg_op1,
+      pcpi_rs2=reg_op2,
+      pcpi_wr=pcpi_wr,
+      pcpi_rd=pcpi_rd,
+      pcpi_wait=pcpi_wait,
+      pcpi_ready=pcpi_ready,
     )
     pcpi_int_wait  = coprocessor.waiting
     pcpi_int_ready = coprocessor.ready
@@ -116,40 +176,29 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
     pcpi_int_rd    = coprocessor.result
   }
 
-  // Memory transaction state.
-  reg mem_valid:bool = nil
-  reg mem_instr:bool = nil
-  reg mem_addr:u32 = nil
-  reg mem_wdata:u32 = nil
-  reg mem_wstrb:u4 = nil
-  reg mem_la_wdata:u32:[latch = true]   = nil
-  reg mem_la_wstrb:u4:[latch = true]    = nil
-  reg mem_state:u2 = nil
-  reg mem_wordsize:u2 = nil
-  reg mem_rdata_word:u32:[latch = true] = nil
-  reg mem_rdata_q:u32 = nil
-  reg mem_do_prefetch:bool              = nil
-  reg mem_do_rinst:bool = nil
-  reg mem_do_rdata:bool = nil
-  reg mem_do_wdata:bool = nil
-  reg mem_la_secondword:bool            = nil
-  reg mem_la_firstword_reg:bool         = nil
-  reg last_mem_valid:bool               = nil
-  reg prefetched_high_word:bool         = nil
-  reg mem_16bit_buffer:u16              = nil
-
-  // The decoder owns instruction state; forward wires connect later fetch logic.
-  wire decode_mem_done:bool = nil
-  wire decode_rdata:u32     = nil
-  const instr               = instruction_decoder<COMPRESSED_ISA=COMPRESSED_ISA,ENABLE_COUNTERS=ENABLE_COUNTERS,ENABLE_COUNTERS64=ENABLE_COUNTERS64>(
-    clk=clk, resetn=resetn, mem_do_rinst=mem_do_rinst, mem_done=decode_mem_done, mem_rdata_latched=decode_rdata, mem_rdata_q=mem_rdata_q,
-    decoder_trigger=decoder_trigger, decoder_pseudo_trigger=decoder_pseudo_trigger
+  // ---- Instruction decoder (owns the decoded-instruction registers) ------------------
+  // Fetch logic below feeds it through forward wires.
+  wire decode_mem_done:Bool = nil
+  wire decode_rdata:U32     = nil
+  const instr = instruction_decoder<
+    COMPRESSED_ISA=COMPRESSED_ISA,
+    ENABLE_COUNTERS=ENABLE_COUNTERS,
+    ENABLE_COUNTERS64=ENABLE_COUNTERS64,
+  >(
+    resetn=resetn,
+    mem_do_rinst=mem_do_rinst,
+    mem_done=decode_mem_done,
+    insn=decode_rdata,
+    mem_rdata_q=mem_rdata_q,
+    decoder_trigger=decoder_trigger,
+    decoder_pseudo_trigger=decoder_pseudo_trigger,
   )
 
-  // Memory byte lanes and instruction validity.
-  const next_pcpi_rs1     = reg_op1
-  const next_pcpi_rs2     = reg_op2
-  const next_mem_la_write = resetn and (mem_state == 0) and mem_do_wdata
+  // ---- Memory byte lanes ----------------------------------------------------------
+  // Stores replicate the data across the lanes it can occupy; loads right-justify
+  // the addressed lane. mem_wordsize: 0 word, 1 halfword, 2 byte.
+  const next_mem_la_write = resetn and mem_state == 0 and mem_do_wdata
+  const lane              = reg_op1#[0..=1]
   match mem_wordsize {
     == 0 {
       mem_la_wdata   = reg_op2
@@ -157,23 +206,16 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
       mem_rdata_word = mem_rdata
     }
     == 1 {
-      const store_halfword = reg_op2#[0 ..= 15]
-      mem_la_wdata         = store_halfword | (store_halfword << 16)
-      mem_la_wstrb         = if reg_op1#[1] != 0 { 12 } else { 3 }
-      const halfword_lane  = reg_op1#[1]
-      mem_rdata_word       = unique if halfword_lane == 0 { mem_rdata#[0 ..= 15] } elif halfword_lane == 1 { mem_rdata#[16 ..= 31] } else {
-        0sb?
-      }
+      const store_halfword = reg_op2#[0..=15]
+      mem_la_wdata   = store_halfword | (store_halfword << 16)
+      mem_la_wstrb   = if lane#[1] != 0 { 12 } else { 3 }
+      mem_rdata_word = if lane#[1] != 0 { mem_rdata#[16..=31] } else { mem_rdata#[0..=15] }
     }
     == 2 {
-      const store_byte = reg_op2#[0 ..= 7]
-      mem_la_wdata     = store_byte | (store_byte << 8) | (store_byte << 16) | (store_byte << 24)
-      mem_la_wstrb     = 1 << reg_op1#[0 ..= 1]
-      mem_rdata_word   = unique if reg_op1#[0 ..= 1] == 0 { mem_rdata#[0 ..= 7] } elif reg_op1#[0 ..= 1] == 1 { mem_rdata#[8 ..= 15] } elif reg_op1#[0
-                                                                                                                                                  ..= 1]
-                                                                                                                                                  == 2 {
-        mem_rdata#[16 ..= 23]
-      } elif reg_op1#[0 ..= 1] == 3 { mem_rdata#[24 ..= 31] } else { 0sb? }
+      const store_byte = reg_op2#[0..=7]
+      mem_la_wdata   = store_byte | (store_byte << 8) | (store_byte << 16) | (store_byte << 24)
+      mem_la_wstrb   = 1 << lane
+      mem_rdata_word = (mem_rdata >> (lane << 3))#[0..=7]
     }
     else {
       mem_la_wdata   = 0sb?
@@ -181,9 +223,9 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
       mem_rdata_word = 0sb?
     }
   }
-  const instr_trap = (CATCH_ILLINSN or WITH_PCPI)
-                     and not (
-    instr.lui
+
+  // An instruction none of the decoder flags recognises (traps, or goes to the PCPI).
+  const known_instruction = instr.lui
     or instr.auipc
     or instr.jal
     or instr.jalr
@@ -231,17 +273,18 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
     or instr.maskirq
     or instr.waitirq
     or instr.timer
-  )
+  const instr_trap        = (CATCH_ILLINSN or WITH_PCPI) and not known_instruction
 
-  // ALU and register-file writeback.
-  const next_pc:u32     = if latched_store and latched_branch { reg_out & 0xfffffffe } else { reg_next_pc }
-  const operands        = alu_operands(a=reg_op1, b=reg_op2, subtract=instr.sub, arithmetic=(instr.sra or instr.srai))
-  reg alu_add_sub_q:u32 = nil
-  reg alu_eq_q:bool     = nil
-  reg alu_lts_q:bool    = nil
-  reg alu_ltu_q:bool    = nil
-  reg alu_shl_q:u32     = nil
-  reg alu_shr_q:u32     = nil
+  // ---- ALU and register-file writeback ---------------------------------------------
+  const next_pc:U32 = if latched_store and latched_branch { reg_out & 0xfffffffe } else { reg_next_pc }
+  const operands    = alu_operands(a=reg_op1, b=reg_op2, subtract=instr.sub, arithmetic=instr.sra or instr.srai)
+  // TWO_CYCLE_ALU registers the ALU results (and compares) before they are used.
+  reg alu_add_sub_q:U32 = nil
+  reg alu_eq_q:Bool     = nil
+  reg alu_lts_q:Bool    = nil
+  reg alu_ltu_q:Bool    = nil
+  reg alu_shl_q:U32     = nil
+  reg alu_shr_q:U32     = nil
   if TWO_CYCLE_ALU {
     alu_add_sub_q = operands.add_sub
     alu_eq_q      = operands.eq
@@ -250,29 +293,37 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
     alu_shl_q     = operands.shl
     alu_shr_q     = operands.shr
   }
-  const alu_add_sub:u32 = if TWO_CYCLE_ALU { alu_add_sub_q } else { operands.add_sub }
-  const alu_eq:bool     = if TWO_CYCLE_ALU { alu_eq_q } else { operands.eq }
-  const alu_lts:bool    = if TWO_CYCLE_ALU { alu_lts_q } else { operands.lts }
-  const alu_ltu:bool    = if TWO_CYCLE_ALU { alu_ltu_q } else { operands.ltu }
-  const alu_shl:u32     = if TWO_CYCLE_ALU { alu_shl_q } else { operands.shl }
-  const alu_shr:u32     = if TWO_CYCLE_ALU { alu_shr_q } else { operands.shr }
-  alu_out_0             = unique if instr.beq { alu_eq } elif instr.bne { not alu_eq } elif instr.bge { not alu_lts } elif instr.bgeu {
+  const alu_add_sub:U32 = if TWO_CYCLE_ALU { alu_add_sub_q } else { operands.add_sub }
+  const alu_eq:Bool     = if TWO_CYCLE_ALU { alu_eq_q } else { operands.eq }
+  const alu_lts:Bool    = if TWO_CYCLE_ALU { alu_lts_q } else { operands.lts }
+  const alu_ltu:Bool    = if TWO_CYCLE_ALU { alu_ltu_q } else { operands.ltu }
+  const alu_shl:U32     = if TWO_CYCLE_ALU { alu_shl_q } else { operands.shl }
+  const alu_shr:U32     = if TWO_CYCLE_ALU { alu_shr_q } else { operands.shr }
+  alu_out_0                  = unique if instr.beq {
+    alu_eq
+  } elif instr.bne {
+    not alu_eq
+  } elif instr.bge {
+    not alu_lts
+  } elif instr.bgeu {
     not alu_ltu
-  } elif instr.is_slti_blt_slt { alu_lts } elif instr.is_sltiu_bltu_sltu { alu_ltu } else { 0ub? != 0 }
-  alu_out = unique if instr.is_lui_auipc_jal_jalr_addi_add_sub { alu_add_sub } elif instr.is_compare { unsigned(alu_out_0) } elif instr
-                                                                                                                                    .xori
-                                                                                                                                    or instr
-                                                                                                                                    .bit_xor {
-    reg_op1 ^ reg_op2
-  } elif instr.ori or instr.bit_or { reg_op1 | reg_op2 } elif instr.andi or instr.bit_and { reg_op1 & reg_op2 } elif (BARREL_SHIFTER
-                                                                                                                        and (instr
-                                                                                                                               .sll
-                                                                                                                               or instr
-                                                                                                                               .slli)) {
-    alu_shl
-  } elif (BARREL_SHIFTER and (instr.srl or instr.srli or instr.sra or instr.srai)) { alu_shr } else { 0sb? }
+  } elif instr.is_slti_blt_slt {
+    alu_lts
+  } elif instr.is_sltiu_bltu_sltu {
+    alu_ltu
+  } else {
+    0ub? != 0
+  }
+  alu_out                    = unique if instr.is_lui_auipc_jal_jalr_addi_add_sub { alu_add_sub }
+    elif instr.is_compare { U1(alu_out_0) }
+    elif instr.xori or instr.bit_xor { reg_op1 ^ reg_op2 }
+    elif instr.ori or instr.bit_or { reg_op1 | reg_op2 }
+    elif instr.andi or instr.bit_and { reg_op1 & reg_op2 }
+    elif BARREL_SHIFTER and (instr.sll or instr.slli) { alu_shl }
+    elif BARREL_SHIFTER and (instr.srl or instr.srli or instr.sra or instr.srai) { alu_shr }
+    else { 0sb? }
   clear_prefetched_high_word = if not prefetched_high_word { false } else { clear_prefetched_high_word_q }
-  if latched_branch or (irq_state != 0) or not resetn {
+  if latched_branch or irq_state != 0 or not resetn {
     clear_prefetched_high_word = COMPRESSED_ISA
   }
   cpuregs_wrdata = 0sb?
@@ -281,16 +332,17 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
     if latched_branch {
       const return_offset = if latched_compr { 2 } else { 4 }
       wrap cpuregs_wrdata = reg_pc + return_offset
-      cpuregs_write  = true
+      cpuregs_write = true
     } elif latched_store and not latched_branch {
       cpuregs_wrdata = if latched_stalu { alu_out_q } else { reg_out }
       cpuregs_write  = true
     }
   }
-  if resetn and cpuregs_write and (latched_rd != 0) {
+  if resetn and cpuregs_write and latched_rd != 0 {
     cpuregs[latched_rd] = cpuregs_wrdata
   }
-  const decoded_rs = if ENABLE_REGS_DUALPORT or (cpu_state != CPU_LD_RS2) { instr.rs1 } else { instr.rs2 }
+  // x0 reads as zero. Without a second read port, LD_RS2 re-reads through port 1.
+  const decoded_rs = if ENABLE_REGS_DUALPORT or cpu_state != CPU_LD_RS2 { instr.rs1 } else { instr.rs2 }
   cpuregs_rs1 = if decoded_rs != 0 { cpuregs[decoded_rs] } else { 0 }
   cpuregs_rs2 = if ENABLE_REGS_DUALPORT {
     if instr.rs2 != 0 { cpuregs[instr.rs2] } else { 0 }
@@ -298,25 +350,30 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
     cpuregs_rs1
   }
 
-  // Instruction fetch and compressed-word assembly.
-  const launch_next_insn = (cpu_state == CPU_FETCH) and decoder_trigger
+  // ---- Instruction fetch and compressed-word assembly ---------------------------
+  const launch_next_insn = cpu_state == CPU_FETCH and decoder_trigger
   if DEBUG and launch_next_insn {
     puts("picorv32 decode: pc={reg_pc} opcode={next_insn_opcode} rd={instr.rd} rs1={instr.rs1} rs2={instr.rs2}")
   }
-  const mem_la_firstword                = COMPRESSED_ISA and (mem_do_prefetch or mem_do_rinst) and (next_pc#[1] != 0) and not mem_la_secondword
-  const mem_la_use_prefetched_high_word = COMPRESSED_ISA
-                                          and mem_la_firstword
-                                          and prefetched_high_word
-                                          and not clear_prefetched_high_word
-  const mem_xfer = (mem_valid and mem_ready) or (mem_la_use_prefetched_high_word and mem_do_rinst)
-  const mem_rdata_latched_noshuffle:u32 = if mem_xfer or LATCHED_MEM_RDATA { mem_rdata } else { mem_rdata_q }
-  const firstword_rdata:u32             = if COMPRESSED_ISA and mem_la_firstword {
-    (0sb?#[0 ..= 15] << 16) | mem_rdata_latched_noshuffle#[16 ..= 31]
-  } else { mem_rdata_latched_noshuffle }
-  const secondword_rdata:u32 = if COMPRESSED_ISA and mem_la_secondword {
-    (mem_rdata_latched_noshuffle#[0 ..= 15] << 16) | mem_16bit_buffer
-  } else { firstword_rdata }
-  const mem_rdata_latched:u32 = if COMPRESSED_ISA and mem_la_use_prefetched_high_word { (0sb?#[0 ..= 15] << 16) | mem_16bit_buffer } else {
+  // A 32-bit instruction can straddle two words when RVC is enabled; the low
+  // halfword is kept in mem_16bit_buffer until its second word arrives.
+  const mem_la_firstword                = COMPRESSED_ISA and (mem_do_prefetch or mem_do_rinst) and next_pc#[1] != 0 and not mem_la_secondword
+  const mem_la_use_prefetched_high_word = COMPRESSED_ISA and mem_la_firstword and prefetched_high_word and not clear_prefetched_high_word
+  const mem_xfer                        = (mem_valid and mem_ready) or (mem_la_use_prefetched_high_word and mem_do_rinst)
+  const mem_rdata_latched_noshuffle:U32 = if mem_xfer or LATCHED_MEM_RDATA { mem_rdata } else { mem_rdata_q }
+  const firstword_rdata:U32             = if COMPRESSED_ISA and mem_la_firstword {
+    (0sb?#[0..=15] << 16) | mem_rdata_latched_noshuffle#[16..=31]
+  } else {
+    mem_rdata_latched_noshuffle
+  }
+  const secondword_rdata:U32            = if COMPRESSED_ISA and mem_la_secondword {
+    (mem_rdata_latched_noshuffle#[0..=15] << 16) | mem_16bit_buffer
+  } else {
+    firstword_rdata
+  }
+  const mem_rdata_latched:U32           = if COMPRESSED_ISA and mem_la_use_prefetched_high_word {
+    (0sb?#[0..=15] << 16) | mem_16bit_buffer
+  } else {
     secondword_rdata
   }
   if not resetn {
@@ -329,23 +386,21 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
     last_mem_valid = mem_valid and not mem_ready
   }
   clear_prefetched_high_word_q = clear_prefetched_high_word
-  const firstword_pending:bool = if not last_mem_valid { mem_la_firstword } else { mem_la_firstword_reg }
+  const firstword_pending:Bool = if not last_mem_valid { mem_la_firstword } else { mem_la_firstword_reg }
   const mem_done               = resetn
-                                 and ((mem_xfer and (mem_state != 0) and (mem_do_rinst or mem_do_rdata or mem_do_wdata))
-                                        or ((mem_state == 3) and mem_do_rinst))
-                                 and (not mem_la_firstword or ((mem_rdata_latched#[0 ..= 1] != 3) and mem_xfer))
-  const next_mem_la_read = resetn
-                           and ((not mem_la_use_prefetched_high_word
-                                   and (mem_state == 0)
-                                   and (mem_do_rinst or mem_do_prefetch or mem_do_rdata))
-                                  or (COMPRESSED_ISA
-                                        and mem_xfer
-                                        and firstword_pending
-                                        and not mem_la_secondword
-                                        and (mem_rdata_latched#[0 ..= 1] == 3)))
-  const next_mem_la_addr:u32 = if mem_do_prefetch or mem_do_rinst {
-    (next_pc#[2 ..= 31] + unsigned(COMPRESSED_ISA and mem_xfer and firstword_pending))#[0 ..= 29] << 2
-  } else { reg_op1#[2 ..= 31] << 2 }
+    and ((mem_xfer and mem_state != 0 and (mem_do_rinst or mem_do_rdata or mem_do_wdata)) or (mem_state == 3 and mem_do_rinst))
+    and (not mem_la_firstword or (mem_rdata_latched#[0..=1] != 3 and mem_xfer))
+  const next_mem_la_read       = resetn
+    and (
+      (
+        not mem_la_use_prefetched_high_word and mem_state == 0 and (mem_do_rinst or mem_do_prefetch or mem_do_rdata)
+      ) or (COMPRESSED_ISA and mem_xfer and firstword_pending and not mem_la_secondword and mem_rdata_latched#[0..=1] == 3)
+    )
+  const next_mem_la_addr:U32   = if mem_do_prefetch or mem_do_rinst {
+    (next_pc#[2..=31] + U1(COMPRESSED_ISA and mem_xfer and firstword_pending))#[0..=29] << 2
+  } else {
+    reg_op1#[2..=31] << 2
+  }
   if mem_xfer {
     mem_rdata_q      = if COMPRESSED_ISA { mem_rdata_latched } else { mem_rdata }
     next_insn_opcode = if COMPRESSED_ISA { mem_rdata_latched } else { mem_rdata }
@@ -354,209 +409,104 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
   decode_mem_done = mem_done
   decode_rdata    = mem_rdata_latched
 
-  // Expand RVC encodings into the ordinary decoder fields.
+  // ---- RVC expansion: rewrite the latched word into the base-ISA field layout ----------
+  // The decoder reads the same compressed word for register fields and flags;
+  // here only immediates and funct fields are patched into mem_rdata_q.
   if COMPRESSED_ISA and mem_done and (mem_do_prefetch or mem_do_rinst) {
-    match mem_rdata_latched#[0 ..= 1] {
+    const rvc    = mem_rdata_latched
+    const funct3 = rvc#[13..=15]
+    // CI-format 6-bit immediate, sign-extended (c.addi, c.li, c.andi, c.lui).
+    const ci_imm = ((rvc#[12] << 5) | rvc#[2..=6])#sext[0..=5]
+    // CB-format branch offset, sign-extended to the 12 bits the B-immediate spreads.
+    const cb_offset = ((rvc#[12] << 7) | (rvc#[5..=6] << 5) | (rvc#[2] << 4) | (rvc#[10..=11] << 2) | rvc#[3..=4])#sext[0..=7]#[0..=11]
+    match rvc#[0..=1] {
       == 0 {
-        match mem_rdata_latched#[13 ..= 15] {
-          == 0 {
-            mem_rdata_q#[12 ..= 14] = 0
-            mem_rdata_q#[20
-            ..= 31] = (mem_rdata_latched#[7 ..= 10] << 6)
-                                | (mem_rdata_latched#[11 ..= 12] << 4)
-                                | (mem_rdata_latched#[5] << 3)
-                                | (mem_rdata_latched#[6] << 2)
-          }
-          == 2 {
-            mem_rdata_q#[20 ..= 31] = (mem_rdata_latched#[5] << 6)
-                                                | (mem_rdata_latched#[10 ..= 12] << 3)
-                                                | (mem_rdata_latched#[6] << 2)
-            mem_rdata_q#[12 ..= 14] = 2
-          }
-          == 6 {
-            const compressed_load_offset = (mem_rdata_latched#[5] << 6)
-                                                     | (mem_rdata_latched#[10 ..= 12] << 3)
-                                                     | (mem_rdata_latched#[6] << 2)
-            mem_rdata_q#[7 ..= 11]  = compressed_load_offset#[0 ..= 4]
-            mem_rdata_q#[25 ..= 31] = (compressed_load_offset >> 5)#[0 ..= 6]
-            mem_rdata_q#[12 ..= 14] = 2
-          }
-          else {
-          }
+        if funct3 == 0 { // c.addi4spn
+          mem_rdata_q#[12..=14] = 0
+          mem_rdata_q#[20..=31] = (rvc#[7..=10] << 6) | (rvc#[11..=12] << 4) | (rvc#[5] << 3) | (rvc#[6] << 2)
+        } elif funct3 == 2 { // c.lw
+          mem_rdata_q#[20..=31] = (rvc#[5] << 6) | (rvc#[10..=12] << 3) | (rvc#[6] << 2)
+          mem_rdata_q#[12..=14] = 2
+        } elif funct3 == 6 { // c.sw
+          const store_offset = (rvc#[5] << 6) | (rvc#[10..=12] << 3) | (rvc#[6] << 2)
+          mem_rdata_q#[7..=11]  = store_offset#[0..=4]
+          mem_rdata_q#[25..=31] = (store_offset >> 5)#[0..=6]
+          mem_rdata_q#[12..=14] = 2
         }
       }
       == 1 {
-        match mem_rdata_latched#[13 ..= 15] {
-          == 0 {
-            mem_rdata_q#[12 ..= 14] = 0
-            mem_rdata_q#[20 ..= 31] = ((mem_rdata_latched#[12] << 5) | mem_rdata_latched#[2 ..= 6])#sext[0 ..= 5]#[0 ..= 11]
+        match funct3 {
+          in (0, 2) { // c.addi / c.nop, c.li
+            mem_rdata_q#[12..=14] = 0
+            mem_rdata_q#[20..=31] = ci_imm#[0..=11]
           }
-          == 2 {
-            mem_rdata_q#[12 ..= 14] = 0
-            mem_rdata_q#[20 ..= 31] = ((mem_rdata_latched#[12] << 5) | mem_rdata_latched#[2 ..= 6])#sext[0 ..= 5]#[0 ..= 11]
-          }
-          == 3 {
-            if mem_rdata_latched#[7 ..= 11] == 2 {
-              mem_rdata_q#[12 ..= 14] = 0
-              mem_rdata_q#[20
-              ..= 31] = ((mem_rdata_latched#[12] << 9)
-                                      | (mem_rdata_latched#[3 ..= 4] << 7)
-                                      | (mem_rdata_latched#[5] << 6)
-                                      | (mem_rdata_latched#[2] << 5)
-                                      | (mem_rdata_latched#[6] << 4))#sext[0
-                                    ..= 9]#[0
-                                    ..= 11]
+          == 3 { // c.addi16sp / c.lui
+            if rvc#[7..=11] == 2 {
+              mem_rdata_q#[12..=14] = 0
+              mem_rdata_q#[20..=31] = ((rvc#[12] << 9)
+                | (rvc#[3..=4] << 7)
+                | (rvc#[5] << 6)
+                | (rvc#[2] << 5)
+                | (rvc#[6] << 4))#sext[0..=9]#[0..=11]
             } else {
-              mem_rdata_q#[12 ..= 31] = ((mem_rdata_latched#[12] << 5) | mem_rdata_latched#[2 ..= 6])#sext[0 ..= 5]#[0 ..= 19]
+              mem_rdata_q#[12..=31] = ci_imm#[0..=19]
             }
           }
-          == 4 {
-            if mem_rdata_latched#[10 ..= 11] == 0 {
-              mem_rdata_q#[25 ..= 31] = 0
-              mem_rdata_q#[12 ..= 14] = 5
+          == 4 { // c.srli / c.srai / c.andi / c.sub .. c.and
+            if rvc#[10..=11] == 0 {
+              mem_rdata_q#[25..=31] = 0
+              mem_rdata_q#[12..=14] = 5
             }
-            if mem_rdata_latched#[10 ..= 11] == 1 {
-              mem_rdata_q#[25 ..= 31] = 32
-              mem_rdata_q#[12 ..= 14] = 5
+            if rvc#[10..=11] == 1 {
+              mem_rdata_q#[25..=31] = 32
+              mem_rdata_q#[12..=14] = 5
             }
-            if mem_rdata_latched#[10 ..= 11] == 2 {
-              mem_rdata_q#[12 ..= 14] = 7
-              mem_rdata_q#[20 ..= 31] = ((mem_rdata_latched#[12] << 5) | mem_rdata_latched#[2 ..= 6])#sext[0 ..= 5]#[0 ..= 11]
+            if rvc#[10..=11] == 2 {
+              mem_rdata_q#[12..=14] = 7
+              mem_rdata_q#[20..=31] = ci_imm#[0..=11]
             }
-            if mem_rdata_latched#[10 ..= 12] == 3 {
-              if mem_rdata_latched#[5 ..= 6] == 0 {
-                mem_rdata_q#[12 ..= 14] = 0
-              }
-              if mem_rdata_latched#[5 ..= 6] == 1 {
-                mem_rdata_q#[12 ..= 14] = 4
-              }
-              if mem_rdata_latched#[5 ..= 6] == 2 {
-                mem_rdata_q#[12 ..= 14] = 6
-              }
-              if mem_rdata_latched#[5 ..= 6] == 3 {
-                mem_rdata_q#[12 ..= 14] = 7
-              }
-              mem_rdata_q#[25 ..= 31] = if mem_rdata_latched#[5 ..= 6] == 0 { 32 } else { 0 }
+            if rvc#[10..=12] == 3 {
+              const alu_op = rvc#[5..=6] // sub, xor, or, and
+              mem_rdata_q#[12..=14] = if alu_op == 0 { 0 } elif alu_op == 1 { 4 } elif alu_op == 2 { 6 } else { 7 }
+              mem_rdata_q#[25..=31] = if alu_op == 0 { 32 } else { 0 }
             }
           }
-          == 6 {
-            mem_rdata_q#[12 ..= 14] = 0
-            mem_rdata_q#[8
-            ..= 11] = ((mem_rdata_latched#[12] << 7)
-                                  | (mem_rdata_latched#[5 ..= 6] << 5)
-                                  | (mem_rdata_latched#[2] << 4)
-                                  | (mem_rdata_latched#[10 ..= 11] << 2)
-                                  | mem_rdata_latched#[3 ..= 4])#sext[0
-                                ..= 7]#[0
-                                ..= 11]#[0
-                                ..= 3]
-            mem_rdata_q#[25
-            ..= 30] = (((mem_rdata_latched#[12] << 7)
-                                | (mem_rdata_latched#[5 ..= 6] << 5)
-                                | (mem_rdata_latched#[2] << 4)
-                                | (mem_rdata_latched#[10 ..= 11] << 2)
-                                | mem_rdata_latched#[3 ..= 4])#sext[0 ..= 7]#[0 ..= 11]
-                                 >> 4)#[0
-                                ..= 5]
-            mem_rdata_q#[7] = (((mem_rdata_latched#[12] << 7)
-                                           | (mem_rdata_latched#[5 ..= 6] << 5)
-                                           | (mem_rdata_latched#[2] << 4)
-                                           | (mem_rdata_latched#[10 ..= 11] << 2)
-                                           | mem_rdata_latched#[3 ..= 4])#sext[0 ..= 7]#[0 ..= 11]
-                                           >> 10)
-                                        & 1
-            mem_rdata_q#[31] = (((mem_rdata_latched#[12] << 7)
-                                            | (mem_rdata_latched#[5 ..= 6] << 5)
-                                            | (mem_rdata_latched#[2] << 4)
-                                            | (mem_rdata_latched#[10 ..= 11] << 2)
-                                            | mem_rdata_latched#[3 ..= 4])#sext[0 ..= 7]#[0 ..= 11]
-                                            >> 11)
-                                         & 1
-          }
-          == 7 {
-            mem_rdata_q#[12 ..= 14] = 1
-            mem_rdata_q#[8
-            ..= 11] = ((mem_rdata_latched#[12] << 7)
-                                  | (mem_rdata_latched#[5 ..= 6] << 5)
-                                  | (mem_rdata_latched#[2] << 4)
-                                  | (mem_rdata_latched#[10 ..= 11] << 2)
-                                  | mem_rdata_latched#[3 ..= 4])#sext[0
-                                ..= 7]#[0
-                                ..= 11]#[0
-                                ..= 3]
-            mem_rdata_q#[25
-            ..= 30] = (((mem_rdata_latched#[12] << 7)
-                                | (mem_rdata_latched#[5 ..= 6] << 5)
-                                | (mem_rdata_latched#[2] << 4)
-                                | (mem_rdata_latched#[10 ..= 11] << 2)
-                                | mem_rdata_latched#[3 ..= 4])#sext[0 ..= 7]#[0 ..= 11]
-                                 >> 4)#[0
-                                ..= 5]
-            mem_rdata_q#[7] = (((mem_rdata_latched#[12] << 7)
-                                           | (mem_rdata_latched#[5 ..= 6] << 5)
-                                           | (mem_rdata_latched#[2] << 4)
-                                           | (mem_rdata_latched#[10 ..= 11] << 2)
-                                           | mem_rdata_latched#[3 ..= 4])#sext[0 ..= 7]#[0 ..= 11]
-                                           >> 10)
-                                        & 1
-            mem_rdata_q#[31] = (((mem_rdata_latched#[12] << 7)
-                                            | (mem_rdata_latched#[5 ..= 6] << 5)
-                                            | (mem_rdata_latched#[2] << 4)
-                                            | (mem_rdata_latched#[10 ..= 11] << 2)
-                                            | mem_rdata_latched#[3 ..= 4])#sext[0 ..= 7]#[0 ..= 11]
-                                            >> 11)
-                                         & 1
-          }
-          else {
+          in (6, 7) { // c.beqz / c.bnez
+            mem_rdata_q#[12..=14] = if funct3 == 6 { 0 } else { 1 }
+            mem_rdata_q#[8..=11]  = cb_offset#[0..=3]
+            mem_rdata_q#[25..=30] = (cb_offset >> 4)#[0..=5]
+            mem_rdata_q#[7]       = (cb_offset >> 10) & 1
+            mem_rdata_q#[31]      = (cb_offset >> 11) & 1
           }
         }
       }
       == 2 {
-        match mem_rdata_latched#[13 ..= 15] {
-          == 0 {
-            mem_rdata_q#[25 ..= 31] = 0
-            mem_rdata_q#[12 ..= 14] = 1
+        if funct3 == 0 { // c.slli
+          mem_rdata_q#[25..=31] = 0
+          mem_rdata_q#[12..=14] = 1
+        } elif funct3 == 2 { // c.lwsp
+          mem_rdata_q#[20..=31] = (rvc#[2..=3] << 6) | (rvc#[12] << 5) | (rvc#[4..=6] << 2)
+          mem_rdata_q#[12..=14] = 2
+        } elif funct3 == 4 { // c.jr / c.mv / c.jalr / c.add
+          if rvc#[2..=6] == 0 and (rvc#[12] == 0 or rvc#[7..=11] != 0) {
+            mem_rdata_q#[12..=14] = 0
+            mem_rdata_q#[20..=31] = 0
           }
-          == 2 {
-            mem_rdata_q#[20 ..= 31] = (mem_rdata_latched#[2 ..= 3] << 6)
-                                                | (mem_rdata_latched#[12] << 5)
-                                                | (mem_rdata_latched#[4 ..= 6] << 2)
-            mem_rdata_q#[12 ..= 14] = 2
+          if rvc#[2..=6] != 0 {
+            mem_rdata_q#[12..=14] = 0
+            mem_rdata_q#[25..=31] = 0
           }
-          == 4 {
-            if (mem_rdata_latched#[12] == 0) and (mem_rdata_latched#[2 ..= 6] == 0) {
-              mem_rdata_q#[12 ..= 14] = 0
-              mem_rdata_q#[20 ..= 31] = 0
-            }
-            if (mem_rdata_latched#[12] == 0) and (mem_rdata_latched#[2 ..= 6] != 0) {
-              mem_rdata_q#[12 ..= 14] = 0
-              mem_rdata_q#[25 ..= 31] = 0
-            }
-            if (mem_rdata_latched#[12] != 0) and (mem_rdata_latched#[7 ..= 11] != 0) and (mem_rdata_latched#[2 ..= 6] == 0) {
-              mem_rdata_q#[12 ..= 14] = 0
-              mem_rdata_q#[20 ..= 31] = 0
-            }
-            if (mem_rdata_latched#[12] != 0) and (mem_rdata_latched#[2 ..= 6] != 0) {
-              mem_rdata_q#[12 ..= 14] = 0
-              mem_rdata_q#[25 ..= 31] = 0
-            }
-          }
-          == 6 {
-            const compressed_store_offset = (mem_rdata_latched#[7 ..= 8] << 6) | (mem_rdata_latched#[9 ..= 12] << 2)
-            mem_rdata_q#[7 ..= 11]        = compressed_store_offset#[0 ..= 4]
-            mem_rdata_q#[25 ..= 31]       = (compressed_store_offset >> 5)#[0 ..= 6]
-            mem_rdata_q#[12 ..= 14]       = 2
-          }
-          else {
-          }
+        } elif funct3 == 6 { // c.swsp
+          const store_offset = (rvc#[7..=8] << 6) | (rvc#[9..=12] << 2)
+          mem_rdata_q#[7..=11]  = store_offset#[0..=4]
+          mem_rdata_q#[25..=31] = (store_offset >> 5)#[0..=6]
+          mem_rdata_q#[12..=14] = 2
         }
-      }
-      else {
       }
     }
   }
 
-  // Memory transaction state machine.
+  // ---- Memory transaction state machine ----------------------------------------------
   if not resetn or trap {
     if not resetn {
       mem_state = 0
@@ -568,9 +518,9 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
     prefetched_high_word = false
   } else {
     if next_mem_la_read or next_mem_la_write {
-      mem_addr         = next_mem_la_addr
+      mem_addr = next_mem_la_addr
       const write_mask = if next_mem_la_write { 15 } else { 0 }
-      mem_wstrb        = mem_la_wstrb & write_mask
+      mem_wstrb = mem_la_wstrb & write_mask
     }
     if next_mem_la_write {
       mem_wdata = mem_la_wdata
@@ -595,14 +545,14 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
             mem_valid         = true
             mem_la_secondword = true
             if not mem_la_use_prefetched_high_word {
-              mem_16bit_buffer = mem_rdata#[16 ..= 31]
+              mem_16bit_buffer = mem_rdata#[16..=31]
             }
           } else {
             mem_valid         = false
             mem_la_secondword = false
             if COMPRESSED_ISA and not mem_do_rdata {
-              if (mem_rdata#[0 ..= 1] != 3) or mem_la_secondword {
-                mem_16bit_buffer     = mem_rdata#[16 ..= 31]
+              if mem_rdata#[0..=1] != 3 or mem_la_secondword {
+                mem_16bit_buffer     = mem_rdata#[16..=31]
                 prefetched_high_word = true
               } else {
                 prefetched_high_word = false
@@ -623,21 +573,11 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
           mem_state = 0
         }
       }
-      else {
-        mem_valid            = 0ub? != 0
-        mem_instr            = 0ub? != 0
-        mem_wstrb            = 0sb?
-        mem_state            = 0sb?
-        mem_la_secondword    = 0ub? != 0
-        mem_16bit_buffer     = 0sb?
-        prefetched_high_word = 0ub? != 0
-      }
     }
   }
   if clear_prefetched_high_word {
     prefetched_high_word = false
   }
-
   if decoder_trigger and not decoder_pseudo_trigger {
     pcpi_insn = if WITH_PCPI { mem_rdata_q } else { 0sb? }
   }
@@ -645,10 +585,12 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
   reg_sh  = 0sb?
   reg_out = 0sb?
 
-  // CPU state machine and counter maintenance.
+  // ---- CPU state machine and counter maintenance ---------------------------------------
   if WITH_PCPI and CATCH_ILLINSN {
     if resetn and pcpi_valid and not pcpi_int_wait {
-      if pcpi_timeout_counter != 0 { wrap  pcpi_timeout_counter -= 1 }
+      if pcpi_timeout_counter != 0 {
+        wrap pcpi_timeout_counter -= 1
+      }
     } else {
       pcpi_timeout_counter = 15
     }
@@ -660,7 +602,9 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
   alu_out_q   = alu_out
   if ENABLE_COUNTERS {
     wrap count_cycle = if resetn { count_cycle + 1 } else { 0 }
-    if not ENABLE_COUNTERS64 { count_cycle#[32 ..= 63] = 0 }
+    if not ENABLE_COUNTERS64 {
+      count_cycle#[32..=63] = 0
+    }
   } else {
     count_cycle = 0sb?
     count_instr = 0sb?
@@ -676,8 +620,13 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
   set_mem_do_rdata         = false
   next_irq_pending         = 0sb?
   set_mem_do_rinst         = false
+  // Set when rs1 (and, with the dual-port register file, rs2) are loaded: the
+  // common tail below then picks the coprocessor, a memory state, the shifter or the ALU.
+  mut operands_loaded:Bool = false
   if not resetn {
-    if ENABLE_COUNTERS { count_instr = 0 }
+    if ENABLE_COUNTERS {
+      count_instr = 0
+    }
     next_irq_pending = 0
     if STACKADDR != 0xffffffff {
       latched_rd = 2
@@ -694,7 +643,7 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
         current_pc   = reg_next_pc
         if latched_branch {
           const branch_target = if latched_stalu { alu_out_q } else { reg_out }
-          current_pc          = if latched_store { branch_target & 0xfffffffe } else { reg_next_pc }
+          current_pc = if latched_store { branch_target & 0xfffffffe } else { reg_next_pc }
         }
         reg_pc         = current_pc
         reg_next_pc    = current_pc
@@ -711,7 +660,9 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
           wrap reg_next_pc = current_pc + instruction_bytes
           if ENABLE_COUNTERS {
             wrap count_instr = count_instr + 1
-            if not ENABLE_COUNTERS64 { count_instr#[32 ..= 63] = 0 }
+            if not ENABLE_COUNTERS64 {
+              count_instr#[32..=63] = 0
+            }
           }
           if instr.jal {
             mem_do_rinst = true
@@ -731,29 +682,25 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
           if WITH_PCPI {
             reg_op1 = cpuregs_rs1
             if ENABLE_REGS_DUALPORT {
-              reg_sh     = cpuregs_rs2#[0 ..= 4]
-              reg_op2    = cpuregs_rs2
-              pcpi_valid = true
-              if pcpi_int_ready {
-                mem_do_rinst  = true
-                pcpi_valid    = false
-                reg_out       = pcpi_int_rd
-                latched_store = pcpi_int_wr
-                cpu_state     = CPU_FETCH
-              } elif CATCH_ILLINSN and (pcpi_timeout or instr.ecall_ebreak) {
-                pcpi_valid = false
-                cpu_state  = CPU_TRAP
-              }
+              reg_sh          = cpuregs_rs2#[0..=4]
+              reg_op2         = cpuregs_rs2
+              operands_loaded = true
             } else {
               cpu_state = CPU_LD_RS2
             }
           } else {
             cpu_state = CPU_TRAP
           }
-        } elif (ENABLE_COUNTERS and (instr.rdcycle or instr.rdcycleh or instr.rdinstr or instr.rdinstrh)) {
-          reg_out = if instr.rdcycle { count_cycle#[0 ..= 31] } elif instr.rdcycleh and ENABLE_COUNTERS64 {
-            count_cycle#[32 ..= 63]
-          } elif instr.rdinstr { count_instr#[0 ..= 31] } elif instr.rdinstrh and ENABLE_COUNTERS64 { count_instr#[32 ..= 63] } else {
+        } elif ENABLE_COUNTERS and (instr.rdcycle or instr.rdcycleh or instr.rdinstr or instr.rdinstrh) {
+          reg_out       = if instr.rdcycle {
+            count_cycle#[0..=31]
+          } elif instr.rdcycleh and ENABLE_COUNTERS64 {
+            count_cycle#[32..=63]
+          } elif instr.rdinstr {
+            count_instr#[0..=31]
+          } elif instr.rdinstrh and ENABLE_COUNTERS64 {
+            count_instr#[32..=63]
+          } else {
             0sb?
           }
           latched_store = true
@@ -787,56 +734,18 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
         } else {
           reg_op1 = cpuregs_rs1
           if ENABLE_REGS_DUALPORT {
-            reg_sh  = cpuregs_rs2#[0 ..= 4]
-            reg_op2 = cpuregs_rs2
-            if instr.is_sb_sh_sw {
-              cpu_state    = CPU_STMEM
-              mem_do_rinst = true
-            } elif instr.is_sll_srl_sra and not BARREL_SHIFTER {
-              cpu_state = CPU_SHIFT
-            } else {
-              if TWO_CYCLE_ALU or (TWO_CYCLE_COMPARE and instr.is_beq_bne_blt_bge_bltu_bgeu) {
-                alu_wait   = true
-                alu_wait_2 = TWO_CYCLE_ALU and TWO_CYCLE_COMPARE and instr.is_beq_bne_blt_bge_bltu_bgeu
-              } else {
-                mem_do_rinst = mem_do_prefetch
-              }
-              cpu_state = CPU_EXEC
-            }
+            reg_sh          = cpuregs_rs2#[0..=4]
+            reg_op2         = cpuregs_rs2
+            operands_loaded = true
           } else {
             cpu_state = CPU_LD_RS2
           }
         }
       }
       == CPU_LD_RS2 {
-        reg_sh  = cpuregs_rs2#[0 ..= 4]
-        reg_op2 = cpuregs_rs2
-        if WITH_PCPI and instr_trap {
-          pcpi_valid = true
-          if pcpi_int_ready {
-            mem_do_rinst  = true
-            pcpi_valid    = false
-            reg_out       = pcpi_int_rd
-            latched_store = pcpi_int_wr
-            cpu_state     = CPU_FETCH
-          } elif CATCH_ILLINSN and (pcpi_timeout or instr.ecall_ebreak) {
-            pcpi_valid = false
-            cpu_state  = CPU_TRAP
-          }
-        } elif instr.is_sb_sh_sw {
-          cpu_state    = CPU_STMEM
-          mem_do_rinst = true
-        } elif instr.is_sll_srl_sra and not BARREL_SHIFTER {
-          cpu_state = CPU_SHIFT
-        } else {
-          if TWO_CYCLE_ALU or (TWO_CYCLE_COMPARE and instr.is_beq_bne_blt_bge_bltu_bgeu) {
-            alu_wait   = true
-            alu_wait_2 = TWO_CYCLE_ALU and TWO_CYCLE_COMPARE and instr.is_beq_bne_blt_bge_bltu_bgeu
-          } else {
-            mem_do_rinst = mem_do_prefetch
-          }
-          cpu_state = CPU_EXEC
-        }
+        reg_sh          = cpuregs_rs2#[0..=4]
+        reg_op2         = cpuregs_rs2
+        operands_loaded = true
       }
       == CPU_EXEC {
         wrap reg_out = reg_pc + instr.imm
@@ -844,13 +753,13 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
           mem_do_rinst = mem_do_prefetch and not alu_wait_2
           alu_wait     = alu_wait_2
         } elif instr.is_beq_bne_blt_bge_bltu_bgeu {
+          const branch_taken = if TWO_CYCLE_COMPARE { alu_out_0_q } else { alu_out_0 }
           latched_rd     = 0
-          latched_store  = if TWO_CYCLE_COMPARE { alu_out_0_q } else { alu_out_0 }
-          latched_branch = if TWO_CYCLE_COMPARE { alu_out_0_q } else { alu_out_0 }
+          latched_store  = branch_taken
+          latched_branch = branch_taken
           if mem_done {
             cpu_state = CPU_FETCH
           }
-          const branch_taken = if TWO_CYCLE_COMPARE { alu_out_0_q } else { alu_out_0 }
           if branch_taken {
             decoder_trigger  = false
             set_mem_do_rinst = true
@@ -869,13 +778,17 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
           mem_do_rinst = mem_do_prefetch
           cpu_state    = CPU_FETCH
         } else {
-          const shift_amount:u5 = if TWO_STAGE_SHIFT and (reg_sh >= 4) { 4 } else { 1 }
+          const shift_amount:U5 = if TWO_STAGE_SHIFT and reg_sh >= 4 { 4 } else { 1 }
           reg_op1 = if instr.slli or instr.sll or instr.srli or instr.srl or instr.srai or instr.sra {
             // Upstream priority is left, logical right, then arithmetic right.
             // Preserve it even if an inductive cut sets conflicting decode flags.
             const logical_right = instr.srli or instr.srl
-            shift_word(value=reg_op1, amount=shift_amount, left=(instr.slli or instr.sll), arithmetic=not logical_right
-                                                         and (instr.srai or instr.sra))
+            shift_word(
+              value=reg_op1,
+              amount=shift_amount,
+              left=instr.slli or instr.sll,
+              arithmetic=not logical_right and (instr.srai or instr.sra),
+            )
           } else {
             0sb?
           }
@@ -886,7 +799,7 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
         if not mem_do_prefetch or mem_done {
           if not mem_do_wdata {
             mem_wordsize = if instr.sb { 2 } elif instr.sh { 1 } elif instr.sw { 0 } else { 0sb? }
-            wrap reg_op1     = reg_op1 + instr.imm
+            wrap reg_op1 = reg_op1 + instr.imm
             set_mem_do_wdata = true
           }
           if not mem_do_prefetch and mem_done {
@@ -904,70 +817,68 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
             latched_is_lu = instr.is_lbu_lhu_lw
             latched_is_lh = instr.lh
             latched_is_lb = instr.lb
-            wrap reg_op1     = reg_op1 + instr.imm
+            wrap reg_op1 = reg_op1 + instr.imm
             set_mem_do_rdata = true
           }
           if not mem_do_prefetch and mem_done {
-            wrap reg_out = if latched_is_lu { mem_rdata_word } elif latched_is_lh { mem_rdata_word#sext[0 ..= 15] } elif latched_is_lb {
-              mem_rdata_word#sext[0 ..= 7]
-            } else { 0sb? }
+            reg_out                = if latched_is_lu {
+              mem_rdata_word
+            } elif latched_is_lh {
+              mem_rdata_word#sext[0..=15]
+            } elif latched_is_lb {
+              mem_rdata_word#sext[0..=7]
+            } else {
+              0sb?
+            }
             decoder_trigger        = true
             decoder_pseudo_trigger = true
             cpu_state              = CPU_FETCH
           }
         }
       }
-      else {
-        trap = 0ub? != 0
-        mem_do_rinst           = 0ub? != 0
-        mem_wordsize           = 0sb?
-        current_pc             = 0sb?
-        irq_active             = 0ub? != 0
-        eoi = 0sb?
-        next_irq_pending       = 0sb?
-        trace_valid            = 0ub? != 0
-        trace_data             = 0sb?
-        reg_pc = 0sb?
-        reg_next_pc            = 0sb?
-        latched_store          = 0ub? != 0
-        latched_stalu          = 0ub? != 0
-        latched_branch         = 0ub? != 0
-        latched_is_lu          = 0ub? != 0
-        latched_is_lh          = 0ub? != 0
-        latched_is_lb          = 0ub? != 0
-        latched_rd             = 0sb?
-        latched_compr          = 0ub? != 0
-        irq_state              = 0sb?
-        reg_out                = 0sb?
-        do_waitirq             = 0ub? != 0
-        count_instr            = 0sb?
-        mem_do_prefetch        = 0ub? != 0
-        cpu_state              = 0sb?
-        reg_op1                = 0sb?
-        reg_op2                = 0sb?
-        pcpi_valid             = 0ub? != 0
-        reg_sh = 0sb?
-        irq_mask               = 0sb?
-        timer = 0sb?
-        decoder_trigger        = 0ub? != 0
-        set_mem_do_rinst       = 0ub? != 0
-        set_mem_do_wdata       = 0ub? != 0
-        decoder_pseudo_trigger = 0ub? != 0
-        set_mem_do_rdata       = 0ub? != 0
+    }
+  }
+  // Operands loaded: an unrecognised instruction goes to the coprocessor (and
+  // traps on timeout or ecall/ebreak); the rest pick their execution state.
+  if operands_loaded {
+    if WITH_PCPI and instr_trap {
+      pcpi_valid = true
+      if pcpi_int_ready {
+        mem_do_rinst  = true
+        pcpi_valid    = false
+        reg_out       = pcpi_int_rd
+        latched_store = pcpi_int_wr
+        cpu_state     = CPU_FETCH
+      } elif CATCH_ILLINSN and (pcpi_timeout or instr.ecall_ebreak) {
+        pcpi_valid = false
+        cpu_state  = CPU_TRAP
       }
+    } elif instr.is_sb_sh_sw {
+      cpu_state    = CPU_STMEM
+      mem_do_rinst = true
+    } elif instr.is_sll_srl_sra and not BARREL_SHIFTER {
+      cpu_state = CPU_SHIFT
+    } else {
+      if TWO_CYCLE_ALU or (TWO_CYCLE_COMPARE and instr.is_beq_bne_blt_bge_bltu_bgeu) {
+        alu_wait   = true
+        alu_wait_2 = TWO_CYCLE_ALU and TWO_CYCLE_COMPARE and instr.is_beq_bne_blt_bge_bltu_bgeu
+      } else {
+        mem_do_rinst = mem_do_prefetch
+      }
+      cpu_state = CPU_EXEC
     }
   }
 
-  // Alignment and illegal-instruction traps.
+  // ---- Alignment and illegal-instruction traps -----------------------------------------
   if CATCH_MISALIGN and resetn and (mem_do_rdata or mem_do_wdata) {
-    if (mem_wordsize == 0) and (reg_op1#[0 ..= 1] != 0) {
+    if mem_wordsize == 0 and reg_op1#[0..=1] != 0 {
       cpu_state = CPU_TRAP
     }
-    if (mem_wordsize == 1) and ((reg_op1 & 1) != 0) {
+    if mem_wordsize == 1 and (reg_op1 & 1) != 0 {
       cpu_state = CPU_TRAP
     }
   }
-  const pc_misaligned = if COMPRESSED_ISA { boolean(reg_pc#[0]) } else { reg_pc#[0 ..= 1] != 0 }
+  const pc_misaligned = if COMPRESSED_ISA { reg_pc#[0] == 1 } else { reg_pc#[0..=1] != 0 }
   if CATCH_MISALIGN and resetn and mem_do_rinst and pc_misaligned {
     cpu_state = CPU_TRAP
   }
@@ -994,14 +905,14 @@ pub mod picorv32<ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true, ENABLE_REGS_DUALP
       reg_pc#[0]      = 0
       reg_next_pc#[0] = 0
     } else {
-      reg_pc#[0 ..= 1]      = 0
-      reg_next_pc#[0 ..= 1] = 0
+      reg_pc#[0..=1]      = 0
+      reg_next_pc#[0..=1] = 0
     }
   }
   irq_pending  = next_irq_pending
   mem_la_read  = next_mem_la_read
   mem_la_write = next_mem_la_write
   mem_la_addr  = next_mem_la_addr
-  pcpi_rs1     = next_pcpi_rs1
-  pcpi_rs2     = next_pcpi_rs2
+  pcpi_rs1     = reg_op1
+  pcpi_rs2     = reg_op2
 }

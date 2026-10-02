@@ -170,7 +170,7 @@ sanitize_args() {
   local out="" a
   for a in "$@"; do
     case "$a" in
-    "$CORE_P_DIR"*) a="$CORE/pyrope${a#"$CORE_P_DIR"}" ;;
+    "$CORE_P_DIR"*) a="$CORE/$(basename "$CORE_P_DIR")${a#"$CORE_P_DIR"}" ;;
     "$CORE_V_DIR"*) a="$CORE/verilog${a#"$CORE_V_DIR"}" ;;
     "$CORE_SIM_DIR"*) a="$CORE/sim${a#"$CORE_SIM_DIR"}" ;;
     "$CORE_VERIF_DIR"*) a="$CORE/verif${a#"$CORE_VERIF_DIR"}" ;;

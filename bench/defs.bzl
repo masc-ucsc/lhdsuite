@@ -23,6 +23,11 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             Such a core has no compile_verilog, sim_verilog, or cross-language
 #             lec scenarios; those targets are omitted rather than redirected
 #             to a smaller, unrelated Verilog cone.
+#   pyrope2   True = <core>/pyrope2 is a maintained (hand-cleaned) tree with the
+#             same top; the core's BUILD must carry `pyrope2` + `pyrope2_top`
+#             filegroups. Adds `<core>_compile_pyrope2` and (when the core has a
+#             sim_tb) `<core>_sim_pyrope2`: MODE=pyrope2 is MODE=pyrope over
+#             that tree, held to the SAME gates and cycle counts.
 #   unit      module carrying the verify sidecar and the bug1/comment1
 #             variants; must be inside the top's cone.
 #   incremental_edit_unit  synth-only override for the semantic incremental
@@ -147,6 +152,7 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 CORES = {
     "dino": {
         "pkg": "//dino",
+        "pyrope2": True,
         "top": "PipelinedDualIssueCPU",
         "unit": "ALU",
         # The pipeline stage register: load / hold / flush / reset are all
@@ -260,6 +266,7 @@ CORES = {
     },
     "picorv32": {
         "pkg": "//picorv32",
+        "pyrope2": True,
         # picorv32_top is the parameter-pinning wrapper; picorv32 is the CPU.
         # Both languages are the SAME design here (unlike cva6), so every
         # cross-language scenario is real.
@@ -319,6 +326,7 @@ CORES = {
     },
     "minion": {
         "pkg": "//minion",
+        "pyrope2": True,
         "top": "minion_top",
         "unit": "txfma_adder",
         # No sequential sidecar yet. vpu_trans or a dcache handshake would be
@@ -472,6 +480,7 @@ CORES = {
         # one valid result per operating cycle. The Pyrope and generate-loop
         # Verilog are independent implementations of the same contract.
         "pkg": "//matched_filter",
+        "pyrope2": True,
         "top": "matched_filter",
         # `tap` sits under the top (64 instances) and its reference load is the
         # bug1 site: tests/bug1/tap.prp corrupts each loaded byte, which the
@@ -630,6 +639,7 @@ _SCENARIOS = [
     # --- Lgraph creation throughput (LoC/s, words/s) ---
     ("compile_verilog", "compile.sh", "verilog", "long", "", ""),
     ("compile_pyrope", "compile.sh", "pyrope", "long", "", ""),
+    ("compile_pyrope2", "compile.sh", "pyrope2", "long", "", ""),
     # Per-file separate compilation driven by a real build system: `lhd scan`
     # dependency discovery -> generated Makefile (one rule per file, deps = its
     # direct imports, pruned to --top's cone) -> `make -j`. Dependencies ride in
@@ -654,6 +664,9 @@ _SCENARIOS = [
     # core opt IN to simulation just by naming a driver.
     ("sim_verilog", "sim.sh", "verilog", "long", "", "sim_tb"),
     ("sim_pyrope", "sim.sh", "pyrope", "long", "", "sim_tb"),
+    # The cleaned tree under the same driver, gates and cycle count. Generated
+    # only for cores with the `pyrope2` knob (see core_benches).
+    ("sim_pyrope2", "sim.sh", "pyrope2", "long", "", "sim_tb"),
     # The sim counterpart of synth_incremental: four compiled-driver builds
     # over one workdir and emit dir, reporting setup/codegen and host C++
     # compile+link separately. No TIMED step executes the driver; each built
@@ -708,6 +721,8 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
         pkg + ":verilog",
         pkg + ":verilog_filelist",
     ]
+    if cfg.get("pyrope2", False):
+        data.extend([pkg + ":pyrope2", pkg + ":pyrope2_top"])
     if not synth_only:
         data.extend([
             pkg + ":tests",
@@ -729,7 +744,9 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "LHD": "$(rlocationpath @livehd//lhd:lhd)",
             "CORE": core,
             "CORE_V_FLIST": "$(rlocationpath %s:verilog_filelist)" % pkg,
-            "CORE_P_TOP": "$(rlocationpath %s:pyrope_top)" % pkg,
+            # MODE=pyrope2 reads the cleaned tree: the scripts derive every
+            # source path from CORE_P_TOP's directory.
+            "CORE_P_TOP": "$(rlocationpath %s:%s)" % (pkg, "pyrope2_top" if mode == "pyrope2" else "pyrope_top"),
             # Current generated Pyrope makes the DummyDPICWrapper_* bodies
             # empty, matching the synthesis-side SV without DiffExt stubs.
             "CORE_P_STUB_TOP": "",
@@ -809,6 +826,8 @@ def core_benches(core):
             "synth_incremental",
             "sim_verilog",
             "sim_pyrope",
+            "compile_pyrope2",
+            "sim_pyrope2",
             "sim_incremental",
             "sim_incremental_llvm",
             "lec_incremental",
@@ -819,6 +838,8 @@ def core_benches(core):
             "sim_verilator",
         ]:
             continue
+        if suffix.endswith("_pyrope2") and not cfg.get("pyrope2", False):
+            continue  # no maintained pyrope2 tree for this core
         if needs_color and needs_color not in cfg["color_algs"]:
             continue  # e.g. no synth_lec_flat on a core too big to color flat
         if needs_cfg and not cfg.get(needs_cfg, ""):

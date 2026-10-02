@@ -3,6 +3,7 @@
 #   MODE=verilog  slang front-end via the filelist (-F, -DSYNTHESIS, plus the
 #                 core's $CORE_V_FLAGS). LoC/words count the WHOLE filelist,
 #                 since slang parses every file in it.
+#   MODE=pyrope2 the same over <core>/pyrope2 (CORE_P_TOP names that tree)
 #   MODE=pyrope   top .prp; sibling import discovery pulls the whole tree
 #   MODE=pyrope_parallel
 #                 per-file separate compilation driven by a REAL BUILD SYSTEM.
@@ -42,13 +43,15 @@ verilog)
   run_timed compile_verilog lhd compile verilog --top "$CORE_TOP" \
     --emit-dir lg:out_lg --workdir w -- -F "$CORE_V_DIR/filelist.f" -DSYNTHESIS $CORE_V_FLAGS
   ;;
-pyrope)
-  run_timed compile_pyrope lhd compile "$CORE_P_DIR/$CORE_TOP.prp" \
+pyrope | pyrope2)
+  # MODE=pyrope2 is MODE=pyrope over <core>/pyrope2: defs.bzl points CORE_P_TOP
+  # at the pyrope2 tree, and every step/metric name carries the MODE.
+  run_timed "compile_$MODE" lhd compile "$CORE_P_DIR/$CORE_TOP.prp" \
     ${P_STUBS[@]+"${P_STUBS[@]}"} \
-    --top "$CORE_TOP" --emit-dir lg:out_lg --workdir w --result-json compile_pyrope.json \
+    --top "$CORE_TOP" --emit-dir lg:out_lg --workdir w --result-json "compile_$MODE.json" \
     ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"}
   read -r n_loc n_words <<EOF
-$(compile_input_stats compile_pyrope.json "$CORE_P_DIR" "$CORE_P_STUB_DIR")
+$(compile_input_stats "compile_$MODE.json" "$CORE_P_DIR" "$CORE_P_STUB_DIR")
 EOF
   [[ "$n_loc" =~ ^[0-9]+$ && "$n_words" =~ ^[0-9]+$ ]] || {
     echo "FAIL: could not count the compiled Pyrope cone" >&2

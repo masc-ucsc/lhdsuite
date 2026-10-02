@@ -1,34 +1,36 @@
 const enc = import("encodings")
-comptime const branch_eq = 0
-comptime const branch_ne = 1
-comptime const branch_lt = 4
-comptime const branch_ge = 5
+
+comptime const branch_eq  = 0
+comptime const branch_ne  = 1
+comptime const branch_lt  = 4
+comptime const branch_ge  = 5
 comptime const branch_ltu = 6
 comptime const branch_geu = 7
 
-pub mod DualIssueNextPC::[timecheck = false](
-  io_branch:u1,
-  io_jumptype:u2,
-  io_inputx:u64,
-  io_inputy:u64,
-  io_funct3:u3,
-  io_pc:u64,
-  io_imm:u64,
-  io_pipeB_valid:u1
-) -> (io_nextpc:u64@[], io_taken:u1@[]) {
-  const branch_taken:bool = match io_funct3 {
+// Resolves the branch or jump in EX: the taken flag and the next fetch address.
+pub comb DualIssueNextPC(
+  io_branch:Bool,
+  io_funct3:U3,
+  io_imm:U64,
+  io_inputx:U64,
+  io_inputy:U64,
+  io_jumptype:U2,
+  io_pc:U64,
+  io_pipeB_valid:Bool,
+) -> (io_nextpc:U64, io_taken:Bool) {
+  const branch_taken = match io_funct3 {
     == branch_eq { io_inputx == io_inputy }
     == branch_ne { io_inputx != io_inputy }
-    == branch_lt { io_inputx#sext[0 ..= 63] < io_inputy#sext[0 ..= 63] }
-    == branch_ge { io_inputx#sext[0 ..= 63] >= io_inputy#sext[0 ..= 63] }
+    == branch_lt { io_inputx#sext[0..=63] < io_inputy#sext[0..=63] }
+    == branch_ge { io_inputx#sext[0..=63] >= io_inputy#sext[0..=63] }
     == branch_ltu { io_inputx < io_inputy }
     == branch_geu { io_inputx >= io_inputy }
     else { false }
   }
-  const taken:bool = if io_branch != 0 { branch_taken } else { io_jumptype != 0 }
+  io_taken = if io_branch { branch_taken } else { io_jumptype != 0 }
   // The reference does not clear JALR bit zero; retain that behavior.
-  const indirect:bool = io_branch == 0 and io_jumptype#[0] != 0
-  const base:u64      = if indirect { io_inputx } else { io_pc }
-  wrap io_nextpc = if taken { base + io_imm } else { io_pc + (if io_pipeB_valid != 0 { enc.fetch_bytes } else { enc.instruction_bytes }) }
-  io_taken  = unsigned(taken)
+  const indirect = not io_branch and io_jumptype#[0] == 1
+  const base:U64 = if indirect { io_inputx } else { io_pc }
+  wrap io_nextpc = if io_taken { base + io_imm }
+    else { io_pc + (if io_pipeB_valid { enc.fetch_bytes } else { enc.instruction_bytes }) }
 }

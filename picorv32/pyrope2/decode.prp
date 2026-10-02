@@ -1,374 +1,367 @@
-comptime const op_auipc:u7 = 0x17
-comptime const op_branch:u7 = 0x63
-comptime const op_fence:u7 = 0x0f
-comptime const op_immediate:u7 = 0x13
-comptime const op_jal:u7 = 0x6f
-comptime const op_jalr:u7 = 0x67
-comptime const op_load:u7 = 0x03
-comptime const op_lui:u7 = 0x37
-comptime const op_register:u7 = 0x33
-comptime const op_store:u7 = 0x23
-comptime const op_system:u7 = 0x73
+// PicoRV32 instruction decoder (ISC, see ../verilog/COPYING).
+// Two registered stages, as upstream: compressed/standard field extraction when
+// a fetch completes, then operation decode when the decoder is triggered.
+
+comptime const OP_AUIPC:U7     = 0x17
+comptime const OP_BRANCH:U7    = 0x63
+comptime const OP_FENCE:U7     = 0x0f
+comptime const OP_IMMEDIATE:U7 = 0x13
+comptime const OP_JAL:U7       = 0x6f
+comptime const OP_JALR:U7      = 0x67
+comptime const OP_LOAD:U7      = 0x03
+comptime const OP_LUI:U7       = 0x37
+comptime const OP_REGISTER:U7  = 0x33
+comptime const OP_STORE:U7     = 0x23
+comptime const OP_SYSTEM:U7    = 0x73
 
 // Architectural immediates for the five ordinary RISC-V instruction formats.
-// The caller selects a format and owns the decode pipeline registers.
-pub comb immediates(insn:u32) -> (i:u32, s:u32, b:u32, u:u32, j:u32) {
+pub comb immediates(insn:U32) -> (b:U32, i:U32, j:U32, s:U32, u:U32) {
   wrap i = insn#sext[20..=31]
   wrap s = ((insn#[25..=31] << 5) | insn#[7..=11])#sext[0..=11]
-  wrap b = ((insn#[31] << 12) | (insn#[7] << 11) |
-    (insn#[25..=30] << 5) | (insn#[8..=11] << 1))#sext[0..=12]
+  wrap b = ((insn#[31] << 12) | (insn#[7] << 11) | (insn#[25..=30] << 5) | (insn#[8..=11] << 1))#sext[0..=12]
   u = insn#[12..=31] << 12
-  wrap j = ((insn#[31] << 20) | (insn#[12..=19] << 12) |
-    (insn#[20] << 11) | (insn#[21..=30] << 1))#sext[0..=20]
+  wrap j = ((insn#[31] << 20) | (insn#[12..=19] << 12) | (insn#[20] << 11) | (insn#[21..=30] << 1))#sext[0..=20]
 }
 
 // C.J/C.JAL share a signed 12-bit displacement with an implicit low zero.
-pub comb compressed_jump(insn:u16) -> (value:u32) {
-  wrap value = ((insn#[12] << 11) | (insn#[11] << 4) | (insn#[9..=10] << 8) |
-    (insn#[8] << 10) | (insn#[7] << 6) | (insn#[6] << 7) |
-    (insn#[3..=5] << 1) | (insn#[2] << 5))#sext[0..=11]
+pub comb compressed_jump(insn:U16) -> (value:U32) {
+  wrap value = ((insn#[12] << 11)
+    | (insn#[11] << 4)
+    | (insn#[9..=10] << 8)
+    | (insn#[8] << 10)
+    | (insn#[7] << 6)
+    | (insn#[6] << 7)
+    | (insn#[3..=5] << 1)
+    | (insn#[2] << 5))#sext[0..=11]
 }
 
-// Registered instruction decoding. Inputs are the fetch/decode stage's current
-// signals; the outputs retain the upstream nonblocking register semantics.
+// Registered instruction decoding. `insn` is the instruction word being
+// fetched (after RVC fetch assembly) and `mem_rdata_q` the latched word the
+// operation decode reads. Flags without a reset keep their unknown power-on
+// value, as upstream.
 pub mod instruction_decoder<COMPRESSED_ISA=true, ENABLE_COUNTERS=true, ENABLE_COUNTERS64=true>(
-  clk:u1, resetn:bool, mem_do_rinst:bool, mem_done:bool,
-  mem_rdata_latched:u32, mem_rdata_q:u32, decoder_trigger:bool, decoder_pseudo_trigger:bool
+  clk:Clock,
+  decoder_pseudo_trigger:Bool,
+  decoder_trigger:Bool,
+  insn:U32,
+  mem_do_rinst:Bool,
+  mem_done:Bool,
+  mem_rdata_q:U32,
+  resetn:Bool,
 ) -> (
-  lui:bool@[], auipc:bool@[], jal:bool@[], jalr:bool@[], beq:bool@[], bne:bool@[], blt:bool@[], bge:bool@[],
-  bltu:bool@[], bgeu:bool@[], lb:bool@[], lh:bool@[], lw:bool@[], lbu:bool@[], lhu:bool@[], sb:bool@[],
-  sh:bool@[], sw:bool@[], addi:bool@[], slti:bool@[], sltiu:bool@[], xori:bool@[], ori:bool@[], andi:bool@[],
-  slli:bool@[], srli:bool@[], srai:bool@[], add:bool@[], sub:bool@[], sll:bool@[], slt:bool@[], sltu:bool@[],
-  bit_xor:bool@[], srl:bool@[], sra:bool@[], bit_or:bool@[], bit_and:bool@[], rdcycle:bool@[], rdcycleh:bool@[],
-  rdinstr:bool@[], rdinstrh:bool@[], ecall_ebreak:bool@[], fence:bool@[], getq:bool@[], setq:bool@[],
-  retirq:bool@[], maskirq:bool@[], waitirq:bool@[], timer:bool@[], rd:u5@[], rs1:u5@[], rs2:u5@[],
-  imm:u32@[], imm_j:u32@[], compressed:bool@[], is_lui_auipc_jal:bool@[], is_lb_lh_lw_lbu_lhu:bool@[],
-  is_slli_srli_srai:bool@[], is_jalr_addi_slti_sltiu_xori_ori_andi:bool@[], is_sb_sh_sw:bool@[],
-  is_sll_srl_sra:bool@[], is_lui_auipc_jal_jalr_addi_add_sub:bool@[], is_slti_blt_slt:bool@[],
-  is_sltiu_bltu_sltu:bool@[], is_beq_bne_blt_bge_bltu_bgeu:bool@[], is_lbu_lhu_lw:bool@[],
-  is_alu_reg_imm:bool@[], is_alu_reg_reg:bool@[], is_compare:bool@[]
+  reg lui:Bool@[]=nil,
+  reg auipc:Bool@[]=nil,
+  reg jal:Bool@[]=nil,
+  reg jalr:Bool@[]=nil,
+  reg beq:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg bne:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg blt:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg bge:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg bltu:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg bgeu:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg lb:Bool@[]=nil,
+  reg lh:Bool@[]=nil,
+  reg lw:Bool@[]=nil,
+  reg lbu:Bool@[]=nil,
+  reg lhu:Bool@[]=nil,
+  reg sb:Bool@[]=nil,
+  reg sh:Bool@[]=nil,
+  reg sw:Bool@[]=nil,
+  reg addi:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg slti:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg sltiu:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg xori:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg ori:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg andi:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg slli:Bool@[]=nil,
+  reg srli:Bool@[]=nil,
+  reg srai:Bool@[]=nil,
+  reg add:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg sub:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg sll:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg slt:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg sltu:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg bit_xor:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg srl:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg sra:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg bit_or:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg bit_and:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg rdcycle:Bool@[]=nil,
+  reg rdcycleh:Bool@[]=nil,
+  reg rdinstr:Bool@[]=nil,
+  reg rdinstrh:Bool@[]=nil,
+  reg ecall_ebreak:Bool@[]=nil,
+  reg fence:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg getq:Bool@[]=nil,
+  reg setq:Bool@[]=nil,
+  reg retirq:Bool@[]=nil,
+  reg maskirq:Bool@[]=nil,
+  reg waitirq:Bool@[]=nil,
+  reg timer:Bool@[]=nil,
+  reg rd:U5@[]=nil,
+  reg rs1:U5@[]=nil,
+  reg rs2:U5@[]=nil,
+  reg imm:U32@[]=nil,
+  reg imm_j:U32@[]=nil,
+  reg compressed:Bool@[]=nil,
+  reg is_lui_auipc_jal:Bool@[]=nil,
+  reg is_lb_lh_lw_lbu_lhu:Bool@[]=nil,
+  reg is_slli_srli_srai:Bool@[]=nil,
+  reg is_jalr_addi_slti_sltiu_xori_ori_andi:Bool@[]=nil,
+  reg is_sb_sh_sw:Bool@[]=nil,
+  reg is_sll_srl_sra:Bool@[]=nil,
+  reg is_lui_auipc_jal_jalr_addi_add_sub:Bool@[]=nil,
+  reg is_slti_blt_slt:Bool@[]=nil,
+  reg is_sltiu_bltu_sltu:Bool@[]=nil,
+  reg is_beq_bne_blt_bge_bltu_bgeu:Bool@[]:[negreset=true, reset_pin=resetn]=false,
+  reg is_lbu_lhu_lw:Bool@[]=nil,
+  reg is_alu_reg_imm:Bool@[]=nil,
+  reg is_alu_reg_reg:Bool@[]=nil,
+  reg is_compare:Bool@[]:[negreset=true, reset_pin=resetn]=false,
 ) {
-  reg lui:bool = nil
-  reg auipc:bool = nil
-  reg jal:bool = nil
-  reg jalr:bool = nil
-  reg beq:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg bne:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg blt:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg bge:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg bltu:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg bgeu:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg lb:bool = nil
-  reg lh:bool = nil
-  reg lw:bool = nil
-  reg lbu:bool = nil
-  reg lhu:bool = nil
-  reg sb:bool = nil
-  reg sh:bool = nil
-  reg sw:bool = nil
-  reg addi:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg slti:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg sltiu:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg xori:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg ori:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg andi:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg slli:bool = nil
-  reg srli:bool = nil
-  reg srai:bool = nil
-  reg add:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg sub:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg sll:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg slt:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg sltu:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg bit_xor:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg srl:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg sra:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg bit_or:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg bit_and:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg rdcycle:bool = nil
-  reg rdcycleh:bool = nil
-  reg rdinstr:bool = nil
-  reg rdinstrh:bool = nil
-  reg ecall_ebreak:bool = nil
-  reg fence:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg getq:bool = nil
-  reg setq:bool = nil
-  reg retirq:bool = nil
-  reg maskirq:bool = nil
-  reg waitirq:bool = nil
-  reg timer:bool = nil
-  reg rd:u5 = nil
-  reg rs1:u5 = nil
-  reg rs2:u5 = nil
-  reg imm:u32 = nil
-  reg imm_j:u32 = nil
-  reg compressed:bool = nil
-  reg is_lui_auipc_jal:bool = nil
-  reg is_lb_lh_lw_lbu_lhu:bool = nil
-  reg is_slli_srli_srai:bool = nil
-  reg is_jalr_addi_slti_sltiu_xori_ori_andi:bool = nil
-  reg is_sb_sh_sw:bool = nil
-  reg is_sll_srl_sra:bool = nil
-  reg is_lui_auipc_jal_jalr_addi_add_sub:bool = nil
-  reg is_slti_blt_slt:bool = nil
-  reg is_sltiu_bltu_sltu:bool = nil
-  reg is_beq_bne_blt_bge_bltu_bgeu:bool:[negreset=true, reset_pin=ref resetn] = false
-  reg is_lbu_lhu_lw:bool = nil
-  reg is_alu_reg_imm:bool = nil
-  reg is_alu_reg_reg:bool = nil
-  reg is_compare:bool:[negreset=true, reset_pin=ref resetn] = false
+  // Instruction classes, one stage after the operation flags they group.
+  is_lui_auipc_jal                   = lui or auipc or jal
+  is_lui_auipc_jal_jalr_addi_add_sub = lui or auipc or jal or jalr or addi or add or sub
+  is_slti_blt_slt                    = slti or blt or slt
+  is_sltiu_bltu_sltu                 = sltiu or bltu or sltu
+  is_lbu_lhu_lw                      = lbu or lhu or lw
+  is_compare                         = is_beq_bne_blt_bge_bltu_bgeu or slti or slt or sltiu or sltu
 
-  // Instruction decoder: class decode, then registered operation decode.
-  is_lui_auipc_jal = lui or auipc or jal
-  is_lui_auipc_jal_jalr_addi_add_sub = (lui or auipc or jal or jalr or
-    addi or add or sub)
-  is_slti_blt_slt = slti or blt or slt
-  is_sltiu_bltu_sltu = sltiu or bltu or sltu
-  is_lbu_lhu_lw = lbu or lhu or lw
-  is_compare = is_beq_bne_blt_bge_bltu_bgeu or slti or slt or sltiu or sltu
+  // Stage 1: instruction format and register fields from the fetched word.
   if mem_do_rinst and mem_done {
-    lui = mem_rdata_latched#[0..=6] == op_lui
-    auipc = mem_rdata_latched#[0..=6] == op_auipc
-    jal = mem_rdata_latched#[0..=6] == op_jal
-    jalr = (mem_rdata_latched#[0..=6] == op_jalr) and (mem_rdata_latched#[12..=14] == 0)
-    retirq = false
-    waitirq = false
-    is_beq_bne_blt_bge_bltu_bgeu = mem_rdata_latched#[0..=6] == op_branch
-    is_lb_lh_lw_lbu_lhu = mem_rdata_latched#[0..=6] == op_load
-    is_sb_sh_sw = mem_rdata_latched#[0..=6] == op_store
-    is_alu_reg_imm = mem_rdata_latched#[0..=6] == op_immediate
-    is_alu_reg_reg = mem_rdata_latched#[0..=6] == op_register
-    const fetched_immediates = immediates(insn=mem_rdata_latched)
-    imm_j = fetched_immediates.j
-    rd = mem_rdata_latched#[7..=11]
-    rs1 = mem_rdata_latched#[15..=19]
-    rs2 = mem_rdata_latched#[20..=24]
-    compressed = false
-    if COMPRESSED_ISA and (mem_rdata_latched#[0..=1] != 3) {
+    const opcode = insn#[0..=6]
+    lui                          = opcode == OP_LUI
+    auipc                        = opcode == OP_AUIPC
+    jal                          = opcode == OP_JAL
+    jalr                         = opcode == OP_JALR and insn#[12..=14] == 0
+    retirq                       = false
+    waitirq                      = false
+    is_beq_bne_blt_bge_bltu_bgeu = opcode == OP_BRANCH
+    is_lb_lh_lw_lbu_lhu          = opcode == OP_LOAD
+    is_sb_sh_sw                  = opcode == OP_STORE
+    is_alu_reg_imm               = opcode == OP_IMMEDIATE
+    is_alu_reg_reg               = opcode == OP_REGISTER
+    imm_j                        = immediates(insn).j
+    rd                           = insn#[7..=11]
+    rs1                          = insn#[15..=19]
+    rs2                          = insn#[20..=24]
+    compressed                   = false
+
+    if COMPRESSED_ISA and insn#[0..=1] != 3 {
+      // RVC: map each compressed form onto the base-ISA flags and registers.
+      const rd_rs1:U5    = insn#[7..=11] // full register field (CR/CI formats)
+      const rs2_full:U5  = insn#[2..=6] // CR/CSS source (also the CI shift amount)
+      const rs1_prime:U5 = 8 + insn#[7..=9] // x8..x15 (CL/CS/CA/CB formats)
+      const rs2_prime:U5 = 8 + insn#[2..=4]
+      const funct3       = insn#[13..=15]
+
       compressed = true
-      rd = 0
-      rs1 = 0
-      rs2 = 0
+      rd         = 0
+      rs1        = 0
+      rs2        = 0
+      imm_j      = compressed_jump(insn=insn#[0..=15])
 
-      imm_j = compressed_jump(insn=mem_rdata_latched#[0..=15])
-
-      match mem_rdata_latched#[0..=1] {
+      match insn#[0..=1] {
         == 0 {
-          match mem_rdata_latched#[13..=15] {
-            == 0 {
-              is_alu_reg_imm = mem_rdata_latched#[5..=12] != 0
-              rs1 = 2
-              rd = (8 + mem_rdata_latched#[2..=4])#[0..=4]
-            }
-            == 2 {
-              is_lb_lh_lw_lbu_lhu = true
-              rs1 = (8 + mem_rdata_latched#[7..=9])#[0..=4]
-              rd = (8 + mem_rdata_latched#[2..=4])#[0..=4]
-            }
-            == 6 {
-              is_sb_sh_sw = true
-              rs1 = (8 + mem_rdata_latched#[7..=9])#[0..=4]
-              rs2 = (8 + mem_rdata_latched#[2..=4])#[0..=4]
-            }
-            else {
-            }
+          if funct3 == 0 { // c.addi4spn
+            is_alu_reg_imm = insn#[5..=12] != 0
+            rs1            = 2
+            rd             = rs2_prime
+          } elif funct3 == 2 { // c.lw
+            is_lb_lh_lw_lbu_lhu = true
+            rs1                 = rs1_prime
+            rd                  = rs2_prime
+          } elif funct3 == 6 { // c.sw
+            is_sb_sh_sw = true
+            rs1         = rs1_prime
+            rs2         = rs2_prime
           }
         }
         == 1 {
-          match mem_rdata_latched#[13..=15] {
-            == 0 {
+          match funct3 {
+            == 0 { // c.addi / c.nop
               is_alu_reg_imm = true
-              rd = mem_rdata_latched#[7..=11]
-              rs1 = mem_rdata_latched#[7..=11]
+              rd             = rd_rs1
+              rs1            = rd_rs1
             }
-            == 1 {
+            == 1 { // c.jal
               jal = true
-              rd = 1
+              rd  = 1
             }
-            == 2 {
+            == 2 { // c.li
               is_alu_reg_imm = true
-              rd = mem_rdata_latched#[7..=11]
-              rs1 = 0
+              rd             = rd_rs1
+              rs1            = 0
             }
-            == 3 {
-              if (mem_rdata_latched#[12] != 0) or (mem_rdata_latched#[2..=6] != 0) {
-                if mem_rdata_latched#[7..=11] == 2 {
+            == 3 { // c.addi16sp / c.lui
+              if insn#[12] != 0 or rs2_full != 0 {
+                if rd_rs1 == 2 {
                   is_alu_reg_imm = true
-                  rd = mem_rdata_latched#[7..=11]
-                  rs1 = mem_rdata_latched#[7..=11]
+                  rd             = rd_rs1
+                  rs1            = rd_rs1
                 } else {
                   lui = true
-                  rd = mem_rdata_latched#[7..=11]
+                  rd  = rd_rs1
                   rs1 = 0
                 }
               }
             }
-            == 4 {
-              if (mem_rdata_latched#[11] == 0) and (mem_rdata_latched#[12] == 0) {
+            == 4 { // c.srli / c.srai / c.andi / c.sub..c.and
+              if insn#[11] == 0 and insn#[12] == 0 {
                 is_alu_reg_imm = true
-                rd = (8 + mem_rdata_latched#[7..=9])#[0..=4]
-                rs1 = (8 + mem_rdata_latched#[7..=9])#[0..=4]
-                rs2 = ((mem_rdata_latched#[12] << 5) | mem_rdata_latched#[2..=6])#[0..=4]
+                rd             = rs1_prime
+                rs1            = rs1_prime
+                rs2            = rs2_full
               }
-              if mem_rdata_latched#[10..=11] == 2 {
+              if insn#[10..=11] == 2 {
                 is_alu_reg_imm = true
-                rd = (8 + mem_rdata_latched#[7..=9])#[0..=4]
-                rs1 = (8 + mem_rdata_latched#[7..=9])#[0..=4]
+                rd             = rs1_prime
+                rs1            = rs1_prime
               }
-              if mem_rdata_latched#[10..=12] == 3 {
+              if insn#[10..=12] == 3 {
                 is_alu_reg_reg = true
-                rd = (8 + mem_rdata_latched#[7..=9])#[0..=4]
-                rs1 = (8 + mem_rdata_latched#[7..=9])#[0..=4]
-                rs2 = (8 + mem_rdata_latched#[2..=4])#[0..=4]
+                rd             = rs1_prime
+                rs1            = rs1_prime
+                rs2            = rs2_prime
               }
             }
-            == 5 {
+            == 5 { // c.j
               jal = true
             }
-            == 6 {
+            in (6, 7) { // c.beqz / c.bnez
               is_beq_bne_blt_bge_bltu_bgeu = true
-              rs1 = (8 + mem_rdata_latched#[7..=9])#[0..=4]
-              rs2 = 0
-            }
-            == 7 {
-              is_beq_bne_blt_bge_bltu_bgeu = true
-              rs1 = (8 + mem_rdata_latched#[7..=9])#[0..=4]
-              rs2 = 0
-            }
-            else {
-              is_alu_reg_imm = 0ub? != 0
-              rd = 0sb?
-              rs1 = 0sb?
-              jal = 0ub? != 0
-              lui = 0ub? != 0
-              rs2 = 0sb?
-              is_alu_reg_reg = 0ub? != 0
-              is_beq_bne_blt_bge_bltu_bgeu = 0ub? != 0
+              rs1                          = rs1_prime
+              rs2                          = 0
             }
           }
         }
         == 2 {
-          match mem_rdata_latched#[13..=15] {
-            == 0 {
-              if mem_rdata_latched#[12] == 0 {
-                is_alu_reg_imm = true
-                rd = mem_rdata_latched#[7..=11]
-                rs1 = mem_rdata_latched#[7..=11]
-                rs2 = ((mem_rdata_latched#[12] << 5) | mem_rdata_latched#[2..=6])#[0..=4]
-              }
+          if funct3 == 0 { // c.slli
+            if insn#[12] == 0 {
+              is_alu_reg_imm = true
+              rd             = rd_rs1
+              rs1            = rd_rs1
+              rs2            = rs2_full
             }
-            == 2 {
-              if mem_rdata_latched#[7..=11] != 0 {
-                is_lb_lh_lw_lbu_lhu = true
-                rd = mem_rdata_latched#[7..=11]
-                rs1 = 2
-              }
+          } elif funct3 == 2 { // c.lwsp
+            if rd_rs1 != 0 {
+              is_lb_lh_lw_lbu_lhu = true
+              rd                  = rd_rs1
+              rs1                 = 2
             }
-            == 4 {
-              if (mem_rdata_latched#[12] == 0) and (mem_rdata_latched#[7..=11] != 0) and (mem_rdata_latched#[2..=6] == 0) {
-                jalr = true
-                rd = 0
-                rs1 = mem_rdata_latched#[7..=11]
-              }
-              if (mem_rdata_latched#[12] == 0) and (mem_rdata_latched#[2..=6] != 0) {
-                is_alu_reg_reg = true
-                rd = mem_rdata_latched#[7..=11]
-                rs1 = 0
-                rs2 = mem_rdata_latched#[2..=6]
-              }
-              if (mem_rdata_latched#[12] != 0) and (mem_rdata_latched#[7..=11] != 0) and (mem_rdata_latched#[2..=6] == 0) {
-                jalr = true
-                rd = 1
-                rs1 = mem_rdata_latched#[7..=11]
-              }
-              if (mem_rdata_latched#[12] != 0) and (mem_rdata_latched#[2..=6] != 0) {
-                is_alu_reg_reg = true
-                rd = mem_rdata_latched#[7..=11]
-                rs1 = mem_rdata_latched#[7..=11]
-                rs2 = mem_rdata_latched#[2..=6]
-              }
+          } elif funct3 == 4 { // c.jr / c.mv / c.jalr / c.add
+            if insn#[12] == 0 and rd_rs1 != 0 and rs2_full == 0 {
+              jalr = true
+              rd   = 0
+              rs1  = rd_rs1
             }
-            == 6 {
-              is_sb_sh_sw = true
-              rs1 = 2
-              rs2 = mem_rdata_latched#[2..=6]
+            if insn#[12] == 0 and rs2_full != 0 {
+              is_alu_reg_reg = true
+              rd             = rd_rs1
+              rs1            = 0
+              rs2            = rs2_full
             }
-            else {
+            if insn#[12] != 0 and rd_rs1 != 0 and rs2_full == 0 {
+              jalr = true
+              rd   = 1
+              rs1  = rd_rs1
             }
+            if insn#[12] != 0 and rs2_full != 0 {
+              is_alu_reg_reg = true
+              rd             = rd_rs1
+              rs1            = rd_rs1
+              rs2            = rs2_full
+            }
+          } elif funct3 == 6 { // c.swsp
+            is_sb_sh_sw = true
+            rs1         = 2
+            rs2         = rs2_full
           }
-        }
-        else {
         }
       }
     }
   }
+
+  // Stage 2: operation flags and immediate from the latched word.
   if decoder_trigger and not decoder_pseudo_trigger {
-    const opcode = mem_rdata_q#[0..=6]
-    const funct3 = mem_rdata_q#[12..=14]
-    const funct7 = mem_rdata_q#[25..=31]
-    const shift_encoding = (((funct3 == 1) and (funct7 == 0)) or
-                           ((funct3 == 5) and ((funct7 == 0) or (funct7 == 32))))
-    beq = is_beq_bne_blt_bge_bltu_bgeu and (funct3 == 0)
-    bne = is_beq_bne_blt_bge_bltu_bgeu and (funct3 == 1)
-    blt = is_beq_bne_blt_bge_bltu_bgeu and (funct3 == 4)
-    bge = is_beq_bne_blt_bge_bltu_bgeu and (funct3 == 5)
-    bltu = is_beq_bne_blt_bge_bltu_bgeu and (funct3 == 6)
-    bgeu = is_beq_bne_blt_bge_bltu_bgeu and (funct3 == 7)
-    lb = is_lb_lh_lw_lbu_lhu and (funct3 == 0)
-    lh = is_lb_lh_lw_lbu_lhu and (funct3 == 1)
-    lw = is_lb_lh_lw_lbu_lhu and (funct3 == 2)
-    lbu = is_lb_lh_lw_lbu_lhu and (funct3 == 4)
-    lhu = is_lb_lh_lw_lbu_lhu and (funct3 == 5)
-    sb = is_sb_sh_sw and (funct3 == 0)
-    sh = is_sb_sh_sw and (funct3 == 1)
-    sw = is_sb_sh_sw and (funct3 == 2)
-    addi = is_alu_reg_imm and (funct3 == 0)
-    slti = is_alu_reg_imm and (funct3 == 2)
-    sltiu = is_alu_reg_imm and (funct3 == 3)
-    xori = is_alu_reg_imm and (funct3 == 4)
-    ori = is_alu_reg_imm and (funct3 == 6)
-    andi = is_alu_reg_imm and (funct3 == 7)
-    slli = is_alu_reg_imm and (funct3 == 1) and (funct7 == 0)
-    srli = is_alu_reg_imm and (funct3 == 5) and (funct7 == 0)
-    srai = is_alu_reg_imm and (funct3 == 5) and (funct7 == 32)
-    add = is_alu_reg_reg and (funct3 == 0) and (funct7 == 0)
-    sub = is_alu_reg_reg and (funct3 == 0) and (funct7 == 32)
-    sll = is_alu_reg_reg and (funct3 == 1) and (funct7 == 0)
-    slt = is_alu_reg_reg and (funct3 == 2) and (funct7 == 0)
-    sltu = is_alu_reg_reg and (funct3 == 3) and (funct7 == 0)
-    bit_xor = is_alu_reg_reg and (funct3 == 4) and (funct7 == 0)
-    srl = is_alu_reg_reg and (funct3 == 5) and (funct7 == 0)
-    sra = is_alu_reg_reg and (funct3 == 5) and (funct7 == 32)
-    bit_or = is_alu_reg_reg and (funct3 == 6) and (funct7 == 0)
-    bit_and = is_alu_reg_reg and (funct3 == 7) and (funct7 == 0)
-    rdcycle = (((opcode == op_system) and (mem_rdata_q#[12..=31] == 0xc0002)) or
-      ((opcode == op_system) and (mem_rdata_q#[12..=31] == 0xc0102))) and ENABLE_COUNTERS
-    rdcycleh = (((opcode == op_system) and (mem_rdata_q#[12..=31] == 0xc8002)) or
-      ((opcode == op_system) and (mem_rdata_q#[12..=31] == 0xc8102))) and ENABLE_COUNTERS and ENABLE_COUNTERS64
-    rdinstr = (opcode == op_system) and (mem_rdata_q#[12..=31] == 0xc0202) and ENABLE_COUNTERS
-    rdinstrh = (opcode == op_system) and (mem_rdata_q#[12..=31] == 0xc8202) and ENABLE_COUNTERS and ENABLE_COUNTERS64
-    ecall_ebreak = ((opcode == op_system) and (mem_rdata_q#[21..=31] == 0) and (mem_rdata_q#[7..=19] == 0)) or
-      (COMPRESSED_ISA and (mem_rdata_q#[0..=15] == 0x9002))
-    fence = (opcode == op_fence) and (funct3 == 0)
-    getq = false
-    setq = false
+    const opcode         = mem_rdata_q#[0..=6]
+    const funct3         = mem_rdata_q#[12..=14]
+    const funct7         = mem_rdata_q#[25..=31]
+    const csr            = mem_rdata_q#[12..=31]
+    const system         = opcode == OP_SYSTEM
+    const shift_encoding = (funct3 == 1 and funct7 == 0) or (funct3 == 5 and (funct7 == 0 or funct7 == 32))
+
+    beq  = is_beq_bne_blt_bge_bltu_bgeu and funct3 == 0
+    bne  = is_beq_bne_blt_bge_bltu_bgeu and funct3 == 1
+    blt  = is_beq_bne_blt_bge_bltu_bgeu and funct3 == 4
+    bge  = is_beq_bne_blt_bge_bltu_bgeu and funct3 == 5
+    bltu = is_beq_bne_blt_bge_bltu_bgeu and funct3 == 6
+    bgeu = is_beq_bne_blt_bge_bltu_bgeu and funct3 == 7
+
+    lb  = is_lb_lh_lw_lbu_lhu and funct3 == 0
+    lh  = is_lb_lh_lw_lbu_lhu and funct3 == 1
+    lw  = is_lb_lh_lw_lbu_lhu and funct3 == 2
+    lbu = is_lb_lh_lw_lbu_lhu and funct3 == 4
+    lhu = is_lb_lh_lw_lbu_lhu and funct3 == 5
+    sb  = is_sb_sh_sw and funct3 == 0
+    sh  = is_sb_sh_sw and funct3 == 1
+    sw  = is_sb_sh_sw and funct3 == 2
+
+    addi  = is_alu_reg_imm and funct3 == 0
+    slti  = is_alu_reg_imm and funct3 == 2
+    sltiu = is_alu_reg_imm and funct3 == 3
+    xori  = is_alu_reg_imm and funct3 == 4
+    ori   = is_alu_reg_imm and funct3 == 6
+    andi  = is_alu_reg_imm and funct3 == 7
+    slli  = is_alu_reg_imm and funct3 == 1 and funct7 == 0
+    srli  = is_alu_reg_imm and funct3 == 5 and funct7 == 0
+    srai  = is_alu_reg_imm and funct3 == 5 and funct7 == 32
+
+    add     = is_alu_reg_reg and funct3 == 0 and funct7 == 0
+    sub     = is_alu_reg_reg and funct3 == 0 and funct7 == 32
+    sll     = is_alu_reg_reg and funct3 == 1 and funct7 == 0
+    slt     = is_alu_reg_reg and funct3 == 2 and funct7 == 0
+    sltu    = is_alu_reg_reg and funct3 == 3 and funct7 == 0
+    bit_xor = is_alu_reg_reg and funct3 == 4 and funct7 == 0
+    srl     = is_alu_reg_reg and funct3 == 5 and funct7 == 0
+    sra     = is_alu_reg_reg and funct3 == 5 and funct7 == 32
+    bit_or  = is_alu_reg_reg and funct3 == 6 and funct7 == 0
+    bit_and = is_alu_reg_reg and funct3 == 7 and funct7 == 0
+
+    // Counter reads are the CSRRS encodings of cycle/time and instret.
+    rdcycle      = ENABLE_COUNTERS and system and (csr == 0xc0002 or csr == 0xc0102)
+    rdcycleh     = ENABLE_COUNTERS and ENABLE_COUNTERS64 and system and (csr == 0xc8002 or csr == 0xc8102)
+    rdinstr      = ENABLE_COUNTERS and system and csr == 0xc0202
+    rdinstrh     = ENABLE_COUNTERS and ENABLE_COUNTERS64 and system and csr == 0xc8202
+    ecall_ebreak = (system and mem_rdata_q#[21..=31] == 0 and mem_rdata_q#[7..=19] == 0)
+      or (COMPRESSED_ISA and mem_rdata_q#[0..=15] == 0x9002)
+    fence        = opcode == OP_FENCE and funct3 == 0
+
+    // IRQ instructions are not implemented (ENABLE_IRQ is unsupported).
+    getq    = false
+    setq    = false
     maskirq = false
-    timer = false
-    is_slli_srli_srai = is_alu_reg_imm and shift_encoding
-    is_jalr_addi_slti_sltiu_xori_ori_andi = jalr or (is_alu_reg_imm and
-      ((funct3 == 0) or (funct3 == 2) or (funct3 == 3) or (funct3 == 4) or (funct3 == 6) or
-      (funct3 == 7)))
-    is_sll_srl_sra = is_alu_reg_reg and shift_encoding
-    is_lui_auipc_jal_jalr_addi_add_sub = false
-    is_compare = false
+    timer   = false
+
+    is_slli_srli_srai                     = is_alu_reg_imm and shift_encoding
+    is_jalr_addi_slti_sltiu_xori_ori_andi = jalr or (is_alu_reg_imm and funct3 != 1 and funct3 != 5)
+    is_sll_srl_sra                        = is_alu_reg_reg and shift_encoding
+    is_lui_auipc_jal_jalr_addi_add_sub    = false
+    is_compare                            = false
+
     const formats = immediates(insn=mem_rdata_q)
-    imm = if jal { imm_j }
-      elif lui or auipc { formats.u }
-      elif jalr or is_lb_lh_lw_lbu_lhu or is_alu_reg_imm { formats.i }
-      elif is_beq_bne_blt_bge_bltu_bgeu { formats.b }
-      elif is_sb_sh_sw { formats.s }
-      else { 0ub? }
-
+    imm = if jal {
+      imm_j
+    } elif lui or auipc {
+      formats.u
+    } elif jalr or is_lb_lh_lw_lbu_lhu or is_alu_reg_imm {
+      formats.i
+    } elif is_beq_bne_blt_bge_bltu_bgeu {
+      formats.b
+    } elif is_sb_sh_sw {
+      formats.s
+    } else {
+      0sb?
+    }
   }
-
 }

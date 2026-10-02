@@ -138,6 +138,14 @@ Every core shares one shape (`<core>/` = `dino/`, `minion/` or `cva6/`):
   driver names its DUT as `import("lg:NAME")` with the design supplied as the
   positional before it (one driver then serves a `.prp` tree and an `lg:`
   library unchanged).
+- **`pyrope2` is a per-core knob, not a second core.** `CORES[...]["pyrope2"]`
+  plus `pyrope2`/`pyrope2_top` filegroups in `<core>/BUILD` add
+  `<core>_compile_pyrope2` and `<core>_sim_pyrope2`. They are `MODE=pyrope2` of
+  the same scripts, with `CORE_P_TOP` pointing at `<core>/pyrope2`: same driver,
+  gates and cycle count as the `pyrope` scenarios, nothing duplicated. Do not
+  point `lec`/`synth`/`verify` at it without the same care as for `pyrope/`.
+  `bench/simcmp.sh` compares Verilator against all three lhd-sim flavours
+  outside bazel.
 - **Verilator is a comparison, not a scenario the suite owns.** `sim_verilator`
   SKIPS (exit 0, `METRIC verilator_present 0`) when verilator is absent — do
   not turn it into a hard failure the way `require_tech_dir` is. Its C++ driver

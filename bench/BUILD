@@ -83,9 +83,11 @@ test_suite(
     name = "compile",
     tests = [
         ":dino_compile_pyrope",
+        ":dino_compile_pyrope2",
         ":dino_compile_pyrope_parallel",
         ":dino_compile_verilog",
         ":minion_compile_pyrope",
+        ":minion_compile_pyrope2",
         ":minion_compile_pyrope_parallel",
         ":minion_compile_verilog",
     ],
@@ -95,9 +97,11 @@ test_suite(
     name = "sim",
     tests = [
         ":dino_sim_pyrope",
+        ":dino_sim_pyrope2",
         ":dino_sim_verilator",
         ":dino_sim_verilog",
         ":minion_sim_pyrope",
+        ":minion_sim_pyrope2",
         ":minion_sim_verilator",
         ":minion_sim_verilog",
     ],

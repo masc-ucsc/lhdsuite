@@ -36,6 +36,19 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# The hand-maintained, cleaned tree (see //bench:picorv32_sim_pyrope2). Same top.
+filegroup(
+    name = "pyrope2",
+    srcs = glob(["pyrope2/*.prp"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "pyrope2_top",
+    srcs = ["pyrope2/picorv32_top.prp"],
+    visibility = ["//visibility:public"],
+)
+
 # Simulation drivers. picorv32_prog_tb.prp runs a real RISC-V program with the
 # testbench acting as the CPU's memory; the C++ twin checks the same workload.
 filegroup(

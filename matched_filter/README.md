@@ -81,9 +81,7 @@ The derived-width and type-alias fixes allow
 the output port and array elements. The design likewise uses `Product_T` for
 its retained multiplier values.
 
-Two generic cases remain unsupported. Passing `Sum_T` as the `add_node` type
-argument loses the `a.[bits]` metadata used inside that generic, so the call
-keeps the equivalent structural type. A non-type generic bound computed from
-the surrounding loop index (for example
-`add_level<N=(SIZE >> (lvl + 1))>`) also does not elaborate. The tree therefore
-keeps the node loop directly in the top module.
+One generic case remains unsupported: a non-type generic bound computed from
+the surrounding loop index (for example `add_level<N=(SIZE >> (lvl + 1))>`)
+does not elaborate, so the tree keeps the node loop directly in the top module.
+`pyrope2/` passes the `Sum_T` alias straight to `add_node<Sum_T>`.

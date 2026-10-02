@@ -1,34 +1,42 @@
 const enc = import("encodings")
 
-pub comb Control(opcode:u7) -> (
-  control:(
-    ex_ctrl:(itype:u1, aluop:u1, src1:u1, src2:u2, branch:u1, jumptype:u2, resultselect:u1, wordinst:u1), mem_ctrl:(memop:u2), wb_ctrl:(toreg:u1,
-                                                                                                                                        regwrite:u1)
-  )
+// Instruction decoder: opcode -> execute / memory / write-back control signals.
+// (The reference's unused io_validinst output is omitted.)
+pub comb Control(
+  io_opcode:U7
+) -> (
+  io_aluop:U1,
+  io_branch:U1,
+  io_itype:U1,
+  io_jumptype:U2,
+  io_memop:U2,
+  io_regwrite:U1,
+  io_resultselect:U1,
+  io_src1:U1,
+  io_src2:U2,
+  io_toreg:U1,
+  io_wordinst:U1,
 ) {
-  const register_op:bool  = opcode == enc.op_register or opcode == enc.op_register_word
-  const immediate_op:bool = opcode == enc.op_immediate or opcode == enc.op_immediate_word
-  const load:bool         = opcode == enc.op_load
-  const store:bool        = opcode == enc.op_store
-  const branch:bool       = opcode == enc.op_branch
-  const lui:bool          = opcode == enc.op_lui
-  const auipc:bool        = opcode == enc.op_auipc
-  const jal:bool          = opcode == enc.op_jal
-  const jalr:bool         = opcode == enc.op_jalr
-  const jump:bool         = jal or jalr
-  const writes_rd:bool    = register_op or immediate_op or load or lui or auipc or jump
+  const register_op  = io_opcode == enc.op_register or io_opcode == enc.op_register_word
+  const immediate_op = io_opcode == enc.op_immediate or io_opcode == enc.op_immediate_word
+  const load         = io_opcode == enc.op_load
+  const store        = io_opcode == enc.op_store
+  const branch       = io_opcode == enc.op_branch
+  const lui          = io_opcode == enc.op_lui
+  const auipc        = io_opcode == enc.op_auipc
+  const jal          = io_opcode == enc.op_jal
+  const jalr         = io_opcode == enc.op_jalr
+  const jump         = jal or jalr
 
-  control.ex_ctrl.itype        = unsigned(immediate_op)
-  control.ex_ctrl.aluop        = unsigned(register_op or immediate_op)
-  control.ex_ctrl.src1         = unsigned(auipc or jump)
-  control.ex_ctrl.src2         = if jump { enc.src2_four }
-    elif immediate_op or load or store or auipc { enc.src2_immediate }
-    else { enc.src2_register }
-  control.ex_ctrl.branch       = unsigned(branch)
-  control.ex_ctrl.jumptype     = if jal { enc.jump_direct } elif jalr { enc.jump_indirect } else { enc.jump_none }
-  control.ex_ctrl.resultselect = unsigned(lui)
-  control.mem_ctrl.memop       = if load { enc.mem_load } elif store { enc.mem_store } else { enc.mem_none }
-  control.wb_ctrl.toreg        = unsigned(load)
-  control.wb_ctrl.regwrite     = unsigned(writes_rd)
-  control.ex_ctrl.wordinst     = unsigned(opcode == enc.op_immediate_word or opcode == enc.op_register_word)
+  io_itype = U1(immediate_op)
+  io_aluop = U1(register_op or immediate_op)
+  io_src1 = U1(auipc or jump)
+  io_src2 = if jump { enc.src2_four } elif immediate_op or load or store or auipc { enc.src2_immediate } else { enc.src2_register }
+  io_branch = U1(branch)
+  io_jumptype = if jal { enc.jump_direct } elif jalr { enc.jump_indirect } else { enc.jump_none }
+  io_resultselect = U1(lui)
+  io_wordinst = U1(io_opcode == enc.op_immediate_word or io_opcode == enc.op_register_word)
+  io_memop = if load { enc.mem_load } elif store { enc.mem_store } else { enc.mem_none }
+  io_toreg = U1(load)
+  io_regwrite = U1(register_op or immediate_op or load or lui or auipc or jump)
 }

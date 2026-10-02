@@ -44,6 +44,7 @@
 # skips that driver.
 #
 #   MODE=pyrope   sim the <core>/pyrope tree directly.
+#   MODE=pyrope2  the same over <core>/pyrope2 (defs.bzl points CORE_P_TOP there).
 #   MODE=verilog  compile the Verilog through slang straight to an lgraph
 #                 library (--emit-dir lg:) and sim THAT. It used to detour
 #                 through `--emit-dir pyrope:` and sim the re-emitted source,
@@ -104,7 +105,7 @@ done
 TOP_INPUT=
 PROG_INPUT=
 case "${MODE:?}" in
-pyrope | incr)
+pyrope | pyrope2 | incr)
   copy_core_pyrope tree
   BENCH_INPUT="tree/$CORE_SIM_TB_UNIT.prp"
   [ -z "$CORE_SIM_TOP_TB" ] || TOP_INPUT="tree/$CORE_SIM_TOP_UNIT.prp"

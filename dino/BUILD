@@ -27,6 +27,19 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# The hand-maintained, cleaned tree (see //bench:dino_sim_pyrope2). Same top.
+filegroup(
+    name = "pyrope2",
+    srcs = glob(["pyrope2/*.prp"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "pyrope2_top",
+    srcs = ["pyrope2/PipelinedDualIssueCPU.prp"],
+    visibility = ["//visibility:public"],
+)
+
 # Simulation drivers — plain suite code, usable outside bazel too. The .prp
 # testbenches drive `lhd sim`; the .cpp is the Verilator twin of
 # sim/dino_prog_tb.prp that //bench:dino_sim_verilator compares against.

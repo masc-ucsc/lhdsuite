@@ -5,47 +5,52 @@
 // advances only under ref_load, then remains fixed during operation. Every x
 // sample starts a new dot product. The LOG2_SIZE-level registered adder tree
 // returns one result per cycle after its deterministic pipeline delay.
-const tap      = import("tap.tap")
+const tap = import("tap.tap")
 const add_node = import("add_node.add_node")
 
-comptime const SIZE       = 64
-comptime const LOG2_SIZE  = 6
+comptime const SIZE = 64
+comptime const LOG2_SIZE = 6
 comptime const MULT_WIDTH = 4
-comptime const SUM_WIDTH  = MULT_WIDTH + LOG2_SIZE
+comptime const SUM_WIDTH = MULT_WIDTH + LOG2_SIZE
 
-type Product_T = signed(bits=MULT_WIDTH)
-type Sum_T     = signed(bits=SUM_WIDTH)
+type Product_T = Signed(bits=MULT_WIDTH)
+type Sum_T = Signed(bits=SUM_WIDTH)
 
 cassert(SIZE == (1 << LOG2_SIZE), "SIZE must equal 2**LOG2_SIZE")
 cassert(LOG2_SIZE > 0, "LOG2_SIZE must be positive")
-cassert(MULT_WIDTH > 0 and MULT_WIDTH <= 16,
-        "MULT_WIDTH must be in 1..=16 for signed 8-bit inputs")
+cassert(MULT_WIDTH > 0 and MULT_WIDTH <= 16, "MULT_WIDTH must be in 1..=16 for signed 8-bit inputs")
 
+// The external `reset` (and the 0/1 `ref_load`, `y_valid`) stay `U1`, as in the
+// RTL; they become `Reset`/`Bool` just inside.
+// prp-style-allow reset-port-type
+//
 // `timecheck=false`: the sample chain, held reference state, and registered
 // reduction deliberately mix cycle ages.
-pub mod matched_filter::[timecheck=false](clock:u1, reset:u1, x:s8, ref_in:s8, ref_load:bool) -> (y:Sum_T@[0], y_valid:bool@[0]) {
-  mut xs:s8 = x
-  mut refs:s8 = ref_in
+pub mod matched_filter::[timecheck=false](clock:Clock, ref_in:S8, ref_load:U1, reset:U1, x:S8) -> (y:Sum_T@[0], y_valid:U1@[0]) {
+  mut xs:S8 = x
+  mut refs:S8 = ref_in
+  const loading = ref_load == 1
+  const in_reset = reset == 1
   mut current:[SIZE]Sum_T = 0
 
   for i in 0..<SIZE {
-    const t = tap(x_in=xs, ref_in=refs, ref_load=ref_load)
-    xs   = t.x_out
+    const t = tap(reset=in_reset, x_in=xs, ref_in=refs, ref_load=loading)
+    xs = t.x_out
     refs = t.ref_out
 
-    // Always retain the MSB side. At 8..=16 bits, multiply the full s8
+    // Always retain the MSB side. At 8..=16 bits, multiply the full S8
     // operands and retain the upper MULT_WIDTH product bits. Below 8 bits,
     // first retain the upper MULT_WIDTH bits of each operand, multiply those
     // signed values, then retain the upper MULT_WIDTH product bits. Width 4:
     //   (x#[4..=7] * ref#[4..=7])#[4..=7]
     // #sext selects those same bits while declaring the selected MSB as sign.
     const product:Product_T = if MULT_WIDTH >= 8 {
-      const full_product:s16 = t.x_out * t.ref_out
+      const full_product:S16 = t.x_out*t.ref_out
       full_product#sext[(16 - MULT_WIDTH)..=15]
     } else {
       const x_msb:Product_T = (t.x_out >> (8 - MULT_WIDTH))#sext[0..<MULT_WIDTH]
       const ref_msb:Product_T = (t.ref_out >> (8 - MULT_WIDTH))#sext[0..<MULT_WIDTH]
-      const narrow_product:signed(bits=2 * MULT_WIDTH) = x_msb * ref_msb
+      const narrow_product:Signed(bits=2*MULT_WIDTH) = x_msb*ref_msb
       (narrow_product >> MULT_WIDTH)#sext[0..<MULT_WIDTH]
     }
     current[i] = product
@@ -53,21 +58,18 @@ pub mod matched_filter::[timecheck=false](clock:u1, reset:u1, x:s8, ref_in:s8, r
 
   // Each registered level reads one vector and writes a distinct next vector.
   // After the level is complete, current advances to that new pipeline stage.
-  reg valid_pipe:unsigned(bits=LOG2_SIZE):[reset_pin=ref reset] = 0
+  reg valid_pipe:Unsigned(bits=LOG2_SIZE):[reset_pin=in_reset] = 0
   for lvl in 0..<LOG2_SIZE {
     mut next:[SIZE]Sum_T = 0
     for j in 0..<(SIZE >> (lvl + 1)) {
-      // Bind the structural type: named aliases are not resolved at this generic call.
-      const node = add_node<Sum_T>(
-        a=current[2 * j],
-        b=current[2 * j + 1],
-      )
+      const node = add_node<Sum_T>(reset=in_reset, a=current[2*j], b=current[2*j + 1])
       next[j] = node
     }
     current = next
   }
 
-  y_valid = (valid_pipe#[LOG2_SIZE - 1] != 0) and not ref_load
-  wrap valid_pipe = if ref_load { 0 } else { (valid_pipe << 1) | 1 }
-  y = if y_valid { current[0] } else { 0 }
+  const valid = valid_pipe#[LOG2_SIZE - 1] == 1 and not loading
+  y_valid = U1(valid)
+  wrap valid_pipe = if loading { 0 } else { (valid_pipe << 1) | 1 }
+  y = if valid { current[0] } else { 0 }
 }

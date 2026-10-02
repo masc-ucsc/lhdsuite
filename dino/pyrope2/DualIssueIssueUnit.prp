@@ -1,29 +1,53 @@
 const enc = import("encodings")
 
-pub mod DualIssueIssueUnit::[timecheck = false](clock:u1, reset:u1, io_pc:u64, io_inst:u64) -> (
-  io_nextpc:u64@[],
-  io_pipeA_inst:u32@[],
-  io_pipeB_inst:u32@[],
-  io_pipeB_valid:u1@[]
-) {
-  const first           = io_inst#[0 ..= 31]
-  const second          = io_inst#[32 ..= 63]
-  const first_opcode    = first#[enc.opcode_lo ..= enc.opcode_hi]
-  const second_opcode   = second#[enc.opcode_lo ..= enc.opcode_hi]
-  const upper_half:bool = io_pc#[0 ..= 2] == enc.instruction_bytes
-  const rd              = first#[enc.rd_lo ..= enc.rd_hi]
-  const writes_rd:bool  = first_opcode in (enc.op_register, enc.op_immediate, enc.op_load, enc.op_lui, enc.op_auipc, enc.op_jal, enc.op_jalr, enc.op_immediate_word, enc.op_register_word)
-  const reads_rs1:bool  = second_opcode in (enc.op_register, enc.op_immediate, enc.op_load, enc.op_store, enc.op_branch, enc.op_jalr, enc.op_immediate_word, enc.op_register_word)
-  const reads_rs2:bool  = second_opcode in (enc.op_register, enc.op_store, enc.op_branch, enc.op_register_word)
-  const serial:bool     = first_opcode in (enc.op_load, enc.op_store, enc.op_branch, enc.op_jal, enc.op_jalr)
-  const dependency:bool = writes_rd
-                          and rd != 0
-                          and ((reads_rs1 and rd == second#[enc.rs1_lo ..= enc.rs1_hi]) or (reads_rs2 and rd == second#[enc.rs2_lo ..= enc.rs2_hi]))
-  const issue_b:bool = not upper_half and not serial and not dependency
+// Picks the instruction pair for the two lanes from one 64-bit fetch word. Lane B
+// issues only when lane A's instruction is not a memory/control op, lane B does not
+// read the register lane A writes, and the fetch address is 8-byte aligned.
+pub comb DualIssueIssueUnit(
+  io_inst:U64,
+  io_pc:U64,
+) -> (io_nextpc:U64, io_pipeA_inst:U32, io_pipeB_inst:U32, io_pipeB_valid:Bool) {
+  const first         = io_inst#[0..=31]
+  const second        = io_inst#[32..=63]
+  const first_opcode  = first#[enc.opcode_lo..=enc.opcode_hi]
+  const second_opcode = second#[enc.opcode_lo..=enc.opcode_hi]
+  const upper_half    = io_pc#[0..=2] == enc.instruction_bytes
+  const rd            = first#[enc.rd_lo..=enc.rd_hi]
+  const writes_rd     = first_opcode
+    in (
+      enc.op_register,
+      enc.op_immediate,
+      enc.op_load,
+      enc.op_lui,
+      enc.op_auipc,
+      enc.op_jal,
+      enc.op_jalr,
+      enc.op_immediate_word,
+      enc.op_register_word,
+    )
+  const reads_rs1     = second_opcode
+    in (
+      enc.op_register,
+      enc.op_immediate,
+      enc.op_load,
+      enc.op_store,
+      enc.op_branch,
+      enc.op_jalr,
+      enc.op_immediate_word,
+      enc.op_register_word,
+    )
+  const reads_rs2     = second_opcode in (enc.op_register, enc.op_store, enc.op_branch, enc.op_register_word)
+  const serial        = first_opcode in (enc.op_load, enc.op_store, enc.op_branch, enc.op_jal, enc.op_jalr)
+  const dependency    = writes_rd
+    and rd != 0
+    and (
+      (reads_rs1 and rd == second#[enc.rs1_lo..=enc.rs1_hi]) or (reads_rs2 and rd == second#[enc.rs2_lo..=enc.rs2_hi])
+    )
+  const issue_b       = not upper_half and not serial and not dependency
 
   // At PC % 8 == 4 the upper instruction moves into pipe A.
   wrap io_nextpc = io_pc + (if issue_b { enc.fetch_bytes } else { enc.instruction_bytes })
   io_pipeA_inst  = if upper_half { second } else { first }
   io_pipeB_inst  = if issue_b { second } else { enc.nop_instruction } // ADDI x0, x0, 0
-  io_pipeB_valid = unsigned(issue_b)
+  io_pipeB_valid = issue_b
 }

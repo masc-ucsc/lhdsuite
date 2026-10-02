@@ -92,12 +92,12 @@ Run one synthesis job at a time.
 
 | Scenario | Checks or measures |
 | --- | --- |
-| `compile_verilog`, `compile_pyrope` | Front-end compilation and throughput. |
+| `compile_verilog`, `compile_pyrope`, `compile_pyrope2` | Front-end compilation and throughput. `compile_pyrope2` (cores with a maintained `pyrope2/` tree: dino, picorv32, matched_filter, minion) runs the same flow over that tree. |
 | `compile_pyrope_parallel` | Separate compilation through an import-aware generated Makefile. |
 | `compile_incremental` | Compilation across cold, comment-only, and semantic edits. |
 | `synth`, `synth_incremental` | Mapping time, reuse, gate count, area, and timing with sky130. Minion also runs a flat-mapping comparison. |
 | `synth_lec_synth`, `synth_lec_flat` | Synthesized netlist equivalence, including reuse after a comment edit; flat is Minion-only. |
-| `sim_verilog`, `sim_pyrope`, `sim_verilator` | Simulation with checked output values; host compilation and execution are timed separately. |
+| `sim_verilog`, `sim_pyrope`, `sim_pyrope2`, `sim_verilator` | Simulation with checked output values; host compilation and execution are timed separately. `sim_pyrope2` is `sim_pyrope` over `<core>/pyrope2` with the same driver, gates and cycle count. |
 | `sim_incremental`, `sim_incremental_llvm` | Simulator build reuse across edits, using C++ or LLVM. Only the builds are timed; each rebuilt driver is then executed once and must behave exactly like a caches-off build of the same tree (cold, comment-only, and the one-module edit against a from-scratch build of the edited tree). |
 | `lec`, `lec_bug`, `lec_incremental` | Cross-language equivalence, injected-bug detection, and proof-cache reuse. |
 | `verify`, `verify_bug`, `verify_temporal`, `verify_incremental` | Formal sidecar properties, mutant refutation, sequential properties, and reuse where supported. |
@@ -157,3 +157,12 @@ drivers, and supported scenarios. The verification unit and injected edits
 must be reachable from the selected top. Shared scripts read the `CORE_*`
 contract in [bench/common.sh](bench/common.sh); keep design-specific settings
 in `CORES`. See [AGENTS.md](AGENTS.md) for maintenance conventions.
+
+### Comparing the four simulators
+
+`bench/simcmp.sh [--core minion] [--lhd PATH]` builds Verilator and `lhd sim`
+(Verilog, Pyrope, Pyrope2) once and prints build times, the two-point-fit
+cycles/s and each simulator's marker line in one table. It needs no bazel, so it
+can run against a frozen copy of `lhd` while `../livehd` is being rebuilt. A
+testbench's `cycles` parameter has a range (dino's is `U20`), so keep
+`--factor * --cycles` inside it.

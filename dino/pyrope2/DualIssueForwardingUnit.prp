@@ -1,47 +1,82 @@
 const enc = import("encodings")
 
-// Priority is MEM-B, MEM-A, WB-B, WB-A; register x0 is never forwarded.
-pub mod DualIssueForwardingUnit::[timecheck = false](
-  io_ex_pipeA_rs1:u5,
-  io_ex_pipeA_rs2:u5,
-  io_ex_pipeB_rs1:u5,
-  io_ex_pipeB_rs2:u5,
-  io_ex_pipeA_rd:u5,
-  io_ex_pipeA_rw:u1,
-  io_mem_pipeA_rd:u5,
-  io_mem_pipeA_rw:u1,
-  io_mem_pipeB_rd:u5,
-  io_mem_pipeB_rw:u1,
-  io_wb_pipeA_rd:u5,
-  io_wb_pipeA_rw:u1,
-  io_wb_pipeB_rd:u5,
-  io_wb_pipeB_rw:u1
-) -> (io_pipeA_forward1:u3@[], io_pipeA_forward2:u3@[], io_pipeB_forward1:u3@[], io_pipeB_forward2:u3@[]) {
-  io_pipeA_forward1 = if io_ex_pipeA_rs1 == enc.zero_register { enc.forward_original }
-    elif io_mem_pipeB_rw != 0 and io_mem_pipeB_rd == io_ex_pipeA_rs1 { enc.a_forward_mem_b }
-    elif io_mem_pipeA_rw != 0 and io_mem_pipeA_rd == io_ex_pipeA_rs1 { enc.a_forward_mem_a }
-    elif io_wb_pipeB_rw != 0 and io_wb_pipeB_rd == io_ex_pipeA_rs1 { enc.a_forward_wb_b }
-    elif io_wb_pipeA_rw != 0 and io_wb_pipeA_rd == io_ex_pipeA_rs1 { enc.a_forward_wb_a }
-    else { enc.forward_original }
+// A pipeline stage's register write: destination and write enable.
+type Writer = (rd:U5, rw:Bool)
+type Codes  = (mem_a:U3, mem_b:U3, wb_a:U3, wb_b:U3)
+comptime const lane_a = (
+  const mem_a=enc.a_forward_mem_a,
+  const mem_b=enc.a_forward_mem_b,
+  const wb_a=enc.a_forward_wb_a,
+  const wb_b=enc.a_forward_wb_b,
+)
+comptime const lane_b = (
+  const mem_a=enc.b_forward_mem_a,
+  const mem_b=enc.b_forward_mem_b,
+  const wb_a=enc.b_forward_wb_a,
+  const wb_b=enc.b_forward_wb_b,
+)
 
-  io_pipeA_forward2 = if io_ex_pipeA_rs2 == enc.zero_register { enc.forward_original }
-    elif io_mem_pipeB_rw != 0 and io_mem_pipeB_rd == io_ex_pipeA_rs2 { enc.a_forward_mem_b }
-    elif io_mem_pipeA_rw != 0 and io_mem_pipeA_rd == io_ex_pipeA_rs2 { enc.a_forward_mem_a }
-    elif io_wb_pipeB_rw != 0 and io_wb_pipeB_rd == io_ex_pipeA_rs2 { enc.a_forward_wb_b }
-    elif io_wb_pipeA_rw != 0 and io_wb_pipeA_rd == io_ex_pipeA_rs2 { enc.a_forward_wb_a }
+// Selector for one operand: the youngest older writer of `rs` wins, in the order
+// MEM-B, MEM-A, WB-B, WB-A. Register x0 is never forwarded. Lane B reserves
+// selector 1 for EX-A, so the codes differ per lane and are passed in.
+comb forward_select(codes:Codes, mem_a:Writer, mem_b:Writer, rs:U5, wb_a:Writer, wb_b:Writer) -> (select:U3) {
+  select = if rs == enc.zero_register { enc.forward_original }
+    elif mem_b.rw and mem_b.rd == rs { codes.mem_b }
+    elif mem_a.rw and mem_a.rd == rs { codes.mem_a }
+    elif wb_b.rw and wb_b.rd == rs { codes.wb_b }
+    elif wb_a.rw and wb_a.rd == rs { codes.wb_a }
     else { enc.forward_original }
+}
 
-  io_pipeB_forward1 = if io_ex_pipeB_rs1 == enc.zero_register { enc.forward_original }
-    elif io_mem_pipeB_rw != 0 and io_mem_pipeB_rd == io_ex_pipeB_rs1 { enc.b_forward_mem_b }
-    elif io_mem_pipeA_rw != 0 and io_mem_pipeA_rd == io_ex_pipeB_rs1 { enc.b_forward_mem_a }
-    elif io_wb_pipeB_rw != 0 and io_wb_pipeB_rd == io_ex_pipeB_rs1 { enc.b_forward_wb_b }
-    elif io_wb_pipeA_rw != 0 and io_wb_pipeA_rd == io_ex_pipeB_rs1 { enc.b_forward_wb_a }
-    else { enc.forward_original }
-
-  io_pipeB_forward2 = if io_ex_pipeB_rs2 == enc.zero_register { enc.forward_original }
-    elif io_mem_pipeB_rw != 0 and io_mem_pipeB_rd == io_ex_pipeB_rs2 { enc.b_forward_mem_b }
-    elif io_mem_pipeA_rw != 0 and io_mem_pipeA_rd == io_ex_pipeB_rs2 { enc.b_forward_mem_a }
-    elif io_wb_pipeB_rw != 0 and io_wb_pipeB_rd == io_ex_pipeB_rs2 { enc.b_forward_wb_b }
-    elif io_wb_pipeA_rw != 0 and io_wb_pipeA_rd == io_ex_pipeB_rs2 { enc.b_forward_wb_a }
-    else { enc.forward_original }
+pub comb DualIssueForwardingUnit(
+  io_ex_pipeA_rs1:U5,
+  io_ex_pipeA_rs2:U5,
+  io_ex_pipeB_rs1:U5,
+  io_ex_pipeB_rs2:U5,
+  io_mem_pipeA_rd:U5,
+  io_mem_pipeA_rw:Bool,
+  io_mem_pipeB_rd:U5,
+  io_mem_pipeB_rw:Bool,
+  io_wb_pipeA_rd:U5,
+  io_wb_pipeA_rw:Bool,
+  io_wb_pipeB_rd:U5,
+  io_wb_pipeB_rw:Bool,
+) -> (io_pipeA_forward1:U3, io_pipeA_forward2:U3, io_pipeB_forward1:U3, io_pipeB_forward2:U3) {
+  // Bundles are built here: a tuple port forwarded through an inlined comb to another comb is rejected.
+  const mem_pipeA = (const rd=io_mem_pipeA_rd, const rw=io_mem_pipeA_rw)
+  const mem_pipeB = (const rd=io_mem_pipeB_rd, const rw=io_mem_pipeB_rw)
+  const wb_pipeA  = (const rd=io_wb_pipeA_rd, const rw=io_wb_pipeA_rw)
+  const wb_pipeB  = (const rd=io_wb_pipeB_rd, const rw=io_wb_pipeB_rw)
+  io_pipeA_forward1 = forward_select(
+    codes=lane_a,
+    mem_a=mem_pipeA,
+    mem_b=mem_pipeB,
+    rs=io_ex_pipeA_rs1,
+    wb_a=wb_pipeA,
+    wb_b=wb_pipeB,
+  )
+  io_pipeA_forward2 = forward_select(
+    codes=lane_a,
+    mem_a=mem_pipeA,
+    mem_b=mem_pipeB,
+    rs=io_ex_pipeA_rs2,
+    wb_a=wb_pipeA,
+    wb_b=wb_pipeB,
+  )
+  io_pipeB_forward1 = forward_select(
+    codes=lane_b,
+    mem_a=mem_pipeA,
+    mem_b=mem_pipeB,
+    rs=io_ex_pipeB_rs1,
+    wb_a=wb_pipeA,
+    wb_b=wb_pipeB,
+  )
+  io_pipeB_forward2 = forward_select(
+    codes=lane_b,
+    mem_a=mem_pipeA,
+    mem_b=mem_pipeB,
+    rs=io_ex_pipeB_rs2,
+    wb_a=wb_pipeA,
+    wb_b=wb_pipeB,
+  )
 }

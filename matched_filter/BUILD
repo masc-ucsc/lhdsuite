@@ -29,6 +29,19 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# The hand-maintained, cleaned tree (see //bench:matched_filter_sim_pyrope2). Same top.
+filegroup(
+    name = "pyrope2",
+    srcs = glob(["pyrope2/*.prp"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "pyrope2_top",
+    srcs = ["pyrope2/matched_filter.prp"],
+    visibility = ["//visibility:public"],
+)
+
 # Simulation drivers: the .prp drives `lhd sim` (both language modes, via
 # `import("lg:matched_filter")`), the .cpp is its Verilator twin.
 filegroup(

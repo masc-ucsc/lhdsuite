@@ -24,6 +24,8 @@ FLAT_CORES = ("minion",)
 # <core>_sim_verilator target, so only those may be looked up — asking for a
 # target that is not generated would report it as "not run yet" forever).
 VERILATOR_CORES = ("dino", "minion")
+# Cores with a maintained <core>/pyrope2 tree (the `pyrope2` knob in defs.bzl).
+PYROPE2_CORES = ("dino", "minion", "picorv32", "matched_filter")
 
 
 def load(root: Path, target: str):
@@ -136,11 +138,14 @@ def report_core(root: Path, core: str) -> list:
     # ---- compile ----------------------------------------------------------
     cv = None if core in PYROPE_ONLY_CORES else G("compile_verilog")
     cp, cpp = G("compile_pyrope"), G("compile_pyrope_parallel")
+    cp2 = G("compile_pyrope2") if core in PYROPE2_CORES else None
     compile_rows = [cp, cpp] if core in PYROPE_ONLY_CORES else [cv, cp, cpp]
+    if core in PYROPE2_CORES:
+        compile_rows.append(cp2)
     rep.head("compile (source -> lg:)", *compile_rows)
-    if cv or cp or cpp:
+    if cv or cp or cpp or cp2:
         print(f"   {'':11} {'LoC':>8} {'words':>9} {'time':>8} {'LoC/s':>9} {'words/s':>9}")
-        for name, r in (("verilog", cv), ("pyrope", cp)):
+        for name, r in (("verilog", cv), ("pyrope", cp), ("pyrope2", cp2)):
             if not r:
                 continue
             m = r[3]
@@ -164,7 +169,7 @@ def report_core(root: Path, core: str) -> list:
                   f" {fmt(m.get('parallel_depth'))} levels deep,"
                   f" widest {fmt(m.get('parallel_widest'))}")
         rep.cmds(("compile_verilog", cv), ("compile_pyrope", cp),
-                 ("compile_pyrope_parallel", cpp))
+                 ("compile_pyrope2", cp2), ("compile_pyrope_parallel", cpp))
 
     # ---- synthesis coloring ----------------------------------------------
     sy = G("synth")
@@ -228,6 +233,7 @@ def report_core(root: Path, core: str) -> list:
 
     # ---- sim --------------------------------------------------------------
     sp = G("sim_pyrope")
+    sp2 = G("sim_pyrope2") if core in PYROPE2_CORES else None
     sv = None if core in PYROPE_ONLY_CORES else G("sim_verilog")
     # A core with no verilator_tb has no such target at all, so it must not
     # reach head() either — a None there means "generated but never run", and
@@ -235,12 +241,14 @@ def report_core(root: Path, core: str) -> list:
     has_vl = core in VERILATOR_CORES
     svl = G("sim_verilator") if has_vl else None
     sim_rows = [sp]
+    if core in PYROPE2_CORES:
+        sim_rows.append(sp2)
     if core not in PYROPE_ONLY_CORES:
         sim_rows.append(sv)
     if has_vl:
         sim_rows.append(svl)
     rep.head("sim benchmark throughput", *sim_rows)
-    if sp or sv or svl:
+    if sp or sp2 or sv or svl:
         # `lhd sim --setup-only` only writes the driver sources; the host C++
         # compile lives inside --run-only and is rebuilt every time, so it used
         # to swamp the simulation it was being reported as. Keep the two apart:
@@ -259,7 +267,7 @@ def report_core(root: Path, core: str) -> list:
             return "ok" if all(x == 1 for x in v) else "-"
 
         skipped = svl and svl[3].get("verilator_present") == 0
-        rows = [("pyrope", sp), ("verilog", sv)]
+        rows = [("pyrope", sp), ("pyrope2", sp2), ("verilog", sv)]
         if svl and not skipped:
             rows.append(("verilator", svl))
         for name, r in rows:
@@ -284,7 +292,7 @@ def report_core(root: Path, core: str) -> list:
             return None
 
         sample = sp or sv
-        bench_tbs = {tb_for_step(r, "sim_setup") for r in (sp, sv) if r}
+        bench_tbs = {tb_for_step(r, "sim_setup") for r in (sp, sp2, sv) if r}
         bench_tbs.discard(None)
         bench = "/".join(sorted(bench_tbs)) or "simulation driver"
         print(f"   sim cyc/s: {bench}, no VCD on either simulator;"
@@ -321,7 +329,7 @@ def report_core(root: Path, core: str) -> list:
             policy = "gates this target" if m.get("sim_cpu_top_gated") == 1 else "informational only"
             print(f"   extra: {', '.join(whole)} run separately for correctness ({policy},"
                   f" VCD on); not timed above")
-        rep.cmds(("sim_pyrope", sp), ("sim_verilog", sv), ("sim_verilator", svl))
+        rep.cmds(("sim_pyrope", sp), ("sim_pyrope2", sp2), ("sim_verilog", sv), ("sim_verilator", svl))
 
     # ---- lec --------------------------------------------------------------
     if core not in PYROPE_ONLY_CORES:

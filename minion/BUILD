@@ -40,6 +40,19 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# The hand-maintained, cleaned tree (see //bench:minion_sim_pyrope2). Same top.
+filegroup(
+    name = "pyrope2",
+    srcs = glob(["pyrope2/*.prp"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "pyrope2_top",
+    srcs = ["pyrope2/minion_top.prp"],
+    visibility = ["//visibility:public"],
+)
+
 # Simulation drivers (hello-world testbench) — plain suite code, usable
 # outside bazel too: sim/thread_sched_tb.prp next to any Pyrope tree.
 filegroup(
