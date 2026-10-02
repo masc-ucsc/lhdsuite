@@ -1,48 +1,52 @@
-pub mod intpipe_csr_file_conv::[timecheck=false](clk_i:u1, rst_ni:u1, tensorconv_size_data:(row_step_offset:u8, padding2:u8, row_size:u16, col_step_offset:u8, padding1:u8, col_size:u16), tensorconv_ctrl_data:(row_pos:u16, padding1:u16, col_pos:u16), tensorconv_size_wen:u1, tensorconv_ctrl_wen:u1, tensorload_wen:u1, tensorfma_wen:u1, cacheop_wen:u1) -> (can_accept_new_write:u1@[], conv_save_mask:u1@[], conv_bits_ready:u1@[], conv_bits:u16@[]) {
-  reg conv_save_mask:u1:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
-  reg conv_bits:u16:[clock_pin=ref clk_i]
-  reg conv_idx:u4:[clock_pin=ref clk_i]
-  reg compute_done_q:u1:[initial=1, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
-  reg pending_q:u1:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
-  reg conv_col_offset:u16:[clock_pin=ref clk_i]
-  reg conv_row_offset:u16:[clock_pin=ref clk_i]
-  wire trigger:u1
-  wire conv_col_pos:u18
-  wire conv_row_pos:u18
-  mut compute_done_d:u1 = 0
-  mut conv_col_offset_d:u16 = 0
-  mut conv_row_offset_d:u16 = 0
+pub mod intpipe_csr_file_conv::[timecheck=false](clk_i:Clock, rst_ni:U1, tensorconv_size_data:(row_step_offset:U8, padding2:U8, row_size:U16, col_step_offset:U8, padding1:U8, col_size:U16), tensorconv_ctrl_data:(row_pos:U16, padding1:U16, col_pos:U16), tensorconv_size_wen:U1, tensorconv_ctrl_wen:U1, tensorload_wen:U1, tensorfma_wen:U1, cacheop_wen:U1) -> (can_accept_new_write:U1@[], conv_save_mask:U1@[], conv_bits_ready:U1@[], conv_bits:U16@[]) {
+  reg conv_save_mask:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg conv_bits:U16:[clock_pin=clk_i]
+  reg conv_idx:U4:[clock_pin=clk_i]
+  reg compute_done_q:U1:[initial=1, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg pending_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg conv_col_offset:U16:[clock_pin=clk_i]
+  reg conv_row_offset:U16:[clock_pin=clk_i]
+  wire trigger:U1 = nil
+  wire conv_col_pos:U18 = nil
+  wire conv_row_pos:U18 = nil
+  mut compute_done_d:U1 = 0
+  mut conv_col_offset_d:U16 = 0
+  mut conv_row_offset_d:U16 = 0
   compute_done_d = 0ub?
   mut pending_d = 0ub?
   conv_col_offset_d = 0sb?
   conv_row_offset_d = 0sb?
-  mut conv_idx_d:u4 = 0sb?
+  mut conv_idx_d:U4 = 0sb?
   mut conv_pass_result = 0ub?
-  const can_accept_new_write__w1 = unsigned(pending_q == 0)
+  mut _b2i_1 = if pending_q == 0 { 1 } else { 0 }
+  const can_accept_new_write__w1 = _b2i_1
   pending_d = if ((tensorload_wen != 0) or (tensorfma_wen != 0) or (cacheop_wen != 0)) and (compute_done_q == 0) { 1 } else { pending_q }
   if compute_done_q != 0 {
     pending_d = 0
   }
-  trigger = unsigned(((tensorconv_size_wen != 0) or (tensorconv_ctrl_wen != 0)) and (can_accept_new_write__w1 != 0))
-  conv_idx_d = if trigger != 0 { 0 } else { (conv_idx + 1)#[0..=3] }
-  conv_col_offset_d = (conv_col_offset + tensorconv_size_data.col_step_offset#[0..=7]#sext[0..=7]#[0..=15])#[0..=15]
-  conv_row_offset_d = (conv_row_offset + tensorconv_size_data.row_step_offset#[0..=7]#sext[0..=7]#[0..=15])#[0..=15]
+  mut _b2i_2 = if ((tensorconv_size_wen != 0) or (tensorconv_ctrl_wen != 0)) and (can_accept_new_write__w1 != 0) { 1 } else { 0 }
+  trigger = _b2i_2
+  conv_idx_d = if trigger != 0 { 0 } else { (conv_idx + 1)#[0..<4] }
+  conv_row_offset_d = (conv_row_offset + tensorconv_size_data.row_step_offset#[0..<8]#sext[0..=7]#[0..<16])#[0..<16]
+  conv_col_offset_d = (conv_col_offset + tensorconv_size_data.col_step_offset#[0..<8]#sext[0..=7]#[0..<16])#[0..<16]
   if trigger != 0 {
     conv_col_offset_d = 0
     conv_row_offset_d = 0
   }
-  conv_col_pos = (tensorconv_ctrl_data.col_pos#[0..=15]#sext[0..=15]#[0..=17] + conv_col_offset#sext[0..=15]#[0..=17])#[0..=17]
-  conv_row_pos = (tensorconv_ctrl_data.row_pos#[0..=15]#sext[0..=15]#[0..=17] + conv_row_offset#sext[0..=15]#[0..=17])#[0..=17]
-  conv_pass_result = if ((conv_col_pos >> 17) & 1) != 0 { 0 } else { 1 }
-  if ((conv_row_pos >> 17) & 1) != 0 {
+  conv_col_pos = (tensorconv_ctrl_data.col_pos#[0..<16]#sext[0..=15]#[0..<18] + conv_col_offset#[0..<16]#sext[0..=15]#[0..<18])#[0..<18]
+  conv_row_pos = (tensorconv_ctrl_data.row_pos#[0..<16]#sext[0..=15]#[0..<18] + conv_row_offset#[0..<16]#sext[0..=15]#[0..<18])#[0..<18]
+  conv_pass_result = if conv_col_pos#[17..<18] != 0 { 0 } else { 1 }
+  if conv_row_pos#[17..<18] != 0 {
     conv_pass_result = 0
   }
-  if conv_col_pos >= tensorconv_size_data.col_size#[0..=15] {
+  if conv_col_pos >= tensorconv_size_data.col_size#[0..<16] {
     conv_pass_result = 0
   }
-  if conv_row_pos >= tensorconv_size_data.row_size#[0..=15] {
+  if conv_row_pos >= tensorconv_size_data.row_size#[0..<16] {
     conv_pass_result = 0
   }
+  mut conv_bits_d__w2 = conv_bits
+  conv_bits_d__w2#[conv_idx..<(conv_idx + 1)] = conv_pass_result & 1
   const conv_bits_ready__w1 = compute_done_q
   compute_done_d = compute_done_q
   if trigger != 0 {
@@ -50,11 +54,12 @@ pub mod intpipe_csr_file_conv::[timecheck=false](clk_i:u1, rst_ni:u1, tensorconv
   } elif conv_idx == 15 {
     compute_done_d = 1
   }
-  const clk_en__w1 = unsigned((trigger != 0) or (compute_done_q == 0) or (pending_q != 0))
-  mut _mux_4:u1 = if conv_save_mask != 0 { 0 } else { conv_save_mask & 1 }
-  mut _mux_5:u1 = if (compute_done_d != 0) and (compute_done_q == 0) { 1 } else { _mux_4 & 1 }
+  mut _b2i_3 = if (trigger != 0) or (compute_done_q == 0) or (pending_q != 0) { 1 } else { 0 }
+  const clk_en__w1 = _b2i_3
+  mut _mux_4:U1 = if conv_save_mask != 0 { 0 } else { conv_save_mask & 1 }
+  mut _mux_5:U1 = if (compute_done_d != 0) and (compute_done_q == 0) { 1 } else { _mux_4 & 1 }
   if clk_en__w1 != 0 {
-    conv_bits = ((conv_bits & (~(1 << conv_idx))) | ((conv_pass_result & 1) << conv_idx))#[0..=15]
+    conv_bits = conv_bits_d__w2
     conv_idx = conv_idx_d
     conv_col_offset = conv_col_offset_d
     conv_row_offset = conv_row_offset_d

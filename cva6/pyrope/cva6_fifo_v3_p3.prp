@@ -1,52 +1,45 @@
-pub mod cva6_fifo_v3_p3<FALL_THROUGH=1, FPGA_ALTERA=0, DATA_WIDTH=2, DEPTH=4, FPGA_EN=0, ADDR_DEPTH=2>::[timecheck=false](clk_i:u1, rst_ni:u1, flush_i:u1, testmode_i:u1, data_i:u2, push_i:u1, pop_i:u1) -> (full_o:u1@[], empty_o:u1@[], usage_o:u2@[], data_o:u2@[]) {
-  mut _mux_1:u32 = 0
-  reg read_pointer_q:u2:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
-  reg write_pointer_q:u2:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
-  reg status_cnt_q:u3:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
-  reg mem_q:[4]u2:[ordering="old", initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
-  mut gate_clock:u1 = 0
-  mut status_cnt_n:u3 = 0
-  mut mem_n:u8 = 0
-  mut data_ft_q__wtmp:u2 = 0sb?
-  mut first_word_q__wtmp:u1 = 0sb?
-  mut _mux_4:u2 = 0
-  _mux_1 = 1
-  {
-    _mux_1 = DEPTH
-  }
-  const FifoDepth = _mux_1
+pub mod cva6_fifo_v3_p3<FALL_THROUGH=1, FPGA_ALTERA=0, DATA_WIDTH=2, DEPTH=4, FPGA_EN=0, ADDR_DEPTH=2>::[timecheck=false](clk_i:Clock, rst_ni:U1, flush_i:U1, testmode_i:U1, data_i:U2, push_i:U1, pop_i:U1) -> (full_o:U1@[], empty_o:U1@[], usage_o:U2@[], data_o:U2@[]) {
+  reg read_pointer_q:U2:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg write_pointer_q:U2:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg status_cnt_q:U3:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg mem_q:[4]U2:[ordering="old", initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  mut gate_clock:U1 = 0
+  mut status_cnt_n:U3 = 0
+  mut mem_n:U8 = 0
+  mut data_ft_q__wtmp:U2 = 0sb?
+  mut first_word_q__wtmp:U1 = 0sb?
+  const FifoDepth = DEPTH#[0..<32]
   gate_clock = 0ub?
-  mut read_pointer_n:u2 = 0sb?
-  mut write_pointer_n:u2 = 0sb?
+  mut read_pointer_n:U2 = 0sb?
+  mut write_pointer_n:U2 = 0sb?
   status_cnt_n = 0sb?
   mem_n = 0sb?
   data_o = 0sb?
-  const usage_o__w1 = status_cnt_q#[0..=1]
-  mut _b2i_2 = if status_cnt_q == FifoDepth#[0..=2] { 1 } else { 0 }
-  const full_o__w1 = _b2i_2
-  mut _b2i_3 = if status_cnt_q == 0 { 1 } else { 0 }
-  const empty_o__w1 = _b2i_3 & (~(FALL_THROUGH & push_i & 1)) & 1 & 1
-  _mux_4 = mem_q[read_pointer_q]
-  status_cnt_n = status_cnt_q
-  write_pointer_n = write_pointer_q
-  mem_n = mem_q
+  const usage_o__w1 = status_cnt_q#[0..<2]
+  mut _b2i_1 = if status_cnt_q == FifoDepth#[0..<3] { 1 } else { 0 }
+  const full_o__w1 = _b2i_1
+  mut _b2i_2 = if status_cnt_q == 0 { 1 } else { 0 }
+  const empty_o__w1 = _b2i_2 & (~(FALL_THROUGH & push_i & 1)#[0]) & 1
   gate_clock = 1
-  if (push_i != 0) and (((~full_o__w1) & 1) != 0) {
-    const t21 = write_pointer_q * 2
-    mem_n = ((mem_n & (~(3 << t21))) | (data_i << t21))#[0..=7]
+  mem_n = mem_q#[0..<8]
+  write_pointer_n = write_pointer_q
+  status_cnt_n = status_cnt_q
+  if (push_i != 0) and ((~full_o__w1#[0]) != 0) {
+    const t17 = write_pointer_q * 2
+    mem_n#[t17..<(t17 + 1 + 1)] = data_i#[0..<2]
     gate_clock = 0
-    write_pointer_n = if write_pointer_q == (FifoDepth#[0..=1] - 1)#[0..=31] { 0 } else { (write_pointer_q + 1)#[0..=1] }
-    status_cnt_n = (status_cnt_q + 1)#[0..=2]
+    write_pointer_n = if write_pointer_q == (FifoDepth#[0..<2] - 1)#[0..<32] { 0 } else { (write_pointer_q + 1)#[0..<2] }
+    status_cnt_n = (status_cnt_q + 1)#[0..<3]
   }
   read_pointer_n = read_pointer_q
-  if (pop_i != 0) and (((~empty_o__w1) & 1) != 0) {
-    read_pointer_n = if read_pointer_n == (FifoDepth#[0..=1] - 1)#[0..=31] { 0 } else { (read_pointer_q + 1)#[0..=1] }
-    status_cnt_n = (status_cnt_q - 1)#[0..=31]#[0..=2]
+  if (pop_i != 0) and ((~empty_o__w1#[0]) != 0) {
+    read_pointer_n = if read_pointer_n == (FifoDepth#[0..<2] - 1)#[0..<32] { 0 } else { (read_pointer_q + 1)#[0..<2] }
+    status_cnt_n = (status_cnt_q - 1)#[0..<32]#[0..<3]
   }
-  if (push_i != 0) and (pop_i != 0) and (((~full_o__w1) & 1) != 0) and (((~empty_o__w1) & 1) != 0) {
+  if (push_i != 0) and (pop_i != 0) and ((~full_o__w1#[0]) != 0) and ((~empty_o__w1#[0]) != 0) {
     status_cnt_n = status_cnt_q
   }
-  data_o = _mux_4
+  data_o = mem_q[read_pointer_q]
   if ((FALL_THROUGH != 0) or ((FPGA_EN != 0) and (FPGA_ALTERA != 0))) and (status_cnt_q == 0) and (push_i != 0) {
     data_o = data_i
     if pop_i != 0 {
@@ -68,7 +61,7 @@ pub mod cva6_fifo_v3_p3<FALL_THROUGH=1, FPGA_ALTERA=0, DATA_WIDTH=2, DEPTH=4, FP
   }
   if rst_ni != 0 {
     if gate_clock == 0 {
-      mem_q = mem_n
+      mem_q#[0..<8] = mem_n
     }
   }
   full_o = full_o__w1

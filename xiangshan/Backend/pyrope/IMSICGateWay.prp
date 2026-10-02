@@ -1,24 +1,34 @@
 const AsyncResetSynchronizerShiftReg_w1_d3_i0 = import("AsyncResetSynchronizerShiftReg_w1_d3_i0.AsyncResetSynchronizerShiftReg_w1_d3_i0")
 
-pub mod IMSICGateWay::[timecheck=false](clock:u1, reset:u1, msiio_vld_req:u1, msiio_data:u13) -> (msiio_vld_ack:u1@[], msi_data_o:u9@[], msi_valid_o:u9@[]) {
-  reg msi_vld_ack_cpu:u1:[initial=0, reset_pin=ref reset, async=true]
-  reg msi_data_catch:u9:[initial=0, reset_pin=ref reset, async=true]
-  reg msi_intf_valids:u9:[initial=0, reset_pin=ref reset, async=true]
+pub mod IMSICGateWay::[timecheck=false](`clock`:Clock, `reset`:U1, msiio_vld_req:U1, msiio_data:U13) -> (msiio_vld_ack:U1@[], msi_data_o:U9@[], msi_valid_o:U9@[]) {
+  mut _msi_intf_valids_T_1:U16 = 0
+  mut _mux_1:U9 = 0
+  reg msi_vld_ack_cpu:U1:[initial=0, reset_pin=`reset`, async=true]
+  reg msi_data_catch:U9:[initial=0, reset_pin=`reset`, async=true]
+  reg msi_intf_valids:U9:[initial=0, reset_pin=`reset`, async=true]
   mut `msiio.vld_req` = msiio_vld_req & 1
-  mut `msiio.data` = msiio_data
+  mut `msiio.data` = msiio_data#[0..<13]
   mut `msiio.vld_ack` = msi_vld_ack_cpu & 1
-  mut msi_vld_req_cpu_chain = AsyncResetSynchronizerShiftReg_w1_d3_i0::[name=msi_vld_req_cpu_chain](clock = clock, reset = reset, io_d = `msiio.vld_req`)
+  mut msi_vld_req_cpu_chain = AsyncResetSynchronizerShiftReg_w1_d3_i0::[name=msi_vld_req_cpu_chain](`clock` = `clock`, `reset` = `reset`, io_d = `msiio.vld_req`)
   const msi_vld_req_cpu__w1 = msi_vld_req_cpu_chain
   const msi_data_o__w1 = msi_data_catch
   const msi_valid_o__w1 = msi_intf_valids
   const msi_in__w1 = `msiio.data`
-  const msi_vld_ris_cpu__w1 = msi_vld_req_cpu__w1 & (~msi_vld_ack_cpu) & 1 & 1
-  msi_vld_ack_cpu = msi_vld_req_cpu__w1
-  if msi_vld_ris_cpu__w1 != 0 {
-    msi_data_catch = msi_in__w1#[0..=8]
+  const msi_vld_ris_cpu__w1 = msi_vld_req_cpu__w1 & (~msi_vld_ack_cpu) & 1
+  if not (`reset` != 0) {
+    msi_vld_ack_cpu = msi_vld_req_cpu__w1
   }
-  mut _mux_1:u9 = if msi_vld_ris_cpu__w1 != 0 { (1 << msi_in__w1#[9..=12])#[0..=15]#[0..=8] } else { 0 }
-  msi_intf_valids = _mux_1
+  if not (`reset` != 0) {
+    if msi_vld_ris_cpu__w1 != 0 {
+      msi_data_catch = msi_in__w1#[0..<9]
+    }
+  }
+  if not (`reset` != 0) {
+    _msi_intf_valids_T_1 = 0ub????????????????
+    _msi_intf_valids_T_1 = (1 << msi_in__w1#[9..<13])#[0..<16]
+    _mux_1 = if msi_vld_ris_cpu__w1 != 0 { _msi_intf_valids_T_1#[0..<9] } else { 0 }
+    msi_intf_valids = _mux_1
+  }
   msiio_vld_ack = `msiio.vld_ack`
   msi_data_o = msi_data_o__w1
   msi_valid_o = msi_valid_o__w1

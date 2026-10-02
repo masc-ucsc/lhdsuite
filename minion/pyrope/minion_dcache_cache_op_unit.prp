@@ -2,87 +2,663 @@ const prim_clk_gate = import("prim_clk_gate.prim_clk_gate")
 const minion_dcache_pkg = import("minion_dcache_pkg")
 const minion_pkg = import("minion_pkg")
 
-pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chicken_bit_dcache_i:u1, cache_op_valid_i:u1, cache_op_req_i:(cmd:u4, start_level:u2, dest_level:u2, count:u4, addr:u48, way:u2, stride:u48, thread_id:u1, use_tmask:u1, tmask_ready:u1, tmask_bits:u16, l2_scp_dest:u17, l2_scp_fill:u1), cache_op_req_next_i:(cmd:u4, start_level:u2, dest_level:u2), meta_read_grant_i:u1, meta_read_resp_way_en_i:(e3:u1, e2:u1, e1:u1, e0:u1), meta_read_resp_i:u140, s1_phys_addr_tag_i:minion_dcache_pkg.PaTagExtSize_T, s1_tlb_wait_i:u1, s1_tlb_fail_i:u1, meta_write_ready_i:u1, writeback_ready_i:u1, writeback_done_i:u1, id_rq_full_i:u1, id_co_pf_grant_i:u1, cache_op_ready_byp_i:u1, mh_clear_slock_valid_i:u1, mh_clear_slock_set_i:minion_dcache_pkg.DcacheSetIdxWidth_T, mh_clear_slock_way_i:minion_dcache_pkg.DcacheWayIdxWidth_T, da_clear_rdy_i:u1, mh_probe_rdy_i:minion_dcache_pkg.DcacheMhFileSize_T, mh_metaw_rdy_i:minion_dcache_pkg.DcacheMhFileSize_T, rq_conflict_i:u1, cfg_clear_all_i:u1, cfg_clear_low_i:u1, cfg_alloc_scp_i:u1, cfg_cache_mode_i:u2, vm_status_i:u16) -> (busy_o:u1@[], cache_op_ready_o:u1@[], th_id_complete_o:u4@[], meta_read_bid_o:u1@[], meta_read_valid_o:u1@[], meta_read_phys_o:u1@[], meta_read_force_set_o:u1@[], meta_read_thread_id_o:u1@[], meta_read_skip_pma_o:u1@[], meta_read_addr_o:u48@[], meta_read_addr_msb_err_o:u1@[], meta_write_valid_next_o:u1@[], meta_write_valid_o:u1@[], meta_write_req_o:(set_idx:u4, way_en:u4, data:(coh_state:u2, tag:u33))@[], nack_set_valid_o:u1@[], nack_set_value_o:minion_dcache_pkg.DcacheSetIdxWidth_T@[], writeback_valid_o:u1@[], writeback_req_o:(tag:u33, set:u4, way_en:u4, is_tbox:u1, mem_idx:u1, addr_low:u7)@[], id_co_pf_bid_o:u1@[], s0_co_pf_valid_o:u1@[], s0_co_pf_req_o:(addr:u49, addr_msb_err:u1, set:u4, phys:u1, misaligned:u1, misaligned_2nd:u1, dest:(fp:u1, addr:u5, thread_id:u1), cmd:u5, typ:u4, gsc_cnt:u3, ps_mask:u8, data:u256, replay:u1, replay_entry:u3, replay_age:u5, cache_op:u1, buf_alloc:u1, buf_id:u3, cacheable:u1, chunk_read:u4, uc_load_2nd:u1, uc_load_ok:u1, miss_fill_ok:u1, gsc32_idx:u40, vm_sel:u3, mem_global:u1)@[], cache_op_valid_byp_o:u1@[], cache_op_req_byp_o:(cmd:u4, start_level:u2, dest_level:u2, count:u4, addr:u48, way:u2, stride:u48, thread_id:u1, use_tmask:u1, tmask_ready:u1, tmask_bits:u16, l2_scp_dest:u17, l2_scp_fill:u1)@[], hlock_state_o:u64@[], slock_state_o:u64@[], da_clear_en_o:u1@[], da_clear_val_o:u1@[], da_clear_set_o:minion_dcache_pkg.DcacheSetIdxWidth_T@[], da_clear_way_o:minion_dcache_pkg.DcacheWayIdxWidth_T@[], da_clear_idx_o:u1@[], vm_status_co_o:(prv:u2, mprv:u1, mpp:u2, sum:u1, mxr:u1, debug:u1)@[], err_flags_o:u4@[], csr_debug_signals_o:u4@[], sm_match_debug_signals_o:minion_dcache_pkg.DcacheDbgSmMatchBits_T@[], sm_filter_debug_signals_o:minion_dcache_pkg.DcacheDbgSmFilterBits_T@[], sm_data_debug_signals_o:minion_dcache_pkg.DcacheDbgSmDataBits_T@[]) {
-  mut dcache_way_decode:u4 = 0
-  mut dcache_way_encode:u2 = 0
-  mut way:u2 = 0
-  mut ways:u4 = 0
-  reg meta_read_valid_o:u1:[clock_pin=ref clkgt]
-  reg s0_co_pf_valid_o:u1:[clock_pin=ref clkgt]
-  reg hlock_state_o:u64:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
-  reg slock_state_o:u64:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
-  reg da_clear_idx_o:u1:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clkgt]
-  reg vm_status_co_o_q:u8:[clock_pin=ref clkgt]
-  reg state_q:u4:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clkgt]
-  reg req_q:u18:[clock_pin=ref clkgt]
-  reg req_addr_q:u48:[clock_pin=ref clkgt]
-  reg req_addr_msb_err_q:u1:[clock_pin=ref clkgt]
-  reg req_tmask_bits_q:u16:[clock_pin=ref clkgt]
-  reg req_count_q:u4:[clock_pin=ref clkgt]
-  reg req_stride_q:u42:[clock_pin=ref clkgt]
-  reg req_set_way_q:u6:[clock_pin=ref clkgt]
-  reg meta_data_way_en_q:u4:[clock_pin=ref clkgt]
-  reg meta_data_req_addr_q:u40:[clock_pin=ref clkgt]
-  reg phys_addr_tag_q:u33:[clock_pin=ref clkgt]
-  reg new_coh_q:u2:[clock_pin=ref clkgt]
-  reg abort_operation_q:u1:[clock_pin=ref clkgt]
-  reg err_lock_q:u1:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clkgt]
-  reg err_mem_q:u1:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clkgt]
-  reg term_loop_q:u1:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clkgt]
-  reg cache_op_is_l1_q:u1:[clock_pin=ref clk_i]
-  reg cache_op_is_nop_q:u1:[clock_pin=ref clk_i]
-  reg send_op_to_l2_q:u1:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clkgt]
-  reg id_running_q:u1:[clock_pin=ref clkgt]
-  reg mh_probe_rdy_reg_q:u2:[clock_pin=ref clkgt]
-  reg conflict_reason_q:u1:[clock_pin=ref clkgt]
-  reg clear_line_on_q:u1:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clkgt]
-  wire meta_read_set:u4
-  wire is_set_way_op:u1
-  wire is_lock_xx_op:u1
-  wire clear_line:u1
-  wire da_clear_idx_d:u1
-  wire clear_line_on_d:u1
-  wire lock_set:u4
-  wire lock_way:u2
-  wire clkgt:u1
-  mut req_addr_d:u48 = 0
-  mut req_addr_msb_err_d:u1 = 0
-  mut req_count_d:u4 = 0
-  mut req_set_way_d:u6 = 0
-  mut meta_read_resp_match:u1 = 0
-  mut meta_read_mux_tag:u33 = 0
-  mut meta_read_mux_way:u2 = 0
-  mut meta_force_way_en:u4 = 0
-  mut err_lock_d:u1 = 0
-  mut err_mem_d:u1 = 0
-  mut cancel_send_to_l2:u1 = 0
-  mut send_op_to_l2_d:u1 = 0
-  mut conflict_reason_d:u1 = 0
-  mut found_free_way:u1 = 0
-  mut hlock_state_d:u64 = 0
-  mut slock_state_d:u64 = 0
-  wire busy_o:u1
-  wire cache_op_ready_o:u1
-  wire da_clear_val_o:u1
-  mut th_id_complete_o__wtmp:u4 = 0sb?
-  wire th_id_complete_o:u4
-  mut meta_read_mux_state__wtmp:u2 = 0sb?
-  wire meta_read_mux_state:u2
-  mut meta_read_mux_match__wtmp:u1 = 0sb?
-  wire meta_read_mux_match:u1
-  mut new_coh_d__wtmp:u2 = 0sb?
-  wire new_coh_d:u2
-  mut abort_operation_d__wtmp:u1 = 0sb?
-  wire abort_operation_d:u1
-  mut dcache_set_correct:u4 = 0
+pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:Clock, rst_ni:U1, chicken_bit_dcache_i:U1, cache_op_valid_i:U1, cache_op_req_i:(cmd:U4, start_level:U2, dest_level:U2, count:U4, addr:U48, way:U2, stride:U48, thread_id:U1, use_tmask:U1, tmask_ready:U1, tmask_bits:U16, l2_scp_dest:U17, l2_scp_fill:U1), cache_op_req_next_i:(cmd:U4, start_level:U2, dest_level:U2), meta_read_grant_i:U1, meta_read_resp_way_en_i:(e3:U1, e2:U1, e1:U1, e0:U1), meta_read_resp_i:U140, s1_phys_addr_tag_i:minion_dcache_pkg.PaTagExtSize_T, s1_tlb_wait_i:U1, s1_tlb_fail_i:U1, meta_write_ready_i:U1, writeback_ready_i:U1, writeback_done_i:U1, id_rq_full_i:U1, id_co_pf_grant_i:U1, cache_op_ready_byp_i:U1, mh_clear_slock_valid_i:U1, mh_clear_slock_set_i:minion_dcache_pkg.DcacheSetIdxWidth_T, mh_clear_slock_way_i:minion_dcache_pkg.DcacheWayIdxWidth_T, da_clear_rdy_i:U1, mh_probe_rdy_i:minion_dcache_pkg.DcacheMhFileSize_T, mh_metaw_rdy_i:minion_dcache_pkg.DcacheMhFileSize_T, rq_conflict_i:U1, cfg_clear_all_i:U1, cfg_clear_low_i:U1, cfg_alloc_scp_i:U1, cfg_cache_mode_i:U2, vm_status_i:U16) -> (busy_o:U1@[], cache_op_ready_o:U1@[], th_id_complete_o:U4@[], meta_read_bid_o:U1@[], meta_read_valid_o:U1@[], meta_read_phys_o:U1@[], meta_read_force_set_o:U1@[], meta_read_thread_id_o:U1@[], meta_read_skip_pma_o:U1@[], meta_read_addr_o:U48@[], meta_read_addr_msb_err_o:U1@[], meta_write_valid_next_o:U1@[], meta_write_valid_o:U1@[], meta_write_req_o:(set_idx:U4, way_en:U4, data:(coh_state:U2, tag:U33))@[], nack_set_valid_o:U1@[], nack_set_value_o:minion_dcache_pkg.DcacheSetIdxWidth_T@[], writeback_valid_o:U1@[], writeback_req_o:(tag:U33, set:U4, way_en:U4, is_tbox:U1, mem_idx:U1, addr_low:U7)@[], id_co_pf_bid_o:U1@[], s0_co_pf_valid_o:U1@[], s0_co_pf_req_o:(addr:U49, addr_msb_err:U1, set:U4, phys:U1, misaligned:U1, misaligned_2nd:U1, dest:(fp:U1, addr:U5, thread_id:U1), cmd:U5, typ:U4, gsc_cnt:U3, ps_mask:U8, data:U256, replay:U1, replay_entry:U3, replay_age:U5, cache_op:U1, buf_alloc:U1, buf_id:U3, cacheable:U1, chunk_read:U4, uc_load_2nd:U1, uc_load_ok:U1, miss_fill_ok:U1, gsc32_idx:U40, vm_sel:U3, mem_global:U1)@[], cache_op_valid_byp_o:U1@[], cache_op_req_byp_o:(cmd:U4, start_level:U2, dest_level:U2, count:U4, addr:U48, way:U2, stride:U48, thread_id:U1, use_tmask:U1, tmask_ready:U1, tmask_bits:U16, l2_scp_dest:U17, l2_scp_fill:U1)@[], hlock_state_o:U64@[], slock_state_o:U64@[], da_clear_en_o:U1@[], da_clear_val_o:U1@[], da_clear_set_o:minion_dcache_pkg.DcacheSetIdxWidth_T@[], da_clear_way_o:minion_dcache_pkg.DcacheWayIdxWidth_T@[], da_clear_idx_o:U1@[], vm_status_co_o:(prv:U2, mprv:U1, mpp:U2, sum:U1, mxr:U1, debug:U1)@[], err_flags_o:U4@[], csr_debug_signals_o:U4@[], sm_match_debug_signals_o:minion_dcache_pkg.DcacheDbgSmMatchBits_T@[], sm_filter_debug_signals_o:minion_dcache_pkg.DcacheDbgSmFilterBits_T@[], sm_data_debug_signals_o:minion_dcache_pkg.DcacheDbgSmDataBits_T@[]) {
+  mut _b2i_109 = 0
+  mut _b2i_16 = 0
+  mut _b2i_32 = 0
+  mut _b2i_78 = 0
+  mut _b2i_79 = 0
+  mut _b2i_80 = 0
+  mut _b2i_81 = 0
+  mut dcache_way_decode:U4 = 0
+  mut dcache_way_encode:U2 = 0
+  mut way:U2 = 0
+  mut ways:U4 = 0
+  reg meta_read_valid_o:U1:[clock_pin=clkgt]
+  reg s0_co_pf_valid_o:U1:[clock_pin=clkgt]
+  reg hlock_state_o:U64:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg slock_state_o:U64:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg da_clear_idx_o:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clkgt]
+  reg vm_status_co_o_q:U8:[clock_pin=clkgt]
+  reg state_q:U4:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clkgt]
+  reg req_q:U18:[clock_pin=clkgt]
+  reg req_addr_q:U48:[clock_pin=clkgt]
+  reg req_addr_msb_err_q:U1:[clock_pin=clkgt]
+  reg req_tmask_bits_q:U16:[clock_pin=clkgt]
+  reg req_count_q:U4:[clock_pin=clkgt]
+  reg req_stride_q:U42:[clock_pin=clkgt]
+  reg req_set_way_q:U6:[clock_pin=clkgt]
+  reg meta_data_way_en_q:U4:[clock_pin=clkgt]
+  reg meta_data_req_addr_q:U40:[clock_pin=clkgt]
+  reg phys_addr_tag_q:U33:[clock_pin=clkgt]
+  reg new_coh_q:U2:[clock_pin=clkgt]
+  reg abort_operation_q:U1:[clock_pin=clkgt]
+  reg err_lock_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clkgt]
+  reg err_mem_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clkgt]
+  reg term_loop_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clkgt]
+  reg cache_op_is_l1_q:U1:[clock_pin=clk_i]
+  reg cache_op_is_nop_q:U1:[clock_pin=clk_i]
+  reg send_op_to_l2_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clkgt]
+  reg id_running_q:U1:[clock_pin=clkgt]
+  reg mh_probe_rdy_reg_q:U2:[clock_pin=clkgt]
+  reg conflict_reason_q:U1:[clock_pin=clkgt]
+  reg clear_line_on_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clkgt]
+  wire `err_flags_o[0]`:U1 = nil
+  wire `err_flags_o[1]`:U1 = nil
+  wire `err_flags_o[2]`:U1 = nil
+  wire `err_flags_o[3]`:U1 = nil
+  wire err_flags_o:U4 = nil
+  wire `sm_data_debug_signals_o[0]`:U1 = nil
+  wire `sm_data_debug_signals_o[1]`:U1 = nil
+  wire `sm_data_debug_signals_o[2]`:U1 = nil
+  wire `sm_data_debug_signals_o[3]`:U1 = nil
+  wire `sm_data_debug_signals_o[4]`:U1 = nil
+  wire `sm_data_debug_signals_o[5]`:U1 = nil
+  wire `sm_data_debug_signals_o[6]`:U1 = nil
+  wire `sm_data_debug_signals_o[7]`:U1 = nil
+  wire `sm_data_debug_signals_o[8]`:U1 = nil
+  wire `sm_data_debug_signals_o[9]`:U1 = nil
+  wire `sm_data_debug_signals_o[10]`:U1 = nil
+  wire `sm_data_debug_signals_o[11]`:U1 = nil
+  wire `sm_data_debug_signals_o[12]`:U1 = nil
+  wire `sm_data_debug_signals_o[13]`:U1 = nil
+  wire `sm_data_debug_signals_o[14]`:U1 = nil
+  wire `sm_data_debug_signals_o[15]`:U1 = nil
+  wire `sm_data_debug_signals_o[16]`:U1 = nil
+  wire `sm_data_debug_signals_o[17]`:U1 = nil
+  wire `sm_data_debug_signals_o[18]`:U1 = nil
+  wire `sm_data_debug_signals_o[19]`:U1 = nil
+  wire `sm_data_debug_signals_o[20]`:U1 = nil
+  wire `sm_data_debug_signals_o[21]`:U1 = nil
+  wire `sm_data_debug_signals_o[22]`:U1 = nil
+  wire `sm_data_debug_signals_o[23]`:U1 = nil
+  wire `sm_data_debug_signals_o[24]`:U1 = nil
+  wire `sm_data_debug_signals_o[25]`:U1 = nil
+  wire `sm_data_debug_signals_o[26]`:U1 = nil
+  wire `sm_data_debug_signals_o[27]`:U1 = nil
+  wire `sm_data_debug_signals_o[28]`:U1 = nil
+  wire `sm_data_debug_signals_o[29]`:U1 = nil
+  wire `sm_data_debug_signals_o[30]`:U1 = nil
+  wire `sm_data_debug_signals_o[31]`:U1 = nil
+  wire `sm_data_debug_signals_o[32]`:U1 = nil
+  wire `sm_data_debug_signals_o[33]`:U1 = nil
+  wire `sm_data_debug_signals_o[34]`:U1 = nil
+  wire `sm_data_debug_signals_o[35]`:U1 = nil
+  wire `sm_data_debug_signals_o[36]`:U1 = nil
+  wire `sm_data_debug_signals_o[37]`:U1 = nil
+  wire `sm_data_debug_signals_o[38]`:U1 = nil
+  wire `sm_data_debug_signals_o[39]`:U1 = nil
+  wire `sm_data_debug_signals_o[40]`:U1 = nil
+  wire `sm_data_debug_signals_o[41]`:U1 = nil
+  wire `sm_data_debug_signals_o[42]`:U1 = nil
+  wire `sm_data_debug_signals_o[43]`:U1 = nil
+  wire `sm_data_debug_signals_o[44]`:U1 = nil
+  wire `sm_data_debug_signals_o[45]`:U1 = nil
+  wire `sm_data_debug_signals_o[46]`:U1 = nil
+  wire `sm_data_debug_signals_o[47]`:U1 = nil
+  wire `sm_data_debug_signals_o[48]`:U1 = nil
+  wire `sm_data_debug_signals_o[49]`:U1 = nil
+  wire `sm_data_debug_signals_o[50]`:U1 = nil
+  wire `sm_data_debug_signals_o[51]`:U1 = nil
+  wire `sm_data_debug_signals_o[52]`:U1 = nil
+  wire `sm_data_debug_signals_o[53]`:U1 = nil
+  wire `sm_data_debug_signals_o[54]`:U1 = nil
+  wire `sm_data_debug_signals_o[55]`:U1 = nil
+  wire `sm_data_debug_signals_o[56]`:U1 = nil
+  wire `sm_data_debug_signals_o[57]`:U1 = nil
+  wire `sm_data_debug_signals_o[58]`:U1 = nil
+  wire `sm_data_debug_signals_o[59]`:U1 = nil
+  wire `sm_data_debug_signals_o[60]`:U1 = nil
+  wire `sm_data_debug_signals_o[61]`:U1 = nil
+  wire `sm_data_debug_signals_o[62]`:U1 = nil
+  wire `sm_data_debug_signals_o[63]`:U1 = nil
+  wire `sm_data_debug_signals_o[64]`:U1 = nil
+  wire `sm_data_debug_signals_o[65]`:U1 = nil
+  wire `sm_data_debug_signals_o[66]`:U1 = nil
+  wire `sm_data_debug_signals_o[67]`:U1 = nil
+  wire `sm_data_debug_signals_o[68]`:U1 = nil
+  wire `sm_data_debug_signals_o[69]`:U1 = nil
+  wire `sm_data_debug_signals_o[70]`:U1 = nil
+  wire `sm_data_debug_signals_o[71]`:U1 = nil
+  wire `sm_data_debug_signals_o[72]`:U1 = nil
+  wire `sm_data_debug_signals_o[73]`:U1 = nil
+  wire `sm_data_debug_signals_o[74]`:U1 = nil
+  wire `sm_data_debug_signals_o[75]`:U1 = nil
+  wire `sm_data_debug_signals_o[76]`:U1 = nil
+  wire `sm_data_debug_signals_o[77]`:U1 = nil
+  wire `sm_data_debug_signals_o[78]`:U1 = nil
+  wire `sm_data_debug_signals_o[79]`:U1 = nil
+  wire `sm_data_debug_signals_o[80]`:U1 = nil
+  wire `sm_data_debug_signals_o[81]`:U1 = nil
+  wire `sm_data_debug_signals_o[82]`:U1 = nil
+  wire `sm_data_debug_signals_o[83]`:U1 = nil
+  wire `sm_data_debug_signals_o[84]`:U1 = nil
+  wire `sm_data_debug_signals_o[85]`:U1 = nil
+  wire `sm_data_debug_signals_o[86]`:U1 = nil
+  wire `sm_data_debug_signals_o[87]`:U1 = nil
+  wire `sm_data_debug_signals_o[88]`:U1 = nil
+  wire `sm_data_debug_signals_o[89]`:U1 = nil
+  wire `sm_data_debug_signals_o[90]`:U1 = nil
+  wire `sm_data_debug_signals_o[91]`:U1 = nil
+  wire `sm_data_debug_signals_o[92]`:U1 = nil
+  wire `sm_data_debug_signals_o[93]`:U1 = nil
+  wire `sm_data_debug_signals_o[94]`:U1 = nil
+  wire `sm_data_debug_signals_o[95]`:U1 = nil
+  wire `sm_data_debug_signals_o[96]`:U1 = nil
+  wire `sm_data_debug_signals_o[97]`:U1 = nil
+  wire `sm_data_debug_signals_o[98]`:U1 = nil
+  wire `sm_data_debug_signals_o[99]`:U1 = nil
+  wire `sm_data_debug_signals_o[100]`:U1 = nil
+  wire `sm_data_debug_signals_o[101]`:U1 = nil
+  wire `sm_data_debug_signals_o[102]`:U1 = nil
+  wire `sm_data_debug_signals_o[103]`:U1 = nil
+  wire `sm_data_debug_signals_o[104]`:U1 = nil
+  wire `sm_data_debug_signals_o[105]`:U1 = nil
+  wire `sm_data_debug_signals_o[106]`:U1 = nil
+  wire `sm_data_debug_signals_o[107]`:U1 = nil
+  wire `sm_data_debug_signals_o[108]`:U1 = nil
+  wire `sm_data_debug_signals_o[109]`:U1 = nil
+  wire `sm_data_debug_signals_o[110]`:U1 = nil
+  wire `sm_data_debug_signals_o[111]`:U1 = nil
+  wire `sm_data_debug_signals_o[112]`:U1 = nil
+  wire `sm_data_debug_signals_o[113]`:U1 = nil
+  wire `sm_data_debug_signals_o[114]`:U1 = nil
+  wire `sm_data_debug_signals_o[115]`:U1 = nil
+  wire `sm_data_debug_signals_o[116]`:U1 = nil
+  wire `sm_data_debug_signals_o[117]`:U1 = nil
+  wire `sm_data_debug_signals_o[118]`:U1 = nil
+  wire `sm_data_debug_signals_o[119]`:U1 = nil
+  wire `sm_data_debug_signals_o[120]`:U1 = nil
+  wire `sm_data_debug_signals_o[121]`:U1 = nil
+  wire `sm_data_debug_signals_o[122]`:U1 = nil
+  wire `sm_data_debug_signals_o[123]`:U1 = nil
+  wire `sm_data_debug_signals_o[124]`:U1 = nil
+  wire `sm_data_debug_signals_o[125]`:U1 = nil
+  wire `sm_data_debug_signals_o[126]`:U1 = nil
+  wire `sm_data_debug_signals_o[127]`:U1 = nil
+  wire `sm_data_debug_signals_o[128]`:U1 = nil
+  wire `sm_data_debug_signals_o[129]`:U1 = nil
+  wire `sm_data_debug_signals_o[130]`:U1 = nil
+  wire `sm_data_debug_signals_o[131]`:U1 = nil
+  wire `sm_data_debug_signals_o[132]`:U1 = nil
+  wire `sm_data_debug_signals_o[133]`:U1 = nil
+  wire `sm_data_debug_signals_o[134]`:U1 = nil
+  wire `sm_data_debug_signals_o[135]`:U1 = nil
+  wire `sm_data_debug_signals_o[136]`:U1 = nil
+  wire `sm_data_debug_signals_o[137]`:U1 = nil
+  wire `sm_data_debug_signals_o[138]`:U1 = nil
+  wire `sm_data_debug_signals_o[139]`:U1 = nil
+  wire `sm_data_debug_signals_o[140]`:U1 = nil
+  wire `sm_data_debug_signals_o[141]`:U1 = nil
+  wire `sm_data_debug_signals_o[142]`:U1 = nil
+  wire `sm_data_debug_signals_o[143]`:U1 = nil
+  wire `sm_data_debug_signals_o[144]`:U1 = nil
+  wire `sm_data_debug_signals_o[145]`:U1 = nil
+  wire `sm_data_debug_signals_o[146]`:U1 = nil
+  wire `sm_data_debug_signals_o[147]`:U1 = nil
+  wire `sm_data_debug_signals_o[148]`:U1 = nil
+  wire `sm_data_debug_signals_o[149]`:U1 = nil
+  wire `sm_data_debug_signals_o[150]`:U1 = nil
+  wire `sm_data_debug_signals_o[151]`:U1 = nil
+  wire `sm_data_debug_signals_o[152]`:U1 = nil
+  wire `sm_data_debug_signals_o[153]`:U1 = nil
+  wire `sm_data_debug_signals_o[154]`:U1 = nil
+  wire `sm_data_debug_signals_o[155]`:U1 = nil
+  wire `sm_data_debug_signals_o[156]`:U1 = nil
+  wire `sm_data_debug_signals_o[157]`:U1 = nil
+  wire `sm_data_debug_signals_o[158]`:U1 = nil
+  wire `sm_data_debug_signals_o[159]`:U1 = nil
+  wire `sm_data_debug_signals_o[160]`:U1 = nil
+  wire `sm_data_debug_signals_o[161]`:U1 = nil
+  wire `sm_data_debug_signals_o[162]`:U1 = nil
+  wire `sm_data_debug_signals_o[163]`:U1 = nil
+  wire `sm_data_debug_signals_o[164]`:U1 = nil
+  wire `sm_data_debug_signals_o[165]`:U1 = nil
+  wire `sm_data_debug_signals_o[166]`:U1 = nil
+  wire `sm_data_debug_signals_o[167]`:U1 = nil
+  wire `sm_data_debug_signals_o[168]`:U1 = nil
+  wire `sm_data_debug_signals_o[169]`:U1 = nil
+  wire `sm_data_debug_signals_o[170]`:U1 = nil
+  wire `sm_data_debug_signals_o[171]`:U1 = nil
+  wire `sm_data_debug_signals_o[172]`:U1 = nil
+  wire `sm_data_debug_signals_o[173]`:U1 = nil
+  wire `sm_data_debug_signals_o[174]`:U1 = nil
+  wire `sm_data_debug_signals_o[175]`:U1 = nil
+  wire `sm_data_debug_signals_o[176]`:U1 = nil
+  wire `sm_data_debug_signals_o[177]`:U1 = nil
+  wire `sm_data_debug_signals_o[178]`:U1 = nil
+  wire `sm_data_debug_signals_o[179]`:U1 = nil
+  wire `sm_data_debug_signals_o[180]`:U1 = nil
+  wire `sm_data_debug_signals_o[181]`:U1 = nil
+  wire `sm_data_debug_signals_o[182]`:U1 = nil
+  wire `sm_data_debug_signals_o[183]`:U1 = nil
+  wire `sm_data_debug_signals_o[184]`:U1 = nil
+  wire `sm_data_debug_signals_o[185]`:U1 = nil
+  wire `sm_data_debug_signals_o[186]`:U1 = nil
+  wire `sm_data_debug_signals_o[187]`:U1 = nil
+  wire `sm_data_debug_signals_o[188]`:U1 = nil
+  wire `sm_data_debug_signals_o[189]`:U1 = nil
+  wire `sm_data_debug_signals_o[190]`:U1 = nil
+  wire `sm_data_debug_signals_o[191]`:U1 = nil
+  wire `sm_data_debug_signals_o[192]`:U1 = nil
+  wire `sm_data_debug_signals_o[193]`:U1 = nil
+  wire `sm_data_debug_signals_o[194]`:U1 = nil
+  wire `sm_data_debug_signals_o[195]`:U1 = nil
+  wire `sm_data_debug_signals_o[196]`:U1 = nil
+  wire `sm_data_debug_signals_o[197]`:U1 = nil
+  wire `sm_data_debug_signals_o[198]`:U1 = nil
+  wire `sm_data_debug_signals_o[199]`:U1 = nil
+  wire `sm_data_debug_signals_o[200]`:U1 = nil
+  wire `sm_data_debug_signals_o[201]`:U1 = nil
+  wire `sm_data_debug_signals_o[202]`:U1 = nil
+  wire `sm_data_debug_signals_o[203]`:U1 = nil
+  wire `sm_data_debug_signals_o[204]`:U1 = nil
+  wire `sm_data_debug_signals_o[205]`:U1 = nil
+  wire `sm_data_debug_signals_o[206]`:U1 = nil
+  wire `sm_data_debug_signals_o[207]`:U1 = nil
+  wire `sm_data_debug_signals_o[208]`:U1 = nil
+  wire `sm_data_debug_signals_o[209]`:U1 = nil
+  wire `sm_data_debug_signals_o[210]`:U1 = nil
+  wire `sm_data_debug_signals_o[211]`:U1 = nil
+  wire `sm_data_debug_signals_o[212]`:U1 = nil
+  wire `sm_data_debug_signals_o[213]`:U1 = nil
+  wire `sm_data_debug_signals_o[214]`:U1 = nil
+  wire `sm_data_debug_signals_o[215]`:U1 = nil
+  wire `sm_data_debug_signals_o[216]`:U1 = nil
+  wire `sm_data_debug_signals_o[217]`:U1 = nil
+  wire `sm_data_debug_signals_o[218]`:U1 = nil
+  wire `sm_data_debug_signals_o[219]`:U1 = nil
+  wire `sm_data_debug_signals_o[220]`:U1 = nil
+  wire `sm_data_debug_signals_o[221]`:U1 = nil
+  wire `sm_data_debug_signals_o[222]`:U1 = nil
+  wire `sm_data_debug_signals_o[223]`:U1 = nil
+  wire `sm_data_debug_signals_o[224]`:U1 = nil
+  wire `sm_data_debug_signals_o[225]`:U1 = nil
+  wire `sm_data_debug_signals_o[226]`:U1 = nil
+  wire `sm_data_debug_signals_o[227]`:U1 = nil
+  wire `sm_data_debug_signals_o[228]`:U1 = nil
+  wire `sm_data_debug_signals_o[229]`:U1 = nil
+  wire `sm_data_debug_signals_o[230]`:U1 = nil
+  wire `sm_data_debug_signals_o[231]`:U1 = nil
+  wire `sm_data_debug_signals_o[232]`:U1 = nil
+  wire `sm_data_debug_signals_o[233]`:U1 = nil
+  wire `sm_data_debug_signals_o[234]`:U1 = nil
+  wire `sm_data_debug_signals_o[235]`:U1 = nil
+  wire `sm_data_debug_signals_o[236]`:U1 = nil
+  wire `sm_data_debug_signals_o[237]`:U1 = nil
+  wire `sm_data_debug_signals_o[238]`:U1 = nil
+  wire `sm_data_debug_signals_o[239]`:U1 = nil
+  wire `sm_data_debug_signals_o[240]`:U1 = nil
+  wire `sm_data_debug_signals_o[241]`:U1 = nil
+  wire `sm_data_debug_signals_o[242]`:U1 = nil
+  wire `sm_data_debug_signals_o[243]`:U1 = nil
+  wire `sm_data_debug_signals_o[244]`:U1 = nil
+  wire `sm_data_debug_signals_o[245]`:U1 = nil
+  wire `sm_data_debug_signals_o[246]`:U1 = nil
+  wire `sm_data_debug_signals_o[247]`:U1 = nil
+  wire `sm_data_debug_signals_o[248]`:U1 = nil
+  wire `sm_data_debug_signals_o[249]`:U1 = nil
+  wire `sm_data_debug_signals_o[250]`:U1 = nil
+  wire `sm_data_debug_signals_o[251]`:U1 = nil
+  wire `sm_data_debug_signals_o[252]`:U1 = nil
+  wire `sm_data_debug_signals_o[253]`:U1 = nil
+  wire `sm_data_debug_signals_o[254]`:U1 = nil
+  wire `sm_data_debug_signals_o[255]`:U1 = nil
+  wire `sm_data_debug_signals_o[256]`:U1 = nil
+  wire `sm_data_debug_signals_o[257]`:U1 = nil
+  wire `sm_data_debug_signals_o[258]`:U1 = nil
+  wire `sm_data_debug_signals_o[259]`:U1 = nil
+  wire `sm_data_debug_signals_o[260]`:U1 = nil
+  wire `sm_data_debug_signals_o[261]`:U1 = nil
+  wire `sm_data_debug_signals_o[262]`:U1 = nil
+  wire `sm_data_debug_signals_o[263]`:U1 = nil
+  wire `sm_data_debug_signals_o[264]`:U1 = nil
+  wire `sm_data_debug_signals_o[265]`:U1 = nil
+  wire `sm_data_debug_signals_o[266]`:U1 = nil
+  wire `sm_data_debug_signals_o[267]`:U1 = nil
+  wire `sm_data_debug_signals_o[268]`:U1 = nil
+  wire `sm_data_debug_signals_o[269]`:U1 = nil
+  wire `sm_data_debug_signals_o[270]`:U1 = nil
+  wire `sm_data_debug_signals_o[271]`:U1 = nil
+  wire `sm_data_debug_signals_o[272]`:U1 = nil
+  wire `sm_data_debug_signals_o[273]`:U1 = nil
+  wire `sm_data_debug_signals_o[274]`:U1 = nil
+  wire `sm_data_debug_signals_o[275]`:U1 = nil
+  wire `sm_data_debug_signals_o[276]`:U1 = nil
+  wire `sm_data_debug_signals_o[277]`:U1 = nil
+  wire `sm_data_debug_signals_o[278]`:U1 = nil
+  wire `sm_data_debug_signals_o[279]`:U1 = nil
+  wire `sm_data_debug_signals_o[280]`:U1 = nil
+  wire `sm_data_debug_signals_o[281]`:U1 = nil
+  wire `sm_data_debug_signals_o[282]`:U1 = nil
+  wire `sm_data_debug_signals_o[283]`:U1 = nil
+  wire `sm_data_debug_signals_o[284]`:U1 = nil
+  wire `sm_data_debug_signals_o[285]`:U1 = nil
+  wire `sm_data_debug_signals_o[286]`:U1 = nil
+  wire `sm_data_debug_signals_o[287]`:U1 = nil
+  wire `sm_data_debug_signals_o[288]`:U1 = nil
+  wire `sm_data_debug_signals_o[289]`:U1 = nil
+  wire `sm_data_debug_signals_o[290]`:U1 = nil
+  wire `sm_data_debug_signals_o[291]`:U1 = nil
+  wire `sm_data_debug_signals_o[292]`:U1 = nil
+  wire `sm_data_debug_signals_o[293]`:U1 = nil
+  wire `sm_data_debug_signals_o[294]`:U1 = nil
+  wire `sm_data_debug_signals_o[295]`:U1 = nil
+  wire `sm_data_debug_signals_o[296]`:U1 = nil
+  wire `sm_data_debug_signals_o[297]`:U1 = nil
+  wire `sm_data_debug_signals_o[298]`:U1 = nil
+  wire `sm_data_debug_signals_o[299]`:U1 = nil
+  wire `sm_data_debug_signals_o[300]`:U1 = nil
+  wire `sm_data_debug_signals_o[301]`:U1 = nil
+  wire `sm_data_debug_signals_o[302]`:U1 = nil
+  wire `sm_data_debug_signals_o[303]`:U1 = nil
+  wire `sm_data_debug_signals_o[304]`:U1 = nil
+  wire `sm_data_debug_signals_o[305]`:U1 = nil
+  wire `sm_data_debug_signals_o[306]`:U1 = nil
+  wire `sm_data_debug_signals_o[307]`:U1 = nil
+  wire `sm_data_debug_signals_o[308]`:U1 = nil
+  wire `sm_data_debug_signals_o[309]`:U1 = nil
+  wire `sm_data_debug_signals_o[310]`:U1 = nil
+  wire `sm_data_debug_signals_o[311]`:U1 = nil
+  wire `sm_data_debug_signals_o[312]`:U1 = nil
+  wire `sm_data_debug_signals_o[313]`:U1 = nil
+  wire `sm_data_debug_signals_o[314]`:U1 = nil
+  wire `sm_data_debug_signals_o[315]`:U1 = nil
+  wire `sm_data_debug_signals_o[316]`:U1 = nil
+  wire `sm_data_debug_signals_o[317]`:U1 = nil
+  wire `sm_data_debug_signals_o[318]`:U1 = nil
+  wire `sm_data_debug_signals_o[319]`:U1 = nil
+  wire `sm_data_debug_signals_o[320]`:U1 = nil
+  wire `sm_data_debug_signals_o[321]`:U1 = nil
+  wire `sm_data_debug_signals_o[322]`:U1 = nil
+  wire `sm_data_debug_signals_o[323]`:U1 = nil
+  wire `sm_data_debug_signals_o[324]`:U1 = nil
+  wire `sm_data_debug_signals_o[325]`:U1 = nil
+  wire `sm_data_debug_signals_o[326]`:U1 = nil
+  wire `sm_data_debug_signals_o[327]`:U1 = nil
+  wire `sm_data_debug_signals_o[328]`:U1 = nil
+  wire `sm_data_debug_signals_o[329]`:U1 = nil
+  wire `sm_data_debug_signals_o[330]`:U1 = nil
+  wire `sm_data_debug_signals_o[331]`:U1 = nil
+  wire `sm_data_debug_signals_o[332]`:U1 = nil
+  wire `sm_data_debug_signals_o[333]`:U1 = nil
+  wire `sm_data_debug_signals_o[334]`:U1 = nil
+  wire `sm_data_debug_signals_o[335]`:U1 = nil
+  wire `sm_data_debug_signals_o[336]`:U1 = nil
+  wire `sm_data_debug_signals_o[337]`:U1 = nil
+  wire `sm_data_debug_signals_o[338]`:U1 = nil
+  wire `sm_data_debug_signals_o[339]`:U1 = nil
+  wire `sm_data_debug_signals_o[340]`:U1 = nil
+  wire `sm_data_debug_signals_o[341]`:U1 = nil
+  wire `sm_data_debug_signals_o[342]`:U1 = nil
+  wire `sm_data_debug_signals_o[343]`:U1 = nil
+  wire `sm_data_debug_signals_o[344]`:U1 = nil
+  wire `sm_data_debug_signals_o[345]`:U1 = nil
+  wire `sm_data_debug_signals_o[346]`:U1 = nil
+  wire `sm_data_debug_signals_o[347]`:U1 = nil
+  wire `sm_data_debug_signals_o[348]`:U1 = nil
+  wire `sm_data_debug_signals_o[349]`:U1 = nil
+  wire `sm_data_debug_signals_o[350]`:U1 = nil
+  wire `sm_data_debug_signals_o[351]`:U1 = nil
+  wire `sm_data_debug_signals_o[352]`:U1 = nil
+  wire `sm_data_debug_signals_o[353]`:U1 = nil
+  wire `sm_data_debug_signals_o[354]`:U1 = nil
+  wire `sm_data_debug_signals_o[355]`:U1 = nil
+  wire `sm_data_debug_signals_o[356]`:U1 = nil
+  wire `sm_data_debug_signals_o[357]`:U1 = nil
+  wire `sm_data_debug_signals_o[358]`:U1 = nil
+  wire `sm_data_debug_signals_o[359]`:U1 = nil
+  wire `sm_data_debug_signals_o[360]`:U1 = nil
+  wire `sm_data_debug_signals_o[361]`:U1 = nil
+  wire `sm_data_debug_signals_o[362]`:U1 = nil
+  wire `sm_data_debug_signals_o[363]`:U1 = nil
+  wire `sm_data_debug_signals_o[364]`:U1 = nil
+  wire `sm_data_debug_signals_o[365]`:U1 = nil
+  wire `sm_data_debug_signals_o[366]`:U1 = nil
+  wire `sm_data_debug_signals_o[367]`:U1 = nil
+  wire `sm_data_debug_signals_o[368]`:U1 = nil
+  wire `sm_data_debug_signals_o[369]`:U1 = nil
+  wire `sm_data_debug_signals_o[370]`:U1 = nil
+  wire `sm_data_debug_signals_o[371]`:U1 = nil
+  wire `sm_data_debug_signals_o[372]`:U1 = nil
+  wire `sm_data_debug_signals_o[373]`:U1 = nil
+  wire `sm_data_debug_signals_o[374]`:U1 = nil
+  wire `sm_data_debug_signals_o[375]`:U1 = nil
+  wire `sm_data_debug_signals_o[376]`:U1 = nil
+  wire `sm_data_debug_signals_o[377]`:U1 = nil
+  wire `sm_data_debug_signals_o[378]`:U1 = nil
+  wire `sm_data_debug_signals_o[379]`:U1 = nil
+  wire `sm_data_debug_signals_o[380]`:U1 = nil
+  wire `sm_data_debug_signals_o[381]`:U1 = nil
+  wire `sm_data_debug_signals_o[382]`:U1 = nil
+  wire `sm_data_debug_signals_o[383]`:U1 = nil
+  wire `sm_data_debug_signals_o[384]`:U1 = nil
+  wire `sm_data_debug_signals_o[385]`:U1 = nil
+  wire `sm_data_debug_signals_o[386]`:U1 = nil
+  wire `sm_data_debug_signals_o[387]`:U1 = nil
+  wire `sm_data_debug_signals_o[388]`:U1 = nil
+  wire `sm_data_debug_signals_o[389]`:U1 = nil
+  wire `sm_data_debug_signals_o[390]`:U1 = nil
+  wire `sm_data_debug_signals_o[391]`:U1 = nil
+  wire `sm_data_debug_signals_o[392]`:U1 = nil
+  wire `sm_data_debug_signals_o[393]`:U1 = nil
+  wire `sm_data_debug_signals_o[394]`:U1 = nil
+  wire `sm_data_debug_signals_o[395]`:U1 = nil
+  wire `sm_data_debug_signals_o[396]`:U1 = nil
+  wire `sm_data_debug_signals_o[397]`:U1 = nil
+  wire `sm_data_debug_signals_o[398]`:U1 = nil
+  wire `sm_data_debug_signals_o[399]`:U1 = nil
+  wire `sm_data_debug_signals_o[400]`:U1 = nil
+  wire `sm_data_debug_signals_o[401]`:U1 = nil
+  wire `sm_data_debug_signals_o[402]`:U1 = nil
+  wire `sm_data_debug_signals_o[403]`:U1 = nil
+  wire `sm_data_debug_signals_o[404]`:U1 = nil
+  wire `sm_data_debug_signals_o[405]`:U1 = nil
+  wire `sm_data_debug_signals_o[406]`:U1 = nil
+  wire `sm_data_debug_signals_o[407]`:U1 = nil
+  wire `sm_data_debug_signals_o[408]`:U1 = nil
+  wire `sm_data_debug_signals_o[409]`:U1 = nil
+  wire `sm_data_debug_signals_o[410]`:U1 = nil
+  wire `sm_data_debug_signals_o[411]`:U1 = nil
+  wire `sm_data_debug_signals_o[412]`:U1 = nil
+  wire `sm_data_debug_signals_o[413]`:U1 = nil
+  wire `sm_data_debug_signals_o[414]`:U1 = nil
+  wire `sm_data_debug_signals_o[415]`:U1 = nil
+  wire `sm_data_debug_signals_o[416]`:U1 = nil
+  wire `sm_data_debug_signals_o[417]`:U1 = nil
+  wire `sm_data_debug_signals_o[418]`:U1 = nil
+  wire `sm_data_debug_signals_o[419]`:U1 = nil
+  wire `sm_data_debug_signals_o[420]`:U1 = nil
+  wire `sm_data_debug_signals_o[421]`:U1 = nil
+  wire `sm_data_debug_signals_o[422]`:U1 = nil
+  wire `sm_data_debug_signals_o[423]`:U1 = nil
+  wire `sm_data_debug_signals_o[424]`:U1 = nil
+  wire `sm_data_debug_signals_o[425]`:U1 = nil
+  wire `sm_data_debug_signals_o[426]`:U1 = nil
+  wire `sm_data_debug_signals_o[427]`:U1 = nil
+  wire `sm_data_debug_signals_o[428]`:U1 = nil
+  wire `sm_data_debug_signals_o[429]`:U1 = nil
+  wire `sm_data_debug_signals_o[430]`:U1 = nil
+  wire `sm_data_debug_signals_o[431]`:U1 = nil
+  wire `sm_data_debug_signals_o[432]`:U1 = nil
+  wire `sm_data_debug_signals_o[433]`:U1 = nil
+  wire `sm_data_debug_signals_o[434]`:U1 = nil
+  wire `sm_data_debug_signals_o[435]`:U1 = nil
+  wire `sm_data_debug_signals_o[436]`:U1 = nil
+  wire `sm_data_debug_signals_o[437]`:U1 = nil
+  wire `sm_data_debug_signals_o[438]`:U1 = nil
+  wire `sm_data_debug_signals_o[439]`:U1 = nil
+  wire `sm_data_debug_signals_o[440]`:U1 = nil
+  wire `sm_data_debug_signals_o[441]`:U1 = nil
+  wire `sm_data_debug_signals_o[442]`:U1 = nil
+  wire `sm_data_debug_signals_o[443]`:U1 = nil
+  wire `sm_data_debug_signals_o[444]`:U1 = nil
+  wire `sm_data_debug_signals_o[445]`:U1 = nil
+  wire `sm_data_debug_signals_o[446]`:U1 = nil
+  wire `sm_data_debug_signals_o[447]`:U1 = nil
+  wire `sm_data_debug_signals_o[448]`:U1 = nil
+  wire `sm_data_debug_signals_o[449]`:U1 = nil
+  wire `sm_data_debug_signals_o[450]`:U1 = nil
+  wire `sm_data_debug_signals_o[451]`:U1 = nil
+  wire `sm_data_debug_signals_o[452]`:U1 = nil
+  wire `sm_data_debug_signals_o[453]`:U1 = nil
+  wire `sm_data_debug_signals_o[454]`:U1 = nil
+  wire `sm_data_debug_signals_o[455]`:U1 = nil
+  wire `sm_data_debug_signals_o[456]`:U1 = nil
+  wire `sm_data_debug_signals_o[457]`:U1 = nil
+  wire `sm_data_debug_signals_o[458]`:U1 = nil
+  wire `sm_data_debug_signals_o[459]`:U1 = nil
+  wire `sm_data_debug_signals_o[460]`:U1 = nil
+  wire `sm_data_debug_signals_o[461]`:U1 = nil
+  wire `sm_data_debug_signals_o[462]`:U1 = nil
+  wire `sm_data_debug_signals_o[463]`:U1 = nil
+  wire `sm_data_debug_signals_o[464]`:U1 = nil
+  wire `sm_data_debug_signals_o[465]`:U1 = nil
+  wire `sm_data_debug_signals_o[466]`:U1 = nil
+  wire `sm_data_debug_signals_o[467]`:U1 = nil
+  wire `sm_data_debug_signals_o[468]`:U1 = nil
+  wire `sm_data_debug_signals_o[469]`:U1 = nil
+  wire `sm_data_debug_signals_o[470]`:U1 = nil
+  wire `sm_data_debug_signals_o[471]`:U1 = nil
+  wire `sm_data_debug_signals_o[472]`:U1 = nil
+  wire `sm_data_debug_signals_o[473]`:U1 = nil
+  wire `sm_data_debug_signals_o[474]`:U1 = nil
+  wire `sm_data_debug_signals_o[475]`:U1 = nil
+  wire `sm_data_debug_signals_o[476]`:U1 = nil
+  wire `sm_data_debug_signals_o[477]`:U1 = nil
+  wire `sm_data_debug_signals_o[478]`:U1 = nil
+  wire `sm_data_debug_signals_o[479]`:U1 = nil
+  wire `sm_data_debug_signals_o[480]`:U1 = nil
+  wire `sm_data_debug_signals_o[481]`:U1 = nil
+  wire `sm_data_debug_signals_o[482]`:U1 = nil
+  wire `sm_data_debug_signals_o[483]`:U1 = nil
+  wire `sm_data_debug_signals_o[484]`:U1 = nil
+  wire `sm_data_debug_signals_o[485]`:U1 = nil
+  wire `sm_data_debug_signals_o[486]`:U1 = nil
+  wire `sm_data_debug_signals_o[487]`:U1 = nil
+  wire `sm_data_debug_signals_o[488]`:U1 = nil
+  wire `sm_data_debug_signals_o[489]`:U1 = nil
+  wire `sm_data_debug_signals_o[490]`:U1 = nil
+  wire `sm_data_debug_signals_o[491]`:U1 = nil
+  wire `sm_data_debug_signals_o[492]`:U1 = nil
+  wire `sm_data_debug_signals_o[493]`:U1 = nil
+  wire `sm_data_debug_signals_o[494]`:U1 = nil
+  wire `sm_data_debug_signals_o[495]`:U1 = nil
+  wire `sm_data_debug_signals_o[496]`:U1 = nil
+  wire `sm_data_debug_signals_o[497]`:U1 = nil
+  wire `sm_data_debug_signals_o[498]`:U1 = nil
+  wire `sm_data_debug_signals_o[499]`:U1 = nil
+  wire `sm_data_debug_signals_o[500]`:U1 = nil
+  wire `sm_data_debug_signals_o[501]`:U1 = nil
+  wire `sm_data_debug_signals_o[502]`:U1 = nil
+  wire `sm_data_debug_signals_o[503]`:U1 = nil
+  wire `sm_data_debug_signals_o[504]`:U1 = nil
+  wire `sm_data_debug_signals_o[505]`:U1 = nil
+  wire `sm_data_debug_signals_o[506]`:U1 = nil
+  wire `sm_data_debug_signals_o[507]`:U1 = nil
+  wire `sm_data_debug_signals_o[508]`:U1 = nil
+  wire `sm_data_debug_signals_o[509]`:U1 = nil
+  wire `sm_data_debug_signals_o[510]`:U1 = nil
+  wire `sm_data_debug_signals_o[511]`:U1 = nil
+  wire sm_data_debug_signals_o:U512 = nil
+  wire meta_read_set:U4 = nil
+  wire is_set_way_op:U1 = nil
+  wire is_lock_xx_op:U1 = nil
+  wire clear_line:U1 = nil
+  wire da_clear_idx_d:U1 = nil
+  wire clear_line_on_d:U1 = nil
+  wire lock_set:U4 = nil
+  wire lock_way:U2 = nil
+  wire clkgt:Clock = nil
+  mut req_addr_d:U48 = 0
+  mut req_addr_msb_err_d:U1 = 0
+  mut req_count_d:U4 = 0
+  mut req_set_way_d:U6 = 0
+  mut meta_read_resp_match:U1 = 0
+  mut meta_read_mux_tag:U33 = 0
+  mut meta_read_mux_way:U2 = 0
+  mut meta_force_way_en:U4 = 0
+  mut err_lock_d:U1 = 0
+  mut err_mem_d:U1 = 0
+  mut cancel_send_to_l2:U1 = 0
+  mut send_op_to_l2_d:U1 = 0
+  mut conflict_reason_d:U1 = 0
+  mut found_free_way:U1 = 0
+  mut hlock_state_d:U64 = 0
+  mut slock_state_d:U64 = 0
+  wire busy_o:U1 = nil
+  wire cache_op_ready_o:U1 = nil
+  wire da_clear_val_o:U1 = nil
+  wire `meta_write_req_o__bpr.set_idx`:U4 = nil
+  wire `meta_write_req_o__bpr.way_en`:U4 = nil
+  wire `meta_write_req_o__bpr.data.coh_state`:U2 = nil
+  wire `meta_write_req_o__bpr.data.tag`:U33 = nil
+  wire `writeback_req_o__bpr.tag`:U33 = nil
+  wire `writeback_req_o__bpr.set`:U4 = nil
+  wire `writeback_req_o__bpr.way_en`:U4 = nil
+  wire `writeback_req_o__bpr.is_tbox`:U1 = nil
+  wire `writeback_req_o__bpr.mem_idx`:U1 = nil
+  wire `writeback_req_o__bpr.addr_low`:U7 = nil
+  wire `s0_co_pf_req_o__bpr.addr`:U49 = nil
+  wire `s0_co_pf_req_o__bpr.addr_msb_err`:U1 = nil
+  wire `s0_co_pf_req_o__bpr.set`:U4 = nil
+  wire `s0_co_pf_req_o__bpr.phys`:U1 = nil
+  wire `s0_co_pf_req_o__bpr.misaligned`:U1 = nil
+  wire `s0_co_pf_req_o__bpr.misaligned_2nd`:U1 = nil
+  wire `s0_co_pf_req_o__bpr.dest.fp`:U1 = nil
+  wire `s0_co_pf_req_o__bpr.dest.addr`:U5 = nil
+  wire `s0_co_pf_req_o__bpr.dest.thread_id`:U1 = nil
+  wire `s0_co_pf_req_o__bpr.cmd`:U5 = nil
+  wire `s0_co_pf_req_o__bpr.typ`:U4 = nil
+  wire `s0_co_pf_req_o__bpr.gsc_cnt`:U3 = nil
+  wire `s0_co_pf_req_o__bpr.ps_mask`:U8 = nil
+  wire `s0_co_pf_req_o__bpr.data`:U256 = nil
+  wire `s0_co_pf_req_o__bpr.replay`:U1 = nil
+  wire `s0_co_pf_req_o__bpr.replay_entry`:U3 = nil
+  wire `s0_co_pf_req_o__bpr.replay_age`:U5 = nil
+  wire `s0_co_pf_req_o__bpr.cache_op`:U1 = nil
+  wire `s0_co_pf_req_o__bpr.buf_alloc`:U1 = nil
+  wire `s0_co_pf_req_o__bpr.buf_id`:U3 = nil
+  wire `s0_co_pf_req_o__bpr.cacheable`:U1 = nil
+  wire `s0_co_pf_req_o__bpr.chunk_read`:U4 = nil
+  wire `s0_co_pf_req_o__bpr.uc_load_2nd`:U1 = nil
+  wire `s0_co_pf_req_o__bpr.uc_load_ok`:U1 = nil
+  wire `s0_co_pf_req_o__bpr.miss_fill_ok`:U1 = nil
+  wire `s0_co_pf_req_o__bpr.gsc32_idx`:U40 = nil
+  wire `s0_co_pf_req_o__bpr.vm_sel`:U3 = nil
+  wire `s0_co_pf_req_o__bpr.mem_global`:U1 = nil
+  wire `cache_op_req_byp_o__bpr.cmd`:U4 = nil
+  wire `cache_op_req_byp_o__bpr.start_level`:U2 = nil
+  wire `cache_op_req_byp_o__bpr.dest_level`:U2 = nil
+  wire `cache_op_req_byp_o__bpr.count`:U4 = nil
+  wire `cache_op_req_byp_o__bpr.addr`:U48 = nil
+  wire `cache_op_req_byp_o__bpr.way`:U2 = nil
+  wire `cache_op_req_byp_o__bpr.stride`:U48 = nil
+  wire `cache_op_req_byp_o__bpr.thread_id`:U1 = nil
+  wire `cache_op_req_byp_o__bpr.use_tmask`:U1 = nil
+  wire `cache_op_req_byp_o__bpr.tmask_ready`:U1 = nil
+  wire `cache_op_req_byp_o__bpr.tmask_bits`:U16 = nil
+  wire `cache_op_req_byp_o__bpr.l2_scp_dest`:U17 = nil
+  wire `cache_op_req_byp_o__bpr.l2_scp_fill`:U1 = nil
+  mut th_id_complete_o__wtmp:U4 = 0sb?
+  wire th_id_complete_o:U4 = nil
+  mut meta_read_mux_state__wtmp:U2 = 0sb?
+  wire meta_read_mux_state:U2 = nil
+  mut meta_read_mux_match__wtmp:U1 = 0sb?
+  wire meta_read_mux_match:U1 = nil
+  mut new_coh_d__wtmp:U2 = 0sb?
+  wire new_coh_d:U2 = nil
+  mut abort_operation_d__wtmp:U1 = 0sb?
+  wire abort_operation_d:U1 = nil
+  mut dcache_set_correct:U4 = 0
   const ReqSetWayWidth = minion_dcache_pkg.DcacheWayIdxWidth + minion_dcache_pkg.DcacheSetIdxWidth
-  vm_status_co_o.prv = vm_status_co_o_q#[6..=7]
-  vm_status_co_o.mprv = (vm_status_co_o_q >> 5) & 1
-  vm_status_co_o.mpp = vm_status_co_o_q#[3..=4]
-  vm_status_co_o.sum = (vm_status_co_o_q >> 2) & 1
-  vm_status_co_o.mxr = (vm_status_co_o_q >> 1) & 1
+  vm_status_co_o.prv = vm_status_co_o_q#[6..<8]
+  vm_status_co_o.mprv = vm_status_co_o_q#[5..<6]
+  vm_status_co_o.mpp = vm_status_co_o_q#[3..<5]
+  vm_status_co_o.sum = vm_status_co_o_q#[2..<3]
+  vm_status_co_o.mxr = vm_status_co_o_q#[1..<2]
   vm_status_co_o.debug = vm_status_co_o_q & 1
-  mut state_d:u4 = 0sb?
+  mut state_d:U4 = 0sb?
   req_addr_d = 0sb?
   req_addr_msb_err_d = 0ub?
   req_count_d = 0sb?
@@ -91,7 +667,7 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
   meta_read_mux_tag = 0sb?
   meta_read_mux_way = 0sb?
   meta_force_way_en = 0sb?
-  mut meta_data_req_addr_d:u40 = 0sb?
+  mut meta_data_req_addr_d:U40 = 0sb?
   err_lock_d = 0ub?
   err_mem_d = 0ub?
   mut term_loop_d = 0ub?
@@ -99,17 +675,22 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
   send_op_to_l2_d = 0ub?
   conflict_reason_d = 0ub?
   found_free_way = 0ub?
-  mut count_hlock_zero:u3 = 0sb?
+  mut count_hlock_zero:U3 = 0sb?
   hlock_state_d = 0sb?
   slock_state_d = 0sb?
-  err_flags_o = 0sb?
-  sm_data_debug_signals_o = 0sb?
-  const cache_op_start_l1_d__w1 = unsigned(cache_op_req_next_i.start_level == minion_pkg.cache_op_L1)
-  const cache_op_dest_l1_d__w1 = unsigned(cache_op_req_next_i.dest_level == minion_pkg.cache_op_L1)
-  const cache_op_prefetch__w1 = unsigned((cache_op_req_i.cmd == minion_pkg.cache_op_Pref) and (cache_op_req_i.dest_level == minion_pkg.cache_op_L1))
-  const t116 = cache_op_req_i.l2_scp_dest#[0..=16]#^[..]
-  const cache_op_accepted__w1 = unsigned((cache_op_valid_i != 0) and (send_op_to_l2_q == 0) and (cache_op_is_l1_q != 0))
-  const state_up__w1 = unsigned((state_q != minion_dcache_pkg.CacheOpInvalid) or (cache_op_valid_i != 0))
+  const cache_op_start_l1_d__w1 = U1(cache_op_req_next_i.start_level == minion_pkg.cache_op_L1)
+  const cache_op_dest_l1_d__w1 = U1(cache_op_req_next_i.dest_level == minion_pkg.cache_op_L1)
+  const cache_op_prefetch__w1 = U1((cache_op_req_i.cmd == minion_pkg.cache_op_Pref) and (cache_op_req_i.dest_level == minion_pkg.cache_op_L1))
+  const t113 = cache_op_req_i.l2_scp_dest#[0..<17]#^[..]
+  mut _b2i_4 = if (cache_op_req_next_i.cmd == minion_pkg.cache_op_Lock_VA) or (cache_op_req_next_i.cmd == minion_pkg.cache_op_Unlock_VA) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Flush_SW) and (cache_op_dest_l1_d__w1 == 0) and (cache_op_start_l1_d__w1 != 0)) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Evict_SW) and (cache_op_dest_l1_d__w1 == 0) and (cache_op_start_l1_d__w1 != 0)) or (cache_op_req_next_i.cmd == minion_pkg.cache_op_Lock_SW) or (cache_op_req_next_i.cmd == minion_pkg.cache_op_Unlock_SW) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Flush_VA) and (cache_op_dest_l1_d__w1 == 0) and (cache_op_start_l1_d__w1 != 0)) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Evict_VA) and (cache_op_dest_l1_d__w1 == 0) and (cache_op_start_l1_d__w1 != 0)) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Pref) and (cache_op_dest_l1_d__w1 != 0)) { 1 } else { 0 }
+  mut _b2i_5 = if ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Flush_SW) and ((cache_op_dest_l1_d__w1 != 0) or (cache_op_start_l1_d__w1 == 0))) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Evict_SW) and ((cache_op_dest_l1_d__w1 != 0) or (cache_op_start_l1_d__w1 == 0))) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Flush_VA) and (cache_op_dest_l1_d__w1 != 0)) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Evict_VA) and (cache_op_dest_l1_d__w1 != 0)) { 1 } else { 0 }
+  mut _b2i_6 = if (cache_op_valid_i != 0) and (send_op_to_l2_q == 0) and (cache_op_is_l1_q != 0) { 1 } else { 0 }
+  const cache_op_accepted__w1 = _b2i_6
+  mut _b2i_7 = if (state_q != minion_dcache_pkg.CacheOpInvalid) or (cache_op_valid_i != 0) { 1 } else { 0 }
+  const state_up__w1 = _b2i_7
+  mut _b2i_8 = if state_q == minion_dcache_pkg.CacheOpMetaResp { 1 } else { 0 }
+  mut _b2i_9 = if state_q == minion_dcache_pkg.CacheOpMetaResp { 1 } else { 0 }
+  mut _b2i_10 = if state_q == minion_dcache_pkg.CacheOpWaitTmask { 1 } else { 0 }
   mut `req_d.cmd` = 0
   mut `req_d.snoop_type` = 0
   mut `req_d.thread_id` = 0
@@ -119,56 +700,65 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
   mut `req_d.dest_level` = 0
   mut `req_d.prefetch` = 0
   mut `req_d.send_to_l2` = 0
-  const `req_d.cmd__w1` = cache_op_req_i.cmd#[0..=3]
-  mut _mux_11:u2 = if cache_op_req_i.cmd == minion_pkg.cache_op_Flush_SW { minion_dcache_pkg.SnoopToExclusive#[0..=1] } else { minion_dcache_pkg.SnoopToInvalid#[0..=1] }
-  mut _mux_12:u2 = if cache_op_req_i.cmd == minion_pkg.cache_op_Flush_VA { minion_dcache_pkg.SnoopToExclusive#[0..=1] } else { _mux_11 }
-  mut _mux_13:u2 = if cache_op_req_i.cmd == minion_pkg.cache_op_Evict_SW { minion_dcache_pkg.SnoopToInvalid#[0..=1] } else { _mux_12 }
-  mut _mux_14:u2 = if cache_op_req_i.cmd == minion_pkg.cache_op_Evict_VA { minion_dcache_pkg.SnoopToInvalid#[0..=1] } else { _mux_13 }
-  const `req_d.snoop_type__w1` = _mux_14
+  const `req_d.cmd__w1` = cache_op_req_i.cmd#[0..<4]
+  mut _mux_11:U2 = if cache_op_req_i.cmd == minion_pkg.cache_op_Flush_SW { minion_dcache_pkg.SnoopToExclusive#[0..<2] } else { minion_dcache_pkg.SnoopToInvalid#[0..<2] }
+  mut _mux_12:U2 = if cache_op_req_i.cmd == minion_pkg.cache_op_Flush_VA { minion_dcache_pkg.SnoopToExclusive#[0..<2] } else { _mux_11#[0..<2] }
+  mut _mux_13:U2 = if cache_op_req_i.cmd == minion_pkg.cache_op_Evict_SW { minion_dcache_pkg.SnoopToInvalid#[0..<2] } else { _mux_12#[0..<2] }
+  mut _mux_14:U2 = if cache_op_req_i.cmd == minion_pkg.cache_op_Evict_VA { minion_dcache_pkg.SnoopToInvalid#[0..<2] } else { _mux_13#[0..<2] }
+  const `req_d.snoop_type__w1` = _mux_14#[0..<2]
   const `req_d.thread_id__w1` = cache_op_req_i.thread_id & 1
   const `req_d.use_tmask__w1` = cache_op_req_i.use_tmask & 1
-  const `req_d.count__w1` = cache_op_req_i.count#[0..=3]
-  const `req_d.start_level__w1` = cache_op_req_i.start_level#[0..=1]
-  const `req_d.dest_level__w1` = cache_op_req_i.dest_level#[0..=1]
+  const `req_d.count__w1` = cache_op_req_i.count#[0..<4]
+  const `req_d.start_level__w1` = cache_op_req_i.start_level#[0..<2]
+  const `req_d.dest_level__w1` = cache_op_req_i.dest_level#[0..<2]
   const `req_d.prefetch__w1` = cache_op_prefetch__w1 & 1
-  const `req_d.send_to_l2__w1` = unsigned((cache_op_req_i.dest_level > minion_pkg.cache_op_L2) and ((cache_op_req_i.cmd == minion_pkg.cache_op_Flush_SW) or (cache_op_req_i.cmd == minion_pkg.cache_op_Evict_SW) or (cache_op_req_i.cmd == minion_pkg.cache_op_Flush_VA) or (cache_op_req_i.cmd == minion_pkg.cache_op_Evict_VA))) & 1
+  const `req_d.send_to_l2__w1` = U1((cache_op_req_i.dest_level > minion_pkg.cache_op_L2) and ((cache_op_req_i.cmd == minion_pkg.cache_op_Flush_SW) or (cache_op_req_i.cmd == minion_pkg.cache_op_Evict_SW) or (cache_op_req_i.cmd == minion_pkg.cache_op_Flush_VA) or (cache_op_req_i.cmd == minion_pkg.cache_op_Evict_VA))) & 1
   if state_q == minion_dcache_pkg.CacheOpInvalid {
     req_addr_d = cache_op_req_i.addr
     req_addr_msb_err_d = 0
-    req_set_way_d = (cache_op_req_i.way#[0..=1] << 4) | cache_op_req_i.addr#[6..=9]
+    req_set_way_d = (cache_op_req_i.way#[0..<2] << 4) | cache_op_req_i.addr#[6..<10]
     req_count_d = 0
   } else {
-    req_addr_d = ((req_addr_q#[6..=47] << 6) + (req_stride_q << 6))#[0..=47]
-    req_addr_msb_err_d = unsigned((((req_addr_q >> (minion_dcache_pkg.VaSize - 1)#[0..=31]) & 1) != 0) and (((req_addr_d >> (minion_dcache_pkg.VaSize - 1)#[0..=31]) & 1) == 0))
-    req_set_way_d = (req_set_way_q + 1)#[0..=5]
-    req_count_d = (req_count_q + 1)#[0..=3]
+    req_addr_d = ((req_addr_q#[6..<48] << 6) + (req_stride_q#[0..<42] << 6))#[0..<48]
+    _b2i_16 = if (((req_addr_q >> (minion_dcache_pkg.VaSize - 1)#[0..<32]) & 1) != 0) and (((req_addr_d >> (minion_dcache_pkg.VaSize - 1)#[0..<32]) & 1) == 0) { 1 } else { 0 }
+    req_addr_msb_err_d = _b2i_16
+    req_set_way_d = (req_set_way_q + 1)#[0..<6]
+    req_count_d = (req_count_q + 1)#[0..<4]
   }
-  const req_way__w1 = (req_set_way_q >> ((ReqSetWayWidth - 1)#[0..=31] - 1))#[0..=1]
-  const req_set__w1 = req_set_way_q#[0..=3]
+  const req_way__w1 = (req_set_way_q >> ((ReqSetWayWidth - 1)#[0..<32] - 1))#[0..<2]
+  const req_set__w1 = req_set_way_q#[0..<4]
   meta_read_resp_match = 0
   if meta_read_resp_way_en_i.e0 != 0 {
-    meta_read_resp_match = (0 | unsigned(meta_read_resp_i#[0..=34]#[33..=34] >= minion_dcache_pkg.StateShared)) & 1
+    meta_read_resp_match = (0 | U1(meta_read_resp_i#[0..<35]#[33..<35] >= minion_dcache_pkg.StateShared)) & 1
   }
   if meta_read_resp_way_en_i.e1 != 0 {
-    meta_read_resp_match = (meta_read_resp_match | unsigned(meta_read_resp_i#[35..=69]#[33..=34] >= minion_dcache_pkg.StateShared)) & 1
+    meta_read_resp_match = (meta_read_resp_match | U1(meta_read_resp_i#[35..<0x46]#[33..<35] >= minion_dcache_pkg.StateShared)) & 1
   }
   if meta_read_resp_way_en_i.e2 != 0 {
-    meta_read_resp_match = (meta_read_resp_match | unsigned(meta_read_resp_i#[70..=104]#[33..=34] >= minion_dcache_pkg.StateShared)) & 1
+    meta_read_resp_match = (meta_read_resp_match | U1(meta_read_resp_i#[0x46..<0x69]#[33..<35] >= minion_dcache_pkg.StateShared)) & 1
   }
   if meta_read_resp_way_en_i.e3 != 0 {
-    meta_read_resp_match = (meta_read_resp_match | unsigned(meta_read_resp_i#[105..=139]#[33..=34] >= minion_dcache_pkg.StateShared)) & 1
+    meta_read_resp_match = (meta_read_resp_match | U1(meta_read_resp_i#[0x69..<0x8c]#[33..<35] >= minion_dcache_pkg.StateShared)) & 1
   }
-  mut err_flags_o__w1 = err_flags_o
-  err_flags_o__w1#[0..=1] = ((unsigned((err_lock_q != 0) and (((req_q >> 11) & 1) != 0)) & 1) << 1) | (unsigned((err_lock_q != 0) and (((req_q >> 11) & 1) == 0)) & 1)
-  mut err_flags_o__w2 = err_flags_o__w1
-  err_flags_o__w2#[2..=3] = ((unsigned((err_mem_q != 0) and (((req_q >> 11) & 1) != 0)) & 1) << 1) | (unsigned((err_mem_q != 0) and (((req_q >> 11) & 1) == 0)) & 1)
+  mut _b2i_22 = if state_q == minion_dcache_pkg.CacheOpMetaRespWait { 1 } else { 0 }
+  mut _b2i_23 = if (err_lock_q != 0) and (req_q#[11..<12] != 0) { 1 } else { 0 }
+  mut _b2i_24 = if (err_lock_q != 0) and (req_q#[11..<12] == 0) { 1 } else { 0 }
+  const t327 = ((_b2i_23 & 1) << 1) | (_b2i_24 & 1)
+  `err_flags_o[0]` = t327 & 1
+  `err_flags_o[1]` = t327#[1..<2]
+  mut _b2i_25 = if (err_mem_q != 0) and (req_q#[11..<12] != 0) { 1 } else { 0 }
+  mut _b2i_26 = if (err_mem_q != 0) and (req_q#[11..<12] == 0) { 1 } else { 0 }
+  const t340 = ((_b2i_25 & 1) << 1) | (_b2i_26 & 1)
+  `err_flags_o[2]` = t340 & 1
+  `err_flags_o[3]` = t340#[1..<2]
   mut `dft_zero.scanmode` = 0
   mut `dft_zero.scan_reset_n` = 0
   mut `dft_zero.sram_clk_override` = 0
   mut `dft_zero.ram_rei` = 0
   mut `dft_zero.ram_wei` = 0
-  cache_op_is_l1_q = unsigned((cache_op_req_next_i.cmd == minion_pkg.cache_op_Lock_VA) or (cache_op_req_next_i.cmd == minion_pkg.cache_op_Unlock_VA) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Flush_SW) and (cache_op_dest_l1_d__w1 == 0) and (cache_op_start_l1_d__w1 != 0)) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Evict_SW) and (cache_op_dest_l1_d__w1 == 0) and (cache_op_start_l1_d__w1 != 0)) or (cache_op_req_next_i.cmd == minion_pkg.cache_op_Lock_SW) or (cache_op_req_next_i.cmd == minion_pkg.cache_op_Unlock_SW) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Flush_VA) and (cache_op_dest_l1_d__w1 == 0) and (cache_op_start_l1_d__w1 != 0)) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Evict_VA) and (cache_op_dest_l1_d__w1 == 0) and (cache_op_start_l1_d__w1 != 0)) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Pref) and (cache_op_dest_l1_d__w1 != 0)))
-  cache_op_is_nop_q = unsigned(((cache_op_req_next_i.cmd == minion_pkg.cache_op_Flush_SW) and ((cache_op_dest_l1_d__w1 != 0) or (cache_op_start_l1_d__w1 == 0))) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Evict_SW) and ((cache_op_dest_l1_d__w1 != 0) or (cache_op_start_l1_d__w1 == 0))) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Flush_VA) and (cache_op_dest_l1_d__w1 != 0)) or ((cache_op_req_next_i.cmd == minion_pkg.cache_op_Evict_VA) and (cache_op_dest_l1_d__w1 != 0)))
+  cache_op_is_l1_q = _b2i_4
+  cache_op_is_nop_q = _b2i_5
+  mut _b2i_27 = if (state_q == minion_dcache_pkg.CacheOpL1Prefetch) and (id_rq_full_i == 0) and (s0_co_pf_valid_o == 0) { 1 } else { 0 }
   mut `s0_co_pf_req_o__bpo.addr` = 0
   mut `s0_co_pf_req_o__bpo.addr_msb_err` = 0
   mut `s0_co_pf_req_o__bpo.set` = 0
@@ -197,25 +787,404 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
   mut `s0_co_pf_req_o__bpo.gsc32_idx` = 0
   mut `s0_co_pf_req_o__bpo.vm_sel` = 0
   mut `s0_co_pf_req_o__bpo.mem_global` = 0
-  const `s0_co_pf_req_o__bpo.addr__w1` = req_addr_q#[6..=47] << 6
+  const `s0_co_pf_req_o__bpo.addr__w1` = req_addr_q#[6..<48] << 6
   const `s0_co_pf_req_o__bpo.addr_msb_err__w1` = req_addr_msb_err_q
   mut `s0_co_pf_req_o__bpo.cmd__w1` = minion_dcache_pkg.DcCmdPfr
   mut `s0_co_pf_req_o__bpo.typ__w1` = minion_dcache_pkg.DcTypeD
-  const `s0_co_pf_req_o__bpo.dest.thread_id__w1` = (req_q >> 11) & 1
+  const `s0_co_pf_req_o__bpo.dest.thread_id__w1` = req_q#[11..<12]
   mut `s0_co_pf_req_o__bpo.vm_sel__w1` = minion_dcache_pkg.DcacheVmSelCo
-  const csr_debug_signals_o__w1 = state_q
+  const csr_debug_signals_o__w1 = state_q#[0..<4]
   const sm_match_debug_signals_o__w1 = ((meta_read_valid_o & 1) << 6) | ((err_lock_q & 1) << 5) | ((err_mem_q & 1) << 4) | ((term_loop_q & 1) << 3) | ((state_up__w1 & 1) << 2) | ((abort_operation_q & 1) << 1) | (cache_op_accepted__w1 & 1)
-  const sm_filter_debug_signals_o__w1 = (((err_lock_q & 1) << 75) | ((err_mem_q & 1) << 74) | ((term_loop_q & 1) << 73) | ((state_up__w1 & 1) << 72) | ((abort_operation_q & 1) << 71) | ((cache_op_accepted__w1 & 1) << 70) | (req_addr_q << 22) | (req_q << 4) | state_q)
-  mut sm_data_debug_signals_o__w1 = sm_data_debug_signals_o
-  sm_data_debug_signals_o__w1#[384..=511] = 0
-  mut sm_data_debug_signals_o__w2 = sm_data_debug_signals_o__w1
-  sm_data_debug_signals_o__w2#[256..=383] = 0
-  mut sm_data_debug_signals_o__w3 = sm_data_debug_signals_o__w2
-  sm_data_debug_signals_o__w3#[0..=127] = (((cache_op_is_l1_q & 1) << 119) | ((cache_op_is_nop_q & 1) << 118) | (req_count_q << 114) | (req_stride_q << 72) | (req_set_way_q << 66) | (req_addr_q << 18) | req_q)
-  err_mem_d = 0
-  state_d = state_q
-  conflict_reason_d = conflict_reason_q
+  const sm_filter_debug_signals_o__w1 = (((err_lock_q & 1) << 75) | ((err_mem_q & 1) << 74) | ((term_loop_q & 1) << 73) | ((state_up__w1 & 1) << 72) | ((abort_operation_q & 1) << 71) | ((cache_op_accepted__w1 & 1) << 70) | (req_addr_q#[0..<48] << 22) | (req_q#[0..<18] << 4) | state_q#[0..<4])#[0..<0x4c]
+  `sm_data_debug_signals_o[384]` = 0
+  `sm_data_debug_signals_o[385]` = 0
+  `sm_data_debug_signals_o[386]` = 0
+  `sm_data_debug_signals_o[387]` = 0
+  `sm_data_debug_signals_o[388]` = 0
+  `sm_data_debug_signals_o[389]` = 0
+  `sm_data_debug_signals_o[390]` = 0
+  `sm_data_debug_signals_o[391]` = 0
+  `sm_data_debug_signals_o[392]` = 0
+  `sm_data_debug_signals_o[393]` = 0
+  `sm_data_debug_signals_o[394]` = 0
+  `sm_data_debug_signals_o[395]` = 0
+  `sm_data_debug_signals_o[396]` = 0
+  `sm_data_debug_signals_o[397]` = 0
+  `sm_data_debug_signals_o[398]` = 0
+  `sm_data_debug_signals_o[399]` = 0
+  `sm_data_debug_signals_o[400]` = 0
+  `sm_data_debug_signals_o[401]` = 0
+  `sm_data_debug_signals_o[402]` = 0
+  `sm_data_debug_signals_o[403]` = 0
+  `sm_data_debug_signals_o[404]` = 0
+  `sm_data_debug_signals_o[405]` = 0
+  `sm_data_debug_signals_o[406]` = 0
+  `sm_data_debug_signals_o[407]` = 0
+  `sm_data_debug_signals_o[408]` = 0
+  `sm_data_debug_signals_o[409]` = 0
+  `sm_data_debug_signals_o[410]` = 0
+  `sm_data_debug_signals_o[411]` = 0
+  `sm_data_debug_signals_o[412]` = 0
+  `sm_data_debug_signals_o[413]` = 0
+  `sm_data_debug_signals_o[414]` = 0
+  `sm_data_debug_signals_o[415]` = 0
+  `sm_data_debug_signals_o[416]` = 0
+  `sm_data_debug_signals_o[417]` = 0
+  `sm_data_debug_signals_o[418]` = 0
+  `sm_data_debug_signals_o[419]` = 0
+  `sm_data_debug_signals_o[420]` = 0
+  `sm_data_debug_signals_o[421]` = 0
+  `sm_data_debug_signals_o[422]` = 0
+  `sm_data_debug_signals_o[423]` = 0
+  `sm_data_debug_signals_o[424]` = 0
+  `sm_data_debug_signals_o[425]` = 0
+  `sm_data_debug_signals_o[426]` = 0
+  `sm_data_debug_signals_o[427]` = 0
+  `sm_data_debug_signals_o[428]` = 0
+  `sm_data_debug_signals_o[429]` = 0
+  `sm_data_debug_signals_o[430]` = 0
+  `sm_data_debug_signals_o[431]` = 0
+  `sm_data_debug_signals_o[432]` = 0
+  `sm_data_debug_signals_o[433]` = 0
+  `sm_data_debug_signals_o[434]` = 0
+  `sm_data_debug_signals_o[435]` = 0
+  `sm_data_debug_signals_o[436]` = 0
+  `sm_data_debug_signals_o[437]` = 0
+  `sm_data_debug_signals_o[438]` = 0
+  `sm_data_debug_signals_o[439]` = 0
+  `sm_data_debug_signals_o[440]` = 0
+  `sm_data_debug_signals_o[441]` = 0
+  `sm_data_debug_signals_o[442]` = 0
+  `sm_data_debug_signals_o[443]` = 0
+  `sm_data_debug_signals_o[444]` = 0
+  `sm_data_debug_signals_o[445]` = 0
+  `sm_data_debug_signals_o[446]` = 0
+  `sm_data_debug_signals_o[447]` = 0
+  `sm_data_debug_signals_o[448]` = 0
+  `sm_data_debug_signals_o[449]` = 0
+  `sm_data_debug_signals_o[450]` = 0
+  `sm_data_debug_signals_o[451]` = 0
+  `sm_data_debug_signals_o[452]` = 0
+  `sm_data_debug_signals_o[453]` = 0
+  `sm_data_debug_signals_o[454]` = 0
+  `sm_data_debug_signals_o[455]` = 0
+  `sm_data_debug_signals_o[456]` = 0
+  `sm_data_debug_signals_o[457]` = 0
+  `sm_data_debug_signals_o[458]` = 0
+  `sm_data_debug_signals_o[459]` = 0
+  `sm_data_debug_signals_o[460]` = 0
+  `sm_data_debug_signals_o[461]` = 0
+  `sm_data_debug_signals_o[462]` = 0
+  `sm_data_debug_signals_o[463]` = 0
+  `sm_data_debug_signals_o[464]` = 0
+  `sm_data_debug_signals_o[465]` = 0
+  `sm_data_debug_signals_o[466]` = 0
+  `sm_data_debug_signals_o[467]` = 0
+  `sm_data_debug_signals_o[468]` = 0
+  `sm_data_debug_signals_o[469]` = 0
+  `sm_data_debug_signals_o[470]` = 0
+  `sm_data_debug_signals_o[471]` = 0
+  `sm_data_debug_signals_o[472]` = 0
+  `sm_data_debug_signals_o[473]` = 0
+  `sm_data_debug_signals_o[474]` = 0
+  `sm_data_debug_signals_o[475]` = 0
+  `sm_data_debug_signals_o[476]` = 0
+  `sm_data_debug_signals_o[477]` = 0
+  `sm_data_debug_signals_o[478]` = 0
+  `sm_data_debug_signals_o[479]` = 0
+  `sm_data_debug_signals_o[480]` = 0
+  `sm_data_debug_signals_o[481]` = 0
+  `sm_data_debug_signals_o[482]` = 0
+  `sm_data_debug_signals_o[483]` = 0
+  `sm_data_debug_signals_o[484]` = 0
+  `sm_data_debug_signals_o[485]` = 0
+  `sm_data_debug_signals_o[486]` = 0
+  `sm_data_debug_signals_o[487]` = 0
+  `sm_data_debug_signals_o[488]` = 0
+  `sm_data_debug_signals_o[489]` = 0
+  `sm_data_debug_signals_o[490]` = 0
+  `sm_data_debug_signals_o[491]` = 0
+  `sm_data_debug_signals_o[492]` = 0
+  `sm_data_debug_signals_o[493]` = 0
+  `sm_data_debug_signals_o[494]` = 0
+  `sm_data_debug_signals_o[495]` = 0
+  `sm_data_debug_signals_o[496]` = 0
+  `sm_data_debug_signals_o[497]` = 0
+  `sm_data_debug_signals_o[498]` = 0
+  `sm_data_debug_signals_o[499]` = 0
+  `sm_data_debug_signals_o[500]` = 0
+  `sm_data_debug_signals_o[501]` = 0
+  `sm_data_debug_signals_o[502]` = 0
+  `sm_data_debug_signals_o[503]` = 0
+  `sm_data_debug_signals_o[504]` = 0
+  `sm_data_debug_signals_o[505]` = 0
+  `sm_data_debug_signals_o[506]` = 0
+  `sm_data_debug_signals_o[507]` = 0
+  `sm_data_debug_signals_o[508]` = 0
+  `sm_data_debug_signals_o[509]` = 0
+  `sm_data_debug_signals_o[510]` = 0
+  `sm_data_debug_signals_o[511]` = 0
+  `sm_data_debug_signals_o[256]` = 0
+  `sm_data_debug_signals_o[257]` = 0
+  `sm_data_debug_signals_o[258]` = 0
+  `sm_data_debug_signals_o[259]` = 0
+  `sm_data_debug_signals_o[260]` = 0
+  `sm_data_debug_signals_o[261]` = 0
+  `sm_data_debug_signals_o[262]` = 0
+  `sm_data_debug_signals_o[263]` = 0
+  `sm_data_debug_signals_o[264]` = 0
+  `sm_data_debug_signals_o[265]` = 0
+  `sm_data_debug_signals_o[266]` = 0
+  `sm_data_debug_signals_o[267]` = 0
+  `sm_data_debug_signals_o[268]` = 0
+  `sm_data_debug_signals_o[269]` = 0
+  `sm_data_debug_signals_o[270]` = 0
+  `sm_data_debug_signals_o[271]` = 0
+  `sm_data_debug_signals_o[272]` = 0
+  `sm_data_debug_signals_o[273]` = 0
+  `sm_data_debug_signals_o[274]` = 0
+  `sm_data_debug_signals_o[275]` = 0
+  `sm_data_debug_signals_o[276]` = 0
+  `sm_data_debug_signals_o[277]` = 0
+  `sm_data_debug_signals_o[278]` = 0
+  `sm_data_debug_signals_o[279]` = 0
+  `sm_data_debug_signals_o[280]` = 0
+  `sm_data_debug_signals_o[281]` = 0
+  `sm_data_debug_signals_o[282]` = 0
+  `sm_data_debug_signals_o[283]` = 0
+  `sm_data_debug_signals_o[284]` = 0
+  `sm_data_debug_signals_o[285]` = 0
+  `sm_data_debug_signals_o[286]` = 0
+  `sm_data_debug_signals_o[287]` = 0
+  `sm_data_debug_signals_o[288]` = 0
+  `sm_data_debug_signals_o[289]` = 0
+  `sm_data_debug_signals_o[290]` = 0
+  `sm_data_debug_signals_o[291]` = 0
+  `sm_data_debug_signals_o[292]` = 0
+  `sm_data_debug_signals_o[293]` = 0
+  `sm_data_debug_signals_o[294]` = 0
+  `sm_data_debug_signals_o[295]` = 0
+  `sm_data_debug_signals_o[296]` = 0
+  `sm_data_debug_signals_o[297]` = 0
+  `sm_data_debug_signals_o[298]` = 0
+  `sm_data_debug_signals_o[299]` = 0
+  `sm_data_debug_signals_o[300]` = 0
+  `sm_data_debug_signals_o[301]` = 0
+  `sm_data_debug_signals_o[302]` = 0
+  `sm_data_debug_signals_o[303]` = 0
+  `sm_data_debug_signals_o[304]` = 0
+  `sm_data_debug_signals_o[305]` = 0
+  `sm_data_debug_signals_o[306]` = 0
+  `sm_data_debug_signals_o[307]` = 0
+  `sm_data_debug_signals_o[308]` = 0
+  `sm_data_debug_signals_o[309]` = 0
+  `sm_data_debug_signals_o[310]` = 0
+  `sm_data_debug_signals_o[311]` = 0
+  `sm_data_debug_signals_o[312]` = 0
+  `sm_data_debug_signals_o[313]` = 0
+  `sm_data_debug_signals_o[314]` = 0
+  `sm_data_debug_signals_o[315]` = 0
+  `sm_data_debug_signals_o[316]` = 0
+  `sm_data_debug_signals_o[317]` = 0
+  `sm_data_debug_signals_o[318]` = 0
+  `sm_data_debug_signals_o[319]` = 0
+  `sm_data_debug_signals_o[320]` = 0
+  `sm_data_debug_signals_o[321]` = 0
+  `sm_data_debug_signals_o[322]` = 0
+  `sm_data_debug_signals_o[323]` = 0
+  `sm_data_debug_signals_o[324]` = 0
+  `sm_data_debug_signals_o[325]` = 0
+  `sm_data_debug_signals_o[326]` = 0
+  `sm_data_debug_signals_o[327]` = 0
+  `sm_data_debug_signals_o[328]` = 0
+  `sm_data_debug_signals_o[329]` = 0
+  `sm_data_debug_signals_o[330]` = 0
+  `sm_data_debug_signals_o[331]` = 0
+  `sm_data_debug_signals_o[332]` = 0
+  `sm_data_debug_signals_o[333]` = 0
+  `sm_data_debug_signals_o[334]` = 0
+  `sm_data_debug_signals_o[335]` = 0
+  `sm_data_debug_signals_o[336]` = 0
+  `sm_data_debug_signals_o[337]` = 0
+  `sm_data_debug_signals_o[338]` = 0
+  `sm_data_debug_signals_o[339]` = 0
+  `sm_data_debug_signals_o[340]` = 0
+  `sm_data_debug_signals_o[341]` = 0
+  `sm_data_debug_signals_o[342]` = 0
+  `sm_data_debug_signals_o[343]` = 0
+  `sm_data_debug_signals_o[344]` = 0
+  `sm_data_debug_signals_o[345]` = 0
+  `sm_data_debug_signals_o[346]` = 0
+  `sm_data_debug_signals_o[347]` = 0
+  `sm_data_debug_signals_o[348]` = 0
+  `sm_data_debug_signals_o[349]` = 0
+  `sm_data_debug_signals_o[350]` = 0
+  `sm_data_debug_signals_o[351]` = 0
+  `sm_data_debug_signals_o[352]` = 0
+  `sm_data_debug_signals_o[353]` = 0
+  `sm_data_debug_signals_o[354]` = 0
+  `sm_data_debug_signals_o[355]` = 0
+  `sm_data_debug_signals_o[356]` = 0
+  `sm_data_debug_signals_o[357]` = 0
+  `sm_data_debug_signals_o[358]` = 0
+  `sm_data_debug_signals_o[359]` = 0
+  `sm_data_debug_signals_o[360]` = 0
+  `sm_data_debug_signals_o[361]` = 0
+  `sm_data_debug_signals_o[362]` = 0
+  `sm_data_debug_signals_o[363]` = 0
+  `sm_data_debug_signals_o[364]` = 0
+  `sm_data_debug_signals_o[365]` = 0
+  `sm_data_debug_signals_o[366]` = 0
+  `sm_data_debug_signals_o[367]` = 0
+  `sm_data_debug_signals_o[368]` = 0
+  `sm_data_debug_signals_o[369]` = 0
+  `sm_data_debug_signals_o[370]` = 0
+  `sm_data_debug_signals_o[371]` = 0
+  `sm_data_debug_signals_o[372]` = 0
+  `sm_data_debug_signals_o[373]` = 0
+  `sm_data_debug_signals_o[374]` = 0
+  `sm_data_debug_signals_o[375]` = 0
+  `sm_data_debug_signals_o[376]` = 0
+  `sm_data_debug_signals_o[377]` = 0
+  `sm_data_debug_signals_o[378]` = 0
+  `sm_data_debug_signals_o[379]` = 0
+  `sm_data_debug_signals_o[380]` = 0
+  `sm_data_debug_signals_o[381]` = 0
+  `sm_data_debug_signals_o[382]` = 0
+  `sm_data_debug_signals_o[383]` = 0
+  const t672 = (((cache_op_is_l1_q & 1) << 119) | ((cache_op_is_nop_q & 1) << 118) | (req_count_q#[0..<4] << 114) | (req_stride_q#[0..<42] << 72) | (req_set_way_q#[0..<6] << 66) | (req_addr_q#[0..<48] << 18) | req_q#[0..<18])#[0..<0x78]
+  `sm_data_debug_signals_o[0]` = t672 & 1
+  `sm_data_debug_signals_o[1]` = t672#[1..<2]
+  `sm_data_debug_signals_o[2]` = t672#[2..<3]
+  `sm_data_debug_signals_o[3]` = t672#[3..<4]
+  `sm_data_debug_signals_o[4]` = t672#[4..<5]
+  `sm_data_debug_signals_o[5]` = t672#[5..<6]
+  `sm_data_debug_signals_o[6]` = t672#[6..<7]
+  `sm_data_debug_signals_o[7]` = t672#[7..<8]
+  `sm_data_debug_signals_o[8]` = t672#[8..<9]
+  `sm_data_debug_signals_o[9]` = t672#[9..<10]
+  `sm_data_debug_signals_o[10]` = t672#[10..<11]
+  `sm_data_debug_signals_o[11]` = t672#[11..<12]
+  `sm_data_debug_signals_o[12]` = t672#[12..<13]
+  `sm_data_debug_signals_o[13]` = t672#[13..<14]
+  `sm_data_debug_signals_o[14]` = t672#[14..<15]
+  `sm_data_debug_signals_o[15]` = t672#[15..<16]
+  `sm_data_debug_signals_o[16]` = t672#[16..<17]
+  `sm_data_debug_signals_o[17]` = t672#[17..<18]
+  `sm_data_debug_signals_o[18]` = t672#[18..<19]
+  `sm_data_debug_signals_o[19]` = t672#[19..<20]
+  `sm_data_debug_signals_o[20]` = t672#[20..<21]
+  `sm_data_debug_signals_o[21]` = t672#[21..<22]
+  `sm_data_debug_signals_o[22]` = t672#[22..<23]
+  `sm_data_debug_signals_o[23]` = t672#[23..<24]
+  `sm_data_debug_signals_o[24]` = t672#[24..<25]
+  `sm_data_debug_signals_o[25]` = t672#[25..<26]
+  `sm_data_debug_signals_o[26]` = t672#[26..<27]
+  `sm_data_debug_signals_o[27]` = t672#[27..<28]
+  `sm_data_debug_signals_o[28]` = t672#[28..<29]
+  `sm_data_debug_signals_o[29]` = t672#[29..<30]
+  `sm_data_debug_signals_o[30]` = t672#[30..<31]
+  `sm_data_debug_signals_o[31]` = t672#[31..<32]
+  `sm_data_debug_signals_o[32]` = t672#[32..<33]
+  `sm_data_debug_signals_o[33]` = t672#[33..<34]
+  `sm_data_debug_signals_o[34]` = t672#[34..<35]
+  `sm_data_debug_signals_o[35]` = t672#[35..<36]
+  `sm_data_debug_signals_o[36]` = t672#[36..<37]
+  `sm_data_debug_signals_o[37]` = t672#[37..<38]
+  `sm_data_debug_signals_o[38]` = t672#[38..<39]
+  `sm_data_debug_signals_o[39]` = t672#[39..<40]
+  `sm_data_debug_signals_o[40]` = t672#[40..<41]
+  `sm_data_debug_signals_o[41]` = t672#[41..<42]
+  `sm_data_debug_signals_o[42]` = t672#[42..<43]
+  `sm_data_debug_signals_o[43]` = t672#[43..<44]
+  `sm_data_debug_signals_o[44]` = t672#[44..<45]
+  `sm_data_debug_signals_o[45]` = t672#[45..<46]
+  `sm_data_debug_signals_o[46]` = t672#[46..<47]
+  `sm_data_debug_signals_o[47]` = t672#[47..<48]
+  `sm_data_debug_signals_o[48]` = t672#[48..<49]
+  `sm_data_debug_signals_o[49]` = t672#[49..<50]
+  `sm_data_debug_signals_o[50]` = t672#[50..<51]
+  `sm_data_debug_signals_o[51]` = t672#[51..<52]
+  `sm_data_debug_signals_o[52]` = t672#[52..<53]
+  `sm_data_debug_signals_o[53]` = t672#[53..<54]
+  `sm_data_debug_signals_o[54]` = t672#[54..<55]
+  `sm_data_debug_signals_o[55]` = t672#[55..<56]
+  `sm_data_debug_signals_o[56]` = t672#[56..<57]
+  `sm_data_debug_signals_o[57]` = t672#[57..<58]
+  `sm_data_debug_signals_o[58]` = t672#[58..<59]
+  `sm_data_debug_signals_o[59]` = t672#[59..<60]
+  `sm_data_debug_signals_o[60]` = t672#[60..<61]
+  `sm_data_debug_signals_o[61]` = t672#[61..<62]
+  `sm_data_debug_signals_o[62]` = t672#[62..<63]
+  `sm_data_debug_signals_o[63]` = t672#[63..<0x40]
+  `sm_data_debug_signals_o[64]` = t672#[0x40..<0x41]
+  `sm_data_debug_signals_o[65]` = t672#[0x41..<0x42]
+  `sm_data_debug_signals_o[66]` = t672#[0x42..<0x43]
+  `sm_data_debug_signals_o[67]` = t672#[0x43..<0x44]
+  `sm_data_debug_signals_o[68]` = t672#[0x44..<0x45]
+  `sm_data_debug_signals_o[69]` = t672#[0x45..<0x46]
+  `sm_data_debug_signals_o[70]` = t672#[0x46..<0x47]
+  `sm_data_debug_signals_o[71]` = t672#[0x47..<0x48]
+  `sm_data_debug_signals_o[72]` = t672#[0x48..<0x49]
+  `sm_data_debug_signals_o[73]` = t672#[0x49..<0x4a]
+  `sm_data_debug_signals_o[74]` = t672#[0x4a..<0x4b]
+  `sm_data_debug_signals_o[75]` = t672#[0x4b..<0x4c]
+  `sm_data_debug_signals_o[76]` = t672#[0x4c..<0x4d]
+  `sm_data_debug_signals_o[77]` = t672#[0x4d..<0x4e]
+  `sm_data_debug_signals_o[78]` = t672#[0x4e..<0x4f]
+  `sm_data_debug_signals_o[79]` = t672#[0x4f..<0x50]
+  `sm_data_debug_signals_o[80]` = t672#[0x50..<0x51]
+  `sm_data_debug_signals_o[81]` = t672#[0x51..<0x52]
+  `sm_data_debug_signals_o[82]` = t672#[0x52..<0x53]
+  `sm_data_debug_signals_o[83]` = t672#[0x53..<0x54]
+  `sm_data_debug_signals_o[84]` = t672#[0x54..<0x55]
+  `sm_data_debug_signals_o[85]` = t672#[0x55..<0x56]
+  `sm_data_debug_signals_o[86]` = t672#[0x56..<0x57]
+  `sm_data_debug_signals_o[87]` = t672#[0x57..<0x58]
+  `sm_data_debug_signals_o[88]` = t672#[0x58..<0x59]
+  `sm_data_debug_signals_o[89]` = t672#[0x59..<0x5a]
+  `sm_data_debug_signals_o[90]` = t672#[0x5a..<0x5b]
+  `sm_data_debug_signals_o[91]` = t672#[0x5b..<0x5c]
+  `sm_data_debug_signals_o[92]` = t672#[0x5c..<0x5d]
+  `sm_data_debug_signals_o[93]` = t672#[0x5d..<0x5e]
+  `sm_data_debug_signals_o[94]` = t672#[0x5e..<0x5f]
+  `sm_data_debug_signals_o[95]` = t672#[0x5f..<0x60]
+  `sm_data_debug_signals_o[96]` = t672#[0x60..<0x61]
+  `sm_data_debug_signals_o[97]` = t672#[0x61..<0x62]
+  `sm_data_debug_signals_o[98]` = t672#[0x62..<0x63]
+  `sm_data_debug_signals_o[99]` = t672#[0x63..<0x64]
+  `sm_data_debug_signals_o[100]` = t672#[0x64..<0x65]
+  `sm_data_debug_signals_o[101]` = t672#[0x65..<0x66]
+  `sm_data_debug_signals_o[102]` = t672#[0x66..<0x67]
+  `sm_data_debug_signals_o[103]` = t672#[0x67..<0x68]
+  `sm_data_debug_signals_o[104]` = t672#[0x68..<0x69]
+  `sm_data_debug_signals_o[105]` = t672#[0x69..<0x6a]
+  `sm_data_debug_signals_o[106]` = t672#[0x6a..<0x6b]
+  `sm_data_debug_signals_o[107]` = t672#[0x6b..<0x6c]
+  `sm_data_debug_signals_o[108]` = t672#[0x6c..<0x6d]
+  `sm_data_debug_signals_o[109]` = t672#[0x6d..<0x6e]
+  `sm_data_debug_signals_o[110]` = t672#[0x6e..<0x6f]
+  `sm_data_debug_signals_o[111]` = t672#[0x6f..<0x70]
+  `sm_data_debug_signals_o[112]` = t672#[0x70..<0x71]
+  `sm_data_debug_signals_o[113]` = t672#[0x71..<0x72]
+  `sm_data_debug_signals_o[114]` = t672#[0x72..<0x73]
+  `sm_data_debug_signals_o[115]` = t672#[0x73..<0x74]
+  `sm_data_debug_signals_o[116]` = t672#[0x74..<0x75]
+  `sm_data_debug_signals_o[117]` = t672#[0x75..<0x76]
+  `sm_data_debug_signals_o[118]` = t672#[0x76..<0x77]
+  `sm_data_debug_signals_o[119]` = t672#[0x77..<0x78]
+  `sm_data_debug_signals_o[120]` = t672#[0x78..<0x79]
+  `sm_data_debug_signals_o[121]` = t672#[0x79..<0x7a]
+  `sm_data_debug_signals_o[122]` = t672#[0x7a..<0x7b]
+  `sm_data_debug_signals_o[123]` = t672#[0x7b..<0x7c]
+  `sm_data_debug_signals_o[124]` = t672#[0x7c..<0x7d]
+  `sm_data_debug_signals_o[125]` = t672#[0x7d..<0x7e]
+  `sm_data_debug_signals_o[126]` = t672#[0x7e..<0x7f]
+  `sm_data_debug_signals_o[127]` = t672#[0x7f..<0x80]
   cancel_send_to_l2 = 0
+  conflict_reason_d = conflict_reason_q
+  state_d = state_q
+  err_mem_d = 0
   match state_q {
     == minion_dcache_pkg.CacheOpInvalid {
       if cache_op_accepted__w1 != 0 {
@@ -229,9 +1198,9 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
     == minion_dcache_pkg.CacheOpWaitTmask {
       if cache_op_req_i.tmask_ready != 0 {
         if (cache_op_req_i.tmask_bits & 1) != 0 {
-          state_d = if ((req_q >> 1) & 1) != 0 { minion_dcache_pkg.CacheOpL1Prefetch } else { minion_dcache_pkg.CacheOpMetaRead }
+          state_d = if req_q#[1..<2] != 0 { minion_dcache_pkg.CacheOpL1Prefetch } else { minion_dcache_pkg.CacheOpMetaRead }
         } else {
-          state_d = if req_count_q != req_q#[6..=9] { minion_dcache_pkg.CacheOpNextOperation } else { minion_dcache_pkg.CacheOpInvalid }
+          state_d = if req_count_q != req_q#[6..<10] { minion_dcache_pkg.CacheOpNextOperation } else { minion_dcache_pkg.CacheOpInvalid }
         }
       }
     }
@@ -258,7 +1227,7 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
         state_d = minion_dcache_pkg.CacheOpWaitConflict
         conflict_reason_d = minion_dcache_pkg.CoConflictRq
         cancel_send_to_l2 = 1
-      } elif req_q#[14..=17] == minion_pkg.cache_op_Evict_SW {
+      } elif req_q#[14..<18] == minion_pkg.cache_op_Evict_SW {
         if meta_read_mux_state == minion_dcache_pkg.StateModified {
           state_d = minion_dcache_pkg.CacheOpWritebackReq
         } else {
@@ -267,7 +1236,7 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
           }
           state_d = minion_dcache_pkg.CacheOpMetaWrite
         }
-      } elif req_q#[14..=17] == minion_pkg.cache_op_Flush_SW {
+      } elif req_q#[14..<18] == minion_pkg.cache_op_Flush_SW {
         if meta_read_mux_state == minion_dcache_pkg.StateModified {
           state_d = minion_dcache_pkg.CacheOpWritebackReq
         } else {
@@ -276,11 +1245,11 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
           }
           state_d = minion_dcache_pkg.CacheOpMetaWrite
         }
-      } elif req_q#[14..=17] == minion_pkg.cache_op_Lock_SW {
+      } elif req_q#[14..<18] == minion_pkg.cache_op_Lock_SW {
         state_d = if (meta_read_resp_match == 0) and (meta_read_mux_state == minion_dcache_pkg.StateModified) { minion_dcache_pkg.CacheOpWritebackReq } else { minion_dcache_pkg.CacheOpMetaWrite }
-      } elif req_q#[14..=17] == minion_pkg.cache_op_Unlock_SW {
+      } elif req_q#[14..<18] == minion_pkg.cache_op_Unlock_SW {
         state_d = minion_dcache_pkg.CacheOpMetaWriteLock
-      } elif req_q#[14..=17] == minion_pkg.cache_op_Evict_VA {
+      } elif req_q#[14..<18] == minion_pkg.cache_op_Evict_VA {
         if (meta_read_mux_match != 0) and (meta_read_mux_state == minion_dcache_pkg.StateModified) {
           state_d = minion_dcache_pkg.CacheOpWritebackReq
         } elif meta_read_mux_match != 0 {
@@ -288,9 +1257,9 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
         } elif (req_q & 1) != 0 {
           state_d = minion_dcache_pkg.CacheOpWaitNext
         } else {
-          state_d = if req_count_q != req_q#[6..=9] { minion_dcache_pkg.CacheOpNextOperation } else { minion_dcache_pkg.CacheOpInvalid }
+          state_d = if req_count_q != req_q#[6..<10] { minion_dcache_pkg.CacheOpNextOperation } else { minion_dcache_pkg.CacheOpInvalid }
         }
-      } elif req_q#[14..=17] == minion_pkg.cache_op_Flush_VA {
+      } elif req_q#[14..<18] == minion_pkg.cache_op_Flush_VA {
         if (meta_read_mux_match != 0) and (meta_read_mux_state == minion_dcache_pkg.StateModified) {
           state_d = minion_dcache_pkg.CacheOpWritebackReq
         } elif meta_read_mux_match != 0 {
@@ -298,15 +1267,15 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
         } elif (req_q & 1) != 0 {
           state_d = minion_dcache_pkg.CacheOpWaitNext
         } else {
-          state_d = if req_count_q != req_q#[6..=9] { minion_dcache_pkg.CacheOpNextOperation } else { minion_dcache_pkg.CacheOpInvalid }
+          state_d = if req_count_q != req_q#[6..<10] { minion_dcache_pkg.CacheOpNextOperation } else { minion_dcache_pkg.CacheOpInvalid }
         }
-      } elif req_q#[14..=17] == minion_pkg.cache_op_Lock_VA {
+      } elif req_q#[14..<18] == minion_pkg.cache_op_Lock_VA {
         state_d = if (meta_read_resp_match == 0) and (meta_read_mux_state == minion_dcache_pkg.StateModified) { minion_dcache_pkg.CacheOpWritebackReq } else { minion_dcache_pkg.CacheOpMetaWrite }
-      } elif req_q#[14..=17] == minion_pkg.cache_op_Unlock_VA {
+      } elif req_q#[14..<18] == minion_pkg.cache_op_Unlock_VA {
         if meta_read_mux_match != 0 {
           state_d = minion_dcache_pkg.CacheOpMetaWriteLock
         } else {
-          state_d = if req_count_q != req_q#[6..=9] { minion_dcache_pkg.CacheOpNextOperation } else { minion_dcache_pkg.CacheOpInvalid }
+          state_d = if req_count_q != req_q#[6..<10] { minion_dcache_pkg.CacheOpNextOperation } else { minion_dcache_pkg.CacheOpInvalid }
         }
       } else {
         state_d = minion_dcache_pkg.CacheOpInvalid
@@ -317,7 +1286,7 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
     }
     == minion_dcache_pkg.CacheOpWaitConflict {
       if conflict_reason_q == minion_dcache_pkg.CoConflictMh {
-        if (mh_probe_rdy_reg_q | mh_metaw_rdy_i) == 3 {
+        if (mh_probe_rdy_reg_q | mh_metaw_rdy_i)#[0..<2] == 3 {
           state_d = minion_dcache_pkg.CacheOpMetaRead
         }
       } elif rq_conflict_i == 0 {
@@ -341,7 +1310,7 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
         if (send_op_to_l2_q != 0) or (clear_line != 0) {
           state_d = minion_dcache_pkg.CacheOpWaitNext
         } else {
-          state_d = if req_count_q != req_q#[6..=9] { minion_dcache_pkg.CacheOpNextOperation } else { minion_dcache_pkg.CacheOpInvalid }
+          state_d = if req_count_q != req_q#[6..<10] { minion_dcache_pkg.CacheOpNextOperation } else { minion_dcache_pkg.CacheOpInvalid }
         }
       }
     }
@@ -349,7 +1318,7 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
       if clear_line != 0 {
         state_d = minion_dcache_pkg.CacheOpWaitNext
       } else {
-        state_d = if req_count_q != req_q#[6..=9] { minion_dcache_pkg.CacheOpNextOperation } else { minion_dcache_pkg.CacheOpInvalid }
+        state_d = if req_count_q != req_q#[6..<10] { minion_dcache_pkg.CacheOpNextOperation } else { minion_dcache_pkg.CacheOpInvalid }
       }
     }
     == minion_dcache_pkg.CacheOpL1Prefetch {
@@ -359,7 +1328,7 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
     }
     == minion_dcache_pkg.CacheOpNextOpOrInvalid {
       if s1_tlb_fail_i == 0 {
-        state_d = if req_count_q != req_q#[6..=9] { minion_dcache_pkg.CacheOpNextOperation } else { minion_dcache_pkg.CacheOpInvalid }
+        state_d = if req_count_q != req_q#[6..<10] { minion_dcache_pkg.CacheOpNextOperation } else { minion_dcache_pkg.CacheOpInvalid }
       } else {
         state_d = minion_dcache_pkg.CacheOpInvalid
         err_mem_d = 1
@@ -367,7 +1336,7 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
     }
     == minion_dcache_pkg.CacheOpWaitNext {
       if (send_op_to_l2_q == 0) and (clear_line == 0) {
-        state_d = if req_count_q != req_q#[6..=9] { minion_dcache_pkg.CacheOpNextOperation } else { minion_dcache_pkg.CacheOpInvalid }
+        state_d = if req_count_q != req_q#[6..<10] { minion_dcache_pkg.CacheOpNextOperation } else { minion_dcache_pkg.CacheOpInvalid }
       }
     }
     == minion_dcache_pkg.CacheOpWaitTlb {
@@ -379,11 +1348,11 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
       if term_loop_q != 0 {
         state_d = minion_dcache_pkg.CacheOpInvalid
       } elif (send_op_to_l2_q == 0) and (clear_line == 0) {
-        if ((req_q >> 10) & 1) == 0 {
-          state_d = if ((req_q >> 1) & 1) != 0 { minion_dcache_pkg.CacheOpL1Prefetch } else { minion_dcache_pkg.CacheOpMetaRead }
+        if req_q#[10..<11] == 0 {
+          state_d = if req_q#[1..<2] != 0 { minion_dcache_pkg.CacheOpL1Prefetch } else { minion_dcache_pkg.CacheOpMetaRead }
         } elif (((req_tmask_bits_q << 1) >> (req_count_q + 1)) & 1) != 0 {
-          state_d = if ((req_q >> 1) & 1) != 0 { minion_dcache_pkg.CacheOpL1Prefetch } else { minion_dcache_pkg.CacheOpMetaRead }
-        } elif req_count_q == req_q#[6..=9] {
+          state_d = if req_q#[1..<2] != 0 { minion_dcache_pkg.CacheOpL1Prefetch } else { minion_dcache_pkg.CacheOpMetaRead }
+        } elif req_count_q == req_q#[6..<10] {
           state_d = minion_dcache_pkg.CacheOpInvalid
         }
       }
@@ -392,12 +1361,14 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
       state_d = minion_dcache_pkg.CacheOpInvalid
     }
   }
-  const state_meta_resp_qual__w1 = unsigned((state_q == minion_dcache_pkg.CacheOpMetaResp) and (state_d != minion_dcache_pkg.CacheOpWaitConflict))
+  mut _b2i_31 = if (state_q == minion_dcache_pkg.CacheOpMetaResp) and (state_d != minion_dcache_pkg.CacheOpWaitConflict) { 1 } else { 0 }
+  const state_meta_resp_qual__w1 = _b2i_31
   send_op_to_l2_d = send_op_to_l2_q
   if send_op_to_l2_q == 0 {
-    send_op_to_l2_d = unsigned(((req_q & 1) != 0) and (abort_operation_q == 0) and (cancel_send_to_l2 == 0) and (((state_meta_resp_qual__w1 != 0) and (state_d != minion_dcache_pkg.CacheOpWritebackReq)) or ((state_q == minion_dcache_pkg.CacheOpWritebackResp) and (state_d != minion_dcache_pkg.CacheOpWritebackResp))))
+    _b2i_32 = if ((req_q & 1) != 0) and (abort_operation_q == 0) and (cancel_send_to_l2 == 0) and (((state_meta_resp_qual__w1 != 0) and (state_d != minion_dcache_pkg.CacheOpWritebackReq)) or ((state_q == minion_dcache_pkg.CacheOpWritebackResp) and (state_d != minion_dcache_pkg.CacheOpWritebackResp))) { 1 } else { 0 }
+    send_op_to_l2_d = _b2i_32
   } else {
-    send_op_to_l2_d = unsigned(cache_op_ready_byp_i == 0)
+    send_op_to_l2_d = U1(cache_op_ready_byp_i == 0)
   }
   const cache_op_valid_byp_o__w1 = send_op_to_l2_q
   mut `cache_op_req_byp_o__bpo.cmd` = 0
@@ -413,184 +1384,190 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
   mut `cache_op_req_byp_o__bpo.tmask_bits` = 0
   mut `cache_op_req_byp_o__bpo.l2_scp_dest` = 0
   mut `cache_op_req_byp_o__bpo.l2_scp_fill` = 0
-  const `cache_op_req_byp_o__bpo.cmd__w1` = req_q#[14..=17]
-  const `cache_op_req_byp_o__bpo.start_level__w1` = req_q#[4..=5]
-  const `cache_op_req_byp_o__bpo.dest_level__w1` = req_q#[2..=3]
-  const `cache_op_req_byp_o__bpo.addr__w1` = meta_data_req_addr_q
+  const `cache_op_req_byp_o__bpo.cmd__w1` = req_q#[14..<18]
+  const `cache_op_req_byp_o__bpo.start_level__w1` = req_q#[4..<6]
+  const `cache_op_req_byp_o__bpo.dest_level__w1` = req_q#[2..<4]
+  const `cache_op_req_byp_o__bpo.addr__w1` = meta_data_req_addr_q#[0..<40]
   const `cache_op_req_byp_o__bpo.stride__w1` = (id_running_q & 1)
-  const `cache_op_req_byp_o__bpo.thread_id__w1` = (req_q >> 11) & 1
-  const req_up__w1 = unsigned((state_q == minion_dcache_pkg.CacheOpInvalid) and (state_d != minion_dcache_pkg.CacheOpInvalid))
-  meta_force_way_en = 0
+  const `cache_op_req_byp_o__bpo.thread_id__w1` = req_q#[11..<12]
+  mut _b2i_36 = if (state_q == minion_dcache_pkg.CacheOpInvalid) and (state_d != minion_dcache_pkg.CacheOpInvalid) { 1 } else { 0 }
+  const req_up__w1 = _b2i_36
+  mut _b2i_37 = if (state_q == minion_dcache_pkg.CacheOpInvalid) and (cache_op_ready_o != 0) and (cache_op_valid_i != 0) { 1 } else { 0 }
+  mut _b2i_38 = if (req_up__w1 != 0) or ((state_d == minion_dcache_pkg.CacheOpNextOperation) and (send_op_to_l2_q == 0)) { 1 } else { 0 }
   found_free_way = 0
-  if (is_set_way_op != 0) or (req_q#[14..=17] == minion_pkg.cache_op_Lock_SW) {
-    meta_read_mux_tag = ((meta_read_resp_i << 35) >> ((req_way__w1 * 35)#[0..=8] + 35))#[0..=34]#[0..=32]
-    meta_read_mux_state__wtmp = ((meta_read_resp_i << 35) >> ((req_way__w1 * 35)#[0..=8] + 35))#[0..=34]#[33..=34]
+  meta_force_way_en = 0
+  if (is_set_way_op != 0) or (req_q#[14..<18] == minion_pkg.cache_op_Lock_SW) {
+    meta_read_mux_tag = ((meta_read_resp_i << 35) >> ((req_way__w1 * 35)#[0..<9] + 35))#[0..<35]#[0..<33]
+    meta_read_mux_state__wtmp = ((meta_read_resp_i << 35) >> ((req_way__w1 * 35)#[0..<9] + 35))#[0..<35]#[33..<35]
     way = 0ub??
     way = req_way__w1
     dcache_way_decode = 0ub????
     dcache_way_decode = 0
-    dcache_way_decode = ((0 & (~(1 << way))) | (1 << way))#[0..=3]
+    dcache_way_decode#[way..<(way + 1)] = 1
     meta_force_way_en = dcache_way_decode
     meta_read_mux_way = req_way__w1
     meta_read_mux_match__wtmp = 1
   } else {
-    meta_read_mux_match__wtmp = unsigned(((meta_read_resp_way_en_i.e3 << 3) | (meta_read_resp_way_en_i.e2 << 2) | (meta_read_resp_way_en_i.e1 << 1) | meta_read_resp_way_en_i.e0) != 0)
-    meta_read_mux_tag = meta_read_resp_i#[0..=34]#[0..=32]
-    meta_read_mux_state__wtmp = meta_read_resp_i#[0..=34]#[33..=34]
+    meta_read_mux_match__wtmp = U1(((meta_read_resp_way_en_i.e3 << 3) | (meta_read_resp_way_en_i.e2 << 2) | (meta_read_resp_way_en_i.e1 << 1) | meta_read_resp_way_en_i.e0) != 0)
+    meta_read_mux_tag = meta_read_resp_i#[0..<35]#[0..<33]
+    meta_read_mux_state__wtmp = meta_read_resp_i#[0..<35]#[33..<35]
     ways = 0ub????
     ways = (meta_read_resp_way_en_i.e3 << 3) | (meta_read_resp_way_en_i.e2 << 2) | (meta_read_resp_way_en_i.e1 << 1) | meta_read_resp_way_en_i.e0
     dcache_way_encode = 0ub??
     dcache_way_encode = if (ways & 1) != 0 { 0 } else { 0 }
-    if ((ways >> 1) & 1) != 0 {
-      dcache_way_encode = dcache_way_encode | 1
+    if ways#[1..<2] != 0 {
+      dcache_way_encode = (dcache_way_encode | 1)#[0..<2]
     }
-    if ((ways >> 2) & 1) != 0 {
-      dcache_way_encode = dcache_way_encode | 2
+    if ways#[2..<3] != 0 {
+      dcache_way_encode = (dcache_way_encode | 2)#[0..<2]
     }
-    if ((ways >> 3) & 1) != 0 {
-      dcache_way_encode = dcache_way_encode | 3
+    if ways#[3..<4] != 0 {
+      dcache_way_encode = (dcache_way_encode | 3)#[0..<2]
     }
     meta_read_mux_way = dcache_way_encode
     if meta_read_resp_way_en_i.e1 != 0 {
-      meta_read_mux_tag = meta_read_resp_i#[35..=69]#[0..=32]
-      meta_read_mux_state__wtmp = meta_read_resp_i#[35..=69]#[33..=34]
+      meta_read_mux_tag = meta_read_resp_i#[35..<0x46]#[0..<33]
+      meta_read_mux_state__wtmp = meta_read_resp_i#[35..<0x46]#[33..<35]
     }
     if meta_read_resp_way_en_i.e2 != 0 {
-      meta_read_mux_tag = meta_read_resp_i#[70..=104]#[0..=32]
-      meta_read_mux_state__wtmp = meta_read_resp_i#[70..=104]#[33..=34]
+      meta_read_mux_tag = meta_read_resp_i#[0x46..<0x69]#[0..<33]
+      meta_read_mux_state__wtmp = meta_read_resp_i#[0x46..<0x69]#[33..<35]
     }
     if meta_read_resp_way_en_i.e3 != 0 {
-      meta_read_mux_tag = meta_read_resp_i#[105..=139]#[0..=32]
-      meta_read_mux_state__wtmp = meta_read_resp_i#[105..=139]#[33..=34]
+      meta_read_mux_tag = meta_read_resp_i#[0x69..<0x8c]#[0..<33]
+      meta_read_mux_state__wtmp = meta_read_resp_i#[0x69..<0x8c]#[33..<35]
     }
-    if (meta_read_mux_match__wtmp == 0) and (req_q#[14..=17] == minion_pkg.cache_op_Lock_VA) {
-      if (meta_read_resp_i#[0..=34]#[33..=34] == minion_dcache_pkg.StateInvalid) and true {
+    if (meta_read_mux_match__wtmp == 0) and (req_q#[14..<18] == minion_pkg.cache_op_Lock_VA) {
+      if (meta_read_resp_i#[0..<35]#[33..<35] == minion_dcache_pkg.StateInvalid) and true {
         found_free_way = 1
         meta_read_mux_way = 0
-        meta_read_mux_tag = meta_read_resp_i#[0..=34]#[0..=32]
-        meta_read_mux_state__wtmp = meta_read_resp_i#[0..=34]#[33..=34]
+        meta_read_mux_tag = meta_read_resp_i#[0..<35]#[0..<33]
+        meta_read_mux_state__wtmp = meta_read_resp_i#[0..<35]#[33..<35]
       }
-      if (meta_read_resp_i#[35..=69]#[33..=34] == minion_dcache_pkg.StateInvalid) and (found_free_way == 0) {
+      if (meta_read_resp_i#[35..<0x46]#[33..<35] == minion_dcache_pkg.StateInvalid) and (found_free_way == 0) {
         found_free_way = 1
         meta_read_mux_way = 1
-        meta_read_mux_tag = meta_read_resp_i#[35..=69]#[0..=32]
-        meta_read_mux_state__wtmp = meta_read_resp_i#[35..=69]#[33..=34]
+        meta_read_mux_tag = meta_read_resp_i#[35..<0x46]#[0..<33]
+        meta_read_mux_state__wtmp = meta_read_resp_i#[35..<0x46]#[33..<35]
       }
-      if (meta_read_resp_i#[70..=104]#[33..=34] == minion_dcache_pkg.StateInvalid) and (found_free_way == 0) {
+      if (meta_read_resp_i#[0x46..<0x69]#[33..<35] == minion_dcache_pkg.StateInvalid) and (found_free_way == 0) {
         found_free_way = 1
         meta_read_mux_way = 2
-        meta_read_mux_tag = meta_read_resp_i#[70..=104]#[0..=32]
-        meta_read_mux_state__wtmp = meta_read_resp_i#[70..=104]#[33..=34]
+        meta_read_mux_tag = meta_read_resp_i#[0x46..<0x69]#[0..<33]
+        meta_read_mux_state__wtmp = meta_read_resp_i#[0x46..<0x69]#[33..<35]
       }
-      if (meta_read_resp_i#[105..=139]#[33..=34] == minion_dcache_pkg.StateInvalid) and (found_free_way == 0) {
+      if (meta_read_resp_i#[0x69..<0x8c]#[33..<35] == minion_dcache_pkg.StateInvalid) and (found_free_way == 0) {
         found_free_way = 1
         meta_read_mux_way = 3
-        meta_read_mux_tag = meta_read_resp_i#[105..=139]#[0..=32]
-        meta_read_mux_state__wtmp = meta_read_resp_i#[105..=139]#[33..=34]
+        meta_read_mux_tag = meta_read_resp_i#[0x69..<0x8c]#[0..<33]
+        meta_read_mux_state__wtmp = meta_read_resp_i#[0x69..<0x8c]#[33..<35]
       }
       if found_free_way == 0 {
-        if ((((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] & 1) == 0) and ((((slock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] & 1) == 0) and (found_free_way == 0) {
+        if ((((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4] & 1) == 0) and ((((slock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4] & 1) == 0) and (found_free_way == 0) {
           found_free_way = 1
           meta_read_mux_way = 0
-          meta_read_mux_tag = meta_read_resp_i#[0..=34]#[0..=32]
-          meta_read_mux_state__wtmp = meta_read_resp_i#[0..=34]#[33..=34]
+          meta_read_mux_tag = meta_read_resp_i#[0..<35]#[0..<33]
+          meta_read_mux_state__wtmp = meta_read_resp_i#[0..<35]#[33..<35]
         }
-        if (((((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] >> 1) & 1) == 0) and (((((slock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] >> 1) & 1) == 0) and (found_free_way == 0) {
+        if (((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4]#[1..<2] == 0) and (((slock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4]#[1..<2] == 0) and (found_free_way == 0) {
           found_free_way = 1
           meta_read_mux_way = 1
-          meta_read_mux_tag = meta_read_resp_i#[35..=69]#[0..=32]
-          meta_read_mux_state__wtmp = meta_read_resp_i#[35..=69]#[33..=34]
+          meta_read_mux_tag = meta_read_resp_i#[35..<0x46]#[0..<33]
+          meta_read_mux_state__wtmp = meta_read_resp_i#[35..<0x46]#[33..<35]
         }
-        if (((((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] >> 2) & 1) == 0) and (((((slock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] >> 2) & 1) == 0) and (found_free_way == 0) {
+        if (((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4]#[2..<3] == 0) and (((slock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4]#[2..<3] == 0) and (found_free_way == 0) {
           found_free_way = 1
           meta_read_mux_way = 2
-          meta_read_mux_tag = meta_read_resp_i#[70..=104]#[0..=32]
-          meta_read_mux_state__wtmp = meta_read_resp_i#[70..=104]#[33..=34]
+          meta_read_mux_tag = meta_read_resp_i#[0x46..<0x69]#[0..<33]
+          meta_read_mux_state__wtmp = meta_read_resp_i#[0x46..<0x69]#[33..<35]
         }
-        if (((((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] >> 3) & 1) == 0) and (((((slock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] >> 3) & 1) == 0) and (found_free_way == 0) {
+        if (((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4]#[3..<4] == 0) and (((slock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4]#[3..<4] == 0) and (found_free_way == 0) {
           found_free_way = 1
           meta_read_mux_way = 3
-          meta_read_mux_tag = meta_read_resp_i#[105..=139]#[0..=32]
-          meta_read_mux_state__wtmp = meta_read_resp_i#[105..=139]#[33..=34]
+          meta_read_mux_tag = meta_read_resp_i#[0x69..<0x8c]#[0..<33]
+          meta_read_mux_state__wtmp = meta_read_resp_i#[0x69..<0x8c]#[33..<35]
         }
       }
       if found_free_way == 0 {
-        if ((((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] & 1) == 0) and (found_free_way == 0) {
+        if ((((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4] & 1) == 0) and (found_free_way == 0) {
           found_free_way = 1
           meta_read_mux_way = 0
-          meta_read_mux_tag = meta_read_resp_i#[0..=34]#[0..=32]
-          meta_read_mux_state__wtmp = meta_read_resp_i#[0..=34]#[33..=34]
+          meta_read_mux_tag = meta_read_resp_i#[0..<35]#[0..<33]
+          meta_read_mux_state__wtmp = meta_read_resp_i#[0..<35]#[33..<35]
         }
-        if (((((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] >> 1) & 1) == 0) and (found_free_way == 0) {
+        if (((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4]#[1..<2] == 0) and (found_free_way == 0) {
           found_free_way = 1
           meta_read_mux_way = 1
-          meta_read_mux_tag = meta_read_resp_i#[35..=69]#[0..=32]
-          meta_read_mux_state__wtmp = meta_read_resp_i#[35..=69]#[33..=34]
+          meta_read_mux_tag = meta_read_resp_i#[35..<0x46]#[0..<33]
+          meta_read_mux_state__wtmp = meta_read_resp_i#[35..<0x46]#[33..<35]
         }
-        if (((((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] >> 2) & 1) == 0) and (found_free_way == 0) {
+        if (((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4]#[2..<3] == 0) and (found_free_way == 0) {
           found_free_way = 1
           meta_read_mux_way = 2
-          meta_read_mux_tag = meta_read_resp_i#[70..=104]#[0..=32]
-          meta_read_mux_state__wtmp = meta_read_resp_i#[70..=104]#[33..=34]
+          meta_read_mux_tag = meta_read_resp_i#[0x46..<0x69]#[0..<33]
+          meta_read_mux_state__wtmp = meta_read_resp_i#[0x46..<0x69]#[33..<35]
         }
-        if (((((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] >> 3) & 1) == 0) and (found_free_way == 0) {
+        if (((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4]#[3..<4] == 0) and (found_free_way == 0) {
           found_free_way = 1
           meta_read_mux_way = 3
-          meta_read_mux_tag = meta_read_resp_i#[105..=139]#[0..=32]
-          meta_read_mux_state__wtmp = meta_read_resp_i#[105..=139]#[33..=34]
+          meta_read_mux_tag = meta_read_resp_i#[0x69..<0x8c]#[0..<33]
+          meta_read_mux_state__wtmp = meta_read_resp_i#[0x69..<0x8c]#[33..<35]
         }
       }
     }
-    if (meta_read_mux_match__wtmp == 0) and ((req_q#[14..=17] == minion_pkg.cache_op_Evict_VA) or (req_q#[14..=17] == minion_pkg.cache_op_Flush_VA)) {
+    if (meta_read_mux_match__wtmp == 0) and ((req_q#[14..<18] == minion_pkg.cache_op_Evict_VA) or (req_q#[14..<18] == minion_pkg.cache_op_Flush_VA)) {
       meta_read_mux_tag = phys_addr_tag_q
     }
   }
-  meta_data_req_addr_d = if is_set_way_op != 0 { (meta_read_mux_tag << 7) | ((req_set__w1 & 1) << 6) } else { (meta_read_mux_tag << 7) | (((req_addr_q >> 6) & 1) << 6) }
+  meta_data_req_addr_d = if is_set_way_op != 0 { (meta_read_mux_tag#[0..<33] << 7) | ((req_set__w1 & 1) << 6) } else { (meta_read_mux_tag#[0..<33] << 7) | (req_addr_q#[6..<7] << 6) }
   way = meta_read_mux_way
-  mut _mux_43:u4 = if is_set_way_op != 0 { meta_force_way_en } else { ((0 & (~(1 << way))) | (1 << way))#[0..=3] }
+  mut dcache_way_decode__w1 = 0
+  dcache_way_decode__w1#[way..<(way + 1)] = 1
+  mut _mux_43:U4 = if is_set_way_op != 0 { meta_force_way_en#[0..<4] } else { dcache_way_decode__w1#[0..<4] }
   abort_operation_d__wtmp = abort_operation_q
+  mut _b2i_44 = if ((cache_op_valid_i != 0) and (state_q == minion_dcache_pkg.CacheOpInvalid)) or (state_q == minion_dcache_pkg.CacheOpNextOperation) or (state_meta_resp_qual__w1 != 0) { 1 } else { 0 }
   count_hlock_zero = 0
   err_lock_d = 0
   if ((cache_op_valid_i != 0) and (state_q == minion_dcache_pkg.CacheOpInvalid)) or (state_q == minion_dcache_pkg.CacheOpNextOperation) {
     abort_operation_d__wtmp = 0
   } elif state_meta_resp_qual__w1 != 0 {
-    if (meta_read_mux_match != 0) and ((((((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] << 1) >> (meta_read_mux_way + 1)) & 1) != 0) {
-      if (req_q#[14..=17] != minion_pkg.cache_op_Unlock_VA) and (req_q#[14..=17] != minion_pkg.cache_op_Unlock_SW) and (req_q#[14..=17] != minion_pkg.cache_op_Flush_VA) and (req_q#[14..=17] != minion_pkg.cache_op_Flush_SW) and (req_q#[14..=17] != minion_pkg.cache_op_Lock_VA) {
+    if (meta_read_mux_match != 0) and ((((((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4] << 1) >> (meta_read_mux_way + 1)) & 1) != 0) {
+      if (req_q#[14..<18] != minion_pkg.cache_op_Unlock_VA) and (req_q#[14..<18] != minion_pkg.cache_op_Unlock_SW) and (req_q#[14..<18] != minion_pkg.cache_op_Flush_VA) and (req_q#[14..<18] != minion_pkg.cache_op_Flush_SW) and (req_q#[14..<18] != minion_pkg.cache_op_Lock_VA) {
         abort_operation_d__wtmp = 1
       }
-      if req_q#[14..=17] == minion_pkg.cache_op_Lock_SW {
+      if req_q#[14..<18] == minion_pkg.cache_op_Lock_SW {
         abort_operation_d__wtmp = 1
         err_lock_d = 1
       }
     }
-    if (req_q#[14..=17] == minion_pkg.cache_op_Evict_SW) and ((((((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] << 1) >> (meta_read_mux_way + 1)) & 1) != 0) {
+    if (req_q#[14..<18] == minion_pkg.cache_op_Evict_SW) and ((((((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4] << 1) >> (meta_read_mux_way + 1)) & 1) != 0) {
       abort_operation_d__wtmp = 1
     }
-    if req_q#[14..=17] == minion_pkg.cache_op_Lock_SW {
+    if req_q#[14..<18] == minion_pkg.cache_op_Lock_SW {
       ways = (meta_read_resp_way_en_i.e3 << 3) | (meta_read_resp_way_en_i.e2 << 2) | (meta_read_resp_way_en_i.e1 << 1) | meta_read_resp_way_en_i.e0
       dcache_way_encode = if (ways & 1) != 0 { 0 } else { 0 }
-      if ((ways >> 1) & 1) != 0 {
-        dcache_way_encode = dcache_way_encode | 1
+      if ways#[1..<2] != 0 {
+        dcache_way_encode = (dcache_way_encode | 1)#[0..<2]
       }
-      if ((ways >> 2) & 1) != 0 {
-        dcache_way_encode = dcache_way_encode | 2
+      if ways#[2..<3] != 0 {
+        dcache_way_encode = (dcache_way_encode | 2)#[0..<2]
       }
-      if ((ways >> 3) & 1) != 0 {
-        dcache_way_encode = dcache_way_encode | 3
+      if ways#[3..<4] != 0 {
+        dcache_way_encode = (dcache_way_encode | 3)#[0..<2]
       }
       if (((meta_read_resp_way_en_i.e3 << 3) | (meta_read_resp_way_en_i.e2 << 2) | (meta_read_resp_way_en_i.e1 << 1) | meta_read_resp_way_en_i.e0) != 0) and (dcache_way_encode != meta_read_mux_way) {
         abort_operation_d__wtmp = 1
         err_lock_d = 1
       }
-      count_hlock_zero = if (((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] & 1) == 0 { 1 } else { 0 }
-      if ((((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] >> 1) & 1) == 0 {
-        count_hlock_zero = (count_hlock_zero + 1)#[0..=2]
+      count_hlock_zero = if (((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4] & 1) == 0 { 1 } else { 0 }
+      if ((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4]#[1..<2] == 0 {
+        count_hlock_zero = (count_hlock_zero + 1)#[0..<3]
       }
-      if ((((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] >> 2) & 1) == 0 {
-        count_hlock_zero = (count_hlock_zero + 1)#[0..=2]
+      if ((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4]#[2..<3] == 0 {
+        count_hlock_zero = (count_hlock_zero + 1)#[0..<3]
       }
-      if ((((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..=3] >> 3) & 1) == 0 {
-        count_hlock_zero = (count_hlock_zero + 1)#[0..=2]
+      if ((hlock_state_o << 4) >> ((meta_read_set * 4) + 4))#[0..<4]#[3..<4] == 0 {
+        count_hlock_zero = (count_hlock_zero + 1)#[0..<3]
       }
       if count_hlock_zero <= 1 {
         abort_operation_d__wtmp = 1
@@ -599,7 +1576,8 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
     }
   }
   term_loop_d = if state_q == minion_dcache_pkg.CacheOpInvalid { 0 } else { (err_lock_d | term_loop_q) & 1 }
-  mut u_cgate = prim_clk_gate::[name=u_cgate](clk_i = clk_i, en_i = (((((((((cache_op_accepted__w1 | busy_o) & 1) | unsigned(not (th_id_complete_o == 15))) & 1) | unsigned(rst_ni == 0)) & 1) | ((((err_lock_q | err_mem_q) & 1) | term_loop_q) & 1)) & 1) | chicken_bit_dcache_i) & 1, `dft_i.scanmode` = 0, `dft_i.scan_reset_n` = 0, `dft_i.sram_clk_override` = 0, `dft_i.ram_rei` = 0, `dft_i.ram_wei` = 0)
+  mut _b2i_46 = if not (th_id_complete_o == 15) { 1 } else { 0 }
+  mut u_cgate = prim_clk_gate::[name=u_cgate](clk_i = clk_i, en_i = (((((((((cache_op_accepted__w1 | busy_o) & 1) | _b2i_46) & 1) | U1(rst_ni == 0)) & 1) | ((((err_lock_q | err_mem_q) & 1) | term_loop_q) & 1)) & 1) | chicken_bit_dcache_i) & 1, `dft_i.scanmode` = 0, `dft_i.scan_reset_n` = 0, `dft_i.sram_clk_override` = 0, `dft_i.ram_rei` = 0, `dft_i.ram_wei` = 0)
   clkgt = u_cgate
   if rst_ni != 0 {
     if state_up__w1 != 0 {
@@ -607,28 +1585,28 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
     }
   }
   meta_read_valid_o = meta_read_grant_i
-  if unsigned(state_q == minion_dcache_pkg.CacheOpMetaResp) != 0 {
+  if _b2i_8 != 0 {
     mh_probe_rdy_reg_q = mh_probe_rdy_i
   }
-  if unsigned(state_q == minion_dcache_pkg.CacheOpMetaResp) != 0 {
+  if _b2i_9 != 0 {
     conflict_reason_q = conflict_reason_d
   }
   if req_up__w1 != 0 {
     req_q = (`req_d.cmd__w1` << 14) | (`req_d.snoop_type__w1` << 12) | (`req_d.thread_id__w1` << 11) | (`req_d.use_tmask__w1` << 10) | (`req_d.count__w1` << 6) | (`req_d.start_level__w1` << 4) | (`req_d.dest_level__w1` << 2) | (`req_d.prefetch__w1` << 1) | `req_d.send_to_l2__w1`
   }
   if req_up__w1 != 0 {
-    req_stride_q = cache_op_req_i.stride#[6..=47]
+    req_stride_q = cache_op_req_i.stride#[6..<48]
   }
-  if unsigned(state_q == minion_dcache_pkg.CacheOpWaitTmask) != 0 {
+  if _b2i_10 != 0 {
     req_tmask_bits_q = cache_op_req_i.tmask_bits
   }
-  if unsigned((state_q == minion_dcache_pkg.CacheOpInvalid) and (cache_op_ready_o != 0) and (cache_op_valid_i != 0)) != 0 {
+  if _b2i_37 != 0 {
     id_running_q = cache_op_req_i.stride & 1
   }
   if req_up__w1 != 0 {
-    vm_status_co_o_q = if cache_op_req_i.thread_id != 0 { vm_status_i#[8..=15] } else { vm_status_i#[0..=7] }
+    vm_status_co_o_q = if cache_op_req_i.thread_id != 0 { vm_status_i#[8..<16] } else { vm_status_i#[0..<8] }
   }
-  if unsigned((req_up__w1 != 0) or ((state_d == minion_dcache_pkg.CacheOpNextOperation) and (send_op_to_l2_q == 0))) != 0 {
+  if _b2i_38 != 0 {
     req_addr_q = req_addr_d
     req_addr_msb_err_q = req_addr_msb_err_d
     req_count_q = req_count_d
@@ -639,10 +1617,10 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
     meta_data_req_addr_q = meta_data_req_addr_d
     new_coh_q = new_coh_d
   }
-  if unsigned(state_q == minion_dcache_pkg.CacheOpMetaRespWait) != 0 {
+  if _b2i_22 != 0 {
     phys_addr_tag_q = s1_phys_addr_tag_i
   }
-  if unsigned(((cache_op_valid_i != 0) and (state_q == minion_dcache_pkg.CacheOpInvalid)) or (state_q == minion_dcache_pkg.CacheOpNextOperation) or (state_meta_resp_qual__w1 != 0)) != 0 {
+  if _b2i_44 != 0 {
     abort_operation_q = abort_operation_d
   }
   s0_co_pf_valid_o = id_co_pf_grant_i
@@ -654,376 +1632,529 @@ pub mod minion_dcache_cache_op_unit::[timecheck=false](clk_i:u1, rst_ni:u1, chic
     clear_line_on_q = clear_line_on_d
     da_clear_idx_o = da_clear_idx_d
   }
-  cache_op_ready_o = unsigned((state_q == minion_dcache_pkg.CacheOpInvalid) and (send_op_to_l2_q == 0) and ((cache_op_is_l1_q != 0) or (cache_op_is_nop_q != 0)))
-  is_set_way_op = unsigned((req_q#[14..=17] == minion_pkg.cache_op_Flush_SW) or (req_q#[14..=17] == minion_pkg.cache_op_Evict_SW) or (req_q#[14..=17] == minion_pkg.cache_op_Unlock_SW))
-  is_lock_xx_op = unsigned((req_q#[14..=17] == minion_pkg.cache_op_Lock_SW) or (req_q#[14..=17] == minion_pkg.cache_op_Lock_VA))
-  const set__w1 = req_addr_q#[6..=9]
+  mut _b2i_48 = if (state_q == minion_dcache_pkg.CacheOpInvalid) and (send_op_to_l2_q == 0) and ((cache_op_is_l1_q != 0) or (cache_op_is_nop_q != 0)) { 1 } else { 0 }
+  cache_op_ready_o = _b2i_48
+  mut _b2i_49 = if (req_q#[14..<18] == minion_pkg.cache_op_Flush_SW) or (req_q#[14..<18] == minion_pkg.cache_op_Evict_SW) or (req_q#[14..<18] == minion_pkg.cache_op_Unlock_SW) { 1 } else { 0 }
+  is_set_way_op = _b2i_49
+  mut _b2i_50 = if (req_q#[14..<18] == minion_pkg.cache_op_Lock_SW) or (req_q#[14..<18] == minion_pkg.cache_op_Lock_VA) { 1 } else { 0 }
+  is_lock_xx_op = _b2i_50
+  mut _b2i_51 = if (state_q == minion_dcache_pkg.CacheOpMetaRead) and (meta_read_valid_o == 0) { 1 } else { 0 }
+  const set__w1 = req_addr_q#[6..<10]
   const dcache_mode__w1 = cfg_cache_mode_i
-  const thread_id__w1 = (req_q >> 11) & 1
+  const thread_id__w1 = req_q#[11..<12]
   dcache_set_correct = 0sb?
   if dcache_mode__w1 == minion_dcache_pkg.DcacheModeSplit {
     if thread_id__w1 == 0 {
-      dcache_set_correct = set__w1#[0..=2]
+      dcache_set_correct = set__w1#[0..<3]
     } else {
-      {
-      }
       dcache_set_correct = (7 << 1) | (set__w1 & 1)
     }
   } elif dcache_mode__w1 == minion_dcache_pkg.DcacheModeScratchpad {
     if thread_id__w1 == 0 {
-      {
-      }
       dcache_set_correct = (3 << 2) | (set__w1 & 1)
     } else {
-      {
-      }
       dcache_set_correct = (7 << 1) | (set__w1 & 1)
     }
   } else {
     dcache_set_correct = set__w1
   }
-  mut _mux_56:u4 = if is_set_way_op != 0 { req_set__w1 } else { dcache_set_correct }
+  mut _mux_56:U4 = if is_set_way_op != 0 { req_set__w1#[0..<4] } else { dcache_set_correct#[0..<4] }
   meta_read_set = _mux_56
-  mut _mux_57:u48 = if is_set_way_op != 0 { (req_addr_q#[10..=47] << 10) | (req_set__w1 << 6) } else { req_addr_q }
+  mut _mux_57:U48 = if is_set_way_op != 0 { (req_addr_q#[10..<48] << 10) | (req_set__w1#[0..<4] << 6) } else { req_addr_q#[0..<48] }
   const meta_read_addr_o__w1 = _mux_57
-  mut _mux_58:u1 = if is_set_way_op != 0 { 0 } else { req_addr_msb_err_q & 1 }
+  mut _mux_58:U1 = if is_set_way_op != 0 { 0 } else { req_addr_msb_err_q & 1 }
+  mut _b2i_59 = if req_q#[14..<18] == minion_pkg.cache_op_Lock_SW { 1 } else { 0 }
+  mut _b2i_60 = if (state_q == minion_dcache_pkg.CacheOpMetaRespWait) and (is_set_way_op != 0) { 1 } else { 0 }
+  mut _b2i_61 = if (state_q == minion_dcache_pkg.CacheOpWritebackReq) and (abort_operation_q == 0) { 1 } else { 0 }
   mut `writeback_req_o__bpo.tag` = 0
   mut `writeback_req_o__bpo.set` = 0
   mut `writeback_req_o__bpo.way_en` = 0
   mut `writeback_req_o__bpo.is_tbox` = 0
   mut `writeback_req_o__bpo.mem_idx` = 0
   mut `writeback_req_o__bpo.addr_low` = 0
-  const `writeback_req_o__bpo.tag__w1` = (meta_data_req_addr_q >> ((minion_dcache_pkg.PaSize - 1)#[0..=31] - 32))#[0..=32]
-  const set__w2 = meta_data_req_addr_q#[6..=9]
+  const `writeback_req_o__bpo.tag__w1` = (meta_data_req_addr_q >> ((minion_dcache_pkg.PaSize - 1)#[0..<32] - 32))#[0..<33]
+  const set__w2 = meta_data_req_addr_q#[6..<10]
   const dcache_mode__w2 = cfg_cache_mode_i
-  const thread_id__w2 = (req_q >> 11) & 1
+  const thread_id__w2 = req_q#[11..<12]
   if dcache_mode__w2 == minion_dcache_pkg.DcacheModeSplit {
     if thread_id__w2 == 0 {
-      dcache_set_correct = set__w2#[0..=2]
+      dcache_set_correct = set__w2#[0..<3]
     } else {
-      {
-      }
       dcache_set_correct = (7 << 1) | (set__w2 & 1)
     }
   } elif dcache_mode__w2 == minion_dcache_pkg.DcacheModeScratchpad {
     if thread_id__w2 == 0 {
-      {
-      }
       dcache_set_correct = (3 << 2) | (set__w2 & 1)
     } else {
-      {
-      }
       dcache_set_correct = (7 << 1) | (set__w2 & 1)
     }
   } else {
     dcache_set_correct = set__w2
   }
-  mut _mux_66:u4 = if is_set_way_op != 0 { req_set__w1 } else { dcache_set_correct }
+  mut _mux_66:U4 = if is_set_way_op != 0 { req_set__w1#[0..<4] } else { dcache_set_correct#[0..<4] }
   const `writeback_req_o__bpo.set__w1` = _mux_66
   const `writeback_req_o__bpo.way_en__w1` = meta_data_way_en_q
-  const meta_write_valid_o__w1 = unsigned((state_q == minion_dcache_pkg.CacheOpMetaWrite) and (abort_operation_q == 0))
-  const meta_write_valid_lock__w1 = unsigned((state_q == minion_dcache_pkg.CacheOpMetaWriteLock) and (abort_operation_q == 0))
-  const set__w3 = req_addr_q#[6..=9]
+  mut _b2i_67 = if (state_d == minion_dcache_pkg.CacheOpMetaWrite) and (abort_operation_q == 0) { 1 } else { 0 }
+  mut _b2i_68 = if (state_q == minion_dcache_pkg.CacheOpMetaWrite) and (abort_operation_q == 0) { 1 } else { 0 }
+  const meta_write_valid_o__w1 = _b2i_68
+  mut _b2i_69 = if (state_q == minion_dcache_pkg.CacheOpMetaWriteLock) and (abort_operation_q == 0) { 1 } else { 0 }
+  const meta_write_valid_lock__w1 = _b2i_69
+  const set__w3 = req_addr_q#[6..<10]
   const dcache_mode__w3 = cfg_cache_mode_i
-  const thread_id__w3 = (req_q >> 11) & 1
+  const thread_id__w3 = req_q#[11..<12]
   if dcache_mode__w3 == minion_dcache_pkg.DcacheModeSplit {
     if thread_id__w3 == 0 {
-      dcache_set_correct = set__w3#[0..=2]
+      dcache_set_correct = set__w3#[0..<3]
     } else {
-      {
-      }
       dcache_set_correct = (7 << 1) | (set__w3 & 1)
     }
   } elif dcache_mode__w3 == minion_dcache_pkg.DcacheModeScratchpad {
     if thread_id__w3 == 0 {
-      {
-      }
       dcache_set_correct = (3 << 2) | (set__w3 & 1)
     } else {
-      {
-      }
       dcache_set_correct = (7 << 1) | (set__w3 & 1)
     }
   } else {
     dcache_set_correct = set__w3
   }
-  mut _mux_74:u4 = if is_set_way_op != 0 { req_set__w1 } else { dcache_set_correct }
+  mut _mux_74:U4 = if is_set_way_op != 0 { req_set__w1#[0..<4] } else { dcache_set_correct#[0..<4] }
   mut `meta_write_req_o__bpo.set_idx` = _mux_74
   mut `meta_write_req_o__bpo.way_en` = meta_data_way_en_q
-  mut _mux_75:u33 = if is_lock_xx_op != 0 { phys_addr_tag_q } else { (meta_data_req_addr_q >> ((minion_dcache_pkg.PaSize - 1)#[0..=31] - 32))#[0..=32] }
+  mut _mux_75:U33 = if is_lock_xx_op != 0 { phys_addr_tag_q#[0..<33] } else { (meta_data_req_addr_q >> ((minion_dcache_pkg.PaSize - 1)#[0..<32] - 32))#[0..<33] }
   mut `meta_write_req_o__bpo.data.tag` = _mux_75
-  mut _mux_76:u2 = if is_lock_xx_op != 0 { minion_dcache_pkg.StateModified#[0..=1] } else { new_coh_q }
+  mut _mux_76:U2 = if is_lock_xx_op != 0 { minion_dcache_pkg.StateModified#[0..<2] } else { new_coh_q#[0..<2] }
   mut `meta_write_req_o__bpo.data.coh_state` = _mux_76
-  busy_o = unsigned(state_q != minion_dcache_pkg.CacheOpInvalid)
-  if (id_running_q == 0) and (((req_q >> 11) & 1) == 0) {
-    th_id_complete_o__wtmp#[0] = unsigned(busy_o == 0) & 1
+  mut _b2i_77 = if state_q != minion_dcache_pkg.CacheOpInvalid { 1 } else { 0 }
+  busy_o = _b2i_77
+  if (id_running_q == 0) and (req_q#[11..<12] == 0) {
+    _b2i_78 = if busy_o == 0 { 1 } else { 0 }
+    th_id_complete_o__wtmp#[0..<1] = _b2i_78 & 1
   } else {
-    th_id_complete_o__wtmp#[0] = 1
+    th_id_complete_o__wtmp#[0..<1] = 1
   }
-  if (id_running_q == 1) and (((req_q >> 11) & 1) == 0) {
-    th_id_complete_o__wtmp#[1] = unsigned(busy_o == 0) & 1
+  if (id_running_q == 1) and (req_q#[11..<12] == 0) {
+    _b2i_79 = if busy_o == 0 { 1 } else { 0 }
+    th_id_complete_o__wtmp#[1..<2] = _b2i_79 & 1
   } else {
-    th_id_complete_o__wtmp#[1] = 1
+    th_id_complete_o__wtmp#[1..<2] = 1
   }
-  if (id_running_q == 0) and (((req_q >> 11) & 1) == 1) {
-    th_id_complete_o__wtmp#[2] = unsigned(busy_o == 0) & 1
+  if (id_running_q == 0) and (req_q#[11..<12] == 1) {
+    _b2i_80 = if busy_o == 0 { 1 } else { 0 }
+    th_id_complete_o__wtmp#[2..<3] = _b2i_80 & 1
   } else {
-    th_id_complete_o__wtmp#[2] = 1
+    th_id_complete_o__wtmp#[2..<3] = 1
   }
-  if (id_running_q == 1) and (((req_q >> 11) & 1) == 1) {
-    th_id_complete_o__wtmp#[3] = unsigned(busy_o == 0) & 1
+  if (id_running_q == 1) and (req_q#[11..<12] == 1) {
+    _b2i_81 = if busy_o == 0 { 1 } else { 0 }
+    th_id_complete_o__wtmp#[3..<4] = _b2i_81 & 1
   } else {
-    th_id_complete_o__wtmp#[3] = 1
+    th_id_complete_o__wtmp#[3..<4] = 1
   }
   if meta_read_mux_state == minion_dcache_pkg.StateInvalid {
     new_coh_d__wtmp = minion_dcache_pkg.StateInvalid
   } elif meta_read_mux_state == minion_dcache_pkg.StateShared {
-    new_coh_d__wtmp = if req_q#[12..=13] == minion_dcache_pkg.SnoopToInvalid { minion_dcache_pkg.StateInvalid } else { minion_dcache_pkg.StateShared }
+    new_coh_d__wtmp = if req_q#[12..<14] == minion_dcache_pkg.SnoopToInvalid { minion_dcache_pkg.StateInvalid } else { minion_dcache_pkg.StateShared }
   } else {
-    new_coh_d__wtmp = if req_q#[12..=13] == minion_dcache_pkg.SnoopToInvalid { minion_dcache_pkg.StateInvalid } else { minion_dcache_pkg.StateExclusive }
+    new_coh_d__wtmp = if req_q#[12..<14] == minion_dcache_pkg.SnoopToInvalid { minion_dcache_pkg.StateInvalid } else { minion_dcache_pkg.StateExclusive }
   }
-  const lock_zero__w1 = unsigned(((meta_write_valid_o__w1 != 0) or (meta_write_valid_lock__w1 != 0)) and ((req_q#[14..=17] == minion_pkg.cache_op_Lock_SW) or (req_q#[14..=17] == minion_pkg.cache_op_Lock_VA)))
-  const lock_en__w2 = (unsigned(((meta_write_valid_o__w1 != 0) or (meta_write_valid_lock__w1 != 0)) and ((req_q#[14..=17] == minion_pkg.cache_op_Lock_SW) or (req_q#[14..=17] == minion_pkg.cache_op_Unlock_SW) or (req_q#[14..=17] == minion_pkg.cache_op_Lock_VA) or (req_q#[14..=17] == minion_pkg.cache_op_Unlock_VA) or (req_q#[14..=17] == minion_pkg.cache_op_Evict_VA) or (req_q#[14..=17] == minion_pkg.cache_op_Evict_SW))) | unsigned((cfg_clear_all_i != 0) or (cfg_clear_low_i != 0) or (cfg_alloc_scp_i != 0))) & 1
-  slock_state_d = slock_state_o
+  mut _b2i_82 = if ((meta_write_valid_o__w1 != 0) or (meta_write_valid_lock__w1 != 0)) and ((req_q#[14..<18] == minion_pkg.cache_op_Lock_SW) or (req_q#[14..<18] == minion_pkg.cache_op_Unlock_SW) or (req_q#[14..<18] == minion_pkg.cache_op_Lock_VA) or (req_q#[14..<18] == minion_pkg.cache_op_Unlock_VA) or (req_q#[14..<18] == minion_pkg.cache_op_Evict_VA) or (req_q#[14..<18] == minion_pkg.cache_op_Evict_SW)) { 1 } else { 0 }
+  mut _b2i_83 = if ((meta_write_valid_o__w1 != 0) or (meta_write_valid_lock__w1 != 0)) and ((req_q#[14..<18] == minion_pkg.cache_op_Lock_SW) or (req_q#[14..<18] == minion_pkg.cache_op_Lock_VA)) { 1 } else { 0 }
+  const lock_zero__w1 = _b2i_83
+  const lock_en__w2 = (_b2i_82 | U1((cfg_clear_all_i != 0) or (cfg_clear_low_i != 0) or (cfg_alloc_scp_i != 0))) & 1
   hlock_state_d = hlock_state_o
+  slock_state_d = slock_state_o
   if lock_en__w2 != 0 {
     if cfg_alloc_scp_i != 0 {
-      {
-      }
-      hlock_state_d#[0..=3] = 15
-      {
-      }
-      slock_state_d#[0..=3] = 15
-      {
-      }
-      hlock_state_d#[4..=7] = 15
-      {
-      }
-      slock_state_d#[4..=7] = 15
-      {
-      }
-      hlock_state_d#[8..=11] = 15
-      {
-      }
-      slock_state_d#[8..=11] = 15
-      {
-      }
-      hlock_state_d#[12..=15] = 15
-      {
-      }
-      slock_state_d#[12..=15] = 15
-      {
-      }
-      hlock_state_d#[16..=19] = 15
-      {
-      }
-      slock_state_d#[16..=19] = 15
-      {
-      }
-      hlock_state_d#[20..=23] = 15
-      {
-      }
-      slock_state_d#[20..=23] = 15
-      {
-      }
-      hlock_state_d#[24..=27] = 15
-      {
-      }
-      slock_state_d#[24..=27] = 15
-      {
-      }
-      hlock_state_d#[28..=31] = 15
-      {
-      }
-      slock_state_d#[28..=31] = 15
-      {
-      }
-      hlock_state_d#[32..=35] = 15
-      {
-      }
-      slock_state_d#[32..=35] = 15
-      {
-      }
-      hlock_state_d#[36..=39] = 15
-      {
-      }
-      slock_state_d#[36..=39] = 15
-      {
-      }
-      hlock_state_d#[40..=43] = 15
-      {
-      }
-      slock_state_d#[40..=43] = 15
-      {
-      }
-      hlock_state_d#[44..=47] = 15
-      {
-      }
-      slock_state_d#[44..=47] = 15
+      hlock_state_d#[0..<4] = 15
+      slock_state_d#[0..<4] = 15
+      hlock_state_d#[4..<8] = 15
+      slock_state_d#[4..<8] = 15
+      hlock_state_d#[8..<12] = 15
+      slock_state_d#[8..<12] = 15
+      hlock_state_d#[12..<16] = 15
+      slock_state_d#[12..<16] = 15
+      hlock_state_d#[16..<20] = 15
+      slock_state_d#[16..<20] = 15
+      hlock_state_d#[20..<24] = 15
+      slock_state_d#[20..<24] = 15
+      hlock_state_d#[24..<28] = 15
+      slock_state_d#[24..<28] = 15
+      hlock_state_d#[28..<32] = 15
+      slock_state_d#[28..<32] = 15
+      hlock_state_d#[32..<36] = 15
+      slock_state_d#[32..<36] = 15
+      hlock_state_d#[36..<40] = 15
+      slock_state_d#[36..<40] = 15
+      hlock_state_d#[40..<44] = 15
+      slock_state_d#[40..<44] = 15
+      hlock_state_d#[44..<48] = 15
+      slock_state_d#[44..<48] = 15
     } elif cfg_clear_low_i != 0 {
-      hlock_state_d#[0..=3] = 0
-      slock_state_d#[0..=3] = 0
-      hlock_state_d#[4..=7] = 0
-      slock_state_d#[4..=7] = 0
-      hlock_state_d#[8..=11] = 0
-      slock_state_d#[8..=11] = 0
-      hlock_state_d#[12..=15] = 0
-      slock_state_d#[12..=15] = 0
-      hlock_state_d#[16..=19] = 0
-      slock_state_d#[16..=19] = 0
-      hlock_state_d#[20..=23] = 0
-      slock_state_d#[20..=23] = 0
-      hlock_state_d#[24..=27] = 0
-      slock_state_d#[24..=27] = 0
-      hlock_state_d#[28..=31] = 0
-      slock_state_d#[28..=31] = 0
-      hlock_state_d#[32..=35] = 0
-      slock_state_d#[32..=35] = 0
-      hlock_state_d#[36..=39] = 0
-      slock_state_d#[36..=39] = 0
-      hlock_state_d#[40..=43] = 0
-      slock_state_d#[40..=43] = 0
-      hlock_state_d#[44..=47] = 0
-      slock_state_d#[44..=47] = 0
-      hlock_state_d#[48..=51] = 0
-      slock_state_d#[48..=51] = 0
-      hlock_state_d#[52..=55] = 0
-      slock_state_d#[52..=55] = 0
+      hlock_state_d#[0..<4] = 0
+      slock_state_d#[0..<4] = 0
+      hlock_state_d#[4..<8] = 0
+      slock_state_d#[4..<8] = 0
+      hlock_state_d#[8..<12] = 0
+      slock_state_d#[8..<12] = 0
+      hlock_state_d#[12..<16] = 0
+      slock_state_d#[12..<16] = 0
+      hlock_state_d#[16..<20] = 0
+      slock_state_d#[16..<20] = 0
+      hlock_state_d#[20..<24] = 0
+      slock_state_d#[20..<24] = 0
+      hlock_state_d#[24..<28] = 0
+      slock_state_d#[24..<28] = 0
+      hlock_state_d#[28..<32] = 0
+      slock_state_d#[28..<32] = 0
+      hlock_state_d#[32..<36] = 0
+      slock_state_d#[32..<36] = 0
+      hlock_state_d#[36..<40] = 0
+      slock_state_d#[36..<40] = 0
+      hlock_state_d#[40..<44] = 0
+      slock_state_d#[40..<44] = 0
+      hlock_state_d#[44..<48] = 0
+      slock_state_d#[44..<48] = 0
+      hlock_state_d#[48..<52] = 0
+      slock_state_d#[48..<52] = 0
+      hlock_state_d#[52..<56] = 0
+      slock_state_d#[52..<56] = 0
     } elif cfg_clear_all_i != 0 {
       hlock_state_d = 0
       slock_state_d = 0
-    } elif req_q#[14..=17] == minion_pkg.cache_op_Lock_SW {
-      const t1482 = (lock_set * 4) + lock_way
-      hlock_state_d = ((hlock_state_d & (~(1 << t1482))) | (1 << t1482))#[0..=63]
-      const t1490 = (lock_set * 4) + lock_way
-      slock_state_d = ((slock_state_d & (~(1 << t1490))) | (0 << t1490))#[0..=63]
-    } elif req_q#[14..=17] == minion_pkg.cache_op_Unlock_SW {
-      const t1500 = (lock_set * 4) + lock_way
-      hlock_state_d = ((hlock_state_d & (~(1 << t1500))) | (0 << t1500))#[0..=63]
-      const t1508 = (lock_set * 4) + lock_way
-      slock_state_d = ((slock_state_d & (~(1 << t1508))) | (0 << t1508))#[0..=63]
-    } elif req_q#[14..=17] == minion_pkg.cache_op_Evict_SW {
-      const t1518 = (lock_set * 4) + lock_way
-      slock_state_d = ((slock_state_d & (~(1 << t1518))) | (0 << t1518))#[0..=63]
-    } elif req_q#[14..=17] == minion_pkg.cache_op_Lock_VA {
-      const t1538 = (lock_set * 4) + lock_way
-      slock_state_d = ((slock_state_d & (~(1 << t1538))) | ((unsigned((((((hlock_state_o << 4) >> ((lock_set * 4) + 4))#[0..=3] << 1) >> (lock_way + 1)) & 1) == 0) & 1) << t1538))#[0..=63]
-    } elif (req_q#[14..=17] == minion_pkg.cache_op_Unlock_VA) or (req_q#[14..=17] == minion_pkg.cache_op_Evict_VA) {
-      const t1552 = (lock_set * 4) + lock_way
-      slock_state_d = ((slock_state_d & (~(1 << t1552))) | (0 << t1552))#[0..=63]
+    } elif req_q#[14..<18] == minion_pkg.cache_op_Lock_SW {
+      const t1793 = (lock_set * 4) + lock_way
+      hlock_state_d#[t1793..<(t1793 + 1)] = 1
+      const t1796 = (lock_set * 4) + lock_way
+      slock_state_d#[t1796..<(t1796 + 1)] = 0
+    } elif req_q#[14..<18] == minion_pkg.cache_op_Unlock_SW {
+      const t1801 = (lock_set * 4) + lock_way
+      hlock_state_d#[t1801..<(t1801 + 1)] = 0
+      const t1804 = (lock_set * 4) + lock_way
+      slock_state_d#[t1804..<(t1804 + 1)] = 0
+    } elif req_q#[14..<18] == minion_pkg.cache_op_Evict_SW {
+      const t1809 = (lock_set * 4) + lock_way
+      slock_state_d#[t1809..<(t1809 + 1)] = 0
+    } elif req_q#[14..<18] == minion_pkg.cache_op_Lock_VA {
+      _b2i_109 = if (((((hlock_state_o << 4) >> ((lock_set * 4) + 4))#[0..<4] << 1) >> (lock_way + 1)) & 1) == 0 { 1 } else { 0 }
+      const t1824 = (lock_set * 4) + lock_way
+      slock_state_d#[t1824..<(t1824 + 1)] = _b2i_109 & 1
+    } elif (req_q#[14..<18] == minion_pkg.cache_op_Unlock_VA) or (req_q#[14..<18] == minion_pkg.cache_op_Evict_VA) {
+      const t1833 = (lock_set * 4) + lock_way
+      slock_state_d#[t1833..<(t1833 + 1)] = 0
     }
   }
   if mh_clear_slock_valid_i != 0 {
-    const t1561 = (mh_clear_slock_set_i * 4) + mh_clear_slock_way_i
-    slock_state_d = ((slock_state_d & (~(1 << t1561))) | (0 << t1561))#[0..=63]
+    const t1837 = (mh_clear_slock_set_i * 4) + mh_clear_slock_way_i
+    slock_state_d#[t1837..<(t1837 + 1)] = 0
   }
   ways = meta_data_way_en_q
   if (ways & 1) != 0 {
     dcache_way_encode = 0
   }
-  if ((ways >> 1) & 1) != 0 {
-    dcache_way_encode = dcache_way_encode | 1
+  if ways#[1..<2] != 0 {
+    dcache_way_encode = (dcache_way_encode | 1)#[0..<2]
   }
-  if ((ways >> 2) & 1) != 0 {
-    dcache_way_encode = dcache_way_encode | 2
+  if ways#[2..<3] != 0 {
+    dcache_way_encode = (dcache_way_encode | 2)#[0..<2]
   }
-  if ((ways >> 3) & 1) != 0 {
-    dcache_way_encode = dcache_way_encode | 3
+  if ways#[3..<4] != 0 {
+    dcache_way_encode = (dcache_way_encode | 3)#[0..<2]
   }
   lock_way = dcache_way_encode
-  lock_set = `meta_write_req_o__bpo.set_idx`
-  const da_clear_en_o__w1 = unsigned((lock_zero__w1 != 0) or (clear_line_on_q != 0))
+  lock_set = `meta_write_req_o__bpr.set_idx`
+  mut _b2i_111 = if (lock_zero__w1 != 0) or (clear_line_on_q != 0) { 1 } else { 0 }
+  const da_clear_en_o__w1 = _b2i_111
   da_clear_val_o = clear_line_on_q
-  mut _mux_112:u1 = if (da_clear_val_o != 0) and (da_clear_rdy_i != 0) { (~da_clear_idx_o) & 1 } else { da_clear_idx_o & 1 }
+  mut _mux_112:U1 = if (da_clear_val_o != 0) and (da_clear_rdy_i != 0) { ~da_clear_idx_o } else { da_clear_idx_o & 1 }
   da_clear_idx_d = _mux_112
-  clear_line_on_d = unsigned((lock_zero__w1 != 0) or ((clear_line_on_q != 0) and (not ((da_clear_val_o != 0) and (da_clear_rdy_i != 0) and (da_clear_idx_o != 0)))))
+  mut _b2i_113 = if (lock_zero__w1 != 0) or ((clear_line_on_q != 0) and (not ((da_clear_val_o != 0) and (da_clear_rdy_i != 0) and (da_clear_idx_o != 0)))) { 1 } else { 0 }
+  clear_line_on_d = _b2i_113
   clear_line = da_clear_en_o__w1
+  mut _b2i_114 = if (lock_en__w2 != 0) or (mh_clear_slock_valid_i != 0) { 1 } else { 0 }
   if rst_ni != 0 {
     if lock_en__w2 != 0 {
       hlock_state_o = hlock_state_d
     }
-    if unsigned((lock_en__w2 != 0) or (mh_clear_slock_valid_i != 0)) != 0 {
+    if _b2i_114 != 0 {
       slock_state_o = slock_state_d
     }
   }
-  mut sm_data_debug_signals_o__w4 = sm_data_debug_signals_o__w3
-  sm_data_debug_signals_o__w4#[128..=255] = (((err_lock_q & 1) << 125) | ((err_mem_q & 1) << 124) | ((term_loop_q & 1) << 123) | ((meta_read_mux_match & 1) << 122) | (meta_read_mux_tag << 89) | (meta_read_mux_way << 87) | (meta_read_mux_state << 85) | (meta_read_addr_o__w1 << 37) | (((meta_read_resp_way_en_i.e3 << 3) | (meta_read_resp_way_en_i.e2 << 2) | (meta_read_resp_way_en_i.e1 << 1) | meta_read_resp_way_en_i.e0)#[0..=3] << 33) | phys_addr_tag_q)
+  mut _b2i_115 = if (state_meta_resp_qual__w1 != 0) or (state_q == minion_dcache_pkg.CacheOpWritebackReq) or (state_q == minion_dcache_pkg.CacheOpWritebackResp) or (state_q == minion_dcache_pkg.CacheOpMetaWrite) or (state_q == minion_dcache_pkg.CacheOpMetaWriteLock) or (clear_line_on_q != 0) { 1 } else { 0 }
+  const t1916 = (((err_lock_q & 1) << 125) | ((err_mem_q & 1) << 124) | ((term_loop_q & 1) << 123) | ((meta_read_mux_match & 1) << 122) | (meta_read_mux_tag#[0..<33] << 89) | (meta_read_mux_way#[0..<2] << 87) | (meta_read_mux_state#[0..<2] << 85) | (meta_read_addr_o__w1#[0..<48] << 37) | (((meta_read_resp_way_en_i.e3 << 3) | (meta_read_resp_way_en_i.e2 << 2) | (meta_read_resp_way_en_i.e1 << 1) | meta_read_resp_way_en_i.e0)#[0..<4] << 33) | phys_addr_tag_q#[0..<33])#[0..<0x7e]
+  `sm_data_debug_signals_o[128]` = t1916 & 1
+  `sm_data_debug_signals_o[129]` = t1916#[1..<2]
+  `sm_data_debug_signals_o[130]` = t1916#[2..<3]
+  `sm_data_debug_signals_o[131]` = t1916#[3..<4]
+  `sm_data_debug_signals_o[132]` = t1916#[4..<5]
+  `sm_data_debug_signals_o[133]` = t1916#[5..<6]
+  `sm_data_debug_signals_o[134]` = t1916#[6..<7]
+  `sm_data_debug_signals_o[135]` = t1916#[7..<8]
+  `sm_data_debug_signals_o[136]` = t1916#[8..<9]
+  `sm_data_debug_signals_o[137]` = t1916#[9..<10]
+  `sm_data_debug_signals_o[138]` = t1916#[10..<11]
+  `sm_data_debug_signals_o[139]` = t1916#[11..<12]
+  `sm_data_debug_signals_o[140]` = t1916#[12..<13]
+  `sm_data_debug_signals_o[141]` = t1916#[13..<14]
+  `sm_data_debug_signals_o[142]` = t1916#[14..<15]
+  `sm_data_debug_signals_o[143]` = t1916#[15..<16]
+  `sm_data_debug_signals_o[144]` = t1916#[16..<17]
+  `sm_data_debug_signals_o[145]` = t1916#[17..<18]
+  `sm_data_debug_signals_o[146]` = t1916#[18..<19]
+  `sm_data_debug_signals_o[147]` = t1916#[19..<20]
+  `sm_data_debug_signals_o[148]` = t1916#[20..<21]
+  `sm_data_debug_signals_o[149]` = t1916#[21..<22]
+  `sm_data_debug_signals_o[150]` = t1916#[22..<23]
+  `sm_data_debug_signals_o[151]` = t1916#[23..<24]
+  `sm_data_debug_signals_o[152]` = t1916#[24..<25]
+  `sm_data_debug_signals_o[153]` = t1916#[25..<26]
+  `sm_data_debug_signals_o[154]` = t1916#[26..<27]
+  `sm_data_debug_signals_o[155]` = t1916#[27..<28]
+  `sm_data_debug_signals_o[156]` = t1916#[28..<29]
+  `sm_data_debug_signals_o[157]` = t1916#[29..<30]
+  `sm_data_debug_signals_o[158]` = t1916#[30..<31]
+  `sm_data_debug_signals_o[159]` = t1916#[31..<32]
+  `sm_data_debug_signals_o[160]` = t1916#[32..<33]
+  `sm_data_debug_signals_o[161]` = t1916#[33..<34]
+  `sm_data_debug_signals_o[162]` = t1916#[34..<35]
+  `sm_data_debug_signals_o[163]` = t1916#[35..<36]
+  `sm_data_debug_signals_o[164]` = t1916#[36..<37]
+  `sm_data_debug_signals_o[165]` = t1916#[37..<38]
+  `sm_data_debug_signals_o[166]` = t1916#[38..<39]
+  `sm_data_debug_signals_o[167]` = t1916#[39..<40]
+  `sm_data_debug_signals_o[168]` = t1916#[40..<41]
+  `sm_data_debug_signals_o[169]` = t1916#[41..<42]
+  `sm_data_debug_signals_o[170]` = t1916#[42..<43]
+  `sm_data_debug_signals_o[171]` = t1916#[43..<44]
+  `sm_data_debug_signals_o[172]` = t1916#[44..<45]
+  `sm_data_debug_signals_o[173]` = t1916#[45..<46]
+  `sm_data_debug_signals_o[174]` = t1916#[46..<47]
+  `sm_data_debug_signals_o[175]` = t1916#[47..<48]
+  `sm_data_debug_signals_o[176]` = t1916#[48..<49]
+  `sm_data_debug_signals_o[177]` = t1916#[49..<50]
+  `sm_data_debug_signals_o[178]` = t1916#[50..<51]
+  `sm_data_debug_signals_o[179]` = t1916#[51..<52]
+  `sm_data_debug_signals_o[180]` = t1916#[52..<53]
+  `sm_data_debug_signals_o[181]` = t1916#[53..<54]
+  `sm_data_debug_signals_o[182]` = t1916#[54..<55]
+  `sm_data_debug_signals_o[183]` = t1916#[55..<56]
+  `sm_data_debug_signals_o[184]` = t1916#[56..<57]
+  `sm_data_debug_signals_o[185]` = t1916#[57..<58]
+  `sm_data_debug_signals_o[186]` = t1916#[58..<59]
+  `sm_data_debug_signals_o[187]` = t1916#[59..<60]
+  `sm_data_debug_signals_o[188]` = t1916#[60..<61]
+  `sm_data_debug_signals_o[189]` = t1916#[61..<62]
+  `sm_data_debug_signals_o[190]` = t1916#[62..<63]
+  `sm_data_debug_signals_o[191]` = t1916#[63..<0x40]
+  `sm_data_debug_signals_o[192]` = t1916#[0x40..<0x41]
+  `sm_data_debug_signals_o[193]` = t1916#[0x41..<0x42]
+  `sm_data_debug_signals_o[194]` = t1916#[0x42..<0x43]
+  `sm_data_debug_signals_o[195]` = t1916#[0x43..<0x44]
+  `sm_data_debug_signals_o[196]` = t1916#[0x44..<0x45]
+  `sm_data_debug_signals_o[197]` = t1916#[0x45..<0x46]
+  `sm_data_debug_signals_o[198]` = t1916#[0x46..<0x47]
+  `sm_data_debug_signals_o[199]` = t1916#[0x47..<0x48]
+  `sm_data_debug_signals_o[200]` = t1916#[0x48..<0x49]
+  `sm_data_debug_signals_o[201]` = t1916#[0x49..<0x4a]
+  `sm_data_debug_signals_o[202]` = t1916#[0x4a..<0x4b]
+  `sm_data_debug_signals_o[203]` = t1916#[0x4b..<0x4c]
+  `sm_data_debug_signals_o[204]` = t1916#[0x4c..<0x4d]
+  `sm_data_debug_signals_o[205]` = t1916#[0x4d..<0x4e]
+  `sm_data_debug_signals_o[206]` = t1916#[0x4e..<0x4f]
+  `sm_data_debug_signals_o[207]` = t1916#[0x4f..<0x50]
+  `sm_data_debug_signals_o[208]` = t1916#[0x50..<0x51]
+  `sm_data_debug_signals_o[209]` = t1916#[0x51..<0x52]
+  `sm_data_debug_signals_o[210]` = t1916#[0x52..<0x53]
+  `sm_data_debug_signals_o[211]` = t1916#[0x53..<0x54]
+  `sm_data_debug_signals_o[212]` = t1916#[0x54..<0x55]
+  `sm_data_debug_signals_o[213]` = t1916#[0x55..<0x56]
+  `sm_data_debug_signals_o[214]` = t1916#[0x56..<0x57]
+  `sm_data_debug_signals_o[215]` = t1916#[0x57..<0x58]
+  `sm_data_debug_signals_o[216]` = t1916#[0x58..<0x59]
+  `sm_data_debug_signals_o[217]` = t1916#[0x59..<0x5a]
+  `sm_data_debug_signals_o[218]` = t1916#[0x5a..<0x5b]
+  `sm_data_debug_signals_o[219]` = t1916#[0x5b..<0x5c]
+  `sm_data_debug_signals_o[220]` = t1916#[0x5c..<0x5d]
+  `sm_data_debug_signals_o[221]` = t1916#[0x5d..<0x5e]
+  `sm_data_debug_signals_o[222]` = t1916#[0x5e..<0x5f]
+  `sm_data_debug_signals_o[223]` = t1916#[0x5f..<0x60]
+  `sm_data_debug_signals_o[224]` = t1916#[0x60..<0x61]
+  `sm_data_debug_signals_o[225]` = t1916#[0x61..<0x62]
+  `sm_data_debug_signals_o[226]` = t1916#[0x62..<0x63]
+  `sm_data_debug_signals_o[227]` = t1916#[0x63..<0x64]
+  `sm_data_debug_signals_o[228]` = t1916#[0x64..<0x65]
+  `sm_data_debug_signals_o[229]` = t1916#[0x65..<0x66]
+  `sm_data_debug_signals_o[230]` = t1916#[0x66..<0x67]
+  `sm_data_debug_signals_o[231]` = t1916#[0x67..<0x68]
+  `sm_data_debug_signals_o[232]` = t1916#[0x68..<0x69]
+  `sm_data_debug_signals_o[233]` = t1916#[0x69..<0x6a]
+  `sm_data_debug_signals_o[234]` = t1916#[0x6a..<0x6b]
+  `sm_data_debug_signals_o[235]` = t1916#[0x6b..<0x6c]
+  `sm_data_debug_signals_o[236]` = t1916#[0x6c..<0x6d]
+  `sm_data_debug_signals_o[237]` = t1916#[0x6d..<0x6e]
+  `sm_data_debug_signals_o[238]` = t1916#[0x6e..<0x6f]
+  `sm_data_debug_signals_o[239]` = t1916#[0x6f..<0x70]
+  `sm_data_debug_signals_o[240]` = t1916#[0x70..<0x71]
+  `sm_data_debug_signals_o[241]` = t1916#[0x71..<0x72]
+  `sm_data_debug_signals_o[242]` = t1916#[0x72..<0x73]
+  `sm_data_debug_signals_o[243]` = t1916#[0x73..<0x74]
+  `sm_data_debug_signals_o[244]` = t1916#[0x74..<0x75]
+  `sm_data_debug_signals_o[245]` = t1916#[0x75..<0x76]
+  `sm_data_debug_signals_o[246]` = t1916#[0x76..<0x77]
+  `sm_data_debug_signals_o[247]` = t1916#[0x77..<0x78]
+  `sm_data_debug_signals_o[248]` = t1916#[0x78..<0x79]
+  `sm_data_debug_signals_o[249]` = t1916#[0x79..<0x7a]
+  `sm_data_debug_signals_o[250]` = t1916#[0x7a..<0x7b]
+  `sm_data_debug_signals_o[251]` = t1916#[0x7b..<0x7c]
+  `sm_data_debug_signals_o[252]` = t1916#[0x7c..<0x7d]
+  `sm_data_debug_signals_o[253]` = t1916#[0x7d..<0x7e]
+  `sm_data_debug_signals_o[254]` = t1916#[0x7e..<0x7f]
+  `sm_data_debug_signals_o[255]` = t1916#[0x7f..<0x80]
+  err_flags_o = (`err_flags_o[3]` << 3) | (`err_flags_o[2]` << 2) | (`err_flags_o[1]` << 1) | `err_flags_o[0]`
+  sm_data_debug_signals_o = (`sm_data_debug_signals_o[511]` << 511) | (`sm_data_debug_signals_o[510]` << 510) | (`sm_data_debug_signals_o[509]` << 509) | (`sm_data_debug_signals_o[508]` << 508) | (`sm_data_debug_signals_o[507]` << 507) | (`sm_data_debug_signals_o[506]` << 506) | (`sm_data_debug_signals_o[505]` << 505) | (`sm_data_debug_signals_o[504]` << 504) | (`sm_data_debug_signals_o[503]` << 503) | (`sm_data_debug_signals_o[502]` << 502) | (`sm_data_debug_signals_o[501]` << 501) | (`sm_data_debug_signals_o[500]` << 500) | (`sm_data_debug_signals_o[499]` << 499) | (`sm_data_debug_signals_o[498]` << 498) | (`sm_data_debug_signals_o[497]` << 497) | (`sm_data_debug_signals_o[496]` << 496) | (`sm_data_debug_signals_o[495]` << 495) | (`sm_data_debug_signals_o[494]` << 494) | (`sm_data_debug_signals_o[493]` << 493) | (`sm_data_debug_signals_o[492]` << 492) | (`sm_data_debug_signals_o[491]` << 491) | (`sm_data_debug_signals_o[490]` << 490) | (`sm_data_debug_signals_o[489]` << 489) | (`sm_data_debug_signals_o[488]` << 488) | (`sm_data_debug_signals_o[487]` << 487) | (`sm_data_debug_signals_o[486]` << 486) | (`sm_data_debug_signals_o[485]` << 485) | (`sm_data_debug_signals_o[484]` << 484) | (`sm_data_debug_signals_o[483]` << 483) | (`sm_data_debug_signals_o[482]` << 482) | (`sm_data_debug_signals_o[481]` << 481) | (`sm_data_debug_signals_o[480]` << 480) | (`sm_data_debug_signals_o[479]` << 479) | (`sm_data_debug_signals_o[478]` << 478) | (`sm_data_debug_signals_o[477]` << 477) | (`sm_data_debug_signals_o[476]` << 476) | (`sm_data_debug_signals_o[475]` << 475) | (`sm_data_debug_signals_o[474]` << 474) | (`sm_data_debug_signals_o[473]` << 473) | (`sm_data_debug_signals_o[472]` << 472) | (`sm_data_debug_signals_o[471]` << 471) | (`sm_data_debug_signals_o[470]` << 470) | (`sm_data_debug_signals_o[469]` << 469) | (`sm_data_debug_signals_o[468]` << 468) | (`sm_data_debug_signals_o[467]` << 467) | (`sm_data_debug_signals_o[466]` << 466) | (`sm_data_debug_signals_o[465]` << 465) | (`sm_data_debug_signals_o[464]` << 464) | (`sm_data_debug_signals_o[463]` << 463) | (`sm_data_debug_signals_o[462]` << 462) | (`sm_data_debug_signals_o[461]` << 461) | (`sm_data_debug_signals_o[460]` << 460) | (`sm_data_debug_signals_o[459]` << 459) | (`sm_data_debug_signals_o[458]` << 458) | (`sm_data_debug_signals_o[457]` << 457) | (`sm_data_debug_signals_o[456]` << 456) | (`sm_data_debug_signals_o[455]` << 455) | (`sm_data_debug_signals_o[454]` << 454) | (`sm_data_debug_signals_o[453]` << 453) | (`sm_data_debug_signals_o[452]` << 452) | (`sm_data_debug_signals_o[451]` << 451) | (`sm_data_debug_signals_o[450]` << 450) | (`sm_data_debug_signals_o[449]` << 449) | (`sm_data_debug_signals_o[448]` << 448) | (`sm_data_debug_signals_o[447]` << 447) | (`sm_data_debug_signals_o[446]` << 446) | (`sm_data_debug_signals_o[445]` << 445) | (`sm_data_debug_signals_o[444]` << 444) | (`sm_data_debug_signals_o[443]` << 443) | (`sm_data_debug_signals_o[442]` << 442) | (`sm_data_debug_signals_o[441]` << 441) | (`sm_data_debug_signals_o[440]` << 440) | (`sm_data_debug_signals_o[439]` << 439) | (`sm_data_debug_signals_o[438]` << 438) | (`sm_data_debug_signals_o[437]` << 437) | (`sm_data_debug_signals_o[436]` << 436) | (`sm_data_debug_signals_o[435]` << 435) | (`sm_data_debug_signals_o[434]` << 434) | (`sm_data_debug_signals_o[433]` << 433) | (`sm_data_debug_signals_o[432]` << 432) | (`sm_data_debug_signals_o[431]` << 431) | (`sm_data_debug_signals_o[430]` << 430) | (`sm_data_debug_signals_o[429]` << 429) | (`sm_data_debug_signals_o[428]` << 428) | (`sm_data_debug_signals_o[427]` << 427) | (`sm_data_debug_signals_o[426]` << 426) | (`sm_data_debug_signals_o[425]` << 425) | (`sm_data_debug_signals_o[424]` << 424) | (`sm_data_debug_signals_o[423]` << 423) | (`sm_data_debug_signals_o[422]` << 422) | (`sm_data_debug_signals_o[421]` << 421) | (`sm_data_debug_signals_o[420]` << 420) | (`sm_data_debug_signals_o[419]` << 419) | (`sm_data_debug_signals_o[418]` << 418) | (`sm_data_debug_signals_o[417]` << 417) | (`sm_data_debug_signals_o[416]` << 416) | (`sm_data_debug_signals_o[415]` << 415) | (`sm_data_debug_signals_o[414]` << 414) | (`sm_data_debug_signals_o[413]` << 413) | (`sm_data_debug_signals_o[412]` << 412) | (`sm_data_debug_signals_o[411]` << 411) | (`sm_data_debug_signals_o[410]` << 410) | (`sm_data_debug_signals_o[409]` << 409) | (`sm_data_debug_signals_o[408]` << 408) | (`sm_data_debug_signals_o[407]` << 407) | (`sm_data_debug_signals_o[406]` << 406) | (`sm_data_debug_signals_o[405]` << 405) | (`sm_data_debug_signals_o[404]` << 404) | (`sm_data_debug_signals_o[403]` << 403) | (`sm_data_debug_signals_o[402]` << 402) | (`sm_data_debug_signals_o[401]` << 401) | (`sm_data_debug_signals_o[400]` << 400) | (`sm_data_debug_signals_o[399]` << 399) | (`sm_data_debug_signals_o[398]` << 398) | (`sm_data_debug_signals_o[397]` << 397) | (`sm_data_debug_signals_o[396]` << 396) | (`sm_data_debug_signals_o[395]` << 395) | (`sm_data_debug_signals_o[394]` << 394) | (`sm_data_debug_signals_o[393]` << 393) | (`sm_data_debug_signals_o[392]` << 392) | (`sm_data_debug_signals_o[391]` << 391) | (`sm_data_debug_signals_o[390]` << 390) | (`sm_data_debug_signals_o[389]` << 389) | (`sm_data_debug_signals_o[388]` << 388) | (`sm_data_debug_signals_o[387]` << 387) | (`sm_data_debug_signals_o[386]` << 386) | (`sm_data_debug_signals_o[385]` << 385) | (`sm_data_debug_signals_o[384]` << 384) | (`sm_data_debug_signals_o[383]` << 383) | (`sm_data_debug_signals_o[382]` << 382) | (`sm_data_debug_signals_o[381]` << 381) | (`sm_data_debug_signals_o[380]` << 380) | (`sm_data_debug_signals_o[379]` << 379) | (`sm_data_debug_signals_o[378]` << 378) | (`sm_data_debug_signals_o[377]` << 377) | (`sm_data_debug_signals_o[376]` << 376) | (`sm_data_debug_signals_o[375]` << 375) | (`sm_data_debug_signals_o[374]` << 374) | (`sm_data_debug_signals_o[373]` << 373) | (`sm_data_debug_signals_o[372]` << 372) | (`sm_data_debug_signals_o[371]` << 371) | (`sm_data_debug_signals_o[370]` << 370) | (`sm_data_debug_signals_o[369]` << 369) | (`sm_data_debug_signals_o[368]` << 368) | (`sm_data_debug_signals_o[367]` << 367) | (`sm_data_debug_signals_o[366]` << 366) | (`sm_data_debug_signals_o[365]` << 365) | (`sm_data_debug_signals_o[364]` << 364) | (`sm_data_debug_signals_o[363]` << 363) | (`sm_data_debug_signals_o[362]` << 362) | (`sm_data_debug_signals_o[361]` << 361) | (`sm_data_debug_signals_o[360]` << 360) | (`sm_data_debug_signals_o[359]` << 359) | (`sm_data_debug_signals_o[358]` << 358) | (`sm_data_debug_signals_o[357]` << 357) | (`sm_data_debug_signals_o[356]` << 356) | (`sm_data_debug_signals_o[355]` << 355) | (`sm_data_debug_signals_o[354]` << 354) | (`sm_data_debug_signals_o[353]` << 353) | (`sm_data_debug_signals_o[352]` << 352) | (`sm_data_debug_signals_o[351]` << 351) | (`sm_data_debug_signals_o[350]` << 350) | (`sm_data_debug_signals_o[349]` << 349) | (`sm_data_debug_signals_o[348]` << 348) | (`sm_data_debug_signals_o[347]` << 347) | (`sm_data_debug_signals_o[346]` << 346) | (`sm_data_debug_signals_o[345]` << 345) | (`sm_data_debug_signals_o[344]` << 344) | (`sm_data_debug_signals_o[343]` << 343) | (`sm_data_debug_signals_o[342]` << 342) | (`sm_data_debug_signals_o[341]` << 341) | (`sm_data_debug_signals_o[340]` << 340) | (`sm_data_debug_signals_o[339]` << 339) | (`sm_data_debug_signals_o[338]` << 338) | (`sm_data_debug_signals_o[337]` << 337) | (`sm_data_debug_signals_o[336]` << 336) | (`sm_data_debug_signals_o[335]` << 335) | (`sm_data_debug_signals_o[334]` << 334) | (`sm_data_debug_signals_o[333]` << 333) | (`sm_data_debug_signals_o[332]` << 332) | (`sm_data_debug_signals_o[331]` << 331) | (`sm_data_debug_signals_o[330]` << 330) | (`sm_data_debug_signals_o[329]` << 329) | (`sm_data_debug_signals_o[328]` << 328) | (`sm_data_debug_signals_o[327]` << 327) | (`sm_data_debug_signals_o[326]` << 326) | (`sm_data_debug_signals_o[325]` << 325) | (`sm_data_debug_signals_o[324]` << 324) | (`sm_data_debug_signals_o[323]` << 323) | (`sm_data_debug_signals_o[322]` << 322) | (`sm_data_debug_signals_o[321]` << 321) | (`sm_data_debug_signals_o[320]` << 320) | (`sm_data_debug_signals_o[319]` << 319) | (`sm_data_debug_signals_o[318]` << 318) | (`sm_data_debug_signals_o[317]` << 317) | (`sm_data_debug_signals_o[316]` << 316) | (`sm_data_debug_signals_o[315]` << 315) | (`sm_data_debug_signals_o[314]` << 314) | (`sm_data_debug_signals_o[313]` << 313) | (`sm_data_debug_signals_o[312]` << 312) | (`sm_data_debug_signals_o[311]` << 311) | (`sm_data_debug_signals_o[310]` << 310) | (`sm_data_debug_signals_o[309]` << 309) | (`sm_data_debug_signals_o[308]` << 308) | (`sm_data_debug_signals_o[307]` << 307) | (`sm_data_debug_signals_o[306]` << 306) | (`sm_data_debug_signals_o[305]` << 305) | (`sm_data_debug_signals_o[304]` << 304) | (`sm_data_debug_signals_o[303]` << 303) | (`sm_data_debug_signals_o[302]` << 302) | (`sm_data_debug_signals_o[301]` << 301) | (`sm_data_debug_signals_o[300]` << 300) | (`sm_data_debug_signals_o[299]` << 299) | (`sm_data_debug_signals_o[298]` << 298) | (`sm_data_debug_signals_o[297]` << 297) | (`sm_data_debug_signals_o[296]` << 296) | (`sm_data_debug_signals_o[295]` << 295) | (`sm_data_debug_signals_o[294]` << 294) | (`sm_data_debug_signals_o[293]` << 293) | (`sm_data_debug_signals_o[292]` << 292) | (`sm_data_debug_signals_o[291]` << 291) | (`sm_data_debug_signals_o[290]` << 290) | (`sm_data_debug_signals_o[289]` << 289) | (`sm_data_debug_signals_o[288]` << 288) | (`sm_data_debug_signals_o[287]` << 287) | (`sm_data_debug_signals_o[286]` << 286) | (`sm_data_debug_signals_o[285]` << 285) | (`sm_data_debug_signals_o[284]` << 284) | (`sm_data_debug_signals_o[283]` << 283) | (`sm_data_debug_signals_o[282]` << 282) | (`sm_data_debug_signals_o[281]` << 281) | (`sm_data_debug_signals_o[280]` << 280) | (`sm_data_debug_signals_o[279]` << 279) | (`sm_data_debug_signals_o[278]` << 278) | (`sm_data_debug_signals_o[277]` << 277) | (`sm_data_debug_signals_o[276]` << 276) | (`sm_data_debug_signals_o[275]` << 275) | (`sm_data_debug_signals_o[274]` << 274) | (`sm_data_debug_signals_o[273]` << 273) | (`sm_data_debug_signals_o[272]` << 272) | (`sm_data_debug_signals_o[271]` << 271) | (`sm_data_debug_signals_o[270]` << 270) | (`sm_data_debug_signals_o[269]` << 269) | (`sm_data_debug_signals_o[268]` << 268) | (`sm_data_debug_signals_o[267]` << 267) | (`sm_data_debug_signals_o[266]` << 266) | (`sm_data_debug_signals_o[265]` << 265) | (`sm_data_debug_signals_o[264]` << 264) | (`sm_data_debug_signals_o[263]` << 263) | (`sm_data_debug_signals_o[262]` << 262) | (`sm_data_debug_signals_o[261]` << 261) | (`sm_data_debug_signals_o[260]` << 260) | (`sm_data_debug_signals_o[259]` << 259) | (`sm_data_debug_signals_o[258]` << 258) | (`sm_data_debug_signals_o[257]` << 257) | (`sm_data_debug_signals_o[256]` << 256) | (`sm_data_debug_signals_o[255]` << 255) | (`sm_data_debug_signals_o[254]` << 254) | (`sm_data_debug_signals_o[253]` << 253) | (`sm_data_debug_signals_o[252]` << 252) | (`sm_data_debug_signals_o[251]` << 251) | (`sm_data_debug_signals_o[250]` << 250) | (`sm_data_debug_signals_o[249]` << 249) | (`sm_data_debug_signals_o[248]` << 248) | (`sm_data_debug_signals_o[247]` << 247) | (`sm_data_debug_signals_o[246]` << 246) | (`sm_data_debug_signals_o[245]` << 245) | (`sm_data_debug_signals_o[244]` << 244) | (`sm_data_debug_signals_o[243]` << 243) | (`sm_data_debug_signals_o[242]` << 242) | (`sm_data_debug_signals_o[241]` << 241) | (`sm_data_debug_signals_o[240]` << 240) | (`sm_data_debug_signals_o[239]` << 239) | (`sm_data_debug_signals_o[238]` << 238) | (`sm_data_debug_signals_o[237]` << 237) | (`sm_data_debug_signals_o[236]` << 236) | (`sm_data_debug_signals_o[235]` << 235) | (`sm_data_debug_signals_o[234]` << 234) | (`sm_data_debug_signals_o[233]` << 233) | (`sm_data_debug_signals_o[232]` << 232) | (`sm_data_debug_signals_o[231]` << 231) | (`sm_data_debug_signals_o[230]` << 230) | (`sm_data_debug_signals_o[229]` << 229) | (`sm_data_debug_signals_o[228]` << 228) | (`sm_data_debug_signals_o[227]` << 227) | (`sm_data_debug_signals_o[226]` << 226) | (`sm_data_debug_signals_o[225]` << 225) | (`sm_data_debug_signals_o[224]` << 224) | (`sm_data_debug_signals_o[223]` << 223) | (`sm_data_debug_signals_o[222]` << 222) | (`sm_data_debug_signals_o[221]` << 221) | (`sm_data_debug_signals_o[220]` << 220) | (`sm_data_debug_signals_o[219]` << 219) | (`sm_data_debug_signals_o[218]` << 218) | (`sm_data_debug_signals_o[217]` << 217) | (`sm_data_debug_signals_o[216]` << 216) | (`sm_data_debug_signals_o[215]` << 215) | (`sm_data_debug_signals_o[214]` << 214) | (`sm_data_debug_signals_o[213]` << 213) | (`sm_data_debug_signals_o[212]` << 212) | (`sm_data_debug_signals_o[211]` << 211) | (`sm_data_debug_signals_o[210]` << 210) | (`sm_data_debug_signals_o[209]` << 209) | (`sm_data_debug_signals_o[208]` << 208) | (`sm_data_debug_signals_o[207]` << 207) | (`sm_data_debug_signals_o[206]` << 206) | (`sm_data_debug_signals_o[205]` << 205) | (`sm_data_debug_signals_o[204]` << 204) | (`sm_data_debug_signals_o[203]` << 203) | (`sm_data_debug_signals_o[202]` << 202) | (`sm_data_debug_signals_o[201]` << 201) | (`sm_data_debug_signals_o[200]` << 200) | (`sm_data_debug_signals_o[199]` << 199) | (`sm_data_debug_signals_o[198]` << 198) | (`sm_data_debug_signals_o[197]` << 197) | (`sm_data_debug_signals_o[196]` << 196) | (`sm_data_debug_signals_o[195]` << 195) | (`sm_data_debug_signals_o[194]` << 194) | (`sm_data_debug_signals_o[193]` << 193) | (`sm_data_debug_signals_o[192]` << 192) | (`sm_data_debug_signals_o[191]` << 191) | (`sm_data_debug_signals_o[190]` << 190) | (`sm_data_debug_signals_o[189]` << 189) | (`sm_data_debug_signals_o[188]` << 188) | (`sm_data_debug_signals_o[187]` << 187) | (`sm_data_debug_signals_o[186]` << 186) | (`sm_data_debug_signals_o[185]` << 185) | (`sm_data_debug_signals_o[184]` << 184) | (`sm_data_debug_signals_o[183]` << 183) | (`sm_data_debug_signals_o[182]` << 182) | (`sm_data_debug_signals_o[181]` << 181) | (`sm_data_debug_signals_o[180]` << 180) | (`sm_data_debug_signals_o[179]` << 179) | (`sm_data_debug_signals_o[178]` << 178) | (`sm_data_debug_signals_o[177]` << 177) | (`sm_data_debug_signals_o[176]` << 176) | (`sm_data_debug_signals_o[175]` << 175) | (`sm_data_debug_signals_o[174]` << 174) | (`sm_data_debug_signals_o[173]` << 173) | (`sm_data_debug_signals_o[172]` << 172) | (`sm_data_debug_signals_o[171]` << 171) | (`sm_data_debug_signals_o[170]` << 170) | (`sm_data_debug_signals_o[169]` << 169) | (`sm_data_debug_signals_o[168]` << 168) | (`sm_data_debug_signals_o[167]` << 167) | (`sm_data_debug_signals_o[166]` << 166) | (`sm_data_debug_signals_o[165]` << 165) | (`sm_data_debug_signals_o[164]` << 164) | (`sm_data_debug_signals_o[163]` << 163) | (`sm_data_debug_signals_o[162]` << 162) | (`sm_data_debug_signals_o[161]` << 161) | (`sm_data_debug_signals_o[160]` << 160) | (`sm_data_debug_signals_o[159]` << 159) | (`sm_data_debug_signals_o[158]` << 158) | (`sm_data_debug_signals_o[157]` << 157) | (`sm_data_debug_signals_o[156]` << 156) | (`sm_data_debug_signals_o[155]` << 155) | (`sm_data_debug_signals_o[154]` << 154) | (`sm_data_debug_signals_o[153]` << 153) | (`sm_data_debug_signals_o[152]` << 152) | (`sm_data_debug_signals_o[151]` << 151) | (`sm_data_debug_signals_o[150]` << 150) | (`sm_data_debug_signals_o[149]` << 149) | (`sm_data_debug_signals_o[148]` << 148) | (`sm_data_debug_signals_o[147]` << 147) | (`sm_data_debug_signals_o[146]` << 146) | (`sm_data_debug_signals_o[145]` << 145) | (`sm_data_debug_signals_o[144]` << 144) | (`sm_data_debug_signals_o[143]` << 143) | (`sm_data_debug_signals_o[142]` << 142) | (`sm_data_debug_signals_o[141]` << 141) | (`sm_data_debug_signals_o[140]` << 140) | (`sm_data_debug_signals_o[139]` << 139) | (`sm_data_debug_signals_o[138]` << 138) | (`sm_data_debug_signals_o[137]` << 137) | (`sm_data_debug_signals_o[136]` << 136) | (`sm_data_debug_signals_o[135]` << 135) | (`sm_data_debug_signals_o[134]` << 134) | (`sm_data_debug_signals_o[133]` << 133) | (`sm_data_debug_signals_o[132]` << 132) | (`sm_data_debug_signals_o[131]` << 131) | (`sm_data_debug_signals_o[130]` << 130) | (`sm_data_debug_signals_o[129]` << 129) | (`sm_data_debug_signals_o[128]` << 128) | (`sm_data_debug_signals_o[127]` << 127) | (`sm_data_debug_signals_o[126]` << 126) | (`sm_data_debug_signals_o[125]` << 125) | (`sm_data_debug_signals_o[124]` << 124) | (`sm_data_debug_signals_o[123]` << 123) | (`sm_data_debug_signals_o[122]` << 122) | (`sm_data_debug_signals_o[121]` << 121) | (`sm_data_debug_signals_o[120]` << 120) | (`sm_data_debug_signals_o[119]` << 119) | (`sm_data_debug_signals_o[118]` << 118) | (`sm_data_debug_signals_o[117]` << 117) | (`sm_data_debug_signals_o[116]` << 116) | (`sm_data_debug_signals_o[115]` << 115) | (`sm_data_debug_signals_o[114]` << 114) | (`sm_data_debug_signals_o[113]` << 113) | (`sm_data_debug_signals_o[112]` << 112) | (`sm_data_debug_signals_o[111]` << 111) | (`sm_data_debug_signals_o[110]` << 110) | (`sm_data_debug_signals_o[109]` << 109) | (`sm_data_debug_signals_o[108]` << 108) | (`sm_data_debug_signals_o[107]` << 107) | (`sm_data_debug_signals_o[106]` << 106) | (`sm_data_debug_signals_o[105]` << 105) | (`sm_data_debug_signals_o[104]` << 104) | (`sm_data_debug_signals_o[103]` << 103) | (`sm_data_debug_signals_o[102]` << 102) | (`sm_data_debug_signals_o[101]` << 101) | (`sm_data_debug_signals_o[100]` << 100) | (`sm_data_debug_signals_o[99]` << 99) | (`sm_data_debug_signals_o[98]` << 98) | (`sm_data_debug_signals_o[97]` << 97) | (`sm_data_debug_signals_o[96]` << 96) | (`sm_data_debug_signals_o[95]` << 95) | (`sm_data_debug_signals_o[94]` << 94) | (`sm_data_debug_signals_o[93]` << 93) | (`sm_data_debug_signals_o[92]` << 92) | (`sm_data_debug_signals_o[91]` << 91) | (`sm_data_debug_signals_o[90]` << 90) | (`sm_data_debug_signals_o[89]` << 89) | (`sm_data_debug_signals_o[88]` << 88) | (`sm_data_debug_signals_o[87]` << 87) | (`sm_data_debug_signals_o[86]` << 86) | (`sm_data_debug_signals_o[85]` << 85) | (`sm_data_debug_signals_o[84]` << 84) | (`sm_data_debug_signals_o[83]` << 83) | (`sm_data_debug_signals_o[82]` << 82) | (`sm_data_debug_signals_o[81]` << 81) | (`sm_data_debug_signals_o[80]` << 80) | (`sm_data_debug_signals_o[79]` << 79) | (`sm_data_debug_signals_o[78]` << 78) | (`sm_data_debug_signals_o[77]` << 77) | (`sm_data_debug_signals_o[76]` << 76) | (`sm_data_debug_signals_o[75]` << 75) | (`sm_data_debug_signals_o[74]` << 74) | (`sm_data_debug_signals_o[73]` << 73) | (`sm_data_debug_signals_o[72]` << 72) | (`sm_data_debug_signals_o[71]` << 71) | (`sm_data_debug_signals_o[70]` << 70) | (`sm_data_debug_signals_o[69]` << 69) | (`sm_data_debug_signals_o[68]` << 68) | (`sm_data_debug_signals_o[67]` << 67) | (`sm_data_debug_signals_o[66]` << 66) | (`sm_data_debug_signals_o[65]` << 65) | (`sm_data_debug_signals_o[64]` << 64) | (`sm_data_debug_signals_o[63]` << 63) | (`sm_data_debug_signals_o[62]` << 62) | (`sm_data_debug_signals_o[61]` << 61) | (`sm_data_debug_signals_o[60]` << 60) | (`sm_data_debug_signals_o[59]` << 59) | (`sm_data_debug_signals_o[58]` << 58) | (`sm_data_debug_signals_o[57]` << 57) | (`sm_data_debug_signals_o[56]` << 56) | (`sm_data_debug_signals_o[55]` << 55) | (`sm_data_debug_signals_o[54]` << 54) | (`sm_data_debug_signals_o[53]` << 53) | (`sm_data_debug_signals_o[52]` << 52) | (`sm_data_debug_signals_o[51]` << 51) | (`sm_data_debug_signals_o[50]` << 50) | (`sm_data_debug_signals_o[49]` << 49) | (`sm_data_debug_signals_o[48]` << 48) | (`sm_data_debug_signals_o[47]` << 47) | (`sm_data_debug_signals_o[46]` << 46) | (`sm_data_debug_signals_o[45]` << 45) | (`sm_data_debug_signals_o[44]` << 44) | (`sm_data_debug_signals_o[43]` << 43) | (`sm_data_debug_signals_o[42]` << 42) | (`sm_data_debug_signals_o[41]` << 41) | (`sm_data_debug_signals_o[40]` << 40) | (`sm_data_debug_signals_o[39]` << 39) | (`sm_data_debug_signals_o[38]` << 38) | (`sm_data_debug_signals_o[37]` << 37) | (`sm_data_debug_signals_o[36]` << 36) | (`sm_data_debug_signals_o[35]` << 35) | (`sm_data_debug_signals_o[34]` << 34) | (`sm_data_debug_signals_o[33]` << 33) | (`sm_data_debug_signals_o[32]` << 32) | (`sm_data_debug_signals_o[31]` << 31) | (`sm_data_debug_signals_o[30]` << 30) | (`sm_data_debug_signals_o[29]` << 29) | (`sm_data_debug_signals_o[28]` << 28) | (`sm_data_debug_signals_o[27]` << 27) | (`sm_data_debug_signals_o[26]` << 26) | (`sm_data_debug_signals_o[25]` << 25) | (`sm_data_debug_signals_o[24]` << 24) | (`sm_data_debug_signals_o[23]` << 23) | (`sm_data_debug_signals_o[22]` << 22) | (`sm_data_debug_signals_o[21]` << 21) | (`sm_data_debug_signals_o[20]` << 20) | (`sm_data_debug_signals_o[19]` << 19) | (`sm_data_debug_signals_o[18]` << 18) | (`sm_data_debug_signals_o[17]` << 17) | (`sm_data_debug_signals_o[16]` << 16) | (`sm_data_debug_signals_o[15]` << 15) | (`sm_data_debug_signals_o[14]` << 14) | (`sm_data_debug_signals_o[13]` << 13) | (`sm_data_debug_signals_o[12]` << 12) | (`sm_data_debug_signals_o[11]` << 11) | (`sm_data_debug_signals_o[10]` << 10) | (`sm_data_debug_signals_o[9]` << 9) | (`sm_data_debug_signals_o[8]` << 8) | (`sm_data_debug_signals_o[7]` << 7) | (`sm_data_debug_signals_o[6]` << 6) | (`sm_data_debug_signals_o[5]` << 5) | (`sm_data_debug_signals_o[4]` << 4) | (`sm_data_debug_signals_o[3]` << 3) | (`sm_data_debug_signals_o[2]` << 2) | (`sm_data_debug_signals_o[1]` << 1) | `sm_data_debug_signals_o[0]`
   th_id_complete_o = th_id_complete_o__wtmp
   meta_read_mux_state = meta_read_mux_state__wtmp
   meta_read_mux_match = meta_read_mux_match__wtmp
   new_coh_d = new_coh_d__wtmp
   abort_operation_d = abort_operation_d__wtmp
-  meta_write_req_o.set_idx = `meta_write_req_o__bpo.set_idx`
-  meta_write_req_o.way_en = `meta_write_req_o__bpo.way_en`
-  meta_write_req_o.data.coh_state = `meta_write_req_o__bpo.data.coh_state`
-  meta_write_req_o.data.tag = `meta_write_req_o__bpo.data.tag`
-  writeback_req_o.tag = `writeback_req_o__bpo.tag__w1`
-  writeback_req_o.set = `writeback_req_o__bpo.set__w1`
-  writeback_req_o.way_en = `writeback_req_o__bpo.way_en__w1`
+  const t2047 = `meta_write_req_o__bpo.set_idx`
+  `meta_write_req_o__bpr.set_idx` = t2047
+  meta_write_req_o.set_idx = t2047
+  const t2048 = `meta_write_req_o__bpo.way_en`
+  `meta_write_req_o__bpr.way_en` = t2048
+  meta_write_req_o.way_en = t2048
+  const t2049 = `meta_write_req_o__bpo.data.coh_state`
+  `meta_write_req_o__bpr.data.coh_state` = t2049
+  meta_write_req_o.data.coh_state = t2049
+  const t2050 = `meta_write_req_o__bpo.data.tag`
+  `meta_write_req_o__bpr.data.tag` = t2050
+  meta_write_req_o.data.tag = t2050
+  const t2051 = `writeback_req_o__bpo.tag__w1`
+  `writeback_req_o__bpr.tag` = t2051
+  writeback_req_o.tag = t2051
+  const t2052 = `writeback_req_o__bpo.set__w1`
+  `writeback_req_o__bpr.set` = t2052
+  writeback_req_o.set = t2052
+  const t2053 = `writeback_req_o__bpo.way_en__w1`
+  `writeback_req_o__bpr.way_en` = t2053
+  writeback_req_o.way_en = t2053
+  `writeback_req_o__bpr.is_tbox` = 0
   writeback_req_o.is_tbox = 0
+  `writeback_req_o__bpr.mem_idx` = 0
   writeback_req_o.mem_idx = 0
+  `writeback_req_o__bpr.addr_low` = 0
   writeback_req_o.addr_low = 0
-  s0_co_pf_req_o.addr = `s0_co_pf_req_o__bpo.addr__w1`
-  s0_co_pf_req_o.addr_msb_err = `s0_co_pf_req_o__bpo.addr_msb_err__w1`
+  const t2057 = `s0_co_pf_req_o__bpo.addr__w1`
+  `s0_co_pf_req_o__bpr.addr` = t2057
+  s0_co_pf_req_o.addr = t2057
+  const t2058 = `s0_co_pf_req_o__bpo.addr_msb_err__w1`
+  `s0_co_pf_req_o__bpr.addr_msb_err` = t2058
+  s0_co_pf_req_o.addr_msb_err = t2058
+  `s0_co_pf_req_o__bpr.set` = 0
   s0_co_pf_req_o.set = 0
+  `s0_co_pf_req_o__bpr.phys` = 0
   s0_co_pf_req_o.phys = 0
+  `s0_co_pf_req_o__bpr.misaligned` = 0
   s0_co_pf_req_o.misaligned = 0
+  `s0_co_pf_req_o__bpr.misaligned_2nd` = 0
   s0_co_pf_req_o.misaligned_2nd = 0
+  `s0_co_pf_req_o__bpr.dest.fp` = 0
   s0_co_pf_req_o.dest.fp = 0
+  `s0_co_pf_req_o__bpr.dest.addr` = 0
   s0_co_pf_req_o.dest.addr = 0
-  s0_co_pf_req_o.dest.thread_id = `s0_co_pf_req_o__bpo.dest.thread_id__w1`
-  s0_co_pf_req_o.cmd = `s0_co_pf_req_o__bpo.cmd__w1`
-  s0_co_pf_req_o.typ = `s0_co_pf_req_o__bpo.typ__w1`
+  const t2065 = `s0_co_pf_req_o__bpo.dest.thread_id__w1`
+  `s0_co_pf_req_o__bpr.dest.thread_id` = t2065
+  s0_co_pf_req_o.dest.thread_id = t2065
+  const t2066 = `s0_co_pf_req_o__bpo.cmd__w1`
+  `s0_co_pf_req_o__bpr.cmd` = t2066
+  s0_co_pf_req_o.cmd = t2066
+  const t2067 = `s0_co_pf_req_o__bpo.typ__w1`
+  `s0_co_pf_req_o__bpr.typ` = t2067
+  s0_co_pf_req_o.typ = t2067
+  `s0_co_pf_req_o__bpr.gsc_cnt` = 0
   s0_co_pf_req_o.gsc_cnt = 0
+  `s0_co_pf_req_o__bpr.ps_mask` = 0
   s0_co_pf_req_o.ps_mask = 0
+  `s0_co_pf_req_o__bpr.data` = 0
   s0_co_pf_req_o.data = 0
+  `s0_co_pf_req_o__bpr.replay` = 0
   s0_co_pf_req_o.replay = 0
+  `s0_co_pf_req_o__bpr.replay_entry` = 0
   s0_co_pf_req_o.replay_entry = 0
+  `s0_co_pf_req_o__bpr.replay_age` = 0
   s0_co_pf_req_o.replay_age = 0
+  `s0_co_pf_req_o__bpr.cache_op` = 1
   s0_co_pf_req_o.cache_op = 1
+  `s0_co_pf_req_o__bpr.buf_alloc` = 0
   s0_co_pf_req_o.buf_alloc = 0
+  `s0_co_pf_req_o__bpr.buf_id` = 0
   s0_co_pf_req_o.buf_id = 0
+  `s0_co_pf_req_o__bpr.cacheable` = 1
   s0_co_pf_req_o.cacheable = 1
+  `s0_co_pf_req_o__bpr.chunk_read` = 0
   s0_co_pf_req_o.chunk_read = 0
+  `s0_co_pf_req_o__bpr.uc_load_2nd` = 0
   s0_co_pf_req_o.uc_load_2nd = 0
+  `s0_co_pf_req_o__bpr.uc_load_ok` = 0
   s0_co_pf_req_o.uc_load_ok = 0
+  `s0_co_pf_req_o__bpr.miss_fill_ok` = 0
   s0_co_pf_req_o.miss_fill_ok = 0
+  `s0_co_pf_req_o__bpr.gsc32_idx` = 0
   s0_co_pf_req_o.gsc32_idx = 0
-  s0_co_pf_req_o.vm_sel = `s0_co_pf_req_o__bpo.vm_sel__w1`
+  const t2083 = `s0_co_pf_req_o__bpo.vm_sel__w1`
+  `s0_co_pf_req_o__bpr.vm_sel` = t2083
+  s0_co_pf_req_o.vm_sel = t2083
+  `s0_co_pf_req_o__bpr.mem_global` = 0
   s0_co_pf_req_o.mem_global = 0
-  cache_op_req_byp_o.cmd = `cache_op_req_byp_o__bpo.cmd__w1`
-  cache_op_req_byp_o.start_level = `cache_op_req_byp_o__bpo.start_level__w1`
-  cache_op_req_byp_o.dest_level = `cache_op_req_byp_o__bpo.dest_level__w1`
+  const t2085 = `cache_op_req_byp_o__bpo.cmd__w1`
+  `cache_op_req_byp_o__bpr.cmd` = t2085
+  cache_op_req_byp_o.cmd = t2085
+  const t2086 = `cache_op_req_byp_o__bpo.start_level__w1`
+  `cache_op_req_byp_o__bpr.start_level` = t2086
+  cache_op_req_byp_o.start_level = t2086
+  const t2087 = `cache_op_req_byp_o__bpo.dest_level__w1`
+  `cache_op_req_byp_o__bpr.dest_level` = t2087
+  cache_op_req_byp_o.dest_level = t2087
+  `cache_op_req_byp_o__bpr.count` = 0
   cache_op_req_byp_o.count = 0
-  cache_op_req_byp_o.addr = `cache_op_req_byp_o__bpo.addr__w1`
+  const t2089 = `cache_op_req_byp_o__bpo.addr__w1`
+  `cache_op_req_byp_o__bpr.addr` = t2089
+  cache_op_req_byp_o.addr = t2089
+  `cache_op_req_byp_o__bpr.way` = 0
   cache_op_req_byp_o.way = 0
-  cache_op_req_byp_o.stride = `cache_op_req_byp_o__bpo.stride__w1`
-  cache_op_req_byp_o.thread_id = `cache_op_req_byp_o__bpo.thread_id__w1`
+  const t2091 = `cache_op_req_byp_o__bpo.stride__w1`
+  `cache_op_req_byp_o__bpr.stride` = t2091
+  cache_op_req_byp_o.stride = t2091
+  const t2092 = `cache_op_req_byp_o__bpo.thread_id__w1`
+  `cache_op_req_byp_o__bpr.thread_id` = t2092
+  cache_op_req_byp_o.thread_id = t2092
+  `cache_op_req_byp_o__bpr.use_tmask` = 0
   cache_op_req_byp_o.use_tmask = 0
+  `cache_op_req_byp_o__bpr.tmask_ready` = 0
   cache_op_req_byp_o.tmask_ready = 0
+  `cache_op_req_byp_o__bpr.tmask_bits` = 0
   cache_op_req_byp_o.tmask_bits = 0
+  `cache_op_req_byp_o__bpr.l2_scp_dest` = 0
   cache_op_req_byp_o.l2_scp_dest = 0
+  `cache_op_req_byp_o__bpr.l2_scp_fill` = 0
   cache_op_req_byp_o.l2_scp_fill = 0
-  meta_read_bid_o = unsigned((state_q == minion_dcache_pkg.CacheOpMetaRead) and (meta_read_valid_o == 0))
-  meta_read_phys_o = unsigned(req_q#[14..=17] == minion_pkg.cache_op_Lock_SW)
+  meta_read_bid_o = _b2i_51
+  meta_read_phys_o = _b2i_59
   meta_read_force_set_o = is_set_way_op
-  meta_read_thread_id_o = (req_q >> 11) & 1
-  meta_read_skip_pma_o = unsigned((state_q == minion_dcache_pkg.CacheOpMetaRespWait) and (is_set_way_op != 0))
+  meta_read_thread_id_o = req_q#[11..<12]
+  meta_read_skip_pma_o = _b2i_60
   meta_read_addr_o = meta_read_addr_o__w1
   meta_read_addr_msb_err_o = _mux_58
-  meta_write_valid_next_o = unsigned((state_d == minion_dcache_pkg.CacheOpMetaWrite) and (abort_operation_q == 0))
+  meta_write_valid_next_o = _b2i_67
   meta_write_valid_o = meta_write_valid_o__w1
-  nack_set_valid_o = unsigned((state_meta_resp_qual__w1 != 0) or (state_q == minion_dcache_pkg.CacheOpWritebackReq) or (state_q == minion_dcache_pkg.CacheOpWritebackResp) or (state_q == minion_dcache_pkg.CacheOpMetaWrite) or (state_q == minion_dcache_pkg.CacheOpMetaWriteLock) or (clear_line_on_q != 0))
+  nack_set_valid_o = _b2i_115
   nack_set_value_o = meta_read_set
-  writeback_valid_o = unsigned((state_q == minion_dcache_pkg.CacheOpWritebackReq) and (abort_operation_q == 0))
-  id_co_pf_bid_o = unsigned((state_q == minion_dcache_pkg.CacheOpL1Prefetch) and (id_rq_full_i == 0) and (s0_co_pf_valid_o == 0))
+  writeback_valid_o = _b2i_61
+  id_co_pf_bid_o = _b2i_27
   cache_op_valid_byp_o = cache_op_valid_byp_o__w1
   da_clear_en_o = da_clear_en_o__w1
   da_clear_set_o = lock_set
   da_clear_way_o = lock_way
-  err_flags_o = err_flags_o__w2
   csr_debug_signals_o = csr_debug_signals_o__w1
   sm_match_debug_signals_o = sm_match_debug_signals_o__w1
   sm_filter_debug_signals_o = sm_filter_debug_signals_o__w1
-  sm_data_debug_signals_o = sm_data_debug_signals_o__w4
 }

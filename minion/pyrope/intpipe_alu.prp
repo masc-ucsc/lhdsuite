@@ -1,333 +1,335 @@
 const minion_pkg = import("minion_pkg")
 
-pub comb intpipe_alu::[timecheck=false](dw:u1, fn:u5, in1:minion_pkg.XregSize_T, in2:minion_pkg.XregSize_T) -> (out:minion_pkg.XregSize_T, adder_out:minion_pkg.XregSize_T) {
-  wire in2_inv:u64
-  wire in1_xor_in2:u64
-  wire is_sub:u1
-  wire cmp_inverted:u1
-  wire cmp_equal:u1
-  wire cmp_unsigned:u1
-  wire is_cmp:u1
-  wire shift_in_ext:u128
-  wire shift_out_ext:u64
-  wire shift_in:u64
-  wire shift_in_mux:u64
-  wire shift_in_hi_32:u32
-  wire shift_in_hi:u32
-  wire shift_amount:u6
-  wire adder_out:u64
-  mut reverse_bits:u64 = 0
-  mut bitmixb_tmp:u16 = 0
-  mut low_sel_bit:u5 = 0
-  mut high_sel_bit:u5 = 0
-  const XregMsb = (minion_pkg.XregSize - 1)#[0..=31]
+pub comb intpipe_alu::[timecheck=false](dw:U1, fn:U5, in1:minion_pkg.XregSize_T, in2:minion_pkg.XregSize_T) -> (out:minion_pkg.XregSize_T, adder_out:minion_pkg.XregSize_T) {
+  wire in2_inv:U64 = nil
+  wire in1_xor_in2:U64 = nil
+  wire is_sub:U1 = nil
+  wire cmp_inverted:U1 = nil
+  wire cmp_equal:U1 = nil
+  wire cmp_unsigned:U1 = nil
+  wire is_cmp:U1 = nil
+  wire shift_in_ext:U128 = nil
+  wire shift_out_ext:U64 = nil
+  wire shift_in:U64 = nil
+  wire shift_in_mux:U64 = nil
+  wire shift_in_hi_32:U32 = nil
+  wire shift_in_hi:U32 = nil
+  wire shift_amount:U6 = nil
+  wire adder_out:U64 = nil
+  mut reverse_bits:U64 = 0
+  mut bitmixb_tmp:U16 = 0
+  mut low_sel_bit:U5 = 0
+  mut high_sel_bit:U5 = 0
+  const XregMsb = (minion_pkg.XregSize - 1)#[0..<32]
   out = 0sb?
-  is_sub = (fn >> 3) & 1
-  mut _mux_1:u64 = if is_sub != 0 { (~in2)#[0..=63] } else { in2 }
+  is_sub = fn#[3..<4]
+  mut _mux_1:U64 = if is_sub != 0 { ~in2 } else { in2#[0..<0x40] }
   in2_inv = _mux_1
-  adder_out = ((in1 + in2_inv)#[0..=63] + is_sub)#[0..=63]
-  in1_xor_in2 = in1 ^ in2_inv
-  is_cmp = unsigned((fn == minion_pkg.AluSeq) or (fn == minion_pkg.AluSne) or (fn >= minion_pkg.AluSlt))
+  adder_out = ((in1 + in2_inv)#[0..<0x40] + is_sub)#[0..<0x40]
+  in1_xor_in2 = (in1 ^ in2_inv)#[0..<0x40]
+  is_cmp = U1((fn == minion_pkg.AluSeq) or (fn == minion_pkg.AluSne) or (fn >= minion_pkg.AluSlt))
   cmp_inverted = fn & 1
-  cmp_unsigned = (fn >> 1) & 1
-  cmp_equal = unsigned(((fn >> 3) & 1) == 0)
-  mut _mux_5:u1 = if cmp_unsigned != 0 { (in2 >> XregMsb) & 1 } else { (in1 >> XregMsb) & 1 }
-  mut _mux_6:u1 = if ((in1 >> XregMsb) & 1) == ((in2 >> XregMsb) & 1) { (adder_out >> XregMsb) & 1 } else { _mux_5 & 1 }
-  mut _mux_7:u1 = if cmp_equal != 0 { unsigned(in1_xor_in2 == 0) & 1 } else { _mux_6 & 1 }
-  mut _rep_9:u32 = if (unsigned((is_sub != 0) and (((in1 >> 31) & 1) != 0)) & 1) != 0 { 0xffffffff } else { 0 }
+  cmp_unsigned = fn#[1..<2]
+  cmp_equal = U1(fn#[3..<4] == 0)
+  mut _b2i_4 = if in1_xor_in2 == 0 { 1 } else { 0 }
+  mut _mux_5:U1 = if cmp_unsigned != 0 { (in2 >> XregMsb) & 1 } else { (in1 >> XregMsb) & 1 }
+  mut _mux_6:U1 = if ((in1 >> XregMsb) & 1) == ((in2 >> XregMsb) & 1) { (adder_out >> XregMsb) & 1 } else { _mux_5 & 1 }
+  mut _mux_7:U1 = if cmp_equal != 0 { _b2i_4 & 1 } else { _mux_6 & 1 }
+  mut _rep_9:U32 = if (U1((is_sub != 0) and (((in1 >> 31) & 1) != 0)) & 1) != 0 { 0xffffffff } else { 0 }
   shift_in_hi_32 = _rep_9
-  mut _mux_10:u32 = if dw != 0 { in1#[32..=63] } else { shift_in_hi_32 }
+  mut _mux_10:U32 = if dw != 0 { in1#[32..<0x40] } else { shift_in_hi_32#[0..<32] }
   shift_in_hi = _mux_10
-  shift_in = (shift_in_hi << 32) | in1#[0..=31]
-  shift_amount = ((unsigned((((in2 >> 5) & 1) != 0) and (dw != 0)) & 1) << 5) | in2#[0..=4]
+  shift_in = (shift_in_hi#[0..<32] << 32) | in1#[0..<32]
+  shift_amount = ((U1((in2#[5..<6] != 0) and (dw != 0)) & 1) << 5) | in2#[0..<5]
   const in__w1 = shift_in
   reverse_bits = 0sb?
   mut reverse_bits__w1 = reverse_bits
-  reverse_bits__w1#[0] = (in__w1 >> (XregMsb - 0)#[0..=31]) & 1
+  reverse_bits__w1#[0..<1] = (in__w1 >> (XregMsb - 0)#[0..<32]) & 1
   mut reverse_bits__w2 = reverse_bits__w1
-  reverse_bits__w2#[1] = (in__w1 >> (XregMsb - 1)#[0..=31]) & 1
+  reverse_bits__w2#[1..<2] = (in__w1 >> (XregMsb - 1)#[0..<32]) & 1
   mut reverse_bits__w3 = reverse_bits__w2
-  reverse_bits__w3#[2] = (in__w1 >> (XregMsb - 2)#[0..=31]) & 1
+  reverse_bits__w3#[2..<3] = (in__w1 >> (XregMsb - 2)#[0..<32]) & 1
   mut reverse_bits__w4 = reverse_bits__w3
-  reverse_bits__w4#[3] = (in__w1 >> (XregMsb - 3)#[0..=31]) & 1
+  reverse_bits__w4#[3..<4] = (in__w1 >> (XregMsb - 3)#[0..<32]) & 1
   mut reverse_bits__w5 = reverse_bits__w4
-  reverse_bits__w5#[4] = (in__w1 >> (XregMsb - 4)#[0..=31]) & 1
+  reverse_bits__w5#[4..<5] = (in__w1 >> (XregMsb - 4)#[0..<32]) & 1
   mut reverse_bits__w6 = reverse_bits__w5
-  reverse_bits__w6#[5] = (in__w1 >> (XregMsb - 5)#[0..=31]) & 1
+  reverse_bits__w6#[5..<6] = (in__w1 >> (XregMsb - 5)#[0..<32]) & 1
   mut reverse_bits__w7 = reverse_bits__w6
-  reverse_bits__w7#[6] = (in__w1 >> (XregMsb - 6)#[0..=31]) & 1
+  reverse_bits__w7#[6..<7] = (in__w1 >> (XregMsb - 6)#[0..<32]) & 1
   mut reverse_bits__w8 = reverse_bits__w7
-  reverse_bits__w8#[7] = (in__w1 >> (XregMsb - 7)#[0..=31]) & 1
+  reverse_bits__w8#[7..<8] = (in__w1 >> (XregMsb - 7)#[0..<32]) & 1
   mut reverse_bits__w9 = reverse_bits__w8
-  reverse_bits__w9#[8] = (in__w1 >> (XregMsb - 8)#[0..=31]) & 1
+  reverse_bits__w9#[8..<9] = (in__w1 >> (XregMsb - 8)#[0..<32]) & 1
   mut reverse_bits__w10 = reverse_bits__w9
-  reverse_bits__w10#[9] = (in__w1 >> (XregMsb - 9)#[0..=31]) & 1
+  reverse_bits__w10#[9..<10] = (in__w1 >> (XregMsb - 9)#[0..<32]) & 1
   mut reverse_bits__w11 = reverse_bits__w10
-  reverse_bits__w11#[10] = (in__w1 >> (XregMsb - 10)#[0..=31]) & 1
+  reverse_bits__w11#[10..<11] = (in__w1 >> (XregMsb - 10)#[0..<32]) & 1
   mut reverse_bits__w12 = reverse_bits__w11
-  reverse_bits__w12#[11] = (in__w1 >> (XregMsb - 11)#[0..=31]) & 1
+  reverse_bits__w12#[11..<12] = (in__w1 >> (XregMsb - 11)#[0..<32]) & 1
   mut reverse_bits__w13 = reverse_bits__w12
-  reverse_bits__w13#[12] = (in__w1 >> (XregMsb - 12)#[0..=31]) & 1
+  reverse_bits__w13#[12..<13] = (in__w1 >> (XregMsb - 12)#[0..<32]) & 1
   mut reverse_bits__w14 = reverse_bits__w13
-  reverse_bits__w14#[13] = (in__w1 >> (XregMsb - 13)#[0..=31]) & 1
+  reverse_bits__w14#[13..<14] = (in__w1 >> (XregMsb - 13)#[0..<32]) & 1
   mut reverse_bits__w15 = reverse_bits__w14
-  reverse_bits__w15#[14] = (in__w1 >> (XregMsb - 14)#[0..=31]) & 1
+  reverse_bits__w15#[14..<15] = (in__w1 >> (XregMsb - 14)#[0..<32]) & 1
   mut reverse_bits__w16 = reverse_bits__w15
-  reverse_bits__w16#[15] = (in__w1 >> (XregMsb - 15)#[0..=31]) & 1
+  reverse_bits__w16#[15..<16] = (in__w1 >> (XregMsb - 15)#[0..<32]) & 1
   mut reverse_bits__w17 = reverse_bits__w16
-  reverse_bits__w17#[16] = (in__w1 >> (XregMsb - 16)#[0..=31]) & 1
+  reverse_bits__w17#[16..<17] = (in__w1 >> (XregMsb - 16)#[0..<32]) & 1
   mut reverse_bits__w18 = reverse_bits__w17
-  reverse_bits__w18#[17] = (in__w1 >> (XregMsb - 17)#[0..=31]) & 1
+  reverse_bits__w18#[17..<18] = (in__w1 >> (XregMsb - 17)#[0..<32]) & 1
   mut reverse_bits__w19 = reverse_bits__w18
-  reverse_bits__w19#[18] = (in__w1 >> (XregMsb - 18)#[0..=31]) & 1
+  reverse_bits__w19#[18..<19] = (in__w1 >> (XregMsb - 18)#[0..<32]) & 1
   mut reverse_bits__w20 = reverse_bits__w19
-  reverse_bits__w20#[19] = (in__w1 >> (XregMsb - 19)#[0..=31]) & 1
+  reverse_bits__w20#[19..<20] = (in__w1 >> (XregMsb - 19)#[0..<32]) & 1
   mut reverse_bits__w21 = reverse_bits__w20
-  reverse_bits__w21#[20] = (in__w1 >> (XregMsb - 20)#[0..=31]) & 1
+  reverse_bits__w21#[20..<21] = (in__w1 >> (XregMsb - 20)#[0..<32]) & 1
   mut reverse_bits__w22 = reverse_bits__w21
-  reverse_bits__w22#[21] = (in__w1 >> (XregMsb - 21)#[0..=31]) & 1
+  reverse_bits__w22#[21..<22] = (in__w1 >> (XregMsb - 21)#[0..<32]) & 1
   mut reverse_bits__w23 = reverse_bits__w22
-  reverse_bits__w23#[22] = (in__w1 >> (XregMsb - 22)#[0..=31]) & 1
+  reverse_bits__w23#[22..<23] = (in__w1 >> (XregMsb - 22)#[0..<32]) & 1
   mut reverse_bits__w24 = reverse_bits__w23
-  reverse_bits__w24#[23] = (in__w1 >> (XregMsb - 23)#[0..=31]) & 1
+  reverse_bits__w24#[23..<24] = (in__w1 >> (XregMsb - 23)#[0..<32]) & 1
   mut reverse_bits__w25 = reverse_bits__w24
-  reverse_bits__w25#[24] = (in__w1 >> (XregMsb - 24)#[0..=31]) & 1
+  reverse_bits__w25#[24..<25] = (in__w1 >> (XregMsb - 24)#[0..<32]) & 1
   mut reverse_bits__w26 = reverse_bits__w25
-  reverse_bits__w26#[25] = (in__w1 >> (XregMsb - 25)#[0..=31]) & 1
+  reverse_bits__w26#[25..<26] = (in__w1 >> (XregMsb - 25)#[0..<32]) & 1
   mut reverse_bits__w27 = reverse_bits__w26
-  reverse_bits__w27#[26] = (in__w1 >> (XregMsb - 26)#[0..=31]) & 1
+  reverse_bits__w27#[26..<27] = (in__w1 >> (XregMsb - 26)#[0..<32]) & 1
   mut reverse_bits__w28 = reverse_bits__w27
-  reverse_bits__w28#[27] = (in__w1 >> (XregMsb - 27)#[0..=31]) & 1
+  reverse_bits__w28#[27..<28] = (in__w1 >> (XregMsb - 27)#[0..<32]) & 1
   mut reverse_bits__w29 = reverse_bits__w28
-  reverse_bits__w29#[28] = (in__w1 >> (XregMsb - 28)#[0..=31]) & 1
+  reverse_bits__w29#[28..<29] = (in__w1 >> (XregMsb - 28)#[0..<32]) & 1
   mut reverse_bits__w30 = reverse_bits__w29
-  reverse_bits__w30#[29] = (in__w1 >> (XregMsb - 29)#[0..=31]) & 1
+  reverse_bits__w30#[29..<30] = (in__w1 >> (XregMsb - 29)#[0..<32]) & 1
   mut reverse_bits__w31 = reverse_bits__w30
-  reverse_bits__w31#[30] = (in__w1 >> (XregMsb - 30)#[0..=31]) & 1
+  reverse_bits__w31#[30..<31] = (in__w1 >> (XregMsb - 30)#[0..<32]) & 1
   mut reverse_bits__w32 = reverse_bits__w31
-  reverse_bits__w32#[31] = (in__w1 >> (XregMsb - 31)#[0..=31]) & 1
+  reverse_bits__w32#[31..<32] = (in__w1 >> (XregMsb - 31)#[0..<32]) & 1
   mut reverse_bits__w33 = reverse_bits__w32
-  reverse_bits__w33#[32] = (in__w1 >> (XregMsb - 32)#[0..=31]) & 1
+  reverse_bits__w33#[32..<33] = (in__w1 >> (XregMsb - 32)#[0..<32]) & 1
   mut reverse_bits__w34 = reverse_bits__w33
-  reverse_bits__w34#[33] = (in__w1 >> (XregMsb - 33)#[0..=31]) & 1
+  reverse_bits__w34#[33..<34] = (in__w1 >> (XregMsb - 33)#[0..<32]) & 1
   mut reverse_bits__w35 = reverse_bits__w34
-  reverse_bits__w35#[34] = (in__w1 >> (XregMsb - 34)#[0..=31]) & 1
+  reverse_bits__w35#[34..<35] = (in__w1 >> (XregMsb - 34)#[0..<32]) & 1
   mut reverse_bits__w36 = reverse_bits__w35
-  reverse_bits__w36#[35] = (in__w1 >> (XregMsb - 35)#[0..=31]) & 1
+  reverse_bits__w36#[35..<36] = (in__w1 >> (XregMsb - 35)#[0..<32]) & 1
   mut reverse_bits__w37 = reverse_bits__w36
-  reverse_bits__w37#[36] = (in__w1 >> (XregMsb - 36)#[0..=31]) & 1
+  reverse_bits__w37#[36..<37] = (in__w1 >> (XregMsb - 36)#[0..<32]) & 1
   mut reverse_bits__w38 = reverse_bits__w37
-  reverse_bits__w38#[37] = (in__w1 >> (XregMsb - 37)#[0..=31]) & 1
+  reverse_bits__w38#[37..<38] = (in__w1 >> (XregMsb - 37)#[0..<32]) & 1
   mut reverse_bits__w39 = reverse_bits__w38
-  reverse_bits__w39#[38] = (in__w1 >> (XregMsb - 38)#[0..=31]) & 1
+  reverse_bits__w39#[38..<39] = (in__w1 >> (XregMsb - 38)#[0..<32]) & 1
   mut reverse_bits__w40 = reverse_bits__w39
-  reverse_bits__w40#[39] = (in__w1 >> (XregMsb - 39)#[0..=31]) & 1
+  reverse_bits__w40#[39..<40] = (in__w1 >> (XregMsb - 39)#[0..<32]) & 1
   mut reverse_bits__w41 = reverse_bits__w40
-  reverse_bits__w41#[40] = (in__w1 >> (XregMsb - 40)#[0..=31]) & 1
+  reverse_bits__w41#[40..<41] = (in__w1 >> (XregMsb - 40)#[0..<32]) & 1
   mut reverse_bits__w42 = reverse_bits__w41
-  reverse_bits__w42#[41] = (in__w1 >> (XregMsb - 41)#[0..=31]) & 1
+  reverse_bits__w42#[41..<42] = (in__w1 >> (XregMsb - 41)#[0..<32]) & 1
   mut reverse_bits__w43 = reverse_bits__w42
-  reverse_bits__w43#[42] = (in__w1 >> (XregMsb - 42)#[0..=31]) & 1
+  reverse_bits__w43#[42..<43] = (in__w1 >> (XregMsb - 42)#[0..<32]) & 1
   mut reverse_bits__w44 = reverse_bits__w43
-  reverse_bits__w44#[43] = (in__w1 >> (XregMsb - 43)#[0..=31]) & 1
+  reverse_bits__w44#[43..<44] = (in__w1 >> (XregMsb - 43)#[0..<32]) & 1
   mut reverse_bits__w45 = reverse_bits__w44
-  reverse_bits__w45#[44] = (in__w1 >> (XregMsb - 44)#[0..=31]) & 1
+  reverse_bits__w45#[44..<45] = (in__w1 >> (XregMsb - 44)#[0..<32]) & 1
   mut reverse_bits__w46 = reverse_bits__w45
-  reverse_bits__w46#[45] = (in__w1 >> (XregMsb - 45)#[0..=31]) & 1
+  reverse_bits__w46#[45..<46] = (in__w1 >> (XregMsb - 45)#[0..<32]) & 1
   mut reverse_bits__w47 = reverse_bits__w46
-  reverse_bits__w47#[46] = (in__w1 >> (XregMsb - 46)#[0..=31]) & 1
+  reverse_bits__w47#[46..<47] = (in__w1 >> (XregMsb - 46)#[0..<32]) & 1
   mut reverse_bits__w48 = reverse_bits__w47
-  reverse_bits__w48#[47] = (in__w1 >> (XregMsb - 47)#[0..=31]) & 1
+  reverse_bits__w48#[47..<48] = (in__w1 >> (XregMsb - 47)#[0..<32]) & 1
   mut reverse_bits__w49 = reverse_bits__w48
-  reverse_bits__w49#[48] = (in__w1 >> (XregMsb - 48)#[0..=31]) & 1
+  reverse_bits__w49#[48..<49] = (in__w1 >> (XregMsb - 48)#[0..<32]) & 1
   mut reverse_bits__w50 = reverse_bits__w49
-  reverse_bits__w50#[49] = (in__w1 >> (XregMsb - 49)#[0..=31]) & 1
+  reverse_bits__w50#[49..<50] = (in__w1 >> (XregMsb - 49)#[0..<32]) & 1
   mut reverse_bits__w51 = reverse_bits__w50
-  reverse_bits__w51#[50] = (in__w1 >> (XregMsb - 50)#[0..=31]) & 1
+  reverse_bits__w51#[50..<51] = (in__w1 >> (XregMsb - 50)#[0..<32]) & 1
   mut reverse_bits__w52 = reverse_bits__w51
-  reverse_bits__w52#[51] = (in__w1 >> (XregMsb - 51)#[0..=31]) & 1
+  reverse_bits__w52#[51..<52] = (in__w1 >> (XregMsb - 51)#[0..<32]) & 1
   mut reverse_bits__w53 = reverse_bits__w52
-  reverse_bits__w53#[52] = (in__w1 >> (XregMsb - 52)#[0..=31]) & 1
+  reverse_bits__w53#[52..<53] = (in__w1 >> (XregMsb - 52)#[0..<32]) & 1
   mut reverse_bits__w54 = reverse_bits__w53
-  reverse_bits__w54#[53] = (in__w1 >> (XregMsb - 53)#[0..=31]) & 1
+  reverse_bits__w54#[53..<54] = (in__w1 >> (XregMsb - 53)#[0..<32]) & 1
   mut reverse_bits__w55 = reverse_bits__w54
-  reverse_bits__w55#[54] = (in__w1 >> (XregMsb - 54)#[0..=31]) & 1
+  reverse_bits__w55#[54..<55] = (in__w1 >> (XregMsb - 54)#[0..<32]) & 1
   mut reverse_bits__w56 = reverse_bits__w55
-  reverse_bits__w56#[55] = (in__w1 >> (XregMsb - 55)#[0..=31]) & 1
+  reverse_bits__w56#[55..<56] = (in__w1 >> (XregMsb - 55)#[0..<32]) & 1
   mut reverse_bits__w57 = reverse_bits__w56
-  reverse_bits__w57#[56] = (in__w1 >> (XregMsb - 56)#[0..=31]) & 1
+  reverse_bits__w57#[56..<57] = (in__w1 >> (XregMsb - 56)#[0..<32]) & 1
   mut reverse_bits__w58 = reverse_bits__w57
-  reverse_bits__w58#[57] = (in__w1 >> (XregMsb - 57)#[0..=31]) & 1
+  reverse_bits__w58#[57..<58] = (in__w1 >> (XregMsb - 57)#[0..<32]) & 1
   mut reverse_bits__w59 = reverse_bits__w58
-  reverse_bits__w59#[58] = (in__w1 >> (XregMsb - 58)#[0..=31]) & 1
+  reverse_bits__w59#[58..<59] = (in__w1 >> (XregMsb - 58)#[0..<32]) & 1
   mut reverse_bits__w60 = reverse_bits__w59
-  reverse_bits__w60#[59] = (in__w1 >> (XregMsb - 59)#[0..=31]) & 1
+  reverse_bits__w60#[59..<60] = (in__w1 >> (XregMsb - 59)#[0..<32]) & 1
   mut reverse_bits__w61 = reverse_bits__w60
-  reverse_bits__w61#[60] = (in__w1 >> (XregMsb - 60)#[0..=31]) & 1
+  reverse_bits__w61#[60..<61] = (in__w1 >> (XregMsb - 60)#[0..<32]) & 1
   mut reverse_bits__w62 = reverse_bits__w61
-  reverse_bits__w62#[61] = (in__w1 >> (XregMsb - 61)#[0..=31]) & 1
+  reverse_bits__w62#[61..<62] = (in__w1 >> (XregMsb - 61)#[0..<32]) & 1
   mut reverse_bits__w63 = reverse_bits__w62
-  reverse_bits__w63#[62] = (in__w1 >> (XregMsb - 62)#[0..=31]) & 1
+  reverse_bits__w63#[62..<63] = (in__w1 >> (XregMsb - 62)#[0..<32]) & 1
   mut reverse_bits__w64 = reverse_bits__w63
-  reverse_bits__w64#[63] = (in__w1 >> (XregMsb - 63)#[0..=31]) & 1
-  const t331 = reverse_bits__w64
-  const t332 = t331#[0..=63]
-  mut _mux_13:u64 = if (fn == minion_pkg.AluSr) or (fn == minion_pkg.AluSra) { shift_in } else { t332 }
+  reverse_bits__w64#[63..<0x40] = (in__w1 >> (XregMsb - 63)#[0..<32]) & 1
+  const t326 = reverse_bits__w64
+  const t327 = t326#[0..<0x40]
+  mut _mux_13:U64 = if (fn == minion_pkg.AluSr) or (fn == minion_pkg.AluSra) { shift_in#[0..<0x40] } else { t327 }
   shift_in_mux = _mux_13
-  mut _rep_15:u64 = if (unsigned((is_sub != 0) and (((shift_in >> XregMsb) & 1) != 0)) & 1) != 0 { 0xffffffffffffffff } else { 0 }
-  shift_in_ext = (_rep_15 << 64) | shift_in_mux
-  shift_out_ext = (shift_in_ext >> shift_amount)#[0..=63]
-  const in__w2 = shift_out_ext
+  mut _b2i_14 = if (is_sub != 0) and (((shift_in >> XregMsb) & 1) != 0) { 1 } else { 0 }
+  mut _rep_15:U64 = if (_b2i_14 & 1) != 0 { 0xffffffffffffffff } else { 0 }
+  shift_in_ext = (_rep_15#[0..<0x40] << 64) | shift_in_mux#[0..<0x40]
+  shift_out_ext = (shift_in_ext >> shift_amount)#[0..<0x40]
+  const in__w2 = shift_out_ext#[0..<0x40]
   mut reverse_bits__w65 = reverse_bits__w64
-  reverse_bits__w65#[0] = (in__w2 >> (XregMsb - 0)#[0..=31]) & 1
+  reverse_bits__w65#[0..<1] = (in__w2 >> (XregMsb - 0)#[0..<32]) & 1
   mut reverse_bits__w66 = reverse_bits__w65
-  reverse_bits__w66#[1] = (in__w2 >> (XregMsb - 1)#[0..=31]) & 1
+  reverse_bits__w66#[1..<2] = (in__w2 >> (XregMsb - 1)#[0..<32]) & 1
   mut reverse_bits__w67 = reverse_bits__w66
-  reverse_bits__w67#[2] = (in__w2 >> (XregMsb - 2)#[0..=31]) & 1
+  reverse_bits__w67#[2..<3] = (in__w2 >> (XregMsb - 2)#[0..<32]) & 1
   mut reverse_bits__w68 = reverse_bits__w67
-  reverse_bits__w68#[3] = (in__w2 >> (XregMsb - 3)#[0..=31]) & 1
+  reverse_bits__w68#[3..<4] = (in__w2 >> (XregMsb - 3)#[0..<32]) & 1
   mut reverse_bits__w69 = reverse_bits__w68
-  reverse_bits__w69#[4] = (in__w2 >> (XregMsb - 4)#[0..=31]) & 1
+  reverse_bits__w69#[4..<5] = (in__w2 >> (XregMsb - 4)#[0..<32]) & 1
   mut reverse_bits__w70 = reverse_bits__w69
-  reverse_bits__w70#[5] = (in__w2 >> (XregMsb - 5)#[0..=31]) & 1
+  reverse_bits__w70#[5..<6] = (in__w2 >> (XregMsb - 5)#[0..<32]) & 1
   mut reverse_bits__w71 = reverse_bits__w70
-  reverse_bits__w71#[6] = (in__w2 >> (XregMsb - 6)#[0..=31]) & 1
+  reverse_bits__w71#[6..<7] = (in__w2 >> (XregMsb - 6)#[0..<32]) & 1
   mut reverse_bits__w72 = reverse_bits__w71
-  reverse_bits__w72#[7] = (in__w2 >> (XregMsb - 7)#[0..=31]) & 1
+  reverse_bits__w72#[7..<8] = (in__w2 >> (XregMsb - 7)#[0..<32]) & 1
   mut reverse_bits__w73 = reverse_bits__w72
-  reverse_bits__w73#[8] = (in__w2 >> (XregMsb - 8)#[0..=31]) & 1
+  reverse_bits__w73#[8..<9] = (in__w2 >> (XregMsb - 8)#[0..<32]) & 1
   mut reverse_bits__w74 = reverse_bits__w73
-  reverse_bits__w74#[9] = (in__w2 >> (XregMsb - 9)#[0..=31]) & 1
+  reverse_bits__w74#[9..<10] = (in__w2 >> (XregMsb - 9)#[0..<32]) & 1
   mut reverse_bits__w75 = reverse_bits__w74
-  reverse_bits__w75#[10] = (in__w2 >> (XregMsb - 10)#[0..=31]) & 1
+  reverse_bits__w75#[10..<11] = (in__w2 >> (XregMsb - 10)#[0..<32]) & 1
   mut reverse_bits__w76 = reverse_bits__w75
-  reverse_bits__w76#[11] = (in__w2 >> (XregMsb - 11)#[0..=31]) & 1
+  reverse_bits__w76#[11..<12] = (in__w2 >> (XregMsb - 11)#[0..<32]) & 1
   mut reverse_bits__w77 = reverse_bits__w76
-  reverse_bits__w77#[12] = (in__w2 >> (XregMsb - 12)#[0..=31]) & 1
+  reverse_bits__w77#[12..<13] = (in__w2 >> (XregMsb - 12)#[0..<32]) & 1
   mut reverse_bits__w78 = reverse_bits__w77
-  reverse_bits__w78#[13] = (in__w2 >> (XregMsb - 13)#[0..=31]) & 1
+  reverse_bits__w78#[13..<14] = (in__w2 >> (XregMsb - 13)#[0..<32]) & 1
   mut reverse_bits__w79 = reverse_bits__w78
-  reverse_bits__w79#[14] = (in__w2 >> (XregMsb - 14)#[0..=31]) & 1
+  reverse_bits__w79#[14..<15] = (in__w2 >> (XregMsb - 14)#[0..<32]) & 1
   mut reverse_bits__w80 = reverse_bits__w79
-  reverse_bits__w80#[15] = (in__w2 >> (XregMsb - 15)#[0..=31]) & 1
+  reverse_bits__w80#[15..<16] = (in__w2 >> (XregMsb - 15)#[0..<32]) & 1
   mut reverse_bits__w81 = reverse_bits__w80
-  reverse_bits__w81#[16] = (in__w2 >> (XregMsb - 16)#[0..=31]) & 1
+  reverse_bits__w81#[16..<17] = (in__w2 >> (XregMsb - 16)#[0..<32]) & 1
   mut reverse_bits__w82 = reverse_bits__w81
-  reverse_bits__w82#[17] = (in__w2 >> (XregMsb - 17)#[0..=31]) & 1
+  reverse_bits__w82#[17..<18] = (in__w2 >> (XregMsb - 17)#[0..<32]) & 1
   mut reverse_bits__w83 = reverse_bits__w82
-  reverse_bits__w83#[18] = (in__w2 >> (XregMsb - 18)#[0..=31]) & 1
+  reverse_bits__w83#[18..<19] = (in__w2 >> (XregMsb - 18)#[0..<32]) & 1
   mut reverse_bits__w84 = reverse_bits__w83
-  reverse_bits__w84#[19] = (in__w2 >> (XregMsb - 19)#[0..=31]) & 1
+  reverse_bits__w84#[19..<20] = (in__w2 >> (XregMsb - 19)#[0..<32]) & 1
   mut reverse_bits__w85 = reverse_bits__w84
-  reverse_bits__w85#[20] = (in__w2 >> (XregMsb - 20)#[0..=31]) & 1
+  reverse_bits__w85#[20..<21] = (in__w2 >> (XregMsb - 20)#[0..<32]) & 1
   mut reverse_bits__w86 = reverse_bits__w85
-  reverse_bits__w86#[21] = (in__w2 >> (XregMsb - 21)#[0..=31]) & 1
+  reverse_bits__w86#[21..<22] = (in__w2 >> (XregMsb - 21)#[0..<32]) & 1
   mut reverse_bits__w87 = reverse_bits__w86
-  reverse_bits__w87#[22] = (in__w2 >> (XregMsb - 22)#[0..=31]) & 1
+  reverse_bits__w87#[22..<23] = (in__w2 >> (XregMsb - 22)#[0..<32]) & 1
   mut reverse_bits__w88 = reverse_bits__w87
-  reverse_bits__w88#[23] = (in__w2 >> (XregMsb - 23)#[0..=31]) & 1
+  reverse_bits__w88#[23..<24] = (in__w2 >> (XregMsb - 23)#[0..<32]) & 1
   mut reverse_bits__w89 = reverse_bits__w88
-  reverse_bits__w89#[24] = (in__w2 >> (XregMsb - 24)#[0..=31]) & 1
+  reverse_bits__w89#[24..<25] = (in__w2 >> (XregMsb - 24)#[0..<32]) & 1
   mut reverse_bits__w90 = reverse_bits__w89
-  reverse_bits__w90#[25] = (in__w2 >> (XregMsb - 25)#[0..=31]) & 1
+  reverse_bits__w90#[25..<26] = (in__w2 >> (XregMsb - 25)#[0..<32]) & 1
   mut reverse_bits__w91 = reverse_bits__w90
-  reverse_bits__w91#[26] = (in__w2 >> (XregMsb - 26)#[0..=31]) & 1
+  reverse_bits__w91#[26..<27] = (in__w2 >> (XregMsb - 26)#[0..<32]) & 1
   mut reverse_bits__w92 = reverse_bits__w91
-  reverse_bits__w92#[27] = (in__w2 >> (XregMsb - 27)#[0..=31]) & 1
+  reverse_bits__w92#[27..<28] = (in__w2 >> (XregMsb - 27)#[0..<32]) & 1
   mut reverse_bits__w93 = reverse_bits__w92
-  reverse_bits__w93#[28] = (in__w2 >> (XregMsb - 28)#[0..=31]) & 1
+  reverse_bits__w93#[28..<29] = (in__w2 >> (XregMsb - 28)#[0..<32]) & 1
   mut reverse_bits__w94 = reverse_bits__w93
-  reverse_bits__w94#[29] = (in__w2 >> (XregMsb - 29)#[0..=31]) & 1
+  reverse_bits__w94#[29..<30] = (in__w2 >> (XregMsb - 29)#[0..<32]) & 1
   mut reverse_bits__w95 = reverse_bits__w94
-  reverse_bits__w95#[30] = (in__w2 >> (XregMsb - 30)#[0..=31]) & 1
+  reverse_bits__w95#[30..<31] = (in__w2 >> (XregMsb - 30)#[0..<32]) & 1
   mut reverse_bits__w96 = reverse_bits__w95
-  reverse_bits__w96#[31] = (in__w2 >> (XregMsb - 31)#[0..=31]) & 1
+  reverse_bits__w96#[31..<32] = (in__w2 >> (XregMsb - 31)#[0..<32]) & 1
   mut reverse_bits__w97 = reverse_bits__w96
-  reverse_bits__w97#[32] = (in__w2 >> (XregMsb - 32)#[0..=31]) & 1
+  reverse_bits__w97#[32..<33] = (in__w2 >> (XregMsb - 32)#[0..<32]) & 1
   mut reverse_bits__w98 = reverse_bits__w97
-  reverse_bits__w98#[33] = (in__w2 >> (XregMsb - 33)#[0..=31]) & 1
+  reverse_bits__w98#[33..<34] = (in__w2 >> (XregMsb - 33)#[0..<32]) & 1
   mut reverse_bits__w99 = reverse_bits__w98
-  reverse_bits__w99#[34] = (in__w2 >> (XregMsb - 34)#[0..=31]) & 1
+  reverse_bits__w99#[34..<35] = (in__w2 >> (XregMsb - 34)#[0..<32]) & 1
   mut reverse_bits__w100 = reverse_bits__w99
-  reverse_bits__w100#[35] = (in__w2 >> (XregMsb - 35)#[0..=31]) & 1
+  reverse_bits__w100#[35..<36] = (in__w2 >> (XregMsb - 35)#[0..<32]) & 1
   mut reverse_bits__w101 = reverse_bits__w100
-  reverse_bits__w101#[36] = (in__w2 >> (XregMsb - 36)#[0..=31]) & 1
+  reverse_bits__w101#[36..<37] = (in__w2 >> (XregMsb - 36)#[0..<32]) & 1
   mut reverse_bits__w102 = reverse_bits__w101
-  reverse_bits__w102#[37] = (in__w2 >> (XregMsb - 37)#[0..=31]) & 1
+  reverse_bits__w102#[37..<38] = (in__w2 >> (XregMsb - 37)#[0..<32]) & 1
   mut reverse_bits__w103 = reverse_bits__w102
-  reverse_bits__w103#[38] = (in__w2 >> (XregMsb - 38)#[0..=31]) & 1
+  reverse_bits__w103#[38..<39] = (in__w2 >> (XregMsb - 38)#[0..<32]) & 1
   mut reverse_bits__w104 = reverse_bits__w103
-  reverse_bits__w104#[39] = (in__w2 >> (XregMsb - 39)#[0..=31]) & 1
+  reverse_bits__w104#[39..<40] = (in__w2 >> (XregMsb - 39)#[0..<32]) & 1
   mut reverse_bits__w105 = reverse_bits__w104
-  reverse_bits__w105#[40] = (in__w2 >> (XregMsb - 40)#[0..=31]) & 1
+  reverse_bits__w105#[40..<41] = (in__w2 >> (XregMsb - 40)#[0..<32]) & 1
   mut reverse_bits__w106 = reverse_bits__w105
-  reverse_bits__w106#[41] = (in__w2 >> (XregMsb - 41)#[0..=31]) & 1
+  reverse_bits__w106#[41..<42] = (in__w2 >> (XregMsb - 41)#[0..<32]) & 1
   mut reverse_bits__w107 = reverse_bits__w106
-  reverse_bits__w107#[42] = (in__w2 >> (XregMsb - 42)#[0..=31]) & 1
+  reverse_bits__w107#[42..<43] = (in__w2 >> (XregMsb - 42)#[0..<32]) & 1
   mut reverse_bits__w108 = reverse_bits__w107
-  reverse_bits__w108#[43] = (in__w2 >> (XregMsb - 43)#[0..=31]) & 1
+  reverse_bits__w108#[43..<44] = (in__w2 >> (XregMsb - 43)#[0..<32]) & 1
   mut reverse_bits__w109 = reverse_bits__w108
-  reverse_bits__w109#[44] = (in__w2 >> (XregMsb - 44)#[0..=31]) & 1
+  reverse_bits__w109#[44..<45] = (in__w2 >> (XregMsb - 44)#[0..<32]) & 1
   mut reverse_bits__w110 = reverse_bits__w109
-  reverse_bits__w110#[45] = (in__w2 >> (XregMsb - 45)#[0..=31]) & 1
+  reverse_bits__w110#[45..<46] = (in__w2 >> (XregMsb - 45)#[0..<32]) & 1
   mut reverse_bits__w111 = reverse_bits__w110
-  reverse_bits__w111#[46] = (in__w2 >> (XregMsb - 46)#[0..=31]) & 1
+  reverse_bits__w111#[46..<47] = (in__w2 >> (XregMsb - 46)#[0..<32]) & 1
   mut reverse_bits__w112 = reverse_bits__w111
-  reverse_bits__w112#[47] = (in__w2 >> (XregMsb - 47)#[0..=31]) & 1
+  reverse_bits__w112#[47..<48] = (in__w2 >> (XregMsb - 47)#[0..<32]) & 1
   mut reverse_bits__w113 = reverse_bits__w112
-  reverse_bits__w113#[48] = (in__w2 >> (XregMsb - 48)#[0..=31]) & 1
+  reverse_bits__w113#[48..<49] = (in__w2 >> (XregMsb - 48)#[0..<32]) & 1
   mut reverse_bits__w114 = reverse_bits__w113
-  reverse_bits__w114#[49] = (in__w2 >> (XregMsb - 49)#[0..=31]) & 1
+  reverse_bits__w114#[49..<50] = (in__w2 >> (XregMsb - 49)#[0..<32]) & 1
   mut reverse_bits__w115 = reverse_bits__w114
-  reverse_bits__w115#[50] = (in__w2 >> (XregMsb - 50)#[0..=31]) & 1
+  reverse_bits__w115#[50..<51] = (in__w2 >> (XregMsb - 50)#[0..<32]) & 1
   mut reverse_bits__w116 = reverse_bits__w115
-  reverse_bits__w116#[51] = (in__w2 >> (XregMsb - 51)#[0..=31]) & 1
+  reverse_bits__w116#[51..<52] = (in__w2 >> (XregMsb - 51)#[0..<32]) & 1
   mut reverse_bits__w117 = reverse_bits__w116
-  reverse_bits__w117#[52] = (in__w2 >> (XregMsb - 52)#[0..=31]) & 1
+  reverse_bits__w117#[52..<53] = (in__w2 >> (XregMsb - 52)#[0..<32]) & 1
   mut reverse_bits__w118 = reverse_bits__w117
-  reverse_bits__w118#[53] = (in__w2 >> (XregMsb - 53)#[0..=31]) & 1
+  reverse_bits__w118#[53..<54] = (in__w2 >> (XregMsb - 53)#[0..<32]) & 1
   mut reverse_bits__w119 = reverse_bits__w118
-  reverse_bits__w119#[54] = (in__w2 >> (XregMsb - 54)#[0..=31]) & 1
+  reverse_bits__w119#[54..<55] = (in__w2 >> (XregMsb - 54)#[0..<32]) & 1
   mut reverse_bits__w120 = reverse_bits__w119
-  reverse_bits__w120#[55] = (in__w2 >> (XregMsb - 55)#[0..=31]) & 1
+  reverse_bits__w120#[55..<56] = (in__w2 >> (XregMsb - 55)#[0..<32]) & 1
   mut reverse_bits__w121 = reverse_bits__w120
-  reverse_bits__w121#[56] = (in__w2 >> (XregMsb - 56)#[0..=31]) & 1
+  reverse_bits__w121#[56..<57] = (in__w2 >> (XregMsb - 56)#[0..<32]) & 1
   mut reverse_bits__w122 = reverse_bits__w121
-  reverse_bits__w122#[57] = (in__w2 >> (XregMsb - 57)#[0..=31]) & 1
+  reverse_bits__w122#[57..<58] = (in__w2 >> (XregMsb - 57)#[0..<32]) & 1
   mut reverse_bits__w123 = reverse_bits__w122
-  reverse_bits__w123#[58] = (in__w2 >> (XregMsb - 58)#[0..=31]) & 1
+  reverse_bits__w123#[58..<59] = (in__w2 >> (XregMsb - 58)#[0..<32]) & 1
   mut reverse_bits__w124 = reverse_bits__w123
-  reverse_bits__w124#[59] = (in__w2 >> (XregMsb - 59)#[0..=31]) & 1
+  reverse_bits__w124#[59..<60] = (in__w2 >> (XregMsb - 59)#[0..<32]) & 1
   mut reverse_bits__w125 = reverse_bits__w124
-  reverse_bits__w125#[60] = (in__w2 >> (XregMsb - 60)#[0..=31]) & 1
+  reverse_bits__w125#[60..<61] = (in__w2 >> (XregMsb - 60)#[0..<32]) & 1
   mut reverse_bits__w126 = reverse_bits__w125
-  reverse_bits__w126#[61] = (in__w2 >> (XregMsb - 61)#[0..=31]) & 1
+  reverse_bits__w126#[61..<62] = (in__w2 >> (XregMsb - 61)#[0..<32]) & 1
   mut reverse_bits__w127 = reverse_bits__w126
-  reverse_bits__w127#[62] = (in__w2 >> (XregMsb - 62)#[0..=31]) & 1
+  reverse_bits__w127#[62..<63] = (in__w2 >> (XregMsb - 62)#[0..<32]) & 1
   mut reverse_bits__w128 = reverse_bits__w127
-  reverse_bits__w128#[63] = (in__w2 >> (XregMsb - 63)#[0..=31]) & 1
-  const t608 = reverse_bits__w128
-  const t609 = t608#[0..=63]
-  mut _mux_17:u64 = if fn == minion_pkg.AluSl { t609 } else { 0 }
-  mut _mux_18:u64 = if (fn == minion_pkg.AluSr) or (fn == minion_pkg.AluSra) { shift_out_ext } else { _mux_17 }
-  mut _mux_19:u64 = if (fn == minion_pkg.AluXor) or (fn == minion_pkg.AluOr) { in1_xor_in2 } else { 0 }
-  mut _mux_20:u64 = if (fn == minion_pkg.AluOr) or (fn == minion_pkg.AluAnd) { in1 & in2 } else { 0 }
+  reverse_bits__w128#[63..<0x40] = (in__w2 >> (XregMsb - 63)#[0..<32]) & 1
+  const t603 = reverse_bits__w128
+  const t604 = t603#[0..<0x40]
+  mut _mux_17:U64 = if fn == minion_pkg.AluSl { t604 } else { 0 }
+  mut _mux_18:U64 = if (fn == minion_pkg.AluSr) or (fn == minion_pkg.AluSra) { shift_out_ext#[0..<0x40] } else { _mux_17#[0..<0x40] }
+  mut _mux_19:U64 = if (fn == minion_pkg.AluXor) or (fn == minion_pkg.AluOr) { in1_xor_in2#[0..<0x40] } else { 0 }
+  mut _mux_20:U64 = if (fn == minion_pkg.AluOr) or (fn == minion_pkg.AluAnd) { (in1 & in2)#[0..<0x40] } else { 0 }
   bitmixb_tmp = 0sb?
   low_sel_bit = 0sb?
   high_sel_bit = 0sb?
-  mut _mux_21:u1 = if (in1 & 1) != 0 { ((in2 << 1) >> 9) & 1 } else { ((in2 << 1) >> 1) & 1 }
+  mut _mux_21:U1 = if (in1 & 1) != 0 { ((in2 << 1) >> 9) & 1 } else { ((in2 << 1) >> 1) & 1 }
   mut bitmixb_tmp__w1 = bitmixb_tmp
-  bitmixb_tmp__w1#[0] = _mux_21 & 1
-  high_sel_bit = 8
+  bitmixb_tmp__w1#[0..<1] = _mux_21 & 1
   low_sel_bit = 0
+  high_sel_bit = 8
   if (in1 & 1) != 0 {
     high_sel_bit = 9
   } else {
     low_sel_bit = 1
   }
-  mut _mux_22:u1 = if ((in1 >> 1) & 1) != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
+  mut _mux_22:U1 = if in1#[1..<2] != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
   mut bitmixb_tmp__w2 = bitmixb_tmp__w1
-  bitmixb_tmp__w2#[1] = _mux_22 & 1
+  bitmixb_tmp__w2#[1..<2] = _mux_22 & 1
   low_sel_bit = 0
   high_sel_bit = 8
   if (in1 & 1) != 0 {
@@ -335,89 +337,89 @@ pub comb intpipe_alu::[timecheck=false](dw:u1, fn:u5, in1:minion_pkg.XregSize_T,
   } else {
     low_sel_bit = 1
   }
-  if ((in1 >> 1) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[1..<2] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  mut _mux_23:u1 = if ((in1 >> 2) & 1) != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
+  mut _mux_23:U1 = if in1#[2..<3] != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
   mut bitmixb_tmp__w3 = bitmixb_tmp__w2
-  bitmixb_tmp__w3#[2] = _mux_23 & 1
-  low_sel_bit = 0
+  bitmixb_tmp__w3#[2..<3] = _mux_23 & 1
   high_sel_bit = 8
+  low_sel_bit = 0
   if (in1 & 1) != 0 {
     high_sel_bit = 9
   } else {
     low_sel_bit = 1
   }
-  if ((in1 >> 1) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[1..<2] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 2) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[2..<3] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  mut _mux_24:u1 = if ((in1 >> 3) & 1) != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
+  mut _mux_24:U1 = if in1#[3..<4] != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
   mut bitmixb_tmp__w4 = bitmixb_tmp__w3
-  bitmixb_tmp__w4#[3] = _mux_24 & 1
-  high_sel_bit = 8
+  bitmixb_tmp__w4#[3..<4] = _mux_24 & 1
   low_sel_bit = 0
+  high_sel_bit = 8
   if (in1 & 1) != 0 {
     high_sel_bit = 9
   } else {
     low_sel_bit = 1
   }
-  if ((in1 >> 1) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[1..<2] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 2) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[2..<3] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 3) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[3..<4] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  mut _mux_25:u1 = if ((in1 >> 4) & 1) != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
+  mut _mux_25:U1 = if in1#[4..<5] != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
   mut bitmixb_tmp__w5 = bitmixb_tmp__w4
-  bitmixb_tmp__w5#[4] = _mux_25 & 1
-  high_sel_bit = 8
+  bitmixb_tmp__w5#[4..<5] = _mux_25 & 1
   low_sel_bit = 0
+  high_sel_bit = 8
   if (in1 & 1) != 0 {
     high_sel_bit = 9
   } else {
     low_sel_bit = 1
   }
-  if ((in1 >> 1) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[1..<2] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 2) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[2..<3] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 3) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[3..<4] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 4) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[4..<5] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  mut _mux_26:u1 = if ((in1 >> 5) & 1) != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
+  mut _mux_26:U1 = if in1#[5..<6] != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
   mut bitmixb_tmp__w6 = bitmixb_tmp__w5
-  bitmixb_tmp__w6#[5] = _mux_26 & 1
+  bitmixb_tmp__w6#[5..<6] = _mux_26 & 1
   low_sel_bit = 0
   high_sel_bit = 8
   if (in1 & 1) != 0 {
@@ -425,119 +427,119 @@ pub comb intpipe_alu::[timecheck=false](dw:u1, fn:u5, in1:minion_pkg.XregSize_T,
   } else {
     low_sel_bit = 1
   }
-  if ((in1 >> 1) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[1..<2] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 2) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[2..<3] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 3) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[3..<4] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 4) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[4..<5] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 5) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[5..<6] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  mut _mux_27:u1 = if ((in1 >> 6) & 1) != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
+  mut _mux_27:U1 = if in1#[6..<7] != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
   mut bitmixb_tmp__w7 = bitmixb_tmp__w6
-  bitmixb_tmp__w7#[6] = _mux_27 & 1
-  high_sel_bit = 8
+  bitmixb_tmp__w7#[6..<7] = _mux_27 & 1
   low_sel_bit = 0
+  high_sel_bit = 8
   if (in1 & 1) != 0 {
     high_sel_bit = 9
   } else {
     low_sel_bit = 1
   }
-  if ((in1 >> 1) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[1..<2] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 2) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[2..<3] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 3) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[3..<4] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 4) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[4..<5] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 5) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[5..<6] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 6) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[6..<7] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  mut _mux_28:u1 = if ((in1 >> 7) & 1) != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
+  mut _mux_28:U1 = if in1#[7..<8] != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
   mut bitmixb_tmp__w8 = bitmixb_tmp__w7
-  bitmixb_tmp__w8#[7] = _mux_28 & 1
-  high_sel_bit = 8
+  bitmixb_tmp__w8#[7..<8] = _mux_28 & 1
   low_sel_bit = 0
+  high_sel_bit = 8
   if (in1 & 1) != 0 {
     high_sel_bit = 9
   } else {
     low_sel_bit = 1
   }
-  if ((in1 >> 1) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[1..<2] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 2) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[2..<3] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 3) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[3..<4] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 4) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[4..<5] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 5) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[5..<6] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 6) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[6..<7] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 7) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[7..<8] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  mut _mux_29:u1 = if ((in1 >> 8) & 1) != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
+  mut _mux_29:U1 = if in1#[8..<9] != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
   mut bitmixb_tmp__w9 = bitmixb_tmp__w8
-  bitmixb_tmp__w9#[8] = _mux_29 & 1
+  bitmixb_tmp__w9#[8..<9] = _mux_29 & 1
   high_sel_bit = 8
   low_sel_bit = 0
   if (in1 & 1) != 0 {
@@ -545,229 +547,229 @@ pub comb intpipe_alu::[timecheck=false](dw:u1, fn:u5, in1:minion_pkg.XregSize_T,
   } else {
     low_sel_bit = 1
   }
-  if ((in1 >> 1) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[1..<2] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 2) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[2..<3] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 3) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[3..<4] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 4) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[4..<5] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 5) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[5..<6] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 6) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[6..<7] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 7) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[7..<8] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 8) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[8..<9] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  mut _mux_30:u1 = if ((in1 >> 9) & 1) != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
+  mut _mux_30:U1 = if in1#[9..<10] != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
   mut bitmixb_tmp__w10 = bitmixb_tmp__w9
-  bitmixb_tmp__w10#[9] = _mux_30 & 1
-  high_sel_bit = 8
+  bitmixb_tmp__w10#[9..<10] = _mux_30 & 1
   low_sel_bit = 0
+  high_sel_bit = 8
   if (in1 & 1) != 0 {
     high_sel_bit = 9
   } else {
     low_sel_bit = 1
   }
-  if ((in1 >> 1) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[1..<2] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 2) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[2..<3] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 3) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[3..<4] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 4) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[4..<5] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 5) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[5..<6] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 6) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[6..<7] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 7) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[7..<8] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 8) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[8..<9] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 9) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[9..<10] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  mut _mux_31:u1 = if ((in1 >> 10) & 1) != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
+  mut _mux_31:U1 = if in1#[10..<11] != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
   mut bitmixb_tmp__w11 = bitmixb_tmp__w10
-  bitmixb_tmp__w11#[10] = _mux_31 & 1
-  low_sel_bit = 0
+  bitmixb_tmp__w11#[10..<11] = _mux_31 & 1
   high_sel_bit = 8
+  low_sel_bit = 0
   if (in1 & 1) != 0 {
     high_sel_bit = 9
   } else {
     low_sel_bit = 1
   }
-  if ((in1 >> 1) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[1..<2] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 2) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[2..<3] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 3) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[3..<4] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 4) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[4..<5] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 5) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[5..<6] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 6) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[6..<7] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 7) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[7..<8] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 8) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[8..<9] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 9) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[9..<10] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 10) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[10..<11] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  mut _mux_32:u1 = if ((in1 >> 11) & 1) != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
+  mut _mux_32:U1 = if in1#[11..<12] != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
   mut bitmixb_tmp__w12 = bitmixb_tmp__w11
-  bitmixb_tmp__w12#[11] = _mux_32 & 1
-  low_sel_bit = 0
+  bitmixb_tmp__w12#[11..<12] = _mux_32 & 1
   high_sel_bit = 8
+  low_sel_bit = 0
   if (in1 & 1) != 0 {
     high_sel_bit = 9
   } else {
     low_sel_bit = 1
   }
-  if ((in1 >> 1) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[1..<2] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 2) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[2..<3] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 3) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[3..<4] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 4) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[4..<5] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 5) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[5..<6] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 6) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[6..<7] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 7) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[7..<8] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 8) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[8..<9] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 9) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[9..<10] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 10) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[10..<11] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 11) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[11..<12] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  mut _mux_33:u1 = if ((in1 >> 12) & 1) != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
+  mut _mux_33:U1 = if in1#[12..<13] != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
   mut bitmixb_tmp__w13 = bitmixb_tmp__w12
-  bitmixb_tmp__w13#[12] = _mux_33 & 1
+  bitmixb_tmp__w13#[12..<13] = _mux_33 & 1
   high_sel_bit = 8
   low_sel_bit = 0
   if (in1 & 1) != 0 {
@@ -775,69 +777,69 @@ pub comb intpipe_alu::[timecheck=false](dw:u1, fn:u5, in1:minion_pkg.XregSize_T,
   } else {
     low_sel_bit = 1
   }
-  if ((in1 >> 1) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[1..<2] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 2) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[2..<3] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 3) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[3..<4] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 4) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[4..<5] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 5) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[5..<6] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 6) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[6..<7] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 7) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[7..<8] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 8) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[8..<9] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 9) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[9..<10] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 10) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[10..<11] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 11) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[11..<12] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 12) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[12..<13] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  mut _mux_34:u1 = if ((in1 >> 13) & 1) != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
+  mut _mux_34:U1 = if in1#[13..<14] != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
   mut bitmixb_tmp__w14 = bitmixb_tmp__w13
-  bitmixb_tmp__w14#[13] = _mux_34 & 1
+  bitmixb_tmp__w14#[13..<14] = _mux_34 & 1
   high_sel_bit = 8
   low_sel_bit = 0
   if (in1 & 1) != 0 {
@@ -845,156 +847,156 @@ pub comb intpipe_alu::[timecheck=false](dw:u1, fn:u5, in1:minion_pkg.XregSize_T,
   } else {
     low_sel_bit = 1
   }
-  if ((in1 >> 1) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[1..<2] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 2) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[2..<3] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 3) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[3..<4] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 4) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[4..<5] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 5) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[5..<6] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 6) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[6..<7] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 7) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[7..<8] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 8) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[8..<9] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 9) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[9..<10] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 10) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[10..<11] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 11) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[11..<12] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 12) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[12..<13] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 13) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[13..<14] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  mut _mux_35:u1 = if ((in1 >> 14) & 1) != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
+  mut _mux_35:U1 = if in1#[14..<15] != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
   mut bitmixb_tmp__w15 = bitmixb_tmp__w14
-  bitmixb_tmp__w15#[14] = _mux_35 & 1
-  low_sel_bit = 0
+  bitmixb_tmp__w15#[14..<15] = _mux_35 & 1
   high_sel_bit = 8
+  low_sel_bit = 0
   if (in1 & 1) != 0 {
     high_sel_bit = 9
   } else {
     low_sel_bit = 1
   }
-  if ((in1 >> 1) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[1..<2] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 2) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[2..<3] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 3) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[3..<4] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 4) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[4..<5] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 5) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[5..<6] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 6) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[6..<7] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 7) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[7..<8] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 8) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[8..<9] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 9) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[9..<10] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 10) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[10..<11] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 11) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[11..<12] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 12) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[12..<13] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 13) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[13..<14] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  if ((in1 >> 14) & 1) != 0 {
-    high_sel_bit = (high_sel_bit + 1)#[0..=4]
+  if in1#[14..<15] != 0 {
+    high_sel_bit = (high_sel_bit + 1)#[0..<5]
   } else {
-    low_sel_bit = (low_sel_bit + 1)#[0..=4]
+    low_sel_bit = (low_sel_bit + 1)#[0..<5]
   }
-  mut _mux_36:u1 = if ((in1 >> 15) & 1) != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
+  mut _mux_36:U1 = if in1#[15..<16] != 0 { ((in2 << 1) >> (high_sel_bit + 1)) & 1 } else { ((in2 << 1) >> (low_sel_bit + 1)) & 1 }
   mut bitmixb_tmp__w16 = bitmixb_tmp__w15
-  bitmixb_tmp__w16#[15] = _mux_36 & 1
-  out = unique if fn == minion_pkg.AluAdd { adder_out } elif fn == minion_pkg.AluSub { adder_out } elif fn == minion_pkg.AluPackb { (in2#[0..=7] << 8) | in1#[0..=7] } elif fn == minion_pkg.AluBitmixb { bitmixb_tmp__w16#[0..=15] } else { (((cmp_inverted ^ _mux_7) & 1 & is_cmp & 1) | (_mux_19 | _mux_20)) | _mux_18 }
+  bitmixb_tmp__w16#[15..<16] = _mux_36 & 1
+  out = unique if fn == minion_pkg.AluAdd { adder_out } elif fn == minion_pkg.AluSub { adder_out } elif fn == minion_pkg.AluPackb { (in2#[0..<8] << 8) | in1#[0..<8] } elif fn == minion_pkg.AluBitmixb { bitmixb_tmp__w16#[0..<16] } else { ((((cmp_inverted ^ _mux_7) & 1 & is_cmp & 1) | (_mux_19 | _mux_20)#[0..<0x40])#[0..<0x40] | _mux_18)#[0..<0x40] }
   if dw == 0 {
-    out = out#[0..=31]#sext[0..=31]#[0..=63]
+    out = out#[0..<32]#sext[0..=31]#[0..<0x40]
   }
 }

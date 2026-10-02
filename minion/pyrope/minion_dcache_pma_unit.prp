@@ -1,51 +1,74 @@
 const minion_dcache_pkg = import("minion_dcache_pkg")
 
-pub comb minion_dcache_pma_unit::[timecheck=false](ioshire_i:u1, af_skip_i:u1, req_data_i:(paddr:u40, typ:u4, amo:u1, write:u1, mem_global:u1, ts_tl_co:u1), mprot_i:(enable_secure_memory:u1, dram_size:u2, disable_osbox_access:u1, disable_pcie_access:u1, io_access_mode:u2), valid_addr_i:u1, vm_status_i:(prv:u2, mprv:u1, mpp:u2, sum:u1, mxr:u1, debug:u1)) -> (resp_data_o:(access_fault:u1, cacheable:u1)) {
-  wire privilege_mode:u2
-  wire dcache_req_io_permitted:u1
-  wire dcache_req_sp_permitted:u1
-  wire dcache_req_scp_permitted:u1
-  wire dcache_req_esr_permitted:u1
-  wire dcache_req_pcie_permitted:u1
-  wire dcache_req_mcode_permitted:u1
-  wire dcache_req_mdata_permitted:u1
-  wire dcache_req_scode_permitted:u1
-  wire dcache_req_sdata_permitted:u1
-  wire dcache_req_osbox_permitted:u1
-  wire dcache_req_sp_sram_code_permitted:u1
-  wire dcache_req_sp_sram_data_permitted:u1
-  mut _mux_1:u2 = if vm_status_i.mprv != 0 { vm_status_i.mpp#[0..=1] } else { vm_status_i.prv#[0..=1] }
+pub comb minion_dcache_pma_unit::[timecheck=false](ioshire_i:U1, af_skip_i:U1, req_data_i:(paddr:U40, typ:U4, amo:U1, write:U1, mem_global:U1, ts_tl_co:U1), mprot_i:(enable_secure_memory:U1, dram_size:U2, disable_osbox_access:U1, disable_pcie_access:U1, io_access_mode:U2), valid_addr_i:U1, vm_status_i:(prv:U2, mprv:U1, mpp:U2, sum:U1, mxr:U1, debug:U1)) -> (resp_data_o:(access_fault:U1, cacheable:U1)) {
+  wire privilege_mode:U2 = nil
+  wire dcache_req_io_permitted:U1 = nil
+  wire dcache_req_sp_permitted:U1 = nil
+  wire dcache_req_scp_permitted:U1 = nil
+  wire dcache_req_esr_permitted:U1 = nil
+  wire dcache_req_pcie_permitted:U1 = nil
+  wire dcache_req_mcode_permitted:U1 = nil
+  wire dcache_req_mdata_permitted:U1 = nil
+  wire dcache_req_scode_permitted:U1 = nil
+  wire dcache_req_sdata_permitted:U1 = nil
+  wire dcache_req_osbox_permitted:U1 = nil
+  wire dcache_req_sp_sram_code_permitted:U1 = nil
+  wire dcache_req_sp_sram_data_permitted:U1 = nil
+  wire `resp_data_o__bpr.access_fault`:U1 = nil
+  wire `resp_data_o__bpr.cacheable`:U1 = nil
+  mut _mux_1:U2 = if vm_status_i.mprv != 0 { vm_status_i.mpp#[0..<2] } else { vm_status_i.prv#[0..<2] }
   privilege_mode = _mux_1
-  dcache_req_io_permitted = unsigned((req_data_i.amo == 0) and (req_data_i.ts_tl_co == 0) and (mprot_i.io_access_mode <= privilege_mode) and (mprot_i.io_access_mode != minion_dcache_pkg.MprotIoAccessModeF))
-  mut _mux_5:u1 = if req_data_i.write != 0 { unsigned(privilege_mode == minion_dcache_pkg.PrvM) & 1 } else { unsigned(privilege_mode != minion_dcache_pkg.PrvU) & 1 }
+  mut _b2i_2 = if (req_data_i.amo == 0) and (req_data_i.ts_tl_co == 0) and (mprot_i.io_access_mode <= privilege_mode) and (mprot_i.io_access_mode != minion_dcache_pkg.MprotIoAccessModeF) { 1 } else { 0 }
+  dcache_req_io_permitted = _b2i_2
+  mut _b2i_3 = if privilege_mode == minion_dcache_pkg.PrvM { 1 } else { 0 }
+  mut _b2i_4 = if privilege_mode != minion_dcache_pkg.PrvU { 1 } else { 0 }
+  mut _mux_5:U1 = if req_data_i.write != 0 { _b2i_3 & 1 } else { _b2i_4 & 1 }
   dcache_req_sp_sram_code_permitted = _mux_5
-  dcache_req_sp_sram_data_permitted = unsigned(privilege_mode != minion_dcache_pkg.PrvU)
+  mut _b2i_6 = if privilege_mode != minion_dcache_pkg.PrvU { 1 } else { 0 }
+  dcache_req_sp_sram_data_permitted = _b2i_6
   const paddr__w1 = req_data_i.paddr
   const paddr_s1__w1 = paddr__w1
+  mut _b2i_11 = if (U1(paddr_s1__w1#[30..<40] == 1) != 0) and (paddr_s1__w1#[17..<30] == 0) { 1 } else { 0 }
   const paddr_s3__w1 = paddr__w1
+  mut _b2i_15 = if (U1(paddr_s3__w1#[30..<40] == 1) != 0) and (paddr_s3__w1#[20..<30] == 4) { 1 } else { 0 }
+  mut _b2i_16 = if (_b2i_11 != 0) or (_b2i_15 != 0) { 1 } else { 0 }
   const paddr_s4__w1 = req_data_i.paddr
+  mut _b2i_20 = if (U1(paddr_s4__w1#[30..<40] == 1) != 0) and (paddr_s4__w1#[19..<30] == 8) { 1 } else { 0 }
   const paddr_s5__w1 = req_data_i.paddr
-  dcache_req_sp_permitted = unsigned((req_data_i.amo == 0) and ((req_data_i.ts_tl_co == 0) or (unsigned((unsigned((unsigned(paddr_s1__w1#[30..=39] == 1) != 0) and (paddr_s1__w1#[17..=29] == 0)) != 0) or (unsigned((unsigned(paddr_s3__w1#[30..=39] == 1) != 0) and (paddr_s3__w1#[20..=29] == 4)) != 0)) != 0)) and ((dcache_req_sp_sram_code_permitted != 0) or (unsigned((unsigned(paddr_s4__w1#[30..=39] == 1) != 0) and (paddr_s4__w1#[19..=29] == 8)) == 0)) and ((dcache_req_sp_sram_data_permitted != 0) or (unsigned((unsigned(paddr_s5__w1#[30..=39] == 1) != 0) and (paddr_s5__w1#[19..=29] == 9)) == 0)) and (ioshire_i != 0))
-  dcache_req_scp_permitted = unsigned((req_data_i.amo == 0) or (req_data_i.mem_global != 0))
-  dcache_req_esr_permitted = unsigned((req_data_i.amo == 0) and (req_data_i.ts_tl_co == 0) and (req_data_i.typ == minion_dcache_pkg.DcTypeD) and (req_data_i.paddr#[0..=2] == 0) and (req_data_i.paddr#[30..=31] <= privilege_mode) and ((ioshire_i != 0) or (req_data_i.paddr#[30..=31] != 2)))
-  dcache_req_pcie_permitted = unsigned((req_data_i.amo == 0) and (req_data_i.ts_tl_co == 0) and ((ioshire_i != 0) or (mprot_i.disable_pcie_access == 0)))
-  dcache_req_mcode_permitted = unsigned((ioshire_i != 0) or ((privilege_mode == minion_dcache_pkg.PrvM) and (not ((req_data_i.write != 0) and (mprot_i.enable_secure_memory != 0)))))
-  dcache_req_mdata_permitted = unsigned((ioshire_i != 0) or (privilege_mode == minion_dcache_pkg.PrvM))
-  mut _mux_33:u1 = if mprot_i.enable_secure_memory != 0 { unsigned((ioshire_i != 0) or (privilege_mode == minion_dcache_pkg.PrvM) or ((privilege_mode == minion_dcache_pkg.PrvS) and (req_data_i.write == 0))) & 1 } else { unsigned((ioshire_i != 0) or (mprot_i.disable_osbox_access == 0)) & 1 }
+  mut _b2i_24 = if (U1(paddr_s5__w1#[30..<40] == 1) != 0) and (paddr_s5__w1#[19..<30] == 9) { 1 } else { 0 }
+  mut _b2i_25 = if (req_data_i.amo == 0) and ((req_data_i.ts_tl_co == 0) or (_b2i_16 != 0)) and ((dcache_req_sp_sram_code_permitted != 0) or (_b2i_20 == 0)) and ((dcache_req_sp_sram_data_permitted != 0) or (_b2i_24 == 0)) and (ioshire_i != 0) { 1 } else { 0 }
+  dcache_req_sp_permitted = _b2i_25
+  dcache_req_scp_permitted = U1((req_data_i.amo == 0) or (req_data_i.mem_global != 0))
+  mut _b2i_27 = if (req_data_i.amo == 0) and (req_data_i.ts_tl_co == 0) and (req_data_i.typ == minion_dcache_pkg.DcTypeD) and (req_data_i.paddr#[0..<3] == 0) and (req_data_i.paddr#[30..<32] <= privilege_mode) and ((ioshire_i != 0) or (req_data_i.paddr#[30..<32] != 2)) { 1 } else { 0 }
+  dcache_req_esr_permitted = _b2i_27
+  dcache_req_pcie_permitted = U1((req_data_i.amo == 0) and (req_data_i.ts_tl_co == 0) and ((ioshire_i != 0) or (mprot_i.disable_pcie_access == 0)))
+  mut _b2i_29 = if (ioshire_i != 0) or ((privilege_mode == minion_dcache_pkg.PrvM) and (not ((req_data_i.write != 0) and (mprot_i.enable_secure_memory != 0)))) { 1 } else { 0 }
+  dcache_req_mcode_permitted = _b2i_29
+  mut _b2i_30 = if (ioshire_i != 0) or (privilege_mode == minion_dcache_pkg.PrvM) { 1 } else { 0 }
+  dcache_req_mdata_permitted = _b2i_30
+  mut _b2i_31 = if (ioshire_i != 0) or (privilege_mode == minion_dcache_pkg.PrvM) or ((privilege_mode == minion_dcache_pkg.PrvS) and (req_data_i.write == 0)) { 1 } else { 0 }
+  mut _mux_33:U1 = if mprot_i.enable_secure_memory != 0 { _b2i_31 & 1 } else { U1((ioshire_i != 0) or (mprot_i.disable_osbox_access == 0)) & 1 }
   dcache_req_scode_permitted = _mux_33
-  mut _mux_36:u1 = if mprot_i.enable_secure_memory != 0 { unsigned((ioshire_i != 0) or (privilege_mode != minion_dcache_pkg.PrvU)) & 1 } else { unsigned((ioshire_i != 0) or (mprot_i.disable_osbox_access == 0)) & 1 }
+  mut _b2i_34 = if (ioshire_i != 0) or (privilege_mode != minion_dcache_pkg.PrvU) { 1 } else { 0 }
+  mut _mux_36:U1 = if mprot_i.enable_secure_memory != 0 { _b2i_34 & 1 } else { U1((ioshire_i != 0) or (mprot_i.disable_osbox_access == 0)) & 1 }
   dcache_req_sdata_permitted = _mux_36
-  dcache_req_osbox_permitted = unsigned((ioshire_i != 0) or (mprot_i.disable_osbox_access == 0))
+  dcache_req_osbox_permitted = U1((ioshire_i != 0) or (mprot_i.disable_osbox_access == 0))
   const paddr_s6__w1 = req_data_i.paddr
   const paddr__w2 = req_data_i.paddr
   const paddr_s1__w2 = paddr__w2
+  mut _b2i_47 = if (U1(paddr_s1__w2#[30..<40] == 1) != 0) and (paddr_s1__w2#[17..<30] == 0) { 1 } else { 0 }
   const paddr_s3__w2 = paddr__w2
-  mut `resp_data_o__bpo.cacheable` = unsigned((req_data_i.amo == 0) and ((unsigned((((paddr_s6__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..=31]) & 1) != 0) and (((paddr_s6__w1 >> 38) & 1) == 0)) != 0) or (unsigned(req_data_i.paddr#[31..=39] == 1) != 0) or (unsigned((unsigned((unsigned(paddr_s1__w2#[30..=39] == 1) != 0) and (paddr_s1__w2#[17..=29] == 0)) != 0) or (unsigned((unsigned(paddr_s3__w2#[30..=39] == 1) != 0) and (paddr_s3__w2#[20..=29] == 4)) != 0)) != 0)))
+  mut _b2i_51 = if (U1(paddr_s3__w2#[30..<40] == 1) != 0) and (paddr_s3__w2#[20..<30] == 4) { 1 } else { 0 }
+  mut _b2i_52 = if (_b2i_47 != 0) or (_b2i_51 != 0) { 1 } else { 0 }
+  mut _b2i_53 = if (req_data_i.amo == 0) and ((U1((((paddr_s6__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..<32]) & 1) != 0) and (paddr_s6__w1#[38..<39] == 0)) != 0) or (U1(req_data_i.paddr#[31..<40] == 1) != 0) or (_b2i_52 != 0)) { 1 } else { 0 }
+  mut `resp_data_o__bpo.cacheable` = _b2i_53
   const paddr_s11__w1 = req_data_i.paddr
   const paddr_s13__w1 = req_data_i.paddr
   const paddr_s14__w1 = paddr_s13__w1
+  mut _b2i_70 = if (U1((((paddr_s14__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..<32]) & 1) != 0) and (paddr_s14__w1#[23..<38] == 0)) != 0) and (paddr_s13__w1#[21..<23] == 0) { 1 } else { 0 }
   const paddr_s15__w1 = req_data_i.paddr
   const paddr_s14__w2 = paddr_s15__w1
+  mut _b2i_75 = if (U1((((paddr_s14__w2 >> (minion_dcache_pkg.PaSize - 1)#[0..<32]) & 1) != 0) and (paddr_s14__w2#[23..<38] == 0)) != 0) and (paddr_s15__w1#[21..<23] != 0) { 1 } else { 0 }
   const paddr_s16__w1 = req_data_i.paddr
   const paddr_s17__w1 = req_data_i.paddr
   const paddr_s18__w1 = req_data_i.paddr
@@ -56,7 +79,13 @@ pub comb minion_dcache_pma_unit::[timecheck=false](ioshire_i:u1, af_skip_i:u1, r
   const paddr_s22__w1 = paddr_s20__w1
   const paddr_s23__w1 = paddr_s20__w1
   const paddr_s24__w1 = paddr_s20__w1
-  mut `resp_data_o__bpo.access_fault` = unsigned((valid_addr_i != 0) and (af_skip_i == 0) and (((unsigned(req_data_i.paddr#[30..=39] == 0) != 0) and (dcache_req_io_permitted == 0)) or ((unsigned(req_data_i.paddr#[30..=39] == 1) != 0) and (dcache_req_sp_permitted == 0)) or ((unsigned(req_data_i.paddr#[31..=39] == 1) != 0) and (dcache_req_scp_permitted == 0)) or ((unsigned(req_data_i.paddr#[32..=39] == 1) != 0) and (dcache_req_esr_permitted == 0)) or (unsigned((paddr_s11__w1#[38..=39] == 0) and (paddr_s11__w1#[33..=37] != 0)) != 0) or ((unsigned(req_data_i.paddr#[38..=39] == 1) != 0) and (dcache_req_pcie_permitted == 0)) or ((unsigned((unsigned((((paddr_s14__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..=31]) & 1) != 0) and (paddr_s14__w1#[23..=37] == 0)) != 0) and (paddr_s13__w1#[21..=22] == 0)) != 0) and (dcache_req_mcode_permitted == 0)) or ((unsigned((unsigned((((paddr_s14__w2 >> (minion_dcache_pkg.PaSize - 1)#[0..=31]) & 1) != 0) and (paddr_s14__w2#[23..=37] == 0)) != 0) and (paddr_s15__w1#[21..=22] != 0)) != 0) and (dcache_req_mdata_permitted == 0)) or ((unsigned((((paddr_s16__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..=31]) & 1) != 0) and (paddr_s16__w1#[26..=37] == 0) and (paddr_s16__w1#[23..=25] == 1)) != 0) and (dcache_req_scode_permitted == 0)) or ((unsigned((((paddr_s17__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..=31]) & 1) != 0) and (paddr_s17__w1#[26..=37] == 0) and (paddr_s17__w1#[24..=25] != 0)) != 0) and (dcache_req_sdata_permitted == 0)) or ((unsigned((((paddr_s18__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..=31]) & 1) != 0) and (paddr_s18__w1#[32..=37] == 0) and (paddr_s18__w1#[26..=31] != 0)) != 0) and (dcache_req_osbox_permitted == 0)) or ((unsigned((((paddr_s19__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..=31]) & 1) != 0) and (((paddr_s19__w1 >> 38) & 1) == 1)) != 0) and (ioshire_i == 0)) or (unsigned((((paddr_s20__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..=31]) & 1) != 0) and (paddr_s20__w1#[32..=37] != 0) and (((dram_size__w1 == minion_dcache_pkg.MprotDramSize8G) and (unsigned((((paddr_s21__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..=31]) & 1) != 0) and (paddr_s21__w1#[33..=37] != 0)) != 0)) or ((dram_size__w1 == minion_dcache_pkg.MprotDramSize16G) and (unsigned((((paddr_s22__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..=31]) & 1) != 0) and (paddr_s22__w1#[34..=37] != 0)) != 0)) or ((dram_size__w1 == minion_dcache_pkg.MprotDramSize24G) and (unsigned((((paddr_s23__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..=31]) & 1) != 0) and ((paddr_s23__w1#[33..=37] == 3) or (paddr_s23__w1#[35..=37] != 0))) != 0)) or ((dram_size__w1 == minion_dcache_pkg.MprotDramSize32G) and (unsigned((((paddr_s24__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..=31]) & 1) != 0) and (paddr_s24__w1#[35..=37] != 0)) != 0)))) != 0)))
-  resp_data_o.access_fault = `resp_data_o__bpo.access_fault`
-  resp_data_o.cacheable = `resp_data_o__bpo.cacheable`
+  mut _b2i_102 = if (((paddr_s20__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..<32]) & 1) != 0) and (paddr_s20__w1#[32..<38] != 0) and (((dram_size__w1 == minion_dcache_pkg.MprotDramSize8G) and (U1((((paddr_s21__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..<32]) & 1) != 0) and (paddr_s21__w1#[33..<38] != 0)) != 0)) or ((dram_size__w1 == minion_dcache_pkg.MprotDramSize16G) and (U1((((paddr_s22__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..<32]) & 1) != 0) and (paddr_s22__w1#[34..<38] != 0)) != 0)) or ((dram_size__w1 == minion_dcache_pkg.MprotDramSize24G) and (U1((((paddr_s23__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..<32]) & 1) != 0) and ((paddr_s23__w1#[33..<38] == 3) or (paddr_s23__w1#[35..<38] != 0))) != 0)) or ((dram_size__w1 == minion_dcache_pkg.MprotDramSize32G) and (U1((((paddr_s24__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..<32]) & 1) != 0) and (paddr_s24__w1#[35..<38] != 0)) != 0))) { 1 } else { 0 }
+  mut _b2i_103 = if (valid_addr_i != 0) and (af_skip_i == 0) and (((U1(req_data_i.paddr#[30..<40] == 0) != 0) and (dcache_req_io_permitted == 0)) or ((U1(req_data_i.paddr#[30..<40] == 1) != 0) and (dcache_req_sp_permitted == 0)) or ((U1(req_data_i.paddr#[31..<40] == 1) != 0) and (dcache_req_scp_permitted == 0)) or ((U1(req_data_i.paddr#[32..<40] == 1) != 0) and (dcache_req_esr_permitted == 0)) or (U1((paddr_s11__w1#[38..<40] == 0) and (paddr_s11__w1#[33..<38] != 0)) != 0) or ((U1(req_data_i.paddr#[38..<40] == 1) != 0) and (dcache_req_pcie_permitted == 0)) or ((_b2i_70 != 0) and (dcache_req_mcode_permitted == 0)) or ((_b2i_75 != 0) and (dcache_req_mdata_permitted == 0)) or ((U1((((paddr_s16__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..<32]) & 1) != 0) and (paddr_s16__w1#[26..<38] == 0) and (paddr_s16__w1#[23..<26] == 1)) != 0) and (dcache_req_scode_permitted == 0)) or ((U1((((paddr_s17__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..<32]) & 1) != 0) and (paddr_s17__w1#[26..<38] == 0) and (paddr_s17__w1#[24..<26] != 0)) != 0) and (dcache_req_sdata_permitted == 0)) or ((U1((((paddr_s18__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..<32]) & 1) != 0) and (paddr_s18__w1#[32..<38] == 0) and (paddr_s18__w1#[26..<32] != 0)) != 0) and (dcache_req_osbox_permitted == 0)) or ((U1((((paddr_s19__w1 >> (minion_dcache_pkg.PaSize - 1)#[0..<32]) & 1) != 0) and (paddr_s19__w1#[38..<39] == 1)) != 0) and (ioshire_i == 0)) or (_b2i_102 != 0)) { 1 } else { 0 }
+  mut `resp_data_o__bpo.access_fault` = _b2i_103
+  const t442 = `resp_data_o__bpo.access_fault`
+  `resp_data_o__bpr.access_fault` = t442
+  resp_data_o.access_fault = t442
+  const t443 = `resp_data_o__bpo.cacheable`
+  `resp_data_o__bpr.cacheable` = t443
+  resp_data_o.cacheable = t443
 }

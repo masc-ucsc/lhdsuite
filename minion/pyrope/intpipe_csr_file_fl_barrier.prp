@@ -1,14 +1,17 @@
 const minion_pkg = import("minion_pkg")
 
-pub mod intpipe_csr_file_fl_barrier::[timecheck=false](clk_i:u1, rst_ni:u1, start_valid:u1, start_data:minion_pkg.CsrFlBarrierSize_T, start_waddr:minion_pkg.XregAddrSize_T, start_thread_id:u1, neigh_resp_valid:u1, neigh_resp_data:u1, rf_wen_ready:u1) -> (start_ready:u1@[], neigh_req_valid:u1@[], neigh_req_data:minion_pkg.CsrFlBarrierSize_T@[], rf_wen_valid:u1@[], rf_wen_valid_early:u1@[], rf_wen_thread_id:u1@[], rf_wen_addr:minion_pkg.XregAddrSize_T@[], rf_wen_data:minion_pkg.XregSize_T@[], scoreboard_valid:u1@[], scoreboard_addr:(fp:u1, addr:u5, thread_id:u1)@[]) {
-  reg neigh_req_data:u13:[clock_pin=ref clk_i]
-  reg rf_wen_thread_id:u1:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
-  reg rf_wen_addr:u5:[clock_pin=ref clk_i]
-  reg state_q:u2:[initial=0, reset_pin=ref rst_ni, async=true, negreset=true, clock_pin=ref clk_i]
-  reg rf_wen_data_r:u1:[clock_pin=ref clk_i]
-  wire start_ready:u1
-  wire rf_wen_valid:u1
-  mut state_d:u2 = 0sb?
+pub mod intpipe_csr_file_fl_barrier::[timecheck=false](clk_i:Clock, rst_ni:U1, start_valid:U1, start_data:minion_pkg.CsrFlBarrierSize_T, start_waddr:minion_pkg.XregAddrSize_T, start_thread_id:U1, neigh_resp_valid:U1, neigh_resp_data:U1, rf_wen_ready:U1) -> (start_ready:U1@[], neigh_req_valid:U1@[], neigh_req_data:minion_pkg.CsrFlBarrierSize_T@[], rf_wen_valid:U1@[], rf_wen_valid_early:U1@[], rf_wen_thread_id:U1@[], rf_wen_addr:minion_pkg.XregAddrSize_T@[], rf_wen_data:minion_pkg.XregSize_T@[], scoreboard_valid:U1@[], scoreboard_addr:(fp:U1, addr:U5, thread_id:U1)@[]) {
+  reg neigh_req_data:U13:[clock_pin=clk_i]
+  reg rf_wen_thread_id:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg rf_wen_addr:U5:[clock_pin=clk_i]
+  reg state_q:U2:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg rf_wen_data_r:U1:[clock_pin=clk_i]
+  wire start_ready:U1 = nil
+  wire rf_wen_valid:U1 = nil
+  wire `scoreboard_addr__bpr.fp`:U1 = nil
+  wire `scoreboard_addr__bpr.addr`:U5 = nil
+  wire `scoreboard_addr__bpr.thread_id`:U1 = nil
+  mut state_d:U2 = 0sb?
   if neigh_resp_valid != 0 {
     rf_wen_data_r = neigh_resp_data
   }
@@ -22,14 +25,21 @@ pub mod intpipe_csr_file_fl_barrier::[timecheck=false](clk_i:u1, rst_ni:u1, star
   if (state_q == 3) and (rf_wen_ready != 0) {
     state_d = 0
   }
-  start_ready = unsigned(state_q == 0)
-  const start_accepted__w1 = unsigned((start_ready != 0) and (start_valid != 0))
-  rf_wen_valid = unsigned(state_q == 3)
+  mut _b2i_2 = if (start_valid != 0) or (state_q != 0) { 1 } else { 0 }
+  mut _b2i_3 = if state_q == 0 { 1 } else { 0 }
+  start_ready = _b2i_3
+  mut _b2i_4 = if (start_ready != 0) and (start_valid != 0) { 1 } else { 0 }
+  const start_accepted__w1 = _b2i_4
+  mut _b2i_5 = if state_q == 1 { 1 } else { 0 }
+  mut _b2i_6 = if state_q == 3 { 1 } else { 0 }
+  rf_wen_valid = _b2i_6
+  mut _b2i_7 = if (rf_wen_valid != 0) or (neigh_resp_valid != 0) { 1 } else { 0 }
+  mut _b2i_8 = if state_q != 0 { 1 } else { 0 }
   mut `scoreboard_addr__bpo.fp` = 0
   mut `scoreboard_addr__bpo.addr` = rf_wen_addr
   mut `scoreboard_addr__bpo.thread_id` = rf_wen_thread_id
   if rst_ni != 0 {
-    if unsigned((start_valid != 0) or (state_q != 0)) != 0 {
+    if _b2i_2 != 0 {
       state_q = state_d
     }
   }
@@ -44,11 +54,16 @@ pub mod intpipe_csr_file_fl_barrier::[timecheck=false](clk_i:u1, rst_ni:u1, star
       rf_wen_thread_id = start_thread_id
     }
   }
+  `scoreboard_addr__bpr.fp` = 0
   scoreboard_addr.fp = 0
-  scoreboard_addr.addr = `scoreboard_addr__bpo.addr`
-  scoreboard_addr.thread_id = `scoreboard_addr__bpo.thread_id`
-  neigh_req_valid = unsigned(state_q == 1)
-  rf_wen_valid_early = unsigned((rf_wen_valid != 0) or (neigh_resp_valid != 0))
+  const t39 = `scoreboard_addr__bpo.addr`
+  `scoreboard_addr__bpr.addr` = t39
+  scoreboard_addr.addr = t39
+  const t40 = `scoreboard_addr__bpo.thread_id`
+  `scoreboard_addr__bpr.thread_id` = t40
+  scoreboard_addr.thread_id = t40
+  neigh_req_valid = _b2i_5
+  rf_wen_valid_early = _b2i_7
   rf_wen_data = (rf_wen_data_r & 1)
-  scoreboard_valid = unsigned(state_q != 0)
+  scoreboard_valid = _b2i_8
 }
