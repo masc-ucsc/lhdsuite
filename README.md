@@ -92,7 +92,7 @@ Run one synthesis job at a time.
 
 | Scenario | Checks or measures |
 | --- | --- |
-| `compile_verilog`, `compile_pyrope`, `compile_pyrope2` | Front-end compilation and throughput. `compile_pyrope2` (cores with a maintained `pyrope2/` tree: dino, picorv32, matched_filter, minion) runs the same flow over that tree. |
+| `compile_verilog`, `compile_pyrope`, `compile_pyrope2` | Front-end compilation and throughput. `compile_pyrope2` (cores with a maintained `pyrope2/` tree: dino, picorv32, matched_filter) runs the same flow over that tree. |
 | `compile_pyrope_parallel` | Separate compilation through an import-aware generated Makefile. |
 | `compile_incremental` | Compilation across cold, comment-only, and semantic edits. |
 | `synth`, `synth_incremental` | Mapping time, reuse, gate count, area, and timing with sky130. Minion also runs a flat-mapping comparison. |
@@ -127,6 +127,11 @@ intentional bugs that LEC or formal verification must detect.
 Measure reuse by saved work and elapsed time, not cache-hit counts alone.
 Simulation output assertions and strict proof gates remain enabled.
 
+Some incremental LEC targets accept a timeout without refutation under the
+existing owner policy. Minion and Backend currently pass through that path;
+their pass status does not establish equivalence. Strict proof checks still
+reject incomplete verdicts.
+
 ## Known-failing scenarios
 
 These are previously reported failures, not a fresh status report for the
@@ -136,6 +141,11 @@ selected LiveHD checkout. Re-run the relevant target to establish its status.
 | --- | --- |
 | `//bench:picorv32_lec`, `picorv32_lec_bug` | A six-cycle bounded result misses behavior beyond reset and cannot establish equivalence or detect the mutant. |
 | `//bench:minion_lec`, `minion_lec_incremental`, `minion_synth_lec_synth` | Unresolved state, memory, and hierarchical proof obligations. |
+| `//bench:xs_rob_lec_incremental` | RenameBuffer and Rob remain inconclusive in unbounded equivalence; 10 of 12 definitions prove within the configured budget. |
+| `//bench:xs_rob_synth_incremental` | ABC cold, warm, and edit reuse checks pass, but all four downstream timing analyses fail with `std::bad_alloc` at roughly 560 GiB peak memory. |
+| `//bench:xs_backend_synth_incremental` | Warm ABC mapping reaches only 1.48× speedup versus the required 2× (10,604 hits / 1,166 misses). Full and cold timing analyses fail with `std::bad_alloc` at roughly 545 GiB peak memory. |
+| `//bench:cva6_synth_incremental` | Downstream timing analysis fails with `std::bad_alloc` after ABC maps the large design; the full run reaches roughly 548 GiB peak memory. |
+| `//bench:xs_exu_synth_incremental` | Expensive reuse-ineligible regions prevent the comment-only ABC map from meeting the required 2× speedup. |
 | `//verif:genprp_minion` | Slang driver-order failure during generation. |
 | `//verif:genprp_xs_enqentry_4` | Excessive front-end memory use. |
 | `//verif:genprp_xs_tracebuffer` | Combinational cycle in generated Pyrope. |

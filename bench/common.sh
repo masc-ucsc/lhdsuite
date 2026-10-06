@@ -239,7 +239,23 @@ step_failed() {
   else
     where="$WORK/$log"
   fi
-  tail -n "$BENCH_FAIL_TAIL" "$log" >&2
+  # Structured results can contain hundreds of thousands of unpaired states.
+  # Keep the error itself visible, while the archived log retains every detail.
+  tail -n "$BENCH_FAIL_TAIL" "$log" | python3 -c '
+import json, sys
+for line in sys.stdin:
+    if len(line) > 4096:
+        try:
+            result = json.loads(line)
+            summary = {k: result[k] for k in ("command", "status", "severity", "message", "hint", "error") if k in result}
+            if summary:
+                line = json.dumps(summary, ensure_ascii=False) + "\n"
+        except (ValueError, TypeError):
+            pass
+        if len(line) > 4096:
+            line = line[:3072] + " ... [long line truncated; see archived log] ... " + line[-768:]
+    sys.stdout.write(line)
+' >&2
   echo "  [$log: $(wc -l <"$log" | tr -d ' ') lines; full log at $where;" \
     "--test_env=BENCH_VERBOSE=1 prints it all here]" >&2
 }

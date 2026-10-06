@@ -26,72 +26,72 @@ comptime const LDEST          = 14
 comptime const PDEST          = 6
 comptime const VL_WEN         = 1
 
-comb advance_pointer(pointer:u10, amount:u10) -> (next:u10) {
-  const total:u10  = (pointer#[0 ..< ADDRESS_BITS] + amount)#[0 ..= 9]
+comb advance_pointer(pointer:U10, amount:U10) -> (next:U10) {
+  const total:U10  = (pointer#[0 ..< ADDRESS_BITS] + amount)#[0 ..= 9]
   const crossed    = total >= DEPTH
-  const address:u9 = (if crossed { total - DEPTH } else { total })#[0 ..< ADDRESS_BITS]
-  next             = ((pointer#[ADDRESS_BITS] ^ unsigned(crossed)) << ADDRESS_BITS) | address
+  const address:U9 = (if crossed { total - DEPTH } else { total })#[0 ..< ADDRESS_BITS]
+  next             = ((pointer#[ADDRESS_BITS] ^ Unsigned(crossed)) << ADDRESS_BITS) | address
 }
 
-comb rotate_pointer(bits:u352, amount:u4) -> (next:u352) {
+comb rotate_pointer(bits:U352, amount:U4) -> (next:U352) {
   // The RTL's padded lookup returns the original word beyond lane eight.
   next = if amount <= RENAME_WIDTH { ((bits << amount) | (bits >> (DEPTH - amount)))#[0 ..< DEPTH] } else { bits }
 }
 
 pub mod RenameBuffer::[timecheck = false](
-  clock:u1,
-  reset:u1,
-  io_redirect_valid:u1,
-  io_req:u4080,
-  io_fromRob_walkSize:u9,
-  io_fromRob_walkEnd:u1,
-  io_fromRob_commitSize:u9,
-  io_fromRob_vecLoadExcp:(valid:u1, bits:(isStrided:u1, isVlm:u1)),
-  io_snpt:(snptEnq:u1, snptDeq:u1, useSnpt:u1, snptSelect:u2, flushVec:u4)
+  clock:Clock,
+  reset:U1,
+  io_redirect_valid:U1,
+  io_req:U4080,
+  io_fromRob_walkSize:U9,
+  io_fromRob_walkEnd:U1,
+  io_fromRob_commitSize:U9,
+  io_fromRob_vecLoadExcp:(valid:U1, bits:(isStrided:U1, isVlm:U1)),
+  io_snpt:(snptEnq:U1, snptDeq:U1, useSnpt:U1, snptSelect:U2, flushVec:U4)
 ) -> (
-  io_canEnq:u1@[],
-  io_canEnqForDispatch:u1@[],
-  io_commits:(isCommit:u1, commitValid:u8, isWalk:u1, walkValid:u8, info:u160)@[],
-  io_diffCommits:(isCommit:u1, commitValid:u520, info:u10400)@[],
-  io_status:(walkEnd:u1, commitEnd:u1)@[],
-  io_toVecExcpMod:(logicPhyRegMap:u112)@[]
+  io_canEnq:U1@[],
+  io_canEnqForDispatch:U1@[],
+  io_commits:(isCommit:U1, commitValid:U8, isWalk:U1, walkValid:U8, info:U160)@[],
+  io_diffCommits:(isCommit:U1, commitValid:U520, info:U10400)@[],
+  io_status:(walkEnd:U1, commitEnd:U1)@[],
+  io_toVecExcpMod:(logicPhyRegMap:U112)@[]
 ) {
   // State names retain automatic correspondence with the elaborated RTL.
-  reg enqPtrVec:[RENAME_WIDTH]u10:[ordering = "old", reset_pin = ref reset, async = true] = (0, 1, 2, 3, 4, 5, 6, 7)
-  reg deqPtrVec:[COMMIT_WIDTH]u10:[ordering = "old", reset_pin = ref reset, async = true] = (0, 1, 2, 3, 4, 5, 6, 7)
-  reg enqPtrOH:u352:[reset_pin = ref reset, async = true] = 1
-  reg deqPtrOH:u352:[reset_pin = ref reset, async = true] = 1
-  reg walkPtr:u10 = nil
-  reg diffPtr:u10:[reset_pin = ref reset, async = true] = 0
-  reg renameBuffer:[DEPTH]u20:[ordering = "old"] = nil
-  const entries_word:u7040 = renameBuffer#[..]
+  reg enqPtrVec:[RENAME_WIDTH]U10:[ordering = "old", reset_pin=reset, async = true] = (0, 1, 2, 3, 4, 5, 6, 7)
+  reg deqPtrVec:[COMMIT_WIDTH]U10:[ordering = "old", reset_pin=reset, async = true] = (0, 1, 2, 3, 4, 5, 6, 7)
+  reg enqPtrOH:U352:[reset_pin=reset, async = true] = 1
+  reg deqPtrOH:U352:[reset_pin=reset, async = true] = 1
+  reg walkPtr:U10 = nil
+  reg diffPtr:U10:[reset_pin=reset, async = true] = 0
+  reg renameBuffer:[DEPTH]U20:[ordering = "old"] = nil
+  const entries_word:U7040 = renameBuffer#[..]
 
-  reg state:u2:[reset_pin = ref reset, async = true]           = STATE_IDLE
-  reg robWalkEndReg:u1:[reset_pin = ref reset, async = true]   = 0
-  reg commitSize:u9:[reset_pin = ref reset, async = true]      = 0
-  reg walkSize:u9:[reset_pin = ref reset, async = true]        = 0
-  reg specialWalkSize:u9:[reset_pin = ref reset, async = true] = 0
-  const idle = state == STATE_IDLE
-  const special_walk = state == STATE_SPECIAL_WALK
-  const walking = state == STATE_WALK
-  const redirect = io_redirect_valid != 0
-  const use_snapshot = io_snpt.useSnpt != 0
-  const committing = idle or special_walk
+  reg state:U2:[reset_pin=reset, async = true]           = STATE_IDLE
+  reg robWalkEndReg:U1:[reset_pin=reset, async = true]   = 0
+  reg commitSize:U9:[reset_pin=reset, async = true]      = 0
+  reg walkSize:U9:[reset_pin=reset, async = true]        = 0
+  reg specialWalkSize:U9:[reset_pin=reset, async = true] = 0
+  const idle:Bool = state == STATE_IDLE
+  const special_walk:Bool = state == STATE_SPECIAL_WALK
+  const walking:Bool = state == STATE_WALK
+  const redirect:Bool = io_redirect_valid != 0
+  const use_snapshot:Bool = io_snpt.useSnpt != 0
+  const committing:Bool = idle or special_walk
 
   // Allocation uses the count of earlier accepted requests, not lane number.
-  mut accepted:u8                = 0
-  mut requests:[RENAME_WIDTH]u20 = 0
+  mut accepted:U8                = 0
+  mut requests:[RENAME_WIDTH]U20 = 0
   for lane in 0 ..< RENAME_WIDTH {
-    const request:u510 = io_req#[(lane*REQUEST_BITS) ..+ REQUEST_BITS]
-    accepted#[lane]    = unsigned(request#[REQUEST_VALID] != 0 and request#|[REQUEST_V0_WEN ..= REQUEST_RF_WEN] != 0)
+    const request:U510 = io_req#[(lane*REQUEST_BITS) ..+ REQUEST_BITS]
+    accepted#[lane]    = Unsigned(request#[REQUEST_VALID] != 0 and request#|[REQUEST_V0_WEN ..= REQUEST_RF_WEN] != 0)
     requests[lane]     = (request#[REQUEST_LDEST ..+ 6] << LDEST)
       | (request#[REQUEST_PDEST ..+ 8] << PDEST)
       | (request#[REQUEST_VL_WEN ..+ 5] << VL_WEN)
       | request#[REQUEST_MOVE]
   }
-  const enqueue_count:u4    = accepted#+[..]
-  mut allocation_slots:u72  = 0
-  mut preceding_requests:u3 = 0
+  const enqueue_count:U4    = accepted#+[..]
+  mut allocation_slots:U72  = 0
+  mut preceding_requests:U3 = 0
   for lane in 0 ..< RENAME_WIDTH {
     allocation_slots#[(lane*ADDRESS_BITS) ..+ ADDRESS_BITS] = enqPtrVec[preceding_requests]#[0 ..< ADDRESS_BITS]
     wrap preceding_requests += accepted#[lane]
@@ -99,7 +99,7 @@ pub mod RenameBuffer::[timecheck = false](
   // All reads see old state. Later request lanes have write priority.
   for write_index in 0 ..< DEPTH {
     const entry        = DEPTH - 1 - write_index
-    mut next_entry:u20 = renameBuffer[entry]
+    mut next_entry:U20 = renameBuffer[entry]
     for lane in 0 ..< RENAME_WIDTH {
       if accepted#[lane] != 0 and allocation_slots#[(lane*ADDRESS_BITS) ..+ ADDRESS_BITS] == entry {
         next_entry = requests[lane]
@@ -110,97 +110,97 @@ pub mod RenameBuffer::[timecheck = false](
 
   // Commit uses the registered one-hot pointer; recovery uses the binary
   // walk pointer. Masked OR preserves multi-hot and out-of-range behavior.
-  mut commit_info:u160 = 0
-  mut commit_valid:u8  = 0
-  mut walk_valid:u8    = 0
+  mut commit_info:U160 = 0
+  mut commit_valid:U8  = 0
+  mut walk_valid:U8    = 0
   for lane in 0 ..< COMMIT_WIDTH {
-    mut commit_entry:u20 = 0
-    mut walk_entry:u20   = 0
+    mut commit_entry:U20 = 0
+    mut walk_entry:U20   = 0
     for slot in 0 ..< DEPTH {
       const source_slot = if slot >= lane { slot - lane } else { slot + DEPTH - lane }
-      const entry:u20   = entries_word#[(slot*ENTRY_BITS) ..+ ENTRY_BITS]
+      const entry:U20   = entries_word#[(slot*ENTRY_BITS) ..+ ENTRY_BITS]
       if deqPtrOH#[source_slot] != 0 { commit_entry = commit_entry | entry }
       if walkPtr#[0 ..< ADDRESS_BITS] == source_slot { walk_entry = walk_entry | entry }
     }
     commit_info#[(lane*ENTRY_BITS) ..+ ENTRY_BITS] = if committing { commit_entry } else { walk_entry }
-    commit_valid#[lane] = unsigned((idle and lane < commitSize) or (special_walk and lane < specialWalkSize))
-    walk_valid#[lane] = unsigned((walking and lane < walkSize) or (special_walk and lane < specialWalkSize))
+    commit_valid#[lane] = Unsigned((idle and lane < commitSize) or (special_walk and lane < specialWalkSize))
+    walk_valid#[lane] = Unsigned((walking and lane < walkSize) or (special_walk and lane < specialWalkSize))
   }
-  io_commits = (const isCommit=unsigned(committing), const commitValid=commit_valid, const isWalk=unsigned(walking or special_walk),
+  io_commits = (const isCommit=Unsigned(committing), const commitValid=commit_valid, const isWalk=Unsigned(walking or special_walk),
                 const walkValid=walk_valid, const info=commit_info)
-  mut commit_number:u4 = 0
-  mut walk_number:u4   = 0
+  mut commit_number:U4 = 0
+  mut walk_number:U4   = 0
   for lane in 0 ..< COMMIT_WIDTH {
     if commit_valid#[0] != 0 and commit_valid#[lane] != 0 { commit_number = lane + 1 }
     if walk_valid#[0] != 0 and walk_valid#[lane] != 0 { walk_number = lane + 1 }
   }
-  const commit_count:u4     = if idle { commit_number } else { 0 }
-  const walk_count:u4       = if walking { walk_number } else { 0 }
-  const special_count:u4    = if special_walk { walk_number } else { 0 }
-  const commit_size_next:u9 = (commitSize + io_fromRob_commitSize - commit_count)#[0 ..= 8]
-  const walk_size_next:u9   = (walkSize + io_fromRob_walkSize - walk_count)#[0 ..= 8]
-  const new_special_size:u9 = if redirect and not use_snapshot { commit_size_next } else { 0 }
+  const commit_count:U4     = if idle { commit_number } else { 0 }
+  const walk_count:U4       = if walking { walk_number } else { 0 }
+  const special_count:U4    = if special_walk { walk_number } else { 0 }
+  const commit_size_next:U9 = (commitSize + io_fromRob_commitSize - commit_count)#[0 ..= 8]
+  const walk_size_next:U9   = (walkSize + io_fromRob_walkSize - walk_count)#[0 ..= 8]
+  const new_special_size:U9 = if redirect and not use_snapshot { commit_size_next } else { 0 }
   wrap specialWalkSize = specialWalkSize + new_special_size - special_count
   commitSize      = if redirect and not use_snapshot { 0 } else { commit_size_next }
   walkSize        = if redirect { 0 } else { walk_size_next }
-  io_status       = (const walkEnd=unsigned(walk_size_next == 0), const commitEnd=unsigned(commit_size_next == 0))
+  io_status       = (const walkEnd=Unsigned(walk_size_next == 0), const commitEnd=Unsigned(commit_size_next == 0))
 
   const special_end   = specialWalkSize <= COMMIT_WIDTH
   const walk_end      = (robWalkEndReg != 0 or (io_fromRob_walkEnd != 0 and io_fromRob_walkSize == 0)) and walkSize <= COMMIT_WIDTH
-  const next_state:u2 = if redirect { if use_snapshot { STATE_WALK } else { STATE_SPECIAL_WALK } }
+  const next_state:U2 = if redirect { if use_snapshot { STATE_WALK } else { STATE_SPECIAL_WALK } }
     elif idle { STATE_IDLE }
     elif special_walk and special_end { STATE_WALK }
     elif walking and walk_end { STATE_IDLE }
     else { state }
   state               = next_state
-  robWalkEndReg       = unsigned(not redirect and (io_fromRob_walkEnd != 0 or robWalkEndReg != 0))
+  robWalkEndReg       = Unsigned(not redirect and (io_fromRob_walkEnd != 0 or robWalkEndReg != 0))
 
   mut walkPtrSnapshots_snapshotGen = SnapshotGenerator::[name=walkPtrSnapshots_snapshotGen](
     clock=clock, reset=reset, io_enq=io_snpt.snptEnq, io_enqData=(const flag=enqPtrVec[0]#[ADDRESS_BITS], const value=enqPtrVec[0]#[0
       ..< ADDRESS_BITS]), io_deq=io_snpt.snptDeq, io_redirect=io_redirect_valid, io_flushVec=io_snpt.flushVec
   )
-  const snapshot:u10       = (walkPtrSnapshots_snapshotGen.io_snapshots >> (io_snpt.snptSelect*POINTER_BITS))#[0 ..< POINTER_BITS]
-  const dequeue_steps:u4   = if idle { commit_count } elif special_walk { special_count } else { 0 }
-  const dequeue_base:u10   = advance_pointer(pointer=deqPtrVec[0], amount=dequeue_steps)
-  mut dequeue_pointers:u80 = 0
+  const snapshot:U10       = (walkPtrSnapshots_snapshotGen.io_snapshots >> (io_snpt.snptSelect*POINTER_BITS))#[0 ..< POINTER_BITS]
+  const dequeue_steps:U4   = if idle { commit_count } elif special_walk { special_count } else { 0 }
+  const dequeue_base:U10   = advance_pointer(pointer=deqPtrVec[0], amount=dequeue_steps)
+  mut dequeue_pointers:U80 = 0
   for lane in 0 ..< COMMIT_WIDTH {
-    dequeue_pointers#[(lane*POINTER_BITS) ..+ POINTER_BITS] = advance_pointer(pointer=dequeue_base, amount=lane)
+    dequeue_pointers#[(lane*POINTER_BITS) ..+ POINTER_BITS] = advance_pointer(pointer=dequeue_base, amount=lane#[0 ..+ 10])
   }
   deqPtrVec                = dequeue_pointers
   deqPtrOH = rotate_pointer(bits=deqPtrOH, amount=dequeue_steps)
-  const walk_next:u10      = if idle and next_state == STATE_WALK { snapshot }
+  const walk_next:U10      = if idle and next_state == STATE_WALK { snapshot }
     elif special_walk and next_state == STATE_WALK { dequeue_pointers#[0 ..< POINTER_BITS] }
     elif walking and use_snapshot and redirect { snapshot }
     elif walking { advance_pointer(pointer=walkPtr, amount=walk_count) }
     else { walkPtr }
   walkPtr = walk_next
   const recovery_done      = walking and next_state == STATE_IDLE
-  const enqueue_base:u10   = if recovery_done { walk_next } else { advance_pointer(pointer=enqPtrVec[0], amount=enqueue_count) }
-  mut enqueue_pointers:u80 = 0
+  const enqueue_base:U10   = if recovery_done { walk_next } else { advance_pointer(pointer=enqPtrVec[0], amount=enqueue_count) }
+  mut enqueue_pointers:U80 = 0
   for lane in 0 ..< RENAME_WIDTH {
-    enqueue_pointers#[(lane*POINTER_BITS) ..+ POINTER_BITS] = advance_pointer(pointer=enqueue_base, amount=lane)
+    enqueue_pointers#[(lane*POINTER_BITS) ..+ POINTER_BITS] = advance_pointer(pointer=enqueue_base, amount=lane#[0 ..+ 10])
   }
   enqPtrVec = enqueue_pointers
-  const rotated_enqueue:u352 = rotate_pointer(bits=enqPtrOH, amount=enqueue_count)
+  const rotated_enqueue:U352 = rotate_pointer(bits=enqPtrOH, amount=enqueue_count)
   enqPtrOH = if recovery_done { (1 << walk_next#[0 ..< ADDRESS_BITS])#[0 ..< DEPTH] } else { rotated_enqueue }
 
   // Queue occupancy and enqueue credit are nine-bit RTL arithmetic.
   const lap_distance = if enqPtrVec[0]#[ADDRESS_BITS] == deqPtrVec[0]#[ADDRESS_BITS] { 0 } else { DEPTH }
-  const occupied:u9 = (enqPtrVec[0]#[0 ..< ADDRESS_BITS] - deqPtrVec[0]#[0 ..< ADDRESS_BITS] + lap_distance)#[0 ..= 8]
-  const after_enqueue:u9 = (occupied + enqueue_count)#[0 ..= 8]
-  reg allowEnqueue_last_REG:u1:[reset_pin = ref reset, async = true]            = 1
-  reg allowEnqueueForDispatch_last_REG:u1:[reset_pin = ref reset, async = true] = 1
-  allowEnqueue_last_REG = unsigned(after_enqueue <= DEPTH - RENAME_WIDTH)
-  allowEnqueueForDispatch_last_REG = unsigned(after_enqueue <= DEPTH - 2*RENAME_WIDTH)
-  io_canEnq = allowEnqueue_last_REG & unsigned(idle)
-  io_canEnqForDispatch = allowEnqueueForDispatch_last_REG & unsigned(idle)
+  const occupied:U9 = (enqPtrVec[0]#[0 ..< ADDRESS_BITS] - deqPtrVec[0]#[0 ..< ADDRESS_BITS] + lap_distance)#[0 ..= 8]
+  const after_enqueue:U9 = (occupied + enqueue_count)#[0 ..= 8]
+  reg allowEnqueue_last_REG:U1:[reset_pin=reset, async = true]            = 1
+  reg allowEnqueueForDispatch_last_REG:U1:[reset_pin=reset, async = true] = 1
+  allowEnqueue_last_REG = Unsigned(after_enqueue <= DEPTH - RENAME_WIDTH)
+  allowEnqueueForDispatch_last_REG = Unsigned(after_enqueue <= DEPTH - 2*RENAME_WIDTH)
+  io_canEnq = allowEnqueue_last_REG & Unsigned(idle)
+  io_canEnqForDispatch = allowEnqueueForDispatch_last_REG & Unsigned(idle)
 
   // Exception recovery captures logical/physical mappings one cycle later.
-  reg vecLoadExcp:u3 = nil
-  reg io_toVecExcpMod_logicPhyRegMap_valid_REG:[COMMIT_WIDTH]u1   = nil
-  reg io_toVecExcpMod_logicPhyRegMap_bits_lreg_r:[COMMIT_WIDTH]u6 = nil
-  reg io_toVecExcpMod_logicPhyRegMap_bits_preg_r:[COMMIT_WIDTH]u8 = nil
-  mut exception_map:u112 = 0
+  reg vecLoadExcp:U3 = nil
+  reg io_toVecExcpMod_logicPhyRegMap_valid_REG:[COMMIT_WIDTH]U1   = nil
+  reg io_toVecExcpMod_logicPhyRegMap_bits_lreg_r:[COMMIT_WIDTH]U6 = nil
+  reg io_toVecExcpMod_logicPhyRegMap_bits_preg_r:[COMMIT_WIDTH]U8 = nil
+  mut exception_map:U112 = 0
   for lane in 0 ..< COMMIT_WIDTH {
     // The public RTL map exposes seven of the eight stored physical bits.
     exception_map#[(lane*MAP_BITS)
@@ -208,7 +208,7 @@ pub mod RenameBuffer::[timecheck = false](
       | (io_toVecExcpMod_logicPhyRegMap_bits_lreg_r[lane] << 7)
       | io_toVecExcpMod_logicPhyRegMap_bits_preg_r[lane]#[0 ..= 6]
     const map_valid = special_walk and vecLoadExcp#[2] != 0 and commit_valid#[lane] != 0
-    io_toVecExcpMod_logicPhyRegMap_valid_REG[lane] = unsigned(map_valid)
+    io_toVecExcpMod_logicPhyRegMap_valid_REG[lane] = Unsigned(map_valid)
     if map_valid {
       io_toVecExcpMod_logicPhyRegMap_bits_lreg_r[lane] = commit_info#[(lane*ENTRY_BITS + LDEST) ..+ 6]
       io_toVecExcpMod_logicPhyRegMap_bits_preg_r[lane] = commit_info#[(lane*ENTRY_BITS + PDEST) ..+ 8]
@@ -229,18 +229,18 @@ pub mod RenameBuffer::[timecheck = false](
   // Debug has COMMIT_WIDTH * MaxUopSize (65) lanes. The elaborated pointer
   // subtracts DEPTH once and then keeps nine address bits, even past one lap.
   // Padding reproduces the RTL's entry-zero result for addresses >= DEPTH.
-  mut padded_entries:u10240   = 0
+  mut padded_entries:U10240   = 0
   padded_entries#[0 ..= 7039] = entries_word
   for slot in DEPTH ..< ADDRESS_SPACE {
     padded_entries#[(slot*ENTRY_BITS) ..+ ENTRY_BITS] = entries_word#[0 ..< ENTRY_BITS]
   }
-  mut debug_info:u10400 = 0
-  mut debug_valid:u520  = 0
+  mut debug_info:U10400 = 0
+  mut debug_valid:U520  = 0
   for lane in 0 ..< DEBUG_WIDTH {
     const total = diffPtr#[0 ..< ADDRESS_BITS] + lane
-    const address:u9 = (if total >= DEPTH { total - DEPTH } else { total })#[0 ..< ADDRESS_BITS]
+    const address:U9 = (if total >= DEPTH { total - DEPTH } else { total })#[0 ..< ADDRESS_BITS]
     debug_info#[(lane*ENTRY_BITS) ..+ ENTRY_BITS] = (padded_entries >> (address*ENTRY_BITS))#[0 ..< ENTRY_BITS]
-    debug_valid#[lane] = unsigned(lane < io_fromRob_commitSize)
+    debug_valid#[lane] = Unsigned(lane < io_fromRob_commitSize)
   }
   io_diffCommits = (const isCommit=1, const commitValid=debug_valid, const info=debug_info)
   diffPtr        = advance_pointer(pointer=diffPtr, amount=io_fromRob_commitSize)

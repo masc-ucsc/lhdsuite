@@ -139,7 +139,7 @@ def main():
             save()
             return None
         ports = json.loads(candidates[0].read_text())["io"]
-        return sorted((p["name"], p["dir"], p["declared_bits"], p["signed"]) for p in ports)
+        return sorted((p["name"], p["dir"], p["declared_bits"], p["signed"], p.get("clock", False)) for p in ports)
 
     def check(core, entry, config=None, label=None):
         top = "MaxPeriodFibonacciLFSR" if entry.endswith("LFSR2") else "RobEnqPtrWrapper" if entry.endswith("_N32") else entry
@@ -150,7 +150,9 @@ def main():
         target = work / label
         target.mkdir(exist_ok=True)
         vfiles = [base / "verilog" / (top + ".sv")]
-        if core != "xiangshan/Backend" and (base / "verilog/filelist.f").exists():
+        # Rocket contributes one vendored LFSR leaf, not the entire stale
+        # Rocket-system filelist. Its matching top RTL is self-contained.
+        if core not in ("xiangshan/Backend", "rocket") and (base / "verilog/filelist.f").exists():
             vfiles = [base / "verilog" / line.strip() for line in
                       (base / "verilog/filelist.f").read_text().splitlines()
                       if line.strip() and not line.lstrip().startswith(("//", "#"))]
@@ -189,7 +191,7 @@ def main():
                 trailing=["--", "-DSYNTHESIS"]):
             return
         ref = "lg:" + str(library)
-        reference_interface = interface(label + "/verilog", ref, top) if top != "RenameBuffer" else None
+        reference_interface = interface(label + "/verilog", ref, top)
         sides = [("generated", generated / (top + ".prp")), ("pyrope2", impl)]
         if not config:
             sides.insert(1, ("pyrope", checked))
@@ -205,23 +207,11 @@ def main():
             run(label + "/" + side + "_compile", ["compile", source, "--top", top,
                 "--emit-dir", "lg:" + str(target / (side + "_lg"))], shared=cache)
             run(label + "/" + side + "_incremental", ["compile", source, "--top", top], shared=cache)
-            if top != "RenameBuffer":
-                signature = interface(label + "/" + side, "lg:" + str(target / (side + "_lg")), top)
-                report["checks"].append({"name": label + "/" + side + "_interface",
-                    "ok": signature is not None and signature == reference_interface,
-                    "reference_ports": reference_interface, "ports": signature})
-                save()
-            else:
-                # This generated top has its complete public signature on one
-                # line. Check the declared interface without emitting its large
-                # simulator solely to rediscover the same port declarations.
-                signature = next(line for line in source.read_text().splitlines() if line.startswith("pub mod RenameBuffer"))
-                reference_signature = next(line for line in (generated / "RenameBuffer.prp").read_text().splitlines()
-                                           if line.startswith("pub mod RenameBuffer"))
-                report["checks"].append({"name": label + "/" + side + "_interface",
-                    "ok": signature == reference_signature, "ports": signature,
-                    "reference_ports": reference_signature})
-                save()
+            signature = interface(label + "/" + side, "lg:" + str(target / (side + "_lg")), top)
+            report["checks"].append({"name": label + "/" + side + "_interface",
+                "ok": signature is not None and signature == reference_interface,
+                "reference_ports": reference_interface, "ports": signature})
+            save()
             opts = ["--set", "formal.lec.hier=false"]
             if side == "pyrope2" and mapping:
                 opts += ["--set", "formal.lec.match=@" + str(mapping)]

@@ -40,16 +40,16 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# The hand-maintained, cleaned tree (see //bench:minion_sim_pyrope2). Same top.
+# Optional maintained tree. The benchmark knob stays disabled until it is checked in.
 filegroup(
     name = "pyrope2",
-    srcs = glob(["pyrope2/*.prp"]),
+    srcs = glob(["pyrope2/*.prp"], allow_empty = True),  # minion/pyrope2 is not checked in yet
     visibility = ["//visibility:public"],
 )
 
 filegroup(
     name = "pyrope2_top",
-    srcs = ["pyrope2/minion_top.prp"],
+    srcs = glob(["pyrope2/minion_top.prp"], allow_empty = True),
     visibility = ["//visibility:public"],
 )
 

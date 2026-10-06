@@ -234,7 +234,7 @@ CORES = {
         # architectural leaf while synth/sim exercise the complete hierarchy.
         "unit": "alu",
         "generated_variants": True,
-        "variant_bug_find": "  const adder_result__w1 = (((operand_a_bitmanip << 1) | 1) + operand_b_neg__w1)#[1..=64]",
+        "variant_bug_find": "  const adder_result__w1 = (((operand_a_bitmanip#[0..<0x40] << 1) | 1) + operand_b_neg__w1)#[1..<0x41]",
         "variant_bug_replace": "  const adder_result__w1 = operand_a__w1 - operand_b__w1",
         # No separate temporal sidecar yet.
         "seq_unit": "",
@@ -326,7 +326,8 @@ CORES = {
     },
     "minion": {
         "pkg": "//minion",
-        "pyrope2": True,
+        # The optional filegroups are placeholders; no maintained tree exists.
+        "pyrope2": False,
         "top": "minion_top",
         "unit": "txfma_adder",
         # No sequential sidecar yet. vpu_trans or a dcache handshake would be

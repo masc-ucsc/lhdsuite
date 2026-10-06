@@ -26,7 +26,7 @@ filegroup(
 
 filegroup(
     name = "pyrope",
-    srcs = glob(["pyrope/*.prp"]) + ["pyrope/manifest.json"],
+    srcs = glob(["pyrope/*.prp"]) + glob(["pyrope/manifest.json"], allow_empty = True),
     visibility = ["//visibility:public"],
 )
 
