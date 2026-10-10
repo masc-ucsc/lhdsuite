@@ -56,7 +56,7 @@ def main():
         seen[cell] = width
 
         ports = ", ".join(
-            {"clock": "clock:u1", "enable": "enable:u1", "io": "io:u%d" % width}[a] for a in args
+            {"clock": "clock:U1", "enable": "enable:U1", "io": "io:U%d" % width}[a] for a in args
         )
         body = (
             "// Synthesis sink model for the `%s` DPI cell.\n"
@@ -74,7 +74,7 @@ def main():
 
     print("generated %d stub(s) into %s" % (len(seen), out))
     for cell, width in sorted(seen.items()):
-        print("  %-40s io:u%d" % (cell, width))
+        print("  %-40s io:U%d" % (cell, width))
 
 
 main()

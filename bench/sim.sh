@@ -179,6 +179,16 @@ case " ${CORE_SIM_SETS:-} " in
   *) CORE_SIM_SETS="--set sim.tune.profile=off ${CORE_SIM_SETS:-}" ;;
 esac
 
+# Host C++ build parallelism: the SAME job count bench/sim_verilator.sh hands
+# `make -j`. Under `bazel test` lhd defaults to 2 jobs (bazel normally runs
+# tests side by side), but every sim target here is tagged `exclusive`, so that
+# default only made sim_cc_ms a 2-core number next to Verilator's all-core one
+# (xs_rob: 629 s at 2 jobs vs 46 s at 128). A core may still pin its own.
+case " ${CORE_SIM_SETS:-} " in
+  *"sim.jobs="*) ;;
+  *) CORE_SIM_SETS="--set sim.jobs=$(cpu_count) ${CORE_SIM_SETS:-}" ;;
+esac
+
 # ---- MODE=incr: full plus the three-pass rebuild over ONE workdir ------------
 #
 # The sim counterpart of synth_incremental. The measured endpoint is a compiled
