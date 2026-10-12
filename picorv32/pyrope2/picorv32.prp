@@ -20,6 +20,7 @@ comptime const CPU_LDMEM:U8  = 0x01
 
 // Simple (non-lookahead, non-AXI) memory interface. mem_la_* are the lookahead
 // signals, pcpi_* the external coprocessor port.
+// synthesis attribute: Shift unit: reverse barrel order maps smaller here.
 pub mod picorv32<
   ENABLE_COUNTERS=true,
   ENABLE_COUNTERS64=true,
@@ -41,7 +42,8 @@ pub mod picorv32<
   DEBUG=false,
 >::[
   timecheck=false
-](
+,synth.barrel="reverse"
+,synth.abc_pre="resyn2"](
   clk:Clock,
   irq:U32,
   mem_rdata:U32,
@@ -601,7 +603,8 @@ pub mod picorv32<
   alu_out_0_q = alu_out_0
   alu_out_q   = alu_out
   if ENABLE_COUNTERS {
-    wrap count_cycle = if resetn { count_cycle + 1 } else { 0 }
+    const cycle_inc::[synth.adder="prefix"] = count_cycle + 1
+    wrap count_cycle = if resetn { cycle_inc } else { 0 }
     if not ENABLE_COUNTERS64 {
       count_cycle#[32..=63] = 0
     }
@@ -659,7 +662,8 @@ pub mod picorv32<
           const instruction_bytes = if instr.compressed { 2 } else { 4 }
           wrap reg_next_pc = current_pc + instruction_bytes
           if ENABLE_COUNTERS {
-            wrap count_instr = count_instr + 1
+            const instr_inc::[synth.adder="prefix"] = count_instr + 1
+            wrap count_instr = instr_inc
             if not ENABLE_COUNTERS64 {
               count_instr#[32..=63] = 0
             }
