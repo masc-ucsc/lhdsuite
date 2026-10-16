@@ -1,12 +1,20 @@
 // pyroA - hand translation of riscv-boom v4 ifu/bpd/ras.scala.
 // SmallBoomConfig: nRasEntries=32, vaddrBitsExtended=40 (RV64 Sv39+ext).
 // Reference: pyro_scratch/boom/RAS/chisel/ras.scala (46 LOC Chisel).
-// LEC vs SmallBoom Verilog pending `hagent-boom` kaffirlime build.
-// Try reg-array shape first; only one write site, so the upass.tolg
-// multi-write bug should not fire.
+//
+// LEC-matching rewrite (post-spot-check 2026-10-16):
+//   1. SmallBoomV4Config BoomRAS.sv has NO reset port — regs init via
+//      Verilog randomize macros, not a reset wire. pyroA drops reset:u1
+//      and uses `reg x:u40 = 0` without `reset_pin=` attribute.
+//   2. firtool emits reg-arrays as 32 scalar flops `ras_0 .. ras_31`.
+//      LEC tier-2 matcher cannot pair `reg ras:[32]u40` with those
+//      scalars (same class as AgeDetector v1). Workaround: declare
+//      32 individual `reg ras_N:u40`, name-for-name against the .sv.
+//   3. Chisel's three RegNexts emit as `io_read_addr_REG`, `_REG_1`,
+//      `_REG_2`. Rename for tier-2 state pairing.
 
 pub mod BoomRAS::[timecheck=false](
-  clock:Clock, reset:u1,
+  clock:Clock,
   io_read_idx:u5,
   io_write_valid:u1,
   io_write_idx:u5,
@@ -15,24 +23,114 @@ pub mod BoomRAS::[timecheck=false](
   io_read_addr:u40@[]
 ) {
 
-  // 32-entry RAS as a reg array of u40 words.
-  reg ras:[32]u40:[reset_pin=reset, async=true] = 0
+  // 32-entry RAS: scalar regs for tier-2 LEC state-pairing with the .sv.
+  reg ras_0 :u40
+  reg ras_1 :u40
+  reg ras_2 :u40
+  reg ras_3 :u40
+  reg ras_4 :u40
+  reg ras_5 :u40
+  reg ras_6 :u40
+  reg ras_7 :u40
+  reg ras_8 :u40
+  reg ras_9 :u40
+  reg ras_10:u40
+  reg ras_11:u40
+  reg ras_12:u40
+  reg ras_13:u40
+  reg ras_14:u40
+  reg ras_15:u40
+  reg ras_16:u40
+  reg ras_17:u40
+  reg ras_18:u40
+  reg ras_19:u40
+  reg ras_20:u40
+  reg ras_21:u40
+  reg ras_22:u40
+  reg ras_23:u40
+  reg ras_24:u40
+  reg ras_25:u40
+  reg ras_26:u40
+  reg ras_27:u40
+  reg ras_28:u40
+  reg ras_29:u40
+  reg ras_30:u40
+  reg ras_31:u40
 
-  // RegNext of the write/read collision flag, the write address, and the
-  // registered RAS read. See Chisel: Mux(RegNext(valid && write==read),
-  // RegNext(write_addr), RegNext(ras(read_idx))).
-  reg forward_sel_r:u1:[reset_pin=reset, async=true] = 0
-  reg write_addr_r:u40:[reset_pin=reset, async=true] = 0
-  reg ras_read_r:u40:[reset_pin=reset, async=true] = 0
+  // RegNext of (collision, write_addr, ras_read) — names match firtool emit.
+  reg io_read_addr_REG  :u1
+  reg io_read_addr_REG_1:u40
+  reg io_read_addr_REG_2:u40
 
-  forward_sel_r = if io_write_valid != 0 and io_write_idx == io_read_idx { 1 } else { 0 }
-  write_addr_r  = io_write_addr
-  ras_read_r    = ras[io_read_idx]
+  // Next-cycle registered values. See Chisel ras.scala:37-39.
+  io_read_addr_REG   = if io_write_valid != 0 and io_write_idx == io_read_idx { 1 } else { 0 }
+  io_read_addr_REG_1 = io_write_addr
+  io_read_addr_REG_2 = if      io_read_idx ==  0 { ras_0  }
+                       elif    io_read_idx ==  1 { ras_1  }
+                       elif    io_read_idx ==  2 { ras_2  }
+                       elif    io_read_idx ==  3 { ras_3  }
+                       elif    io_read_idx ==  4 { ras_4  }
+                       elif    io_read_idx ==  5 { ras_5  }
+                       elif    io_read_idx ==  6 { ras_6  }
+                       elif    io_read_idx ==  7 { ras_7  }
+                       elif    io_read_idx ==  8 { ras_8  }
+                       elif    io_read_idx ==  9 { ras_9  }
+                       elif    io_read_idx == 10 { ras_10 }
+                       elif    io_read_idx == 11 { ras_11 }
+                       elif    io_read_idx == 12 { ras_12 }
+                       elif    io_read_idx == 13 { ras_13 }
+                       elif    io_read_idx == 14 { ras_14 }
+                       elif    io_read_idx == 15 { ras_15 }
+                       elif    io_read_idx == 16 { ras_16 }
+                       elif    io_read_idx == 17 { ras_17 }
+                       elif    io_read_idx == 18 { ras_18 }
+                       elif    io_read_idx == 19 { ras_19 }
+                       elif    io_read_idx == 20 { ras_20 }
+                       elif    io_read_idx == 21 { ras_21 }
+                       elif    io_read_idx == 22 { ras_22 }
+                       elif    io_read_idx == 23 { ras_23 }
+                       elif    io_read_idx == 24 { ras_24 }
+                       elif    io_read_idx == 25 { ras_25 }
+                       elif    io_read_idx == 26 { ras_26 }
+                       elif    io_read_idx == 27 { ras_27 }
+                       elif    io_read_idx == 28 { ras_28 }
+                       elif    io_read_idx == 29 { ras_29 }
+                       elif    io_read_idx == 30 { ras_30 }
+                       else                      { ras_31 }
 
-  io_read_addr = if forward_sel_r != 0 { write_addr_r } else { ras_read_r }
+  io_read_addr = if io_read_addr_REG != 0 { io_read_addr_REG_1 } else { io_read_addr_REG_2 }
 
-  // Write path - single write site (satisfies upass.tolg precondition).
-  if io_write_valid != 0 {
-    ras[io_write_idx] = io_write_addr
-  }
+  // 32-way conditional write to scalar regs (fan-out of `ras(write_idx) := write_addr`).
+  if io_write_valid != 0 and io_write_idx ==  0 { ras_0  = io_write_addr }
+  if io_write_valid != 0 and io_write_idx ==  1 { ras_1  = io_write_addr }
+  if io_write_valid != 0 and io_write_idx ==  2 { ras_2  = io_write_addr }
+  if io_write_valid != 0 and io_write_idx ==  3 { ras_3  = io_write_addr }
+  if io_write_valid != 0 and io_write_idx ==  4 { ras_4  = io_write_addr }
+  if io_write_valid != 0 and io_write_idx ==  5 { ras_5  = io_write_addr }
+  if io_write_valid != 0 and io_write_idx ==  6 { ras_6  = io_write_addr }
+  if io_write_valid != 0 and io_write_idx ==  7 { ras_7  = io_write_addr }
+  if io_write_valid != 0 and io_write_idx ==  8 { ras_8  = io_write_addr }
+  if io_write_valid != 0 and io_write_idx ==  9 { ras_9  = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 10 { ras_10 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 11 { ras_11 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 12 { ras_12 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 13 { ras_13 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 14 { ras_14 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 15 { ras_15 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 16 { ras_16 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 17 { ras_17 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 18 { ras_18 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 19 { ras_19 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 20 { ras_20 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 21 { ras_21 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 22 { ras_22 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 23 { ras_23 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 24 { ras_24 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 25 { ras_25 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 26 { ras_26 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 27 { ras_27 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 28 { ras_28 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 29 { ras_29 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 30 { ras_30 = io_write_addr }
+  if io_write_valid != 0 and io_write_idx == 31 { ras_31 = io_write_addr }
 }
