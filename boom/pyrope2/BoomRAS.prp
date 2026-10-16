@@ -1,0 +1,38 @@
+// pyroA - hand translation of riscv-boom v4 ifu/bpd/ras.scala.
+// SmallBoomConfig: nRasEntries=32, vaddrBitsExtended=40 (RV64 Sv39+ext).
+// Reference: pyro_scratch/boom/RAS/chisel/ras.scala (46 LOC Chisel).
+// LEC vs SmallBoom Verilog pending `hagent-boom` kaffirlime build.
+// Try reg-array shape first; only one write site, so the upass.tolg
+// multi-write bug should not fire.
+
+pub mod BoomRAS::[timecheck=false](
+  clock:Clock, reset:u1,
+  io_read_idx:u5,
+  io_write_valid:u1,
+  io_write_idx:u5,
+  io_write_addr:u40
+) -> (
+  io_read_addr:u40@[]
+) {
+
+  // 32-entry RAS as a reg array of u40 words.
+  reg ras:[32]u40:[reset_pin=reset, async=true] = 0
+
+  // RegNext of the write/read collision flag, the write address, and the
+  // registered RAS read. See Chisel: Mux(RegNext(valid && write==read),
+  // RegNext(write_addr), RegNext(ras(read_idx))).
+  reg forward_sel_r:u1:[reset_pin=reset, async=true] = 0
+  reg write_addr_r:u40:[reset_pin=reset, async=true] = 0
+  reg ras_read_r:u40:[reset_pin=reset, async=true] = 0
+
+  forward_sel_r = if io_write_valid != 0 and io_write_idx == io_read_idx { 1 } else { 0 }
+  write_addr_r  = io_write_addr
+  ras_read_r    = ras[io_read_idx]
+
+  io_read_addr = if forward_sel_r != 0 { write_addr_r } else { ras_read_r }
+
+  // Write path - single write site (satisfies upass.tolg precondition).
+  if io_write_valid != 0 {
+    ras[io_write_idx] = io_write_addr
+  }
+}

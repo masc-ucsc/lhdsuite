@@ -1,0 +1,108 @@
+// pyroD - minimal lift: expose the wakeup-loop bound as a named const.
+// Change vs pyroC (one line):
+//   `for w in 0..<2`  ->  `for w in 0..<numWbPorts`
+// Rationale: letting LEC see a named trip count unlocks the retained-loop
+// fast path (observed: `loop certificate: 1 matched compact recurrence`).
+// Semantics must match pyroC; LEC pyroD vs pyroC is the gate.
+
+pub mod BusyTable::[timecheck=false](
+  clock:Clock, reset:u1,
+
+  io_ren_uops_0_prs1:u6,
+  io_ren_uops_0_prs2:u6,
+  io_ren_uops_0_prs3:u6,
+  io_ren_uops_0_pdst:u6,
+  io_rebusy_reqs_0:u1,
+
+  io_wakeups_0_valid:u1,
+  io_wakeups_0_bits_uop_pdst:u6,
+  io_wakeups_0_bits_rebusy:u1,
+  io_wakeups_0_bits_speculative_mask:u1,
+
+  io_wakeups_1_valid:u1,
+  io_wakeups_1_bits_uop_pdst:u6,
+  io_wakeups_1_bits_rebusy:u1,
+  io_wakeups_1_bits_speculative_mask:u1,
+
+  io_child_rebusys:u1
+) -> (
+  io_busy_resps_0_prs1_busy:u1@[],
+  io_busy_resps_0_prs2_busy:u1@[],
+  io_busy_resps_0_prs3_busy:u1@[],
+  io_debug_busytable:u52@[]
+) {
+
+  const one52:u52 = 1
+
+  reg busy_table:u52:[reset_pin=reset, async=true] = 0
+
+  reg wakeup_0_valid_r :u1:[reset_pin=reset, async=true] = 0
+  reg wakeup_0_pdst_r  :u6:[reset_pin=reset, async=true] = 0
+  reg wakeup_0_rebusy_r:u1:[reset_pin=reset, async=true] = 0
+  reg wakeup_0_spec_r  :u1:[reset_pin=reset, async=true] = 0
+  reg wakeup_1_valid_r :u1:[reset_pin=reset, async=true] = 0
+  reg wakeup_1_pdst_r  :u6:[reset_pin=reset, async=true] = 0
+  reg wakeup_1_rebusy_r:u1:[reset_pin=reset, async=true] = 0
+  reg wakeup_1_spec_r  :u1:[reset_pin=reset, async=true] = 0
+
+  wakeup_0_valid_r  = io_wakeups_0_valid
+  wakeup_0_pdst_r   = io_wakeups_0_bits_uop_pdst
+  wakeup_0_rebusy_r = io_wakeups_0_bits_rebusy
+  wakeup_0_spec_r   = io_wakeups_0_bits_speculative_mask
+  wakeup_1_valid_r  = io_wakeups_1_valid
+  wakeup_1_pdst_r   = io_wakeups_1_bits_uop_pdst
+  wakeup_1_rebusy_r = io_wakeups_1_bits_rebusy
+  wakeup_1_spec_r   = io_wakeups_1_bits_speculative_mask
+
+  const numWbPorts:u8 = 2
+
+  // Single wakeup pass: build next-busy masks AND per-prs match/override.
+  mut unbusy_mask:u52 = 0
+  mut wakeup_rebusy_mask:u52 = 0
+  mut prs1_any:u1 = 0
+  mut prs1_override:u1 = 0
+  mut prs2_any:u1 = 0
+  mut prs2_override:u1 = 0
+  mut prs3_any:u1 = 0
+  mut prs3_override:u1 = 0
+  for w in 0..<numWbPorts {
+    const valid_r:u1  = if w == 0 { wakeup_0_valid_r }  else { wakeup_1_valid_r }
+    const pdst_r:u6   = if w == 0 { wakeup_0_pdst_r }   else { wakeup_1_pdst_r }
+    const rebusy_r:u1 = if w == 0 { wakeup_0_rebusy_r } else { wakeup_1_rebusy_r }
+    const spec_r:u1   = if w == 0 { wakeup_0_spec_r }   else { wakeup_1_spec_r }
+    const squashed:u1 = if (spec_r & io_child_rebusys) != 0 { 1 } else { 0 }
+    const eff_valid:u1 = valid_r & (~squashed)
+
+    if eff_valid != 0 and rebusy_r == 0 {
+      unbusy_mask = unbusy_mask | (one52 << pdst_r)
+    }
+    if eff_valid != 0 and rebusy_r != 0 {
+      wakeup_rebusy_mask = wakeup_rebusy_mask | (one52 << pdst_r)
+    }
+
+    const hit1:u1 = if pdst_r == io_ren_uops_0_prs1 { eff_valid } else { 0 }
+    const hit2:u1 = if pdst_r == io_ren_uops_0_prs2 { eff_valid } else { 0 }
+    const hit3:u1 = if pdst_r == io_ren_uops_0_prs3 { eff_valid } else { 0 }
+    prs1_any = prs1_any | hit1
+    prs2_any = prs2_any | hit2
+    prs3_any = prs3_any | hit3
+    prs1_override = prs1_override | (hit1 & rebusy_r)
+    prs2_override = prs2_override | (hit2 & rebusy_r)
+    prs3_override = prs3_override | (hit3 & rebusy_r)
+  }
+
+  const busy_table_wb:u52 = busy_table & (~unbusy_mask)
+  const rebusy_from_rename:u52 = if io_rebusy_reqs_0 != 0 { one52 << io_ren_uops_0_pdst } else { 0 }
+  busy_table = busy_table_wb | rebusy_from_rename | wakeup_rebusy_mask
+
+  const prs1_base:u1 = (busy_table >> io_ren_uops_0_prs1) & 1
+  const prs2_base:u1 = (busy_table >> io_ren_uops_0_prs2) & 1
+  const prs3_base:u1 = (busy_table >> io_ren_uops_0_prs3) & 1
+
+  io_busy_resps_0_prs1_busy = if prs1_any != 0 { prs1_override } else { prs1_base }
+  io_busy_resps_0_prs2_busy = if prs2_any != 0 { prs2_override } else { prs2_base }
+  // float=false -> integer BusyTable zeros prs3 unconditionally
+  io_busy_resps_0_prs3_busy = 0
+
+  io_debug_busytable = busy_table
+}
