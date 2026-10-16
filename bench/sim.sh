@@ -156,15 +156,18 @@ SIM_INPUTS=("$BENCH_INPUT" "tree/$SIM_TB")
 
 # Make the selected execution engine part of the scraped benchmark identity.
 # Historical rows predate this metric and remain under phase `sim`; new rows
-# are rendered as `sim_slop` or `sim_llvm` by bench/ledger.py. `auto` is lhd's
-# built-in default, slop: lhd's tuner never moves the backend on its own.
-SIM_BACKEND=slop
+# are rendered as `sim_slop` or `sim_llvm` by bench/ledger.py. An UNSET
+# sim.tune.backend is llvm (lhd's built-in default since livehd 98a7e7c44, owner
+# ruling 2026-10-15; it was slop before). An explicit `auto` is the tuned
+# decision, else slop -- the tuner never trials the backend, and every leg here
+# pins sim.tune.profile=off below, so `auto` is slop.
+SIM_BACKEND=default
 for kv in ${CORE_SIM_SETS:-}; do
   case "$kv" in sim.tune.backend=*) SIM_BACKEND=${kv#sim.tune.backend=} ;; esac
 done
 case "$SIM_BACKEND" in
   slop | auto) metric sim_backend_llvm 0 bool ;;
-  llvm) metric sim_backend_llvm 1 bool ;;
+  llvm | default | "") metric sim_backend_llvm 1 bool ;;
   *) echo "FAIL: unsupported simulator backend '$SIM_BACKEND'" >&2; exit 2 ;;
 esac
 
@@ -184,9 +187,11 @@ esac
 # tests side by side), but every sim target here is tagged `exclusive`, so that
 # default only made sim_cc_ms a 2-core number next to Verilator's all-core one
 # (xs_rob: 629 s at 2 jobs vs 46 s at 128). A core may still pin its own.
+# `lhd.jobs` is the one job knob (it replaced sim.jobs, which lhd now rejects
+# as a usage error).
 case " ${CORE_SIM_SETS:-} " in
-  *"sim.jobs="*) ;;
-  *) CORE_SIM_SETS="--set sim.jobs=$(cpu_count) ${CORE_SIM_SETS:-}" ;;
+  *"lhd.jobs="*) ;;
+  *) CORE_SIM_SETS="--set lhd.jobs=$(cpu_count) ${CORE_SIM_SETS:-}" ;;
 esac
 
 # ---- MODE=incr: full plus the three-pass rebuild over ONE workdir ------------

@@ -7,20 +7,24 @@
 # `ifndef SYNTHESIS $error/$fatal blocks), so it is compiled first:
 #   lhd compile verilog --top T --emit-dir lg:ref.lg -- -F filelist.f -DSYNTHESIS
 #
-#   MODE=pass  equivalence must be PROVEN (exit 0).
+#   MODE=pass  the top must not be refuted: PROVEN-full, PROVEN-bounded(n),
+#              TESTED-sampled(N) (exit 0), or TIMEOUT-* (exit 0, accepted per
+#              the owner rulings 2026-09-15 / 2026-10-14). Any REFUTED-* fails.
 #   MODE=bug   bug1 variant ($CORE_UNIT's add flipped to subtract) must be
-#              caught: non-zero exit AND a refutation, not a crash.
+#              caught: the top REFUTED-cex with exit 10 -- a counterexample,
+#              not a crash and not a REFUTED-<why> (exit 7, no answer).
 #   MODE=incr  three runs sharing one --workdir (formal_cache.json under it):
-#              cold, identical warm re-run (cache hits asserted), then a
+#              cold, identical warm re-run (verdict-cache use asserted under
+#              a proof effort; sampled presets never cache), then a
 #              comment1 recompile (still equivalent, still warm).
 #
 # A core with a CORE_LEC_TRUST list (minion — defs holding a latch or negedge
 # flop ONE MODULE LEVEL DOWN, which edge normalization cannot rewrite across a
 # module boundary yet; fixme issue 1) runs every lec_run with
 # `--set formal.lec.trust=…`: the listed defs are assumed equal (disclosed,
-# never proven) and the latch-free majority is proven bottom-up. Strict is the
-# lhd default, so a witness-free UNKNOWN top is a hard fail either way (a trust
-# list must not turn an inconclusive green).
+# never proven) and the latch-free majority is proven bottom-up. An undecided
+# top is REFUTED-<why> (exit 7), a hard fail either way (a trust list must not
+# turn a non-answer green).
 RF="${TEST_SRCDIR:-${RUNFILES_DIR:-$0.runfiles}}"
 . "$RF/_main/bench/common.sh"
 
@@ -41,72 +45,75 @@ lec_run() {  # IMPL_LG [WORKDIR] [INCREMENTAL]
   [ "$incremental" != false ] || incr_args=(--set lhd.incremental=false)
   # CORE_LEC_TRUST (defs.bzl): modules ASSUMED equivalent without proof — the
   # escape hatch for cones holding a cell the LEC encoder cannot model yet (a
-  # latch). lhd is strict by default, so a witness-free UNKNOWN top is a hard
-  # fail: a trust list must let the latch-free majority PROVE, never turn an
-  # inconclusive run green (AGENTS.md: never loosen the gate). Two explicit
+  # latch). An undecided top is REFUTED-<why> (exit 7), a hard fail: a trust
+  # list must let the latch-free majority PROVE, never turn a non-answer
+  # green (AGENTS.md: never loosen the gate). Two explicit
   # forms rather than one array — an empty "${arr[@]}" is an unbound error
   # under `set -u` in the sandbox's bash.
   if [ -n "$CORE_LEC_TRUST" ]; then
     lhd lec --impl "lg:$impl" --ref lg:ref.lg --top "$CORE_TOP" --workdir "$wd" \
-      --set "formal.timeout=$LEC_BUDGET_S" \
+      --set "formal.timeout=$LEC_BUDGET_S" ${LEC_EFFORT_ARGS[@]+"${LEC_EFFORT_ARGS[@]}"} \
       --set "formal.lec.trust=$CORE_LEC_TRUST" ${incr_args[@]+"${incr_args[@]}"}
   else
     lhd lec --impl "lg:$impl" --ref lg:ref.lg --top "$CORE_TOP" --workdir "$wd" \
-      --set "formal.timeout=$LEC_BUDGET_S" ${incr_args[@]+"${incr_args[@]}"}
+      --set "formal.timeout=$LEC_BUDGET_S" ${LEC_EFFORT_ARGS[@]+"${LEC_EFFORT_ARGS[@]}"} \
+      ${incr_args[@]+"${incr_args[@]}"}
   fi
 }
 
-# lec_refuted LOGFILE — true when the log carries an AUTHORITATIVE refutation.
-#
-# Two forms count, and one deliberately does not:
-#   `^lec: '<top>' ... REFUTED`            the whole-design verdict.
-#   `^lec[hier]: '<def>' REFUTED (...)`    a per-def verdict. This one MATTERS:
-#       lhd proves bottom-up, so a def can refute at t=40s while the TOP then
-#       runs out the budget and reports UNKNOWN. Scoring only the top verdict
-#       let that land in the deadline-accepted arm -- a real counterexample,
-#       reported green. dino_lec_bug is the witness: `lec[hier]: 'ALU' REFUTED`
-#       with the top UNKNOWN on the formal budget.
-#   `REFUTED under collapse (N box def(s)) -> flat confirmation` is SPECULATIVE
-#       and is excluded: a collapsed-box attempt may refute and then be
-#       flat-confirmed PROVEN. Minion's dcache metadata array takes that path,
-#       and it emits a SECOND, plain `REFUTED (N child collapse)` line when the
-#       refutation is real -- so excluding the speculative spelling loses nothing.
-lec_refuted() {
-  grep -qaE "^lec: .* REFUTED" "$1" && return 0
-  grep -aE "^lec\[hier\]: '[^']*' REFUTED" "$1" | grep -qv "under collapse" && return 0
-  return 1
-}
+# The whole-design verdict is the LAST top-level headline, read by
+# lec_top_verdict (bench/common.sh): `lec: '<top>' REFUTED-cex (...)` and its
+# siblings. Only the TOP counts (owner ruling 2026-10-14). The per-def
+# `lec[hier]: '<def>' REFUTED (...)` lines are internal block records: a
+# refuted BLOCK is not a refuted design -- lhd re-checks it in its parent's
+# context, and a block refutation that context absorbs (a module boundary is
+# not part of the specification) still prints that line under a PROVEN-full
+# top. When the top itself stays undecided it reports its OWN cause
+# (TIMEOUT-time, ...) and names the block only as a diagnostic. So the block
+# lines are reported below (a NOTE), never scored. The speculative
+# `lec: '<top>' REFUTED under collapse (...) -> flat confirmation` carries no
+# modifier and is not a verdict either.
 
-# lec_timed_out LOGFILE — true when lhd's OWN formal.timeout fired. lhd maps that
-# to a fatal UNKNOWN (pass/lec/pass_lec.cpp: `lec-unknown` ... .fatal()), so it
-# exits NON-ZERO and would otherwise be scored a hard failure — while a harness
-# kill at the very same budget scored a pass. Same event, opposite verdict,
-# decided by which of the two timers happened to fire first.
-lec_timed_out() { grep -qa "hit formal.timeout=" "$1"; }
+# lec_timed_out LOGFILE — true when lhd's OWN budget ended the run: the top
+# reports TIMEOUT-time (formal.timeout) or TIMEOUT-memory, exit 0 plus a
+# warning diagnostic. Never a proof, never a failure (owner ruling); recorded
+# as ${label}_timeout so the ledger can tell it from a proof.
+lec_timed_out() { case "$(lec_top_verdict "$1")" in TIMEOUT-*) return 0 ;; esac; return 1; }
 
 # A LEC leg that must not REFUTE. Under the budget (owner ruling 2026-09-15) a
 # deadline is a PASS: the solver examined what it could and produced no
-# counterexample. A REFUTATION is a failure, and an UNKNOWN for any reason OTHER
-# than the budget is still a hard failure -- the ruling covers timeouts, not
-# inconclusive proofs.
+# counterexample. Any REFUTED-* top is a failure: REFUTED-cex is a
+# counterexample, and REFUTED-<why> is lhd failing to answer -- the ruling
+# covers timeouts, not non-answers.
 lec_no_refutation() {  # LABEL IMPL_LG [WORKDIR] [INCREMENTAL]
   local label=$1
   shift
   # WALL clock, not the solver budget: LEC_BUDGET_S already went to
   # `--set formal.timeout=` inside lec_run. See bench/common.sh.
   run_timed_deadline "$label" "$LEC_WALL_S" lec_run "$@"
-  local log="step_${label}.log"
+  local log="step_${label}.log" verdict nblk
+  verdict=$(lec_top_verdict "$log")
   # Check the LOG before the exit code. A run that PRINTED a refutation and was
   # then killed at the deadline exits 124, and scoring on $LAST_RC alone reported
   # it as "budget reached, no refutation" -- silently passing the one verdict
   # this gate exists to catch.
-  if lec_refuted "$log"; then
-    step_failed "$label" "lec REFUTED (not equivalent); a refutation is a failure whether or not the budget also expired"
+  case "$verdict" in
+  REFUTED-cex)
+    step_failed "$label" "lec REFUTED-cex (not equivalent); a refutation is a failure whether or not the budget also expired"
     exit 1
+    ;;
+  REFUTED-*)
+    step_failed "$label" "lec $verdict: lhd could not answer (exit $LAST_RC); a failure, not a timeout"
+    exit 1
+    ;;
+  esac
+  nblk=$(grep -caE "^lec\[hier\]: '[^']*' REFUTED \(" "$log" || true)
+  if [ "${nblk:-0}" -gt 0 ]; then
+    echo "NOTE: $label: $nblk hierarchy block(s) REFUTED at their boundary; the top is '${verdict:-none}' (a refuted block is not a refuted design)"
   fi
   if [ "$LAST_RC" = 124 ] || lec_timed_out "$log"; then
     metric "${label}_timeout" 1 bool
-    echo "NOTE: $label reached the ${LEC_BUDGET_S}s LEC budget without refuting -- accepted (owner ruling)"
+    echo "NOTE: $label reached the ${LEC_BUDGET_S}s LEC budget without refuting (${verdict:-killed at the wall clock}) -- accepted (owner ruling)"
     return 124
   fi
   if [ "$LAST_RC" != 0 ]; then
@@ -125,48 +132,55 @@ pass)
     exit 0
   fi
   # A collapsed-box attempt may refute speculatively and then be flat-confirmed
-  # PROVEN. Only the final whole-design verdict is authoritative here; matching
-  # any occurrence of "refut" turns that successful fallback into a false test
+  # PROVEN. Only the final whole-design verdict is authoritative here (the
+  # top REFUTED-* case already failed inside lec_no_refutation); matching any
+  # occurrence of "refut" turns that successful fallback into a false test
   # failure (Minion's dcache metadata array exercises this path).
-  if grep -qaE "^lec: .* REFUTED" step_lec_pass.log; then
-    step_failed lec_pass "identical designs reported a refutation"
+  #
+  # A clean exit is necessary but not sufficient: assert the POSITIVE verdict
+  # too, so an output-format change can never let a non-answer slip through.
+  # Accepted (owner ruling 2026-10-14: only a refute fails, bounded proofs are
+  # acceptable): PROVEN-full; PROVEN-bounded(n) (no difference for n design
+  # cycles from reset, exhaustive over inputs); TESTED-sampled(N) (a sampled
+  # LEC_EFFORT preset checked N input vectors with no mismatch; no
+  # equivalence claim). TIMEOUT-* returned above.
+  verdict=$(lec_top_verdict step_lec_pass.log)
+  case "$verdict" in
+  PROVEN-full | PROVEN-bounded* | TESTED-sampled*) ;;
+  *)
+    step_failed lec_pass "lec exited 0 but did not report a PROVEN-full / PROVEN-bounded(n) / TESTED-sampled(N) top for '$CORE_TOP' (got '${verdict:-no top-level verdict}')"
     exit 1
-  fi
-  # A clean exit is necessary but not sufficient: with a trust list under strict,
-  # a witness-free UNKNOWN top already exited non-zero (caught by run_timed), but
-  # assert the POSITIVE verdict too so an output-format change can never let a
-  # non-proof slip through. `PROVEN equivalent` is the CLI's whole-design verdict
-  # string, printed once for the top (per-def lines say `PROVEN (`/`MATCHED`).
-  if ! grep -qa "PROVEN equivalent" step_lec_pass.log; then
-    step_failed lec_pass "lec exited 0 but did not report the top '$CORE_TOP' PROVEN equivalent"
-    exit 1
-  fi
+    ;;
+  esac
   if [ -n "$CORE_LEC_TRUST" ]; then
     nt=$(grep -c "TRUSTED (assumed equal, NOT proven)" step_lec_pass.log || true)
     metric lec_trusted_defs "$nt" defs
-    echo "NOTE: proven under $nt trusted latch def(s) (fixme issue 1); everything else PROVEN"
+    echo "NOTE: $verdict under $nt trusted latch def(s) (fixme issue 1), assumed equal, not checked"
   fi
-  echo "PASS: pyrope impl == verilog ref (lec ${LAST_MS} ms)"
+  echo "PASS: pyrope impl == verilog ref, $verdict (lec ${LAST_MS} ms)"
   ;;
 bug)
   core_variant bug1 src/pyrope
   run_timed compile_bug compile_impl implb
   run_expect_fail lec_bug lec_run implb
-  # Match a VERDICT line, not the word "refut". Two traps, one on each side:
+  # Match the TOP VERDICT, not the word "refut", and demand the counterexample
+  # kind. Three traps:
   #  - too loose: lhd prints `lec[hier]: ESCALATE '<def>' — ... (0 refuted, 1
-  #    inconclusive)` while PROVING, and that contains "refuted" with a ZERO
+  #    undecided)` while PROVING, and that contains "refuted" with a ZERO
   #    count, so `-i refut` passes a run that caught nothing.
-  #  - too strict: matching only the top-level `^lec: ... REFUTED` misses a
-  #    HIERARCHICAL catch. On dino the injected ALU bug yields
-  #    `lec[hier]: 'ALU' REFUTED` while the top goes UNKNOWN on the formal
-  #    budget -- the bug WAS caught, at the def that carries it.
-  # Requiring a quoted def name right after the label excludes the ESCALATE
-  # line (which spells `ESCALATE '<def>'`) while accepting both verdict forms.
-  if ! grep -qaE "\"code\":\"not-equivalent\"|is NOT equivalent|^lec(\[hier\])?: '[^']*' REFUTED" step_lec_bug.log; then
-    step_failed lec_bug "lec failed on bug1 but not as a refutation"
+  #  - a block is not the design: `lec[hier]: 'ALU' REFUTED` is an internal
+  #    block record (owner ruling 2026-10-14). If the top then stays undecided,
+  #    lhd reports the top's own TIMEOUT-* (exit 0, already failed above by
+  #    run_expect_fail), and the bug was NOT caught at the design level.
+  #  - any REFUTED-* is not enough: REFUTED-<why> (exit 7) is lhd failing to
+  #    answer, which an injected bug must not be able to hide behind. Only
+  #    REFUTED-cex with exit 10 is a counterexample.
+  verdict=$(lec_top_verdict step_lec_bug.log)
+  if [ "$verdict" != REFUTED-cex ] || [ "$LAST_RC" != 10 ]; then
+    step_failed lec_bug "lec failed on bug1 but not with a counterexample: top '${verdict:-no top-level verdict}', exit $LAST_RC (want REFUTED-cex, exit 10)"
     exit 1
   fi
-  echo "PASS: injected $CORE_UNIT bug refuted (lec ${LAST_MS} ms)"
+  echo "PASS: injected $CORE_UNIT bug REFUTED-cex (lec ${LAST_MS} ms)"
   ;;
 incr)
   run_timed compile_p1 compile_impl impl1
@@ -176,13 +190,30 @@ incr)
   fi
   run_timed lec_cold lec_run impl1
   run_timed lec_warm lec_run impl1
-  grep -qa "lec\[cache\]" step_lec_warm.log \
-    || { step_failed lec_warm "warm identical re-run reported no verdict-cache use"; exit 1; }
+  # The warm-cache gate applies to the PROOF efforts only. lhd's verdict cache
+  # (formal_cache.json, the `lec[cache]: N hit(s), ...` line) stores definitive
+  # proofs and timeout ledgers; under a sampled preset (quick-check | test |
+  # long-check, and lhd's default `test` when LEC_EFFORT is empty) lhd never
+  # opens it -- a sampled run is fresh random testing by design, and a cached
+  # verdict must not stand in for the vectors it was asked to check (livehd
+  # lhd_kernel_formal.cpp, `!sampled_effort`). There it would fail every
+  # time while saying nothing about reuse, so record that it did not apply.
+  case "$LEC_EFFORT" in
+  proof | verify)
+    metric lec_warm_cache_checked 1 bool
+    grep -qa "lec\[cache\]" step_lec_warm.log \
+      || { step_failed lec_warm "warm identical re-run reported no verdict-cache use (formal.effort=$LEC_EFFORT)"; exit 1; }
+    ;;
+  *)
+    metric lec_warm_cache_checked 0 bool
+    echo "NOTE: lec_warm: verdict-cache gate not applicable under formal.effort=${LEC_EFFORT:-<lhd default>} (sampled presets never use formal_cache.json)"
+    ;;
+  esac
 
   core_variant comment1 src/pyrope
   run_timed compile_p3 compile_impl impl3
   run_timed lec_touch lec_run impl3
-  echo "PASS: cold/warm/comment-touch lec runs all equivalent"
+  echo "PASS: cold/warm/comment-touch lec runs all exited 0 (none refuted)"
   ;;
 *)
   echo "FAIL: unknown MODE=$MODE" >&2

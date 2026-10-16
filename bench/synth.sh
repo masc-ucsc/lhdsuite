@@ -54,9 +54,9 @@
 #                lhd pass liberty gensim $LIB --emit-dir lg:models
 #                lhd lec --impl lg:netlist --ref lg:design --lib lg:models
 #              (--lib supplies behavioral models for the mapped sky130 cells;
-#              without it they are opaque Subs and the proof degrades to
-#              UNKNOWN. For lec_synth the design side is the one-shot's own
-#              compiled library, W/synth/lg.)
+#              without it they are opaque boxes and the comparison checks
+#              nothing about them. For lec_synth the design side is the
+#              one-shot's own compiled library, W/synth/lg.)
 RF="${TEST_SRCDIR:-${RUNFILES_DIR:-$0.runfiles}}"
 . "$RF/_main/bench/common.sh"
 require_tech_dir
@@ -399,27 +399,44 @@ lec_flat | lec_synth)
   # Behavioral models of every Liberty cell, then netlist-vs-design LEC.
   run_timed gensim lhd pass liberty gensim "$LIB" --emit-dir lg:models --workdir Wm
 
-  # lhd is strict by default, so an UNKNOWN is a failure here, not a
-  # shrugged-off pass — the whole point is trusting (or not) the generated
-  # netlist. CORE_LEC_TRUST (defs.bzl) assumes the design's latch-holding DEFS
-  # equal, so the ref (design) side is not refused for holding state the
-  # encoder cannot normalize across a module boundary — the same escape hatch
-  # as bench/lec.sh (fixme issue 1). Names absent from the netlist are silently
-  # ignored.
+  # Any REFUTED-* top exits non-zero (10 = REFUTED-cex, 7 = REFUTED-<why>, no
+  # answer) and run_timed fails the step on it: a non-answer is a failure
+  # here, not a shrugged-off pass — the whole point is trusting (or not) the
+  # generated netlist. TIMEOUT-* exits 0 and is accepted (owner ruling
+  # 2026-10-14), named in a NOTE below. CORE_LEC_TRUST (defs.bzl) assumes the
+  # design's latch-holding DEFS equal, so the ref (design) side is not refused
+  # for holding state the encoder cannot normalize across a module boundary —
+  # the same escape hatch as bench/lec.sh (fixme issue 1). Names absent from
+  # the netlist are silently ignored.
   if [ -n "$CORE_LEC_TRUST" ]; then
     run_timed netlist_lec lhd lec --impl lg:net_pass2 --ref "lg:$design" \
       --lib lg:models --top "$TOP" \
-      --set "formal.lec.trust=$CORE_LEC_TRUST" --workdir LW
+      --set "formal.lec.trust=$CORE_LEC_TRUST" --set "formal.timeout=$LEC_BUDGET_S" ${LEC_EFFORT_ARGS[@]+"${LEC_EFFORT_ARGS[@]}"} --workdir LW
   else
     run_timed netlist_lec lhd lec --impl lg:net_pass2 --ref "lg:$design" \
-      --lib lg:models --top "$TOP" --workdir LW
+      --lib lg:models --top "$TOP" --set "formal.timeout=$LEC_BUDGET_S" ${LEC_EFFORT_ARGS[@]+"${LEC_EFFORT_ARGS[@]}"} --workdir LW
   fi
-  if grep -qia "refut" step_netlist_lec.log; then
-    echo "FAIL: pass-2 $alg netlist NOT equivalent to the design" >&2
+  # Score the TOP verdict (lec_top_verdict, bench/common.sh), not the word
+  # "refut": per-def `lec[hier]: '<def>' REFUTED` block records and the
+  # ESCALATE line's "(0 refuted, ...)" count are not design verdicts, and a
+  # missing headline must fail rather than pass.
+  netlist_verdict=$(lec_top_verdict step_netlist_lec.log)
+  case "$netlist_verdict" in
+  PROVEN-* | TESTED-*) ;;
+  TIMEOUT-*)
+    echo "NOTE: pass-2 $alg netlist LEC $netlist_verdict: neither proved nor refuted -- accepted (owner ruling)"
+    ;;
+  REFUTED-*)
+    echo "FAIL: pass-2 $alg netlist LEC $netlist_verdict against the design" >&2
     exit 1
-  fi
+    ;;
+  *)
+    echo "FAIL: pass-2 $alg netlist LEC exited 0 without a top-level verdict" >&2
+    exit 1
+    ;;
+  esac
   metric synthesis_elapsed_ms "$(( $(now_ms) - SYNTH_START_MS ))" ms
-  echo "PASS: pass-2 $alg netlist LEC-equivalent to the design (lec ${LAST_MS} ms)"
+  echo "PASS: pass-2 $alg netlist vs the design: $netlist_verdict (lec ${LAST_MS} ms)"
   ;;
 *)
   echo "FAIL: unknown MODE=$MODE" >&2

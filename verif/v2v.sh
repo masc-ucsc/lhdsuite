@@ -3,9 +3,11 @@
 #
 # Both equivalence checks compare the generated Verilog against the original
 # Verilog. Each check has a 10-minute equivalence budget (native LEC's is
-# soft; its worker backstop can take longer). The gate accepts
-# solver-inconclusive results under the policy below, but a counterexample,
-# refutation, or failure to run a check is always a failure.
+# soft; its worker backstop can take longer). The gate accepts a timeout
+# (lhd's TIMEOUT-time / TIMEOUT-memory, or a deadline kill) and a bounded or
+# sampled result under the policy below, but a counterexample, any other
+# refutation (lhd's REFUTED-<why>: no answer), or failure to run a check is
+# always a failure.
 
 set -euo pipefail
 
@@ -88,7 +90,10 @@ run_deadline() {
 
 # The LEC budget for every leg of this gate, soft and hard (owner ruling
 # 2026-09-15). Override with LEC_BUDGET_S for a one-off deeper run.
-LEC_BUDGET_S=${LEC_BUDGET_S:-300}   # SOLVER budget -> --set formal.timeout=
+LEC_BUDGET_S=${LEC_BUDGET_S:-120}   # TOTAL lhd lec budget -> --set formal.timeout= (owner 2026-10-15: effort=test, 2 min is enough)
+LEC_EFFORT=${LEC_EFFORT-test}       # formal.effort for the native leg (bench/common.sh); empty = lhd's default
+LEC_EFFORT_ARGS=()
+[ -z "$LEC_EFFORT" ] || LEC_EFFORT_ARGS=(--set "formal.effort=$LEC_EFFORT")
 # v2v already keeps the two apart: its wall clocks are LGCHECK_BUDGET_S and
 # LEC_NATIVE_BUDGET_S, both defaulting to 4x the solver budget on purpose.
 
@@ -323,14 +328,14 @@ esac
 # The implementation
 # input is the generated Verilog (not the intermediate Pyrope/LGraph); ref_lg
 # came directly from the original Verilog in the generation step above. These
-# tops intentionally exceed the interactive one-million-node admission guard,
-# so this correctness gate explicitly accepts the memory risk instead of
-# reporting that policy refusal as an equivalence result. Keep definition jobs
-# serial so one oversize proof owns the memory budget at a time.
+# tops are large; lhd no longer has a design-size admission gate (a run that
+# outgrows memory reports TIMEOUT-memory), so there is nothing to opt out of.
+# Keep lhd serial (lhd.jobs=1, which replaced formal.jobs) so one large proof
+# owns the memory budget at a time.
 printf 'CMD lec:'
 printf ' %q' "$LHD_BIN" lec --impl verilog:"$WORK/impl_all.v" \
   --ref lg:"$WORK/ref_lg" --top "$CORE_TOP" --set "formal.timeout=$LEC_BUDGET_S" \
-  --set formal.allow_oversize=true --set formal.jobs=1 \
+  --set lhd.jobs=1 ${LEC_EFFORT_ARGS[@]+"${LEC_EFFORT_ARGS[@]}"} \
   --workdir work_lec
 printf '\n'
 lec_rc=0
@@ -345,34 +350,36 @@ LEC_NATIVE_BUDGET_S=${LEC_NATIVE_BUDGET_S:-$((LEC_BUDGET_S * 4))}
 run_deadline "$LEC_NATIVE_BUDGET_S" step_lec.log \
   "$LHD_BIN" lec --impl verilog:"$WORK/impl_all.v" \
   --ref lg:"$WORK/ref_lg" --top "$CORE_TOP" --set "formal.timeout=$LEC_BUDGET_S" \
-  --set formal.allow_oversize=true --set formal.jobs=1 \
+  --set lhd.jobs=1 ${LEC_EFFORT_ARGS[@]+"${LEC_EFFORT_ARGS[@]}"} \
   --workdir work_lec
 lec_rc=$?
 set -e
 native_ok=1
-# Verdict policy for THIS gate (owner ruling 2026-09-11, //verif only): the
-# native leg runs under a 600 s soft budget (formal.timeout above) and a proof
-# that remains inconclusive is accepted -- a refutation is still
-# fatal. lhd itself keeps proven / refuted / timeout distinct; only this test
-# collapses timeout into pass, because a multi-hour inconclusive LEC of a
-# whole core says nothing the 10-minute one does not.
+# Verdict policy for THIS gate (owner rulings 2026-09-11 and 2026-10-14): the
+# native leg runs under a soft budget (formal.timeout above) and only a
+# refutation is fatal -- any REFUTED-*. A TIMEOUT-* (lhd exits 0 on it), a
+# deadline kill, PROVEN-bounded(n) and TESTED-sampled(N) are accepted, because
+# a multi-hour undecided LEC of a whole core says nothing the 10-minute one
+# does not. verif/lec_verdict.py has the full table.
 lec_verdict=$(python3 "$(rloc _main/verif/lec_verdict.py)" step_lec.log "$lec_rc")
-# NOVERDICT / BOUNDED / UNDECIDED: no counterexample, but nothing was fully
-# checked either. All three were fatal before this gate learned about deadlines
-# and stay fatal -- only a real TIMEOUT is forgiven.
+# An ALLOWLIST, so a class the classifier does not know fails closed.
 case $lec_verdict in
-NOVERDICT | BOUNDED | UNDECIDED)
-  echo "FAIL: lec reached no usable verdict ($lec_verdict) for $CORE_TOP (rc=$lec_rc) -- not a timeout" >&2
+PROVEN-* | TESTED-* | TIMEOUT-*) ;;
+REFUTED-cex)
+  native_ok=0
+  echo "FAIL: native lhd LEC REFUTED-cex $CORE_TOP: a counterexample" >&2
+  tail -40 step_lec.log >&2
+  ;;
+*)
+  # REFUTED-<why>: lhd could not answer (an encoder refusal, an interface
+  # mismatch, a contradictory assume set, a LiveHD bug). NOVERDICT: no usable
+  # result record at all (a crash, a truncated run, a stale lhd).
+  echo "FAIL: lec reached no answer ($lec_verdict) for $CORE_TOP (rc=$lec_rc) -- not a timeout" >&2
   tail -10 step_lec.log >&2
   archive
   exit 1
   ;;
 esac
-if [ "$lec_verdict" = REFUTED ]; then
-  native_ok=0
-  echo "FAIL: native lhd LEC did not prove $CORE_TOP" >&2
-  tail -40 step_lec.log >&2
-fi
 
 if [ "$native_ok" -ne 1 ]; then
   echo "FAIL: native lhd LEC did not prove $CORE_TOP equivalent" >&2

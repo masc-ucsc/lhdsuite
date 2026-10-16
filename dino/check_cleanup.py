@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Validate the hand-maintained Dino against its original Verilog using LiveHD."""
+"""Validate the hand-maintained Dino against its original Verilog using LiveHD.
+
+The LEC and formal-verify checks pass when lhd reports the design equivalent
+(proven or sampled): PROVEN-full, PROVEN-bounded(n) or TESTED-sampled(N) at
+lhd's default formal.effort, with the bound / vector count recorded in
+results.json. TIMEOUT-time / TIMEOUT-memory pass too (only a refute is a
+failure): recorded with "proof": false and printed as a NOTE. Any REFUTED-*
+fails. The injected-bug checks still require REFUTED-cex with exit 10.
+"""
 import argparse
 import hashlib
 import json
@@ -13,6 +21,38 @@ import time
 SUITE = Path(__file__).resolve().parents[1]
 DINO = SUITE / "dino"
 TOP = "PipelinedDualIssueCPU"
+
+
+# Accepted outcomes (owner rulings 2026-10-14: only a refute is a failure;
+# timeout and bounded are okay), under lhdsuite's own (default) formal.effort.
+# "Equivalent (proven or sampled)": lhd's PROVEN-full, PROVEN-bounded(n) or
+# TESTED-sampled(N). TIMEOUT-time / TIMEOUT-memory also PASS -- never a proof,
+# never a failure -- and are recorded with "proof": false. Any refuted-*, and
+# a missing, inconsistent or pre-2026-10-14 record, is rejected (None).
+def equivalence(lec):
+    verdict = (lec or {}).get("verdict")
+    if verdict == "proven-full" and lec.get("bounded") is False:
+        return {"verdict": verdict, "proof": True}
+    if verdict == "proven-bounded" and lec.get("bounded") is True:
+        return {"verdict": verdict, "bound": lec.get("bound"), "proof": True}
+    if verdict == "tested-sampled":
+        return {"verdict": verdict, "vectors": lec.get("vectors"), "proof": False}
+    if verdict in ("timeout-time", "timeout-memory"):
+        return {"verdict": verdict, "proof": False}
+    return None
+
+
+def describe(evidence):
+    if not evidence:
+        return "no equivalence evidence (verdict is not proven-*, tested-sampled or timeout-*)"
+    if evidence["verdict"].startswith("timeout-"):
+        word = "TIMEOUT-" + evidence["verdict"][len("timeout-"):]
+        return f"NOTE: equivalent? {word} (no proof, no counterexample; not a failure)"
+    if "bound" in evidence:
+        return f"equivalent (proven for {evidence['bound']} cycle(s): proven-bounded)"
+    if "vectors" in evidence:
+        return f"equivalent (sampled {evidence['vectors']} input vectors: tested-sampled)"
+    return "equivalent (proven: proven-full)"
 
 
 def main():
@@ -43,17 +83,30 @@ def main():
         payload = json.loads(result.read_text())
         lec = payload.get("lec", {})
         ok = proc.returncode == 0
-        if verdict == "proven":
-            ok = ok and lec.get("verdict") == "proven" and lec.get("bounded") is False
+        # lhd's verdict vocabulary (livehd pass/lec/property_types.hpp). A real
+        # counterexample is `refuted-cex` with exit 10; every other
+        # `refuted-<why>` exits 7 and is a non-answer, which an injected bug
+        # must not hide behind. `lhd lec` / `lhd formal verify` exit 0 on
+        # TIMEOUT-* too, so the equivalence checks read the verdict, not rc.
+        evidence = None
+        if verdict == "equivalent":
+            evidence = equivalence(lec)
+            ok = ok and evidence is not None
         elif verdict == "refuted":
-            ok = proc.returncode != 0 and lec.get("verdict") == "refuted"
+            ok = proc.returncode == 10 and lec.get("verdict") == "refuted-cex"
+        elif verdict == "verified":
+            evidence = equivalence(payload.get("formal", {}))
+            ok = ok and evidence is not None
         report["checks"].append({"name": name, "command": command, "ok": ok,
                                   "seconds": round(time.monotonic() - started, 3),
-                                  "exit_code": proc.returncode, "lec": lec})
+                                  "exit_code": proc.returncode, "lec": lec,
+                                  "formal": payload.get("formal", {}),
+                                  "equivalence": evidence})
         (work / "results.json").write_text(json.dumps(report, indent=2) + "\n")
         if not ok:
             raise SystemExit(f"FAIL {name}: see {work / (name + '.log')}")
-        print(f"PASS {name}" + (f" ({verdict})" if verdict else ""), flush=True)
+        detail = describe(evidence) if verdict in ("equivalent", "verified") else verdict
+        print(f"PASS {name}" + (f" ({detail})" if detail else ""), flush=True)
 
     ref = "lg:" + str(work / "reference.lg")
     # Slang resolves filelist entries relative to the list itself.
@@ -67,21 +120,21 @@ def main():
     implementation = DINO / "pyrope" / f"{TOP}.prp"
     lec_args = ["lec", "--impl", implementation, "--ref", ref, "--top", TOP]
     # Independent workdirs prove repeatability without reusing a verdict cache.
-    run("lec_first", lec_args, "proven")
-    run("lec_repeat", lec_args, "proven")
+    run("lec_first", lec_args, "equivalent")
+    run("lec_repeat", lec_args, "equivalent")
 
     variants = work / "variants"
     shutil.copytree(DINO / "pyrope", variants)
     shutil.copy2(DINO / "tests/comment1/ALU.prp", variants / "ALU.prp")
-    run("lec_comment", ["lec", "--impl", variants / f"{TOP}.prp", "--ref", ref, "--top", TOP], "proven")
+    run("lec_comment", ["lec", "--impl", variants / f"{TOP}.prp", "--ref", ref, "--top", TOP], "equivalent")
     shutil.copy2(DINO / "tests/bug1/ALU.prp", variants / "ALU.prp")
     run("lec_bug_alu", ["lec", "--impl", variants / "ALU.prp", "--ref", DINO / "verilog/ALU.sv", "--top", "ALU"], "refuted")
     if args.top_bug:
         run("lec_bug_top", ["lec", "--impl", variants / f"{TOP}.prp", "--ref", ref, "--top", TOP], "refuted")
     run("verify_alu", ["formal", "verify", DINO / "pyrope/ALU.prp", DINO / "verif/ALU.verify.prp",
-                       "--top", "ALU", "--set", "formal.bound=2"])
+                       "--top", "ALU", "--set", "formal.bound=2"], "verified")
     run("verify_stage", ["formal", "verify", DINO / "pyrope/StageReg.prp", DINO / "verif/StageReg.verify.prp",
-                         "--top", "StageReg", "--set", "formal.bound=8"])
+                         "--top", "StageReg", "--set", "formal.bound=8"], "verified")
     for seed in (1, 37):
         run(f"program_seed{seed}", ["sim", implementation, DINO / "sim/dino_prog_tb.prp",
                                    "--arg", "cycles=2000", "--seed", seed])

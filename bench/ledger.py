@@ -541,6 +541,13 @@ def write_rows(root: Path, rows, dry_run=False):
 
 
 # ------------------------------------------------------------------ append ---
+# The whole-design refutation headline of `lhd lec` / `lhd formal verify`, in
+# lhd's verdict vocabulary: `lec: '<top>' REFUTED-cex (not equivalent; ...)`,
+# `formal verify: '<top>' REFUTED-<why> (...)`. Per-def `lec[hier]: ...`
+# block records are not design verdicts and do not match.
+REFUTED_HEADLINE = re.compile(r"(?:lec|formal verify): '[^']*' REFUTED-[a-z]+\b")
+
+
 def read_metrics(logdir: Path, target: str):
     """-> (metrics, passed, duration_ms, failed_step, reason), or None."""
     log = logdir / target / "test.log"
@@ -572,7 +579,7 @@ def read_metrics(logdir: Path, target: str):
             fail_lines.append(line.removeprefix("FAIL:").strip())
         elif "assert fail:" in stripped:
             fail_lines.append(stripped)
-        elif " REFUTED (not equivalent)" in stripped:
+        elif REFUTED_HEADLINE.match(stripped):
             fail_lines.append(stripped.split('{"schema_version"', 1)[0].strip())
     ok = True
     duration_ms = None

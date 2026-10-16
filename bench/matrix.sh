@@ -568,6 +568,10 @@ fi
 # for the next setup, which regenerates the color root: the incremental row
 # would then time a trial rebuild and read as a cache regression. `off` keeps
 # every row on lhd's built-in vector.
+#
+# The `sim` row pins sim.tune.backend=slop: an unset backend is llvm since
+# livehd 98a7e7c44 (it was slop), which would make this row a second copy of
+# `sim_llvm` below instead of the slop column of the pair.
 if [[ " $PHASES " == *" sim "* ]]; then
   if [ ! -f "$SIM_DIR/$SIM_TB" ]; then
     echo "  [$CORE sim] SKIPPED: no driver at $SIM_DIR/$SIM_TB" >&2
@@ -578,19 +582,19 @@ if [[ " $PHASES " == *" sim "* ]]; then
       local setup_ms run_ms
       group_begin
       step sim "$mode" "sim_${mode}_setup.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
-        "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --setup-only --set sim.tune.profile=off \
+        "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --setup-only --set sim.tune.backend=slop --set sim.tune.profile=off \
         --workdir "$wd" --result-json "sim_${mode}_setup.json"
       setup_ms=$GRP_MS
       step sim "$mode" "sim_${mode}_run.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
         "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --run-only --arg "cycles=$SIM_CYCLES" \
- --set sim.tune.profile=off --diag-fmt pretty --workdir "$wd" \
+ --set sim.tune.backend=slop --set sim.tune.profile=off --diag-fmt pretty --workdir "$wd" \
         --result-json "sim_${mode}_run.json"
       run_ms=$((GRP_MS - setup_ms))
       group_end sim "$mode" "$(sim_extra "$wd" "$setup_ms" "$run_ms")"
     }
     rm -rf SW_warm0
     warm_phase sim "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} "tree/$SIM_UNIT.prp" "tree/$SIM_TB" \
-      --arg "cycles=$SIM_CYCLES" --set sim.tune.profile=off --workdir SW_warm0
+      --arg "cycles=$SIM_CYCLES" --set sim.tune.backend=slop --set sim.tune.profile=off --workdir SW_warm0
     rm -rf SW_warm0
     rm -rf SW_full; sim_group full SW_full
     rm -rf SW_warm; sim_group cold SW_warm
@@ -651,12 +655,25 @@ if [[ " $PHASES " == *" lec "* ]] && [ "$HAS_LEC" = 1 ]; then
     local mode=$1 lg=$2 wd=$3
     shift 3
     group_begin
-    # 10 = REFUTED: the prover finished and the two sides differ. That is a
-    # verdict, so the timing is valid; the gate sees it via `refuted`.
+    # 10 = REFUTED-cex: the prover finished and the two sides differ. That is
+    # a verdict, so the timing is valid; the gate sees it via `refuted`. 7 =
+    # REFUTED-<why> (lhd could not answer) stays a failed row. lhd exits 0 on
+    # TIMEOUT-* as well as on a proof, so the row also carries lhd's own
+    # `lec.verdict` word -- a timed-out wall clock is the budget, not the
+    # cost of a proof, and must stay distinguishable. $WORK persists across
+    # matrix runs, so drop any previous run's record first.
+    rm -f "lec_$mode.json"
     STEP_OK_CODES="0 10" \
       step lec "$mode" "lec_$mode.json" -- "$LHD" lec --impl "lg:$lg" --ref lg:ref.lg \
         --top "$TOP" --workdir "$wd" --result-json "lec_$mode.json" "$@"
-    group_end lec "$mode" "{\"refuted\": $([ "${STEP_LAST_RC:-0}" = 10 ] && echo true || echo false)}"
+    local verdict
+    verdict=$(python3 -c 'import json, sys
+try:
+    v = json.load(open(sys.argv[1])).get("lec", {}).get("verdict", "")
+except Exception:
+    v = ""
+print(v if isinstance(v, str) and v.replace("-", "").isalpha() else "")' "lec_$mode.json")
+    group_end lec "$mode" "{\"refuted\": $([ "${STEP_LAST_RC:-0}" = 10 ] && echo true || echo false), \"verdict\": \"$verdict\"}"
   }
   rm -rf l_full lw_full lw_warm0
   untimed lec_pre_full compile_into l_full cw_l_full pre_l_full.json

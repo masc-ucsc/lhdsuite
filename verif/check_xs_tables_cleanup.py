@@ -2,8 +2,15 @@
 """Stage and compare XiangShan rename/busy tables and RenameTableWrapper with LiveHD.
 
 By default, check every external output in differential simulation. --lec also
-attempts unbounded equivalence against matching checked-in RTL. Inconclusive
-proofs return nonzero. Sources, logs, and JSON remain in a fresh temporary dir.
+checks equivalence against matching checked-in RTL: it passes when lhd reports
+the two equivalent (proven or sampled) -- PROVEN-full, PROVEN-bounded(n) or
+TESTED-sampled(N), with the bound / vector count recorded in checks.json.
+lhd's TIMEOUT-time / TIMEOUT-memory pass too (only a refute is a failure;
+recorded with "proof": false and printed as a NOTE). An LEC run this
+script's own time/memory watchdog stops passes the same way, as
+TIMEOUT-deadline, unless its partial log already shows a top-level REFUTED-*.
+Any REFUTED-* returns nonzero. Sources, logs, and JSON remain in a fresh
+temporary dir.
 """
 
 import argparse
@@ -19,6 +26,51 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 NAMES = ["RenameTable", "RenameTable_1", "RenameTable_2", "BusyTable", "BusyTable_1"]
+
+
+# Accepted outcomes (owner rulings 2026-10-14: only a refute is a failure;
+# timeout and bounded are okay), under lhdsuite's own (default) formal.effort.
+# "Equivalent (proven or sampled)": lhd's PROVEN-full, PROVEN-bounded(n) or
+# TESTED-sampled(N). TIMEOUT-time / TIMEOUT-memory also PASS -- never a proof,
+# never a failure -- and are recorded with "proof": false. Any refuted-*, and
+# a missing, inconsistent or pre-2026-10-14 record, is rejected (None).
+def equivalence(lec):
+    verdict = (lec or {}).get("verdict")
+    if verdict == "proven-full" and lec.get("bounded") is False:
+        return {"verdict": verdict, "proof": True}
+    if verdict == "proven-bounded" and lec.get("bounded") is True:
+        return {"verdict": verdict, "bound": lec.get("bound"), "proof": True}
+    if verdict == "tested-sampled":
+        return {"verdict": verdict, "vectors": lec.get("vectors"), "proof": False}
+    if verdict in ("timeout-time", "timeout-memory"):
+        return {"verdict": verdict, "proof": False}
+    return None
+
+
+def describe(evidence):
+    if not evidence:
+        return "no equivalence evidence (verdict is not proven-*, tested-sampled or timeout-*)"
+    if evidence["verdict"].startswith("timeout-"):
+        word = "TIMEOUT-" + evidence["verdict"][len("timeout-"):]
+        return f"NOTE: equivalent? {word} (no proof, no counterexample; not a failure)"
+    if "bound" in evidence:
+        return f"equivalent (proven for {evidence['bound']} cycle(s): proven-bounded)"
+    if "vectors" in evidence:
+        return f"equivalent (sampled {evidence['vectors']} input vectors: tested-sampled)"
+    return "equivalent (proven: proven-full)"
+
+
+# A run THIS script's own timer/watchdog stopped writes no lhd record. "Any
+# resource constraint is a timeout" (owner ruling 2026-10-14), the same as
+# verif/lec_verdict.py's TIMEOUT-deadline: it passes, never as a proof --
+# unless the record or the partial log already shows a top-level REFUTED-*.
+TOP_REFUTED = re.compile(r"^(?:lec|formal verify): '[^']*' REFUTED-[a-z]+", re.M)
+
+
+def deadline_evidence(record, log_text):
+    if str((record or {}).get("verdict", "")).startswith("refuted-") or TOP_REFUTED.search(log_text or ""):
+        return None
+    return {"verdict": "timeout-deadline", "proof": False}
 
 
 def split(s):
@@ -37,16 +89,36 @@ def split(s):
     return [x for x in out if x]
 
 
+# One-bit Pyrope type words. Pyrope 3.1 capitalizes them (`U8`, `S4`, `Bool`,
+# `Clock`, `Reset`); the pre-3.1 lowercase `u8`/`s4`/`bool` still parse.
+ONE_BIT_TYPES = ("Bool", "Clock", "Reset", "bool")
+
+
+def type_bits(typ, name):
+    """Bit width of a port type; an unsized or unknown type is an error. An
+    output's landing-cycle check (`U8@[0]`, `U8@[]`) is not part of the type."""
+    typ = re.sub(r"@\[[^\]]*\]$", "", typ).strip()
+    m = re.fullmatch(r"[UuSs](\d+)", typ)
+    if m:
+        return int(m[1])
+    if typ in ONE_BIT_TYPES:
+        return 1
+    raise SystemExit(f"FAIL: cannot size port '{name}' of type '{typ}' "
+                     "(expected U<N>, S<N>, Bool, Clock or Reset)")
+
+
 def flatten(fields, prefix=""):
     out = []
     for item in split(fields):
         name, typ = item.split(":", 1)
-        name = prefix + name.strip()
+        # Pyrope 3.1 backtick-escapes some names (`clock`, `_8`); the
+        # generated testbench addresses the plain spelling.
+        name = prefix + name.strip().strip("`")
         typ = typ.strip()
         if typ.startswith("("):
             out.extend(flatten(typ[1 : typ.rfind(")")], name + "."))
         else:
-            out.append((name, int(re.match(r"u(\d+)", typ)[1])))
+            out.append((name, type_bits(typ, name)))
     return out
 
 
@@ -63,11 +135,11 @@ def wrapper_stimulus(field, bits, dst, off):
             "(((cycle + (lane & 3)) & 31) << 14) | "
             "((((cycle * 13) + lane) & 255) << 6) | (((cycle + lane) & 15) << 2)")
     if field == "io_diffCommits.commitValid":
-        return lanes(520, 1, "unsigned(((cycle + lane) & 3) != 0)")
+        return lanes(520, 1, "U1(((cycle + lane) & 3) != 0)")
     if field in ("io_intRenamePorts", "io_fpRenamePorts", "io_vecRenamePorts"):
         width = bits // 8
         return lanes(8, width,
-            f"(unsigned(((cycle + lane) & 3) == 1) << {width - 1}) | "
+            f"(U1(((cycle + lane) & 3) == 1) << {width - 1}) | "
             "(((cycle + (lane & 3)) & 31) << 8) | (((cycle * 7) + lane) & 255)")
     if field.endswith(".pdestVl"):
         return lanes(8, 5, "(cycle + lane) & 31")
@@ -79,7 +151,7 @@ def wrapper_stimulus(field, bits, dst, off):
         expr = f"(cycle + {lane}) & 31"
     elif "RenamePorts_" in field:
         lane = int(re.search(r"Ports_(\d+)_", field)[1])
-        expr = (f"unsigned(((cycle + {lane}) & 3) == 1)" if field.endswith("_wen")
+        expr = (f"U1(((cycle + {lane}) & 3) == 1)" if field.endswith("_wen")
                 else f"((cycle * 7) + {lane}) & 255")
     elif field.endswith(".isCommit"):
         expr = "cycle#[0]"
@@ -92,14 +164,23 @@ def wrapper_stimulus(field, bits, dst, off):
     else:
         expr = {
             "io_hartId": "cycle#[0..=7]",
-            "io_redirect": "unsigned(phase == 128 or phase == 192)",
-            "io_snpt.snptEnq": "unsigned(phase >= 65 and phase < 69)",
-            "io_snpt.snptDeq": "unsigned(phase == 224)",
+            "io_redirect": "U1(phase == 128 or phase == 192)",
+            "io_snpt.snptEnq": "U1(phase >= 65 and phase < 69)",
+            "io_snpt.snptDeq": "U1(phase == 224)",
             "io_snpt.useSnpt": "cycle#[6]",
             "io_snpt.snptSelect": "cycle#[8..=9]",
             "io_snpt.flushVec": "if phase == 240 { 15 } else { 0 }",
         }[field]
     return f"  {dst} = {expr}\n"
+
+
+def reset_drive(source, name):
+    """How the test drives NAME's `reset` port: a `Reset`/`Bool` port takes
+    the Bool condition, an integer (`U1`) port needs the `U1(...)` cast. Read
+    from the module's own signature (the old and cleaned trees differ)."""
+    m = re.search(r"pub mod " + re.escape(name) + r"\b[^{]*?`?\breset`?\s*:\s*(\w+)", source)
+    cond = "clock < 2 or (clock & 255) == 250"
+    return cond if m and m[1] in ("Reset", "Bool") else f"U1({cond})"
 
 
 def stage(name, work):
@@ -114,6 +195,8 @@ def stage(name, work):
     outputs = sig[sig.index(") -> (") + 6 : sig.rfind(") {")]
     ins = flatten(args)
     outs = flatten(outputs)
+    reset = {"before": reset_drive(source, name),
+             "after": reset_drive((clean / (name + ".prp")).read_text(), name)}
     (d / ("old_" + name + ".prp")).write_text(source)
     shutil.copy(clean / (name + ".prp"), d / ("new_" + name + ".prp"))
     pending = [name]
@@ -129,7 +212,7 @@ def stage(name, work):
         shutil.copy(clean / helper, d / helper)
     fields = [(n, b) for n, b in ins if n not in ("clock", "reset")]
     total = sum(b for n, b in fields)
-    s = f'// Differential test: all externally visible bits, including invalid data.\nconst old = import("old_{name}.{name}")\nconst new = import("new_{name}.{name}")\n\npub comb stimulus(cycle:u32) -> (bus:u{total}) {{\n  bus = 0\n  const phase:u8 = cycle#[0..=7]\n'
+    s = f'// Differential test: all externally visible bits, including invalid data.\nconst old = import("old_{name}.{name}")\nconst new = import("new_{name}.{name}")\n\npub comb stimulus(cycle:U32) -> (bus:U{total}) {{\n  bus = 0\n  const phase:U8 = cycle#[0..=7]\n'
     off = 0
     locations = []
     for field, bits in fields:
@@ -143,7 +226,7 @@ def stage(name, work):
                 addr = 5 if name == "RenameTable" else 6
                 wb = addr + 9
                 ports = bits // wb
-                s += f"  for lane in 0..<{ports} {{\n    const address = (cycle + (lane & 3))#[0..<{addr}]\n    const data = ((cycle * 13) + lane)#[0..=7]\n    const valid = unsigned(((cycle + lane) & 3) != 0)\n    bus#[({off - bits} + (lane * {wb}))..+{wb}] = (valid << {wb - 1}) | (address << 8) | data\n  }}\n"
+                s += f"  for lane in 0..<{ports} {{\n    const address = (cycle + (lane & 3))#[0..<{addr}]\n    const data = ((cycle * 13) + lane)#[0..=7]\n    const valid = U1(((cycle + lane) & 3) != 0)\n    bus#[({off - bits} + (lane * {wb}))..+{wb}] = (valid << {wb - 1}) | (address << 8) | data\n  }}\n"
             elif field.endswith("_hold"):
                 lane = int(re.search(r"_(\d+)_", field)[1])
                 s += f"  {dst} = (cycle >> {lane % 7}) & 1\n"
@@ -152,9 +235,9 @@ def stage(name, work):
                 s += f"  {dst} = (cycle + {lane})#[0..<{bits}]\n"
             else:
                 expr = {
-                    "io_redirect": "unsigned(phase == 128 or phase == 192)",
-                    "io_snpt.snptEnq": "unsigned(phase >= 65 and phase < 69)",
-                    "io_snpt.snptDeq": "unsigned(phase == 224)",
+                    "io_redirect": "U1(phase == 128 or phase == 192)",
+                    "io_snpt.snptEnq": "U1(phase >= 65 and phase < 69)",
+                    "io_snpt.snptDeq": "U1(phase == 224)",
                     "io_snpt.useSnpt": "cycle#[6]",
                     "io_snpt.snptSelect": "cycle#[8..=9]",
                     "io_snpt.flushVec": "if phase == 240 { 15 } else { 0 }",
@@ -163,7 +246,7 @@ def stage(name, work):
         else:
             if field in ["io_allocPregs", "io_wbPregs"]:
                 shift = 0 if field == "io_allocPregs" else 3
-                s += f"  for lane in 0..<{bits // 9} {{\n    const address = ((cycle >> {shift}) + lane)#[0..=7]\n    const valid = unsigned(((cycle + lane) & 3) != 0)\n    bus#[({off - bits} + (lane * 9))..+9] = (valid << 8) | address\n  }}\n"
+                s += f"  for lane in 0..<{bits // 9} {{\n    const address = ((cycle >> {shift}) + lane)#[0..=7]\n    const valid = U1(((cycle + lane) & 3) != 0)\n    bus#[({off - bits} + (lane * 9))..+9] = (valid << 8) | address\n  }}\n"
             elif field.startswith("io_read_"):
                 lane = int(re.search(r"_(\d+)_", field)[1])
                 s += f"  {dst} = (cycle + {lane})#[0..=7]\n"
@@ -172,7 +255,7 @@ def stage(name, work):
             elif field == "io_og0Cancel":
                 s += f"  {dst} = (cycle * 0x45d9f3)#[0..=23]\n"
             elif ".valid" in field:
-                s += f"  {dst} = unsigned((cycle & 3) != 0)\n"
+                s += f"  {dst} = U1((cycle & 3) != 0)\n"
             elif field.endswith("Wen"):
                 bit = 2 if field.endswith("rfWen") else 3
                 s += f"  {dst} = cycle#[{bit}]\n"
@@ -183,14 +266,14 @@ def stage(name, work):
                 s += f"  {dst} = (cycle >> 3)#[0..=5]\n"
             elif field.endswith(".is0Lat"):
                 s += f"  {dst} = cycle#[1]\n"
-    s += "}\n\ntest old.compare(cycles:u20=1024) {\n  mut before = old\n  mut after = new\n  mut inputs = stimulus\n  tick cycles clocks=(clock=1) {\n    inputs.cycle = clock\n"
+    s += "}\n\ntest old.compare(cycles:U20=1024) {\n  mut before = old\n  mut after = new\n  mut inputs = stimulus\n  tick cycles {\n    inputs.cycle = clock\n"
 
     def port(n):
         parts = n.split(".")
         return parts[0] + ("." + "_".join(parts[1:]) if len(parts) > 1 else "")
 
     for inst in ["before", "after"]:
-        s += f"    {inst}.reset = clock < 2 or (clock & 255) == 250\n"
+        s += f"    {inst}.reset = {reset[inst]}\n"
         for field, bits, off in locations:
             s += f"    {inst}.{port(field)} = inputs.bus#[{off}..={off + bits - 1}]\n"
     s += "    step\n    if clock >= 2 {\n"
@@ -207,11 +290,11 @@ def stage(name, work):
         # hierarchies are lowered together. Compare exact output bits each cycle.
         stimulus = s[s.index("pub comb stimulus"):s.index("\n\ntest old.compare")]
         trace = ('const dut = import("lg:RenameTableWrapper")\n\n' + stimulus
-                 + f"\n\ntest dut.trace(cycles:u20=1024) {{\n  mut acc = dut\n"
+                 + f"\n\ntest dut.trace(cycles:U20=1024) {{\n  mut acc = dut\n"
                  + "  mut inputs = stimulus\n"
-                 + "".join(f"  mut observed{i}:u{bits} = 0\n" for i, (_, bits) in enumerate(outs))
-                 + "  tick cycles clocks=(clock=1) {\n    inputs.cycle = clock\n"
-                 + "    acc.reset = (clock < 2) or ((clock & 255) == 250)\n")
+                 + "".join(f"  mut observed{i}:U{bits} = 0\n" for i, (_, bits) in enumerate(outs))
+                 + "  tick cycles {\n    inputs.cycle = clock\n"
+                 + "    acc.reset = @RESET@\n")
         for field, bits, off in locations:
             trace += f"    acc.{port(field)} = inputs.bus#[{off}..={off + bits - 1}]\n"
         trace += "    step\n"
@@ -219,7 +302,9 @@ def stage(name, work):
             trace += f"    observed{i} = acc.{port(field)}\n"
         values = " ".join(f"{{observed{i}}}" for i in range(len(outs)))
         trace += '    if clock >= 2 { puts("TRACE {clock} ' + values + '") }\n  }\n}\n'
-        (d / "trace.prp").write_text(trace)
+        # One trace per side: the two trees type `reset` differently.
+        for side, inst in (("pyrope", "before"), ("pyrope2", "after")):
+            (d / f"trace_{side}.prp").write_text(trace.replace("@RESET@", reset[inst]))
     return d
 
 
@@ -314,12 +399,14 @@ def main():
         path = folder / "result.json"
         result = json.loads(path.read_text()) if path.exists() else {}
         ok = stopped is None and proc.returncode == 0
-        if proof:
-            ok = (
-                ok
-                and result.get("lec", {}).get("verdict") == "proven"
-                and result["lec"].get("bounded") is False
-            )
+        evidence = None
+        if proof and stopped is not None:
+            evidence = deadline_evidence(result.get("lec", {}),
+                                         (folder / "log").read_text(errors="replace"))
+            ok = evidence is not None
+        elif proof:
+            evidence = equivalence(result.get("lec", {}))
+            ok = ok and evidence is not None
         checks.append(
             {
                 "name": name,
@@ -330,10 +417,12 @@ def main():
                 "exit_code": proc.returncode,
                 "ok": ok,
                 "result": result,
+                "equivalence": evidence,
             }
         )
         (work / "checks.json").write_text(json.dumps(checks, indent=2) + "\n")
-        print(f"{name}: {'PASS' if ok else 'INCOMPLETE OR FAILED'}", flush=True)
+        detail = f" -- {describe(evidence)}" if proof else ""
+        print(f"{name}: {'PASS' if ok else 'INCOMPLETE OR FAILED'}{detail}", flush=True)
         return ok
 
     ok = True
@@ -345,7 +434,7 @@ def main():
             for side in ("pyrope", "pyrope2"):
                 passed = run(name + "/sim_" + side, [
                     "sim", ROOT / "xiangshan/Backend" / side / (name + ".prp"),
-                    sources / "trace.prp", "--arg", f"cycles={args.cycles}",
+                    sources / f"trace_{side}.prp", "--arg", f"cycles={args.cycles}",
                     "--set", "sim.unknown_zero=true", "--set", "sim.init_zero=true",
                      "--diag-fmt", "pretty",
                 ])

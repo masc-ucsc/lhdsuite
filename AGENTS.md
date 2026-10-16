@@ -250,8 +250,13 @@ otherwise pass. Never loosen that gate to make a target green.
   That is what the per-core `verify_bound` / `verify_sets` knobs exist for, and
   it is a property of the design's reset, not a dial for making a target green.
   `lhd lec` has the same shape of problem on this core and no knob for it — it
-  returns `PASS(6) equivalent for 6 cycles from reset` instead of an unbounded
-  PROVEN, so both `picorv32_lec` and `picorv32_lec_bug` are known-failing.
+  returned `PASS(6) equivalent for 6 cycles from reset` (today's spelling:
+  `PROVEN-bounded(6)`) instead of an unbounded `PROVEN-full`, so both
+  `picorv32_lec` and `picorv32_lec_bug` were known-failing. Since the
+  2026-10-14 verdict ruling `lec.sh` ACCEPTS `PROVEN-bounded(n)` (only a
+  REFUTED-* fails), so `picorv32_lec` can go green while checking nothing past
+  reset, and `picorv32_lec_bug` still needs a top `REFUTED-cex` (not
+  re-measured under the new vocabulary).
   Before trusting any green proof target, check its window against the reset.
 
 - **Source staging is extension-agnostic.** `copy_core_sources` stages `.sv`

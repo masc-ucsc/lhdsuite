@@ -54,8 +54,10 @@ scenarios. Formal checks target the integer ALU. See the
 
 Install [Bazelisk](https://github.com/bazelbuild/bazelisk); `.bazelversion`
 selects Bazel. LiveHD and its C++ dependencies are built from source.
-[MODULE.bazel](MODULE.bazel) currently selects the sibling `../livehd`
-checkout. To select another checkout, pass `--override_module=livehd=/path/to/livehd`.
+[MODULE.bazel](MODULE.bazel) pins LiveHD to one commit of
+`github.com/masc-ucsc/livehd` (a `git_override`); it does NOT use the sibling
+`../livehd` checkout. To test a local checkout instead, pass
+`--override_module=livehd=/path/to/livehd` (e.g. `=../livehd`).
 Builds default to `-c opt`; use `-c dbg` for compiler debugging.
 
 Synthesis requires sky130 installed and enabled through
@@ -97,9 +99,9 @@ Run one synthesis job at a time.
 | `compile_incremental` | Compilation across cold, comment-only, and semantic edits. |
 | `synth`, `synth_incremental` | Mapping time, reuse, gate count, area, and timing with sky130. Minion also runs a flat-mapping comparison. |
 | `synth_lec_synth`, `synth_lec_flat` | Synthesized netlist equivalence, including reuse after a comment edit; flat is Minion-only. |
-| `sim_verilog`, `sim_pyrope`, `sim_pyrope2`, `sim_verilator` | Simulation with checked output values; host compilation and execution are timed separately. `sim_pyrope2` is `sim_pyrope` over `<core>/pyrope2` with the same driver, gates and cycle count. |
-| `sim_incremental`, `sim_incremental_llvm` | Simulator build reuse across edits, using C++ or LLVM. Only the builds are timed; each rebuilt driver is then executed once and must behave exactly like a caches-off build of the same tree (cold, comment-only, and the one-module edit against a from-scratch build of the edited tree). |
-| `lec`, `lec_bug`, `lec_incremental` | Cross-language equivalence, injected-bug detection, and proof-cache reuse. |
+| `sim_verilog`, `sim_pyrope`, `sim_pyrope2`, `sim_verilator` | Simulation with checked output values; host compilation and execution are timed separately. `sim_pyrope2` is `sim_pyrope` over `<core>/pyrope2` with the same driver, gates and cycle count. The `lhd sim` legs run lhd's default backend (LLVM since livehd 98a7e7c44; `METRIC sim_backend_llvm` records which). |
+| `sim_incremental`, `sim_incremental_llvm` | Simulator build reuse across edits, pinned to the C++ (`slop`) and LLVM backends respectively. Only the builds are timed; each rebuilt driver is then executed once and must behave exactly like a caches-off build of the same tree (cold, comment-only, and the one-module edit against a from-scratch build of the edited tree). |
+| `lec`, `lec_bug`, `lec_incremental` | Cross-language equivalence, injected-bug detection, and proof-cache reuse (the cache gate applies only under a proof `LEC_EFFORT`; sampled presets never cache). |
 | `verify`, `verify_bug`, `verify_temporal`, `verify_incremental` | Formal sidecar properties, mutant refutation, sequential properties, and reuse where supported. |
 
 Logs contain exact `CMD` lines and `METRIC <name> <value> <unit>` records.

@@ -127,9 +127,9 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             design's OWN body encodes fine; it is the hierarchy that refuses.
 #             The driver skips proving each listed def and
 #             black-boxes its instances, so the latch-free majority is still
-#             proven bottom-up instead of the whole design refusing. lhd is
-#             strict by default, so a witness-free UNKNOWN top is a hard fail
-#             (a trust list must not turn an inconclusive run green). Every
+#             proven bottom-up instead of the whole design refusing. An
+#             undecided top is REFUTED-<why> (exit 7), a hard fail (a trust
+#             list must not turn a non-answer green). Every
 #             trusted def is disclosed
 #             ("PROVEN under N trusted def(s)"); include each parameterized
 #             `_pN` twin, since a variant is a distinct def. "" = trust
@@ -847,10 +847,18 @@ def core_benches(core):
             continue  # e.g. no sim_verilator on a core with no verilator_tb
         name = "%s_%s" % (core, suffix)
         scenario_cfg = cfg
-        if suffix == "sim_incremental_llvm":
+
+        # The two incremental-sim scenarios are the SAME flow on the two
+        # backends, so each pins its own: an unset sim.tune.backend became
+        # llvm in livehd 98a7e7c44 (it was slop), and leaving `sim_incremental`
+        # on the default would turn it into a second copy of
+        # `sim_incremental_llvm` and drop slop's reuse coverage. The timed
+        # sim_* legs keep lhd's default (sim.sh records which one ran).
+        if suffix in ("sim_incremental", "sim_incremental_llvm"):
+            backend = "llvm" if suffix == "sim_incremental_llvm" else "slop"
             scenario_cfg = dict(cfg)
             scenario_cfg["sim_sets"] = (cfg.get("sim_sets", "") +
-                                         " --set sim.tune.backend=llvm").strip()
+                                         " --set sim.tune.backend=" + backend).strip()
         _lhd_bench(name, core, scenario_cfg, script, mode, timeout)
         names.append(":" + name)
 

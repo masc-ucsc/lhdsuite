@@ -2,9 +2,10 @@
 # bench cores select different --top values over this one shared source tree;
 # lhd prunes each compile to the selected top's import cone.
 
+# UNUSED since the stub genrule was dropped (see the note at the bottom of this
+# file); kept so a snapshot that imports DiffExt cells again can restore it.
 # The DPI sink models are DERIVED from the DummyDPICWrapper_* sources, never
-# committed — see the `gen_pyrope_stubs` genrule at the bottom of this file and
-# bench/gen_stubs.py for why they have to exist at all. The wrapper -> cell name
+# committed — see bench/gen_stubs.py for why they had to exist. The wrapper -> cell name
 # map is mechanical (`DummyDPICWrapper_X.prp` -> `DiffExtX.prp`), which is what
 # lets the output list be derived here instead of hand-listed: a regenerated
 # XiangShan snapshot picks up new or renamed cells with no edit to this file.
@@ -72,34 +73,14 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# The SV wrappers instantiate these DPI cells only under `ifdef DUMMY`, which
-# is disabled for synthesis. The translated Pyrope snapshot has no preprocessor
-# and retained the imports, so explicit sink models reproduce the synthesis
-# behavior without altering the imported design sources.
-#
-# GENERATED, never committed: checking these in would mean a second source of
-# truth that silently rots when the snapshot is regenerated with new cells or
-# changed `io` widths. `outs` is derived from the same glob the generator reads,
-# so the two cannot disagree.
-genrule(
-    name = "gen_pyrope_stubs",
-    srcs = glob(["pyrope/DummyDPICWrapper_*.prp"]),
-    outs = ["synth_stubs/DiffExt%s.prp" % cell for cell in _STUB_CELLS],
-    cmd = "python3 $(execpath //bench:gen_stubs.py) " +
-          "$$(dirname $$(echo $(SRCS) | cut -d' ' -f1)) $(RULEDIR)/synth_stubs >/dev/null",
-    tools = ["//bench:gen_stubs.py"],
-)
-
-filegroup(
-    name = "pyrope_stubs",
-    srcs = [":gen_pyrope_stubs"],
-    visibility = ["//visibility:public"],
-)
-
-# bench/common.sh takes the DIRECTORY of this one file as $CORE_P_STUB_DIR; any
-# generated stub serves, it just has to be a single deterministic label.
-filegroup(
-    name = "pyrope_stub_top",
-    srcs = ["synth_stubs/DiffExt%s.prp" % _STUB_CELLS[0]],
-    visibility = ["//visibility:public"],
-)
+# No DiffExt* DPI sink stubs. The SV wrappers instantiate their DPI cell only
+# under `ifdef DUMMY` (off for synthesis), and the CURRENT Pyrope snapshot
+# already emits every DummyDPICWrapper_* with an empty body and no DiffExt
+# import, so there is nothing to stub (bench/defs.bzl passes CORE_P_STUB_TOP="").
+# The `gen_pyrope_stubs` genrule that used to live here declared one
+# synth_stubs/DiffExt<X>.prp output per wrapper, but bench/gen_stubs.py SKIPs a
+# wrapper without a DiffExt import, so it created none of them and failed
+# `bazel build //xiangshan/...` (hence `bazel test //...`) with "declared output
+# was not created". If a regenerated snapshot ever imports DiffExt cells again,
+# run bench/gen_stubs.py <pyrope_dir> <out_dir> and point CORE_P_STUB_TOP (and
+# bench/matrix.sh's XS_STUB_DIR) at its output.

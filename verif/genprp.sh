@@ -12,7 +12,8 @@
 #                                                 and elaborate — a bad `const`
 #                                                 rebind or a missing import
 #                                                 fails right here)
-#   3. LEC        gen'd Pyrope (impl) vs the ORIGINAL Verilog (ref), PROVEN
+#   3. LEC        gen'd Pyrope (impl) vs the ORIGINAL Verilog (ref), NOT
+#                 REFUTED (PROVEN-full / -bounded, TESTED-sampled or TIMEOUT-*)
 #
 # Step 3 is the real contract: the Pyrope this tool writes must mean exactly
 # what the Verilog it read meant.
@@ -150,7 +151,10 @@ run_deadline() {
 
 # The LEC budget for every leg of this gate, soft and hard (owner ruling
 # 2026-09-15). Override with LEC_BUDGET_S for a one-off deeper run.
-LEC_BUDGET_S=${LEC_BUDGET_S:-300}   # SOLVER budget -> --set formal.timeout=
+LEC_BUDGET_S=${LEC_BUDGET_S:-120}   # TOTAL lhd lec budget -> --set formal.timeout= (owner 2026-10-15: effort=test, 2 min is enough)
+LEC_EFFORT=${LEC_EFFORT-test}       # formal.effort for the native leg (bench/common.sh); empty = lhd's default
+LEC_EFFORT_ARGS=()
+[ -z "$LEC_EFFORT" ] || LEC_EFFORT_ARGS=(--set "formal.effort=$LEC_EFFORT")
 LEC_WALL_S=${LEC_WALL_S:-0}        # hard wall-clock stop for the leg; 0 = none
 
 # 2. The generated Pyrope must READ BACK. Its imports pull in the sibling files.
@@ -159,16 +163,19 @@ step compile_impl "$LHD_BIN" compile "gen/$CORE_TOP.prp" --top "$CORE_TOP" \
 
 # 3. Cross-language LEC against the original-Verilog graph from step 1.
 #
-# Verdict policy for THIS gate (owner ruling 2026-09-15, //verif only): a
-# FIVE-MINUTE budget per leg, and only a REFUTATION fails. A timeout, an
-# undecided solver and an encoder refusal all mean the engine found no issue, so
-# they pass with the verdict named. lhd itself keeps proven / refuted / timeout
-# distinct; only this test collapses the non-refutations into a pass. So lec is
-# NOT run through `step` (a timed-out lec exits non-zero), it is classified below.
+# Verdict policy for THIS gate (owner rulings 2026-09-15 and 2026-10-14): a
+# FIVE-MINUTE budget per leg, and only a REFUTATION fails -- any REFUTED-*:
+# REFUTED-cex is a counterexample (exit 10), and every other REFUTED-<why>
+# (interface / unsupported / unchecked / vacuous / unexplained, exit 7) is lhd
+# failing to answer, e.g. an encoder refusal. PROVEN-full, PROVEN-bounded(n),
+# TESTED-sampled(N), TIMEOUT-time / TIMEOUT-memory (lhd exits 0 on all of them)
+# and a harness deadline kill pass with the verdict named. lec is NOT run
+# through `step` (a refutation or a deadline kill exits non-zero and must still
+# be told apart), it is classified by verif/lec_verdict.py below.
 #
 # BOTH engines run: the native solver and the independent lgyosys oracle. A
 # single engine cannot police itself -- if the native LEC silently stopped
-# proving anything, every leg would go "inconclusive" and this gate would look
+# proving anything, every leg would go TIMEOUT-time and this gate would look
 # green, which is exactly what the second engine is here to catch.
 #
 # LEC_LEG_VERDICT is set rather than echoed: a `$(lec_leg ...)` would capture
@@ -190,27 +197,28 @@ lec_leg() {  # LABEL EXTRA_SET...
   rc=$?
   set -e
   LEC_LEG_VERDICT=$(python3 "$(rloc _main/verif/lec_verdict.py)" "$log" "$rc")
-  # NOVERDICT / BOUNDED / UNDECIDED: no counterexample, but nothing was fully
-  # checked either (a truncated run, a proof that only covered some cycles, an
-  # encoder refusal). All three were fatal before this gate learned about
-  # deadlines and stay fatal -- only a real TIMEOUT is forgiven.
+  # An ALLOWLIST, so a class the classifier does not know fails closed.
   case $LEC_LEG_VERDICT in
-  NOVERDICT | BOUNDED | UNDECIDED)
-    echo "FAIL: $label reached no usable verdict ($LEC_LEG_VERDICT) for $CORE_TOP (rc=$rc) -- not a timeout" >&2
+  PROVEN-* | TESTED-* | TIMEOUT-*) ;;
+  REFUTED-cex)
+    echo "FAIL: $label REFUTED-cex $CORE_TOP (rc=$rc): a counterexample" >&2
+    tail -10 "$log" >&2
+    archive
+    exit 1
+    ;;
+  *)
+    # REFUTED-<why>: lhd could not answer (an encoder refusal, an interface
+    # mismatch, a contradictory assume set, a LiveHD bug). NOVERDICT: no
+    # usable result record at all (a crash, a truncated run, a stale lhd).
+    echo "FAIL: $label reached no answer ($LEC_LEG_VERDICT) for $CORE_TOP (rc=$rc) -- not a timeout" >&2
     tail -10 "$log" >&2
     archive
     exit 1
     ;;
   esac
-  if [ "$LEC_LEG_VERDICT" = REFUTED ]; then
-    echo "FAIL: $label REFUTED $CORE_TOP (rc=$rc)" >&2
-    tail -10 "$log" >&2
-    archive
-    exit 1
-  fi
 }
 
-lec_leg lec
+lec_leg lec ${LEC_EFFORT_ARGS[@]+"${LEC_EFFORT_ARGS[@]}"}
 lec_verdict=$LEC_LEG_VERDICT
 lec_leg lec_lgyosys --set formal.solver=lgyosys
 lgyosys_verdict=$LEC_LEG_VERDICT

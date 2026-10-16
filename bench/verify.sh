@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # Formal assert/assume: the <core>/verif/$CORE_UNIT.verify.prp sidecar proves
 # arithmetic facts about one real module of the design (dino: the ALU's ADDW
-# sum + sign-extension; minion: the TxFMA 64-bit adder). lhd is strict by
-# default: an UNKNOWN fails the run, so PASS == all PROVEN.
+# sum + sign-extension; minion: the TxFMA 64-bit adder). PASS == every assert
+# obligation proven (formal_report.json `proven-full` or `proven-bounded`, lhd's
+# PROVEN-full / PROVEN-bounded(n)). lhd exits 0 on a TIMEOUT-* run too, so
+# check_proven below -- not the exit code -- is what keeps a timed-out
+# obligation from passing here; a REFUTED-* run exits non-zero (10 / 7).
 #
 #   MODE=cold  one proving run.
 #   MODE=bug   the bug1 variant ($CORE_UNIT's add flipped to subtract) must be
-#              CAUGHT: non-zero exit AND a refutation with a counterexample
-#              trace, not a crash and not an inconclusive UNKNOWN.
+#              CAUGHT: REFUTED-cex with exit 10 AND a counterexample trace, not
+#              a crash and not a REFUTED-<why> (exit 7: lhd could not answer).
 #   MODE=temporal  the SEQUENTIAL sidecar ($CORE_SEQ_UNIT): properties relating
 #              one cycle to the next (`past`/`stable`), at a deeper bound. Only
 #              generated for a core that declares seq_unit.
@@ -72,7 +75,8 @@ for line in sys.stdin:
 print(0 if count is None else count)'
 }
 
-# check_proven LABEL EXPECTED — every assert obligation PROVEN, and as many of
+# check_proven LABEL EXPECTED — every assert obligation proven (`proven-full`
+# or `proven-bounded`; a `timeout-*` or `refuted-*` row fails), and as many of
 # them as the sidecar declares.
 #
 # This reads the per-obligation verdicts out of formal_report.json rather than
@@ -93,7 +97,8 @@ except Exception as e:
     print(f"FAIL: cannot read {rep}: {e}", file=sys.stderr)
     raise SystemExit(1)
 obs = [o for o in d.get("obligations", []) if o.get("kind") == "assert"]
-bad = [(o.get("line"), o.get("verdict")) for o in obs if o.get("verdict") != "proven"]
+PROVEN = ("proven-full", "proven-bounded")  # lhd's PROVEN-full / PROVEN-bounded(n)
+bad = [(o.get("line"), o.get("verdict")) for o in obs if o.get("verdict") not in PROVEN]
 if want <= 0:
     print("FAIL: the sidecar declares no assert obligations (--list-tests parse failed?)", file=sys.stderr)
     raise SystemExit(1)
@@ -118,27 +123,29 @@ cold)
 bug)
   # The formal counterpart of lec_bug. The sidecar's first assert is exactly
   # what tests/bug1 breaks (the unit's add flipped to subtract), so the run must
-  # REFUTE — a non-zero exit alone is not enough, since strict mode also exits
-  # non-zero on an UNKNOWN that proves nothing.
+  # REFUTE with a counterexample — a non-zero exit alone is not enough, since
+  # a REFUTED-<why> (exit 7) also exits non-zero while proving nothing. Read
+  # the run's headline `formal verify: '<top>' <WORD> (...)`, not any
+  # occurrence of "REFUTED".
   core_variant bug1 src/pyrope
   run_expect_fail verify_bug vrun
-  if ! grep -qa "REFUTED" step_verify_bug.log; then
-    step_failed verify_bug "bug1 failed the run but not as a refutation (an UNKNOWN proves nothing)"
+  if ! grep -qaE "^formal verify: '[^']*' REFUTED-cex " step_verify_bug.log || [ "$LAST_RC" != 10 ]; then
+    step_failed verify_bug "bug1 failed the run (exit $LAST_RC) but not as REFUTED-cex with exit 10 (a REFUTED-<why> proves nothing)"
     exit 1
   fi
   # A refutation must come with the per-cycle input trace that reproduces it;
   # that trace is what the generated replay testbench is built from.
   if ! grep -qa "counterexample inputs" step_verify_bug.log; then
-    step_failed verify_bug "REFUTED without a counterexample trace"
+    step_failed verify_bug "REFUTED-cex without a counterexample trace"
     exit 1
   fi
   metric verify_bug_refuted 1 bool
-  echo "PASS: injected $CORE_UNIT bug REFUTED with a counterexample (${LAST_MS} ms)"
+  echo "PASS: injected $CORE_UNIT bug REFUTED-cex with a counterexample (${LAST_MS} ms)"
   ;;
 temporal)
   # Sequential properties over $CORE_SEQ_UNIT: `past`/`stable` relate a cycle to
   # the next, which the arithmetic `unit` sidecars cannot exercise at all. The
-  # same pinned gate applies — every declared assert PROVEN, and as many as the
+  # same pinned gate applies — every declared assert proven, and as many as the
   # sidecar declares.
   : "${CORE_SEQ_UNIT:?this core has no seq_unit; the target should not have been generated}"
   want=$(expected_asserts "$CORE_SEQ_UNIT")

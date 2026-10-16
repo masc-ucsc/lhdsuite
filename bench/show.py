@@ -228,7 +228,7 @@ def report_core(root: Path, core: str) -> list:
             m = r[3]
             print(f"   {name:7} gensim {fmt(m.get('gensim_ms'), 'ms')},"
                   f" lec {fmt(m.get('netlist_lec_ms'), 'ms')}"
-                  f"  (pass-2 netlist PROVEN vs compiled design)")
+                  f"  (pass-2 netlist vs compiled design: not refuted)")
         rep.cmds(("synth_lec_flat", nf), ("synth_lec_synth", ns))
 
     # ---- sim --------------------------------------------------------------
@@ -337,11 +337,11 @@ def report_core(root: Path, core: str) -> list:
         rep.head("lec (pyrope impl vs verilog ref)", lc, lb, li)
         if lc:
             m = lc[3]
-            print(f"   proven:   compile ref {fmt(m.get('compile_ref_ms'), 'ms')},"
+            print(f"   pass:     compile ref {fmt(m.get('compile_ref_ms'), 'ms')},"
                   f" impl {fmt(m.get('compile_impl_ms'), 'ms')}, lec {fmt(m.get('lec_pass_ms'), 'ms')}")
         if lb:
             m = lb[3]
-            print(f"   bug1:     refuted in {fmt(m.get('lec_bug_ms'), 'ms')}"
+            print(f"   bug1:     REFUTED-cex in {fmt(m.get('lec_bug_ms'), 'ms')}"
                   f" (compile {fmt(m.get('compile_bug_ms'), 'ms')})")
         if li:
             m = li[3]

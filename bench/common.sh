@@ -37,8 +37,8 @@
 #                     Always metrics either way. See defs.bzl.
 #   CORE_LEC_TRUST    comma-separated module-def names the LEC scenarios ASSUME
 #                     equivalent without proving them (latch escape hatch; ""
-#                     = trust nothing). When set, lec.sh also runs strict so a
-#                     witness-free UNKNOWN top is a hard fail. See defs.bzl
+#                     = trust nothing). Either way an undecided top is
+#                     REFUTED-<why> (exit 7), a hard fail. See defs.bzl
 #   CORE_VERILATOR_TB      C++ testbench for the Verilator comparison ("" = the
 #                     core has none, and no sim_verilator target is generated)
 #   CORE_VERILATOR_FLAGS   extra verilator options for this core (may be empty)
@@ -270,11 +270,13 @@ for line in sys.stdin:
 # TWO SEPARATE BUDGETS. They were one variable until 2026-09-16 and that was
 # wrong (owner: "by timeout I mean formal timeout, not total time timeout").
 #
-# LEC_BUDGET_S -- the SOLVER budget, passed as `--set formal.timeout=`. It is
-#   PER SOLVE. `lhd lec` is hierarchical and bottom-up, so one leg issues many
-#   solves and its honest wall clock is a multiple of this, not equal to it.
-#   Owner ruling 2026-09-15: a LEC that does not REFUTE within the budget found
-#   no issue, so the gate accepts it.
+# LEC_BUDGET_S -- `--set formal.timeout=` for every native `lhd lec` leg: the
+#   TOTAL budget of one lhd lec run (current lhd enforces it as one wall
+#   deadline over the whole run, every engine/profile arm included). Owner
+#   ruling 2026-10-15: lhdsuite runs formal.effort=test, which is not even a
+#   proof, so 2 minutes total is more than enough -> default 120 s. Owner
+#   ruling 2026-09-15: a LEC that does not REFUTE within the budget found no
+#   issue, so the gate accepts it (TIMEOUT-* exits 0).
 #
 # LEC_WALL_S -- a HARD wall-clock stop for the whole leg, purely a hang guard.
 #   0 (the default) means NO wall-clock stop: bazel's own test timeout is the
@@ -282,8 +284,42 @@ for line in sys.stdin:
 #   variable used to do -- truncates a legitimate multi-solve run and reports it
 #   as "reached the budget without refuting", hiding how little was actually
 #   examined.
-LEC_BUDGET_S=${LEC_BUDGET_S:-300}
+LEC_BUDGET_S=${LEC_BUDGET_S:-120}
 LEC_WALL_S=${LEC_WALL_S:-0}
+
+# LEC_EFFORT -- `--set formal.effort=` for every native `lhd lec` leg (default
+#   `test`). The sampled presets (quick-check | test | long-check) are for
+#   designs a full proof cannot finish, and they are WORK counts, not time:
+#   256 / 2048 / 16384 random input vectors checked against the miter
+#   (concrete-hierarchy BMC; a design the sampler cannot model escalates to
+#   the proof engines). Their pass is TESTED-sampled(N) -- no mismatch, no
+#   equivalence claim. `verify` (uncapped proof) or `proof` run the proof
+#   engines only: PROVEN-full / PROVEN-bounded(n). Every outcome is lhd's
+#   vocabulary (see lec_top_verdict below): PROVEN-*, TESTED-sampled(N) and
+#   TIMEOUT-* exit 0, REFUTED-cex exits 10, REFUTED-<why> exits 7 (no
+#   answer). LEC_BUDGET_S stays the TOTAL backstop; a run it stops before even
+#   quick-check is the budget ruling above. Empty leaves lhd's own default
+#   (`test`, proof-only where the options need it). The lgyosys legs never
+#   take it (the presets require cvc5).
+LEC_EFFORT=${LEC_EFFORT-test}
+LEC_EFFORT_ARGS=()
+[ -z "$LEC_EFFORT" ] || LEC_EFFORT_ARGS=(--set "formal.effort=$LEC_EFFORT")
+
+# lec_top_verdict LOGFILE -- the whole-design verdict of `lhd lec`, read from
+# its LAST top-level headline `lec: '<top>' <WORD> (...)`, printed exactly as
+# lhd spells it: PROVEN-full, PROVEN-bounded(n), TESTED-sampled(N),
+# TIMEOUT-time, TIMEOUT-memory, REFUTED-cex or REFUTED-<why> (interface /
+# unsupported / unchecked / vacuous / unexplained). Empty when there is none.
+#
+# Only the TOP is a design verdict (owner ruling 2026-10-14). The per-def
+# `lec[hier]: '<def>' PROVEN|REFUTED|<cause>` lines are internal block records
+# (a refuted BLOCK is not a refuted design: its parent re-checks it in
+# context), and the speculative `lec: '<top>' REFUTED under collapse ...`
+# line has no modifier, so neither matches here.
+lec_top_verdict() {
+  { grep -aE "^lec: '[^']*' (PROVEN|TESTED|TIMEOUT|REFUTED)-[a-z]+" "$1" 2>/dev/null || true; } \
+    | tail -n 1 | sed -E "s/^lec: '[^']*' ([A-Z]+-[a-z]+(\([0-9]+\))?).*/\1/"
+}
 
 # run_deadline SECONDS LOGFILE CMD... -- run CMD with a HARD wall-clock limit,
 # returning 124 when it had to be killed.
@@ -441,7 +477,9 @@ lhd_timed_rss() {
 }
 
 # run_expect_fail LABEL cmd args... — as run_timed but the step MUST exit
-# non-zero (e.g. LEC on an injected bug). A zero exit fails the test.
+# non-zero (e.g. LEC on an injected bug). A zero exit fails the test. Sets
+# LAST_RC, so a caller can demand the specific failure it wants (lhd's 10 =
+# REFUTED-cex, a real counterexample, rather than 7 = no answer).
 run_expect_fail() {
   local label=$1
   shift
@@ -450,6 +488,7 @@ run_expect_fail() {
   t0=$(now_ms)
   "$@" >"step_${label}.log" 2>&1 || rc=$?
   t1=$(now_ms)
+  LAST_RC=$rc
   if [ "$rc" -eq 0 ]; then
     step_failed "$label" "step '$label' was expected to detect a problem (non-zero exit) but passed: $*"
     return 1
