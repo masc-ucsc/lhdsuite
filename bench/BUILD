@@ -61,6 +61,11 @@ core_benches("cva6")
 # OWN `ifdef FORMAL` spec translated.
 core_benches("picorv32")
 
+# Ibex (lowRISC): a small RV32IMC core, vendored verbatim at one commit, with a
+# suite-written wrapper pinning the parameters. Its verify sidecar is Ibex's
+# OWN IbexDataAddrUnaligned assertion translated.
+core_benches("ibex")
+
 # Minion: an industrial multi-threaded RISC-V core with a vector/tensor unit.
 # Whole-design (Pyrope) top is minion_top; Verilog-side and cross-language
 # scenarios use vpu_top, the largest subtree complete in both languages

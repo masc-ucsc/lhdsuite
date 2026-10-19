@@ -324,6 +324,40 @@ CORES = {
         "verilator_flags": "-Dassert(assert_expr)=",
         "verilator_cycles": 500000,
     },
+    "ibex": {
+        "pkg": "//ibex",
+        # No maintained pyrope2 tree yet.
+        "pyrope2": False,
+        # ibex_suite_top pins ibex_top's parameters and ties off everything but
+        # the instruction and data buses. Both languages are the same design.
+        "top": "ibex_suite_top",
+        # The load-store unit carries Ibex's own IbexDataAddrUnaligned assert.
+        "unit": "ibex_load_store_unit",
+        # No sequential sidecar: Ibex's sequential bus lemmas (LSUHold in
+        # dv/formal/thm/mem.proof) are whole-core facts. See the sidecar header.
+        "seq_unit": "",
+        # The vendored LSU is one 850-line module; mutate the generated unit in
+        # place rather than check in a second copy of it.
+        "generated_variants": True,
+        # The data address leaves the LSU unaligned. Refutes IbexDataAddrUnaligned.
+        "variant_bug_find": "  data_addr_o = data_addr_w_aligned__w1",
+        "variant_bug_replace": "  data_addr_o = data_addr__w1#[0..<32]",
+        "v_flags": "",
+        "color_algs": ["synth"],
+        # The picorv32 program (10 x `acc += 3`, stored to 0x100) with the
+        # testbench as Ibex's instruction and data memory.
+        "sim_tb": "ibex_prog_tb.prp",
+        "sim_cycles": 2000,
+        "sim_tb_unit": "ibex_suite_top",
+        "sim_marker": "ibex prog:",
+        "sim_expect": "stored=30",
+        "sim_top_tb": "",
+        "sim_prog_tb": "",
+        "sim_prog_tb_unit": "",
+        "sim_prog_cycles": "",
+        "lec_trust": "",
+        "verilator_tb": "",
+    },
     "minion": {
         "pkg": "//minion",
         # The optional filegroups are placeholders; no maintained tree exists.

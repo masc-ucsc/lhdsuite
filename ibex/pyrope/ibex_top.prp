@@ -1,0 +1,94 @@
+const ibex_core = import("ibex_core.ibex_core")
+const ibex_register_file_ff = import("ibex_register_file_ff.ibex_register_file_ff")
+const prim_buf = import("prim_buf.prim_buf")
+const prim_clock_gating = import("prim_clock_gating.prim_clock_gating")
+const ibex_pkg = import("ibex_pkg")
+const ibex_cheriot_pkg = import("ibex_cheriot_pkg")
+
+pub mod ibex_top<BaseIsa=0, PMPEnable=0, PMPGranularity=0, PMPNumRegions=4, MHPMCounterNum=0, MHPMCounterWidth=40, PMPRstMsecCfg=0, CheriotRevBitmapAddrWidth=11, CheriotRevBitmapBaseAddr=0, RV32E=0, RV32M=2, RV32B=0, RV32ZC=3, RegFile=0, BranchTargetALU=0, WritebackStage=0, ICache=0, ICacheECC=0, BranchPredictor=0, DbgTriggerEn=0, DbgHwBreakNum=1, SecureIbex=0, LockstepOffset=1, MemECC=0, MemDataWidth=32, ICacheScramble=0, ICacheScrNumPrinceRoundsHalf=2, ICacheTweakInfection=0, RndCnstLfsrSeed=2891135988, RndCnstLfsrPerm=0x1e35ecba467fd1b12e958152c04fa43878a8daed, DmBaseAddr=0x1a110000, DmAddrMask=0xfff, DmHaltAddr=0x1a110800, DmExceptionAddr=0x1a110808, RndCnstIbexKey=0x14e8cecae3040d5e12286bb3cc113298, RndCnstIbexNonce=17840869995729336387, CsrMvendorId=0, CsrMimpId=0>::[timecheck=false](clk_i:Clock, rst_ni:U1, test_en_i:U1, ram_cfg_icache_tag_i:U24, ram_cfg_icache_data_i:U24, cheriot_enable_i:U4, hart_id_i:U32, boot_addr_i:U32, trvk_heap_base_addr_i:U32, instr_gnt_i:U1, instr_rvalid_i:U1, instr_rdata_i:U32, instr_rdata_intg_i:U7, instr_err_i:U1, data_gnt_i:U1, data_rvalid_i:U1, data_rdata_i:U32, data_rdata_intg_i:U7, data_tag_i:U1, data_err_i:U1, trvk_revbm_gnt_i:U1, trvk_revbm_rvalid_i:U1, trvk_revbm_rdata_i:U32, trvk_revbm_rdata_intg_i:U7, trvk_revbm_err_i:U1, irq_software_i:U1, irq_timer_i:U1, irq_external_i:U1, irq_fast_i:U15, irq_nm_i:U1, scramble_key_valid_i:U1, scramble_key_i:ibex_pkg.SCRAMBLE_KEY_W_T, scramble_nonce_i:ibex_pkg.SCRAMBLE_NONCE_W_T, debug_req_i:U1, fetch_enable_i:U4, mcounteren_writable_i:U4, scan_rst_ni:U1) -> (ram_cfg_icache_tag_o:U2@[], ram_cfg_icache_data_o:U2@[], instr_req_o:U1@[], instr_addr_o:U32@[], data_req_o:U1@[], data_we_o:U1@[], data_be_o:U4@[], data_addr_o:U32@[], data_wdata_o:U32@[], data_wdata_intg_o:U7@[], data_tag_o:U1@[], trvk_revbm_req_o:U1@[], trvk_revbm_addr_o:U32@[], scramble_req_o:U1@[], crash_dump_o:(current_pc:U32, next_pc:U32, last_data_addr:U32, exception_pc:U32, exception_addr:U32)@[], double_fault_seen_o:U1@[], alert_minor_o:U1@[], alert_major_internal_o:U1@[], alert_major_bus_o:U1@[], core_sleep_o:U1@[], lockstep_cmp_en_o:U4@[], data_req_shadow_o:U1@[], data_we_shadow_o:U1@[], data_be_shadow_o:U4@[], data_addr_shadow_o:U32@[], data_wdata_shadow_o:U32@[], data_wdata_intg_shadow_o:U7@[], instr_req_shadow_o:U1@[], instr_addr_shadow_o:U32@[]) {
+  reg core_busy_q:U4:[initial=10, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  wire core_busy_d:U4 = nil
+  wire irq_pending:U1 = nil
+  wire rf_rdata_a:U32 = nil
+  wire rf_rdata_b:U32 = nil
+  wire rf_rcap_a:U35 = nil
+  wire rf_rcap_b:U35 = nil
+  mut data_rdata_core:U32 = 0
+  mut instr_rdata_core:U32 = 0
+  wire `crash_dump_o__bpr.current_pc`:U32 = nil
+  wire `crash_dump_o__bpr.next_pc`:U32 = nil
+  wire `crash_dump_o__bpr.last_data_addr`:U32 = nil
+  wire `crash_dump_o__bpr.exception_pc`:U32 = nil
+  wire `crash_dump_o__bpr.exception_addr`:U32 = nil
+  const Lockstep = SecureIbex
+  const BusSizeECC = ibex_pkg.BUS_SIZE#[0..<32]
+  data_rdata_core = 0sb?
+  instr_rdata_core = 0sb?
+  const t14 = core_busy_q#[1..<4]#[0..<3]#^[..]
+  mut u_fetch_enable_buf = prim_buf::[name=u_fetch_enable_buf](in_i = fetch_enable_i)
+  mut u_mcounteren_writable_buf = prim_buf::[name=u_mcounteren_writable_buf](in_i = mcounteren_writable_i)
+  mut instr_rdata_core__w1:U32 = instr_rdata_core
+  instr_rdata_core__w1#[0..<32] = instr_rdata_i#[0..<32]
+  mut data_rdata_core__w1:U32 = data_rdata_core
+  data_rdata_core__w1#[0..<32] = data_rdata_i#[0..<32]
+  const t30 = ((instr_rdata_intg_i#[0..<7] << 7) | data_rdata_intg_i#[0..<7])#[0..<14]#^[..]
+  if rst_ni != 0 {
+    core_busy_q = core_busy_d
+  }
+  const clock_en__w1 = ((((((core_busy_q & 1) | debug_req_i) & 1) | irq_pending) & 1) | irq_nm_i) & 1
+  const core_sleep_o__w1 = ~clock_en__w1#[0]
+  mut core_clock_gate_i = prim_clock_gating::[name=core_clock_gate_i](clk_i = clk_i, en_i = clock_en__w1, test_en_i = test_en_i)
+  const clk__w1 = core_clock_gate_i
+  mut u_ibex_core = ibex_core::[name=u_ibex_core](clk_i = clk__w1, rst_ni = rst_ni, hart_id_i = hart_id_i, boot_addr_i = boot_addr_i, cheriot_enable_i = cheriot_enable_i, instr_gnt_i = instr_gnt_i, instr_rvalid_i = instr_rvalid_i, instr_rdata_i = instr_rdata_core__w1, instr_err_i = instr_err_i, data_gnt_i = data_gnt_i, data_rvalid_i = data_rvalid_i, data_rdata_i = data_rdata_core__w1, data_tag_i = 0, data_err_i = data_err_i, rf_rdata_a_ecc_i = rf_rdata_a, rf_rdata_b_ecc_i = rf_rdata_b, rf_rcap_a_ecc_i = rf_rcap_a, rf_rcap_b_ecc_i = rf_rcap_b, ic_tag_rdata_i = 0, ic_data_rdata_i = 0, ic_scr_key_valid_i = 1, irq_software_i = irq_software_i, irq_timer_i = irq_timer_i, irq_external_i = irq_external_i, irq_fast_i = irq_fast_i, irq_nm_i = irq_nm_i, debug_req_i = debug_req_i, fetch_enable_i = u_fetch_enable_buf, mcounteren_writable_i = u_mcounteren_writable_buf)
+  irq_pending = u_ibex_core.irq_pending_o
+  core_busy_d = (u_ibex_core.core_busy_o.e3 << 3) | (u_ibex_core.core_busy_o.e2 << 2) | (u_ibex_core.core_busy_o.e1 << 1) | u_ibex_core.core_busy_o.e0
+  mut gen_regfile_ff_register_file_i = ibex_register_file_ff::[name=gen_regfile_ff_register_file_i](clk_i = clk__w1, rst_ni = rst_ni, test_en_i = test_en_i, dummy_instr_id_i = u_ibex_core.dummy_instr_id_o, dummy_instr_wb_i = u_ibex_core.dummy_instr_wb_o, cheriot_enable_i = cheriot_enable_i, raddr_a_i = u_ibex_core.rf_raddr_a_o, raddr_b_i = u_ibex_core.rf_raddr_b_o, waddr_a_i = u_ibex_core.rf_waddr_wb_o, wdata_a_i = u_ibex_core.rf_wdata_wb_ecc_o, wcap_a_i = u_ibex_core.rf_wcap_ecc_wb_o, we_a_i = u_ibex_core.rf_we_wb_o)
+  rf_rdata_a = gen_regfile_ff_register_file_i.rdata_a_o
+  rf_rcap_a = gen_regfile_ff_register_file_i.rcap_a_o
+  rf_rdata_b = gen_regfile_ff_register_file_i.rdata_b_o
+  rf_rcap_b = gen_regfile_ff_register_file_i.rcap_b_o
+  const t123 = ((trvk_heap_base_addr_i#[0..<32] << 44) | ((trvk_revbm_gnt_i & 1) << 43) | ((trvk_revbm_rvalid_i & 1) << 42) | (trvk_revbm_rdata_i#[0..<32] << 10) | (trvk_revbm_rdata_intg_i#[0..<7] << 3) | ((trvk_revbm_err_i & 1) << 2) | ((u_ibex_core.data_tag_o & 1) << 1) | (data_tag_i & 1))#[0..<0x4c]#^[..]
+  const t136 = u_ibex_core.crash_dump_o.current_pc
+  `crash_dump_o__bpr.current_pc` = t136
+  crash_dump_o.current_pc = t136
+  const t137 = u_ibex_core.crash_dump_o.next_pc
+  `crash_dump_o__bpr.next_pc` = t137
+  crash_dump_o.next_pc = t137
+  const t138 = u_ibex_core.crash_dump_o.last_data_addr
+  `crash_dump_o__bpr.last_data_addr` = t138
+  crash_dump_o.last_data_addr = t138
+  const t139 = u_ibex_core.crash_dump_o.exception_pc
+  `crash_dump_o__bpr.exception_pc` = t139
+  crash_dump_o.exception_pc = t139
+  const t140 = u_ibex_core.crash_dump_o.exception_addr
+  `crash_dump_o__bpr.exception_addr` = t140
+  crash_dump_o.exception_addr = t140
+  ram_cfg_icache_tag_o = 0
+  ram_cfg_icache_data_o = 0
+  instr_req_o = u_ibex_core.instr_req_o
+  instr_addr_o = u_ibex_core.instr_addr_o
+  data_req_o = u_ibex_core.data_req_o
+  data_we_o = u_ibex_core.data_we_o
+  data_be_o = u_ibex_core.data_be_o
+  data_addr_o = u_ibex_core.data_addr_o
+  data_wdata_o = u_ibex_core.data_wdata_o#[0..<32]
+  data_wdata_intg_o = 0
+  data_tag_o = 0
+  trvk_revbm_req_o = 0
+  trvk_revbm_addr_o = 0
+  scramble_req_o = 0
+  double_fault_seen_o = u_ibex_core.double_fault_seen_o
+  alert_minor_o = (u_ibex_core.alert_minor_o | 0) & 1
+  alert_major_internal_o = (((u_ibex_core.alert_major_internal_o | 0) & 1) | 0) & 1
+  alert_major_bus_o = (((((u_ibex_core.alert_major_bus_o | 0) & 1) | 0) & 1) | 0) & 1
+  core_sleep_o = core_sleep_o__w1
+  lockstep_cmp_en_o = ibex_pkg.IbexMuBiOff
+  data_req_shadow_o = 0
+  data_we_shadow_o = 0
+  data_be_shadow_o = 0
+  data_addr_shadow_o = 0
+  data_wdata_shadow_o = 0
+  data_wdata_intg_shadow_o = 0
+  instr_req_shadow_o = 0
+  instr_addr_shadow_o = 0
+}

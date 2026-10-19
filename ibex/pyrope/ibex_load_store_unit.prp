@@ -1,0 +1,462 @@
+const ibex_pkg = import("ibex_pkg")
+const ibex_cheriot_pkg = import("ibex_cheriot_pkg")
+
+pub mod ibex_load_store_unit<BaseIsa=0, MemECC=0, MemDataWidth=32>::[timecheck=false](clk_i:Clock, rst_ni:U1, cheriot_enable_i:U4, data_gnt_i:U1, data_rvalid_i:U1, data_bus_err_i:U1, data_pmp_err_i:U1, data_rdata_i:U32, data_tag_i:U1, lsu_we_i:U1, lsu_is_cap_i:U1, lsu_cheriot_err_i:U1, lsu_type_i:U2, lsu_wdata_i:U32, lsu_wcap_i:(cap_cor:U2, valid:U1, rsvd:U1, cperms:U6, otype:U3, cexp:U4, top:U9, base:U9), lsu_lc_clrperm_i:(CTAG:U1, SD_LM:U1, GL_LG:U1), lsu_sign_ext_i:U1, lsu_req_i:U1, adder_result_ex_i:U32) -> (data_req_o:U1@[], data_addr_o:U32@[], data_we_o:U1@[], data_be_o:U4@[], data_wdata_o:U32@[], data_tag_o:U1@[], lsu_rcap_o:(cap_cor:U2, valid:U1, rsvd:U1, cperms:U6, otype:U3, cexp:U4, top:U9, base:U9)@[], lsu_rdata_o:U32@[], lsu_rdata_valid_o:U1@[], addr_incr_req_o:U1@[], addr_last_o:U32@[], lsu_req_done_o:U1@[], lsu_resp_valid_o:U1@[], load_err_o:U1@[], load_resp_intg_err_o:U1@[], store_err_o:U1@[], store_resp_intg_err_o:U1@[], lsu_err_is_cheriot_o:U1@[], busy_o:U1@[], perf_load_o:U1@[], perf_store_o:U1@[]) {
+  mut _b2i_8 = 0
+  mut _cap_bits_11:U35 = 0
+  mut _cheriot_cap_to_mem_10:U33 = 0
+  mut _mux_22:U4 = 0
+  mut _mux_23:U4 = 0
+  mut _mux_24:U4 = 0
+  mut `_cap_9.base` = 0
+  mut `_cap_9.cap_cor` = 0
+  mut `_cap_9.cexp` = 0
+  mut `_cap_9.cperms` = 0
+  mut `_cap_9.otype` = 0
+  mut `_cap_9.rsvd` = 0
+  mut `_cap_9.top` = 0
+  mut `_cap_9.valid` = 0
+  reg addr_last_q:U32:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg rdata_q:U24:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg rdata_offset_q:U2:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg data_type_q:U2:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg data_sign_ext_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg data_we_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg handle_misaligned_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg pmp_err_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg lsu_err_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg resp_is_cap_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg cheriot_err_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg resp_lc_clrperm_q:U3:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg ls_fsm_cs:U4:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg cap_rx_fsm_q:U3:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg cap_lsw_err_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg cap_lsw_data_q:U32:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg cap_lsw_tag_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  mut addr_update:U1 = 0
+  mut ctrl_update:U1 = 0
+  mut rdata_update:U1 = 0
+  mut data_be:U4 = 0
+  mut data_wdata_data:U32 = 0
+  mut data_wdata_tag:U1 = 0
+  mut data_rdata_ext:U32 = 0
+  mut rdata_w_ext:U32 = 0
+  mut rdata_h_ext:U32 = 0
+  mut rdata_b_ext:U32 = 0
+  mut handle_misaligned_d:U1 = 0
+  mut pmp_err_d:U1 = 0
+  mut lsu_err_d:U1 = 0
+  mut cheriot_err_d:U1 = 0
+  mut lsu_go:U1 = 0
+  mut lsu_go_goodcap:U1 = 0
+  mut ls_fsm_ns:U4 = 0
+  mut cap_rx_fsm_d:U3 = 0
+  mut wdata_int:U32 = 0
+  wire `lsu_rcap_o__bpr.cap_cor`:U2 = nil
+  wire `lsu_rcap_o__bpr.valid`:U1 = nil
+  wire `lsu_rcap_o__bpr.rsvd`:U1 = nil
+  wire `lsu_rcap_o__bpr.cperms`:U6 = nil
+  wire `lsu_rcap_o__bpr.otype`:U3 = nil
+  wire `lsu_rcap_o__bpr.cexp`:U4 = nil
+  wire `lsu_rcap_o__bpr.top`:U9 = nil
+  wire `lsu_rcap_o__bpr.base`:U9 = nil
+  addr_update = 0ub?
+  ctrl_update = 0ub?
+  rdata_update = 0ub?
+  data_be = 0sb?
+  data_wdata_data = 0sb?
+  data_wdata_tag = 0ub?
+  data_rdata_ext = 0sb?
+  rdata_w_ext = 0sb?
+  rdata_h_ext = 0sb?
+  rdata_b_ext = 0sb?
+  handle_misaligned_d = 0ub?
+  pmp_err_d = 0ub?
+  lsu_err_d = 0ub?
+  cheriot_err_d = 0ub?
+  lsu_go = 0ub?
+  lsu_go_goodcap = 0ub?
+  ls_fsm_ns = 0sb?
+  cap_rx_fsm_d = 0sb?
+  wdata_int = 0sb?
+  data_req_o = 0ub?
+  addr_incr_req_o = 0ub?
+  perf_load_o = 0ub?
+  perf_store_o = 0ub?
+  const data_addr__w1 = adder_result_ex_i
+  mut _mux_3:U2 = if (U1(BaseIsa == ibex_pkg.BaseIsaRV32IorCHERIoT) & U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 1 & lsu_is_cap_i & 1) != 0 { 0 } else { data_addr__w1#[0..<2] }
+  const data_offset__w1 = _mux_3
+  if (U1(BaseIsa == ibex_pkg.BaseIsaRV32IorCHERIoT) & U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 1 & lsu_is_cap_i & 1) != 0 {
+    data_be = 15
+  } else {
+    match lsu_type_i {
+      == 0 {
+        if handle_misaligned_q == 0 {
+          data_be = unique if data_offset__w1 == 0 { 15 } elif data_offset__w1 == 1 { 14 } elif data_offset__w1 == 2 { 12 } elif data_offset__w1 == 3 { 8 } else { 15 }
+        } else {
+          data_be = unique if data_offset__w1 == 0 { 0 } elif data_offset__w1 == 1 { 1 } elif data_offset__w1 == 2 { 3 } elif data_offset__w1 == 3 { 7 } else { 15 }
+        }
+      }
+      == 1 {
+        if handle_misaligned_q == 0 {
+          data_be = unique if data_offset__w1 == 0 { 3 } elif data_offset__w1 == 1 { 6 } elif data_offset__w1 == 2 { 12 } elif data_offset__w1 == 3 { 8 } else { 15 }
+        } else {
+          data_be = 1
+        }
+      }
+      in (2, 3) {
+        data_be = unique if data_offset__w1 == 0 { 1 } elif data_offset__w1 == 1 { 2 } elif data_offset__w1 == 2 { 4 } elif data_offset__w1 == 3 { 8 } else { 15 }
+      }
+      else {
+        data_be = 15
+      }
+    }
+  }
+  wdata_int = unique if data_offset__w1 == 0 { lsu_wdata_i } elif data_offset__w1 == 1 { (lsu_wdata_i#[0..<24] << 8) | lsu_wdata_i#[24..<32] } elif data_offset__w1 == 2 { (lsu_wdata_i#[0..<16] << 16) | lsu_wdata_i#[16..<32] } elif data_offset__w1 == 3 { (lsu_wdata_i#[0..<8] << 24) | lsu_wdata_i#[8..<32] } else { lsu_wdata_i }
+  if (U1(BaseIsa == ibex_pkg.BaseIsaRV32IorCHERIoT) & U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 1 & lsu_is_cap_i & 1) != 0 {
+    _b2i_8 = if ls_fsm_cs == ibex_pkg.CTX_WAIT_GNT2 { 1 } else { 0 }
+    if (lsu_we_i & _b2i_8 & 1) != 0 {
+      const t92 = (lsu_wcap_i.cap_cor << 33) | (lsu_wcap_i.valid << 32) | (lsu_wcap_i.rsvd << 31) | (lsu_wcap_i.cperms << 25) | (lsu_wcap_i.otype << 22) | (lsu_wcap_i.cexp << 18) | (lsu_wcap_i.top << 9) | lsu_wcap_i.base
+      `_cap_9.cap_cor` = t92#[33..<35]
+      `_cap_9.valid` = t92#[32..<33]
+      `_cap_9.rsvd` = t92#[31..<32]
+      `_cap_9.cperms` = t92#[25..<31]
+      `_cap_9.otype` = t92#[22..<25]
+      `_cap_9.cexp` = t92#[18..<22]
+      `_cap_9.top` = t92#[9..<18]
+      `_cap_9.base` = t92#[0..<9]
+      _cheriot_cap_to_mem_10 = 0ub?????????????????????????????????
+      _cap_bits_11 = 0ub???????????????????????????????????
+      _cap_bits_11 = (`_cap_9.cap_cor` << 33) | (`_cap_9.valid` << 32) | (`_cap_9.rsvd` << 31) | (`_cap_9.cperms` << 25) | (`_cap_9.otype` << 22) | (`_cap_9.cexp` << 18) | (`_cap_9.top` << 9) | `_cap_9.base`
+      _cheriot_cap_to_mem_10 = _cap_bits_11#[0..<33]
+      const t125 = _cheriot_cap_to_mem_10
+      data_wdata_data = t125#[0..<32]
+      data_wdata_tag = (t125 >> 32) & 1
+    } elif lsu_we_i != 0 {
+      const t133 = ((lsu_wcap_i.valid & 1) << 32) | lsu_wdata_i#[0..<32]
+      data_wdata_data = t133#[0..<32]
+      data_wdata_tag = (t133 >> 32) & 1
+    } else {
+      const t138 = (1 << 32) | lsu_wdata_i#[0..<32]
+      data_wdata_data = t138#[0..<32]
+      data_wdata_tag = (t138 >> 32) & 1
+    }
+  } else {
+    const t143 = wdata_int#[0..<32]
+    data_wdata_data = t143#[0..<32]
+    data_wdata_tag = (t143 >> 32) & 1
+  }
+  rdata_w_ext = unique if rdata_offset_q == 0 { data_rdata_i#[0..<32] } elif rdata_offset_q == 1 { (data_rdata_i#[0..<8] << 24) | rdata_q#[0..<24] } elif rdata_offset_q == 2 { (data_rdata_i#[0..<16] << 16) | rdata_q#[8..<24] } elif rdata_offset_q == 3 { (data_rdata_i#[0..<24] << 8) | rdata_q#[16..<24] } else { data_rdata_i#[0..<32] }
+  match rdata_offset_q {
+    == 0 {
+      rdata_h_ext = if data_sign_ext_q == 0 { data_rdata_i#[0..<16] } else { data_rdata_i#[0..<16]#sext[0..=15]#[0..<32] }
+    }
+    == 1 {
+      rdata_h_ext = if data_sign_ext_q == 0 { data_rdata_i#[8..<24] } else { data_rdata_i#[8..<24]#sext[0..=15]#[0..<32] }
+    }
+    == 2 {
+      rdata_h_ext = if data_sign_ext_q == 0 { data_rdata_i#[16..<32] } else { data_rdata_i#[16..<32]#sext[0..=15]#[0..<32] }
+    }
+    == 3 {
+      rdata_h_ext = if data_sign_ext_q == 0 { (data_rdata_i#[0..<8] << 8) | rdata_q#[16..<24] } else { ((data_rdata_i#[0..<8] << 8) | rdata_q#[16..<24])#sext[0..=15]#[0..<32] }
+    }
+    else {
+      rdata_h_ext = data_rdata_i#[0..<16]
+    }
+  }
+  match rdata_offset_q {
+    == 0 {
+      rdata_b_ext = if data_sign_ext_q == 0 { data_rdata_i#[0..<8] } else { data_rdata_i#[0..<8]#sext[0..=7]#[0..<32] }
+    }
+    == 1 {
+      rdata_b_ext = if data_sign_ext_q == 0 { data_rdata_i#[8..<16] } else { data_rdata_i#[8..<16]#sext[0..=7]#[0..<32] }
+    }
+    == 2 {
+      rdata_b_ext = if data_sign_ext_q == 0 { data_rdata_i#[16..<24] } else { data_rdata_i#[16..<24]#sext[0..=7]#[0..<32] }
+    }
+    == 3 {
+      rdata_b_ext = if data_sign_ext_q == 0 { data_rdata_i#[24..<32] } else { data_rdata_i#[24..<32]#sext[0..=7]#[0..<32] }
+    }
+    else {
+      rdata_b_ext = data_rdata_i#[0..<8]
+    }
+  }
+  data_rdata_ext = unique if data_type_q == 0 { rdata_w_ext } elif data_type_q == 1 { rdata_h_ext } elif (data_type_q == 2) or (data_type_q == 3) { rdata_b_ext } else { rdata_w_ext }
+  mut _b2i_14 = if ((lsu_type_i == 0) and (data_offset__w1 != 0)) or ((lsu_type_i == 1) and (data_offset__w1 == 3)) { 1 } else { 0 }
+  const split_misaligned_access__w1 = _b2i_14
+  const cpu_req_valid__w1 = lsu_req_i & (~(U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & lsu_cheriot_err_i & 1)#[0]) & 1
+  lsu_err_d = lsu_err_q
+  lsu_go_goodcap = 0
+  addr_update = 0
+  perf_load_o = 0
+  lsu_go = 0
+  ls_fsm_ns = ls_fsm_cs
+  perf_store_o = 0
+  handle_misaligned_d = handle_misaligned_q
+  pmp_err_d = pmp_err_q
+  cheriot_err_d = cheriot_err_q & U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 1
+  data_req_o = 0
+  ctrl_update = 0
+  rdata_update = 0
+  addr_incr_req_o = 0
+  match ls_fsm_cs {
+    == ibex_pkg.IDLE {
+      pmp_err_d = 0
+      cheriot_err_d = 0
+      if (U1(BaseIsa == ibex_pkg.BaseIsaRV32IorCHERIoT) & U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 1 & (lsu_req_i & U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 1 & lsu_cheriot_err_i & 1) & 1) != 0 {
+        data_req_o = 0
+        cheriot_err_d = 1
+        ctrl_update = 1
+        addr_update = 1
+        pmp_err_d = 0
+        lsu_err_d = 0
+        perf_load_o = 0
+        lsu_go = 1
+        ls_fsm_ns = ibex_pkg.IDLE
+      } elif (U1(BaseIsa == ibex_pkg.BaseIsaRV32IorCHERIoT) & U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 1 & cpu_req_valid__w1 & 1 & lsu_is_cap_i & 1) != 0 {
+        data_req_o = 1
+        cheriot_err_d = 0
+        pmp_err_d = data_pmp_err_i
+        lsu_err_d = 0
+        perf_load_o = ~lsu_we_i
+        perf_store_o = lsu_we_i
+        lsu_go = 1
+        lsu_go_goodcap = 1
+        if data_gnt_i != 0 {
+          ctrl_update = 1
+          addr_update = 1
+          ls_fsm_ns = ibex_pkg.CTX_WAIT_GNT2
+        } else {
+          ls_fsm_ns = ibex_pkg.CTX_WAIT_GNT1
+        }
+      } elif cpu_req_valid__w1 != 0 {
+        data_req_o = 1
+        cheriot_err_d = 0
+        pmp_err_d = data_pmp_err_i
+        lsu_err_d = 0
+        perf_load_o = ~lsu_we_i
+        perf_store_o = lsu_we_i
+        lsu_go = 1
+        if data_gnt_i != 0 {
+          ctrl_update = 1
+          addr_update = 1
+          handle_misaligned_d = split_misaligned_access__w1
+          _mux_22 = if split_misaligned_access__w1 != 0 { ibex_pkg.WAIT_RVALID_MIS#[0..<4] } else { ibex_pkg.IDLE#[0..<4] }
+          ls_fsm_ns = _mux_22
+        } else {
+          _mux_23 = if split_misaligned_access__w1 != 0 { ibex_pkg.WAIT_GNT_MIS#[0..<4] } else { ibex_pkg.WAIT_GNT#[0..<4] }
+          ls_fsm_ns = _mux_23
+        }
+      }
+    }
+    == ibex_pkg.WAIT_GNT_MIS {
+      data_req_o = 1
+      if (data_gnt_i != 0) or (pmp_err_q != 0) {
+        addr_update = 1
+        ctrl_update = 1
+        handle_misaligned_d = 1
+        ls_fsm_ns = ibex_pkg.WAIT_RVALID_MIS
+      }
+    }
+    == ibex_pkg.WAIT_RVALID_MIS {
+      data_req_o = 1
+      addr_incr_req_o = 1
+      if (data_rvalid_i != 0) or (pmp_err_q != 0) {
+        pmp_err_d = data_pmp_err_i
+        lsu_err_d = (data_bus_err_i | pmp_err_q) & 1
+        rdata_update = ~data_we_q
+        _mux_24 = if data_gnt_i != 0 { ibex_pkg.IDLE#[0..<4] } else { ibex_pkg.WAIT_GNT#[0..<4] }
+        ls_fsm_ns = _mux_24
+        addr_update = data_gnt_i & (~((data_bus_err_i | pmp_err_q) & 1)#[0]) & 1
+        handle_misaligned_d = ~data_gnt_i
+      } elif data_gnt_i != 0 {
+        ls_fsm_ns = ibex_pkg.WAIT_RVALID_MIS_GNTS_DONE
+        handle_misaligned_d = 0
+      }
+    }
+    == ibex_pkg.WAIT_GNT {
+      addr_incr_req_o = handle_misaligned_q
+      data_req_o = 1
+      if (data_gnt_i != 0) or (pmp_err_q != 0) {
+        ctrl_update = 1
+        addr_update = ~lsu_err_q
+        ls_fsm_ns = ibex_pkg.IDLE
+        handle_misaligned_d = 0
+      }
+    }
+    == ibex_pkg.WAIT_RVALID_MIS_GNTS_DONE {
+      addr_incr_req_o = 1
+      if data_rvalid_i != 0 {
+        pmp_err_d = data_pmp_err_i
+        lsu_err_d = data_bus_err_i
+        addr_update = ~data_bus_err_i
+        rdata_update = ~data_we_q
+        ls_fsm_ns = ibex_pkg.IDLE
+      }
+    }
+    == ibex_pkg.CTX_WAIT_GNT1 {
+      if cheriot_enable_i == ibex_pkg.IbexMuBiOn {
+        addr_incr_req_o = 0
+        data_req_o = 1
+        if data_gnt_i != 0 {
+          ls_fsm_ns = ibex_pkg.CTX_WAIT_GNT2
+          ctrl_update = 1
+          addr_update = 1
+        }
+      } else {
+        ls_fsm_ns = ibex_pkg.IDLE
+      }
+    }
+    == ibex_pkg.CTX_WAIT_GNT2 {
+      if cheriot_enable_i == ibex_pkg.IbexMuBiOn {
+        addr_incr_req_o = 1
+        data_req_o = 1
+        if (data_gnt_i != 0) and ((data_rvalid_i != 0) or (cap_rx_fsm_q == ibex_pkg.CRX_WAIT_RESP2)) {
+          ls_fsm_ns = ibex_pkg.IDLE
+        } elif data_gnt_i != 0 {
+          ls_fsm_ns = ibex_pkg.CTX_WAIT_RESP
+        }
+      } else {
+        ls_fsm_ns = ibex_pkg.IDLE
+      }
+    }
+    == ibex_pkg.CTX_WAIT_RESP {
+      if cheriot_enable_i == ibex_pkg.IbexMuBiOn {
+        addr_incr_req_o = 1
+        data_req_o = 0
+        if data_rvalid_i != 0 {
+          ls_fsm_ns = ibex_pkg.IDLE
+        }
+      } else {
+        ls_fsm_ns = ibex_pkg.IDLE
+      }
+    }
+    else {
+      ls_fsm_ns = ibex_pkg.IDLE
+    }
+  }
+  cap_rx_fsm_d = cap_rx_fsm_q
+  match cap_rx_fsm_q {
+    == ibex_pkg.CRX_IDLE {
+      if (U1(BaseIsa == ibex_pkg.BaseIsaRV32IorCHERIoT) & U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 1 & lsu_go_goodcap & 1) != 0 {
+        cap_rx_fsm_d = ibex_pkg.CRX_WAIT_RESP1
+      }
+    }
+    == ibex_pkg.CRX_WAIT_RESP1 {
+      if data_rvalid_i != 0 {
+        cap_rx_fsm_d = ibex_pkg.CRX_WAIT_RESP2
+      }
+    }
+    == ibex_pkg.CRX_WAIT_RESP2 {
+      if (data_rvalid_i != 0) and (lsu_go_goodcap != 0) {
+        cap_rx_fsm_d = ibex_pkg.CRX_WAIT_RESP1
+      } elif data_rvalid_i != 0 {
+        cap_rx_fsm_d = ibex_pkg.CRX_IDLE
+      }
+    }
+    else {
+      cap_rx_fsm_d = ibex_pkg.CRX_IDLE
+    }
+  }
+  mut _b2i_27 = if ls_fsm_cs != ibex_pkg.IDLE { 1 } else { 0 }
+  mut _b2i_28 = if ls_fsm_ns == ibex_pkg.IDLE { 1 } else { 0 }
+  if rst_ni != 0 {
+    ls_fsm_cs = ls_fsm_ns
+    handle_misaligned_q = handle_misaligned_d
+    pmp_err_q = pmp_err_d
+    lsu_err_q = lsu_err_d
+    cheriot_err_q = cheriot_err_d
+    cap_rx_fsm_q = cap_rx_fsm_d
+    if lsu_go != 0 {
+      resp_is_cap_q = lsu_is_cap_i
+      resp_lc_clrperm_q = (lsu_lc_clrperm_i.CTAG << 2) | (lsu_lc_clrperm_i.SD_LM << 1) | lsu_lc_clrperm_i.GL_LG
+    }
+    if ((U1(BaseIsa == ibex_pkg.BaseIsaRV32IorCHERIoT) & U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 1) != 0) and (cap_rx_fsm_q == ibex_pkg.CRX_WAIT_RESP1) and (data_rvalid_i != 0) and ((~data_we_q) != 0) {
+      cap_lsw_data_q = data_rdata_i#[0..<32]
+      cap_lsw_tag_q = data_tag_i
+    }
+    if ((U1(BaseIsa == ibex_pkg.BaseIsaRV32IorCHERIoT) & U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 1) != 0) and (cap_rx_fsm_q == ibex_pkg.CRX_WAIT_RESP1) and (data_rvalid_i != 0) {
+      cap_lsw_err_q = data_bus_err_i
+    }
+  }
+  const data_or_pmp_err__w1 = (((((lsu_err_q | data_bus_err_i) & 1) | pmp_err_q) & 1) | (U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & (cheriot_err_q | (resp_is_cap_q & cap_lsw_err_q & 1)) & 1 & 1)) & 1
+  mut _b2i_35 = if ls_fsm_cs == ibex_pkg.IDLE { 1 } else { 0 }
+  const lsu_resp_valid_o__w1 = ((((data_rvalid_i | pmp_err_q) & 1) | (U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & cheriot_err_q & 1)) & 1) & _b2i_35 & 1
+  mut _b2i_36 = if ls_fsm_cs == ibex_pkg.IDLE { 1 } else { 0 }
+  const lsu_rdata_valid_o__w1 = _b2i_36 & data_rvalid_i & 1 & (~data_or_pmp_err__w1#[0]) & 1 & (~data_we_q) & 1 & 1 & 1
+  mut `lsu_rcap_o__bpo.cap_cor` = ibex_cheriot_pkg.NULL_CAP#[33..<35]
+  mut `lsu_rcap_o__bpo.valid` = ibex_cheriot_pkg.NULL_CAP#[32..<33]
+  mut `lsu_rcap_o__bpo.rsvd` = ibex_cheriot_pkg.NULL_CAP#[31..<32]
+  mut `lsu_rcap_o__bpo.cperms` = ibex_cheriot_pkg.NULL_CAP#[25..<31]
+  mut `lsu_rcap_o__bpo.otype` = ibex_cheriot_pkg.NULL_CAP#[22..<25]
+  mut `lsu_rcap_o__bpo.cexp` = ibex_cheriot_pkg.NULL_CAP#[18..<22]
+  mut `lsu_rcap_o__bpo.top` = ibex_cheriot_pkg.NULL_CAP#[9..<18]
+  mut `lsu_rcap_o__bpo.base` = ibex_cheriot_pkg.NULL_CAP#[0..<9]
+  const t445 = ((resp_lc_clrperm_q#[0..<3] << 34) | (cap_lsw_data_q#[0..<32] << 2) | ((cap_lsw_tag_q & 1) << 1) | (data_tag_i & 1))#[0..<37]#^[..]
+  const data_addr_w_aligned__w1 = data_addr__w1#[2..<32] << 2
+  const addr_last_o__w1 = addr_last_q
+  const load_err_o__w1 = data_or_pmp_err__w1 & (~data_we_q) & 1 & lsu_resp_valid_o__w1 & 1
+  const store_err_o__w1 = data_or_pmp_err__w1 & data_we_q & 1 & lsu_resp_valid_o__w1 & 1
+  const load_resp_intg_err_o__w1 = 0 & data_rvalid_i & 1 & (~data_we_q) & 1
+  const store_resp_intg_err_o__w1 = 0 & data_rvalid_i & 1 & data_we_q & 1
+  mut _b2i_38 = if ls_fsm_cs != ibex_pkg.IDLE { 1 } else { 0 }
+  if rst_ni != 0 {
+    if rdata_update != 0 {
+      rdata_q = data_rdata_i#[8..<32]
+    }
+  }
+  if rst_ni != 0 {
+    if ctrl_update != 0 {
+      rdata_offset_q = data_offset__w1
+      data_type_q = lsu_type_i
+      data_sign_ext_q = lsu_sign_ext_i
+      data_we_q = lsu_we_i
+    }
+  }
+  mut _mux_39:U32 = if addr_incr_req_o != 0 { data_addr_w_aligned__w1#[0..<32] } else { data_addr__w1#[0..<32] }
+  if rst_ni != 0 {
+    if addr_update != 0 {
+      addr_last_q = _mux_39
+    }
+  }
+  const t480 = `lsu_rcap_o__bpo.cap_cor`
+  `lsu_rcap_o__bpr.cap_cor` = t480
+  lsu_rcap_o.cap_cor = t480
+  const t481 = `lsu_rcap_o__bpo.valid`
+  `lsu_rcap_o__bpr.valid` = t481
+  lsu_rcap_o.valid = t481
+  const t482 = `lsu_rcap_o__bpo.rsvd`
+  `lsu_rcap_o__bpr.rsvd` = t482
+  lsu_rcap_o.rsvd = t482
+  const t483 = `lsu_rcap_o__bpo.cperms`
+  `lsu_rcap_o__bpr.cperms` = t483
+  lsu_rcap_o.cperms = t483
+  const t484 = `lsu_rcap_o__bpo.otype`
+  `lsu_rcap_o__bpr.otype` = t484
+  lsu_rcap_o.otype = t484
+  const t485 = `lsu_rcap_o__bpo.cexp`
+  `lsu_rcap_o__bpr.cexp` = t485
+  lsu_rcap_o.cexp = t485
+  const t486 = `lsu_rcap_o__bpo.top`
+  `lsu_rcap_o__bpr.top` = t486
+  lsu_rcap_o.top = t486
+  const t487 = `lsu_rcap_o__bpo.base`
+  `lsu_rcap_o__bpr.base` = t487
+  lsu_rcap_o.base = t487
+  data_addr_o = data_addr_w_aligned__w1
+  data_we_o = lsu_we_i
+  data_be_o = data_be
+  data_wdata_o = data_wdata_data
+  data_tag_o = data_wdata_tag
+  lsu_rdata_o = data_rdata_ext
+  lsu_rdata_valid_o = lsu_rdata_valid_o__w1
+  addr_last_o = addr_last_o__w1
+  lsu_req_done_o = (lsu_go | _b2i_27) & 1 & _b2i_28 & 1
+  lsu_resp_valid_o = lsu_resp_valid_o__w1
+  load_err_o = load_err_o__w1
+  load_resp_intg_err_o = load_resp_intg_err_o__w1
+  store_err_o = store_err_o__w1
+  store_resp_intg_err_o = store_resp_intg_err_o__w1
+  lsu_err_is_cheriot_o = U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & cheriot_err_q & 1
+  busy_o = _b2i_38
+}

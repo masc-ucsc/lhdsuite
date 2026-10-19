@@ -1,0 +1,260 @@
+const ibex_pkg = import("ibex_pkg")
+
+pub mod ibex_multdiv_fast<RV32M=2>::[timecheck=false](clk_i:Clock, rst_ni:U1, mult_en_i:U1, div_en_i:U1, mult_sel_i:U1, div_sel_i:U1, operator_i:U2, signed_mode_i:(e1:U1, e0:U1), op_a_i:U32, op_b_i:U32, alu_adder_ext_i:U34, alu_adder_i:U32, equal_to_zero_i:U1, data_ind_timing_i:U1, imd_val_q_i:U68, multdiv_ready_id_i:U1) -> (alu_operand_a_o:U33@[], alu_operand_b_o:U33@[], imd_val_d_o:U68@[], imd_val_we_o:(e1:U1, e0:U1)@[], multdiv_result_o:U32@[], valid_o:U1@[]) {
+  mut _mux_10:U3 = 0
+  mut _mux_11:U34 = 0
+  mut _mux_12:U34 = 0
+  mut _mux_6:U3 = 0
+  mut _mux_7:U3 = 0
+  mut _mux_8:U32 = 0
+  mut _mux_9:U32 = 0
+  mut _rep_15:U16 = 0
+  reg op_numerator_q:U32:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg op_quotient_q:U32:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg div_counter_q:U5:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg div_by_zero_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg md_state_q:U3:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg mult_state_q:U2:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  wire mac_res_ext:U35 = nil
+  mut mult_valid:U1 = 0
+  mut op_remainder_d:U34 = 0
+  mut is_greater_equal:U1 = 0
+  mut op_denominator_d:U32 = 0
+  mut op_numerator_d:U32 = 0
+  mut op_quotient_d:U32 = 0
+  mut div_valid:U1 = 0
+  mut div_counter_d:U5 = 0
+  mut div_hold:U1 = 0
+  mut div_by_zero_d:U1 = 0
+  mut md_state_d:U3 = 0
+  mut gen_mult_fast_mult_state_d:U2 = 0
+  wire `imd_val_we_o__bpr.e1`:U1 = nil
+  wire `imd_val_we_o__bpr.e0`:U1 = nil
+  mut accum__wtmp:U34 = 0sb?
+  wire accum:U34 = nil
+  mut sign_a__wtmp:U1 = 0sb?
+  wire sign_a:U1 = nil
+  mut sign_b__wtmp:U1 = 0sb?
+  wire sign_b:U1 = nil
+  mut mac_res_d__wtmp:U34 = 0sb?
+  wire mac_res_d:U34 = nil
+  mut mult_hold__wtmp:U1 = 0sb?
+  wire mult_hold:U1 = nil
+  mut mult_op_a__wtmp:U16 = 0sb?
+  wire mult_op_a:U16 = nil
+  mut mult_op_b__wtmp:U16 = 0sb?
+  wire mult_op_b:U16 = nil
+  mult_valid = 0ub?
+  op_remainder_d = 0sb?
+  is_greater_equal = 0ub?
+  op_denominator_d = 0sb?
+  op_numerator_d = 0sb?
+  op_quotient_d = 0sb?
+  div_valid = 0ub?
+  div_counter_d = 0sb?
+  div_hold = 0ub?
+  div_by_zero_d = 0ub?
+  md_state_d = 0sb?
+  gen_mult_fast_mult_state_d = 0sb?
+  alu_operand_a_o = 0sb?
+  alu_operand_b_o = 0sb?
+  imd_val_d_o = 0sb?
+  const op_denominator_q__w1 = imd_val_q_i#[0..<34]#[0..<32]
+  mut _b2i_2 = if mult_state_q == 0 { 1 } else { 0 }
+  const res_adder_h__w1 = alu_adder_ext_i#[1..<33]
+  if ((imd_val_q_i#[34..<0x44]#[31..<32] ^ op_denominator_q__w1#[31..<32]) & 1) == 0 {
+    is_greater_equal = U1(res_adder_h__w1#[31..<32] == 0)
+  } else {
+    is_greater_equal = imd_val_q_i#[34..<0x44]#[31..<32]
+  }
+  const div_sign_a__w1 = op_a_i#[31..<32] & signed_mode_i.e0 & 1
+  const div_sign_b__w1 = op_b_i#[31..<32] & signed_mode_i.e1 & 1
+  mut _mux_4:U32 = if is_greater_equal != 0 { res_adder_h__w1#[0..<32] } else { imd_val_q_i#[34..<0x44]#[0..<32] }
+  const next_remainder__w1 = _mux_4
+  mut _mux_5:U33 = if is_greater_equal != 0 { (op_quotient_q#[0..<32] | (1 << div_counter_q)#[0..<32]#[0..<32])#[0..<33] } else { op_quotient_q#[0..<32] }
+  const next_quotient__w1 = _mux_5
+  div_by_zero_d = div_by_zero_q
+  op_remainder_d = imd_val_q_i#[34..<0x44]
+  alu_operand_a_o = 1
+  op_denominator_d = op_denominator_q__w1
+  op_numerator_d = op_numerator_q
+  op_quotient_d = op_quotient_q
+  div_counter_d = (div_counter_q - 1)#[0..<5]
+  md_state_d = md_state_q
+  div_hold = 0
+  alu_operand_b_o = ((~op_b_i) << 1) | 1
+  div_valid = 0
+  match md_state_q {
+    == 0 {
+      if operator_i == ibex_pkg.MD_OP_DIV {
+        op_remainder_d = 0x3ffffffff
+        _mux_6 = if (data_ind_timing_i == 0) and (equal_to_zero_i != 0) { 6 } else { 1 }
+        md_state_d = _mux_6
+        div_by_zero_d = equal_to_zero_i
+      } else {
+        op_remainder_d = op_a_i#[0..<32]
+        _mux_7 = if (data_ind_timing_i == 0) and (equal_to_zero_i != 0) { 6 } else { 1 }
+        md_state_d = _mux_7
+      }
+      alu_operand_a_o = 1
+      alu_operand_b_o = ((~op_b_i) << 1) | 1
+      div_counter_d = 31
+    }
+    == 1 {
+      op_quotient_d = 0
+      _mux_8 = if div_sign_a__w1 != 0 { alu_adder_i#[0..<32] } else { op_a_i#[0..<32] }
+      op_numerator_d = _mux_8
+      md_state_d = 2
+      div_counter_d = 31
+      alu_operand_a_o = 1
+      alu_operand_b_o = ((~op_a_i) << 1) | 1
+    }
+    == 2 {
+      op_remainder_d = op_numerator_q#[31..<32]
+      _mux_9 = if div_sign_b__w1 != 0 { alu_adder_i#[0..<32] } else { op_b_i#[0..<32] }
+      op_denominator_d = _mux_9
+      md_state_d = 3
+      div_counter_d = 31
+      alu_operand_a_o = 1
+      alu_operand_b_o = ((~op_b_i) << 1) | 1
+    }
+    == 3 {
+      op_remainder_d = (next_remainder__w1#[0..<32] << 1) | (((op_numerator_q << 1) >> (div_counter_d + 1)) & 1)
+      op_quotient_d = next_quotient__w1#[0..<32]
+      _mux_10 = if div_counter_q == 1 { 4 } else { 3 }
+      md_state_d = _mux_10
+      alu_operand_a_o = (imd_val_q_i#[34..<0x44]#[0..<32] << 1) | 1
+      alu_operand_b_o = ((~op_denominator_q__w1#[0..<32]#[0..=31]) << 1) | 1
+    }
+    == 4 {
+      op_remainder_d = if operator_i == ibex_pkg.MD_OP_DIV { next_quotient__w1#[0..<33] } else { next_remainder__w1#[0..<32] }
+      alu_operand_a_o = (imd_val_q_i#[34..<0x44]#[0..<32] << 1) | 1
+      alu_operand_b_o = ((~op_denominator_q__w1#[0..<32]#[0..=31]) << 1) | 1
+      md_state_d = 5
+    }
+    == 5 {
+      md_state_d = 6
+      if operator_i == ibex_pkg.MD_OP_DIV {
+        _mux_11 = if ((div_sign_a__w1 ^ div_sign_b__w1) & 1 & (~div_by_zero_q) & 1) != 0 { alu_adder_i#[0..<32] } else { imd_val_q_i#[34..<0x44] }
+        op_remainder_d = _mux_11
+      } else {
+        _mux_12 = if div_sign_a__w1 != 0 { alu_adder_i#[0..<32] } else { imd_val_q_i#[34..<0x44] }
+        op_remainder_d = _mux_12
+      }
+      alu_operand_a_o = 1
+      alu_operand_b_o = ((~imd_val_q_i#[34..<0x44]#[0..<32]) << 1) | 1
+    }
+    == 6 {
+      md_state_d = 0
+      div_hold = ~multdiv_ready_id_i
+      div_valid = 1
+    }
+    else {
+      md_state_d = 0
+    }
+  }
+  const div_en_internal__w1 = div_en_i & (~div_hold) & 1
+  if rst_ni != 0 {
+    if div_en_internal__w1 != 0 {
+      div_counter_q = div_counter_d
+      op_numerator_q = op_numerator_d
+      op_quotient_q = op_quotient_d
+      md_state_q = md_state_d
+      div_by_zero_q = div_by_zero_d
+    }
+  }
+  mut imd_val_d_o__w1 = imd_val_d_o
+  imd_val_d_o__w1#[0..<34] = op_denominator_d#[0..<32]
+  mut `imd_val_we_o__bpo.e1` = div_en_internal__w1
+  const mult_en_internal__w1 = mult_en_i & (~mult_hold) & 1
+  mut _mux_13:U34 = if div_sel_i != 0 { op_remainder_d#[0..<34] } else { mac_res_d#[0..<34] }
+  mut imd_val_d_o__w2 = imd_val_d_o__w1
+  imd_val_d_o__w2#[34..<0x44] = _mux_13
+  mut `imd_val_we_o__bpo.e0` = (mult_en_internal__w1 | div_en_internal__w1) & 1
+  mut _mux_14:U32 = if div_sel_i != 0 { imd_val_q_i#[34..<0x44]#[0..<32] } else { mac_res_d#[0..<32] }
+  mac_res_ext = (((((sign_a & 1) << 16) | mult_op_a#[0..<16])#sext[0..=16] * (((sign_b & 1) << 16) | mult_op_b#[0..<16])#sext[0..=16])#[0..<35]#sext[0..=34] + accum#sext[0..=33])#[0..<35]#sext[0..=34]#[0..<35]
+  const mac_res__w1 = mac_res_ext#[0..<34]
+  mult_op_a__wtmp = op_a_i#[0..<16]
+  mult_op_b__wtmp = op_b_i#[0..<16]
+  sign_a__wtmp = 0
+  sign_b__wtmp = 0
+  accum__wtmp = imd_val_q_i#[34..<0x44]
+  mac_res_d__wtmp = mac_res__w1
+  mult_hold__wtmp = 0
+  mult_valid = 0
+  gen_mult_fast_mult_state_d = mult_state_q
+  match mult_state_q {
+    == 0 {
+      mult_op_a__wtmp = op_a_i#[0..<16]
+      mult_op_b__wtmp = op_b_i#[0..<16]
+      sign_a__wtmp = 0
+      sign_b__wtmp = 0
+      accum__wtmp = 0
+      mac_res_d__wtmp = mac_res__w1
+      gen_mult_fast_mult_state_d = 1
+    }
+    == 1 {
+      mult_op_a__wtmp = op_a_i#[0..<16]
+      mult_op_b__wtmp = op_b_i#[16..<32]
+      sign_a__wtmp = 0
+      sign_b__wtmp = signed_mode_i.e1 & op_b_i#[31..<32] & 1
+      accum__wtmp = imd_val_q_i#[34..<0x44]#[16..<32]
+      mac_res_d__wtmp = if operator_i == ibex_pkg.MD_OP_MULL { (mac_res__w1#[0..<16] << 16) | imd_val_q_i#[34..<0x44]#[0..<16] } else { mac_res__w1 }
+      gen_mult_fast_mult_state_d = 2
+    }
+    == 2 {
+      mult_op_a__wtmp = op_a_i#[16..<32]
+      mult_op_b__wtmp = op_b_i#[0..<16]
+      sign_a__wtmp = signed_mode_i.e0 & op_a_i#[31..<32] & 1
+      sign_b__wtmp = 0
+      if operator_i == ibex_pkg.MD_OP_MULL {
+        accum__wtmp = imd_val_q_i#[34..<0x44]#[16..<32]
+        mac_res_d__wtmp = (mac_res__w1#[0..<16] << 16) | imd_val_q_i#[34..<0x44]#[0..<16]
+        mult_valid = 1
+        gen_mult_fast_mult_state_d = 0
+        mult_hold__wtmp = ~multdiv_ready_id_i
+      } else {
+        accum__wtmp = imd_val_q_i#[34..<0x44]
+        mac_res_d__wtmp = mac_res__w1
+        gen_mult_fast_mult_state_d = 3
+      }
+    }
+    == 3 {
+      mult_op_a__wtmp = op_a_i#[16..<32]
+      mult_op_b__wtmp = op_b_i#[16..<32]
+      sign_a__wtmp = signed_mode_i.e0 & op_a_i#[31..<32] & 1
+      sign_b__wtmp = signed_mode_i.e1 & op_b_i#[31..<32] & 1
+      accum__wtmp#[0..<18] = imd_val_q_i#[34..<0x44]#[16..<34]
+      _rep_15 = if (U1(((signed_mode_i.e1 << 1) | signed_mode_i.e0) != 0) & imd_val_q_i#[34..<0x44]#[33..<34] & 1) != 0 { 0xffff } else { 0 }
+      accum__wtmp#[18..<34] = _rep_15#[0..<16]
+      mac_res_d__wtmp = mac_res__w1
+      mult_valid = 1
+      gen_mult_fast_mult_state_d = 0
+      mult_hold__wtmp = ~multdiv_ready_id_i
+    }
+    else {
+      gen_mult_fast_mult_state_d = 0
+    }
+  }
+  if rst_ni != 0 {
+    if mult_en_internal__w1 != 0 {
+      mult_state_q = gen_mult_fast_mult_state_d
+    }
+  }
+  accum = accum__wtmp
+  sign_a = sign_a__wtmp
+  sign_b = sign_b__wtmp
+  mac_res_d = mac_res_d__wtmp
+  mult_hold = mult_hold__wtmp
+  mult_op_a = mult_op_a__wtmp
+  mult_op_b = mult_op_b__wtmp
+  const t229 = `imd_val_we_o__bpo.e1`
+  `imd_val_we_o__bpr.e1` = t229
+  imd_val_we_o.e1 = t229
+  const t230 = `imd_val_we_o__bpo.e0`
+  `imd_val_we_o__bpr.e0` = t230
+  imd_val_we_o.e0 = t230
+  imd_val_d_o = imd_val_d_o__w2
+  multdiv_result_o = _mux_14
+  valid_o = (mult_valid | div_valid) & 1
+}

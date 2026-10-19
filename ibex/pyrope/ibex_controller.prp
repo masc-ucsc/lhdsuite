@@ -1,0 +1,514 @@
+const ibex_pkg = import("ibex_pkg")
+
+pub mod ibex_controller<BaseIsa=0, WritebackStage=0, BranchPredictor=0, MemECC=0>::[timecheck=false](clk_i:Clock, rst_ni:U1, cheriot_enable_i:U4, illegal_insn_i:U1, ecall_insn_i:U1, mret_insn_i:U1, dret_insn_i:U1, wfi_insn_i:U1, ebrk_insn_i:U1, csr_pipe_flush_i:U1, csr_access_i:U1, csr_cheriot_always_ok_i:U1, instr_valid_i:U1, instr_i:U32, instr_compressed_i:U16, instr_is_compressed_i:U1, instr_gets_expanded_i:U2, instr_bp_taken_i:U1, instr_fetch_err_i:U1, instr_fetch_err_plus2_i:U1, instr_fetch_cheriot_acc_vio_i:U1, instr_fetch_cheriot_bound_vio_i:U1, pc_id_i:U32, instr_exec_i:U1, lsu_addr_last_i:U32, load_err_i:U1, store_err_i:U1, mem_resp_intg_err_i:U1, lsu_err_is_cheriot_i:U1, branch_set_i:U1, branch_not_set_i:U1, jump_set_i:U1, csr_mstatus_mie_i:U1, irq_pending_i:U1, irqs_i:(irq_software:U1, irq_timer:U1, irq_external:U1, irq_fast:U15), irq_nm_ext_i:U1, debug_req_i:U1, debug_single_step_i:U1, debug_ebreakm_i:U1, debug_ebreaku_i:U1, trigger_match_i:U1, priv_mode_i:U2, csr_pcc_perm_sr_i:U1, stall_id_i:U1, stall_wb_i:U1, ready_wb_i:U1, instr_is_cheriot_i:U1, cheriot_ex_valid_i:U1, cheriot_ex_err_i:U1, cheriot_wb_err_i:U1, cheriot_ex_err_info_i:U12, cheriot_wb_err_info_i:U16, cheriot_branch_req_i:U1, cheriot_branch_target_i:U32) -> (ctrl_busy_o:U1@[], instr_valid_clear_o:U1@[], id_in_ready_o:U1@[], controller_run_o:U1@[], instr_req_o:U1@[], pc_set_o:U1@[], pc_mux_o:U3@[], nt_branch_mispredict_o:U1@[], exc_pc_mux_o:U2@[], exc_cause_o:(irq_int:U1, irq_ext:U1, lower_cause:U5)@[], wb_exception_o:U1@[], id_exception_o:U1@[], id_exception_nc_o:U1@[], nmi_mode_o:U1@[], debug_cause_o:U3@[], debug_csr_save_o:U1@[], debug_mode_o:U1@[], debug_mode_entering_o:U1@[], csr_save_if_o:U1@[], csr_save_id_o:U1@[], csr_save_wb_o:U1@[], csr_restore_mret_id_o:U1@[], csr_restore_dret_id_o:U1@[], csr_save_cause_o:U1@[], csr_mepcc_clrtag_o:U1@[], csr_mtval_o:U32@[], flush_id_o:U1@[], perf_jump_o:U1@[], perf_tbranch_o:U1@[]) {
+  mut _mux_23:U7 = 0
+  mut _mux_26:U2 = 0
+  mut _mux_31:U32 = 0
+  mut _mux_34:U32 = 0
+  mut _mux_35:U32 = 0
+  mut _mux_36:U7 = 0
+  reg ctrl_fsm_cs:U4:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg nmi_mode_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg debug_mode_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg debug_cause_q:U3:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg load_err_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg store_err_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg exc_req_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg illegal_insn_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg do_single_step_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg enter_debug_mode_prio_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  mut ctrl_fsm_ns:U4 = 0
+  mut nmi_mode_d:U1 = 0
+  mut debug_mode_d:U1 = 0
+  mut instr_fetch_err_prio:U1 = 0
+  mut illegal_insn_prio:U1 = 0
+  mut ecall_insn_prio:U1 = 0
+  mut ebrk_insn_prio:U1 = 0
+  mut store_err_prio:U1 = 0
+  mut load_err_prio:U1 = 0
+  mut cheriot_ex_err_prio:U1 = 0
+  mut cheriot_wb_err_prio:U1 = 0
+  mut halt_if:U1 = 0
+  mut retain_id:U1 = 0
+  mut flush_id:U1 = 0
+  mut mfip_id:U4 = 0
+  wire id_in_ready_o:U1 = nil
+  wire `exc_cause_o__bpr.irq_int`:U1 = nil
+  mut `exc_cause_o__bpo.irq_int` = 0
+  wire `exc_cause_o__bpr.irq_ext`:U1 = nil
+  mut `exc_cause_o__bpo.irq_ext` = 0
+  wire `exc_cause_o__bpr.lower_cause`:U5 = nil
+  mut `exc_cause_o__bpo.lower_cause` = 0
+  ctrl_fsm_ns = 0sb?
+  nmi_mode_d = 0ub?
+  debug_mode_d = 0ub?
+  instr_fetch_err_prio = 0ub?
+  illegal_insn_prio = 0ub?
+  ecall_insn_prio = 0ub?
+  ebrk_insn_prio = 0ub?
+  store_err_prio = 0ub?
+  load_err_prio = 0ub?
+  cheriot_ex_err_prio = 0ub?
+  cheriot_wb_err_prio = 0ub?
+  halt_if = 0ub?
+  retain_id = 0ub?
+  flush_id = 0ub?
+  mfip_id = 0sb?
+  ctrl_busy_o = 0ub?
+  controller_run_o = 0ub?
+  instr_req_o = 0ub?
+  pc_set_o = 0ub?
+  pc_mux_o = 0sb?
+  exc_pc_mux_o = 0sb?
+  debug_csr_save_o = 0ub?
+  debug_mode_entering_o = 0ub?
+  csr_save_if_o = 0ub?
+  csr_save_id_o = 0ub?
+  csr_restore_mret_id_o = 0ub?
+  csr_restore_dret_id_o = 0ub?
+  csr_save_cause_o = 0ub?
+  csr_mepcc_clrtag_o = 0ub?
+  csr_mtval_o = 0sb?
+  perf_jump_o = 0ub?
+  perf_tbranch_o = 0ub?
+  const ecall_insn__w1 = ecall_insn_i & instr_valid_i & 1
+  const mret_insn__w1 = mret_insn_i & instr_valid_i & 1
+  const dret_insn__w1 = dret_insn_i & instr_valid_i & 1
+  const wfi_insn__w1 = wfi_insn_i & instr_valid_i & 1
+  const ebrk_insn__w1 = ebrk_insn_i & instr_valid_i & 1
+  const instr_fetch_err__w1 = instr_fetch_err_i & instr_valid_i & 1
+  const cheriot_ex_err__w1 = cheriot_ex_err_i & instr_is_cheriot_i & 1 & instr_valid_i & 1
+  const t29 = (((csr_access_i & 1) << 4) | ((csr_cheriot_always_ok_i & 1) << 3) | ((csr_pcc_perm_sr_i & 1) << 2) | ((instr_fetch_cheriot_acc_vio_i & 1) << 1) | (instr_fetch_cheriot_bound_vio_i & 1))#[0..<5]#^[..]
+  mut _b2i_1 = if ctrl_fsm_cs != ibex_pkg.FLUSH { 1 } else { 0 }
+  const illegal_insn_d__w1 = illegal_insn_i & _b2i_1 & 1
+  mut _b2i_3 = if ctrl_fsm_cs != ibex_pkg.FLUSH { 1 } else { 0 }
+  const cheriot_asr_err_d__w1 = (((~illegal_insn_i) & 0 & 1) | 0) & 1
+  mut _b2i_5 = if ctrl_fsm_cs != ibex_pkg.FLUSH { 1 } else { 0 }
+  const exc_req_d__w1 = (((((((((ecall_insn__w1 | ebrk_insn__w1) & 1) | illegal_insn_d__w1) & 1) | instr_fetch_err__w1) & 1) | (U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & cheriot_ex_err__w1 & 1)) & 1) | cheriot_asr_err_d__w1) & 1 & _b2i_5 & 1
+  mut _b2i_6 = if ctrl_fsm_cs != ibex_pkg.FLUSH { 1 } else { 0 }
+  const special_req__w1 = (((((((mret_insn__w1 | dret_insn__w1) & 1) | exc_req_d__w1) & 1) | ((((store_err_i | load_err_i) & 1) | (U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & cheriot_wb_err_i & 1)) & 1)) & 1) | ((wfi_insn__w1 | (csr_pipe_flush_i & instr_valid_i & 1)) & 1)) & 1
+  const id_wb_pending__w1 = (instr_valid_i | (~ready_wb_i)) & 1
+  mut _mux_8:U1 = if instr_valid_i != 0 { (~debug_mode_q) & debug_single_step_i & 1 } else { do_single_step_q & 1 }
+  const do_single_step_d__w1 = _mux_8
+  const enter_debug_mode_prio_d__w1 = (debug_req_i | do_single_step_d__w1) & 1 & (~debug_mode_q) & 1 & U1(not ((instr_gets_expanded_i == ibex_pkg.INSTR_EXPANDED) or (instr_gets_expanded_i == ibex_pkg.INSTR_EXPANDED_COMMIT))) & 1
+  const enter_debug_mode__w1 = (enter_debug_mode_prio_d__w1 | (trigger_match_i & (~debug_mode_q) & 1 & U1(not ((instr_gets_expanded_i == ibex_pkg.INSTR_EXPANDED) or (instr_gets_expanded_i == ibex_pkg.INSTR_EXPANDED_COMMIT))) & 1)) & 1
+  mut _mux_11:U1 = if priv_mode_i == ibex_pkg.PRIV_LVL_U { debug_ebreaku_i & 1 } else { 0 }
+  mut _mux_12:U1 = if priv_mode_i == ibex_pkg.PRIV_LVL_M { debug_ebreakm_i & 1 } else { _mux_11 & 1 }
+  const ebreak_into_debug__w1 = _mux_12
+  const irq_nm__w1 = (irq_nm_ext_i | 0) & 1
+  const handle_irq__w1 = (~debug_mode_q) & (~debug_single_step_i) & 1 & (~nmi_mode_q) & 1 & (irq_nm__w1 | (irq_pending_i & ((csr_mstatus_mie_i | U1(priv_mode_i == ibex_pkg.PRIV_LVL_U)) & 1) & 1)) & 1 & 1 & U1(not (instr_gets_expanded_i == ibex_pkg.INSTR_EXPANDED_COMMIT)) & 1
+  mfip_id = if irqs_i.irq_fast#[14..<15] != 0 { 14 } else { 0 }
+  if irqs_i.irq_fast#[13..<14] != 0 {
+    mfip_id = 13
+  }
+  if irqs_i.irq_fast#[12..<13] != 0 {
+    mfip_id = 12
+  }
+  if irqs_i.irq_fast#[11..<12] != 0 {
+    mfip_id = 11
+  }
+  if irqs_i.irq_fast#[10..<11] != 0 {
+    mfip_id = 10
+  }
+  if irqs_i.irq_fast#[9..<10] != 0 {
+    mfip_id = 9
+  }
+  if irqs_i.irq_fast#[8..<9] != 0 {
+    mfip_id = 8
+  }
+  if irqs_i.irq_fast#[7..<8] != 0 {
+    mfip_id = 7
+  }
+  if irqs_i.irq_fast#[6..<7] != 0 {
+    mfip_id = 6
+  }
+  if irqs_i.irq_fast#[5..<6] != 0 {
+    mfip_id = 5
+  }
+  if irqs_i.irq_fast#[4..<5] != 0 {
+    mfip_id = 4
+  }
+  if irqs_i.irq_fast#[3..<4] != 0 {
+    mfip_id = 3
+  }
+  if irqs_i.irq_fast#[2..<3] != 0 {
+    mfip_id = 2
+  }
+  if irqs_i.irq_fast#[1..<2] != 0 {
+    mfip_id = 1
+  }
+  if (irqs_i.irq_fast & 1) != 0 {
+    mfip_id = 0
+  }
+  const debug_cause_o__w1 = debug_cause_q
+  const debug_mode_o__w1 = debug_mode_q
+  const nmi_mode_o__w1 = nmi_mode_q
+  const stall__w1 = (stall_id_i | stall_wb_i) & 1
+  mut _b2i_15 = if (((lsu_err_is_cheriot_i & 1) << 3) | (((U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & cheriot_ex_err__w1 & 1 & _b2i_3 & 1) & 1) << 2) | ((cheriot_wb_err_i & 1) << 1) | (cheriot_asr_err_d__w1 & 1)) != 0 { 1 } else { 0 }
+  const t205 = (((cheriot_ex_valid_i & 1) << 36) | (cheriot_ex_err_info_i#[11..<12] << 35) | (cheriot_wb_err_info_i#[13..<16] << 32) | cheriot_branch_target_i#[0..<32])#[0..<37]#^[..]
+  load_err_prio = 0
+  ebrk_insn_prio = 0
+  ecall_insn_prio = 0
+  instr_fetch_err_prio = 0
+  illegal_insn_prio = 0
+  store_err_prio = 0
+  cheriot_ex_err_prio = 0
+  cheriot_wb_err_prio = 0
+  if instr_fetch_err__w1 != 0 {
+    instr_fetch_err_prio = 1
+  } elif illegal_insn_q != 0 {
+    illegal_insn_prio = 1
+  } elif ecall_insn__w1 != 0 {
+    ecall_insn_prio = 1
+  } elif ebrk_insn__w1 != 0 {
+    ebrk_insn_prio = 1
+  } elif (U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 0 & 1) != 0 {
+    cheriot_ex_err_prio = 1
+  } elif store_err_q != 0 {
+    store_err_prio = 1
+  } elif load_err_q != 0 {
+    load_err_prio = 1
+  } elif (U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 0 & 1) != 0 {
+    cheriot_wb_err_prio = 1
+  } else {
+  }
+  mut _mux_18:U3 = if do_single_step_d__w1 != 0 { ibex_pkg.DBG_CAUSE_STEP#[0..<3] } else { ibex_pkg.DBG_CAUSE_NONE#[0..<3] }
+  mut _mux_19:U3 = if debug_req_i != 0 { ibex_pkg.DBG_CAUSE_HALTREQ#[0..<3] } else { _mux_18#[0..<3] }
+  mut _mux_20:U3 = if (ebrk_insn_prio & ebreak_into_debug__w1 & 1) != 0 { ibex_pkg.DBG_CAUSE_EBREAK#[0..<3] } else { _mux_19#[0..<3] }
+  mut _mux_21:U3 = if trigger_match_i != 0 { ibex_pkg.DBG_CAUSE_TRIGGER#[0..<3] } else { _mux_20#[0..<3] }
+  if rst_ni != 0 {
+    debug_cause_q = _mux_21
+  }
+  `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseInsnAddrMisa#[6..<7]
+  `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseInsnAddrMisa#[5..<6]
+  `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseInsnAddrMisa#[0..<5]
+  flush_id = 0
+  ctrl_busy_o = 1
+  csr_save_if_o = 0
+  debug_mode_entering_o = 0
+  controller_run_o = 0
+  pc_set_o = 0
+  halt_if = 0
+  ctrl_fsm_ns = ctrl_fsm_cs
+  perf_jump_o = 0
+  exc_pc_mux_o = ibex_pkg.EXC_PC_IRQ
+  csr_save_cause_o = 0
+  csr_mtval_o = 0
+  csr_restore_dret_id_o = 0
+  nmi_mode_d = nmi_mode_q
+  debug_csr_save_o = 0
+  csr_save_id_o = 0
+  debug_mode_d = debug_mode_q
+  csr_restore_mret_id_o = 0
+  instr_req_o = 1
+  pc_mux_o = ibex_pkg.PC_BOOT
+  retain_id = 0
+  csr_mepcc_clrtag_o = 0
+  perf_tbranch_o = 0
+  match ctrl_fsm_cs {
+    == ibex_pkg.`RESET` {
+      instr_req_o = 0
+      pc_mux_o = ibex_pkg.PC_BOOT
+      pc_set_o = 1
+      ctrl_fsm_ns = ibex_pkg.BOOT_SET
+    }
+    == ibex_pkg.BOOT_SET {
+      instr_req_o = 1
+      pc_mux_o = ibex_pkg.PC_BOOT
+      pc_set_o = 1
+      ctrl_fsm_ns = ibex_pkg.FIRST_FETCH
+    }
+    == ibex_pkg.WAIT_SLEEP {
+      ctrl_busy_o = 0
+      instr_req_o = 0
+      halt_if = 1
+      flush_id = 1
+      ctrl_fsm_ns = ibex_pkg.SLEEP
+    }
+    == ibex_pkg.SLEEP {
+      instr_req_o = 0
+      halt_if = 1
+      flush_id = 1
+      if (irq_nm__w1 != 0) or (irq_pending_i != 0) or (debug_req_i != 0) or (debug_mode_q != 0) or (debug_single_step_i != 0) {
+        ctrl_fsm_ns = ibex_pkg.FIRST_FETCH
+      } else {
+        ctrl_busy_o = 0
+      }
+    }
+    == ibex_pkg.FIRST_FETCH {
+      if id_in_ready_o != 0 {
+        ctrl_fsm_ns = ibex_pkg.DECODE
+      }
+      if handle_irq__w1 != 0 {
+        ctrl_fsm_ns = ibex_pkg.IRQ_TAKEN
+        halt_if = 1
+      }
+      if enter_debug_mode__w1 != 0 {
+        ctrl_fsm_ns = ibex_pkg.DBG_TAKEN_IF
+        halt_if = 1
+      }
+    }
+    == ibex_pkg.DECODE {
+      controller_run_o = 1
+      pc_mux_o = ibex_pkg.PC_JUMP
+      if special_req__w1 != 0 {
+        retain_id = 1
+        if ((ready_wb_i | 0) & 1) != 0 {
+          ctrl_fsm_ns = ibex_pkg.FLUSH
+        }
+      }
+      if (branch_set_i != 0) or (jump_set_i != 0) or ((U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & cheriot_branch_req_i & 1) != 0) {
+        pc_set_o = 1
+        perf_tbranch_o = branch_set_i
+        perf_jump_o = jump_set_i
+      }
+      if ((enter_debug_mode__w1 != 0) or (handle_irq__w1 != 0)) and ((stall__w1 != 0) or (id_wb_pending__w1 != 0)) {
+        halt_if = 1
+      }
+      if (stall__w1 == 0) and (special_req__w1 == 0) and (id_wb_pending__w1 == 0) {
+        if enter_debug_mode__w1 != 0 {
+          ctrl_fsm_ns = ibex_pkg.DBG_TAKEN_IF
+          halt_if = 1
+        } elif handle_irq__w1 != 0 {
+          ctrl_fsm_ns = ibex_pkg.IRQ_TAKEN
+          halt_if = 1
+        }
+      }
+    }
+    == ibex_pkg.IRQ_TAKEN {
+      pc_mux_o = ibex_pkg.PC_EXC
+      exc_pc_mux_o = ibex_pkg.EXC_PC_IRQ
+      if handle_irq__w1 != 0 {
+        pc_set_o = 1
+        csr_save_if_o = 1
+        csr_save_cause_o = 1
+        if (irq_nm__w1 != 0) and (nmi_mode_q == 0) {
+          _mux_23 = if irq_nm_ext_i != 0 { ibex_pkg.ExcCauseIrqNm#[0..<7] } else { 0x40 }
+          `exc_cause_o__bpo.irq_int` = _mux_23#[6..<7]
+          `exc_cause_o__bpo.irq_ext` = _mux_23#[5..<6]
+          `exc_cause_o__bpo.lower_cause` = _mux_23#[0..<5]
+          if (0 & U1(irq_nm_ext_i == 0) & 1) != 0 {
+            csr_mtval_o = 0
+          }
+          nmi_mode_d = 1
+        } elif irqs_i.irq_fast != 0 {
+          const t329 = ((1 << 4) | mfip_id#[0..<4]) | 32 | 0
+          `exc_cause_o__bpo.irq_int` = t329#[6..<7]
+          `exc_cause_o__bpo.irq_ext` = t329#[5..<6]
+          `exc_cause_o__bpo.lower_cause` = t329#[0..<5]
+        } elif irqs_i.irq_external != 0 {
+          `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseIrqExternalM#[6..<7]
+          `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseIrqExternalM#[5..<6]
+          `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseIrqExternalM#[0..<5]
+        } elif irqs_i.irq_software != 0 {
+          `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseIrqSoftwareM#[6..<7]
+          `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseIrqSoftwareM#[5..<6]
+          `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseIrqSoftwareM#[0..<5]
+        } else {
+          `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseIrqTimerM#[6..<7]
+          `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseIrqTimerM#[5..<6]
+          `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseIrqTimerM#[0..<5]
+        }
+      }
+      ctrl_fsm_ns = ibex_pkg.DECODE
+    }
+    == ibex_pkg.DBG_TAKEN_IF {
+      pc_mux_o = ibex_pkg.PC_EXC
+      exc_pc_mux_o = ibex_pkg.EXC_PC_DBD
+      flush_id = 1
+      pc_set_o = 1
+      csr_save_if_o = 1
+      debug_csr_save_o = 1
+      csr_save_cause_o = 1
+      debug_mode_d = 1
+      debug_mode_entering_o = 1
+      ctrl_fsm_ns = ibex_pkg.DECODE
+    }
+    == ibex_pkg.DBG_TAKEN_ID {
+      flush_id = 1
+      pc_mux_o = ibex_pkg.PC_EXC
+      pc_set_o = 1
+      exc_pc_mux_o = ibex_pkg.EXC_PC_DBD
+      if (ebreak_into_debug__w1 != 0) and (debug_mode_q == 0) {
+        csr_save_cause_o = 1
+        csr_save_id_o = 1
+        debug_csr_save_o = 1
+      }
+      debug_mode_d = 1
+      debug_mode_entering_o = 1
+      ctrl_fsm_ns = ibex_pkg.DECODE
+    }
+    == ibex_pkg.FLUSH {
+      halt_if = 1
+      flush_id = 1
+      ctrl_fsm_ns = ibex_pkg.DECODE
+      if (exc_req_q != 0) or (store_err_q != 0) or (load_err_q != 0) or ((U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 0 & 1) != 0) {
+        pc_set_o = 1
+        pc_mux_o = ibex_pkg.PC_EXC
+        _mux_26 = if debug_mode_q != 0 { ibex_pkg.EXC_PC_DBG_EXC#[0..<2] } else { ibex_pkg.EXC_PC_EXC#[0..<2] }
+        exc_pc_mux_o = _mux_26
+        csr_save_id_o = 0
+        csr_save_cause_o = 1
+        unique if 1 == instr_fetch_err_prio {
+          if (U1(BaseIsa == ibex_pkg.BaseIsaRV32IorCHERIoT) & U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 1 & instr_fetch_cheriot_acc_vio_i & 1) != 0 {
+            `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseCheriFault#[6..<7]
+            `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseCheriFault#[5..<6]
+            `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseCheriFault#[0..<5]
+            csr_mtval_o = 0x402
+          } elif (U1(BaseIsa == ibex_pkg.BaseIsaRV32IorCHERIoT) & U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 1 & instr_fetch_cheriot_bound_vio_i & 1) != 0 {
+            `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseCheriFault#[6..<7]
+            `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseCheriFault#[5..<6]
+            `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseCheriFault#[0..<5]
+            csr_mtval_o = 0x401
+            csr_mepcc_clrtag_o = 1
+          } else {
+            `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseInstrAccessFault#[6..<7]
+            `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseInstrAccessFault#[5..<6]
+            `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseInstrAccessFault#[0..<5]
+            _mux_31 = if instr_fetch_err_plus2_i != 0 { (pc_id_i + 2)#[0..<32] } else { pc_id_i#[0..<32] }
+            csr_mtval_o = _mux_31
+          }
+        } elif 1 == illegal_insn_prio {
+          `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseIllegalInsn#[6..<7]
+          `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseIllegalInsn#[5..<6]
+          `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseIllegalInsn#[0..<5]
+          _mux_34 = if instr_is_compressed_i != 0 { instr_compressed_i#[0..<16] } else { instr_i#[0..<32] }
+          _mux_35 = if (U1(BaseIsa == ibex_pkg.BaseIsaRV32IorCHERIoT) & U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 1) != 0 { 0 } else { _mux_34#[0..<32] }
+          csr_mtval_o = _mux_35
+        } elif 1 == ecall_insn_prio {
+          _mux_36 = if priv_mode_i == ibex_pkg.PRIV_LVL_M { ibex_pkg.ExcCauseEcallMMode#[0..<7] } else { ibex_pkg.ExcCauseEcallUMode#[0..<7] }
+          `exc_cause_o__bpo.irq_int` = _mux_36#[6..<7]
+          `exc_cause_o__bpo.irq_ext` = _mux_36#[5..<6]
+          `exc_cause_o__bpo.lower_cause` = _mux_36#[0..<5]
+        } elif 1 == ebrk_insn_prio {
+          if ((debug_mode_q | ebreak_into_debug__w1) & 1) != 0 {
+            pc_set_o = 0
+            csr_save_id_o = 0
+            csr_save_cause_o = 0
+            ctrl_fsm_ns = ibex_pkg.DBG_TAKEN_ID
+            flush_id = 0
+          } else {
+            `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseBreakpoint#[6..<7]
+            `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseBreakpoint#[5..<6]
+            `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseBreakpoint#[0..<5]
+          }
+        } elif 1 == store_err_prio {
+          if (U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 0 & 1) != 0 {
+            if cheriot_wb_err_info_i#[11..<12] != 0 {
+              `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseStoreAddrMisaligned#[6..<7]
+              `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseStoreAddrMisaligned#[5..<6]
+              `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseStoreAddrMisaligned#[0..<5]
+              csr_mtval_o = lsu_addr_last_i
+            } else {
+              `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseCheriFault#[6..<7]
+              `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseCheriFault#[5..<6]
+              `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseCheriFault#[0..<5]
+              csr_mtval_o = cheriot_wb_err_info_i#[0..<11]
+            }
+          } else {
+            `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseStoreAccessFault#[6..<7]
+            `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseStoreAccessFault#[5..<6]
+            `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseStoreAccessFault#[0..<5]
+            csr_mtval_o = lsu_addr_last_i
+          }
+        } elif 1 == load_err_prio {
+          if (U1(cheriot_enable_i == ibex_pkg.IbexMuBiOn) & 0 & 1) != 0 {
+            if cheriot_wb_err_info_i#[11..<12] != 0 {
+              `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseLoadAddrMisaligned#[6..<7]
+              `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseLoadAddrMisaligned#[5..<6]
+              `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseLoadAddrMisaligned#[0..<5]
+              csr_mtval_o = lsu_addr_last_i
+            } else {
+              `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseCheriFault#[6..<7]
+              `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseCheriFault#[5..<6]
+              `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseCheriFault#[0..<5]
+              csr_mtval_o = cheriot_wb_err_info_i#[0..<11]
+            }
+          } else {
+            `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseLoadAccessFault#[6..<7]
+            `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseLoadAccessFault#[5..<6]
+            `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseLoadAccessFault#[0..<5]
+            csr_mtval_o = lsu_addr_last_i
+          }
+        } elif 1 == cheriot_ex_err_prio {
+          if cheriot_enable_i == ibex_pkg.IbexMuBiOn {
+            `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseCheriFault#[6..<7]
+            `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseCheriFault#[5..<6]
+            `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseCheriFault#[0..<5]
+            csr_mtval_o = cheriot_ex_err_info_i#[0..<11]
+          }
+        } elif 1 == cheriot_wb_err_prio {
+          if cheriot_enable_i == ibex_pkg.IbexMuBiOn {
+            if cheriot_wb_err_info_i#[12..<13] != 0 {
+              `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseIllegalInsn#[6..<7]
+              `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseIllegalInsn#[5..<6]
+              `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseIllegalInsn#[0..<5]
+              csr_mtval_o = cheriot_wb_err_info_i#[0..<11]
+            } else {
+              `exc_cause_o__bpo.irq_int` = ibex_pkg.ExcCauseCheriFault#[6..<7]
+              `exc_cause_o__bpo.irq_ext` = ibex_pkg.ExcCauseCheriFault#[5..<6]
+              `exc_cause_o__bpo.lower_cause` = ibex_pkg.ExcCauseCheriFault#[0..<5]
+              csr_mtval_o = cheriot_wb_err_info_i#[0..<11]
+            }
+          }
+        } else {
+        }
+      } elif mret_insn__w1 != 0 {
+        pc_mux_o = ibex_pkg.PC_ERET
+        pc_set_o = 1
+        csr_restore_mret_id_o = 1
+        if nmi_mode_q != 0 {
+          nmi_mode_d = 0
+        }
+      } elif dret_insn__w1 != 0 {
+        pc_mux_o = ibex_pkg.PC_DRET
+        pc_set_o = 1
+        debug_mode_d = 0
+        csr_restore_dret_id_o = 1
+      } elif wfi_insn__w1 != 0 {
+        ctrl_fsm_ns = ibex_pkg.WAIT_SLEEP
+      }
+      if (enter_debug_mode_prio_q != 0) and (not ((ebrk_insn_prio != 0) and (ebreak_into_debug__w1 != 0))) {
+        ctrl_fsm_ns = ibex_pkg.DBG_TAKEN_IF
+      }
+    }
+    else {
+      instr_req_o = 0
+      ctrl_fsm_ns = ibex_pkg.`RESET`
+    }
+  }
+  if (~instr_exec_i) != 0 {
+    halt_if = 1
+  }
+  id_in_ready_o = (~stall__w1#[0]) & (~halt_if) & 1 & (~retain_id) & 1
+  if rst_ni != 0 {
+    ctrl_fsm_cs = ctrl_fsm_ns
+    nmi_mode_q = nmi_mode_d
+    do_single_step_q = do_single_step_d__w1
+    debug_mode_q = debug_mode_d
+    enter_debug_mode_prio_q = enter_debug_mode_prio_d__w1
+    load_err_q = load_err_i
+    store_err_q = store_err_i
+    exc_req_q = exc_req_d__w1
+    illegal_insn_q = illegal_insn_d__w1
+  }
+  const t519 = `exc_cause_o__bpo.irq_int`
+  `exc_cause_o__bpr.irq_int` = t519
+  exc_cause_o.irq_int = t519
+  const t520 = `exc_cause_o__bpo.irq_ext`
+  `exc_cause_o__bpr.irq_ext` = t520
+  exc_cause_o.irq_ext = t520
+  const t521 = `exc_cause_o__bpo.lower_cause`
+  `exc_cause_o__bpr.lower_cause` = t521
+  exc_cause_o.lower_cause = t521
+  instr_valid_clear_o = ((~((stall__w1 | retain_id) & 1)#[0]) | flush_id) & 1
+  nt_branch_mispredict_o = 0
+  wb_exception_o = 0
+  id_exception_o = exc_req_d__w1
+  id_exception_nc_o = (((((((ecall_insn__w1 | ebrk_insn__w1) & 1) | illegal_insn_d__w1) & 1) | instr_fetch_err__w1) & 1) | cheriot_asr_err_d__w1) & 1 & _b2i_6 & 1
+  nmi_mode_o = nmi_mode_o__w1
+  debug_cause_o = debug_cause_o__w1
+  debug_mode_o = debug_mode_o__w1
+  csr_save_wb_o = 0
+  flush_id_o = flush_id
+}

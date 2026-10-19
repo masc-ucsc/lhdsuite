@@ -1,0 +1,134 @@
+const ibex_compressed_decoder = import("ibex_compressed_decoder.ibex_compressed_decoder")
+const ibex_prefetch_buffer = import("ibex_prefetch_buffer.ibex_prefetch_buffer")
+const ibex_pkg = import("ibex_pkg")
+
+pub mod ibex_if_stage<BaseIsa=0, DmHaltAddr=0x1a110800, DmExceptionAddr=0x1a110808, DummyInstructions=0, ICache=0, RV32ZC=3, ICacheECC=0, ICacheTweakInfection=0, BusSizeECC=32, TagSizeECC=22, LineSizeECC=64, PCIncrCheck=0, ResetAll=0, RndCnstLfsrSeed=2891135988, RndCnstLfsrPerm=0x1e35ecba467fd1b12e958152c04fa43878a8daed, BranchPredictor=0, MemECC=0, MemDataWidth=32>::[timecheck=false](clk_i:Clock, rst_ni:U1, cheriot_enable_i:U4, boot_addr_i:U32, req_i:U1, debug_mode_i:U1, instr_gnt_i:U1, instr_rvalid_i:U1, instr_rdata_i:U32, instr_bus_err_i:U1, ic_tag_rdata_i:U44, ic_data_rdata_i:U128, ic_scr_key_valid_i:U1, pmp_err_if_i:U1, pmp_err_if_plus2_i:U1, instr_valid_clear_i:U1, pc_set_i:U1, pc_mux_i:U3, nt_branch_mispredict_i:U1, nt_branch_addr_i:U32, exc_pc_mux_i:U2, exc_cause:(irq_int:U1, irq_ext:U1, lower_cause:U5), dummy_instr_en_i:U1, dummy_instr_mask_i:U3, dummy_instr_seed_en_i:U1, dummy_instr_seed_i:U32, icache_enable_i:U1, icache_inval_i:U1, branch_target_ex_i:U32, csr_mepc_i:U32, csr_depc_i:U32, csr_mtvec_i:U32, id_in_ready_i:U1, pcc_cap_i:(top33:U33, base32:U32, perms:(`U0`:U1, SE:U1, US:U1, EX:U1, SR:U1, MC:U1, LD:U1, SL:U1, LM:U1, SD:U1, LG:U1, GL:U1), cap_cor:U2, valid:U1, rsvd:U1, cperms:U6, otype:U3, cexp:U4, top:U9, base:U9)) -> (instr_req_o:U1@[], instr_addr_o:U32@[], instr_intg_err_o:U1@[], ic_tag_req_o:ibex_pkg.IC_NUM_WAYS_T@[], ic_tag_write_o:U1@[], ic_tag_addr_o:ibex_pkg.IC_INDEX_W_T@[], ic_tag_wdata_o:U22@[], ic_data_req_o:ibex_pkg.IC_NUM_WAYS_T@[], ic_data_write_o:U1@[], ic_data_addr_o:ibex_pkg.IC_INDEX_W_T@[], ic_data_wdata_o:U64@[], ic_scr_key_req_o:U1@[], instr_valid_id_o:U1@[], instr_new_id_o:U1@[], instr_rdata_id_o:U32@[], instr_rdata_alu_id_o:U32@[], instr_rdata_c_id_o:U16@[], instr_is_compressed_id_o:U1@[], instr_gets_expanded_id_o:U2@[], instr_expanded_id_o:U16@[], instr_bp_taken_o:U1@[], instr_fetch_err_o:U1@[], instr_fetch_err_plus2_o:U1@[], illegal_c_insn_id_o:U1@[], instr_fetch_cheriot_acc_vio_o:U1@[], instr_fetch_cheriot_bound_vio_o:U1@[], dummy_instr_id_o:U1@[], pc_if_o:U32@[], pc_id_o:U32@[], icache_ecc_error_o:U1@[], csr_mtvec_init_o:U1@[], pc_mismatch_alert_o:U1@[], if_busy_o:U1@[]) {
+  mut _b2i_3 = 0
+  mut _b2i_6 = 0
+  mut _mux_4:U32 = 0
+  mut _mux_7:U32 = 0
+  reg instr_rdata_id_o:U32:[clock_pin=clk_i]
+  reg instr_rdata_alu_id_o:U32:[clock_pin=clk_i]
+  reg instr_rdata_c_id_o:U16:[clock_pin=clk_i]
+  reg instr_is_compressed_id_o:U1:[clock_pin=clk_i]
+  reg instr_gets_expanded_id_o:U2:[clock_pin=clk_i]
+  reg instr_expanded_id_o:U16:[clock_pin=clk_i]
+  reg instr_fetch_err_o:U1:[clock_pin=clk_i]
+  reg instr_fetch_err_plus2_o:U1:[clock_pin=clk_i]
+  reg illegal_c_insn_id_o:U1:[clock_pin=clk_i]
+  reg pc_id_o:U32:[clock_pin=clk_i]
+  reg instr_valid_id_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg instr_new_id_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  wire fetch_valid_raw:U1 = nil
+  wire fetch_ready:U1 = nil
+  wire instr_is_compressed:U1 = nil
+  wire if_instr_valid:U1 = nil
+  wire if_instr_rdata:U32 = nil
+  wire if_instr_addr:U32 = nil
+  wire if_instr_bus_err:U1 = nil
+  wire cheriot_bound_vio:U1 = nil
+  wire cheriot_force_uc:U1 = nil
+  mut fetch_addr_n:U32 = 0
+  mut exc_pc:U32 = 0
+  mut irq_vec:U5 = 0
+  fetch_addr_n = 0sb?
+  exc_pc = 0sb?
+  irq_vec = 0sb?
+  const t74 = cheriot_enable_i#[0..<4]#^[..]
+  irq_vec = if exc_cause.irq_int != 0 { ibex_pkg.ExcCauseIrqNm#[0..<5] } else { exc_cause.lower_cause }
+  match exc_pc_mux_i {
+    == ibex_pkg.EXC_PC_EXC {
+      _b2i_3 = if cheriot_enable_i == ibex_pkg.IbexMuBiOn { 1 } else { 0 }
+      _mux_4 = if (U1(BaseIsa == ibex_pkg.BaseIsaRV32IorCHERIoT) & _b2i_3 & 1) != 0 { csr_mtvec_i#[2..<32] << 2 } else { csr_mtvec_i#[8..<32] << 8 }
+      exc_pc = _mux_4
+    }
+    == ibex_pkg.EXC_PC_IRQ {
+      _b2i_6 = if cheriot_enable_i == ibex_pkg.IbexMuBiOn { 1 } else { 0 }
+      _mux_7 = if (U1(BaseIsa == ibex_pkg.BaseIsaRV32IorCHERIoT) & _b2i_6 & 1) != 0 { csr_mtvec_i#[2..<32] << 2 } else { (csr_mtvec_i#[8..<32] << 8) | (irq_vec#[0..<5] << 2) }
+      exc_pc = _mux_7
+    }
+    == ibex_pkg.EXC_PC_DBD {
+      exc_pc = DmHaltAddr
+    }
+    == ibex_pkg.EXC_PC_DBG_EXC {
+      exc_pc = DmExceptionAddr
+    }
+    else {
+      exc_pc = csr_mtvec_i#[8..<32] << 8
+    }
+  }
+  const instr_intg_err_o__w1 = 0 & instr_rvalid_i & 1
+  const allow_all__w1 = U1(pcc_cap_i.base32 == 0) & U1(pcc_cap_i.top33 == 0x100000000) & 1
+  mut _b2i_12 = if cheriot_enable_i == ibex_pkg.IbexMuBiOn { 1 } else { 0 }
+  const instr_valid_id_o__w1 = instr_valid_id_q
+  const instr_new_id_o__w1 = instr_new_id_q
+  const pc_mux_internal__w1 = pc_mux_i#[0..<3]
+  fetch_addr_n = unique if pc_mux_internal__w1 == ibex_pkg.PC_BOOT { (boot_addr_i#[8..<32] << 8) | 0x80 } elif pc_mux_internal__w1 == ibex_pkg.PC_JUMP { branch_target_ex_i } elif pc_mux_internal__w1 == ibex_pkg.PC_EXC { exc_pc } elif pc_mux_internal__w1 == ibex_pkg.PC_ERET { csr_mepc_i } elif pc_mux_internal__w1 == ibex_pkg.PC_DRET { csr_depc_i } elif pc_mux_internal__w1 == ibex_pkg.PC_BP { (boot_addr_i#[8..<32] << 8) | 0x80 } else { (boot_addr_i#[8..<32] << 8) | 0x80 }
+  const branch_req__w1 = (pc_set_i | 0) & 1
+  mut _mux_15:U32 = if branch_req__w1 != 0 { fetch_addr_n#[1..<32] << 1 } else { nt_branch_addr_i#[0..<32] }
+  const fetch_valid__w1 = fetch_valid_raw & (~nt_branch_mispredict_i) & 1
+  mut gen_prefetch_buffer_prefetch_buffer_i = ibex_prefetch_buffer::[name=gen_prefetch_buffer_prefetch_buffer_i](clk_i = clk_i, rst_ni = rst_ni, req_i = req_i, branch_i = (branch_req__w1 | nt_branch_mispredict_i) & 1, addr_i = _mux_15, ready_i = fetch_ready, cheriot_force_uc_i = cheriot_force_uc, instr_gnt_i = instr_gnt_i, instr_rdata_i = instr_rdata_i#[0..<32], instr_err_i = (0 | instr_bus_err_i) & 1, instr_rvalid_i = instr_rvalid_i)
+  fetch_valid_raw = gen_prefetch_buffer_prefetch_buffer_i.valid_o
+  const pc_if_o__w1 = if_instr_addr
+  const if_instr_err__w1 = (((((if_instr_bus_err | ((pmp_err_if_i | (if_instr_addr#[1..<2] & (~instr_is_compressed) & 1 & pmp_err_if_plus2_i & 1)) & 1)) & 1) | (U1(BaseIsa == ibex_pkg.BaseIsaRV32IorCHERIoT) & _b2i_12 & 1 & (~debug_mode_i) & 1 & U1(((~pcc_cap_i.perms.EX#[0]) != 0) or ((~pcc_cap_i.valid#[0]) != 0) or (pcc_cap_i.otype != 0)) & 1)) & 1) | cheriot_bound_vio) & 1
+  const if_instr_err_plus2__w1 = ((if_instr_addr#[1..<2] & (~instr_is_compressed) & 1 & pmp_err_if_plus2_i & 1) | gen_prefetch_buffer_prefetch_buffer_i.err_plus2_o) & 1 & (~pmp_err_if_i) & 1
+  const instr_hdrm__w1 = (pcc_cap_i.top33#[0..<33] - if_instr_addr#[0..<32])#[0..<34]
+  const hdrm_ge4__w1 = U1(instr_hdrm__w1#[2..<33] != 0) & (~instr_hdrm__w1#[33..<34]) & 1
+  mut _mux_18:U1 = if instr_is_compressed != 0 { (U1(instr_hdrm__w1#[1..<33] != 0) & (~instr_hdrm__w1#[33..<34]) & 1) & 1 } else { hdrm_ge4__w1 & 1 }
+  mut _b2i_19 = if (allow_all__w1 != 0) or (_mux_18 != 0) { 1 } else { 0 }
+  const base_ok__w1 = ~U1(if_instr_addr < pcc_cap_i.base32)#[0]
+  mut _b2i_22 = if cheriot_enable_i == ibex_pkg.IbexMuBiOn { 1 } else { 0 }
+  mut _b2i_23 = if ((~base_ok__w1#[0]) != 0) or ((~_b2i_19#[0]) != 0) { 1 } else { 0 }
+  cheriot_bound_vio = U1(BaseIsa == ibex_pkg.BaseIsaRV32IorCHERIoT) & _b2i_22 & 1 & (~debug_mode_i) & 1 & _b2i_23 & 1
+  mut _b2i_25 = if cheriot_enable_i == ibex_pkg.IbexMuBiOn { 1 } else { 0 }
+  cheriot_force_uc = U1(BaseIsa == ibex_pkg.BaseIsaRV32IorCHERIoT) & _b2i_25 & 1 & (~allow_all__w1#[0]) & 1 & ((~base_ok__w1#[0]) | (~hdrm_ge4__w1#[0])) & 1 & 1
+  mut compressed_decoder_i = ibex_compressed_decoder::[name=compressed_decoder_i](clk_i = clk_i, rst_ni = rst_ni, valid_i = fetch_valid__w1 & (~gen_prefetch_buffer_prefetch_buffer_i.err_o#[0]) & 1, id_in_ready_i = id_in_ready_i & (~pc_set_i) & 1, instr_i = if_instr_rdata, cheriot_enable_i = cheriot_enable_i, flush_expanded_i = pc_set_i & U1(pc_mux_i == ibex_pkg.PC_EXC) & 1)
+  instr_is_compressed = compressed_decoder_i.is_compressed_o
+  const instr_out__w1 = compressed_decoder_i.instr_o
+  const instr_valid_id_d__w1 = ((if_instr_valid & id_in_ready_i & 1 & (~pc_set_i) & 1) | (instr_valid_id_q & (~instr_valid_clear_i) & 1)) & 1
+  const instr_new_id_d__w1 = if_instr_valid & id_in_ready_i & 1 & (~pc_set_i) & 1
+  if rst_ni != 0 {
+    instr_valid_id_q = instr_valid_id_d__w1
+    instr_new_id_q = instr_new_id_d__w1
+  }
+  if instr_new_id_d__w1 != 0 {
+    instr_rdata_id_o = instr_out__w1
+    instr_rdata_alu_id_o = instr_out__w1
+    instr_fetch_err_o = if_instr_err__w1
+    instr_fetch_err_plus2_o = if_instr_err_plus2__w1
+    instr_rdata_c_id_o = if_instr_rdata#[0..<16]
+    instr_is_compressed_id_o = instr_is_compressed
+    instr_gets_expanded_id_o = compressed_decoder_i.gets_expanded_o
+    instr_expanded_id_o = if_instr_rdata#[0..<16]
+    illegal_c_insn_id_o = compressed_decoder_i.illegal_instr_o
+    pc_id_o = pc_if_o__w1
+  }
+  if_instr_valid = fetch_valid__w1
+  if_instr_rdata = gen_prefetch_buffer_prefetch_buffer_i.rdata_o
+  if_instr_addr = gen_prefetch_buffer_prefetch_buffer_i.addr_o
+  if_instr_bus_err = gen_prefetch_buffer_prefetch_buffer_i.err_o
+  fetch_ready = id_in_ready_i & 1 & 1 & U1(not ((compressed_decoder_i.gets_expanded_o == ibex_pkg.INSTR_EXPANDED) or (compressed_decoder_i.gets_expanded_o == ibex_pkg.INSTR_EXPANDED_COMMIT))) & 1
+  instr_req_o = gen_prefetch_buffer_prefetch_buffer_i.instr_req_o
+  instr_addr_o = gen_prefetch_buffer_prefetch_buffer_i.instr_addr_o
+  instr_intg_err_o = instr_intg_err_o__w1
+  ic_tag_req_o = 0
+  ic_tag_write_o = 0
+  ic_tag_addr_o = 0
+  ic_tag_wdata_o = 0
+  ic_data_req_o = 0
+  ic_data_write_o = 0
+  ic_data_addr_o = 0
+  ic_data_wdata_o = 0
+  ic_scr_key_req_o = 0
+  instr_valid_id_o = instr_valid_id_o__w1
+  instr_new_id_o = instr_new_id_o__w1
+  instr_bp_taken_o = 0
+  instr_fetch_cheriot_acc_vio_o = 0
+  instr_fetch_cheriot_bound_vio_o = 0
+  dummy_instr_id_o = 0
+  pc_if_o = pc_if_o__w1
+  icache_ecc_error_o = 0
+  csr_mtvec_init_o = U1(pc_mux_i == ibex_pkg.PC_BOOT) & pc_set_i & 1
+  pc_mismatch_alert_o = 0
+  if_busy_o = gen_prefetch_buffer_prefetch_buffer_i.busy_o
+}

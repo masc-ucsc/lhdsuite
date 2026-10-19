@@ -1,0 +1,63 @@
+const ibex_fetch_fifo = import("ibex_fetch_fifo.ibex_fetch_fifo")
+
+pub mod ibex_prefetch_buffer<ResetAll=0>::[timecheck=false](clk_i:Clock, rst_ni:U1, req_i:U1, branch_i:U1, addr_i:U32, ready_i:U1, cheriot_force_uc_i:U1, instr_gnt_i:U1, instr_rdata_i:U32, instr_err_i:U1, instr_rvalid_i:U1) -> (valid_o:U1@[], rdata_o:U32@[], addr_o:U32@[], err_o:U1@[], err_plus2_o:U1@[], instr_req_o:U1@[], instr_addr_o:U32@[], busy_o:U1@[]) {
+  reg valid_req_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg discard_req_q:U1:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg rdata_outstanding_q:U2:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg branch_discard_q:U2:[initial=0, reset_pin=rst_ni, async=true, negreset=true, clock_pin=clk_i]
+  reg stored_addr_q:U32:[clock_pin=clk_i]
+  reg fetch_addr_q:U32:[clock_pin=clk_i]
+  wire `rdata_outstanding_n[0]`:U1 = nil
+  wire `rdata_outstanding_n[1]`:U1 = nil
+  wire rdata_outstanding_n:U2 = nil
+  wire `branch_discard_n[0]`:U1 = nil
+  wire `branch_discard_n[1]`:U1 = nil
+  wire branch_discard_n:U2 = nil
+  wire `rdata_outstanding_rev[0]`:U1 = nil
+  wire `rdata_outstanding_rev[1]`:U1 = nil
+  wire rdata_outstanding_rev:U2 = nil
+  `rdata_outstanding_rev[0]` = (rdata_outstanding_q >> 1) & 1
+  `rdata_outstanding_rev[1]` = (rdata_outstanding_q >> 0) & 1
+  const discard_req_d__w1 = valid_req_q & (branch_i | discard_req_q) & 1 & 1
+  mut _mux_1:U32 = if branch_i != 0 { addr_i#[0..<32] } else { fetch_addr_q#[0..<32] }
+  mut _mux_2:U32 = if valid_req_q != 0 { stored_addr_q#[0..<32] } else { _mux_1#[0..<32] }
+  const instr_addr__w1 = _mux_2
+  mut _mux_3:U2 = if instr_rvalid_i != 0 { (`rdata_outstanding_n[1]` & 1) } else { rdata_outstanding_n#[0..<2] }
+  mut _mux_4:U2 = if instr_rvalid_i != 0 { (`branch_discard_n[1]` & 1) } else { branch_discard_n#[0..<2] }
+  mut fifo_i = ibex_fetch_fifo::[name=fifo_i](clk_i = clk_i, rst_ni = rst_ni, clear_i = branch_i, in_valid_i = instr_rvalid_i & (~(branch_discard_q & 1)#[0]) & 1, in_addr_i = addr_i, in_rdata_i = instr_rdata_i, in_err_i = instr_err_i, cheriot_force_uc_i = cheriot_force_uc_i, out_ready_i = ready_i)
+  const addr_o__w1 = (fifo_i.out_addr_o.e31 << 31) | (fifo_i.out_addr_o.e30 << 30) | (fifo_i.out_addr_o.e29 << 29) | (fifo_i.out_addr_o.e28 << 28) | (fifo_i.out_addr_o.e27 << 27) | (fifo_i.out_addr_o.e26 << 26) | (fifo_i.out_addr_o.e25 << 25) | (fifo_i.out_addr_o.e24 << 24) | (fifo_i.out_addr_o.e23 << 23) | (fifo_i.out_addr_o.e22 << 22) | (fifo_i.out_addr_o.e21 << 21) | (fifo_i.out_addr_o.e20 << 20) | (fifo_i.out_addr_o.e19 << 19) | (fifo_i.out_addr_o.e18 << 18) | (fifo_i.out_addr_o.e17 << 17) | (fifo_i.out_addr_o.e16 << 16) | (fifo_i.out_addr_o.e15 << 15) | (fifo_i.out_addr_o.e14 << 14) | (fifo_i.out_addr_o.e13 << 13) | (fifo_i.out_addr_o.e12 << 12) | (fifo_i.out_addr_o.e11 << 11) | (fifo_i.out_addr_o.e10 << 10) | (fifo_i.out_addr_o.e9 << 9) | (fifo_i.out_addr_o.e8 << 8) | (fifo_i.out_addr_o.e7 << 7) | (fifo_i.out_addr_o.e6 << 6) | (fifo_i.out_addr_o.e5 << 5) | (fifo_i.out_addr_o.e4 << 4) | (fifo_i.out_addr_o.e3 << 3) | (fifo_i.out_addr_o.e2 << 2) | (fifo_i.out_addr_o.e1 << 1) | fifo_i.out_addr_o.e0
+  mut _b2i_5 = if (fifo_i.busy_o | rdata_outstanding_rev)#[0..<2] != 3 { 1 } else { 0 }
+  const valid_new_req__w1 = req_i & (_b2i_5 | branch_i) & 1 & 1 & (~((rdata_outstanding_q >> 1) & 1)#[0]) & 1
+  const valid_req__w1 = (valid_req_q | valid_new_req__w1) & 1
+  const valid_req_d__w1 = valid_req__w1 & (~instr_gnt_i) & 1
+  if (valid_new_req__w1 & (~valid_req_q) & 1 & (~instr_gnt_i) & 1) != 0 {
+    stored_addr_q = instr_addr__w1
+  }
+  mut _mux_6:U32 = if branch_i != 0 { addr_i#[0..<32] } else { fetch_addr_q#[2..<32] << 2 }
+  if ((branch_i | (valid_new_req__w1 & (~valid_req_q) & 1)) & 1) != 0 {
+    fetch_addr_q = (_mux_6 + ((valid_new_req__w1 & (~valid_req_q) & 1) << 2))#[0..<32]
+  }
+  `rdata_outstanding_n[0]` = ((valid_req__w1 & instr_gnt_i & 1) | (rdata_outstanding_q & 1)) & 1
+  `branch_discard_n[0]` = ((((valid_req__w1 & instr_gnt_i & 1 & discard_req_d__w1 & 1) | (branch_i & rdata_outstanding_q & 1 & 1)) & 1) | (branch_discard_q & 1)) & 1
+  `rdata_outstanding_n[1]` = ((valid_req__w1 & instr_gnt_i & 1 & rdata_outstanding_q & 1 & 1) | rdata_outstanding_q#[1..<2]) & 1
+  `branch_discard_n[1]` = ((((valid_req__w1 & instr_gnt_i & 1 & discard_req_d__w1 & 1 & rdata_outstanding_q & 1 & 1) | (branch_i & rdata_outstanding_q#[1..<2] & 1)) & 1) | branch_discard_q#[1..<2]) & 1
+  if rst_ni != 0 {
+    valid_req_q = valid_req_d__w1
+    discard_req_q = discard_req_d__w1
+    rdata_outstanding_q = _mux_3
+    branch_discard_q = _mux_4
+  }
+  const instr_req_o__w1 = valid_req__w1
+  mut _b2i_7 = if rdata_outstanding_q != 0 { 1 } else { 0 }
+  rdata_outstanding_n = (`rdata_outstanding_n[1]` << 1) | `rdata_outstanding_n[0]`
+  branch_discard_n = (`branch_discard_n[1]` << 1) | `branch_discard_n[0]`
+  rdata_outstanding_rev = (`rdata_outstanding_rev[1]` << 1) | `rdata_outstanding_rev[0]`
+  valid_o = fifo_i.out_valid_o
+  rdata_o = fifo_i.out_rdata_o
+  addr_o = addr_o__w1
+  err_o = fifo_i.out_err_o
+  err_plus2_o = fifo_i.out_err_plus2_o
+  instr_req_o = instr_req_o__w1
+  instr_addr_o = instr_addr__w1#[2..<32] << 2
+  busy_o = (_b2i_7 | instr_req_o__w1) & 1
+}

@@ -1,0 +1,40 @@
+// Assert/assume collateral for Ibex's load-store unit — a sidecar, so the
+// design file is never touched.
+//
+// The assert is Ibex's OWN, translated from rtl/ibex_load_store_unit.sv at
+// lowRISC commit a3ab21a80b. Proving the design author's spec rather than one
+// invented for the bench is the same discipline picorv32/verif/ and cva6/verif/
+// follow. Every signal named here is a PORT of ibex_load_store_unit. Ibex's
+// `ASSERT` macro is disabled while `rst_ni` is low, so the claim is guarded on it.
+//
+// The `assume_nocheck` lines are the configuration ibex_suite_top pins:
+// PMPEnable=0 (the core never reports a PMP error to the LSU), CHERIoT off
+// (cheriot_enable_i = IbexMuBiOff = 4'b1010), and Ibex's own input contract for
+// that case, rtl/ibex_load_store_unit.sv:833-834:
+//   `ASSERT_IF(IbexLsuIsCapDisabled,      !lsu_is_cap_i,      cheriot_enable_i != IbexMuBiOn)
+//   `ASSERT_IF(IbexLsuCheriotErrDisabled, !lsu_cheriot_err_i, cheriot_enable_i != IbexMuBiOn)
+//
+// No sequential sidecar (seq_unit is ""). Ibex's own sequential bus lemmas,
+// LSUHold / LSUHoldWrite in dv/formal/thm/mem.proof, are WHOLE-CORE facts: in
+// IDLE the LSU drives data_addr_o from adder_result_ex_i, and only the ID stage
+// keeps that operand stable while a request waits. At LSU level they refute
+// (cycle 5); on ibex_suite_top they are proven through cycle 33 and then hit the
+// 120 s solver limit, past a 29-cycle reset prologue.
+//
+// Usage:
+//   lhd formal verify ibex/pyrope/ibex_load_store_unit.prp \
+//       ibex/verif/ibex_load_store_unit.verify.prp \
+//       --top ibex_load_store_unit --set formal.bound=2 --workdir W
+const lsu = import("ibex_load_store_unit.ibex_load_store_unit")
+
+// A data request is always word aligned. rtl/ibex_load_store_unit.sv:830
+//   `ASSERT(IbexDataAddrUnaligned, data_req_o |-> (data_addr_o[1:0] == 2'b00))
+formal lsu.addr_aligned {
+  mut acc = lsu
+  assume_nocheck(acc.data_pmp_err_i == 0)
+  assume_nocheck(acc.cheriot_enable_i == 0xA)
+  assume_nocheck(acc.lsu_is_cap_i == 0)
+  assume_nocheck(acc.lsu_cheriot_err_i == 0)
+  assert((Bool(acc.rst_ni) and Bool(acc.data_req_o)) implies (acc.data_addr_o#[0..=1] == 0),
+         "a data request must be word aligned")
+}

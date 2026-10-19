@@ -1,0 +1,76 @@
+// A real RISC-V program on Ibex, with the testbench acting as its memory.
+//
+// The same program as picorv32_prog_tb.prp: accumulate 3 ten times and store
+// the result, so the check is architectural (x1 == 30 observed through the
+// program's own `sw`) rather than a tap on any internal signal.
+//
+// Ibex fetches its first instruction at boot_addr + 0x80 (ibex_suite_top pins
+// boot_addr_i = 0). The ROM is 8 words indexed by address bits [4:2], so 0x80
+// is word 0 and the program needs no relocation.
+//
+// The memory model follows Ibex's request/grant/response bus (doc "Instruction
+// Fetch" / "Load-Store Unit"): a request stays up, address stable, until it is
+// granted; the response (rvalid) comes in a later cycle, for loads AND stores.
+// Reads placed above `step` see what the previous step settled, so the model
+// answers one cycle late on purpose: it grants a request it saw last cycle
+// (never one it already granted), then raises rvalid the cycle after the grant.
+// That keeps at most one transaction in flight per bus and never grants
+// without a request (Ibex's own MemGntOnRequest assumption).
+const cpu = import("lg:ibex_suite_top")
+
+test ibex.prog(cycles:U20 = 2000) {
+  mut acc = cpu
+  mut rom = [0x00000093,  // [0] 0x80: addi x1, x0, 0    ; acc = 0
+             0x00A00113,  // [1] 0x84: addi x2, x0, 10   ; n = 10
+             0x00308093,  // [2] 0x88: addi x1, x1, 3    ; loop: acc += 3
+             0xFFF10113,  // [3] 0x8c: addi x2, x2, -1   ; n -= 1
+             0xFE011CE3,  // [4] 0x90: bne  x2, x0, -8   ; until n == 0 (-> 0x88)
+             0x10102023,  // [5] 0x94: sw   x1, 256(x0)  ; expose acc to the tb
+             0x0000006F,  // [6] 0x98: jal  x0, 0        ; spin forever
+             0x00000013]  // [7] 0x9c: nop
+  // Instruction bus: request seen last cycle, grant given last cycle, and the
+  // address of the transaction to answer this cycle.
+  mut i_req  = 0
+  mut i_gnt  = 0
+  mut i_resp = 0
+  mut i_addr = 0
+  // Data bus: same three, plus the write captured at the grant.
+  mut d_req  = 0
+  mut d_gnt  = 0
+  mut d_resp = 0
+  mut stored = 0     // data of the `sw` to 0x100
+  mut got    = 0
+  mut done_cycle = 0
+  tick cycles {
+    acc.rst_ni = U1(clock >= 4)      // active LOW reset, held for the first cycles
+    // Grant a request seen last cycle that has not been granted yet.
+    const i_give = i_req != 0 and i_gnt == 0
+    const d_give = d_req != 0 and d_gnt == 0
+    acc.instr_gnt_i    = U1(i_give)
+    acc.instr_rvalid_i = i_resp
+    acc.instr_rdata_i  = rom[(i_addr >> 2) & 7]
+    acc.data_gnt_i     = U1(d_give)
+    acc.data_rvalid_i  = d_resp
+    acc.data_rdata_i   = 0           // the program never loads
+    step
+    // A grant given this cycle is answered next cycle; the address is the one
+    // still on the bus (Ibex holds it until the grant).
+    i_resp = U1(i_give)
+    d_resp = U1(d_give)
+    if i_give {
+      i_addr = acc.instr_addr_o
+    }
+    if d_give and acc.data_we_o != 0 and acc.data_addr_o == 0x100 and got == 0 {
+      stored = acc.data_wdata_o
+      got = 1
+      done_cycle = clock
+    }
+    i_gnt = U1(i_give)
+    d_gnt = U1(d_give)
+    i_req = acc.instr_req_o
+    d_req = acc.data_req_o
+  }
+  assert(got == 1, "the program's store to 0x100 never appeared on the bus")
+  assert(stored == 30, "10 iterations of `acc += 3` must store 30")
+  puts("ibex prog: stored={stored} at cycle {done_cycle} of {cycles}")
+}
