@@ -1,0 +1,219 @@
+// RenameFreeList - SmallBoomV4 (numPregs=52, alloc/dealloc=1, isImm=false, maxBrCount=8).
+// Scalarized to mirror firtool: free_list / spec_alloc_list / br_alloc_lists_0..7 are u52.
+// Auto-emitted by /tmp/gen_renamefreelist.py.
+
+pub mod RenameFreeList::[timecheck=false](
+  clock:Clock, reset:u1,
+  io_reqs_0:u1,
+  io_despec_0_valid:u1,  io_despec_0_bits:u6,
+  io_dealloc_0_valid:u1, io_dealloc_0_bits:u6,
+  io_ren_br_tags_1_valid:u1, io_ren_br_tags_1_bits:u3,
+  io_brupdate_b2_uop_br_tag:u3, io_brupdate_b2_mispredict:u1,
+  io_rollback:u1
+) -> (
+  io_alloc_pregs_0_valid:u1@[],
+  io_alloc_pregs_0_bits:u6@[],
+  io_debug_freelist:u52@[]
+) {
+
+  // ========= state (reset values match firtool emit) =========
+  reg free_list:u52:[reset_pin=reset] = 0xfffff00000000
+  reg spec_alloc_list:u52:[reset_pin=reset] = 0
+  reg r_valid:u1:[reset_pin=reset] = 0
+  reg r_sel:u6
+  reg com_deallocs_REG_0_valid:u1
+  reg com_deallocs_REG_0_bits:u6
+  reg br_alloc_lists_0:u52
+  reg br_alloc_lists_1:u52
+  reg br_alloc_lists_2:u52
+  reg br_alloc_lists_3:u52
+  reg br_alloc_lists_4:u52
+  reg br_alloc_lists_5:u52
+  reg br_alloc_lists_6:u52
+  reg br_alloc_lists_7:u52
+
+  // ========= sels_0 : one-hot of the lowest set bit in free_list (u52) =========
+  wire sels_0:u52 = if   free_list#[0]  != 0 { 0x1 }
+                    elif free_list#[ 1] != 0 { 0x2 }
+                    elif free_list#[ 2] != 0 { 0x4 }
+                    elif free_list#[ 3] != 0 { 0x8 }
+                    elif free_list#[ 4] != 0 { 0x10 }
+                    elif free_list#[ 5] != 0 { 0x20 }
+                    elif free_list#[ 6] != 0 { 0x40 }
+                    elif free_list#[ 7] != 0 { 0x80 }
+                    elif free_list#[ 8] != 0 { 0x100 }
+                    elif free_list#[ 9] != 0 { 0x200 }
+                    elif free_list#[10] != 0 { 0x400 }
+                    elif free_list#[11] != 0 { 0x800 }
+                    elif free_list#[12] != 0 { 0x1000 }
+                    elif free_list#[13] != 0 { 0x2000 }
+                    elif free_list#[14] != 0 { 0x4000 }
+                    elif free_list#[15] != 0 { 0x8000 }
+                    elif free_list#[16] != 0 { 0x10000 }
+                    elif free_list#[17] != 0 { 0x20000 }
+                    elif free_list#[18] != 0 { 0x40000 }
+                    elif free_list#[19] != 0 { 0x80000 }
+                    elif free_list#[20] != 0 { 0x100000 }
+                    elif free_list#[21] != 0 { 0x200000 }
+                    elif free_list#[22] != 0 { 0x400000 }
+                    elif free_list#[23] != 0 { 0x800000 }
+                    elif free_list#[24] != 0 { 0x1000000 }
+                    elif free_list#[25] != 0 { 0x2000000 }
+                    elif free_list#[26] != 0 { 0x4000000 }
+                    elif free_list#[27] != 0 { 0x8000000 }
+                    elif free_list#[28] != 0 { 0x10000000 }
+                    elif free_list#[29] != 0 { 0x20000000 }
+                    elif free_list#[30] != 0 { 0x40000000 }
+                    elif free_list#[31] != 0 { 0x80000000 }
+                    elif free_list#[32] != 0 { 0x100000000 }
+                    elif free_list#[33] != 0 { 0x200000000 }
+                    elif free_list#[34] != 0 { 0x400000000 }
+                    elif free_list#[35] != 0 { 0x800000000 }
+                    elif free_list#[36] != 0 { 0x1000000000 }
+                    elif free_list#[37] != 0 { 0x2000000000 }
+                    elif free_list#[38] != 0 { 0x4000000000 }
+                    elif free_list#[39] != 0 { 0x8000000000 }
+                    elif free_list#[40] != 0 { 0x10000000000 }
+                    elif free_list#[41] != 0 { 0x20000000000 }
+                    elif free_list#[42] != 0 { 0x40000000000 }
+                    elif free_list#[43] != 0 { 0x80000000000 }
+                    elif free_list#[44] != 0 { 0x100000000000 }
+                    elif free_list#[45] != 0 { 0x200000000000 }
+                    elif free_list#[46] != 0 { 0x400000000000 }
+                    elif free_list#[47] != 0 { 0x800000000000 }
+                    elif free_list#[48] != 0 { 0x1000000000000 }
+                    elif free_list#[49] != 0 { 0x2000000000000 }
+                    elif free_list#[50] != 0 { 0x4000000000000 }
+                    else                    { 0x8000000000000 }
+
+  // ========= r_sel_next : OHToUInt(sels_0), computed as lowest-set-bit index =========
+  wire r_sel_next:u6 = if   free_list#[0]  != 0 { 0 }
+                       elif free_list#[ 1] != 0 {  1 }
+                       elif free_list#[ 2] != 0 {  2 }
+                       elif free_list#[ 3] != 0 {  3 }
+                       elif free_list#[ 4] != 0 {  4 }
+                       elif free_list#[ 5] != 0 {  5 }
+                       elif free_list#[ 6] != 0 {  6 }
+                       elif free_list#[ 7] != 0 {  7 }
+                       elif free_list#[ 8] != 0 {  8 }
+                       elif free_list#[ 9] != 0 {  9 }
+                       elif free_list#[10] != 0 { 10 }
+                       elif free_list#[11] != 0 { 11 }
+                       elif free_list#[12] != 0 { 12 }
+                       elif free_list#[13] != 0 { 13 }
+                       elif free_list#[14] != 0 { 14 }
+                       elif free_list#[15] != 0 { 15 }
+                       elif free_list#[16] != 0 { 16 }
+                       elif free_list#[17] != 0 { 17 }
+                       elif free_list#[18] != 0 { 18 }
+                       elif free_list#[19] != 0 { 19 }
+                       elif free_list#[20] != 0 { 20 }
+                       elif free_list#[21] != 0 { 21 }
+                       elif free_list#[22] != 0 { 22 }
+                       elif free_list#[23] != 0 { 23 }
+                       elif free_list#[24] != 0 { 24 }
+                       elif free_list#[25] != 0 { 25 }
+                       elif free_list#[26] != 0 { 26 }
+                       elif free_list#[27] != 0 { 27 }
+                       elif free_list#[28] != 0 { 28 }
+                       elif free_list#[29] != 0 { 29 }
+                       elif free_list#[30] != 0 { 30 }
+                       elif free_list#[31] != 0 { 31 }
+                       elif free_list#[32] != 0 { 32 }
+                       elif free_list#[33] != 0 { 33 }
+                       elif free_list#[34] != 0 { 34 }
+                       elif free_list#[35] != 0 { 35 }
+                       elif free_list#[36] != 0 { 36 }
+                       elif free_list#[37] != 0 { 37 }
+                       elif free_list#[38] != 0 { 38 }
+                       elif free_list#[39] != 0 { 39 }
+                       elif free_list#[40] != 0 { 40 }
+                       elif free_list#[41] != 0 { 41 }
+                       elif free_list#[42] != 0 { 42 }
+                       elif free_list#[43] != 0 { 43 }
+                       elif free_list#[44] != 0 { 44 }
+                       elif free_list#[45] != 0 { 45 }
+                       elif free_list#[46] != 0 { 46 }
+                       elif free_list#[47] != 0 { 47 }
+                       elif free_list#[48] != 0 { 48 }
+                       elif free_list#[49] != 0 { 49 }
+                       elif free_list#[50] != 0 { 50 }
+                       else                    { 51 }
+
+  // ========= br_deallocs = br_alloc_lists[br_tag] & {52{mispredict}} =========
+  wire br_lookup:u52 = if   io_brupdate_b2_uop_br_tag == 0 { br_alloc_lists_0 }
+                       elif io_brupdate_b2_uop_br_tag == 1 { br_alloc_lists_1 }
+                       elif io_brupdate_b2_uop_br_tag == 2 { br_alloc_lists_2 }
+                       elif io_brupdate_b2_uop_br_tag == 3 { br_alloc_lists_3 }
+                       elif io_brupdate_b2_uop_br_tag == 4 { br_alloc_lists_4 }
+                       elif io_brupdate_b2_uop_br_tag == 5 { br_alloc_lists_5 }
+                       elif io_brupdate_b2_uop_br_tag == 6 { br_alloc_lists_6 }
+                       else                                { br_alloc_lists_7 }
+  wire br_deallocs:u52 = if io_brupdate_b2_mispredict != 0 { br_lookup } else { 0 }
+
+  // widened '1' for u52 shifts (avoids inline type-cast on literal)
+  const one_u52:u52 = 1
+
+  // ========= dealloc_mask =========
+  wire com_deallocs_oh:u52 = one_u52 << com_deallocs_REG_0_bits
+  wire com_deallocs_mask:u52 = if com_deallocs_REG_0_valid != 0 { com_deallocs_oh } else { 0 }
+  wire rollback_mask:u52 = if io_rollback != 0 { spec_alloc_list } else { 0 }
+  wire dealloc_mask:u52 = com_deallocs_mask | br_deallocs | rollback_mask
+
+  // ========= alloc_masks_0 = (1 << r_sel) & {52{io_reqs_0}} =========
+  wire r_sel_oh:u52 = one_u52 << r_sel
+  wire alloc_masks_0:u52 = if io_reqs_0 != 0 { r_sel_oh } else { 0 }
+
+  // ========= com_despec_mask = (1 << io_despec_0_bits) & {52{io_despec_0_valid}} =========
+  wire com_despec_oh:u52 = one_u52 << io_despec_0_bits
+  wire com_despec_mask:u52 = if io_despec_0_valid != 0 { com_despec_oh } else { 0 }
+
+  // ========= sel_fire_0 =========
+  wire not_r_valid_or_req:u1 = if r_valid == 0 or io_reqs_0 != 0 { 1 } else { 0 }
+  wire sels_nonzero:u1 = if sels_0 != 0 { 1 } else { 0 }
+  wire sel_fire_0:u1 = if not_r_valid_or_req != 0 and sels_nonzero != 0 { 1 } else { 0 }
+
+  // ========= io_debug_freelist_0 = free_list | r_sel_oh & {52{r_valid}} =========
+  wire r_sel_oh_gated:u52 = if r_valid != 0 { r_sel_oh } else { 0 }
+  io_debug_freelist = free_list | r_sel_oh_gated
+
+  // ========= free_list <= free_list & ~(sels_0 & {52{sel_fire_0}}) | dealloc_mask =========
+  wire sels_gated:u52 = if sel_fire_0 != 0 { sels_0 } else { 0 }
+  free_list = (free_list & ~sels_gated) | dealloc_mask
+
+  // ========= spec_alloc_list <= (spec_alloc_list | alloc_masks_0) & ~dealloc_mask & ~com_despec_mask =========
+  spec_alloc_list = (spec_alloc_list | alloc_masks_0) & ~dealloc_mask & ~com_despec_mask
+
+  // ========= r_valid <= (r_valid & ~io_reqs_0) | |sels_0 =========
+  wire r_valid_hold:u1 = if r_valid != 0 and io_reqs_0 == 0 { 1 } else { 0 }
+  r_valid = if r_valid_hold != 0 or sels_nonzero != 0 { 1 } else { 0 }
+
+  // ========= r_sel <= r_sel_next if sel_fire_0 =========
+  if sel_fire_0 != 0 { r_sel = r_sel_next }
+
+  // ========= com_deallocs_REG_0 <= RegNext(io_dealloc_0) =========
+  com_deallocs_REG_0_valid = io_dealloc_0_valid
+  com_deallocs_REG_0_bits  = io_dealloc_0_bits
+
+  // ========= br_alloc_lists_i: clear-on-tag-write-else-update =========
+  br_alloc_lists_0 = if io_ren_br_tags_1_bits == 0 and io_ren_br_tags_1_valid != 0 { 0 }
+                       else { (br_alloc_lists_0 & ~br_deallocs) | alloc_masks_0 }
+  br_alloc_lists_1 = if io_ren_br_tags_1_bits == 1 and io_ren_br_tags_1_valid != 0 { 0 }
+                       else { (br_alloc_lists_1 & ~br_deallocs) | alloc_masks_0 }
+  br_alloc_lists_2 = if io_ren_br_tags_1_bits == 2 and io_ren_br_tags_1_valid != 0 { 0 }
+                       else { (br_alloc_lists_2 & ~br_deallocs) | alloc_masks_0 }
+  br_alloc_lists_3 = if io_ren_br_tags_1_bits == 3 and io_ren_br_tags_1_valid != 0 { 0 }
+                       else { (br_alloc_lists_3 & ~br_deallocs) | alloc_masks_0 }
+  br_alloc_lists_4 = if io_ren_br_tags_1_bits == 4 and io_ren_br_tags_1_valid != 0 { 0 }
+                       else { (br_alloc_lists_4 & ~br_deallocs) | alloc_masks_0 }
+  br_alloc_lists_5 = if io_ren_br_tags_1_bits == 5 and io_ren_br_tags_1_valid != 0 { 0 }
+                       else { (br_alloc_lists_5 & ~br_deallocs) | alloc_masks_0 }
+  br_alloc_lists_6 = if io_ren_br_tags_1_bits == 6 and io_ren_br_tags_1_valid != 0 { 0 }
+                       else { (br_alloc_lists_6 & ~br_deallocs) | alloc_masks_0 }
+  br_alloc_lists_7 = if io_ren_br_tags_1_bits == 7 and io_ren_br_tags_1_valid != 0 { 0 }
+                       else { (br_alloc_lists_7 & ~br_deallocs) | alloc_masks_0 }
+
+  // ========= outputs =========
+  io_alloc_pregs_0_valid = r_valid
+  io_alloc_pregs_0_bits  = r_sel
+}
