@@ -1,118 +1,112 @@
-pub mod RenameFreeList::[timecheck=false](clock:u1, reset:u1, io_reqs_0:u1, io_despec_0_valid:u1, io_despec_0_bits:u6, io_dealloc_0_valid:u1, io_dealloc_0_bits:u6, io_ren_br_tags_1_valid:u1, io_ren_br_tags_1_bits:u3, io_brupdate_b2_uop_br_tag:u3, io_brupdate_b2_mispredict:u1, io_rollback:u1) -> (io_alloc_pregs_0_valid:u1@[], io_alloc_pregs_0_bits:u6@[], io_debug_freelist:u52@[]) {
-  mut _rep_58:u52 = 0
-  mut _rep_59:u52 = 0
-  reg r_sel:u6
-  reg free_list:u52
-  reg spec_alloc_list:u52
-  reg br_alloc_lists_0:u52
-  reg br_alloc_lists_1:u52
-  reg br_alloc_lists_2:u52
-  reg br_alloc_lists_3:u52
-  reg br_alloc_lists_4:u52
-  reg br_alloc_lists_5:u52
-  reg br_alloc_lists_6:u52
-  reg br_alloc_lists_7:u52
+// Parametric RenameFreeList.
+//
+// Defaults match SmallBoomV4Config (nIntPhysRegs=52, PregT=u6,
+// FreeListT=u52, maxBrCount=8, BrTagT=u3). At those defaults this LECs
+// against the auto-emitted RenameFreeList.sv.
+//
+// Three unrolled axes from the firtool emission were folded first (steps
+// v1/v2 of this port):
+//   - 8 scalar `br_alloc_lists_0..7` → `br_alloc_lists:[maxBrCount]FreeListT`
+//   - 52-way `_mux_1..=51` priority chain → `for k in 0..<nIntPhysRegs-1`
+//   - 6-way one-hot→binary tree reduce → `for i in 0..<nIntPhysRegs` scan
+//
+// The MegaBoomV4Config dial would be <nIntPhysRegs=144, PregT=u8,
+// FreeListT=u144, maxBrCount=20, BrTagT=u5>. This commit does NOT include
+// a specialization caller or MegaBoom LEC — the Mega SV collateral has
+// not been generated yet (see /tmp/boom/param for scratch artifacts).
+
+pub mod RenameFreeList<nIntPhysRegs=52, PregT=u6, FreeListT=u52, maxBrCount=8, BrTagT=u3>::[timecheck=false](
+  clock:u1,
+  reset:u1,
+  io_reqs_0:u1,
+  io_despec_0_valid:u1,
+  io_despec_0_bits:PregT,
+  io_dealloc_0_valid:u1,
+  io_dealloc_0_bits:PregT,
+  io_ren_br_tags_1_valid:u1,
+  io_ren_br_tags_1_bits:BrTagT,
+  io_brupdate_b2_uop_br_tag:BrTagT,
+  io_brupdate_b2_mispredict:u1,
+  io_rollback:u1
+) -> (
+  io_alloc_pregs_0_valid:u1@[],
+  io_alloc_pregs_0_bits:PregT@[],
+  io_debug_freelist:FreeListT@[]
+) {
+  // Comptime masks and shift amounts.
+  comptime const ALL_ONES  = (1 << nIntPhysRegs) - 1
+  comptime const TOP_BIT   = nIntPhysRegs - 1
+  comptime const HI_SLICE  = nIntPhysRegs - 1  // inclusive end of a FreeListT slice
+
+  // Initial free_list: 32 architectural registers (bits 0..31) are
+  // pre-mapped and NOT free; physical registers 32..nIntPhysRegs-1 start
+  // free (bits 32..TOP_BIT = 1). For SmallBoomV4 (52) this is
+  // 0xfffff00000000; for MegaBoomV4 (144) it would be
+  // 0xffffffffffffffffffffffffffffff00000000. Caller MUST pass
+  // nIntPhysRegs >= 32 (BOOM has 32 integer architectural regs).
+  comptime const FREE_INIT = ((1 << (nIntPhysRegs - 32)) - 1) << 32
+
+  mut _rep_58:FreeListT = 0
+  mut _rep_59:FreeListT = 0
+  reg r_sel:PregT
+  reg free_list:FreeListT
+  reg spec_alloc_list:FreeListT
+  reg br_alloc_lists:[maxBrCount]FreeListT
   reg com_deallocs_REG_0_valid:u1
-  reg com_deallocs_REG_0_bits:u6
+  reg com_deallocs_REG_0_bits:PregT
   reg r_valid:u1
-  mut _mux_1:u52 = if ((free_list >> 50) & 1) != 0 { 0x4000000000000 } else { ((free_list >> 51) & 1) << 51 }
-  mut _mux_2:u52 = if ((free_list >> 49) & 1) != 0 { 0x2000000000000 } else { _mux_1 }
-  mut _mux_3:u52 = if ((free_list >> 48) & 1) != 0 { 0x1000000000000 } else { _mux_2 }
-  mut _mux_4:u52 = if ((free_list >> 47) & 1) != 0 { 0x800000000000 } else { _mux_3 }
-  mut _mux_5:u52 = if ((free_list >> 46) & 1) != 0 { 0x400000000000 } else { _mux_4 }
-  mut _mux_6:u52 = if ((free_list >> 45) & 1) != 0 { 0x200000000000 } else { _mux_5 }
-  mut _mux_7:u52 = if ((free_list >> 44) & 1) != 0 { 0x100000000000 } else { _mux_6 }
-  mut _mux_8:u52 = if ((free_list >> 43) & 1) != 0 { 0x80000000000 } else { _mux_7 }
-  mut _mux_9:u52 = if ((free_list >> 42) & 1) != 0 { 0x40000000000 } else { _mux_8 }
-  mut _mux_10:u52 = if ((free_list >> 41) & 1) != 0 { 0x20000000000 } else { _mux_9 }
-  mut _mux_11:u52 = if ((free_list >> 40) & 1) != 0 { 0x10000000000 } else { _mux_10 }
-  mut _mux_12:u52 = if ((free_list >> 39) & 1) != 0 { 0x8000000000 } else { _mux_11 }
-  mut _mux_13:u52 = if ((free_list >> 38) & 1) != 0 { 0x4000000000 } else { _mux_12 }
-  mut _mux_14:u52 = if ((free_list >> 37) & 1) != 0 { 0x2000000000 } else { _mux_13 }
-  mut _mux_15:u52 = if ((free_list >> 36) & 1) != 0 { 0x1000000000 } else { _mux_14 }
-  mut _mux_16:u52 = if ((free_list >> 35) & 1) != 0 { 0x800000000 } else { _mux_15 }
-  mut _mux_17:u52 = if ((free_list >> 34) & 1) != 0 { 0x400000000 } else { _mux_16 }
-  mut _mux_18:u52 = if ((free_list >> 33) & 1) != 0 { 0x200000000 } else { _mux_17 }
-  mut _mux_19:u52 = if ((free_list >> 32) & 1) != 0 { 0x100000000 } else { _mux_18 }
-  mut _mux_20:u52 = if ((free_list >> 31) & 1) != 0 { 0x80000000 } else { _mux_19 }
-  mut _mux_21:u52 = if ((free_list >> 30) & 1) != 0 { 0x40000000 } else { _mux_20 }
-  mut _mux_22:u52 = if ((free_list >> 29) & 1) != 0 { 0x20000000 } else { _mux_21 }
-  mut _mux_23:u52 = if ((free_list >> 28) & 1) != 0 { 0x10000000 } else { _mux_22 }
-  mut _mux_24:u52 = if ((free_list >> 27) & 1) != 0 { 0x8000000 } else { _mux_23 }
-  mut _mux_25:u52 = if ((free_list >> 26) & 1) != 0 { 0x4000000 } else { _mux_24 }
-  mut _mux_26:u52 = if ((free_list >> 25) & 1) != 0 { 0x2000000 } else { _mux_25 }
-  mut _mux_27:u52 = if ((free_list >> 24) & 1) != 0 { 0x1000000 } else { _mux_26 }
-  mut _mux_28:u52 = if ((free_list >> 23) & 1) != 0 { 0x800000 } else { _mux_27 }
-  mut _mux_29:u52 = if ((free_list >> 22) & 1) != 0 { 0x400000 } else { _mux_28 }
-  mut _mux_30:u52 = if ((free_list >> 21) & 1) != 0 { 0x200000 } else { _mux_29 }
-  mut _mux_31:u52 = if ((free_list >> 20) & 1) != 0 { 0x100000 } else { _mux_30 }
-  mut _mux_32:u52 = if ((free_list >> 19) & 1) != 0 { 0x80000 } else { _mux_31 }
-  mut _mux_33:u52 = if ((free_list >> 18) & 1) != 0 { 0x40000 } else { _mux_32 }
-  mut _mux_34:u52 = if ((free_list >> 17) & 1) != 0 { 0x20000 } else { _mux_33 }
-  mut _mux_35:u52 = if ((free_list >> 16) & 1) != 0 { 0x10000 } else { _mux_34 }
-  mut _mux_36:u52 = if ((free_list >> 15) & 1) != 0 { 0x8000 } else { _mux_35 }
-  mut _mux_37:u52 = if ((free_list >> 14) & 1) != 0 { 0x4000 } else { _mux_36 }
-  mut _mux_38:u52 = if ((free_list >> 13) & 1) != 0 { 0x2000 } else { _mux_37 }
-  mut _mux_39:u52 = if ((free_list >> 12) & 1) != 0 { 0x1000 } else { _mux_38 }
-  mut _mux_40:u52 = if ((free_list >> 11) & 1) != 0 { 0x800 } else { _mux_39 }
-  mut _mux_41:u52 = if ((free_list >> 10) & 1) != 0 { 0x400 } else { _mux_40 }
-  mut _mux_42:u52 = if ((free_list >> 9) & 1) != 0 { 0x200 } else { _mux_41 }
-  mut _mux_43:u52 = if ((free_list >> 8) & 1) != 0 { 0x100 } else { _mux_42 }
-  mut _mux_44:u52 = if ((free_list >> 7) & 1) != 0 { 0x80 } else { _mux_43 }
-  mut _mux_45:u52 = if ((free_list >> 6) & 1) != 0 { 0x40 } else { _mux_44 }
-  mut _mux_46:u52 = if ((free_list >> 5) & 1) != 0 { 32 } else { _mux_45 }
-  mut _mux_47:u52 = if ((free_list >> 4) & 1) != 0 { 16 } else { _mux_46 }
-  mut _mux_48:u52 = if ((free_list >> 3) & 1) != 0 { 8 } else { _mux_47 }
-  mut _mux_49:u52 = if ((free_list >> 2) & 1) != 0 { 4 } else { _mux_48 }
-  mut _mux_50:u52 = if ((free_list >> 1) & 1) != 0 { 2 } else { _mux_49 }
-  mut _mux_51:u52 = if (free_list & 1) != 0 { 1 } else { _mux_50 }
-  const sels_0__w1 = _mux_51
+
+  // Priority-encode free_list's lowest set bit into a one-hot sels_0__w1
+  // (bit 0 = highest priority, bit nIntPhysRegs-1 = lowest).
+  mut sel:FreeListT = ((free_list >> TOP_BIT) & 1) << TOP_BIT
+  for k in 0..<TOP_BIT {
+    const idx = TOP_BIT - 1 - k
+    sel = if ((free_list >> idx) & 1) != 0 { (1 << idx)#[0..=HI_SLICE] } else { sel }
+  }
+  const sels_0__w1 = sel
+
   const _io_debug_freelist_T__w1 = (1 << r_sel)#[0..=63]
-  mut _rep_52:u52 = if (io_brupdate_b2_mispredict & 1) != 0 { 0xfffffffffffff } else { 0 }
-  const br_deallocs__w1 = ((((br_alloc_lists_7 << 364) | (br_alloc_lists_6 << 312) | (br_alloc_lists_5 << 260) | (br_alloc_lists_4 << 208) | (br_alloc_lists_3 << 156) | (br_alloc_lists_2 << 104) | (br_alloc_lists_1 << 52) | br_alloc_lists_0) << 52) >> ((io_brupdate_b2_uop_br_tag * 52) + 52))#[0..=51] & _rep_52
-  mut _rep_53:u52 = if (com_deallocs_REG_0_valid & 1) != 0 { 0xfffffffffffff } else { 0 }
-  mut _rep_54:u52 = if (io_rollback & 1) != 0 { 0xfffffffffffff } else { 0 }
-  const dealloc_mask__w1 = (((1 << com_deallocs_REG_0_bits)#[0..=63]#[0..=51] & _rep_53) | br_deallocs__w1) | (spec_alloc_list & _rep_54)
+  mut _rep_52:FreeListT = if (io_brupdate_b2_mispredict & 1) != 0 { ALL_ONES } else { 0 }
+  const br_deallocs__w1 = br_alloc_lists[io_brupdate_b2_uop_br_tag] & _rep_52
+  mut _rep_53:FreeListT = if (com_deallocs_REG_0_valid & 1) != 0 { ALL_ONES } else { 0 }
+  mut _rep_54:FreeListT = if (io_rollback & 1) != 0 { ALL_ONES } else { 0 }
+  const dealloc_mask__w1 = (((1 << com_deallocs_REG_0_bits)#[0..=63]#[0..=HI_SLICE] & _rep_53) | br_deallocs__w1) | (spec_alloc_list & _rep_54)
   const sel_fire_0__w1 = (((~r_valid) & 1) | io_reqs_0) & 1 & unsigned(sels_0__w1 != 0) & 1
-  mut _rep_56:u52 = if (r_valid & 1) != 0 { 0xfffffffffffff } else { 0 }
-  const io_debug_freelist_0__w1 = free_list | (_io_debug_freelist_T__w1#[0..=51] & _rep_56)
-  const _r_sel_T_1__w1 = sels_0__w1#[33..=51] | sels_0__w1#[1..=31]
-  const _r_sel_T_3__w1 = _r_sel_T_1__w1#[16..=30] | _r_sel_T_1__w1#[0..=14]
-  const _r_sel_T_5__w1 = _r_sel_T_3__w1#[8..=14] | _r_sel_T_3__w1#[0..=6]
-  const _r_sel_T_7__w1 = _r_sel_T_5__w1#[4..=6] | _r_sel_T_5__w1#[0..=2]
-  mut _rep_57:u52 = if (io_reqs_0 & 1) != 0 { 0xfffffffffffff } else { 0 }
-  const alloc_masks_0__w1 = _io_debug_freelist_T__w1#[0..=51] & _rep_57
+  mut _rep_56:FreeListT = if (r_valid & 1) != 0 { ALL_ONES } else { 0 }
+  const io_debug_freelist_0__w1 = free_list | (_io_debug_freelist_T__w1#[0..=HI_SLICE] & _rep_56)
+
+  mut _rep_57:FreeListT = if (io_reqs_0 & 1) != 0 { ALL_ONES } else { 0 }
+  const alloc_masks_0__w1 = _io_debug_freelist_T__w1#[0..=HI_SLICE] & _rep_57
+
+  // One-hot → binary index on nIntPhysRegs-wide sels_0__w1. Equivalent to
+  // the firtool 5-level log2-tree reduce (nIntPhysRegs == 52 branches),
+  // folded into a scan loop that parameters cleanly on any nIntPhysRegs.
+  mut r_sel_val:PregT = 0
+  for i in 0..<nIntPhysRegs {
+    if ((sels_0__w1 >> i) & 1) != 0 {
+      r_sel_val = i
+    }
+  }
+
   if reset != 0 {
-    free_list = 0xfffff00000000
+    free_list = FREE_INIT
     spec_alloc_list = 0
     r_valid = 0
   } else {
-    _rep_58 = if (sel_fire_0__w1 & 1) != 0 { 0xfffffffffffff } else { 0 }
-    free_list = (free_list & (~(sels_0__w1 & _rep_58))#[0..=51]) | dealloc_mask__w1
-    _rep_59 = if (io_despec_0_valid & 1) != 0 { 0xfffffffffffff } else { 0 }
-    spec_alloc_list = ((spec_alloc_list | alloc_masks_0__w1) & (~dealloc_mask__w1)#[0..=51]) & (~((1 << io_despec_0_bits)#[0..=63]#[0..=51] & _rep_59))#[0..=51]
-    r_valid = unsigned((((r_valid & (~io_reqs_0) & 1 & 1) << 52) | sels_0__w1) != 0)
+    _rep_58 = if (sel_fire_0__w1 & 1) != 0 { ALL_ONES } else { 0 }
+    free_list = (free_list & (~(sels_0__w1 & _rep_58))#[0..=HI_SLICE]) | dealloc_mask__w1
+    _rep_59 = if (io_despec_0_valid & 1) != 0 { ALL_ONES } else { 0 }
+    spec_alloc_list = ((spec_alloc_list | alloc_masks_0__w1) & (~dealloc_mask__w1)#[0..=HI_SLICE]) & (~((1 << io_despec_0_bits)#[0..=63]#[0..=HI_SLICE] & _rep_59))#[0..=HI_SLICE]
+    r_valid = unsigned((((r_valid & (~io_reqs_0) & 1 & 1) << nIntPhysRegs) | sels_0__w1) != 0)
   }
-  mut _mux_62:u52 = if (unsigned(io_ren_br_tags_1_bits == 0) & io_ren_br_tags_1_valid & 1) != 0 { 0 } else { (br_alloc_lists_0 & (~br_deallocs__w1)#[0..=51]) | alloc_masks_0__w1 }
-  br_alloc_lists_0 = _mux_62
-  mut _mux_64:u52 = if (unsigned(io_ren_br_tags_1_bits == 1) & io_ren_br_tags_1_valid & 1) != 0 { 0 } else { (br_alloc_lists_1 & (~br_deallocs__w1)#[0..=51]) | alloc_masks_0__w1 }
-  br_alloc_lists_1 = _mux_64
-  mut _mux_66:u52 = if (unsigned(io_ren_br_tags_1_bits == 2) & io_ren_br_tags_1_valid & 1) != 0 { 0 } else { (br_alloc_lists_2 & (~br_deallocs__w1)#[0..=51]) | alloc_masks_0__w1 }
-  br_alloc_lists_2 = _mux_66
-  mut _mux_68:u52 = if (unsigned(io_ren_br_tags_1_bits == 3) & io_ren_br_tags_1_valid & 1) != 0 { 0 } else { (br_alloc_lists_3 & (~br_deallocs__w1)#[0..=51]) | alloc_masks_0__w1 }
-  br_alloc_lists_3 = _mux_68
-  mut _mux_70:u52 = if (unsigned(io_ren_br_tags_1_bits == 4) & io_ren_br_tags_1_valid & 1) != 0 { 0 } else { (br_alloc_lists_4 & (~br_deallocs__w1)#[0..=51]) | alloc_masks_0__w1 }
-  br_alloc_lists_4 = _mux_70
-  mut _mux_72:u52 = if (unsigned(io_ren_br_tags_1_bits == 5) & io_ren_br_tags_1_valid & 1) != 0 { 0 } else { (br_alloc_lists_5 & (~br_deallocs__w1)#[0..=51]) | alloc_masks_0__w1 }
-  br_alloc_lists_5 = _mux_72
-  mut _mux_74:u52 = if (unsigned(io_ren_br_tags_1_bits == 6) & io_ren_br_tags_1_valid & 1) != 0 { 0 } else { (br_alloc_lists_6 & (~br_deallocs__w1)#[0..=51]) | alloc_masks_0__w1 }
-  br_alloc_lists_6 = _mux_74
-  mut _mux_76:u52 = if (unsigned(io_ren_br_tags_1_bits == 7) & io_ren_br_tags_1_valid & 1) != 0 { 0 } else { (br_alloc_lists_7 & (~br_deallocs__w1)#[0..=51]) | alloc_masks_0__w1 }
-  br_alloc_lists_7 = _mux_76
+
+  for i in 0..<maxBrCount {
+    br_alloc_lists[i] = if (unsigned(io_ren_br_tags_1_bits == i) & io_ren_br_tags_1_valid & 1) != 0 { 0 } else { (br_alloc_lists[i] & (~br_deallocs__w1)#[0..=HI_SLICE]) | alloc_masks_0__w1 }
+  }
   com_deallocs_REG_0_valid = io_dealloc_0_valid
   com_deallocs_REG_0_bits = io_dealloc_0_bits
   if sel_fire_0__w1 != 0 {
-    r_sel = ((unsigned(sels_0__w1#[32..=51] != 0) & 1) << 5) | ((unsigned(_r_sel_T_1__w1#[15..=30] != 0) & 1) << 4) | ((unsigned(_r_sel_T_3__w1#[7..=14] != 0) & 1) << 3) | ((unsigned(_r_sel_T_5__w1#[3..=6] != 0) & 1) << 2) | ((unsigned(_r_sel_T_7__w1#[1..=2] != 0) & 1) << 1) | ((((_r_sel_T_7__w1 >> 2) & 1) | (_r_sel_T_7__w1 & 1)) & 1)
+    r_sel = r_sel_val
   }
   io_alloc_pregs_0_valid = r_valid
   io_alloc_pregs_0_bits = r_sel
