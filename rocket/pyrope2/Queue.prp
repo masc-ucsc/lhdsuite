@@ -1,0 +1,41 @@
+const ram_2x60 = import("ram_2x60.ram_2x60")
+
+pub mod Queue::[timecheck=false](clock:u1, reset:u1, io_enq_valid:u1, io_enq_bits_id:u4, io_enq_bits_addr:u31, io_enq_bits_len:u8, io_enq_bits_size:u3, io_enq_bits_burst:u2, io_enq_bits_lock:u1, io_enq_bits_cache:u4, io_enq_bits_prot:u3, io_enq_bits_qos:u4, io_deq_ready:u1) -> (io_enq_ready:u1@[], io_deq_valid:u1@[], io_deq_bits_id:u4@[], io_deq_bits_addr:u31@[], io_deq_bits_len:u8@[], io_deq_bits_size:u3@[], io_deq_bits_burst:u2@[], io_deq_bits_lock:u1@[], io_deq_bits_cache:u4@[], io_deq_bits_prot:u3@[], io_deq_bits_qos:u4@[]) {
+  mut _b2i_2 = 0
+  reg enq_ptr_value:u1:[initial=0, reset_pin=ref reset, async=false]
+  reg deq_ptr_value:u1:[initial=0, reset_pin=ref reset, async=false]
+  reg maybe_full:u1:[initial=0, reset_pin=ref reset, async=false]
+  mut _b2i_1 = if enq_ptr_value == deq_ptr_value { 1 } else { 0 }
+  const ptr_match__w1 = _b2i_1
+  const io_deq_valid_0__w1 = (~(ptr_match__w1 & (~maybe_full) & 1 & 1)) & 1
+  const io_enq_ready_0__w1 = (~(ptr_match__w1 & maybe_full & 1)) & 1
+  const io_enq_ready__w1 = io_enq_ready_0__w1
+  const io_deq_valid__w1 = io_deq_valid_0__w1
+  const do_enq__w1 = io_enq_ready_0__w1 & io_enq_valid & 1
+  const do_deq__w1 = io_deq_ready & io_deq_valid_0__w1 & 1
+  if not (reset != 0) {
+    if do_enq__w1 != 0 {
+      enq_ptr_value = (enq_ptr_value - 1) & 1
+    }
+    if do_deq__w1 != 0 {
+      deq_ptr_value = (deq_ptr_value - 1) & 1
+    }
+    _b2i_2 = if do_enq__w1 == do_deq__w1 { 1 } else { 0 }
+    if ((~_b2i_2) & 1) != 0 {
+      maybe_full = do_enq__w1
+    }
+  }
+  mut ram_ext = ram_2x60::[name=ram_ext](R0_addr = deq_ptr_value, R0_en = 1, R0_clk = clock, W0_addr = enq_ptr_value, W0_en = do_enq__w1, W0_clk = clock, W0_data = (io_enq_bits_qos << 56) | (io_enq_bits_prot << 53) | (io_enq_bits_cache << 49) | ((io_enq_bits_lock & 1) << 48) | (io_enq_bits_burst << 46) | (io_enq_bits_size << 43) | (io_enq_bits_len << 35) | (io_enq_bits_addr << 4) | io_enq_bits_id)
+  const _ram_ext_R0_data__w1 = ram_ext
+  io_enq_ready = io_enq_ready__w1
+  io_deq_valid = io_deq_valid__w1
+  io_deq_bits_id = _ram_ext_R0_data__w1#[0..=3]
+  io_deq_bits_addr = _ram_ext_R0_data__w1#[4..=34]
+  io_deq_bits_len = _ram_ext_R0_data__w1#[35..=42]
+  io_deq_bits_size = _ram_ext_R0_data__w1#[43..=45]
+  io_deq_bits_burst = _ram_ext_R0_data__w1#[46..=47]
+  io_deq_bits_lock = (_ram_ext_R0_data__w1 >> 48) & 1
+  io_deq_bits_cache = _ram_ext_R0_data__w1#[49..=52]
+  io_deq_bits_prot = _ram_ext_R0_data__w1#[53..=55]
+  io_deq_bits_qos = _ram_ext_R0_data__w1#[56..=59]
+}
