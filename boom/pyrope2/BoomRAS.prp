@@ -1,32 +1,30 @@
-// Hand pyroD of riscv-boom v4 ifu/bpd/ras.scala (SmallBoomV4Config:
-// nRasEntries=32, vaddrBitsExtended=40). LEC PROVEN-full vs SmallBoomV4
-// gen-collateral `BoomRAS.sv` (engine=ind, solver=cvc5, 518 ms).
+// Parametric BoomRAS.
 //
-// Previous pyroA (commit 5f035e3) held 32 scalar `reg ras_0..ras_31:u40`
-// name-for-name against the .sv on the assumption that tier-2 state
-// pairing could not pair `reg ras:[32]u40` with those scalars. The
-// pairing step does still fail (`kind/init mismatch`), but the inductive
-// engine proves equivalence via flop-cut miter + abc regardless, so the
-// array form is LEC-safe.
-//
-// Reset: no reset port — SmallBoomV4 regs init via Verilog randomize
-// macros, pyroD matches with `reg x:u40 = 0` and no `reset_pin=` attr.
+// Defaults match SmallBoomV4Config (nRasEntries=32, IdxT=u5, AddrT=u40); at
+// those defaults this LECs structurally against the previously PROVEN hand
+// pyroD at boom/pyrope2/BoomRAS.prp. Changing <nRasEntries, IdxT, AddrT>
+// parametrizes the stack depth and address width — matching the Chisel
+// BoomRAS at generators/boom/.../ifu/bpd/ras.scala, which takes nRasEntries
+// and vaddrBitsExtended via BoomCoreParams. The caller picks IdxT width
+// consistently (std.clog2(nRasEntries) bits) — Pyrope today requires the
+// width type on input ports to be a literal type expression, not a
+// function call like Unsigned(bits=std.clog2(N)).
 
-pub mod BoomRAS::[timecheck=false](
+pub mod BoomRAS<nRasEntries=32, IdxT=u5, AddrT=u40>::[timecheck=false](
   clock:Clock,
-  io_read_idx:u5,
+  io_read_idx:IdxT,
   io_write_valid:u1,
-  io_write_idx:u5,
-  io_write_addr:u40
+  io_write_idx:IdxT,
+  io_write_addr:AddrT
 ) -> (
-  io_read_addr:u40@[]
+  io_read_addr:AddrT@[]
 ) {
 
-  reg ras:[32]u40
+  reg ras:[nRasEntries]AddrT
 
   reg io_read_addr_REG  :u1
-  reg io_read_addr_REG_1:u40
-  reg io_read_addr_REG_2:u40
+  reg io_read_addr_REG_1:AddrT
+  reg io_read_addr_REG_2:AddrT
 
   io_read_addr_REG   = if io_write_valid != 0 and io_write_idx == io_read_idx { 1 } else { 0 }
   io_read_addr_REG_1 = io_write_addr
