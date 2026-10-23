@@ -9,7 +9,7 @@ module rob_compact_uop_mem_0(	// @[generators/boom/src/main/scala/v4/exu/rob.sca
   input  [26:0] W0_data
 );
 
-  rob_compact_uop_mem_0_ext rob_compact_uop_mem_0_ext (	// @[generators/boom/src/main/scala/v4/exu/rob.scala:340:40]
+  rob_compact_uop_mem_0_ext_rob16 rob_compact_uop_mem_0_ext (	// @[generators/boom/src/main/scala/v4/exu/rob.scala:340:40]
     .R0_addr (R0_addr),
     .R0_en   (1'h1),	// @[generators/boom/src/main/scala/v4/exu/rob.scala:340:40]
     .R0_clk  (R0_clk),
