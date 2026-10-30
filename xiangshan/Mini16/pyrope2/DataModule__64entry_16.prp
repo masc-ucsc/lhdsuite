@@ -1,0 +1,41 @@
+// DataModule__64entry_16 (XiangShan Mini16): 64 x 6b register file, 8 read ports with same-cycle write bypass, 2 write ports.
+// Loop-recovered from the auto-emitted Pyrope (pyroA->C); PROVEN-full vs the firtool DataModule__64entry_16.sv.
+pub mod DataModule__64entry_16::[timecheck=false](`clock`:Clock, io_raddr:U48, io_wen:U2, io_waddr:U12, io_wdata:U12) -> (io_rdata:U48@[]) {
+  comptime const Entries = 64
+  comptime const ReadPorts = 8
+  comptime const WritePorts = 2
+  comptime const Bits = 6
+
+  reg data:[Entries]Unsigned(bits=Bits):[ordering="old"]
+
+  // read: a same-cycle write to the read address bypasses (OR of every matching write port)
+  mut rdata:Unsigned(bits=ReadPorts*Bits) = 0
+  for r in 0..<ReadPorts {
+    const ra = io_raddr#[(r*Bits)..<((r*Bits)+Bits)]
+    mut bypass = false
+    mut bval:Unsigned(bits=Bits) = 0
+    for w in 0..<WritePorts {
+      if io_wen#[w] != 0 and io_waddr#[(w*Bits)..<((w*Bits)+Bits)] == ra {
+        bypass = true
+        bval = bval | io_wdata#[(w*Bits)..<((w*Bits)+Bits)]
+      }
+    }
+    rdata#[(r*Bits)..<((r*Bits)+Bits)] = if bypass { bval } else { data[ra] }
+  }
+  io_rdata = rdata
+
+  // write: an entry takes the OR of every write port addressing it
+  for e in 0..<Entries {
+    mut hit = false
+    mut wval:Unsigned(bits=Bits) = 0
+    for w in 0..<WritePorts {
+      if io_wen#[w] != 0 and io_waddr#[(w*Bits)..<((w*Bits)+Bits)] == e {
+        hit = true
+        wval = wval | io_wdata#[(w*Bits)..<((w*Bits)+Bits)]
+      }
+    }
+    if hit {
+      data[e] = wval
+    }
+  }
+}
