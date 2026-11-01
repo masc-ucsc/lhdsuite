@@ -72,7 +72,7 @@ ciel enable --pdk-family sky130 <version>
 
 The harness requires the newest installed sky130 version to be enabled and
 records its hash. It resolves the Liberty directory through `ciel`, replacing
-any inherited `HAGENT_TECH_DIR`; ambiguous or mismatched versions fail with a
+any inherited `LHD_TECH_DIR`; ambiguous or mismatched versions fail with a
 diagnostic.
 
 Verilator is optional. Install it for the comparison scenarios; set
@@ -135,6 +135,13 @@ existing owner policy. Minion and Backend currently pass through that path;
 their pass status does not establish equivalence. Strict proof checks still
 reject incomplete verdicts.
 
+The parallel build publishes a LNAST library for each dependency and lowers the
+complete hardware graph at the selected root. This checks input-dependent
+one-hot obligations in their actual caller context. A strict monolithic compile
+and exact structural identity check validate the assembled library outside the
+measured build interval. This recipe omits the unused isolated hardware graphs
+included in older parallel-build measurements.
+
 ## Known-failing scenarios
 
 These are previously reported failures, not a fresh status report for the
@@ -144,7 +151,6 @@ selected LiveHD checkout. Re-run the relevant target to establish its status.
 | --- | --- |
 | `//bench:picorv32_lec`, `picorv32_lec_bug` | A six-cycle bounded result misses behavior beyond reset and cannot establish equivalence or detect the mutant. |
 | `//bench:ibex_lec_bug` | Sampling LEC from reset reaches no misaligned load/store within the 120 s budget, so the unaligned-address mutant is not detected (`TIMEOUT-time`). `ibex_lec` passes only as `TESTED-sampled`. |
-| `//bench:ibex_compile_pyrope_parallel` | Separate compilation makes `ibex_alu` and `ibex_cs_registers` their own tops, where their `unique case` one-hot checks refute over free inputs (`onehot-violated`). |
 | `//bench:minion_lec`, `minion_lec_incremental`, `minion_synth_lec_synth` | Unresolved state, memory, and hierarchical proof obligations. |
 | `//bench:xs_rob_lec_incremental` | RenameBuffer and Rob remain inconclusive in unbounded equivalence; 10 of 12 definitions prove within the configured budget. |
 | `//bench:xs_rob_synth_incremental` | ABC cold, warm, and edit reuse checks pass, but all four downstream timing analyses fail with `std::bad_alloc` at roughly 560 GiB peak memory. |

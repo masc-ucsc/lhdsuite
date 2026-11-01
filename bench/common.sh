@@ -176,9 +176,9 @@ sanitize_args() {
     "$CORE_VERIF_DIR"*) a="$CORE/verif${a#"$CORE_VERIF_DIR"}" ;;
     "$CORE_TESTS_DIR"*) a="$CORE/tests${a#"$CORE_TESTS_DIR"}" ;;
     esac
-    if [ -n "${HAGENT_TECH_DIR:-}" ]; then
+    if [ -n "${LHD_TECH_DIR:-}" ]; then
       case "$a" in
-      "$HAGENT_TECH_DIR"*) a="\$HAGENT_TECH_DIR${a#"$HAGENT_TECH_DIR"}" ;;
+      "$LHD_TECH_DIR"*) a="\$LHD_TECH_DIR${a#"$LHD_TECH_DIR"}" ;;
       esac
     fi
     out="$out $a"
@@ -555,7 +555,7 @@ cpu_count() { getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4; }
 
 # find_verilator — set $VERILATOR_BIN, or return non-zero if there is no
 # verilator on this machine. Verilator is host state, not a bazel input (same
-# shape as HAGENT_TECH_DIR): $VERILATOR wins, then PATH, then the usual install
+# shape as LHD_TECH_DIR): $VERILATOR wins, then PATH, then the usual install
 # prefixes, because bazel's test PATH does not carry /opt/homebrew/bin.
 #
 # Unlike require_tech_dir this does NOT fail the target. A missing tech library
@@ -890,7 +890,7 @@ PY
 
 require_tech_dir() {
   # Resolve the PDK from ciel every time.  In particular, do not trust an
-  # inherited HAGENT_TECH_DIR: it can silently pin a benchmark to an older
+  # inherited LHD_TECH_DIR: it can silently pin a benchmark to an older
   # library after `ciel enable` moves on.
   # ciel is host state like verilator (find_verilator): bazel's sanitized test
   # PATH does not carry /opt/homebrew/bin or pip's user bin, so probe the usual
@@ -1011,14 +1011,14 @@ for h,d in re.findall(r"([0-9a-f]{7,64})\s+\((\d{4}\.\d{2}\.\d{2})\)", s):
     echo "FAIL: ciel could not resolve sky130 version $latest" >&2
     return 1
   }
-  HAGENT_TECH_DIR="$root/sky130A/libs.ref/sky130_fd_sc_hd/lib"
-  lib="$HAGENT_TECH_DIR/sky130_fd_sc_hd__tt_025C_1v80.lib"
+  LHD_TECH_DIR="$root/sky130A/libs.ref/sky130_fd_sc_hd/lib"
+  lib="$LHD_TECH_DIR/sky130_fd_sc_hd__tt_025C_1v80.lib"
   [ -f "$lib" ] || {
     echo "FAIL: ciel sky130 version $latest does not contain $lib" >&2
     return 1
   }
   PDK_VERSION=$latest
-  export HAGENT_TECH_DIR PDK_VERSION
+  export LHD_TECH_DIR PDK_VERSION
 }
 
 # copy_core_pyrope DEST — writable copy of the Pyrope tree for the

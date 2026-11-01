@@ -137,16 +137,16 @@ SIM_DIR=$PKG_DIR/sim
 
 # ---- PDK, resolved the same way bench/common.sh does ------------------------
 PDK_VERSION=${PDK_VERSION:-}
-if [ -z "${HAGENT_TECH_DIR:-}" ] || [ -z "$PDK_VERSION" ]; then
+if [ -z "${LHD_TECH_DIR:-}" ] || [ -z "$PDK_VERSION" ]; then
   if command -v ciel >/dev/null 2>&1; then
     _v=$(ciel output --pdk-family sky130 2>/dev/null || true)
     if [ -n "$_v" ]; then
-      HAGENT_TECH_DIR="$HOME/.ciel/ciel/sky130/versions/$_v/sky130A/libs.ref/sky130_fd_sc_hd/lib/"
+      LHD_TECH_DIR="$HOME/.ciel/ciel/sky130/versions/$_v/sky130A/libs.ref/sky130_fd_sc_hd/lib/"
       PDK_VERSION=$_v
     fi
   fi
 fi
-export HAGENT_TECH_DIR PDK_VERSION
+export LHD_TECH_DIR PDK_VERSION
 
 # The I3 guardrail is only a guardrail if its measurement clears the noise
 # floor. $SIM_CYCLES is the functional/marker count; $SIM_PERF_CYCLES is the
@@ -531,8 +531,8 @@ fi
 # front-end phases collapsing on the incremental row, the abc tier's as the
 # `abc_*` counters, so neither cache hides behind the other.
 if [[ " $PHASES " == *" synth "* ]]; then
-  if [ -z "${HAGENT_TECH_DIR:-}" ]; then
-    echo "  [$CORE synth] SKIPPED: no sky130 from ciel and no HAGENT_TECH_DIR" >&2
+  if [ -z "${LHD_TECH_DIR:-}" ]; then
+    echo "  [$CORE synth] SKIPPED: no sky130 from ciel and no LHD_TECH_DIR" >&2
   else
     prep_tree
     synth_group() {  # MODE WORKDIR [EXTRA_SETS...]

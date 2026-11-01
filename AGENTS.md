@@ -34,8 +34,9 @@ bazel run //bench:show -- --core minion                # ...one core only
   checkout: `bazel test //... --override_module=livehd=../livehd`.
 - Builds default to `-c opt` (benchmark numbers from a debug lhd are
   unrealistic); use `--config=debug` only when debugging lhd itself.
-- Synthesis targets need `HAGENT_TECH_DIR` pointing at a sky130 Liberty
-  directory (see README setup); they fail with instructions if unset.
+- Synthesis targets resolve the newest installed and enabled sky130 PDK through
+  `ciel`, then export `LHD_TECH_DIR` for LiveHD. Missing or mismatched PDKs fail
+  with instructions (see README setup).
 
 ## Layout
 
@@ -190,8 +191,8 @@ Every core shares one shape (`<core>/` = `dino/`, `minion/` or `cva6/`):
   combinationally by an input the same iteration writes reads one cycle stale.
   dino is unaffected — `io_imem_address` is `pc[63:0]`, a pure register read —
   but put new reads below the `step`.
-- Bench targets are tagged `exclusive` so timings stay clean — keep that for
-  new targets.
+- Bench targets run in parallel under `--local_test_jobs`. On large hosts,
+  target roughly 50% CPU utilization and avoid oversubscription for benchmarks.
 - If you change a design under `<core>/pyrope/`, check whether that core's
   `<core>/tests/` variants (patched copies of single files) need the same
   change.

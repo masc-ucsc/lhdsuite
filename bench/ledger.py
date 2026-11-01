@@ -318,7 +318,7 @@ PHASES = {
         "target": "{core}_lec_incremental",
         "tokens": WARM_TOKENS,
         "wall": ["lec{p}_ms"],
-        "extra": [],
+        "extra": ["lec{p}_timeout"],
         "scenario": [],
     },
     "formal": {
@@ -368,7 +368,7 @@ def identity(root: Path):
         # `Path(tech).name` alone recorded the literal string "lib", because the
         # tech dir ends `.../sky130_fd_sc_hd/lib/` — a value that looks like data
         # and is not. The version is the component after `versions/`.
-        parts = [p for p in os.environ.get("HAGENT_TECH_DIR", "").split("/") if p]
+        parts = [p for p in os.environ.get("LHD_TECH_DIR", "").split("/") if p]
         if "versions" in parts and parts.index("versions") + 1 < len(parts):
             pdk = parts[parts.index("versions") + 1]
         elif parts:
@@ -684,7 +684,7 @@ def cmd_append(args, root: Path):
     # Synthesis resolves the PDK inside the Bazel test sandbox, where the
     # renderer's process environment cannot see it. Trust the benchmark's own
     # emitted metadata, and reject a mixed-PDK scrape instead of stamping every
-    # row with a stale inherited HAGENT_TECH_DIR basename.
+    # row with a stale inherited LHD_TECH_DIR basename.
     pdks = set()
     for core in args.targets:
         target_name = PHASES["synth"]["target"].format(core=core)
@@ -905,8 +905,8 @@ DIRECTION_WORD = {-1: "lower is better", 1: "higher is better",
 V_CLASS = {
     "better": "better", "worse": "worse", "noise": "noise",
     "I3 VIOLATION": "worse", "AREA GUARDRAIL": "worse",
-    "unclassified": "unknown", "not passed": "warn",
-    "not comparable": "warn",
+    "unclassified": "unknown", "not passed": "warn", "timeout; inconclusive": "una",
+    "not comparable": "warn", "verdict not recorded": "una",
     "CHANGED": "warn", "same": "noise", "CORRECTNESS": "worse",
     "": "miss",
 }
@@ -981,11 +981,35 @@ def metrics_of(*rows):
     return sorted(names, key=metric_key)
 
 
+def lec_timed_out(r):
+    return bool(r) and r.get("phase") == "lec" and r.get("lec_timeout") == 1
+
+
+def lec_timing_status(r):
+    if lec_timed_out(r):
+        return "TIMEOUT"
+    if (r and r.get("phase") == "lec" and r.get("passed", True)
+            and r.get("lec_timeout") != 0):
+        return "VERDICT UNKNOWN"
+    return ""
+
+
+def unavailable_reason(*rows):
+    if any(lec_timed_out(row) for row in rows):
+        return "timeout; inconclusive"
+    if any(lec_timing_status(row) == "VERDICT UNKNOWN" for row in rows):
+        return "verdict not recorded"
+    return "not passed"
+
+
 def usable(r):
     """Is this row EVIDENCE? A run that crashed after 300 ms has a `wall_ms`,
     and reading it produced a bold-green 340x speedup on the same line that said
-    FAILED. A non-passing measurement is excluded from every derived number."""
-    return bool(r) and bool(r.get("passed", True))
+    FAILED. A non-passing measurement is excluded from every derived number.
+    A LEC timeout remains an accepted gate result, but its cutoff is not the
+    time to an answer and cannot support a timing comparison. Historical LEC
+    rows without a retained verdict cannot establish a time to an answer either."""
+    return bool(r) and bool(r.get("passed", True)) and not lec_timing_status(r)
 
 
 def uwall(cells, mode):
@@ -1043,6 +1067,8 @@ def section_wall(out, data, modes, eps, previous=None, previous_label=""):
                "shown but never used</b>: its wall clock is the time to a crash, "
                "not the time to an answer, so both derived columns read "
                "&quot;-&quot;.</p>" % (CACHE_COST_WARN * 100))
+    out.append("<p>LEC TIMEOUT timings are inconclusive cutoffs: shown, but not compared. "
+               "Historical LEC rows without a recorded verdict are also excluded from comparisons.</p>")
     if previous:
         out.append("<p><b>previous speedup (%s)</b> is the earlier cold / "
                    "incremental ratio only. It is historical context, not a "
@@ -1070,6 +1096,8 @@ def section_wall(out, data, modes, eps, previous=None, previous_label=""):
             r = cells.get(m)
             if r is None:
                 tds.append(cell("-", "miss"))
+            elif lec_timing_status(r):
+                tds.append(cell(ms(r.get("wall_ms")) + " " + lec_timing_status(r), "una"))
             elif not r.get("passed", True):
                 tds.append(cell("not run" if r.get("not_run") else
                                 ms(r.get("wall_ms")) + " FAILED", "worse"))
@@ -1173,7 +1201,8 @@ def section_guardrail(out, data, modes, eps):
                 if r is None or not is_num(v):
                     tds.append(cell("-", "miss"))
                 elif not usable(r):
-                    tds.append(cell(num(v) + " FAILED", "worse"))
+                    tds.append(cell(num(v) + " " + (lec_timing_status(r) or "FAILED"),
+                                    "una" if lec_timing_status(r) else "worse"))
                 else:
                     tds.append(cell(num(v)))
             for m in modes:
@@ -1181,7 +1210,8 @@ def section_guardrail(out, data, modes, eps):
                     verds.append(cell("ref", "noise"))
                     continue
                 if not usable(cells.get(m)):
-                    verds.append(cell("-" if cells.get(m) is None else "not passed",
+                    verds.append(cell("-" if cells.get(m) is None else
+                                      unavailable_reason(cells.get(m)),
                                       "miss" if cells.get(m) is None else "warn"))
                     continue
                 v = uval(cells, m, k)
@@ -1562,7 +1592,7 @@ def section_config_delta(out, hrows, base_id, cur_id, eps):
                         regressed.append("%s/%s %s (%s) went 1 -> 0"
                                          % (key[0], key[1], m, mode))
                 elif not ok:
-                    verd, d = "not passed", "-"
+                    verd, d = unavailable_reason(b, c), "-"
                 else:
                     d, verd = verdict(bv if is_num(bv) else None,
                                       cv if is_num(cv) else None,
@@ -1679,7 +1709,7 @@ def render_flat_host(out, hrows, base_id, cur_id, eps, synth):
             elif invalid:
                 verd, d = "", "invalid (div_blackbox)"
             elif not ok:
-                verd, d = "not passed", "-"
+                verd, d = unavailable_reason(b, c), "-"
             else:
                 d, verd = verdict(bv if is_num(bv) else None,
                                   cv if is_num(cv) else None,
@@ -2137,6 +2167,9 @@ def timing_cell(cells, mode, metric):
     row = cells.get(mode)
     if row is None:
         return sortable_cell("-", cls="miss")
+    if lec_timing_status(row):
+        value = row.get("wall_ms")
+        return sortable_cell(ms(value) + " " + lec_timing_status(row), value=value, cls="una")
     value = timing_value(cells, mode, metric)
     if not usable(row):
         failed_value = row.get("wall_ms") if metric == "wall" else None
@@ -2318,6 +2351,10 @@ def section_glance(out, data, show_host=None, previous=None, previous_label=""):
                       key=lambda key: (key[0], phase_key(key[1])))
         show_backend = len(phases) > 1
         out.append("<h2>%s</h2>" % esc(title))
+        if phases == ("lec",):
+            out.append("<p>TIMEOUT timings are inconclusive cutoffs. They remain visible "
+                       "but are excluded from speedup ratios and geomeans. Historical rows without "
+                       "a recorded LEC verdict are labeled VERDICT UNKNOWN and excluded too.</p>")
         if not keys:
             out.append('<p class="warn">No %s incremental measurements in this '
                        'configuration.</p>' % esc(title.lower()))

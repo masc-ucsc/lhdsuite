@@ -223,6 +223,25 @@ EOF
   printf 'CMD %s: %s\n' build "make -f build.mk -j$NPROC" >&3
   run_timed build make -f build.mk -j"$NPROC" LHD="$LHD_BIN"
   LAST_MS=$((LAST_MS + scan_ms + gen_ms))
+  # Check the assembled library against the ordinary strict source compile.
+  # These correctness oracles stay outside the measured parallel build time.
+  CURRENT_STEP=parallel_oracle
+  lhd compile "$CORE_P_DIR/$CORE_TOP.prp" ${P_STUBS[@]+"${P_STUBS[@]}"} \
+    --emit-dir lg:parallel_oracle_lg --workdir parallel_oracle_w \
+    >step_parallel_oracle.log 2>&1 \
+    || { step_failed parallel_oracle "strict monolithic compilation failed"; exit 1; }
+  CURRENT_STEP=parallel_compare
+  lhd tool diff lg:parallel_oracle_lg lg:out_lg --structural -q \
+    >step_parallel_compare.log 2>&1 \
+    || { step_failed parallel_compare "separate compilation differs from the strict source oracle"; exit 1; }
+  # tool diff is an informational command: a completed comparison returns
+  # success even for different graphs. Its structural identity protocol is
+  # the exact stdout line "identical".
+  if [ "$(cat step_parallel_compare.log)" != "identical" ]; then
+    step_failed parallel_compare "separate compilation differs from the strict source oracle"
+    exit 1
+  fi
+  CURRENT_STEP=""
   if [ -n "${TEST_UNDECLARED_OUTPUTS_DIR:-}" ]; then
     cp build.mk BUILD.bazel "$TEST_UNDECLARED_OUTPUTS_DIR"/ 2>/dev/null || true
   fi

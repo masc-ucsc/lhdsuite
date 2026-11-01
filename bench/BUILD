@@ -10,8 +10,8 @@
 #   bazel test //bench:dino
 #   bazel test //bench:minion
 #
-# Everything, both cores: `bazel test //bench:all` (serially — targets are
-# tagged exclusive so timing is not polluted by parallel tests). Each target
+# Everything, both cores: `bazel test //bench:all`. Bound concurrency with
+# --local_test_jobs to leave CPU headroom for measurements. Each target
 # also carries a `core_<name>` tag, so `--test_tag_filters=core_minion` is an
 # equivalent way to select one core across a wider pattern.
 #

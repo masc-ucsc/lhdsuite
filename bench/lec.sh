@@ -13,9 +13,10 @@
 #   MODE=bug   bug1 variant ($CORE_UNIT's add flipped to subtract) must be
 #              caught: the top REFUTED-cex with exit 10 -- a counterexample,
 #              not a crash and not a REFUTED-<why> (exit 7, no answer).
-#   MODE=incr  three runs sharing one --workdir (formal_cache.json under it):
-#              cold, identical warm re-run (verdict-cache use asserted under
-#              a proof effort; sampled presets never cache), then a
+#   MODE=incr  an uncached baseline, then three runs sharing one --workdir
+#              (formal_cache.json under it): cold, identical warm re-run
+#              (verdict-cache use asserted under a proof effort; sampled
+#              presets never cache), then a
 #              comment1 recompile (still equivalent, still warm).
 #
 # A core with a CORE_LEC_TRUST list (minion — defs holding a latch or negedge
@@ -124,6 +125,29 @@ lec_no_refutation() {  # LABEL IMPL_LG [WORKDIR] [INCREMENTAL]
   return 0
 }
 
+# Preserve the verdict of each incremental leg. A baseline timeout does not
+# replace the cold, warm or comment-touch executions, and none of their
+# timeouts is a proof. The invocation and its existing exit-code gate stay in
+# run_timed; this also rejects a successful CLI exit with a missing verdict.
+lec_record_result() {  # LABEL [EMIT_TIMEOUT_METRIC]
+  local label=$1 emit_timeout=${2:-true} verdict log="step_${1}.log"
+  cp "$log" "$OUT_DIR/${label}_lec.log"
+  verdict=$(lec_top_verdict "$log")
+  case "$verdict" in
+  PROVEN-full | PROVEN-bounded* | TESTED-sampled*)
+    if [ "$emit_timeout" = true ]; then metric "${label}_timeout" 0 bool; fi
+    ;;
+  TIMEOUT-*)
+    if [ "$emit_timeout" = true ]; then metric "${label}_timeout" 1 bool; fi
+    echo "NOTE: $label reported $verdict -- inconclusive; all incremental legs still run"
+    ;;
+  *)
+    step_failed "$label" "lec exited 0 without an accepted top-level verdict (got '${verdict:-none}')"
+    exit 1
+    ;;
+  esac
+}
+
 case "${MODE:?}" in
 pass)
   run_timed compile_impl compile_impl impl1
@@ -184,12 +208,16 @@ bug)
   ;;
 incr)
   run_timed compile_p1 compile_impl impl1
-  if ! lec_no_refutation lec_full impl1 LF false; then
-    echo "PASS: lec_incremental reached the ${LEC_BUDGET_S}s budget on the full leg without refuting"
-    exit 0
+  if lec_no_refutation lec_full impl1 LF false; then
+    lec_record_result lec_full false  # the baseline helper already recorded its timeout metric
+  else
+    echo "NOTE: lec_full reached the ${LEC_BUDGET_S}s budget without refuting; continuing every incremental leg"
+    cp step_lec_full.log "$OUT_DIR/lec_full_lec.log"
   fi
   run_timed lec_cold lec_run impl1
+  lec_record_result lec_cold
   run_timed lec_warm lec_run impl1
+  lec_record_result lec_warm
   # The warm-cache gate applies to the PROOF efforts only. lhd's verdict cache
   # (formal_cache.json, the `lec[cache]: N hit(s), ...` line) stores definitive
   # proofs and timeout ledgers; under a sampled preset (quick-check | test |
@@ -213,7 +241,8 @@ incr)
   core_variant comment1 src/pyrope
   run_timed compile_p3 compile_impl impl3
   run_timed lec_touch lec_run impl3
-  echo "PASS: cold/warm/comment-touch lec runs all exited 0 (none refuted)"
+  lec_record_result lec_touch
+  echo "PASS: full/cold/warm/comment-touch lec legs all ran without a refutation (timeouts remain inconclusive)"
   ;;
 *)
   echo "FAIL: unknown MODE=$MODE" >&2

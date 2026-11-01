@@ -101,8 +101,15 @@ run_timed sim_setup vlt --cc --exe --Mdir "$VOBJ" --top-module "$CORE_TOP" \
 
 # --- 2. host C++ compile + link ----------------------------------------------
 JOBS=$(cpu_count)
-log_cmd sim_cc "make -C $VOBJ -f V$CORE_TOP.mk -j$JOBS V$CORE_TOP"
-run_timed sim_cc make -C "$VOBJ" -f "V$CORE_TOP.mk" -j"$JOBS" "V$CORE_TOP"
+# Verilator's generated makefile assigns CXX, overriding an environment-only
+# selection. Forward an explicitly supplied compiler as a make assignment,
+# just as the LiveHD host build honors it; leave the unset default alone.
+MAKE_CXX=()
+if [ -n "${CXX:-}" ]; then
+  MAKE_CXX=("CXX=$CXX")
+fi
+log_cmd sim_cc "make -C $VOBJ -f V$CORE_TOP.mk -j$JOBS ${MAKE_CXX[*]} V$CORE_TOP"
+run_timed sim_cc make -C "$VOBJ" -f "V$CORE_TOP.mk" -j"$JOBS" "${MAKE_CXX[@]}" "V$CORE_TOP"
 CC_MS=$LAST_MS  # run_timed already reported it as METRIC sim_cc_ms
 
 # --- 2b. identical warm rebuild ------------------------------------------------
@@ -113,7 +120,7 @@ CC_MS=$LAST_MS  # run_timed already reported it as METRIC sim_cc_ms
 run_timed sim_setup_warm vlt --cc --exe --Mdir "$VOBJ" --top-module "$CORE_TOP" \
   -Wno-fatal $CORE_VERILATOR_FLAGS -DSYNTHESIS -I"$CORE_V_DIR" \
   -F "$CORE_V_DIR/filelist.f" "$VTB"
-run_timed sim_cc_warm make -C "$VOBJ" -f "V$CORE_TOP.mk" -j"$JOBS" "V$CORE_TOP"
+run_timed sim_cc_warm make -C "$VOBJ" -f "V$CORE_TOP.mk" -j"$JOBS" "${MAKE_CXX[@]}" "V$CORE_TOP"
 
 # --- 3a. matched run: the cycle count the lhd sim targets use -----------------
 log_cmd sim_exec "$VBIN --cycles $CYCLES  (x$SIM_REPS, best)"

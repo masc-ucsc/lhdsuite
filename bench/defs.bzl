@@ -829,8 +829,8 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_VERILATOR_CYCLES": str(cfg.get("verilator_cycles", "")),
             "MODE": mode,
         },
-        # Timing benchmarks: never share the machine with other tests.
-        tags = ["exclusive", "core_" + core] + (["slow"] if cfg.get("slow", False) else []),
+        # Parallelism is bounded by --local_test_jobs on large benchmark hosts.
+        tags = ["core_" + core] + (["slow"] if cfg.get("slow", False) else []),
     )
 
 def core_benches(core):

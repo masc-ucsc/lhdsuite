@@ -21,8 +21,7 @@
 # found" — a green-looking no-op. Do not put `manual` back to make a wildcard
 # cheap again; that hides the gate instead of reporting it.
 #
-# They are still CPU-hungry and `exclusive`, so a wildcard run serializes them
-# and takes hours. The per-test budget is the `eternal` bucket, which
+# They are CPU-hungry; bound parallelism with --local_test_jobs. The per-test budget is the `eternal` bucket, which
 # `.bazelrc` raises to 21600s (6h) — only a top that outruns THAT needs an
 # explicit `--test_timeout`. Name one target after touching upass/prp_writer,
 # inou/slang, or the LEC encoder.
@@ -65,11 +64,9 @@ load("//bench:defs.bzl", "CORES")
             "CORE_V_FLAGS": CORES[core]["v_flags"],
             "CORE_V_FLIST": "$(rlocationpath %s:verilog_filelist)" % CORES[core]["pkg"],
         },
-        # LEC on a whole core is CPU-hungry, so it stays `exclusive` (one at a
-        # time); it still runs under a wildcard.
+        # Whole-core LEC runs under the caller's bounded test parallelism.
         tags = [
             "core_" + core,
-            "exclusive",
         ],
     )
     for core in [
@@ -177,7 +174,6 @@ _XS_TOPS = [
         tags = [
             "core_xs",
             "core_" + suffix,
-            "exclusive",
         ],
     )
     for suffix, top in _XS_TOPS
@@ -236,7 +232,6 @@ _V2V_CORES = [
         },
         tags = [
             "core_" + core,
-            "exclusive",
         ],
     )
     for core in _V2V_CORES

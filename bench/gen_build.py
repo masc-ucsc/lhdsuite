@@ -22,15 +22,14 @@ what `make -j` should schedule on and what a BUILD generator should emit), while
 the command line passes the file's full transitive closure -- necessary because
 any dependency that turns out to be type/constant-only produces no lgraph, comes
 in as `ln:`, and then does not carry its own imports. `vpu_defs_pkg` is exactly
-that case. Passing the closure costs nothing measurable once dependencies arrive
-pre-lowered (core_top: 5 direct inputs 37.5s vs 89 closure inputs 36.0s).
+that case. The explicit closure supplies the LNAST namespaces needed while the caller
+elaborates its imported units.
 
-A dependency is passed in its PRE-LOWERED `lg:` form when that unit produced
-graphs, and as `ln:` otherwise. This matters a lot: handing a unit to a dependent
-as `ln:` re-elaborates it from the AST on every load -- for a `comb` unit that
-costs the same as recompiling it from source -- while `lg:` reuses the lowered
-netlist. Which form applies is only knowable after the dependency has been
-built, so the recipe resolves it at run time rather than the generator guessing.
+Library rules publish the LNAST consumed by their dependents. The root also
+publishes the complete hardware graph and checks it in its actual caller
+context. Emitting unused hardware graphs for library units would instead make
+each library a standalone top: input-dependent unique-case obligations can
+refute there even when every actual caller guarantees their exclusivity.
 
 Usage:
   gen_build.py SCAN_JSON --top TOP --mk build.mk --bazel BUILD.bazel
@@ -138,6 +137,8 @@ MK_HEADER = """\
 #
 # `--emit-dir lg:` is transitively closed, so lg_<top> is already the complete
 # design library and needs no final link step.
+# Only the root requests this hardware output. Its graph checks cover the
+# assembled design; library rules emit the LNAST their dependents consume.
 #
 # top: {top}
 # units: {n} of {total} scanned files ({pruned} pruned as outside the top's cone)
@@ -158,7 +159,7 @@ MK_RULE = """
 # prerequisites: direct imports. inputs below: full closure -- ln: is not closed.
 stamp/{unit}.ok: {src}{dep_stamps} | stamp
 \t@$(LHD) compile {src} {ir_ins} \\
-\t   --emit-dir ln:ln_{unit} --emit-dir lg:lg_{unit} --workdir cw_{unit} \\
+\t   --emit-dir ln:ln_{unit} {graph_output} --workdir cw_{unit} \\
 \t   >u_{unit}.log 2>&1 \\
 \t   || {{ echo "FAIL: compiling {unit}" >&2; tail -20 u_{unit}.log >&2; exit 1; }}
 \t@touch $@
@@ -168,7 +169,7 @@ MK_LEAF_RULE = """
 # {unit} (level 0, no imports)
 stamp/{unit}.ok: {src} | stamp
 \t@$(LHD) compile {src} \\
-\t   --emit-dir ln:ln_{unit} --emit-dir lg:lg_{unit} --workdir cw_{unit} \\
+\t   --emit-dir ln:ln_{unit} {graph_output} --workdir cw_{unit} \\
 \t   >u_{unit}.log 2>&1 \\
 \t   || {{ echo "FAIL: compiling {unit}" >&2; tail -20 u_{unit}.log >&2; exit 1; }}
 \t@touch $@
@@ -187,14 +188,16 @@ def emit_make(path, top, units, src, deps, clo, lvl, total):
     out = [MK_HEADER.format(top=top, n=len(units), total=total,
                             pruned=total - len(units), depth=max(lvl.values()) + 1)]
     for u in order:
+        graph_output = "--emit-dir lg:lg_%s" % u if u == top else ""
         if deps[u]:
             out.append(MK_RULE.format(
                 unit=u, src=src[u], lvl=lvl[u],
+                graph_output=graph_output,
                 dep_note="; %d direct imports, %d in closure" % (len(deps[u]), len(clo[u])),
                 dep_stamps="".join(" \\\n    stamp/%s.ok" % d for d in deps[u]),
                 ir_ins=" ".join("ln:ln_%s" % d for d in clo[u])))
         else:
-            out.append(MK_LEAF_RULE.format(unit=u, src=src[u]))
+            out.append(MK_LEAF_RULE.format(unit=u, src=src[u], graph_output=graph_output))
     out.append(MK_FOOTER.format(top=top))
     open(path, "w").write("".join(out))
 
@@ -209,8 +212,9 @@ BZL_HEADER = '''\
 # is the same `lhd compile` the Makefile recipes run, with the lg:/ln: dirs
 # carried on a provider) -- that rule does not exist in this repo yet.
 #
-# The point is that the dependency graph needs nothing but `lhd scan`: deps are
-# each file's DIRECT imports, because `--emit-dir lg:` is transitively closed.
+# The dependency graph needs only `lhd scan`: deps are each file's DIRECT
+# imports. Providers would carry their transitive LNAST closure; the selected
+# root publishes a transitively closed hardware graph.
 #
 # top: {top} -- {n} of {total} scanned files
 

@@ -66,7 +66,7 @@ printf '{"pdk_version":"%s","target":"%s"}\n' \
   "$PDK_VERSION" "${TEST_TARGET:-$CORE}" >"$OUT_DIR/run_metadata.json"
 
 TOP=$CORE_TOP.$CORE_TOP
-LIB="$HAGENT_TECH_DIR/sky130_fd_sc_hd__tt_025C_1v80.lib"
+LIB="$LHD_TECH_DIR/sky130_fd_sc_hd__tt_025C_1v80.lib"
 
 # Experiment-only synthesis knobs. Bazel tests can set BENCH_ABC_*=...,
 # BENCH_COLOR_SYNTH_ALG=pipe|synth|cones, or BENCH_COLOR_REDUCE=1 so one candidate is

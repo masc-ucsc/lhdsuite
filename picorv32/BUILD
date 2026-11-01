@@ -95,5 +95,5 @@ sh_test(
         ":verilog",
         "@livehd//lhd:lhd",
     ],
-    tags = ["exclusive"],
+    tags = [],
 )
