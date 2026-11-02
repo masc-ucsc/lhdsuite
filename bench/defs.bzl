@@ -216,6 +216,7 @@ CORES = {
         "verilator_cycles": 8000000,
     },
     "cva6": {
+        "synth_memory_mb": 196608,
         "pkg": "//cva6",
         # The benchmark is the generated WHOLE CVA6 core. cva6/verilog/ still
         # carries only the tag_cmp cone, so redirecting Verilog/LEC legs there
@@ -462,6 +463,7 @@ CORES = {
     # checksum is cross-validated against the Verilog side rather than blessed
     # from one run.
     "xs_rob": {
+        "synth_memory_mb": 49152,
         "pkg": "//xiangshan/Backend",
         "top": "Rob",
         "unit": "Rob",
@@ -647,6 +649,7 @@ CORES = {
         "slow": True,
     },
     "xs_backend": {
+        "synth_memory_mb": 98304,
         "pkg": "//xiangshan/Backend",
         "top": "Backend",
         "unit": "Backend",
@@ -769,6 +772,12 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
     if cfg.get("sim_tb", ""):
         data.append(pkg + ":sim")
 
+    # Whole-process peaks exceed the per-region ABC limit: CVA6 reached
+    # 146 GiB and Backend 68 GiB. Reserve measured memory with headroom;
+    # these are scheduler estimates, not process limits or exclusions.
+    memory_mb = cfg.get("synth_memory_mb", 0) if script == "synth.sh" else 0
+    resource_tags = ["resources:memory:%s" % memory_mb] if memory_mb else []
+
     sh_test(
         name = name,
         size = "medium",
@@ -830,7 +839,7 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "MODE": mode,
         },
         # Parallelism is bounded by --local_test_jobs on large benchmark hosts.
-        tags = ["core_" + core] + (["slow"] if cfg.get("slow", False) else []),
+        tags = ["core_" + core] + (["slow"] if cfg.get("slow", False) else []) + resource_tags,
     )
 
 def core_benches(core):

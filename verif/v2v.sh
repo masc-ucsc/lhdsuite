@@ -309,8 +309,10 @@ case "$lgyosys_rc" in
   lgyosys_verdict=INCONCLUSIVE
   ;;
 5)
-  lgyosys_verdict=NO-COMPARE  # lgcheck's documented setup failure
-  echo "NOTE: lgcheck could not set up a comparison for $CORE_TOP (rc=5, not a refutation)"
+  echo "FAIL: lgcheck could not set up the independent comparison for $CORE_TOP (rc=5)" >&2
+  tail -40 step_lgyosys.log >&2
+  archive
+  exit 5
   ;;
 124 | 137 | 143)
   lgyosys_verdict=TIMEOUT

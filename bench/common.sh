@@ -548,10 +548,17 @@ best_run() {
   done
 }
 
-# cpu_count — cores to hand a parallel host compile. `lhd sim`'s own build uses
-# every core, so the verilator side must too or sim_cc_ms compares a parallel
-# compile against a serial one.
-cpu_count() { getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4; }
+# cpu_count — one bounded budget for native and Verilator host builds.
+# Outer test parallelism is separate; avoid a machine-sized nested pool per test.
+cpu_count() {
+  local available requested=${LHD_BENCH_JOBS:-16}
+  case "$requested" in
+    '' | *[!0-9]* | 0) echo "FAIL: LHD_BENCH_JOBS must be a positive integer" >&2; return 2 ;;
+  esac
+  available=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
+  [ "$requested" -le "$available" ] || requested=$available
+  echo "$requested"
+}
 
 # find_verilator — set $VERILATOR_BIN, or return non-zero if there is no
 # verilator on this machine. Verilator is host state, not a bazel input (same
