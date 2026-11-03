@@ -665,6 +665,24 @@ CORES = {
         "synth_only": True,
         "slow": True,
     },
+    # rocket-chip TinyConfig, scoped to RocketTile (core + L1 I/D caches + PTW,
+    # 37 modules). The whole SoC (ExampleRocketSystem) lowers to lg but its
+    # Pyrope emission refuses 5 modules with prp-writer-clock-as-data (clocks
+    # routed through child modules as wires), and TestHarness needs SimDTM
+    # (DPI). Both trees are the RocketTile cone only, so this is not a smaller
+    # cone under the whole-SoC name. Regenerated 2026-11-03 with lhd d088d9039
+    # and PROVEN-full vs the Verilog (25/25 defs, 22 s).
+    "rocket": {
+        "pkg": "//rocket",
+        "top": "RocketTile",
+        "unit": "RocketTile",
+        # RocketTile has no `io_x = … & 1` line for the generic bug1 anchor;
+        # flip the ALU result instead (a real behaviour change in the core).
+        "incremental_edit_unit": "ALU",
+        "v_flags": "",
+        "color_algs": ["synth"],
+        "synth_only": True,
+    },
 }
 
 # Scenario table shared by every core:

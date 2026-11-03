@@ -83,6 +83,10 @@ core_benches("xs_exu")
 core_benches("xs_backend")
 core_benches("matched_filter")
 
+# rocket-chip TinyConfig, RocketTile cone (see the CORES entry for why not the
+# whole SoC). Synth-only: no sim driver or verify sidecar yet.
+core_benches("rocket")
+
 # Cross-core scenario suites, for comparing one flow across both designs.
 test_suite(
     name = "compile",
