@@ -11,7 +11,7 @@ measurement (Chisel cold frontend 13.2 s, `asplos27/experiments/frontend_cost_ro
 |---|---|---|
 | `verilog/` | 217 `.sv` modules (~162k LOC) for the whole SoC, plus `plusarg_reader.v`, `SimDTM.{v,cc}`, `vsrc/` | Complete. `filelist.f` lists only the RocketTile cone (36 modules); `filelist_rtl.f` / `filelist_synth.f` are the firtool lists for the whole SoC |
 | `pyrope/` | 37 modules: the RocketTile cone, emitted by `lhd compile verilog --top RocketTile` + `manifest.json` | Regenerated 2026-11-03 with lhd `d088d9039`; PROVEN-full vs the Verilog (25/25 defs, 22 s) |
-| `pyrope2/` | 201 hand-cleaned / loop-form modules (older emit, Pyrope 3.1) | Top layer RocketTile+Rocket LEC-PROVEN vs `.sv` (1aeaa9c, 2026-10-22). Loop folds so far: TLDebugModuleInner (PROVEN), TLFIFOFixer family (PROVEN), CSRFile `reg_pmp` arrays (NCE vs `.sv`) |
+| `pyrope2/` | Loop-cleaned Pyrope. The 37 RocketTile-cone modules were rebased onto the current emit (d080e5f, 2026-11-03); the other 164 files are the old whole-SoC emit (lowercase `u` types) and do NOT compile with current lhd | RocketTile from `pyrope2/` PROVEN-full vs the Verilog cone (~30 s) after every step. Done: CSRFile pyroA-E (2146 -> 1311 lines, -39%): `csr_exists` address OR -> hpm/pmp loops, dead CSR-decode bit temps, PMP regs -> `reg_pmp_<f>:[8]` arrays, `pmpMask` loop, PMP CSR write side -> loops |
 | `sim/`, `verif/`, `tests/` | empty | No sim driver or verify sidecar yet |
 
 `BUILD` exposes `:verilog`, `:verilog_filelist`, `:pyrope`, `:pyrope_top`
@@ -47,11 +47,16 @@ measurement (Chisel cold frontend 13.2 s, `asplos27/experiments/frontend_cost_ro
 
 ## LEC notes
 
-To LEC `pyrope2/` Rocket vs the Verilog: compile the Verilog with
-`-DSYNTHESIS` (slang rejects `$error`/`$fatal` in CSRFile/PlusArgTimeout
-otherwise), stub `plusarg_reader` (`out = DEFAULT`), and run `lhd lec` with
-`--set formal.strict=false` (PlusArgTimeout has no observable output on
-either side).
+`pyrope2/` RocketTile vs the Verilog cone needs no stubs or extra flags:
+
+```bash
+(cd rocket/pyrope2 && lhd compile RocketTile.prp --top RocketTile --set compile.upass.inline=false --emit-dir lg:/tmp/impl)
+(cd rocket/verilog && lhd compile verilog --top RocketTile --emit-dir lg:/tmp/ref -- -F filelist.f -DSYNTHESIS)
+lhd lec --impl lg:/tmp/impl --ref lg:/tmp/ref --top RocketTile --set formal.effort=proof
+```
+
+Each cleanup step is also LEC'd module-level against the previous step and
+against the module's `.sv` before it is committed (one commit per step).
 
 ## How the Verilog was produced
 
@@ -76,6 +81,7 @@ extracted 2026-08-29.
 ## Next
 
 1. Sim driver + verify sidecar so `rocket` runs the full bench, not only synth.
-2. Loop cleanup of the big modules (Rocket, CSRFile, DCache, ICache, TLB, PTW,
-   PMPChecker) with an LEC per step.
+2. Loop cleanup of the big modules, ranked by `lhd pyrope style`: CSRFile
+   (in progress), then RocketTile, DCache, PTW, ShiftQueue, PMPChecker, Rocket,
+   with an LEC per step.
 3. Unblock the whole-SoC Pyrope emission (clock-as-data, case4 above).
