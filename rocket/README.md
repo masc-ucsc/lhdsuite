@@ -19,6 +19,23 @@ measurement (Chisel cold frontend 13.2 s, `asplos27/experiments/frontend_cost_ro
 (`core_benches("rocket")` in `bench/BUILD`, `CORES["rocket"]` in
 `bench/defs.bzl`) is synth-only for now.
 
+## Bench results (2026-11-03, lhd d088d9039, mada4)
+
+| Target | Result |
+|---|---|
+| `rocket_compile_verilog` | PASSED: 41,723 LoC in 2.6 s |
+| `rocket_compile_pyrope` | PASSED: 9,885 LoC in 2.0 s |
+| `rocket_lec_incremental` | PASSED: full/cold/warm/touch ~73 s each (`formal.effort=test`; the PROVEN-full proof is the 22 s run above) |
+| `rocket_synth` | PASSED in 622 s: 1.33M gates, 12.2 mm², 46.0 ns, 17 GB peak RSS |
+| `rocket_synth_incremental` | PASSED: cold 629 s; comment touch 61 s (11/11 region hits); one-line ALU edit 190 s (10/11 hits) |
+
+- Coloring is lopsided: 2 of the 11 regions hold 2.95M GE (99.7%), and one
+  takes 434 s, so an edit inside them saves almost nothing. A smaller
+  `color_max_ge` (as on `xs_backend`) is a possible follow-up.
+- livehd d088d9039 does not build with gcc 16 (`rapidjson/stringbuffer.h`,
+  `-Werror=stringop-overflow`). On mada4 run the bench with
+  `--copt=-Wno-error=stringop-overflow --host_copt=-Wno-error=stringop-overflow`.
+
 ## Why the RocketTile cone, not the whole SoC
 
 - `ExampleRocketSystem` lowers to lg, but Pyrope emission refuses 5 modules
