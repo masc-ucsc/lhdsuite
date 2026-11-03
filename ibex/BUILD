@@ -52,6 +52,16 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# Ibex's own assertions along its real commit history: 153 flattened versions
+# (2022-01..2026-09) as a first file plus per-version line edits, rebuilt by
+# bench/history.py for //bench:ibex_verify_history. history/make_history.py
+# regenerates it from an Ibex clone; see history/README.md.
+filegroup(
+    name = "history",
+    srcs = ["history/history.jsonl.gz"],
+    visibility = ["//visibility:public"],
+)
+
 # This core uses GENERATED variants (see the CORES entry): bug1 and comment1
 # are one-line mutations of pyrope/ibex_load_store_unit.prp made by
 # bench/common.sh, not checked-in copies. The glob stays so the filegroup exists.

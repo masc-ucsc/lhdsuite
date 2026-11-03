@@ -63,6 +63,14 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             `unit` sidecars are pure arithmetic and cannot exercise that at
 #             all. "" = the core has none and no `<core>_verify_temporal` is
 #             generated.
+#   history   True = <core>/history/history.jsonl.gz is a checked-in series of
+#             the core's flattened versions along its real commit history, and
+#             the core's BUILD carries a `history` filegroup with that one file.
+#             Adds `<core>_verify_history`: the core's own assertions on every
+#             version from scratch, with the cone-hash cache, and with Layered
+#             Proof Reuse (formal.reuse=all), which must agree on every verdict.
+#             `history_top` is the flattened files' top and `history_sets` their
+#             `--set k=v` check settings. Absent = no such target.
 #   v_flags   extra slang options for this core's Verilog, appended after the
 #             `--` of `lhd compile verilog` (on top of the shared
 #             -F filelist.f -DSYNTHESIS).
@@ -343,6 +351,13 @@ CORES = {
         # The data address leaves the LSU unaligned. Refutes IbexDataAddrUnaligned.
         "variant_bug_find": "  data_addr_o = data_addr_w_aligned__w1",
         "variant_bug_replace": "  data_addr_o = data_addr__w1#[0..<32]",
+        # 153 versions, 2022-01..2026-09 (ibex/history/README.md). ibex_env is
+        # ibex_core plus Ibex's own bus assumptions; bound 10 reaches the 4-7
+        # cycle counterexamples JasperGold finds on this chain.
+        "history": True,
+        "history_top": "ibex_env",
+        "history_sets": "--set formal.bound=10 --set formal.engine=bmc --set formal.assume_check=false " +
+                        "--set formal.abc_mem=true --set formal.abc_budget=3000",
         "v_flags": "",
         "color_algs": ["synth"],
         # The picorv32 program (10 x `acc += 3`, stored to 0x100) with the
@@ -760,6 +775,9 @@ _SCENARIOS = [
     # that only holds for two cycles is not worth much.
     ("verify_temporal", "verify.sh", "temporal", "eternal", "", "seq_unit"),
     ("verify_incremental", "verify.sh", "incr", "eternal", "", ""),
+    # Cross-version reuse along the core's real commit history: cold vs the
+    # cone-hash cache vs Layered Proof Reuse, which must agree on every verdict.
+    ("verify_history", "verify_history.sh", "history", "eternal", "", "history"),
 ]
 
 def _lhd_bench(name, core, cfg, script, mode, timeout):
@@ -789,6 +807,8 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
     # otherwise a synth-only core's sim scenario would run with an empty tree/.
     if cfg.get("sim_tb", ""):
         data.append(pkg + ":sim")
+    if cfg.get("history", False):
+        data.extend(["history.py", pkg + ":history"])
 
     # Whole-process peaks exceed the per-region ABC limit: CVA6 reached
     # 146 GiB and Backend 68 GiB. Reserve measured memory with headroom;
@@ -850,6 +870,9 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_SIM_TOP_ASSERT": "1" if cfg.get("sim_top_assert", False) else "",
             "CORE_VERIFY_BOUND": str(cfg.get("verify_bound", "")),
             "CORE_VERIFY_SETS": cfg.get("verify_sets", ""),
+            "CORE_HISTORY": "$(rlocationpath %s:history)" % pkg if cfg.get("history", False) else "",
+            "CORE_HISTORY_TOP": cfg.get("history_top", ""),
+            "CORE_HISTORY_SETS": cfg.get("history_sets", ""),
             "CORE_LEC_TRUST": cfg.get("lec_trust", ""),
             "CORE_VERILATOR_TB": cfg.get("verilator_tb", ""),
             "CORE_VERILATOR_FLAGS": cfg.get("verilator_flags", ""),

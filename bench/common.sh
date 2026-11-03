@@ -45,6 +45,11 @@
 #   CORE_VERILATOR_CYCLES  cycle count for the LONG verilator throughput run
 #                     (see bench/sim_verilator.sh for why the matched-count run
 #                     alone cannot measure it).
+#   CORE_HISTORY      rlocationpath of <core>/history/history.jsonl.gz, the
+#                     core's versions along its commit history ("" = none; only
+#                     bench/verify_history.sh reads it, with the two below)
+#   CORE_HISTORY_TOP  top module of those versions
+#   CORE_HISTORY_SETS their `--set k=v` check settings, space separated
 # Paths are runfiles-relative; resolve them with rloc before use. Scripts run
 # inside $TEST_TMPDIR so every pass/workdir is hermetic per test. Scripts set
 # RF (runfiles root) before sourcing this file, which also makes plain
