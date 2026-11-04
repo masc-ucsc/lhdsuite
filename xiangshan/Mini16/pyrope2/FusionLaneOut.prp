@@ -1,6 +1,7 @@
-// One FusionDecoder lane, output side: from the lane's registered fusionVec (28 pattern hits), the two replace
-// vectors, enabled and the registered lsrc2, the constant-replacement opcode, replace-vector selects and src2 flags.
-pub mod FusionLaneOut::[timecheck=false](fusionVec:U28, replace0:U32, replace1:U32, enabled:U1, lsrc2:U5) -> (isFused:U1@[], constReplResult:U7@[], src2FromConst:U1@[], useReplace:U1@[], replaceFuType:U4@[], useReplaceDup:U1@[], replace0Sel:U32@[], replace1Sel:U32@[], src2WithZero:U1@[], src2WithMux:U1@[], rs2FromRs2:U1@[], lsrc2Sel:U6@[]) {
+// One FusionDecoder lane, output side: from the lane's registered state (fusionVec = 28 pattern hits, replace vectors,
+// enabled, lsrc2, instrPairValid, notHint), its io_clear bit and the decoded fuOpType bits, the fused io_out lane
+// (outValid + 97-bit fuType/fuOpType/lsrc2/src2Type/selImm/imm pack) and the io_info rs2From* bits.
+pub mod FusionLaneOut::[timecheck=false](fusionVec:U28, replace0:U32, replace1:U32, enabled:U1, lsrc2:U5, instrPairValid:U1, notHint:U1, clear:U1, rs2FromRs1Reg:U1, rs2FromRs2Reg:U1, decFuOpType:U3) -> (outValid:U1@[], outBits:U97@[], infoRs2FromRs1:U1@[], infoRs2FromRs2:U1@[], infoRs2FromZero:U1@[]) {
   mut _b2i_1 = if fusionVec != 0 { 1 } else { 0 }
   mut _b2i_2 = if fusionVec#[1..<3] != 0 { 1 } else { 0 }
   mut _mux_3:U7 = if _b2i_2 != 0 { 0x4b } else { 0 }
@@ -85,16 +86,35 @@ pub mod FusionLaneOut::[timecheck=false](fusionVec:U28, replace0:U32, replace1:U
   const src2WithMux__w1 = _b2i_35
   const _io_info_0_rs2FromRs2_T__w1 = enabled & src2WithMux__w1 & 1
   mut _mux_36:U6 = if src2WithMux__w1 != 0 { lsrc2#[0..<5] } else { 0 }
-  isFused = _b2i_1
-  constReplResult = constReplResult__w1
-  src2FromConst = _b2i_27
-  useReplace = _b2i_29
-  replaceFuType = _mux_30
-  useReplaceDup = _b2i_31
-  replace0Sel = _mux_32
-  replace1Sel = _mux_33
-  src2WithZero = src2WithZero__w1
-  src2WithMux = src2WithMux__w1
-  rs2FromRs2 = _io_info_0_rs2FromRs2_T__w1
-  lsrc2Sel = _mux_36
+  const isFused = _b2i_1
+  const constReplResult = constReplResult__w1
+  const src2FromConst = _b2i_27
+  const useReplace = _b2i_29
+  const replaceFuType = _mux_30
+  const useReplaceDup = _b2i_31
+  const replace0Sel = _mux_32
+  const replace1Sel = _mux_33
+  const src2WithZero = src2WithZero__w1
+  const src2WithMux = src2WithMux__w1
+  const rs2FromRs2 = _io_info_0_rs2FromRs2_T__w1
+  const lsrc2Sel = _mux_36
+  // fuOpType: patterns 24/25 take the decoded op with the replace prefix (6 << 4), otherwise the constant replacement
+  const fuOpRepl24 = (6 << 4) | (decFuOpType << 1)
+  const fuOpRepl25 = (6 << 4) | (decFuOpType << 1) | 1
+  mut fuOp24:U7 = if fusionVec#[24..<25] != 0 { fuOpRepl24#[0..<7] } else { 0 }
+  mut fuOp25:U7 = if fusionVec#[25..<26] != 0 { fuOpRepl25#[0..<7] } else { 0 }
+  mut fuOpType:U7 = if fusionVec#[24..<26] != 0 { (fuOp24 | fuOp25)#[0..<7] } else { constReplResult#[0..<7] }
+  // io_out lane fields, each (valid << w) | bits
+  const pFuType = (((fusionVec#[19..<20] & 1) << 36) | 0x80)#[0..<37]
+  const pFuOpType = (((isFused & 1) << 9) | fuOpType#[0..<7])#[0..<10]
+  const pLsrc2 = (((enabled & (src2WithMux | src2WithZero) & 1 & 1) << 6) | lsrc2Sel#[0..<6])#[0..<7]
+  const pSrc2Type = (((src2FromConst & 1) << 4) | 1)#[0..<5]
+  const pSelImm = (((useReplace & 1) << 4) | replaceFuType#[0..<4])#[0..<5]
+  const pImm = (((useReplaceDup & 1) << 32) | (replace0Sel | replace1Sel)#[0..<32])#[0..<33]
+  mut anyFused = if fusionVec != 0 { 1 } else { 0 }
+  outValid = instrPairValid & (~clear) & 1 & anyFused & 1 & notHint & 1 & enabled & 1
+  outBits = ((pFuType << 60) | (pFuOpType << 50) | (pLsrc2 << 43) | (pSrc2Type << 38) | (pSelImm << 33) | pImm)#[0..<0x61]
+  infoRs2FromRs1 = rs2FromRs2 & (~rs2FromRs1Reg) & 1
+  infoRs2FromRs2 = rs2FromRs2 & rs2FromRs2Reg & 1
+  infoRs2FromZero = enabled & src2WithZero & 1
 }
