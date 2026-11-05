@@ -63,7 +63,7 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             `unit` sidecars are pure arithmetic and cannot exercise that at
 #             all. "" = the core has none and no `<core>_verify_temporal` is
 #             generated.
-#   history   True = <core>/history/history.jsonl.gz is a checked-in series of
+#   history   True = <core>/tests/history/history.jsonl.gz is a checked-in series of
 #             the core's flattened versions along its real commit history, and
 #             the core's BUILD carries a `history` filegroup with that one file.
 #             Adds `<core>_verify_history`: the core's own assertions on every
@@ -351,7 +351,7 @@ CORES = {
         # The data address leaves the LSU unaligned. Refutes IbexDataAddrUnaligned.
         "variant_bug_find": "  data_addr_o = data_addr_w_aligned__w1",
         "variant_bug_replace": "  data_addr_o = data_addr__w1#[0..<32]",
-        # 153 versions, 2022-01..2026-09 (ibex/history/README.md). ibex_env is
+        # 153 versions, 2022-01..2026-09 (ibex/tests/history/README.md). ibex_env is
         # ibex_core plus Ibex's own bus assumptions; bound 10 reaches the 4-7
         # cycle counterexamples JasperGold finds on this chain.
         "history": True,

@@ -31,7 +31,7 @@ place of 300 MB. `bench/history.py expand` rebuilds the versions.
 To regenerate it from a clone of `https://github.com/lowRISC/ibex`:
 
 ```bash
-python3 ibex/history/make_history.py /path/to/ibex   # writes ibex/history/history.jsonl.gz
+python3 ibex/tests/history/make_history.py /path/to/ibex   # writes ibex/tests/history/history.jsonl.gz
 ```
 
 The walk is pinned to Ibex commit `af456e2557` (2026-10-06). The output is

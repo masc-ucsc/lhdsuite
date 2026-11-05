@@ -54,11 +54,11 @@ filegroup(
 
 # Ibex's own assertions along its real commit history: 153 flattened versions
 # (2022-01..2026-09) as a first file plus per-version line edits, rebuilt by
-# bench/history.py for //bench:ibex_verify_history. history/make_history.py
-# regenerates it from an Ibex clone; see history/README.md.
+# bench/history.py for //bench:ibex_verify_history. tests/history/make_history.py
+# regenerates it from an Ibex clone; see tests/history/README.md.
 filegroup(
     name = "history",
-    srcs = ["history/history.jsonl.gz"],
+    srcs = ["tests/history/history.jsonl.gz"],
     visibility = ["//visibility:public"],
 )
 
@@ -67,6 +67,6 @@ filegroup(
 # bench/common.sh, not checked-in copies. The glob stays so the filegroup exists.
 filegroup(
     name = "tests",
-    srcs = glob(["tests/**"], allow_empty = True),
+    srcs = glob(["tests/**"], exclude = ["tests/history/**"], allow_empty = True),
     visibility = ["//visibility:public"],
 )

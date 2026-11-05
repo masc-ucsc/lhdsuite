@@ -45,7 +45,7 @@
 #   CORE_VERILATOR_CYCLES  cycle count for the LONG verilator throughput run
 #                     (see bench/sim_verilator.sh for why the matched-count run
 #                     alone cannot measure it).
-#   CORE_HISTORY      rlocationpath of <core>/history/history.jsonl.gz, the
+#   CORE_HISTORY      rlocationpath of <core>/tests/history/history.jsonl.gz, the
 #                     core's versions along its commit history ("" = none; only
 #                     bench/verify_history.sh reads it, with the two below)
 #   CORE_HISTORY_TOP  top module of those versions

@@ -11,7 +11,7 @@
       summary and the METRIC lines, exit 1 on a proven/refuted mismatch
 
 A history line holds one version's commit and the line edits that turn the
-previous version into it (see <core>/history/make_history.py).
+previous version into it (see <core>/tests/history/make_history.py).
 """
 import gzip, json, pathlib, sys
 

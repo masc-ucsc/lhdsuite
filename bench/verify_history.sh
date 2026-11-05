@@ -15,7 +15,7 @@
 # wall-clock limit, so whether it finishes depends on load (counted as
 # history_full_bounded_flips). The speed-ups are METRICs, not gates.
 #
-# The versions come from <core>/history/history.jsonl.gz (CORE_HISTORY); see
+# The versions come from <core>/tests/history/history.jsonl.gz (CORE_HISTORY); see
 # that directory's make_history.py. HISTORY_VERSIONS picks a slice: the default
 # is the first 10 versions (minutes); `--test_env=HISTORY_VERSIONS=all` runs the
 # whole chain (hours, one version at a time).
