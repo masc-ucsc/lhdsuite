@@ -704,14 +704,16 @@ CORES = {
         # a one-deep TileLink responder answers the master port with LFSR data,
         # so the core fetches and executes LFSR words. Not functional coverage.
         "sim_tb": "rocket_tb.prp",
-        "sim_cycles": 25000,
+        # 500k cycles: at 25k the run is ~150 ms of simulation and understated the
+        # raw-vs-pyrope2 gap (-13% vs -34% measured at 500k, best of 5).
+        "sim_cycles": 500000,
         "sim_tb_unit": "RocketTile",
         "sim_marker": "rocket:",
         # Reset-free flops reach the outputs (as in xs_rob): zero-fill unknowns
         # so lhd sim matches the 2-state Verilator.
         "sim_sets": "--set sim.unknown_zero=true",
         # Identical from lhd sim on the .prp tree, lhd sim on the Verilog and
-        # Verilator at 25k cycles (register `_r` renamed, see below). Do NOT
+        # Verilator at 25k and 500k cycles (register `_r` renamed, see below). Do NOT
         # re-pin from one side's output.
         # KNOWN FAIL until lhd fixes jose_repro case11: a register named `_r`
         # (RocketCore.scala:1117) collides with the `_r` parameter of the
@@ -721,7 +723,7 @@ CORES = {
         "sim_expect": "sum=4760450083537923318",
         "verilator_tb": "rocket_tb_verilator.cpp",
         "verilator_flags": "",
-        "verilator_cycles": 25000,
+        "verilator_cycles": 500000,
     },
     "gemmini": {
         # ucb-bar Gemmini, standalone TPU-like core (no RoCC front end): 4x4
