@@ -31,6 +31,19 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# The hand-maintained, loop-cleaned tree (see //bench:rocket_sim_pyrope2). Same top.
+filegroup(
+    name = "pyrope2",
+    srcs = glob(["pyrope2/*.prp"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "pyrope2_top",
+    srcs = ["pyrope2/RocketTile.prp"],
+    visibility = ["//visibility:public"],
+)
+
 filegroup(
     name = "sim",
     srcs = glob(["sim/*.prp", "sim/*.cpp"], allow_empty = True),

@@ -697,6 +697,31 @@ CORES = {
         "v_flags": "",
         "color_algs": ["synth"],
         "synth_only": True,
+        # rocket/pyrope2 is the loop-cleaned RocketTile cone, PROVEN-full vs the
+        # Verilog cone after every step.
+        "pyrope2": True,
+        # Free-running throughput driver + cross-language oracle (like xs_rob):
+        # a one-deep TileLink responder answers the master port with LFSR data,
+        # so the core fetches and executes LFSR words. Not functional coverage.
+        "sim_tb": "rocket_tb.prp",
+        "sim_cycles": 25000,
+        "sim_tb_unit": "RocketTile",
+        "sim_marker": "rocket:",
+        # Reset-free flops reach the outputs (as in xs_rob): zero-fill unknowns
+        # so lhd sim matches the 2-state Verilator.
+        "sim_sets": "--set sim.unknown_zero=true",
+        # Identical from lhd sim on the .prp tree, lhd sim on the Verilog and
+        # Verilator at 25k cycles (register `_r` renamed, see below). Do NOT
+        # re-pin from one side's output.
+        # KNOWN FAIL until lhd fixes jose_repro case11: a register named `_r`
+        # (RocketCore.scala:1117) collides with the `_r` parameter of the
+        # generated dump_state()/load_state(), so the sim driver does not
+        # compile. rocket/pyrope2 renames it (r_), so rocket_sim_pyrope2 runs;
+        # rocket_sim_pyrope (raw emit) and rocket_sim_verilog still carry `_r`.
+        "sim_expect": "sum=4760450083537923318",
+        "verilator_tb": "rocket_tb_verilator.cpp",
+        "verilator_flags": "",
+        "verilator_cycles": 25000,
     },
 }
 

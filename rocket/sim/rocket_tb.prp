@@ -1,0 +1,86 @@
+// Free-running simulation driver for rocket-chip TinyConfig `RocketTile` (core + L1 I/D caches + PTW).
+//
+// Like the XiangShan drivers this is a THROUGHPUT benchmark plus a cross-language oracle: the Pyrope tree, an lg:
+// library read from the Verilog, and the Verilator twin (rocket_tb_verilator.cpp) must print the SAME checksum. It is
+// not functional coverage. Every port touched exists, with the same width, on both language sides.
+//
+// The TileLink master port (auto_buffer_out_*) is answered by a one-deep responder: an A request accepted this cycle
+// is answered the next cycle on D with the same source and size -- AccessAckData (opcode 1) carrying LFSR data for a
+// Get (4), AccessAck (0) for a Put. So the core fetches and executes LFSR words: deterministic, and enough to keep the
+// pipeline, caches and PTW busy. Interrupts, hartid and the slave port (auto_buffer_in_*) are held idle.
+const tile = import("lg:RocketTile")
+
+test tile.free_run(cycles:U32 = 1000) {
+  mut acc = tile
+
+  mut lfsr:U64 = 0x123456789abcdef
+  mut sum:U64  = 0
+  mut obs:U64  = 0
+  mut pend:U1   = 0
+  mut pget:U1   = 0
+  mut psrc:U1   = 0
+  mut psize:U4  = 0
+
+  tick cycles {
+    acc.reset = clock < 4
+
+    acc.auto_hartid_in        = 0
+    acc.auto_int_local_in_0_0 = 0
+    acc.auto_int_local_in_1_0 = 0
+    acc.auto_int_local_in_1_1 = 0
+    acc.auto_int_local_in_2_0 = 0
+    acc.auto_buffer_in_a_valid        = 0
+    acc.auto_buffer_in_a_bits_opcode  = 0
+    acc.auto_buffer_in_a_bits_param   = 0
+    acc.auto_buffer_in_a_bits_size    = 0
+    acc.auto_buffer_in_a_bits_source  = 0
+    acc.auto_buffer_in_a_bits_address = 0
+    acc.auto_buffer_in_a_bits_mask    = 0
+    acc.auto_buffer_in_a_bits_data    = 0
+    acc.auto_buffer_in_a_bits_corrupt = 0
+    acc.auto_buffer_in_d_ready        = 1
+
+    acc.auto_buffer_out_a_ready        = ~pend
+    acc.auto_buffer_out_d_valid        = pend
+    acc.auto_buffer_out_d_bits_opcode  = pget
+    acc.auto_buffer_out_d_bits_param   = 0
+    acc.auto_buffer_out_d_bits_size    = psize
+    acc.auto_buffer_out_d_bits_source  = psrc
+    acc.auto_buffer_out_d_bits_sink    = 0
+    acc.auto_buffer_out_d_bits_denied  = 0
+    acc.auto_buffer_out_d_bits_data    = lfsr#[16..=47]
+    acc.auto_buffer_out_d_bits_corrupt = 0
+
+    step
+
+    // responder state for the next cycle: a D beat retires when the core takes it; a new A is taken only when idle
+    mut take = pend & acc.auto_buffer_out_d_ready
+    mut acpt = (~pend) & acc.auto_buffer_out_a_valid
+    if take != 0 { pend = 0 }
+    if acpt != 0 {
+      pend  = 1
+      pget  = if acc.auto_buffer_out_a_bits_opcode == 4 { 1 } else { 0 }
+      psrc  = acc.auto_buffer_out_a_bits_source
+      psize = acc.auto_buffer_out_a_bits_size
+    }
+
+    obs = acc.auto_buffer_out_a_valid
+    wrap obs = obs | (acc.auto_buffer_out_a_bits_opcode << 1)
+    wrap obs = obs | (acc.auto_buffer_out_a_bits_size << 5)
+    wrap obs = obs | (acc.auto_buffer_out_d_ready << 9)
+    wrap obs = obs | (acc.auto_broadcast_out_insns_0_valid << 10)
+    wrap obs = obs | (acc.auto_broadcast_out_insns_0_exception << 11)
+    wrap obs = obs | (acc.auto_wfi_out_0 << 12)
+    wrap obs = obs | (acc.auto_broadcast_out_insns_0_priv << 13)
+    wrap obs = obs | (acc.auto_buffer_out_a_bits_address << 16)
+    wrap sum = ((sum << 1) + obs) & 0x7fffffffffffffff
+    wrap sum = (sum ^ acc.auto_broadcast_out_insns_0_iaddr) & 0x7fffffffffffffff
+
+    // xorshift64, right shift spelled as a bit slice (see xiangshan/Backend/sim/xs_rob_tb.prp for why)
+    wrap lfsr = lfsr ^ (lfsr << 13)
+    wrap lfsr = lfsr ^ lfsr#[7..=63]
+    wrap lfsr = lfsr ^ (lfsr << 17)
+  }
+
+  puts("rocket: cycles={cycles} sum={sum}")
+}
