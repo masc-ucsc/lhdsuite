@@ -723,6 +723,25 @@ CORES = {
         "verilator_flags": "",
         "verilator_cycles": 25000,
     },
+    "gemmini": {
+        # ucb-bar Gemmini, standalone TPU-like core (no RoCC front end): 4x4
+        # systolic mesh of PEs (8-bit MACs, 32-bit accumulators) +
+        # AccumulatorMem. The non-RISC-V, loop-rich design: the emit spells the
+        # mesh as 16 Tile instances, which pyrope2 is meant to fold into loops.
+        "pkg": "//gemmini",
+        "top": "GemminiTPU",
+        "unit": "GemminiTPU",
+        # One MAC's output inverted: a real arithmetic change in all 16 PEs.
+        "incremental_edit_unit": "MacUnit",
+        "v_flags": "",
+        "color_algs": ["synth"],
+        "synth_only": True,
+        "pyrope2": True,
+        # The 64x128 accumulator SRAM does not discharge in 30 min (LEC times out
+        # on the emitted memory, raw emit included); trusted and disclosed, so the
+        # rest (mesh, PEs, transposer, queues, top) is still proven.
+        "lec_trust": "mem_64x128",
+    },
 }
 
 # Scenario table shared by every core:
