@@ -725,6 +725,37 @@ CORES = {
         "verilator_flags": "",
         "verilator_cycles": 500000,
     },
+    "boom": {
+        # chipyard SmallBoomV4Config BoomTile: the BOOM v4 out-of-order core + L1
+        # I/D caches + PTW, the cone of the firtool emit (see boom/BUILD).
+        "pkg": "//boom",
+        "top": "BoomTile",
+        "unit": "BoomTile",
+        # BoomTile has no `io_x = ... & 1` line for the generic bug1 anchor;
+        # flip an ALU result instead (a real behaviour change in the core).
+        "incremental_edit_unit": "ALUUnit",
+        "v_flags": "",
+        "color_algs": ["synth"],
+        "synth_only": True,
+        # Free-running throughput driver + cross-language oracle (like rocket):
+        # a TileLink-C responder serves a fixed RV64 loop on the boot line
+        # (0x10000) and LFSR data elsewhere; the loop walks memory one cache
+        # line per iteration, so the core keeps refilling (AcquireBlock /
+        # GrantData) and, once the cache is full, writing back (ReleaseData).
+        # Not functional coverage.
+        "sim_tb": "boom_tb.prp",
+        # 100k cycles: ~14 s of lhd sim (7k cycles/s), ~2 s of Verilator.
+        "sim_cycles": 100000,
+        "sim_tb_unit": "BoomTile",
+        "sim_marker": "boom:",
+        "sim_sets": "--set sim.unknown_zero=true",
+        # Identical from lhd sim on the raw .prp tree and Verilator at 25k and
+        # 100k cycles. Do NOT re-pin from one side's output.
+        "sim_expect": "sum=5908588184295336531",
+        "verilator_tb": "boom_tb_verilator.cpp",
+        "verilator_flags": "",
+        "verilator_cycles": 100000,
+    },
     "gemmini": {
         # ucb-bar Gemmini, standalone TPU-like core (no RoCC front end): 4x4
         # systolic mesh of PEs (8-bit MACs, 32-bit accumulators) +

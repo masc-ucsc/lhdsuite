@@ -1,0 +1,39 @@
+pub mod PipelinedMultiplier::[timecheck=false](`clock`:Clock, `reset`:U1, io_req_valid:U1, io_req_bits_fn:U5, io_req_bits_dw:U1, io_req_bits_in1:U64, io_req_bits_in2:U64) -> (io_resp_bits_data:U64@[]) {
+  mut _mux_5:U64 = 0
+  mut _mux_6:U64 = 0
+  reg in_pipe_v:U1:[initial=0, reset_pin=`reset`, async=false]
+  reg in_pipe_b_fn:U5
+  reg in_pipe_b_dw:U1
+  reg in_pipe_b_in1:U64
+  reg in_pipe_b_in2:U64
+  reg io_resp_bits_data_pipe_v:U1:[initial=0, reset_pin=`reset`, async=false]
+  reg io_resp_bits_data_pipe_b:U64
+  reg io_resp_bits_data_pipe_pipe_b:U64
+  const decoded_invInputs__w1 = ~in_pipe_b_fn#[0..<2]
+  mut _b2i_2 = if ((decoded_invInputs__w1#[1..<2] << 1) | (U1((((decoded_invInputs__w1 & 1) << 1) | in_pipe_b_fn#[1..<2]) == 3) & 1)) != 0 { 1 } else { 0 }
+  mut _rep_3:U64 = if (_b2i_2 & in_pipe_b_in1#[63..<0x40] & 1) != 0 { 0xffffffffffffffff } else { 0 }
+  mut _rep_4:U64 = if (decoded_invInputs__w1#[1..<2] & in_pipe_b_in2#[63..<0x40] & 1) != 0 { 0xffffffffffffffff } else { 0 }
+  const prod__w1 = (((_rep_3#[0..<0x40] << 64) | in_pipe_b_in1#[0..<0x40]) * ((_rep_4#[0..<0x40] << 64) | in_pipe_b_in2#[0..<0x40]))#[0..<0x80]
+  if `reset` != 0 {
+    in_pipe_v = 0
+    io_resp_bits_data_pipe_v = 0
+  } else {
+    in_pipe_v = io_req_valid
+    io_resp_bits_data_pipe_v = in_pipe_v
+  }
+  if io_req_valid != 0 {
+    in_pipe_b_fn = io_req_bits_fn
+    in_pipe_b_dw = io_req_bits_dw
+    in_pipe_b_in1 = io_req_bits_in1
+    in_pipe_b_in2 = io_req_bits_in2
+  }
+  if in_pipe_v != 0 {
+    _mux_5 = if in_pipe_b_dw != 0 { prod__w1#[0..<0x40] } else { prod__w1#[0..<32]#sext[0..=31]#[0..<0x40] }
+    _mux_6 = if (((in_pipe_b_fn & 1) << 1) | in_pipe_b_fn#[1..<2]) != 0 { prod__w1#[0x40..<0x80] } else { _mux_5#[0..<0x40] }
+    io_resp_bits_data_pipe_b = _mux_6
+  }
+  if io_resp_bits_data_pipe_v != 0 {
+    io_resp_bits_data_pipe_pipe_b = io_resp_bits_data_pipe_b
+  }
+  io_resp_bits_data = io_resp_bits_data_pipe_pipe_b
+}

@@ -1,0 +1,170 @@
+// Free-running simulation driver for chipyard SmallBoomV4 `BoomTile` (BOOM v4 core + L1 I/D caches + PTW).
+//
+// Like rocket/sim/rocket_tb.prp this is a THROUGHPUT benchmark plus a cross-language oracle: the Pyrope tree, an lg:
+// library read from the Verilog, and the Verilator twin (boom_tb_verilator.cpp) must print the SAME checksum. It is not
+// functional coverage. Every port touched exists, with the same width, on both language sides.
+//
+// The TileLink-C master port (auto_buffer_out_*) is answered by a one-message-at-a-time responder:
+//   A Get (4)                    -> D AccessAckData (1), 2^size/8 beats of LFSR data
+//   A PutFull/PutPartial (0/1)   -> D AccessAck (0), after the last A beat
+//   A AcquireBlock (6)           -> D GrantData (5), cap toT, 2^size/8 beats of LFSR data
+//   A AcquirePerm (7)            -> D Grant (4), cap toT
+//   C Release/ReleaseData (6/7)  -> D ReleaseAck (6), after the last C beat
+// E (GrantAck) is always ready, B (probes) is never driven.
+// Data: the boot line 0x10000..0x1003f returns a fixed RV64 loop, everything else LFSR data. The loop walks memory from
+// 0x80000000 one cache line per iteration (x1 = 1 << 31; loop: ld x2,0(x1); add x3,x3,x2; sd x3,8(x1); addi x1,x1,64;
+// j loop), so the core keeps missing in the D-cache: AcquireBlock/GrantData refills and, once the cache is full,
+// ReleaseData writebacks. (With random instruction words alone the core traps to mtvec = 0 and spins with no bus traffic.)
+const tile = import("lg:BoomTile")
+
+test tile.free_run(cycles:U32 = 1000) {
+  mut acc = tile
+
+  mut lfsr:U64 = 0x123456789abcdef
+  mut sum:U64  = 0
+  mut obs:U64  = 0
+  // D channel: one response in flight
+  mut dv:U1    = 0
+  mut dop:U3   = 0
+  mut dsize:U4 = 0
+  mut dsrc:U4  = 0
+  mut dleft:U8 = 0
+  mut dbeats:U8 = 0
+  mut dprog:U1 = 0
+  // A side: a multi-beat Put in progress, and a response waiting for D
+  mut aleft:U8 = 0
+  mut ap:U1    = 0
+  mut apop:U3  = 0
+  mut apsize:U4 = 0
+  mut apsrc:U4 = 0
+  mut apbeats:U8 = 0
+  mut approg:U1 = 0
+  // C side: a Release(Data) in progress, and a ReleaseAck waiting for D
+  mut cleft:U8 = 0
+  mut rp:U1    = 0
+  mut rpsize:U4 = 0
+  mut rpsrc:U4 = 0
+
+  tick cycles {
+    acc.reset = clock < 4
+
+    acc.auto_hartid_in        = 0
+    acc.auto_int_local_in_0_0 = 0
+    acc.auto_int_local_in_1_0 = 0
+    acc.auto_int_local_in_1_1 = 0
+    acc.auto_int_local_in_2_0 = 0
+    acc.auto_int_local_in_3_0 = 0
+
+    const aready = ~(ap | rp | dv)
+    const cready = ~rp
+    acc.auto_buffer_out_a_ready = aready
+    acc.auto_buffer_out_b_valid        = 0
+    acc.auto_buffer_out_b_bits_opcode  = 0
+    acc.auto_buffer_out_b_bits_param   = 0
+    acc.auto_buffer_out_b_bits_size    = 0
+    acc.auto_buffer_out_b_bits_source  = 0
+    acc.auto_buffer_out_b_bits_address = 0
+    acc.auto_buffer_out_b_bits_mask    = 0
+    acc.auto_buffer_out_b_bits_data    = 0
+    acc.auto_buffer_out_b_bits_corrupt = 0
+    acc.auto_buffer_out_c_ready = cready
+    acc.auto_buffer_out_d_valid        = dv
+    acc.auto_buffer_out_d_bits_opcode  = dop
+    acc.auto_buffer_out_d_bits_param   = 0
+    acc.auto_buffer_out_d_bits_size    = dsize
+    acc.auto_buffer_out_d_bits_source  = dsrc
+    acc.auto_buffer_out_d_bits_sink    = 0
+    acc.auto_buffer_out_d_bits_denied  = 0
+    const beat = dbeats - dleft
+    const pdata:U64 = if beat == 0 { 0x01F0909300100093 } elif beat == 1 { 0x002181B30000B103 } elif beat == 2 { 0x040080930030B423 } elif beat == 3 { 0x00000013FF1FF06F } else { 0x0000001300000013 }
+    acc.auto_buffer_out_d_bits_data    = if dprog != 0 { pdata } else { lfsr }
+    acc.auto_buffer_out_d_bits_corrupt = 0
+    acc.auto_buffer_out_e_ready = 1
+
+    step
+
+    // handshakes use the ready values driven BEFORE the edge (aready/cready), never the updated state
+    // D: a beat retires when the core takes it
+    if (dv & acc.auto_buffer_out_d_ready) != 0 {
+      wrap dleft = dleft - 1
+      if dleft == 0 { dv = 0 }
+    }
+    // C: count Release(Data) beats; the ReleaseAck is owed after the last one
+    if (acc.auto_buffer_out_c_valid & cready) != 0 {
+      if cleft == 0 {
+        mut cbeats:U8 = 1
+        if acc.auto_buffer_out_c_bits_opcode == 7 and acc.auto_buffer_out_c_bits_size >= 3 {
+          cbeats = 1 << (acc.auto_buffer_out_c_bits_size - 3)
+        }
+        cleft = cbeats
+      }
+      wrap cleft = cleft - 1
+      if cleft == 0 and (acc.auto_buffer_out_c_bits_opcode == 6 or acc.auto_buffer_out_c_bits_opcode == 7) {
+        rp = 1
+        rpsize = acc.auto_buffer_out_c_bits_size
+        rpsrc = acc.auto_buffer_out_c_bits_source
+      }
+    }
+    // A: count Put beats; every other request is one beat
+    if (acc.auto_buffer_out_a_valid & aready) != 0 {
+      const op = acc.auto_buffer_out_a_bits_opcode
+      const sz = acc.auto_buffer_out_a_bits_size
+      if aleft == 0 {
+        mut abeats:U8 = 1
+        if op <= 1 and sz >= 3 { abeats = 1 << (sz - 3) }
+        aleft = abeats
+      }
+      wrap aleft = aleft - 1
+      if aleft == 0 {
+        ap = 1
+        apsize = sz
+        apsrc = acc.auto_buffer_out_a_bits_source
+        approg = if acc.auto_buffer_out_a_bits_address#[6..=31] == 0x400 { 1 } else { 0 }
+        mut rbeats:U8 = 1
+        if (op == 4 or op == 6) and sz >= 3 { rbeats = 1 << (sz - 3) }
+        apbeats = rbeats
+        apop = if op == 4 { 1 } elif op == 6 { 5 } elif op == 7 { 4 } else { 0 }
+      }
+    }
+    // start the next D response: a ReleaseAck first, then an A response
+    if dv == 0 {
+      if rp != 0 {
+        dv = 1
+        dop = 6
+        dsize = rpsize
+        dsrc = rpsrc
+        dleft = 1
+        dbeats = 1
+        dprog = 0
+        rp = 0
+      } elif ap != 0 {
+        dv = 1
+        dop = apop
+        dsize = apsize
+        dsrc = apsrc
+        dleft = apbeats
+        dbeats = apbeats
+        dprog = approg
+        ap = 0
+      }
+    }
+
+    obs = acc.auto_buffer_out_a_valid
+    wrap obs = obs | (acc.auto_buffer_out_a_bits_opcode << 1)
+    wrap obs = obs | (acc.auto_buffer_out_a_bits_size << 4)
+    wrap obs = obs | (acc.auto_buffer_out_d_ready << 8)
+    wrap obs = obs | (acc.auto_buffer_out_c_valid << 9)
+    wrap obs = obs | (acc.auto_buffer_out_c_bits_opcode << 10)
+    wrap obs = obs | (acc.auto_buffer_out_e_valid << 13)
+    wrap obs = obs | (acc.auto_buffer_out_a_bits_address << 16)
+    wrap sum = ((sum << 1) + obs) & 0x7fffffffffffffff
+    wrap sum = (sum ^ acc.auto_buffer_out_c_bits_address) & 0x7fffffffffffffff
+
+    // xorshift64, right shift spelled as a bit slice (see xiangshan/Backend/sim/xs_rob_tb.prp for why)
+    wrap lfsr = lfsr ^ (lfsr << 13)
+    wrap lfsr = lfsr ^ lfsr#[7..=63]
+    wrap lfsr = lfsr ^ (lfsr << 17)
+  }
+
+  puts("boom: cycles={cycles} sum={sum}")
+}
