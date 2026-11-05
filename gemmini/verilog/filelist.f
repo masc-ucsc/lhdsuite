@@ -1,1 +1,2 @@
 GemminiTPU.sv
+GemminiSimTop.sv

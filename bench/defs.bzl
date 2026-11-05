@@ -741,6 +741,25 @@ CORES = {
         # on the emitted memory, raw emit included); trusted and disclosed, so the
         # rest (mesh, PEs, transposer, queues, top) is still proven.
         "lec_trust": "mem_64x128",
+        # Free-running throughput driver + cross-language oracle (like rocket):
+        # xorshift64 stimulus on every input, a checksum of every output. The
+        # driver talks to GemminiSimTop (sim/GemminiSimTop.prp,
+        # verilog/GemminiSimTop.sv; LEC-proven equal), a flat-port wrapper:
+        # GemminiTPU's ports are nested structs with 128-bit fields, and a
+        # testbench can neither write a struct-port field nor a scalar past
+        # 64 bits. The Verilator twin drives GemminiTPU itself and packs the
+        # structs the same way.
+        "sim_tb": "gemmini_tb.prp",
+        "sim_cycles": 25000,
+        "sim_tb_unit": "GemminiSimTop",
+        "sim_marker": "gemmini:",
+        "sim_sets": "--set sim.unknown_zero=true",
+        # Identical from lhd sim on the .prp tree, lhd sim on the Verilog and
+        # Verilator at 25k cycles. Do NOT re-pin from one side's output.
+        "sim_expect": "sum=6362616511205422611",
+        "verilator_tb": "gemmini_tb_verilator.cpp",
+        "verilator_flags": "",
+        "verilator_cycles": 25000,
     },
 }
 
