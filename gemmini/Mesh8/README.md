@@ -6,7 +6,8 @@ point for the loop cleanups: the 4x4 and 8x8 emits differ only in sizes, so
 the same cleanups apply, and the raw emit grows with the mesh while the loops
 do not.
 
-Not in the bench yet (see "Simulation" for why).
+In the bench as core `gemmini8` (`bench/defs.bzl`); all 14 `gemmini8_*` targets
+pass on kaffirlime.
 
 ## Layout and status (2026-11-06, lhd c53e1728c)
 
@@ -42,12 +43,24 @@ Run `drv.bin` with `--init-zero --set sim.unknown_zero=true`. The 8x8 has
 registers with no initializer whose power-on bits reach the outputs. Without
 `--init-zero` the checksum changes with `--seed`, and passing the flags only to
 `lhd sim --setup-only/--run-only` does not carry them into a later bare
-`drv.bin` run. That is why this core is not in the bench yet: `bench/sim.sh`
-times a bare `drv.bin` re-run.
+`drv.bin` run. In the bench, `bench/sim.sh` forwards `lhd.seed`,
+`sim.init_zero` and `sim.unknown_zero` from the core's `sim_sets` to the timed
+`drv.bin` run, and `gemmini8` sets both `init_zero` and `unknown_zero`.
 
 25k cycles: `sum=3185508839202413007` from Verilator, lhd sim on `pyrope/`,
 lhd sim on `pyrope2/` and lhd sim on the Verilog.
 
-Speed (kaffirlime, lhd c53e1728c): `pyrope/` 122k cycles/s, `pyrope2/` 1.2k
-cycles/s. The Mesh loop alone makes lhd sim about 100x slower. That is the same
-loop codegen issue as the 4x4 (case20), and it grows with the mesh: 16x at 4x4.
+Speed from the bench run (kaffirlime, 25k cycles):
+
+| Target | cycles/s |
+|---|---|
+| lhd sim `pyrope/` | 62.3k |
+| lhd sim `pyrope2/` | 652 |
+| lhd sim Verilog | 76.0k |
+| Verilator | 50.3k |
+
+Synthesis (`gemmini8_synth`): 1,458,735 gates.
+
+The Mesh loop alone makes lhd sim about 100x slower (an earlier standalone run
+gave 122k vs 1.2k cycles/s). That is the same loop codegen issue as the 4x4
+(case20), and it grows with the mesh: 16x at 4x4.
