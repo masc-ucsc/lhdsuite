@@ -737,6 +737,9 @@ CORES = {
         "v_flags": "",
         "color_algs": ["synth"],
         "synth_only": True,
+        # boom/pyrope2 is the BoomTile cone with the old cleanups re-applied, each
+        # module PROVEN-full vs its boom/pyrope twin; same sim checksum.
+        "pyrope2": True,
         # Free-running throughput driver + cross-language oracle (like rocket):
         # a TileLink-C responder serves a fixed RV64 loop on the boot line
         # (0x10000) and LFSR data elsewhere; the loop walks memory one cache

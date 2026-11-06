@@ -2,8 +2,9 @@
 # the firtool emit at chipyard-boom-v4/sims/verilator/generated-src/chipyard.harness.TestHarness.SmallBoomV4Config/
 # gen-collateral.dedup-on.bak (the tree the boom/pyrope2 BoomCore LEC used): verilog/filelist.f lists only BoomTile's
 # cone (236 modules) plus top.mems.v (the 17 SRAM macros it uses) and plusarg_reader.v. pyrope/ is that cone emitted by
-# `lhd compile verilog --top BoomTile` (lhd d088d9039, 2026-11-05). pyrope2/ is NOT wired here yet: it predates the
-# U-type syntax and needs a rebase onto this emit (as rocket/pyrope2 had in d080e5f).
+# `lhd compile verilog --top BoomTile` (lhd d088d9039, 2026-11-05). pyrope2/ is the same cone with the hand/loop
+# cleanups re-applied module by module (each PROVEN-full vs its pyrope/ twin); its files outside the cone
+# (Rob_rob16 + memories, BusyTable) are old-syntax leftovers that the BoomTile top never imports.
 
 filegroup(
     name = "verilog",
@@ -26,6 +27,19 @@ filegroup(
 filegroup(
     name = "pyrope_top",
     srcs = ["pyrope/BoomTile.prp"],
+    visibility = ["//visibility:public"],
+)
+
+# The hand-maintained, loop-cleaned tree (see //bench:boom_sim_pyrope2). Same top.
+filegroup(
+    name = "pyrope2",
+    srcs = glob(["pyrope2/*.prp"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "pyrope2_top",
+    srcs = ["pyrope2/BoomTile.prp"],
     visibility = ["//visibility:public"],
 )
 
