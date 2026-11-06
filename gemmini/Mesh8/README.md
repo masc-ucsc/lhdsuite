@@ -15,7 +15,7 @@ pass on kaffirlime.
 |---|---|---|
 | `verilog/` | `GemminiTPU.sv` (15 modules) + `GemminiSimTop.sv` (flat-port sim wrapper) | Chisel 6.2.0 emit of `/mada/users/frabieik/gemmini_tpu` with `GEMMINI_MESH=8` (`Top.scala` reads the mesh size from that env var, default 4) |
 | `pyrope/` | raw emit, `lhd compile verilog --top GemminiTPU`, 7,945 lines | PROVEN-full vs the Verilog in 2 s (`mem_64x256` trusted) |
-| `pyrope2/` | 10 modules cleaned, 2,716 lines (-66%) | GemminiTPU top PROVEN-full vs the Verilog in 82 s; each module PROVEN-full vs raw and vs the Verilog |
+| `pyrope2/` | 11 modules cleaned, 2,620 lines (-67%) | GemminiTPU top PROVEN-full vs the Verilog in 82 s; each module PROVEN-full vs raw and vs the Verilog |
 | `sim/` | `gemmini_tb.prp`, `GemminiSimTop.prp`, `gemmini_tb_verilator.cpp` | same checksum from lhd sim (pyrope, pyrope2, Verilog) and Verilator |
 
 | Module | raw | pyrope2 | How |
@@ -29,9 +29,10 @@ pass on kaffirlime.
 | TagQueue | 118 | 38 | entry loop; entries are 8 bits (total_rows is 4 bits at 8x8) |
 | Queue6_TagWithIdAndTotalRows | 84 | 39 | port of the 4x4 cleanup |
 | TwoPortSyncMem | 88 | 16 | 32 byte-mask lanes in one loop |
+| GemminiTPU | 142 | 46 | as 4x4 |
 | Tile | 40 | 16 | as 4x4 |
 
-Left raw: GemminiTPU (142, instance wiring), the memories.
+Left raw: the memories, PE and MacUnit.
 
 The generators live in `/mada/users/frabieik/pyro_scratch/gemmini8/gen/`, and
 each one run with N=4 reproduces the 4x4 `gemmini/pyrope2/` file byte for byte:

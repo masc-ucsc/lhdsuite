@@ -12,7 +12,7 @@ RoCC/rocket-chip front end. The non-RISC-V, loop-rich design of the suite.
 |---|---|---|
 | `verilog/` | `GemminiTPU.sv` (15 modules, 4,425 lines) + `GemminiSimTop.sv` (flat-port sim wrapper) | Chisel 6.2.0 emit of the standalone extraction in `/mada/users/frabieik/gemmini_tpu` (`sbt "runMain gemmini.Top"`); rocket-chip/hardfloat/Diplomacy replaced by local stubs |
 | `pyrope/` | 15 modules, `lhd compile verilog --top GemminiTPU` + `manifest.json` (3,865 lines) | PROVEN-full vs the Verilog with `mem_64x128` trusted (see LEC) |
-| `pyrope2/` | 10 modules cleaned, 1,271 lines (-67%) | GemminiTPU top PROVEN-full vs the Verilog in 8 s; each module PROVEN-full vs the previous step and vs the Verilog |
+| `pyrope2/` | 11 modules cleaned, 1,175 lines (-70%) | GemminiTPU top PROVEN-full vs the Verilog in 8 s; each module PROVEN-full vs the previous step and vs the Verilog |
 | `sim/` | `gemmini_tb.prp`, `GemminiSimTop.prp`, `gemmini_tb_verilator.cpp` | same checksum from lhd sim (pyrope, pyrope2, Verilog) and Verilator |
 | `Mesh8/` | the same core regenerated with an 8x8 mesh | see `Mesh8/README.md` |
 
@@ -27,10 +27,11 @@ RoCC/rocket-chip front end. The non-RISC-V, loop-rich design of the suite.
 | AlwaysOutTransposer | 110 | 38 | PE instances declared bottom-right first, so no forward wires; no loop (loop and reg-array forms only reach PROVEN-bounded) |
 | Queue6_TagWithIdAndTotalRows | 84 | 39 | named pointers and full/empty |
 | TwoPortSyncMem | 56 | 16 | byte-mask lanes in one loop |
+| GemminiTPU | 142 | 46 | direct port wiring instead of packing and unpacking through wide vectors |
 | Tile | 40 | 16 | direct wiring |
 
-Left raw: GemminiTPU (142, instance wiring), the memories (`mem_64x128`,
-`ram_6x7`), PE and MacUnit (already small).
+Left raw: the memories (`mem_64x128`, `ram_6x7`), PE and MacUnit (already
+small).
 
 Simulation: the bench runs 25k cycles (`sum=6362616511205422611`); the
 standalone check is 200k cycles (`sum=8485392126227624009`). The `Mesh` loop
