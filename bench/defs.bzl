@@ -797,6 +797,38 @@ CORES = {
         "verilator_flags": "",
         "verilator_cycles": 25000,
     },
+    "gemmini8": {
+        # The same Gemmini core as `gemmini`, regenerated with an 8x8 mesh
+        # (gemmini/Mesh8/README.md): the size point for the loop cleanups. The
+        # raw emit grows with the mesh (7945 lines vs 3865), pyrope2's loops
+        # do not (3140 lines, -60%).
+        "pkg": "//gemmini/Mesh8",
+        "top": "GemminiTPU",
+        "unit": "GemminiTPU",
+        "incremental_edit_unit": "MacUnit",
+        "v_flags": "",
+        "color_algs": ["synth"],
+        "synth_only": True,
+        "pyrope2": True,
+        "lec_trust": "mem_64x256",
+        # Same driver shape as `gemmini` (flat-port wrapper GemminiSimTop, 64-bit
+        # a/b/d, 4 data words). sim.init_zero is REQUIRED here, not a speed
+        # knob: the 8x8 has state with no initializer whose power-on bits reach
+        # the outputs, so without it the checksum moves with --seed and does
+        # not match Verilator (which zero-fills). sim.sh forwards both keys to
+        # its drv.bin re-runs.
+        "sim_tb": "gemmini_tb.prp",
+        "sim_cycles": 25000,
+        "sim_tb_unit": "GemminiSimTop",
+        "sim_marker": "gemmini8:",
+        "sim_sets": "--set sim.unknown_zero=true --set sim.init_zero=true",
+        # Identical from lhd sim on pyrope/ and pyrope2/, lhd sim on the Verilog
+        # and Verilator at 25k cycles. Do NOT re-pin from one side's output.
+        "sim_expect": "sum=3185508839202413007",
+        "verilator_tb": "gemmini_tb_verilator.cpp",
+        "verilator_flags": "",
+        "verilator_cycles": 25000,
+    },
 }
 
 # Scenario table shared by every core:

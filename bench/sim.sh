@@ -194,6 +194,19 @@ case " ${CORE_SIM_SETS:-} " in
   *) CORE_SIM_SETS="--set lhd.jobs=$(cpu_count) ${CORE_SIM_SETS:-}" ;;
 esac
 
+# Run-time keys the generated drv.bin reads itself (`drv.bin --help`: lhd.seed,
+# sim.init_zero, sim.unknown_zero). `lhd sim --run-only` hands them to the binary
+# it runs, so the gated sim_run sees them; every bare drv.bin re-run below must
+# get them too, or it simulates a DIFFERENT power-on state than the run the gate
+# checked. Measured on gemmini/Mesh8 (state with no initializer reaching the
+# outputs): without them the re-run's checksum moved with --seed and matched
+# neither sim_run nor Verilator. Only these keys: the binary rejects the
+# generation-time ones (sim.tune.backend, lhd.jobs, ...).
+DRV_SETS=()
+for kv in ${CORE_SIM_SETS:-}; do
+  case "$kv" in lhd.seed=* | sim.init_zero=* | sim.unknown_zero=*) DRV_SETS+=(--set "$kv") ;; esac
+done
+
 # ---- MODE=incr: full plus the three-pass rebuild over ONE workdir ------------
 #
 # The sim counterpart of synth_incremental. The measured endpoint is a compiled
@@ -274,9 +287,9 @@ if [ "$MODE" = incr ]; then
     local drv=$wd/sim/drv.bin
     [ -x "$drv" ] \
       || { echo "FAIL: sim_pass $tag linked no $drv" >&2; return 1; }
-    log_cmd "sim_exec_$tag" "$drv --cycles $CYCLES --result-json $wd/sim/exec_tests.json"
+    log_cmd "sim_exec_$tag" "$drv --cycles $CYCLES ${DRV_SETS[*]} --result-json $wd/sim/exec_tests.json"
     SIM_EXEC_RC=0
-    CURRENT_STEP=sim_exec_$tag "$drv" --cycles "$CYCLES" \
+    CURRENT_STEP=sim_exec_$tag "$drv" --cycles "$CYCLES" ${DRV_SETS[@]+"${DRV_SETS[@]}"} \
       --result-json "$wd/sim/exec_tests.json" >"step_sim_exec_$tag.log" 2>&1 || SIM_EXEC_RC=$?
   }
 
@@ -427,8 +440,8 @@ fi
 # because sim_run_ms is the real cost of one `lhd sim`.
 : "${SIM_REPS:=3}"
 DRV=SW/sim/drv.bin
-log_cmd sim_exec "$DRV --cycles $CYCLES --result-json SW/sim/exec_tests.json  (x$SIM_REPS, best)"
-best_run sim_exec "$SIM_REPS" "$DRV" --cycles "$CYCLES" \
+log_cmd sim_exec "$DRV --cycles $CYCLES ${DRV_SETS[*]} --result-json SW/sim/exec_tests.json  (x$SIM_REPS, best)"
+best_run sim_exec "$SIM_REPS" "$DRV" --cycles "$CYCLES" ${DRV_SETS[@]+"${DRV_SETS[@]}"} \
   --result-json SW/sim/exec_tests.json
 EXEC_MS=$BEST_MS
 metric sim_exec_ms "$EXEC_MS" ms

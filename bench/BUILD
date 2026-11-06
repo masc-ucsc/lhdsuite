@@ -92,6 +92,9 @@ core_benches("boom")
 
 core_benches("gemmini")
 
+# The same Gemmini core with an 8x8 mesh (gemmini/Mesh8): the size point for the loop cleanups.
+core_benches("gemmini8")
+
 # Cross-core scenario suites, for comparing one flow across both designs.
 test_suite(
     name = "compile",
