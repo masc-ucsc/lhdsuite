@@ -15,13 +15,15 @@ pass on kaffirlime.
 |---|---|---|
 | `verilog/` | `GemminiTPU.sv` (15 modules) + `GemminiSimTop.sv` (flat-port sim wrapper) | Chisel 6.2.0 emit of `/mada/users/frabieik/gemmini_tpu` with `GEMMINI_MESH=8` (`Top.scala` reads the mesh size from that env var, default 4) |
 | `pyrope/` | raw emit, `lhd compile verilog --top GemminiTPU`, 7,945 lines | PROVEN-full vs the Verilog in 2 s (`mem_64x256` trusted) |
-| `pyrope2/` | 8 modules cleaned, 3,140 lines (-60%) | PROVEN-full vs the Verilog in 74 s; each module PROVEN-full vs raw and vs the Verilog |
+| `pyrope2/` | 10 modules cleaned, 2,716 lines (-66%) | GemminiTPU top PROVEN-full vs the Verilog in 82 s; each module PROVEN-full vs raw and vs the Verilog |
 | `sim/` | `gemmini_tb.prp`, `GemminiSimTop.prp`, `gemmini_tb_verilator.cpp` | same checksum from lhd sim (pyrope, pyrope2, Verilog) and Verilator |
 
 | Module | raw | pyrope2 | How |
 |---|---|---|---|
 | Mesh | 3,339 | 1,257 | 64 Tiles in one row/col loop; `gen_mesh.py` (below) from the 4x4 cleanup. The loop is the same as at 4x4; the rest is the 512 scalar registers (declaration + write-back) that LEC needs to pair with the Verilog flops |
 | Queue1_AccumulatorReadResp | 2,376 | 31 | one-entry flow queue rewritten from its semantics |
+| MeshWithDelays | 945 | 785 | `gen_mwd.py` from the 4x4 hand rewrite; skew-chain registers keep their emitted names, and the 45 de-skew registers for valid/last/id of columns 1..6 (nothing reads them) are dropped |
+| AlwaysOutTransposer | 350 | 86 | `gen_transposer.py`: the 64 PE instances declared bottom-right first, so no forward wires; no loop |
 | AccumulatorMem | 146 | 79 | port of the 4x4 cleanup (256-bit data, 32-bit mask) |
 | PE_64 | 134 | 44 | same as 4x4 PE_16 |
 | TagQueue | 118 | 38 | entry loop; entries are 8 bits (total_rows is 4 bits at 8x8) |
@@ -29,13 +31,14 @@ pass on kaffirlime.
 | TwoPortSyncMem | 88 | 16 | 32 byte-mask lanes in one loop |
 | Tile | 40 | 16 | as 4x4 |
 
-Left raw: MeshWithDelays (945; the 4x4 cleanup is a hand rewrite with no loop
-and its skew chains grow to hundreds of named registers), AlwaysOutTransposer
-(350; loop forms do not LEC, see the 4x4 notes), GemminiTPU, the memories.
+Left raw: GemminiTPU (142, instance wiring), the memories.
 
-`gen_mesh.py` lives in `/mada/users/frabieik/pyro_scratch/gemmini8/gen/`:
-`gen_mesh.py <raw Mesh.prp> <4x4 pyrope2/Mesh.prp> 8`. Run with `4` on the 4x4
-raw emit, it reproduces `gemmini/pyrope2/Mesh.prp`.
+The generators live in `/mada/users/frabieik/pyro_scratch/gemmini8/gen/`, and
+each one run with N=4 reproduces the 4x4 `gemmini/pyrope2/` file byte for byte:
+
+- `gen_mesh.py <raw Mesh.prp> <4x4 pyrope2/Mesh.prp> 8`
+- `gen_mwd.py <raw MeshWithDelays.prp> 8` (register names come from the raw emit)
+- `gen_transposer.py 8 <out>`
 
 ## Simulation
 
@@ -50,17 +53,17 @@ registers with no initializer whose power-on bits reach the outputs. Without
 25k cycles: `sum=3185508839202413007` from Verilator, lhd sim on `pyrope/`,
 lhd sim on `pyrope2/` and lhd sim on the Verilog.
 
-Speed from the bench run (kaffirlime, 25k cycles):
+Speed from the bench run (kaffirlime, lhd c53e1728c, 25k cycles):
 
 | Target | cycles/s |
 |---|---|
 | lhd sim `pyrope/` | 62.3k |
-| lhd sim `pyrope2/` | 652 |
+| lhd sim `pyrope2/` | 625 |
 | lhd sim Verilog | 76.0k |
-| Verilator | 50.3k |
+| Verilator | 47.3k |
 
-Synthesis (`gemmini8_synth`): 1,458,735 gates.
+Synthesis (`gemmini8_synth`): 1,458,735 gates, 11.7 mm2.
 
-The Mesh loop alone makes lhd sim about 100x slower (an earlier standalone run
-gave 122k vs 1.2k cycles/s). That is the same loop codegen issue as the 4x4
-(case20), and it grows with the mesh: 16x at 4x4.
+The Mesh loop alone makes lhd sim about 100x slower (a standalone run of the
+final tree gives 1.15k cycles/s; the bench number is lower). That is the same
+loop codegen issue as the 4x4 (case20), and it grows with the mesh: ~9x at 4x4.
