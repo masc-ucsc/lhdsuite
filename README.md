@@ -157,6 +157,7 @@ selected LiveHD checkout. Re-run the relevant target to establish its status.
 | `//bench:xs_backend_synth_incremental` | Warm ABC mapping reaches only 1.48× speedup versus the required 2× (10,604 hits / 1,166 misses). Full and cold timing analyses fail with `std::bad_alloc` at roughly 545 GiB peak memory. |
 | `//bench:cva6_synth_incremental` | Downstream timing analysis fails with `std::bad_alloc` after ABC maps the large design; the full run reaches roughly 548 GiB peak memory. |
 | `//bench:xs_exu_synth_incremental` | Expensive reuse-ineligible regions prevent the comment-only ABC map from meeting the required 2× speedup. |
+| `//bench:gemmini16_synth`, `gemmini16_synth_incremental` | The bit-blasted 64x512 accumulator memory region (`cgen_memory_65rd_64wr_*`) takes 1,779 s in ABC against the 900 s per-region limit (`color-time-oversize`, TIMEOUT-time at mapping). The 8x8's 64x256 memory fits. |
 | `//verif:genprp_minion` | Slang driver-order failure during generation. |
 | `//verif:genprp_xs_enqentry_4` | Excessive front-end memory use. |
 | `//verif:genprp_xs_tracebuffer` | Combinational cycle in generated Pyrope. |

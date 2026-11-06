@@ -5,7 +5,11 @@ regenerated with a 16x16 systolic mesh (256 PEs, 512-bit accumulator rows,
 64x512 SRAM). It is the third size point: the raw emit grows with the mesh,
 and the cleaned tree is produced from the raw emit by generators, not by hand.
 
-In the bench as core `gemmini16` (`bench/defs.bzl`, marked `slow`).
+In the bench as core `gemmini16` (`bench/defs.bzl`, marked `slow`). 12 of its 14
+targets pass on kaffirlime. `gemmini16_synth` and `gemmini16_synth_incremental`
+fail in LiveHD: the bit-blasted 64x512 accumulator memory takes 1,779 s in ABC
+against the 900 s per-region limit (see the known-failing table in the top
+README).
 
 ## Layout and status (2026-11-06, lhd c53e1728c)
 
@@ -55,8 +59,11 @@ The wrapper ports are all <= 64 bits: the 128-bit A/B/D rows are two words,
 the 512-bit accumulator rows eight. Run `drv.bin` with
 `--init-zero --set sim.unknown_zero=true`, as at 8x8.
 
-5k cycles: `sum=4616705506188618455` from Verilator, lhd sim on `pyrope/`,
-lhd sim on `pyrope2/` and lhd sim on the Verilog.
+The bench runs 2k cycles (`sum=439173468031777837`), not 25k: `sim_pyrope2`
+has to fit the gated run plus three timed re-runs in the 15-min `long` timeout,
+and at 5k the gated run alone took 378 s. At 2k the other simulators' timings
+are mostly process startup (bench: pyrope 6.3k, Verilog 10.2k, Verilator 6.0k,
+pyrope2 24.8 cycles/s). At 5k all four give `sum=4616705506188618455`.
 
 Speed (kaffirlime, 5k cycles, standalone run): lhd sim `pyrope/` 22.9k
 cycles/s, Verilog 37.6k, Verilator 8.1k, and `pyrope2/` **22 cycles/s**. The
