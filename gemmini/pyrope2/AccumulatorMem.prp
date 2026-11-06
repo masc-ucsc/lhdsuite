@@ -1,9 +1,10 @@
 const Queue1_AccumulatorReadResp = import("Queue1_AccumulatorReadResp.Queue1_AccumulatorReadResp")
 const TwoPortSyncMem = import("TwoPortSyncMem.TwoPortSyncMem")
 
+// Accumulator bank: a write with acc=1 reads the old row, adds it to the new data in the external adder
+// two cycles later (pipelined_writes[0] -> [1]) and writes the sum back; reads wait for those hazards.
+// pipelined_writes entry: mask 15..0, acc 16, data 144..17, addr 150..145, valid 151.
 pub mod AccumulatorMem::[timecheck=false](`clock`:Clock, `reset`:U1, io_read_req_valid:U1, io_read_req_bits:(scale:U32, addr:U6, igelu_qb:U32, igelu_qc:U32, iexp_qln2:U32, iexp_qln2_inv:U32, act:U3, full:U1, fromDMA:U1), io_read_resp_ready:U1, io_write_valid:U1, io_write_bits:(addr:U6, data:U128, acc:U1, mask:U16), io_adder_sum:U128) -> (io_read_req_ready:U1@[], io_read_resp_valid:U1@[], io_read_resp_bits:(data:U128, fromDMA:U1, scale:U32, igelu_qb:U32, igelu_qc:U32, iexp_qln2:U32, iexp_qln2_inv:U32, act:U3, acc_bank_id:U2)@[], io_write_ready:U1@[], io_adder_valid:U1@[], io_adder_op1:U128@[], io_adder_op2:U128@[]) {
-  wire _q_io_deq_bits:(data:U128, fromDMA:U1, scale:U32, igelu_qb:U32, igelu_qc:U32, iexp_qln2:U32, iexp_qln2_inv:U32, act:U3, acc_bank_id:U2) = nil
-  wire io:(read:U469, write:U153, adder:U385) = nil
   reg pipelined_writes:[2]U152:[ordering="old"]
   reg q_io_enq_bits_scale_REG:U32
   reg q_io_enq_bits_igelu_qb_REG:U32
@@ -13,134 +14,66 @@ pub mod AccumulatorMem::[timecheck=false](`clock`:Clock, `reset`:U1, io_read_req
   reg q_io_enq_bits_act_REG:U3
   reg q_io_enq_bits_fromDMA_REG:U1
   reg q_io_enq_valid_REG:U1
-  wire _q_io_enq_ready:U1 = nil
-  wire _q_io_deq_valid:U1 = nil
-  wire _q_io_count:U1 = nil
-  wire q_will_be_empty:U1 = nil
-  wire rdata_for_adder:U128 = nil
-  wire rdata_for_read_resp:U128 = nil
-  wire `io_read_resp_bits__bpr.data`:U128 = nil
-  wire `io_read_resp_bits__bpr.fromDMA`:U1 = nil
-  wire `io_read_resp_bits__bpr.scale`:U32 = nil
-  wire `io_read_resp_bits__bpr.igelu_qb`:U32 = nil
-  wire `io_read_resp_bits__bpr.igelu_qc`:U32 = nil
-  wire `io_read_resp_bits__bpr.iexp_qln2`:U32 = nil
-  wire `io_read_resp_bits__bpr.iexp_qln2_inv`:U32 = nil
-  wire `io_read_resp_bits__bpr.act`:U3 = nil
-  wire `io_read_resp_bits__bpr.acc_bank_id`:U2 = nil
-  const _mem_io_ren_T_1__w1 = io.write#[0x98..<0x99] & io.write#[0x97..<0x98] & 1
-  mut _mux_1:U128 = if pipelined_writes[1]#[0..<0x97]#[16..<17] != 0 { io.adder#[0..<0x80] } else { pipelined_writes[1]#[0..<0x97]#[17..<0x91] }
-  mut _mux_2:U6 = if (_mem_io_ren_T_1__w1 & io.write#[0..<0x97]#[16..<17] & 1) != 0 { io.write#[0..<0x97]#[0x91..<0x97] } else { io.read#[0x128..<0x1d5]#[0..<0xab]#[0x85..<0x8b] }
-  const _q_io_enq_valid_T__w1 = io.read#[0x128..<0x1d5]#[0xac..<0xad] & io.read#[0x128..<0x1d5]#[0xab..<0xac] & 1
-  mut _b2i_3 = if (((_q_io_count & 1) + (_q_io_enq_ready & q_io_enq_valid_REG & 1))#[0..<2] - (io.read#[0..<0x128]#[0x127..<0x128] & _q_io_deq_valid & 1))#[0..<2] == 0 { 1 } else { 0 }
-  q_will_be_empty = _b2i_3
-  mut _b2i_4 = if pipelined_writes[0]#[0..<0x97]#[0x91..<0x97] == io.read#[0x128..<0x1d5]#[0..<0xab]#[0x85..<0x8b] { 1 } else { 0 }
-  mut _b2i_5 = if pipelined_writes[1]#[0..<0x97]#[0x91..<0x97] == io.read#[0x128..<0x1d5]#[0..<0xab]#[0x85..<0x8b] { 1 } else { 0 }
-  mut `_GEN_0.ready` = q_will_be_empty & (~(io.write#[0x97..<0x98] & io.write#[0..<0x97]#[16..<17] & 1)#[0]) & 1 & (~(((pipelined_writes[0]#[0x97..<0x98] & _b2i_4 & 1) | (pipelined_writes[1]#[0x97..<0x98] & _b2i_5 & 1)) & 1)#[0]) & 1
-  mut `_GEN_0.valid` = io_read_req_valid & 1
-  mut `_GEN_0.bits` = ((io_read_req_bits.scale << 0x8b) | (io_read_req_bits.addr << 0x85) | (io_read_req_bits.igelu_qb << 0x65) | (io_read_req_bits.igelu_qc << 0x45) | (io_read_req_bits.iexp_qln2 << 37) | (io_read_req_bits.iexp_qln2_inv << 5) | (io_read_req_bits.act << 2) | (io_read_req_bits.full << 1) | io_read_req_bits.fromDMA)#[0..<0xab]
-  mut _b2i_6 = if pipelined_writes[0]#[0..<0x97]#[0x91..<0x97] == io.write#[0..<0x97]#[0x91..<0x97] { 1 } else { 0 }
-  mut _b2i_7 = if pipelined_writes[1]#[0..<0x97]#[0x91..<0x97] == io.write#[0..<0x97]#[0x91..<0x97] { 1 } else { 0 }
-  mut `_GEN_1.ready` = ~(((pipelined_writes[0]#[0x97..<0x98] & _b2i_6 & 1 & io.write#[0..<0x97]#[16..<17] & 1) | (pipelined_writes[1]#[0x97..<0x98] & _b2i_7 & 1 & io.write#[0..<0x97]#[16..<17] & 1)) & 1)#[0]
-  mut `_GEN_1.valid` = io_write_valid & 1
-  mut `_GEN_1.bits` = ((io_write_bits.addr << 0x91) | (io_write_bits.data << 17) | (io_write_bits.acc << 16) | io_write_bits.mask)#[0..<0x97]
-  mut `_GEN_2.valid` = pipelined_writes[0]#[0x97..<0x98] & pipelined_writes[0]#[0..<0x97]#[16..<17] & 1
-  mut `_GEN_2.op1` = rdata_for_adder#[0..<0x80]
-  mut `_GEN_2.op2` = pipelined_writes[0]#[0..<0x97]#[17..<0x91]
-  mut `_GEN_2.sum` = io_adder_sum#[0..<0x80]
-  mut `_GEN_3.data` = _q_io_deq_bits.data#[0..<0x80]
-  mut `_GEN_3.fromDMA` = _q_io_deq_bits.fromDMA & 1
-  mut `_GEN_3.scale` = _q_io_deq_bits.scale#[0..<32]
-  mut `_GEN_3.igelu_qb` = _q_io_deq_bits.igelu_qb#[0..<32]
-  mut `_GEN_3.igelu_qc` = _q_io_deq_bits.igelu_qc#[0..<32]
-  mut `_GEN_3.iexp_qln2` = _q_io_deq_bits.iexp_qln2#[0..<32]
-  mut `_GEN_3.iexp_qln2_inv` = _q_io_deq_bits.iexp_qln2_inv#[0..<32]
-  mut `_GEN_3.act` = _q_io_deq_bits.act#[0..<3]
-  mut `_GEN_3.acc_bank_id` = 0
-  mut `_GEN_4.ready` = io_read_resp_ready & 1
-  mut `_GEN_4.valid` = _q_io_deq_valid & 1
-  mut `_GEN_4.bits` = ((`_GEN_3.data` << 0xa6) | (`_GEN_3.fromDMA` << 0xa5) | (`_GEN_3.scale` << 0x85) | (`_GEN_3.igelu_qb` << 0x65) | (`_GEN_3.igelu_qc` << 0x45) | (`_GEN_3.iexp_qln2` << 37) | (`_GEN_3.iexp_qln2_inv` << 5) | (`_GEN_3.act` << 2) | 0)#[0..<0x126]
-  mut `_GEN_5.req` = ((`_GEN_0.ready` << 0xac) | (`_GEN_0.valid` << 0xab) | `_GEN_0.bits`)#[0..<0xad]
-  mut `_GEN_5.resp` = ((`_GEN_4.ready` << 0x127) | (`_GEN_4.valid` << 0x126) | `_GEN_4.bits`)#[0..<0x128]
-  io.read = ((`_GEN_5.req` << 0x128) | `_GEN_5.resp`)#[0..<0x1d5]
-  io.write = ((`_GEN_1.ready` << 0x98) | (`_GEN_1.valid` << 0x97) | `_GEN_1.bits`)#[0..<0x99]
-  io.adder = ((`_GEN_2.valid` << 0x180) | (`_GEN_2.op1` << 0x100) | (`_GEN_2.op2` << 0x80) | `_GEN_2.sum`)#[0..<0x181]
-  mut `_GEN_6.data` = rdata_for_read_resp#[0..<0x80]
-  mut `_GEN_6.fromDMA` = q_io_enq_bits_fromDMA_REG & 1
-  mut `_GEN_6.scale` = q_io_enq_bits_scale_REG#[0..<32]
-  mut `_GEN_6.igelu_qb` = q_io_enq_bits_igelu_qb_REG#[0..<32]
-  mut `_GEN_6.igelu_qc` = q_io_enq_bits_igelu_qc_REG#[0..<32]
-  mut `_GEN_6.iexp_qln2` = q_io_enq_bits_iexp_qln2_REG#[0..<32]
-  mut `_GEN_6.iexp_qln2_inv` = q_io_enq_bits_iexp_qln2_inv_REG#[0..<32]
-  mut `_GEN_6.act` = q_io_enq_bits_act_REG#[0..<3]
-  mut `_GEN_6.acc_bank_id` = 0
-  pipelined_writes[0] = io.write#[0..<0x97] | (((~`reset`) & _mem_io_ren_T_1__w1 & 1) << 0x97)
-  pipelined_writes[1] = pipelined_writes[0]#[0..<0x97] | (((~`reset`) & pipelined_writes[0]#[0x97..<0x98] & 1) << 0x97)
-  q_io_enq_bits_scale_REG = io.read#[0x128..<0x1d5]#[0..<0xab]#[0x8b..<0xab]
-  q_io_enq_bits_igelu_qb_REG = io.read#[0x128..<0x1d5]#[0..<0xab]#[0x65..<0x85]
-  q_io_enq_bits_igelu_qc_REG = io.read#[0x128..<0x1d5]#[0..<0xab]#[0x45..<0x65]
-  q_io_enq_bits_iexp_qln2_REG = io.read#[0x128..<0x1d5]#[0..<0xab]#[37..<0x45]
-  q_io_enq_bits_iexp_qln2_inv_REG = io.read#[0x128..<0x1d5]#[0..<0xab]#[5..<37]
-  q_io_enq_bits_act_REG = io.read#[0x128..<0x1d5]#[0..<0xab]#[2..<5]
-  q_io_enq_bits_fromDMA_REG = io.read#[0x128..<0x1d5]#[0..<0xab] & 1
-  q_io_enq_valid_REG = _q_io_enq_valid_T__w1
-  mut mem = TwoPortSyncMem::[name=mem](`clock` = `clock`, `reset` = `reset`, io_waddr = pipelined_writes[1]#[0..<0x97]#[0x91..<0x97], io_raddr = _mux_2, io_wdata = _mux_1, io_wen = pipelined_writes[1]#[0x97..<0x98], io_ren = (_q_io_enq_valid_T__w1 | (_mem_io_ren_T_1__w1 & io.write#[0..<0x97]#[16..<17] & 1)) & 1, io_mask = pipelined_writes[1]#[0..<0x97]#[0..<16])
-  const _mem_io_rdata__w1 = mem
-  rdata_for_adder = _mem_io_rdata__w1
-  rdata_for_read_resp = _mem_io_rdata__w1
-  mut q = Queue1_AccumulatorReadResp::[name=q](`clock` = `clock`, `reset` = `reset`, io_enq_valid = q_io_enq_valid_REG, `io_enq_bits.data` = `_GEN_6.data`, `io_enq_bits.fromDMA` = `_GEN_6.fromDMA`, `io_enq_bits.scale` = `_GEN_6.scale`, `io_enq_bits.igelu_qb` = `_GEN_6.igelu_qb`, `io_enq_bits.igelu_qc` = `_GEN_6.igelu_qc`, `io_enq_bits.iexp_qln2` = `_GEN_6.iexp_qln2`, `io_enq_bits.iexp_qln2_inv` = `_GEN_6.iexp_qln2_inv`, `io_enq_bits.act` = `_GEN_6.act`, `io_enq_bits.acc_bank_id` = 0, io_deq_ready = io.read#[0..<0x128]#[0x127..<0x128])
-  _q_io_enq_ready = q.io_enq_ready
-  _q_io_deq_valid = q.io_deq_valid
-  _q_io_deq_bits.data = q.io_deq_bits.data
-  _q_io_deq_bits.fromDMA = q.io_deq_bits.fromDMA
-  _q_io_deq_bits.scale = q.io_deq_bits.scale
-  _q_io_deq_bits.igelu_qb = q.io_deq_bits.igelu_qb
-  _q_io_deq_bits.igelu_qc = q.io_deq_bits.igelu_qc
-  _q_io_deq_bits.iexp_qln2 = q.io_deq_bits.iexp_qln2
-  _q_io_deq_bits.iexp_qln2_inv = q.io_deq_bits.iexp_qln2_inv
-  _q_io_deq_bits.act = q.io_deq_bits.act
-  _q_io_deq_bits.acc_bank_id = q.io_deq_bits.acc_bank_id
-  _q_io_count = q.io_count
-  mut `io_read_resp_bits__bpo.data` = io.read#[0..<0x128]#[0..<0x126]#[0xa6..<0x126]
-  mut `io_read_resp_bits__bpo.fromDMA` = io.read#[0..<0x128]#[0..<0x126]#[0xa5..<0xa6]
-  mut `io_read_resp_bits__bpo.scale` = io.read#[0..<0x128]#[0..<0x126]#[0x85..<0xa5]
-  mut `io_read_resp_bits__bpo.igelu_qb` = io.read#[0..<0x128]#[0..<0x126]#[0x65..<0x85]
-  mut `io_read_resp_bits__bpo.igelu_qc` = io.read#[0..<0x128]#[0..<0x126]#[0x45..<0x65]
-  mut `io_read_resp_bits__bpo.iexp_qln2` = io.read#[0..<0x128]#[0..<0x126]#[37..<0x45]
-  mut `io_read_resp_bits__bpo.iexp_qln2_inv` = io.read#[0..<0x128]#[0..<0x126]#[5..<37]
-  mut `io_read_resp_bits__bpo.act` = io.read#[0..<0x128]#[0..<0x126]#[2..<5]
-  mut `io_read_resp_bits__bpo.acc_bank_id` = io.read#[0..<0x128]#[0..<0x126]#[0..<2]
-  const t421 = `io_read_resp_bits__bpo.data`
-  `io_read_resp_bits__bpr.data` = t421
-  io_read_resp_bits.data = t421
-  const t422 = `io_read_resp_bits__bpo.fromDMA`
-  `io_read_resp_bits__bpr.fromDMA` = t422
-  io_read_resp_bits.fromDMA = t422
-  const t423 = `io_read_resp_bits__bpo.scale`
-  `io_read_resp_bits__bpr.scale` = t423
-  io_read_resp_bits.scale = t423
-  const t424 = `io_read_resp_bits__bpo.igelu_qb`
-  `io_read_resp_bits__bpr.igelu_qb` = t424
-  io_read_resp_bits.igelu_qb = t424
-  const t425 = `io_read_resp_bits__bpo.igelu_qc`
-  `io_read_resp_bits__bpr.igelu_qc` = t425
-  io_read_resp_bits.igelu_qc = t425
-  const t426 = `io_read_resp_bits__bpo.iexp_qln2`
-  `io_read_resp_bits__bpr.iexp_qln2` = t426
-  io_read_resp_bits.iexp_qln2 = t426
-  const t427 = `io_read_resp_bits__bpo.iexp_qln2_inv`
-  `io_read_resp_bits__bpr.iexp_qln2_inv` = t427
-  io_read_resp_bits.iexp_qln2_inv = t427
-  const t428 = `io_read_resp_bits__bpo.act`
-  `io_read_resp_bits__bpr.act` = t428
-  io_read_resp_bits.act = t428
-  const t429 = `io_read_resp_bits__bpo.acc_bank_id`
-  `io_read_resp_bits__bpr.acc_bank_id` = t429
-  io_read_resp_bits.acc_bank_id = t429
-  io_read_req_ready = io.read#[0x128..<0x1d5]#[0xac..<0xad]
-  io_read_resp_valid = io.read#[0..<0x128]#[0x126..<0x127]
-  io_write_ready = io.write#[0x98..<0x99]
-  io_adder_valid = io.adder#[0x180..<0x181]
-  io_adder_op1 = io.adder#[0x100..<0x180]
-  io_adder_op2 = io.adder#[0x80..<0x100]
+
+  wire mem_rdata:U128 = nil
+  const pw0 = pipelined_writes[0]
+  const pw1 = pipelined_writes[1]
+  const w_acc = io_write_bits.acc
+  const r_addr = io_read_req_bits.addr
+
+  // a new accumulate to a row still in flight must wait
+  const w_hazard = ((pw0#[151] & w_acc) != 0 and pw0#[145..<151] == io_write_bits.addr)
+                or ((pw1#[151] & w_acc) != 0 and pw1#[145..<151] == io_write_bits.addr)
+  const write_ready:U1 = if w_hazard { 0 } else { 1 }
+  const w_fire = io_write_valid & write_ready
+  const w_acc_fire = w_fire & w_acc
+
+  mut q = Queue1_AccumulatorReadResp::[name=q](`clock` = `clock`, `reset` = `reset`, io_enq_valid = q_io_enq_valid_REG,
+    `io_enq_bits.data` = mem_rdata, `io_enq_bits.fromDMA` = q_io_enq_bits_fromDMA_REG, `io_enq_bits.scale` = q_io_enq_bits_scale_REG,
+    `io_enq_bits.igelu_qb` = q_io_enq_bits_igelu_qb_REG, `io_enq_bits.igelu_qc` = q_io_enq_bits_igelu_qc_REG,
+    `io_enq_bits.iexp_qln2` = q_io_enq_bits_iexp_qln2_REG, `io_enq_bits.iexp_qln2_inv` = q_io_enq_bits_iexp_qln2_inv_REG,
+    `io_enq_bits.act` = q_io_enq_bits_act_REG, `io_enq_bits.acc_bank_id` = 0, io_deq_ready = io_read_resp_ready)
+
+  // a read is accepted only if the response queue will have room and no write to that row is in flight
+  const q_will_be_empty = ((q.io_count + (q.io_enq_ready & q_io_enq_valid_REG))#[0..<2] - (io_read_resp_ready & q.io_deq_valid))#[0..<2] == 0
+  const r_hazard = (io_write_valid & w_acc) != 0
+                or (pw0#[151] != 0 and pw0#[145..<151] == r_addr)
+                or (pw1#[151] != 0 and pw1#[145..<151] == r_addr)
+  const read_ready:U1 = if q_will_be_empty and not r_hazard { 1 } else { 0 }
+  const r_fire = io_read_req_valid & read_ready
+
+  mut mem = TwoPortSyncMem::[name=mem](`clock` = `clock`, `reset` = `reset`,
+    io_waddr = pw1#[145..<151], io_wdata = if pw1#[16] != 0 { io_adder_sum } else { pw1#[17..<145] },
+    io_wen = pw1#[151], io_mask = pw1#[0..<16],
+    io_raddr = if w_acc_fire != 0 { io_write_bits.addr } else { r_addr }, io_ren = r_fire | w_acc_fire)
+  mem_rdata = mem
+
+  const w_bits = (io_write_bits.addr << 145) | (io_write_bits.data << 17) | (w_acc << 16) | io_write_bits.mask
+  pipelined_writes[0] = w_bits | (((~`reset`) & w_fire & 1) << 151)
+  pipelined_writes[1] = pw0#[0..<151] | (((~`reset`) & pw0#[151] & 1) << 151)
+
+  q_io_enq_bits_scale_REG = io_read_req_bits.scale
+  q_io_enq_bits_igelu_qb_REG = io_read_req_bits.igelu_qb
+  q_io_enq_bits_igelu_qc_REG = io_read_req_bits.igelu_qc
+  q_io_enq_bits_iexp_qln2_REG = io_read_req_bits.iexp_qln2
+  q_io_enq_bits_iexp_qln2_inv_REG = io_read_req_bits.iexp_qln2_inv
+  q_io_enq_bits_act_REG = io_read_req_bits.act
+  q_io_enq_bits_fromDMA_REG = io_read_req_bits.fromDMA
+  q_io_enq_valid_REG = r_fire
+
+  io_read_req_ready = read_ready
+  io_write_ready = write_ready
+  io_adder_valid = pw0#[151] & pw0#[16]
+  io_adder_op1 = mem_rdata
+  io_adder_op2 = pw0#[17..<145]
+  io_read_resp_valid = q.io_deq_valid
+  io_read_resp_bits.data = q.io_deq_bits.data
+  io_read_resp_bits.fromDMA = q.io_deq_bits.fromDMA
+  io_read_resp_bits.scale = q.io_deq_bits.scale
+  io_read_resp_bits.igelu_qb = q.io_deq_bits.igelu_qb
+  io_read_resp_bits.igelu_qc = q.io_deq_bits.igelu_qc
+  io_read_resp_bits.iexp_qln2 = q.io_deq_bits.iexp_qln2
+  io_read_resp_bits.iexp_qln2_inv = q.io_deq_bits.iexp_qln2_inv
+  io_read_resp_bits.act = q.io_deq_bits.act
+  io_read_resp_bits.acc_bank_id = 0
 }
