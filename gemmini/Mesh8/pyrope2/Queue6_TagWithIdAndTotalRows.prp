@@ -1,0 +1,39 @@
+const ram_6x8 = import("ram_6x8.ram_6x8")
+
+// 6-entry FIFO over ram_6x8. Note the Verilog writes (total_rows, id, tag) at bits 7..4, 3..1, 0
+// but reads tag, id, total_rows back from bits 7, 6..4, 3..0; kept as is.
+pub mod Queue6_TagWithIdAndTotalRows::[timecheck=false](`clock`:Clock, `reset`:U1, io_enq_valid:U1, io_enq_bits:(tag:(id:U1), id:U3, total_rows:U4), io_deq_ready:U1) -> (io_enq_ready:U1@[], io_deq_valid:U1@[], io_deq_bits:(tag:(id:U1), id:U3, total_rows:U4)@[], io_count:U3@[]) {
+  reg enq_ptr_value:U3:[initial=0, reset_pin=`reset`, async=false]
+  reg deq_ptr_value:U3:[initial=0, reset_pin=`reset`, async=false]
+  reg maybe_full:U1:[initial=0, reset_pin=`reset`, async=false]
+
+  const ptr_match = enq_ptr_value == deq_ptr_value
+  const full = ptr_match and maybe_full != 0
+  const empty = ptr_match and maybe_full == 0
+  const enq_ready:U1 = if full { 0 } else { 1 }
+  const deq_valid:U1 = if empty { 0 } else { 1 }
+  const do_enq = io_enq_valid & enq_ready
+  const do_deq = io_deq_ready & deq_valid
+
+  const ptr_diff = (enq_ptr_value - deq_ptr_value)#[0..<3]
+  io_count = if ptr_match { (if maybe_full != 0 { 6 } else { 0 }) }
+             elif deq_ptr_value > enq_ptr_value { (ptr_diff - 2)#[0..<3] }
+             else { ptr_diff }
+
+  const wdata = if do_enq != 0 { (io_enq_bits.total_rows << 4) | (io_enq_bits.id << 1) | io_enq_bits.tag.id } else { 0 }
+  const wmask = if do_enq != 0 { 0xFF } else { 0 }
+  mut ram_ext = ram_6x8::[name=ram_ext](R0_addr = deq_ptr_value, R0_en = 1, R0_clk = `clock`, W0_addr = enq_ptr_value, W0_en = do_enq, W0_clk = `clock`,
+    `W0_data.e7` = wdata#[7], `W0_data.e6` = wdata#[6], `W0_data.e5` = wdata#[5], `W0_data.e4` = wdata#[4], `W0_data.e3` = wdata#[3], `W0_data.e2` = wdata#[2], `W0_data.e1` = wdata#[1], `W0_data.e0` = wdata#[0],
+    `W0_mask.e7` = wmask#[7], `W0_mask.e6` = wmask#[6], `W0_mask.e5` = wmask#[5], `W0_mask.e4` = wmask#[4], `W0_mask.e3` = wmask#[3], `W0_mask.e2` = wmask#[2], `W0_mask.e1` = wmask#[1], `W0_mask.e0` = wmask#[0])
+  const rdata:U8 = ram_ext
+
+  if do_enq != 0 { enq_ptr_value = if enq_ptr_value == 5 { 0 } else { (enq_ptr_value + 1)#[0..<3] } }
+  if do_deq != 0 { deq_ptr_value = if deq_ptr_value == 5 { 0 } else { (deq_ptr_value + 1)#[0..<3] } }
+  if do_enq != do_deq { maybe_full = do_enq }
+
+  io_enq_ready = enq_ready
+  io_deq_valid = deq_valid
+  io_deq_bits.tag.id = rdata#[7]
+  io_deq_bits.id = rdata#[4..<7]
+  io_deq_bits.total_rows = rdata#[0..<4]
+}

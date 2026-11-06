@@ -1,0 +1,79 @@
+const Queue1_AccumulatorReadResp = import("Queue1_AccumulatorReadResp.Queue1_AccumulatorReadResp")
+const TwoPortSyncMem = import("TwoPortSyncMem.TwoPortSyncMem")
+
+// Accumulator bank: a write with acc=1 reads the old row, adds it to the new data in the external adder
+// two cycles later (pipelined_writes[0] -> [1]) and writes the sum back; reads wait for those hazards.
+// pipelined_writes entry: mask 31..0, acc 32, data 288..33, addr 294..289, valid 295.
+pub mod AccumulatorMem::[timecheck=false](`clock`:Clock, `reset`:U1, io_read_req_valid:U1, io_read_req_bits:(scale:U32, addr:U6, igelu_qb:U32, igelu_qc:U32, iexp_qln2:U32, iexp_qln2_inv:U32, act:U3, full:U1, fromDMA:U1), io_read_resp_ready:U1, io_write_valid:U1, io_write_bits:(addr:U6, data:U256, acc:U1, mask:U32), io_adder_sum:U256) -> (io_read_req_ready:U1@[], io_read_resp_valid:U1@[], io_read_resp_bits:(data:U256, fromDMA:U1, scale:U32, igelu_qb:U32, igelu_qc:U32, iexp_qln2:U32, iexp_qln2_inv:U32, act:U3, acc_bank_id:U2)@[], io_write_ready:U1@[], io_adder_valid:U1@[], io_adder_op1:U256@[], io_adder_op2:U256@[]) {
+  reg pipelined_writes:[2]U296:[ordering="old"]
+  reg q_io_enq_bits_scale_REG:U32
+  reg q_io_enq_bits_igelu_qb_REG:U32
+  reg q_io_enq_bits_igelu_qc_REG:U32
+  reg q_io_enq_bits_iexp_qln2_REG:U32
+  reg q_io_enq_bits_iexp_qln2_inv_REG:U32
+  reg q_io_enq_bits_act_REG:U3
+  reg q_io_enq_bits_fromDMA_REG:U1
+  reg q_io_enq_valid_REG:U1
+
+  wire mem_rdata:U256 = nil
+  const pw0 = pipelined_writes[0]
+  const pw1 = pipelined_writes[1]
+  const w_acc = io_write_bits.acc
+  const r_addr = io_read_req_bits.addr
+
+  // a new accumulate to a row still in flight must wait
+  const w_hazard = ((pw0#[295] & w_acc) != 0 and pw0#[289..<295] == io_write_bits.addr)
+                or ((pw1#[295] & w_acc) != 0 and pw1#[289..<295] == io_write_bits.addr)
+  const write_ready:U1 = if w_hazard { 0 } else { 1 }
+  const w_fire = io_write_valid & write_ready
+  const w_acc_fire = w_fire & w_acc
+
+  mut q = Queue1_AccumulatorReadResp::[name=q](`clock` = `clock`, `reset` = `reset`, io_enq_valid = q_io_enq_valid_REG,
+    `io_enq_bits.data` = mem_rdata, `io_enq_bits.fromDMA` = q_io_enq_bits_fromDMA_REG, `io_enq_bits.scale` = q_io_enq_bits_scale_REG,
+    `io_enq_bits.igelu_qb` = q_io_enq_bits_igelu_qb_REG, `io_enq_bits.igelu_qc` = q_io_enq_bits_igelu_qc_REG,
+    `io_enq_bits.iexp_qln2` = q_io_enq_bits_iexp_qln2_REG, `io_enq_bits.iexp_qln2_inv` = q_io_enq_bits_iexp_qln2_inv_REG,
+    `io_enq_bits.act` = q_io_enq_bits_act_REG, `io_enq_bits.acc_bank_id` = 0, io_deq_ready = io_read_resp_ready)
+
+  // a read is accepted only if the response queue will have room and no write to that row is in flight
+  const q_will_be_empty = ((q.io_count + (q.io_enq_ready & q_io_enq_valid_REG))#[0..<2] - (io_read_resp_ready & q.io_deq_valid))#[0..<2] == 0
+  const r_hazard = (io_write_valid & w_acc) != 0
+                or (pw0#[295] != 0 and pw0#[289..<295] == r_addr)
+                or (pw1#[295] != 0 and pw1#[289..<295] == r_addr)
+  const read_ready:U1 = if q_will_be_empty and not r_hazard { 1 } else { 0 }
+  const r_fire = io_read_req_valid & read_ready
+
+  mut mem = TwoPortSyncMem::[name=mem](`clock` = `clock`, `reset` = `reset`,
+    io_waddr = pw1#[289..<295], io_wdata = if pw1#[32] != 0 { io_adder_sum } else { pw1#[33..<289] },
+    io_wen = pw1#[295], io_mask = pw1#[0..<32],
+    io_raddr = if w_acc_fire != 0 { io_write_bits.addr } else { r_addr }, io_ren = r_fire | w_acc_fire)
+  mem_rdata = mem
+
+  const w_bits = (io_write_bits.addr << 289) | (io_write_bits.data << 33) | (w_acc << 32) | io_write_bits.mask
+  pipelined_writes[0] = w_bits | (((~`reset`) & w_fire & 1) << 295)
+  pipelined_writes[1] = pw0#[0..<295] | (((~`reset`) & pw0#[295] & 1) << 295)
+
+  q_io_enq_bits_scale_REG = io_read_req_bits.scale
+  q_io_enq_bits_igelu_qb_REG = io_read_req_bits.igelu_qb
+  q_io_enq_bits_igelu_qc_REG = io_read_req_bits.igelu_qc
+  q_io_enq_bits_iexp_qln2_REG = io_read_req_bits.iexp_qln2
+  q_io_enq_bits_iexp_qln2_inv_REG = io_read_req_bits.iexp_qln2_inv
+  q_io_enq_bits_act_REG = io_read_req_bits.act
+  q_io_enq_bits_fromDMA_REG = io_read_req_bits.fromDMA
+  q_io_enq_valid_REG = r_fire
+
+  io_read_req_ready = read_ready
+  io_write_ready = write_ready
+  io_adder_valid = pw0#[295] & pw0#[32]
+  io_adder_op1 = mem_rdata
+  io_adder_op2 = pw0#[33..<289]
+  io_read_resp_valid = q.io_deq_valid
+  io_read_resp_bits.data = q.io_deq_bits.data
+  io_read_resp_bits.fromDMA = q.io_deq_bits.fromDMA
+  io_read_resp_bits.scale = q.io_deq_bits.scale
+  io_read_resp_bits.igelu_qb = q.io_deq_bits.igelu_qb
+  io_read_resp_bits.igelu_qc = q.io_deq_bits.igelu_qc
+  io_read_resp_bits.iexp_qln2 = q.io_deq_bits.iexp_qln2
+  io_read_resp_bits.iexp_qln2_inv = q.io_deq_bits.iexp_qln2_inv
+  io_read_resp_bits.act = q.io_deq_bits.act
+  io_read_resp_bits.acc_bank_id = 0
+}

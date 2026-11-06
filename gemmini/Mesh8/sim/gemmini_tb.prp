@@ -1,0 +1,86 @@
+// Free-running simulation driver for the standalone Gemmini TPU core (8x8 systolic mesh + 64x256 accumulator SRAM).
+// Run drv.bin with --init-zero: the 8x8 has registers with no initializer whose power-on bits reach the outputs.
+// Throughput benchmark + cross-language oracle (like rocket_tb / xs_rob_tb): xorshift64 stimulus on every input of
+// the flat-port wrapper GemminiSimTop (sim/GemminiSimTop.prp, verilog/GemminiSimTop.sv), a checksum of every output.
+// The Pyrope tree, an lg: library read from the Verilog, and the Verilator twin (gemmini_tb_verilator.cpp) must print
+// the SAME checksum. Not functional coverage: the mesh requests and accumulator traffic are random.
+const tpu = import("lg:GemminiSimTop")
+
+test tpu.free_run(cycles:U32 = 1000) {
+  mut acc = tpu
+
+  mut lfsr:U64 = 0x123456789abcdef
+  mut sum:U64  = 0
+  mut obs:U64  = 0
+
+  tick cycles {
+    acc.reset = clock < 4
+
+    acc.a_valid = lfsr#[0]
+    acc.a_bits  = lfsr
+    acc.b_valid = lfsr#[1]
+    acc.b_bits  = lfsr#[1..=63]
+    acc.d_valid = lfsr#[2]
+    acc.d_bits  = lfsr#[2..=63]
+    acc.req_valid        = lfsr#[3]
+    acc.req_tag_id       = lfsr#[20]
+    acc.req_dataflow     = lfsr#[21]
+    acc.req_propagate    = lfsr#[22]
+    acc.req_shift        = lfsr#[23..<28]
+    acc.req_a_transpose  = lfsr#[28]
+    acc.req_bd_transpose = lfsr#[29]
+    acc.req_total_rows   = lfsr#[30..<34]
+    acc.req_flush        = lfsr#[34..<36]
+    acc.wr_valid   = lfsr#[4]
+    acc.wr_addr    = lfsr#[35..<41]
+    acc.wr_data_0 = lfsr
+    acc.wr_data_1 = lfsr#[1..=63]
+    acc.wr_data_2 = lfsr#[2..=63]
+    acc.wr_data_3 = lfsr#[3..=63]
+    acc.wr_acc     = lfsr#[41]
+    acc.wr_mask    = lfsr#[24..<56]
+    acc.rd_valid   = lfsr#[5]
+    acc.rd_scale   = lfsr#[0..<32]
+    acc.rd_addr    = lfsr#[44..<50]
+    acc.rd_act     = lfsr#[50..<53]
+    acc.rd_full    = lfsr#[53]
+    acc.rd_fromDMA = lfsr#[54]
+    acc.rd_resp_ready = lfsr#[6]
+
+    step
+
+    obs = acc.a_ready
+    wrap obs = obs | (acc.b_ready << 1)
+    wrap obs = obs | (acc.d_ready << 2)
+    wrap obs = obs | (acc.req_ready << 3)
+    wrap obs = obs | (acc.wr_ready << 4)
+    wrap obs = obs | (acc.rd_req_ready << 5)
+    wrap obs = obs | (acc.rd_resp_valid << 6)
+    wrap obs = obs | (acc.resp_valid << 7)
+    wrap obs = obs | (acc.resp_tag_id << 8)
+    wrap obs = obs | (acc.resp_last << 9)
+    wrap obs = obs ^ (acc.resp_total_rows << 10)
+    wrap obs = obs | (acc.rd_resp_fromDMA << 13)
+    wrap obs = obs | (acc.rd_resp_act << 14)
+    wrap obs = obs | (acc.rd_resp_bank << 17)
+    wrap obs = obs ^ (acc.rd_resp_scale << 20)
+    wrap obs = obs ^ acc.resp_data_0#[0..<63]
+    wrap obs = obs ^ acc.resp_data_1#[0..<63]
+    wrap obs = obs ^ acc.resp_data_2#[0..<63]
+    wrap obs = obs ^ acc.resp_data_3#[0..<63]
+    wrap obs = obs ^ acc.rd_data_0#[0..<63]
+    wrap obs = obs ^ acc.rd_data_1#[0..<63]
+    wrap obs = obs ^ acc.rd_data_2#[0..<63]
+    wrap obs = obs ^ acc.rd_data_3#[0..<63]
+
+    // Masked to 63 bits so the printed checksum is unambiguously positive.
+    wrap sum = ((sum << 1) + obs) & 0x7fffffffffffffff
+
+    // xorshift64; the right shift is a bit slice so every simulator does the same logical shift (see xs_rob_tb).
+    wrap lfsr = lfsr ^ (lfsr << 13)
+    wrap lfsr = lfsr ^ lfsr#[7..=63]
+    wrap lfsr = lfsr ^ (lfsr << 17)
+  }
+
+  puts("gemmini8: cycles={cycles} sum={sum}")
+}
