@@ -68,6 +68,10 @@ HTML=${MATRIX_HTML:-$ROOT/../livehd/docs/current_opt_loop_incr.html}
 # ---- per-core knobs, mirroring the CORES table in bench/defs.bzl -------------
 # Kept as a small case rather than parsed out of defs.bzl: this script runs
 # outside bazel, and a silent mismatch would be worse than a visible duplicate.
+# SIM_SETS mirrors a core's `sim_sets` (handed to every `lhd sim`, and its
+# run-time keys to every bare drv.bin re-run); LEC_TRUST mirrors `lec_trust`;
+# PKG_SUB overrides the package dir (default: the core name).
+SIM_SETS=""; LEC_TRUST=""; PKG_SUB=""
 case "$CORE" in
 dino)
   TOP=PipelinedDualIssueCPU; SIM_UNIT=$TOP; SIM_TB=dino_tb.prp
@@ -123,13 +127,39 @@ xs_backend)
   SIM_CYCLES=1000; DEFAULT_PERF_CYCLES=2000
   COLOR_ALG=synth; HAS_LEC=0; V_FLAGS="--single-unit"
   STUB_DIR=${XS_STUB_DIR:-$ROOT/bazel-bin/xiangshan/Backend/synth_stubs} ;;
+gemmini | gemmini8)
+  # 4x4 / 8x8 Gemmini (gemmini/, gemmini/Mesh8/). The sim drives the flat-port
+  # wrapper GemminiSimTop. The 8x8 NEEDS sim.init_zero: it has state with no
+  # initializer whose power-on bits reach the outputs, so without it the
+  # checksum moves with the seed. The accumulator SRAM is trusted in LEC, as in
+  # the bench.
+  TOP=GemminiTPU; SIM_UNIT=GemminiSimTop; SIM_TB=gemmini_tb.prp
+  COLOR_ALG=synth; HAS_LEC=1; V_FLAGS=""; STUB_DIR=""
+  if [ "$CORE" = gemmini ]; then
+    # ~165k cycles/s in this flow (slop): 200k measured 1.2 s on kaffirlime.
+    SIM_CYCLES=1000; DEFAULT_PERF_CYCLES=200000
+    SIM_SETS="--set sim.unknown_zero=true"; LEC_TRUST=mem_64x128
+  else
+    # ~39k cycles/s in this flow (slop): 25k measured 0.64 s on kaffirlime.
+    SIM_CYCLES=1000; DEFAULT_PERF_CYCLES=25000; PKG_SUB=gemmini/Mesh8
+    SIM_SETS="--set sim.unknown_zero=true --set sim.init_zero=true"; LEC_TRUST=mem_64x256
+  fi ;;
 *)
   echo "FAIL: unknown core '$CORE' (add it to the case in bench/matrix.sh)" >&2; exit 2 ;;
 esac
 
+SIM_ARGS=(); DRV_SETS=(); LEC_ARGS=()
+# shellcheck disable=SC2206
+SIM_ARGS=($SIM_SETS)
+for kv in $SIM_SETS; do
+  # Only the keys drv.bin reads itself; it rejects the generation-time ones.
+  case "$kv" in lhd.seed=* | sim.init_zero=* | sim.unknown_zero=*) DRV_SETS+=(--set "$kv") ;; esac
+done
+[ -n "$LEC_TRUST" ] && LEC_ARGS=(--set "formal.lec.trust=$LEC_TRUST")
+
 case "$CORE" in
 xs_*) PKG_DIR=$ROOT/xiangshan/Backend ;;
-*)    PKG_DIR=$ROOT/$CORE ;;
+*)    PKG_DIR=$ROOT/${PKG_SUB:-$CORE} ;;
 esac
 P_DIR=$PKG_DIR/pyrope
 V_DIR=$PKG_DIR/verilog
@@ -351,7 +381,7 @@ best_exec() {
   [ -x "$bin" ] || { echo ""; return 0; }
   for i in 1 2 3; do
     t0=$(now_ms)
-    "$bin" --cycles "$cycles" >/dev/null 2>&1 || { echo ""; return 0; }
+    "$bin" --cycles "$cycles" ${DRV_SETS[@]+"${DRV_SETS[@]}"} >/dev/null 2>&1 || { echo ""; return 0; }
     t1=$(now_ms)
     ms=$((t1 - t0))
     { [ -n "$best" ] && [ "$best" -le "$ms" ]; } || best=$ms
@@ -581,11 +611,11 @@ if [[ " $PHASES " == *" sim "* ]]; then
       local mode=$1 wd=$2
       local setup_ms run_ms
       group_begin
-      step sim "$mode" "sim_${mode}_setup.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
+      step sim "$mode" "sim_${mode}_setup.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} ${SIM_ARGS[@]+"${SIM_ARGS[@]}"} \
         "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --setup-only --set sim.tune.backend=slop --set sim.tune.profile=off \
         --workdir "$wd" --result-json "sim_${mode}_setup.json"
       setup_ms=$GRP_MS
-      step sim "$mode" "sim_${mode}_run.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
+      step sim "$mode" "sim_${mode}_run.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} ${SIM_ARGS[@]+"${SIM_ARGS[@]}"} \
         "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --run-only --arg "cycles=$SIM_CYCLES" \
  --set sim.tune.backend=slop --set sim.tune.profile=off --diag-fmt pretty --workdir "$wd" \
         --result-json "sim_${mode}_run.json"
@@ -593,7 +623,7 @@ if [[ " $PHASES " == *" sim "* ]]; then
       group_end sim "$mode" "$(sim_extra "$wd" "$setup_ms" "$run_ms")"
     }
     rm -rf SW_warm0
-    warm_phase sim "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} "tree/$SIM_UNIT.prp" "tree/$SIM_TB" \
+    warm_phase sim "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} ${SIM_ARGS[@]+"${SIM_ARGS[@]}"} "tree/$SIM_UNIT.prp" "tree/$SIM_TB" \
       --arg "cycles=$SIM_CYCLES" --set sim.tune.backend=slop --set sim.tune.profile=off --workdir SW_warm0
     rm -rf SW_warm0
     rm -rf SW_full; sim_group full SW_full
@@ -619,12 +649,12 @@ if [[ " $PHASES " == *" sim_llvm "* ]]; then
       local mode=$1 wd=$2
       local setup_ms run_ms
       group_begin
-      step sim_llvm "$mode" "siml_${mode}_setup.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
+      step sim_llvm "$mode" "siml_${mode}_setup.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} ${SIM_ARGS[@]+"${SIM_ARGS[@]}"} \
         "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --setup-only \
         --set sim.tune.backend=llvm --set sim.tune.profile=off \
         --workdir "$wd" --result-json "siml_${mode}_setup.json"
       setup_ms=$GRP_MS
-      step sim_llvm "$mode" "siml_${mode}_run.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
+      step sim_llvm "$mode" "siml_${mode}_run.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} ${SIM_ARGS[@]+"${SIM_ARGS[@]}"} \
         "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --run-only --arg "cycles=$SIM_CYCLES" \
  --set sim.tune.backend=llvm --set sim.tune.profile=off --diag-fmt pretty \
         --workdir "$wd" --result-json "siml_${mode}_run.json"
@@ -632,7 +662,7 @@ if [[ " $PHASES " == *" sim_llvm "* ]]; then
       group_end sim_llvm "$mode" "$(sim_extra "$wd" "$setup_ms" "$run_ms")"
     }
     rm -rf SL_warm0
-    warm_phase sim_llvm "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} "tree/$SIM_UNIT.prp" "tree/$SIM_TB" \
+    warm_phase sim_llvm "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} ${SIM_ARGS[@]+"${SIM_ARGS[@]}"} "tree/$SIM_UNIT.prp" "tree/$SIM_TB" \
       --arg "cycles=$SIM_CYCLES" --set sim.tune.backend=llvm --set sim.tune.profile=off \
       --workdir SL_warm0
     rm -rf SL_warm0
@@ -665,7 +695,7 @@ if [[ " $PHASES " == *" lec "* ]] && [ "$HAS_LEC" = 1 ]; then
     rm -f "lec_$mode.json"
     STEP_OK_CODES="0 10" \
       step lec "$mode" "lec_$mode.json" -- "$LHD" lec --impl "lg:$lg" --ref lg:ref.lg \
-        --top "$TOP" --workdir "$wd" --result-json "lec_$mode.json" "$@"
+        --top "$TOP" --workdir "$wd" --result-json "lec_$mode.json" ${LEC_ARGS[@]+"${LEC_ARGS[@]}"} "$@"
     local verdict
     verdict=$(python3 -c 'import json, sys
 try:
@@ -678,7 +708,7 @@ print(v if isinstance(v, str) and v.replace("-", "").isalpha() else "")' "lec_$m
   rm -rf l_full lw_full lw_warm0
   untimed lec_pre_full compile_into l_full cw_l_full pre_l_full.json
   warm_phase lec "$LHD" lec --impl "lg:l_full" --ref lg:ref.lg --top "$TOP" \
-    --workdir lw_warm0 --set lhd.incremental=false
+    --workdir lw_warm0 --set lhd.incremental=false ${LEC_ARGS[@]+"${LEC_ARGS[@]}"}
   rm -rf lw_warm0
   lec_group full l_full lw_full --set lhd.incremental=false
 
