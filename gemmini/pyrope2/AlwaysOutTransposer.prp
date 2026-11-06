@@ -1,110 +1,38 @@
 const PE = import("PE.PE")
 
+// Always-output 4x4 transposer: a grid of 8-bit PE shift cells. Rows of io_inRow_bits shift in
+// leftward (dir=0) or upward (dir=1); io_outCol_bits reads column 0 (dir=0) or row 0 (dir=1).
+// dir flips every 4 valid rows, so one block is shifted in while the previous one is shifted out.
 pub mod AlwaysOutTransposer::[timecheck=false](`clock`:Clock, `reset`:U1, io_inRow_valid:U1, io_inRow_bits:U32) -> (io_outCol_bits:U32@[]) {
-  mut _b2i_2 = 0
   reg counter:U2:[initial=0, reset_pin=`reset`, async=false]
   reg dir:U1:[initial=0, reset_pin=`reset`, async=false]
-  wire _pes_3_3_io_outL:U8 = nil
-  wire _pes_3_3_io_outU:U8 = nil
-  wire _pes_3_2_io_outL:U8 = nil
-  wire _pes_3_2_io_outU:U8 = nil
-  wire _pes_3_1_io_outL:U8 = nil
-  wire _pes_3_1_io_outU:U8 = nil
-  wire _pes_3_0_io_outL:U8 = nil
-  wire _pes_3_0_io_outU:U8 = nil
-  wire _pes_2_3_io_outL:U8 = nil
-  wire _pes_2_3_io_outU:U8 = nil
-  wire _pes_2_2_io_outL:U8 = nil
-  wire _pes_2_2_io_outU:U8 = nil
-  wire _pes_2_1_io_outL:U8 = nil
-  wire _pes_2_1_io_outU:U8 = nil
-  wire _pes_2_0_io_outL:U8 = nil
-  wire _pes_2_0_io_outU:U8 = nil
-  wire _pes_1_3_io_outL:U8 = nil
-  wire _pes_1_3_io_outU:U8 = nil
-  wire _pes_1_2_io_outL:U8 = nil
-  wire _pes_1_2_io_outU:U8 = nil
-  wire _pes_1_1_io_outL:U8 = nil
-  wire _pes_1_1_io_outU:U8 = nil
-  wire _pes_1_0_io_outL:U8 = nil
-  wire _pes_1_0_io_outU:U8 = nil
-  wire _pes_0_3_io_outL:U8 = nil
-  wire _pes_0_3_io_outU:U8 = nil
-  wire _pes_0_2_io_outL:U8 = nil
-  wire _pes_0_2_io_outU:U8 = nil
-  wire _pes_0_1_io_outL:U8 = nil
-  wire _pes_0_1_io_outU:U8 = nil
-  wire _pes_0_0_io_outL:U8 = nil
-  wire _pes_0_0_io_outU:U8 = nil
-  mut `_GEN_0.ready` = 1
-  mut `_GEN_0.valid` = io_inRow_valid & 1
-  mut `_GEN_0.bits` = io_inRow_bits#[0..<32]
-  mut _mux_1:U32 = if dir != 0 { ((_pes_0_3_io_outU#[0..<8] << 24) | (_pes_0_2_io_outU#[0..<8] << 16) | (_pes_0_1_io_outU#[0..<8] << 8) | _pes_0_0_io_outU#[0..<8])#[0..<32] } else { ((_pes_3_0_io_outL#[0..<8] << 24) | (_pes_2_0_io_outL#[0..<8] << 16) | (_pes_1_0_io_outL#[0..<8] << 8) | _pes_0_0_io_outL#[0..<8])#[0..<32] }
-  mut `_GEN_1.ready` = 1
-  mut `_GEN_1.valid` = 1
-  mut `_GEN_1.bits` = _mux_1#[0..<32]
-  mut `io.inRow` = (0x200000000 | (`_GEN_0.valid` << 32) | `_GEN_0.bits`)#[0..<34]
-  mut `io.outCol` = (0x300000000 | `_GEN_1.bits`)#[0..<34]
-  if not (`reset` != 0) {
-    if `io.inRow`#[32..<33] != 0 {
-      if counter == 3 {
-        counter = ((1 - (3 - counter)#[0..<2])#[0..<2] - 1)#[0..<2]
-      } else {
-        counter = (counter + 1)#[0..<2]
-      }
-    }
+
+  if io_inRow_valid != 0 {
+    if counter == 3 { dir = dir ^ 1 }
+    counter = (counter + 1)#[0..<2]
   }
-  if not (`reset` != 0) {
-    _b2i_2 = if counter == 3 { 1 } else { 0 }
-    dir = ((_b2i_2 & `io.inRow`#[32..<33] & 1) ^ dir) & 1
+
+  // instantiated bottom-right first so every PE reads neighbours already declared
+  mut pes_3_3 = PE::[name=pes_3_3](`clock` = `clock`, io_inR = io_inRow_bits#[24..<32], io_inD = io_inRow_bits#[24..<32], io_dir = dir, io_en = io_inRow_valid)
+  mut pes_3_2 = PE::[name=pes_3_2](`clock` = `clock`, io_inR = pes_3_3.io_outL, io_inD = io_inRow_bits#[16..<24], io_dir = dir, io_en = io_inRow_valid)
+  mut pes_3_1 = PE::[name=pes_3_1](`clock` = `clock`, io_inR = pes_3_2.io_outL, io_inD = io_inRow_bits#[8..<16], io_dir = dir, io_en = io_inRow_valid)
+  mut pes_3_0 = PE::[name=pes_3_0](`clock` = `clock`, io_inR = pes_3_1.io_outL, io_inD = io_inRow_bits#[0..<8], io_dir = dir, io_en = io_inRow_valid)
+  mut pes_2_3 = PE::[name=pes_2_3](`clock` = `clock`, io_inR = io_inRow_bits#[16..<24], io_inD = pes_3_3.io_outU, io_dir = dir, io_en = io_inRow_valid)
+  mut pes_2_2 = PE::[name=pes_2_2](`clock` = `clock`, io_inR = pes_2_3.io_outL, io_inD = pes_3_2.io_outU, io_dir = dir, io_en = io_inRow_valid)
+  mut pes_2_1 = PE::[name=pes_2_1](`clock` = `clock`, io_inR = pes_2_2.io_outL, io_inD = pes_3_1.io_outU, io_dir = dir, io_en = io_inRow_valid)
+  mut pes_2_0 = PE::[name=pes_2_0](`clock` = `clock`, io_inR = pes_2_1.io_outL, io_inD = pes_3_0.io_outU, io_dir = dir, io_en = io_inRow_valid)
+  mut pes_1_3 = PE::[name=pes_1_3](`clock` = `clock`, io_inR = io_inRow_bits#[8..<16], io_inD = pes_2_3.io_outU, io_dir = dir, io_en = io_inRow_valid)
+  mut pes_1_2 = PE::[name=pes_1_2](`clock` = `clock`, io_inR = pes_1_3.io_outL, io_inD = pes_2_2.io_outU, io_dir = dir, io_en = io_inRow_valid)
+  mut pes_1_1 = PE::[name=pes_1_1](`clock` = `clock`, io_inR = pes_1_2.io_outL, io_inD = pes_2_1.io_outU, io_dir = dir, io_en = io_inRow_valid)
+  mut pes_1_0 = PE::[name=pes_1_0](`clock` = `clock`, io_inR = pes_1_1.io_outL, io_inD = pes_2_0.io_outU, io_dir = dir, io_en = io_inRow_valid)
+  mut pes_0_3 = PE::[name=pes_0_3](`clock` = `clock`, io_inR = io_inRow_bits#[0..<8], io_inD = pes_1_3.io_outU, io_dir = dir, io_en = io_inRow_valid)
+  mut pes_0_2 = PE::[name=pes_0_2](`clock` = `clock`, io_inR = pes_0_3.io_outL, io_inD = pes_1_2.io_outU, io_dir = dir, io_en = io_inRow_valid)
+  mut pes_0_1 = PE::[name=pes_0_1](`clock` = `clock`, io_inR = pes_0_2.io_outL, io_inD = pes_1_1.io_outU, io_dir = dir, io_en = io_inRow_valid)
+  mut pes_0_0 = PE::[name=pes_0_0](`clock` = `clock`, io_inR = pes_0_1.io_outL, io_inD = pes_1_0.io_outU, io_dir = dir, io_en = io_inRow_valid)
+
+  io_outCol_bits = if dir != 0 {
+    (pes_0_3.io_outU << 24) | (pes_0_2.io_outU << 16) | (pes_0_1.io_outU << 8) | pes_0_0.io_outU
+  } else {
+    (pes_3_0.io_outL << 24) | (pes_2_0.io_outL << 16) | (pes_1_0.io_outL << 8) | pes_0_0.io_outL
   }
-  mut pes_0_0 = PE::[name=pes_0_0](`clock` = `clock`, io_inR = _pes_0_1_io_outL, io_inD = _pes_1_0_io_outU, io_dir = dir, io_en = `io.inRow`#[32..<33])
-  _pes_0_0_io_outL = pes_0_0.io_outL
-  _pes_0_0_io_outU = pes_0_0.io_outU
-  mut pes_0_1 = PE::[name=pes_0_1](`clock` = `clock`, io_inR = _pes_0_2_io_outL, io_inD = _pes_1_1_io_outU, io_dir = dir, io_en = `io.inRow`#[32..<33])
-  _pes_0_1_io_outL = pes_0_1.io_outL
-  _pes_0_1_io_outU = pes_0_1.io_outU
-  mut pes_0_2 = PE::[name=pes_0_2](`clock` = `clock`, io_inR = _pes_0_3_io_outL, io_inD = _pes_1_2_io_outU, io_dir = dir, io_en = `io.inRow`#[32..<33])
-  _pes_0_2_io_outL = pes_0_2.io_outL
-  _pes_0_2_io_outU = pes_0_2.io_outU
-  mut pes_0_3 = PE::[name=pes_0_3](`clock` = `clock`, io_inR = `io.inRow`#[0..<32]#[0..<8], io_inD = _pes_1_3_io_outU, io_dir = dir, io_en = `io.inRow`#[32..<33])
-  _pes_0_3_io_outL = pes_0_3.io_outL
-  _pes_0_3_io_outU = pes_0_3.io_outU
-  mut pes_1_0 = PE::[name=pes_1_0](`clock` = `clock`, io_inR = _pes_1_1_io_outL, io_inD = _pes_2_0_io_outU, io_dir = dir, io_en = `io.inRow`#[32..<33])
-  _pes_1_0_io_outL = pes_1_0.io_outL
-  _pes_1_0_io_outU = pes_1_0.io_outU
-  mut pes_1_1 = PE::[name=pes_1_1](`clock` = `clock`, io_inR = _pes_1_2_io_outL, io_inD = _pes_2_1_io_outU, io_dir = dir, io_en = `io.inRow`#[32..<33])
-  _pes_1_1_io_outL = pes_1_1.io_outL
-  _pes_1_1_io_outU = pes_1_1.io_outU
-  mut pes_1_2 = PE::[name=pes_1_2](`clock` = `clock`, io_inR = _pes_1_3_io_outL, io_inD = _pes_2_2_io_outU, io_dir = dir, io_en = `io.inRow`#[32..<33])
-  _pes_1_2_io_outL = pes_1_2.io_outL
-  _pes_1_2_io_outU = pes_1_2.io_outU
-  mut pes_1_3 = PE::[name=pes_1_3](`clock` = `clock`, io_inR = `io.inRow`#[0..<32]#[8..<16], io_inD = _pes_2_3_io_outU, io_dir = dir, io_en = `io.inRow`#[32..<33])
-  _pes_1_3_io_outL = pes_1_3.io_outL
-  _pes_1_3_io_outU = pes_1_3.io_outU
-  mut pes_2_0 = PE::[name=pes_2_0](`clock` = `clock`, io_inR = _pes_2_1_io_outL, io_inD = _pes_3_0_io_outU, io_dir = dir, io_en = `io.inRow`#[32..<33])
-  _pes_2_0_io_outL = pes_2_0.io_outL
-  _pes_2_0_io_outU = pes_2_0.io_outU
-  mut pes_2_1 = PE::[name=pes_2_1](`clock` = `clock`, io_inR = _pes_2_2_io_outL, io_inD = _pes_3_1_io_outU, io_dir = dir, io_en = `io.inRow`#[32..<33])
-  _pes_2_1_io_outL = pes_2_1.io_outL
-  _pes_2_1_io_outU = pes_2_1.io_outU
-  mut pes_2_2 = PE::[name=pes_2_2](`clock` = `clock`, io_inR = _pes_2_3_io_outL, io_inD = _pes_3_2_io_outU, io_dir = dir, io_en = `io.inRow`#[32..<33])
-  _pes_2_2_io_outL = pes_2_2.io_outL
-  _pes_2_2_io_outU = pes_2_2.io_outU
-  mut pes_2_3 = PE::[name=pes_2_3](`clock` = `clock`, io_inR = `io.inRow`#[0..<32]#[16..<24], io_inD = _pes_3_3_io_outU, io_dir = dir, io_en = `io.inRow`#[32..<33])
-  _pes_2_3_io_outL = pes_2_3.io_outL
-  _pes_2_3_io_outU = pes_2_3.io_outU
-  mut pes_3_0 = PE::[name=pes_3_0](`clock` = `clock`, io_inR = _pes_3_1_io_outL, io_inD = `io.inRow`#[0..<32]#[0..<8], io_dir = dir, io_en = `io.inRow`#[32..<33])
-  _pes_3_0_io_outL = pes_3_0.io_outL
-  _pes_3_0_io_outU = pes_3_0.io_outU
-  mut pes_3_1 = PE::[name=pes_3_1](`clock` = `clock`, io_inR = _pes_3_2_io_outL, io_inD = `io.inRow`#[0..<32]#[8..<16], io_dir = dir, io_en = `io.inRow`#[32..<33])
-  _pes_3_1_io_outL = pes_3_1.io_outL
-  _pes_3_1_io_outU = pes_3_1.io_outU
-  mut pes_3_2 = PE::[name=pes_3_2](`clock` = `clock`, io_inR = _pes_3_3_io_outL, io_inD = `io.inRow`#[0..<32]#[16..<24], io_dir = dir, io_en = `io.inRow`#[32..<33])
-  _pes_3_2_io_outL = pes_3_2.io_outL
-  _pes_3_2_io_outU = pes_3_2.io_outU
-  mut pes_3_3 = PE::[name=pes_3_3](`clock` = `clock`, io_inR = `io.inRow`#[0..<32]#[24..<32], io_inD = `io.inRow`#[0..<32]#[24..<32], io_dir = dir, io_en = `io.inRow`#[32..<33])
-  _pes_3_3_io_outL = pes_3_3.io_outL
-  _pes_3_3_io_outU = pes_3_3.io_outU
-  io_outCol_bits = `io.outCol`#[0..<32]
 }
