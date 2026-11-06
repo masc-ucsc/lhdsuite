@@ -1,0 +1,38 @@
+// 6-entry tag FIFO. An entry is (tag.id, id, total_rows) packed as bits 8, 7..5, 4..0.
+// A dequeued entry (and every entry during reset) is cleared to tag.id=0, total_rows=16; its id is kept.
+pub mod TagQueue::[timecheck=false](`clock`:Clock, `reset`:U1, io_enq_valid:U1, io_enq_bits:(tag:(id:U1), id:U3, total_rows:U5), io_deq_ready:U1) -> (io_enq_ready:U1@[], io_deq_valid:U1@[], io_deq_bits:(tag:(id:U1), id:U3, total_rows:U5)@[], io_all:U54@[]) {
+  reg regs:[6]U9:[ordering="old"]
+  reg raddr:U3:[initial=0, reset_pin=`reset`, async=false]
+  reg waddr:U3:[initial=0, reset_pin=`reset`, async=false]
+  reg len:U3:[initial=0, reset_pin=`reset`, async=false]
+
+  const enq_ready:U1 = if len == 6 { 0 } else { 1 }
+  const deq_valid:U1 = if len == 0 { 0 } else { 1 }
+  const enq_fire = io_enq_valid & enq_ready
+  const deq_fire = io_deq_ready & deq_valid
+  const head = if raddr > 5 { regs[0] } else { regs[raddr] }
+
+  for i in 0..<6 {
+    const w = if enq_fire != 0 and waddr == i { 1 } else { 0 }
+    const clr = if `reset` != 0 or (deq_fire != 0 and raddr == i) { 1 } else { 0 }
+    const tag = if w != 0 { io_enq_bits.tag.id } else { regs[i]#[8] }
+    const id = if w != 0 { io_enq_bits.id } else { regs[i]#[5..<8] }
+    const rows = if w != 0 { io_enq_bits.total_rows } else { regs[i]#[0..<5] }
+    regs[i] = if clr != 0 { (id << 5) | 16 } else { (tag << 8) | (id << 5) | rows }
+  }
+
+  if deq_fire != 0 { raddr = (if raddr > 4 { raddr - 5 } else { raddr + 1 })#[0..<3] }
+  if enq_fire != 0 { waddr = (if waddr > 4 { waddr - 5 } else { waddr + 1 })#[0..<3] }
+  if enq_fire != 0 and deq_fire == 0 {
+    len = (len + 1)#[0..<3]
+  } elif enq_fire == 0 and deq_fire != 0 {
+    len = (len - 1)#[0..<3]
+  }
+
+  io_enq_ready = enq_ready
+  io_deq_valid = deq_valid
+  io_deq_bits.tag.id = head#[8]
+  io_deq_bits.id = head#[5..<8]
+  io_deq_bits.total_rows = head#[0..<5]
+  io_all = regs#[0..<54]
+}

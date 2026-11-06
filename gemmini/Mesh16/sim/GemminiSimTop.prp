@@ -1,0 +1,63 @@
+// Simulation-only wrapper: flat scalar ports (each <= 64 bits) around the 16x16 GemminiTPU, whose ports are nested
+// structs with 128-bit and 512-bit fields. `lhd sim` testbenches cannot write a field of a struct input port and
+// truncate scalars past 64 bits, so the drivers talk to this wrapper instead. verilog/GemminiSimTop.sv is the same
+// wrapper for the Verilog side; the two are LEC-checked against each other.
+const GemminiTPU = import("GemminiTPU.GemminiTPU")
+
+pub mod GemminiSimTop(`clock`:Clock, `reset`:Reset,
+    a_valid:U1, a_bits_0:U64, a_bits_1:U64, b_valid:U1, b_bits_0:U64, b_bits_1:U64, d_valid:U1, d_bits_0:U64, d_bits_1:U64,
+    req_valid:U1, req_tag_id:U1, req_dataflow:U1, req_propagate:U1, req_shift:U5, req_a_transpose:U1,
+    req_bd_transpose:U1, req_total_rows:U5, req_flush:U2,
+    wr_valid:U1, wr_addr:U6, wr_data_0:U64, wr_data_1:U64, wr_data_2:U64, wr_data_3:U64, wr_data_4:U64, wr_data_5:U64, wr_data_6:U64, wr_data_7:U64, wr_acc:U1, wr_mask:U64,
+    rd_valid:U1, rd_scale:U32, rd_addr:U6, rd_act:U3, rd_full:U1, rd_fromDMA:U1, rd_resp_ready:U1)
+ -> (a_ready:U1@[], b_ready:U1@[], d_ready:U1@[], req_ready:U1@[],
+     resp_valid:U1@[], resp_tag_id:U1@[], resp_data_0:U64@[], resp_data_1:U64@[], resp_data_2:U64@[], resp_data_3:U64@[], resp_data_4:U64@[], resp_data_5:U64@[], resp_data_6:U64@[], resp_data_7:U64@[], resp_total_rows:U5@[], resp_last:U1@[],
+     wr_ready:U1@[], rd_req_ready:U1@[], rd_resp_valid:U1@[], rd_data_0:U64@[], rd_data_1:U64@[], rd_data_2:U64@[], rd_data_3:U64@[], rd_data_4:U64@[], rd_data_5:U64@[], rd_data_6:U64@[], rd_data_7:U64@[], rd_resp_fromDMA:U1@[],
+     rd_resp_scale:U32@[], rd_resp_act:U3@[], rd_resp_bank:U2@[]) {
+  mut tpu = GemminiTPU::[name=tpu](`clock` = `clock`, `reset` = `reset`,
+    io_mesh_a_valid = a_valid, io_mesh_a_bits = (a_bits_1 << 64) | a_bits_0, io_mesh_b_valid = b_valid, io_mesh_b_bits = (b_bits_1 << 64) | b_bits_0, io_mesh_d_valid = d_valid, io_mesh_d_bits = (d_bits_1 << 64) | d_bits_0,
+    io_mesh_req_valid = req_valid,
+    `io_mesh_req_bits.tag.id` = req_tag_id, `io_mesh_req_bits.pe_control.dataflow` = req_dataflow,
+    `io_mesh_req_bits.pe_control.propagate` = req_propagate, `io_mesh_req_bits.pe_control.shift` = req_shift,
+    `io_mesh_req_bits.a_transpose` = req_a_transpose, `io_mesh_req_bits.bd_transpose` = req_bd_transpose,
+    `io_mesh_req_bits.total_rows` = req_total_rows, `io_mesh_req_bits.flush` = req_flush,
+    io_acc_write_valid = wr_valid, `io_acc_write_bits.addr` = wr_addr,
+    `io_acc_write_bits.data` = (wr_data_7 << 448) | (wr_data_6 << 384) | (wr_data_5 << 320) | (wr_data_4 << 256) | (wr_data_3 << 192) | (wr_data_2 << 128) | (wr_data_1 << 64) | wr_data_0, `io_acc_write_bits.acc` = wr_acc,
+    `io_acc_write_bits.mask` = wr_mask,
+    io_acc_read_req_valid = rd_valid, `io_acc_read_req_bits.scale` = rd_scale, `io_acc_read_req_bits.addr` = rd_addr,
+    `io_acc_read_req_bits.igelu_qb` = 0, `io_acc_read_req_bits.igelu_qc` = 0, `io_acc_read_req_bits.iexp_qln2` = 0,
+    `io_acc_read_req_bits.iexp_qln2_inv` = 0, `io_acc_read_req_bits.act` = rd_act,
+    `io_acc_read_req_bits.full` = rd_full, `io_acc_read_req_bits.fromDMA` = rd_fromDMA,
+    io_acc_read_resp_ready = rd_resp_ready)
+  a_ready = tpu.io_mesh_a_ready
+  b_ready = tpu.io_mesh_b_ready
+  d_ready = tpu.io_mesh_d_ready
+  req_ready = tpu.io_mesh_req_ready
+  resp_valid = tpu.io_mesh_resp.valid
+  resp_tag_id = tpu.io_mesh_resp.bits.tag.id
+  resp_data_0 = tpu.io_mesh_resp.bits.data#[0..<64]
+  resp_data_1 = tpu.io_mesh_resp.bits.data#[64..<128]
+  resp_data_2 = tpu.io_mesh_resp.bits.data#[128..<192]
+  resp_data_3 = tpu.io_mesh_resp.bits.data#[192..<256]
+  resp_data_4 = tpu.io_mesh_resp.bits.data#[256..<320]
+  resp_data_5 = tpu.io_mesh_resp.bits.data#[320..<384]
+  resp_data_6 = tpu.io_mesh_resp.bits.data#[384..<448]
+  resp_data_7 = tpu.io_mesh_resp.bits.data#[448..<512]
+  resp_total_rows = tpu.io_mesh_resp.bits.total_rows
+  resp_last = tpu.io_mesh_resp.bits.last
+  wr_ready = tpu.io_acc_write_ready
+  rd_req_ready = tpu.io_acc_read_req_ready
+  rd_resp_valid = tpu.io_acc_read_resp_valid
+  rd_data_0 = tpu.io_acc_read_resp_bits.data#[0..<64]
+  rd_data_1 = tpu.io_acc_read_resp_bits.data#[64..<128]
+  rd_data_2 = tpu.io_acc_read_resp_bits.data#[128..<192]
+  rd_data_3 = tpu.io_acc_read_resp_bits.data#[192..<256]
+  rd_data_4 = tpu.io_acc_read_resp_bits.data#[256..<320]
+  rd_data_5 = tpu.io_acc_read_resp_bits.data#[320..<384]
+  rd_data_6 = tpu.io_acc_read_resp_bits.data#[384..<448]
+  rd_data_7 = tpu.io_acc_read_resp_bits.data#[448..<512]
+  rd_resp_fromDMA = tpu.io_acc_read_resp_bits.fromDMA
+  rd_resp_scale = tpu.io_acc_read_resp_bits.scale
+  rd_resp_act = tpu.io_acc_read_resp_bits.act
+  rd_resp_bank = tpu.io_acc_read_resp_bits.acc_bank_id
+}

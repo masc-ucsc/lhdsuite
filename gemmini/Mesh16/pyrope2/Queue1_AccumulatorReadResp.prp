@@ -1,0 +1,31 @@
+// One-entry flow-through queue: when empty, an enqueued entry passes straight to deq in the same cycle.
+pub mod Queue1_AccumulatorReadResp::[timecheck=false](`clock`:Clock, `reset`:U1, io_enq_valid:U1, io_enq_bits:(data:U512, fromDMA:U1, scale:U32, igelu_qb:U32, igelu_qc:U32, iexp_qln2:U32, iexp_qln2_inv:U32, act:U3, acc_bank_id:U2), io_deq_ready:U1) -> (io_enq_ready:U1@[], io_deq_valid:U1@[], io_deq_bits:(data:U512, fromDMA:U1, scale:U32, igelu_qb:U32, igelu_qc:U32, iexp_qln2:U32, iexp_qln2_inv:U32, act:U3, acc_bank_id:U2)@[], io_count:U1@[]) {
+  reg ram:U678
+  reg maybe_full:U1:[initial=0, reset_pin=`reset`, async=false]
+
+  const empty = maybe_full == 0
+  const do_deq = (maybe_full & io_deq_ready) != 0
+  const enq_ready = io_deq_ready | (~maybe_full)#[0]
+  const do_enq = (io_enq_valid & enq_ready) != 0 and not (empty and io_deq_ready != 0)
+
+  // As in the Verilog (firtool's masked-write lowering), the entry is written with its fields in REVERSED
+  // order (acc_bank_id on top, data at the bottom) but read back with data on top. Kept as emitted.
+  if do_enq {
+    ram = (io_enq_bits.acc_bank_id << 676) | (io_enq_bits.act << 673) | (io_enq_bits.iexp_qln2_inv << 641) | (io_enq_bits.iexp_qln2 << 609) | (io_enq_bits.igelu_qc << 577)
+        | (io_enq_bits.igelu_qb << 545) | (io_enq_bits.scale << 513) | (io_enq_bits.fromDMA << 512) | io_enq_bits.data
+  }
+  if do_enq != do_deq { maybe_full = if do_enq { 1 } else { 0 } }
+
+  io_enq_ready = enq_ready
+  io_deq_valid = io_enq_valid | maybe_full
+  io_deq_bits.data          = if empty { io_enq_bits.data }          else { ram#[166..<678] }
+  io_deq_bits.fromDMA       = if empty { io_enq_bits.fromDMA }       else { ram#[165] }
+  io_deq_bits.scale         = if empty { io_enq_bits.scale }         else { ram#[133..<165] }
+  io_deq_bits.igelu_qb      = if empty { io_enq_bits.igelu_qb }      else { ram#[101..<133] }
+  io_deq_bits.igelu_qc      = if empty { io_enq_bits.igelu_qc }      else { ram#[69..<101] }
+  io_deq_bits.iexp_qln2     = if empty { io_enq_bits.iexp_qln2 }     else { ram#[37..<69] }
+  io_deq_bits.iexp_qln2_inv = if empty { io_enq_bits.iexp_qln2_inv } else { ram#[5..<37] }
+  io_deq_bits.act           = if empty { io_enq_bits.act }           else { ram#[2..<5] }
+  io_deq_bits.acc_bank_id   = if empty { io_enq_bits.acc_bank_id }   else { ram#[0..<2] }
+  io_count = maybe_full
+}

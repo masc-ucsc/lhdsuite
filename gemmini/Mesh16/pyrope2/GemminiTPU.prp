@@ -1,0 +1,46 @@
+const AccumulatorMem = import("AccumulatorMem.AccumulatorMem")
+const MeshWithDelays = import("MeshWithDelays.MeshWithDelays")
+
+// Top: the systolic mesh (with its input/output skew) and the accumulator memory, side by side.
+// The two are not connected inside the core; the accumulator's adder input is tied to 0, as in the Verilog.
+pub mod GemminiTPU::[timecheck=false](`clock`:Clock, `reset`:Reset, io_mesh_a_valid:U1, io_mesh_a_bits:U128, io_mesh_b_valid:U1, io_mesh_b_bits:U128, io_mesh_d_valid:U1, io_mesh_d_bits:U128, io_mesh_req_valid:U1, io_mesh_req_bits:(tag:(id:U1), pe_control:(dataflow:U1, propagate:U1, shift:U5), a_transpose:U1, bd_transpose:U1, total_rows:U5, flush:U2), io_acc_write_valid:U1, io_acc_write_bits:(addr:U6, data:U512, acc:U1, mask:U64), io_acc_read_req_valid:U1, io_acc_read_req_bits:(scale:U32, addr:U6, igelu_qb:U32, igelu_qc:U32, iexp_qln2:U32, iexp_qln2_inv:U32, act:U3, full:U1, fromDMA:U1), io_acc_read_resp_ready:U1) -> (io_mesh_a_ready:U1@[], io_mesh_b_ready:U1@[], io_mesh_d_ready:U1@[], io_mesh_req_ready:U1@[], io_mesh_resp:(valid:U1, bits:(tag:(id:U1), data:U512, total_rows:U5, last:U1))@[], io_acc_write_ready:U1@[], io_acc_read_req_ready:U1@[], io_acc_read_resp_valid:U1@[], io_acc_read_resp_bits:(data:U512, fromDMA:U1, scale:U32, igelu_qb:U32, igelu_qc:U32, iexp_qln2:U32, iexp_qln2_inv:U32, act:U3, acc_bank_id:U2)@[]) {
+  mut mesh = MeshWithDelays::[name=mesh](`clock` = `clock`, `reset` = `reset`,
+    io_a_valid = io_mesh_a_valid, io_a_bits = io_mesh_a_bits, io_b_valid = io_mesh_b_valid, io_b_bits = io_mesh_b_bits,
+    io_d_valid = io_mesh_d_valid, io_d_bits = io_mesh_d_bits, io_req_valid = io_mesh_req_valid,
+    `io_req_bits.tag.id` = io_mesh_req_bits.tag.id, `io_req_bits.pe_control.dataflow` = io_mesh_req_bits.pe_control.dataflow,
+    `io_req_bits.pe_control.propagate` = io_mesh_req_bits.pe_control.propagate, `io_req_bits.pe_control.shift` = io_mesh_req_bits.pe_control.shift,
+    `io_req_bits.a_transpose` = io_mesh_req_bits.a_transpose, `io_req_bits.bd_transpose` = io_mesh_req_bits.bd_transpose,
+    `io_req_bits.total_rows` = io_mesh_req_bits.total_rows, `io_req_bits.flush` = io_mesh_req_bits.flush)
+
+  mut accMem = AccumulatorMem::[name=accMem](`clock` = `clock`, `reset` = `reset`,
+    io_read_req_valid = io_acc_read_req_valid, `io_read_req_bits.scale` = io_acc_read_req_bits.scale, `io_read_req_bits.addr` = io_acc_read_req_bits.addr,
+    `io_read_req_bits.igelu_qb` = io_acc_read_req_bits.igelu_qb, `io_read_req_bits.igelu_qc` = io_acc_read_req_bits.igelu_qc,
+    `io_read_req_bits.iexp_qln2` = io_acc_read_req_bits.iexp_qln2, `io_read_req_bits.iexp_qln2_inv` = io_acc_read_req_bits.iexp_qln2_inv,
+    `io_read_req_bits.act` = io_acc_read_req_bits.act, `io_read_req_bits.full` = io_acc_read_req_bits.full, `io_read_req_bits.fromDMA` = io_acc_read_req_bits.fromDMA,
+    io_read_resp_ready = io_acc_read_resp_ready, io_write_valid = io_acc_write_valid,
+    `io_write_bits.addr` = io_acc_write_bits.addr, `io_write_bits.data` = io_acc_write_bits.data,
+    `io_write_bits.acc` = io_acc_write_bits.acc, `io_write_bits.mask` = io_acc_write_bits.mask, io_adder_sum = 0)
+
+  io_mesh_a_ready = mesh.io_a_ready
+  io_mesh_b_ready = mesh.io_b_ready
+  io_mesh_d_ready = mesh.io_d_ready
+  io_mesh_req_ready = mesh.io_req_ready
+  io_mesh_resp.valid = mesh.io_resp.valid
+  io_mesh_resp.bits.tag.id = mesh.io_resp.bits.tag.id
+  io_mesh_resp.bits.data = mesh.io_resp.bits.data
+  io_mesh_resp.bits.total_rows = mesh.io_resp.bits.total_rows
+  io_mesh_resp.bits.last = mesh.io_resp.bits.last
+
+  io_acc_write_ready = accMem.io_write_ready
+  io_acc_read_req_ready = accMem.io_read_req_ready
+  io_acc_read_resp_valid = accMem.io_read_resp_valid
+  io_acc_read_resp_bits.data = accMem.io_read_resp_bits.data
+  io_acc_read_resp_bits.fromDMA = accMem.io_read_resp_bits.fromDMA
+  io_acc_read_resp_bits.scale = accMem.io_read_resp_bits.scale
+  io_acc_read_resp_bits.igelu_qb = accMem.io_read_resp_bits.igelu_qb
+  io_acc_read_resp_bits.igelu_qc = accMem.io_read_resp_bits.igelu_qc
+  io_acc_read_resp_bits.iexp_qln2 = accMem.io_read_resp_bits.iexp_qln2
+  io_acc_read_resp_bits.iexp_qln2_inv = accMem.io_read_resp_bits.iexp_qln2_inv
+  io_acc_read_resp_bits.act = accMem.io_read_resp_bits.act
+  io_acc_read_resp_bits.acc_bank_id = accMem.io_read_resp_bits.acc_bank_id
+}
