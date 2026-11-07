@@ -19,7 +19,7 @@
 // const cpu = import("PipelinedDualIssueCPU.PipelinedDualIssueCPU")
 const cpu = import("lg:PipelinedDualIssueCPU")
 
-test cpu.prog(cycles:U23 = 1000000) {
+test cpu.prog(cycles:U32 = 1000000) {
   mut acc = cpu
   mut rom = [0x00000093,  // [0]   addi x1,  x0, 0
              0x00000113,  // [1]   addi x2,  x0, 0
@@ -75,6 +75,11 @@ test cpu.prog(cycles:U23 = 1000000) {
   mut got8 = 0
   mut done_cycle = 0
   mut last_pc = 0
+  // Every cycle folds the post-step bus outputs into `sum`; the Verilator twin
+  // (dino_prog_tb_verilator.cpp) folds the SAME values the same way, so the
+  // pinned checksum is a cycle-by-cycle cross-simulator oracle, not only an
+  // end state. Keep the fold identical on both sides.
+  mut sum:U64 = 0
   tick cycles {
     acc.reset = clock < 2
     acc.io_imem_good = 1
@@ -99,6 +104,8 @@ test cpu.prog(cycles:U23 = 1000000) {
     if done_cycle == 0 and got0 == 1 and got8 == 1 {
       done_cycle = clock
     }
+    const obs = acc.io_imem_address ^ (acc.io_dmem_address << 5) ^ acc.io_dmem_writedata ^ (acc.io_dmem_memwrite << 61)
+    wrap sum = ((sum * 31) + obs) & 0x7fffffffffffffff
   }
   if cycles <= 100 {
     assert(last_pc > 0, "the short correctness run advances instruction fetch past reset")
@@ -118,5 +125,5 @@ test cpu.prog(cycles:U23 = 1000000) {
   // fold (0xFF..F - st8 + 1) was written for an unsigned readback and printed
   // 2^64+102 once st8 became signed.
   mut neg_x3 = -st8
-  puts("dino program: x2={st0} -x3={neg_x3}, done at cycle {done_cycle}, IPC={ipc_milli} milli-instr/cycle")
+  puts("dino program: x2={st0} -x3={neg_x3}, done at cycle {done_cycle}, IPC={ipc_milli} milli-instr/cycle sum={sum}")
 }

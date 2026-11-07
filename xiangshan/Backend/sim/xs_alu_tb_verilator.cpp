@@ -133,7 +133,7 @@ int main(int argc, char** argv) {
     // Order-sensitive fold: a schedule that computes the right values in the
     // wrong cycle still changes the checksum.
     // Masked to 63 bits so the printed checksum is unambiguously positive.
-    sum = ((sum << 1) + obs) & 0x7fffffffffffffffULL;
+    sum = ((sum * 31) + obs) & 0x7fffffffffffffffULL;  // *31, not <<1: a shift forgets all but the last 63 cycles
 
     lfsr ^= lfsr << 13;
     lfsr ^= lfsr >> 7;

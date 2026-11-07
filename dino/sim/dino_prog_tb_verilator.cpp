@@ -143,6 +143,7 @@ int main(int argc, char** argv) {
   bool     got0       = false;
   bool     got8       = false;
   uint64_t done_cycle = 0;
+  uint64_t sum        = 0;  // per-cycle fold of the post-step bus outputs, same as the Pyrope driver
 
   top->clock               = 0;
   top->reset               = 1;
@@ -182,6 +183,9 @@ int main(int argc, char** argv) {
     if (done_cycle == 0 && got0 && got8) {
       done_cycle = clock;
     }
+    const uint64_t obs = (uint64_t)top->io_imem_address ^ ((uint64_t)top->io_dmem_address << 5) ^ (uint64_t)top->io_dmem_writedata
+                         ^ ((uint64_t)top->io_dmem_memwrite << 61);
+    sum = (sum * 31 + obs) & 0x7fffffffffffffffULL;
   }
 
   top->final();
@@ -195,11 +199,12 @@ int main(int argc, char** argv) {
   // (nops excluded). IPC in milli-units to stay integer-friendly.
   const uint64_t ipc_milli = done_cycle > 0 ? (334 * 1000) / done_cycle : 0;
   const int64_t  neg_x3    = -st8;
-  std::printf("dino program: x2=%llu -x3=%lld, done at cycle %llu, IPC=%llu milli-instr/cycle\n",
+  std::printf("dino program: x2=%llu -x3=%lld, done at cycle %llu, IPC=%llu milli-instr/cycle sum=%llu\n",
               (unsigned long long)st0,
               (long long)neg_x3,
               (unsigned long long)done_cycle,
-              (unsigned long long)ipc_milli);
+              (unsigned long long)ipc_milli,
+              (unsigned long long)sum);
   if (failures) {
     std::printf("FAIL cpu.prog (%d assert(s))\n", failures);
   } else {

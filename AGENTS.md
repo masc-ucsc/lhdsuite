@@ -157,6 +157,20 @@ Every core shares one shape (`<core>/` = `dino/`, `minion/` or `cva6/`):
   reproduce drive / read / `step` / read; "simplifying" it to the usual two-eval
   clock toggle shifts `done at cycle N` by one and silently decouples the two
   benchmarks).
+- **Sim benchmark size and the checksum oracle (owner direction 2026-11-03).**
+  Size each core's `sim_cycles` so `lhd sim` (default tune vector) runs about
+  1-4 s on the dev box — a soft target — and set `verilator_cycles` EQUAL to it
+  so both simulators do the same work in one matched leg. Every timed driver
+  with a Verilator twin prints a per-cycle checksum, `sum = (sum * 31 + obs) &
+  (2^63 - 1)`, and `sim_expect` pins the line Verilator prints, reproduced by
+  `lhd sim`: a mismatch is a bug hunt, not a re-pin. `*31`, not `<<1`: a shift
+  fold forgets everything but the last 63 cycles (xs_rob's old pin had
+  saturated to 2^63-7). Fold only what the interface defines (an address
+  while its request is up, write data while a strobe is set): a CPU's
+  reset-free bus registers power on from `lhd sim`'s seeded PRNG but zero in
+  Verilator. When reset-free state does reach the outputs (xs_renametable's fp
+  read path on cycle 0), set `sim.init_zero=true` in `sim_sets`; bench/sim.sh
+  then passes `--init-zero` to every re-run of drv.bin.
 - **A `u64` testbench variable is not unsigned after `wrap`.** The XS drivers'
   xorshift64 used to spell its right shift `lfsr >> 7`, and that made the Pyrope
   stimulus diverge from a plain `uint64_t` xorshift64 at cycle 4: after

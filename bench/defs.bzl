@@ -181,16 +181,22 @@ CORES = {
         # livehd's sim cgen stopped calling Slop::get_mask_op for constant bit
         # slices (439 call sites -> 3) and dino went from ~9k to ~383k
         # cycles/s, which put 20k back down to 52 ms, i.e. mostly process
-        # startup. Use 4M so both `lhd sim` and Verilator spend enough time in
-        # the active workload to keep startup and scheduling noise secondary.
+        # startup. 4M was ~0.45 s by 2026-11-03; 16M is ~1.85 s of `lhd sim`
+        # and ~2.1 s of Verilator.
         # Re-check this number after any large sim speedup — a benchmark that
         # has outrun its own cycle count reports startup, not the simulator.
+        # Resized 2026-11-03 (mascm1) to a ~2 s `lhd sim` run with the default
+        # tune vector, Verilator at the SAME count (verilator_cycles ==
+        # sim_cycles, so bench/sim_verilator.sh runs one matched leg), and the
+        # checksum recorded from Verilator and reproduced by `lhd sim`.
         "sim_tb": "dino_prog_tb.prp",
-        "sim_cycles": 4000000,
+        "sim_cycles": 16000000,
         "sim_tb_unit": "PipelinedDualIssueCPU",
         "sim_tb_v": "",
         "sim_marker": "dino program:",
-        "sim_expect": "x2=100 -x3=102",
+        # The architectural readback plus the per-cycle bus checksum both
+        # drivers fold (dino_prog_tb.prp / dino_prog_tb_verilator.cpp).
+        "sim_expect": "x2=100 -x3=102, done at cycle 521, IPC=641 milli-instr/cycle sum=2439160879491747994",
         "sim_top_tb": "dino_tb.prp",
         "sim_top_tb_unit": "PipelinedDualIssueCPU",
         "sim_top_cycles": 1000,
@@ -214,14 +220,11 @@ CORES = {
         # line-by-line twin of dino_prog_tb.prp (same ROM, same poke/peek
         # order), and all three simulators print the same
         # `x2=100 -x3=102, done at cycle 521, IPC=641`.
-        # 8M cycles for the throughput run: verilator does dino at ~4.3M
-        # cycles/s (re-measured 2026-08-09; it was ~2.8M when this knob was
-        # added), so anything shorter measures process startup. The matched 4M
-        # and long 8M runs keep the historical ~17-19 ms process startup
-        # secondary; rerun both modes before quoting a new steady-state ratio.
+        # Equal to sim_cycles: 16M is ~2.1 s of Verilator (~7.7M cycles/s),
+        # well past process startup, so one matched leg measures both.
         "verilator_tb": "dino_prog_tb_verilator.cpp",
         "verilator_flags": "",
-        "verilator_cycles": 8000000,
+        "verilator_cycles": 16000000,
     },
     "cva6": {
         "synth_memory_mb": 196608,
@@ -318,11 +321,18 @@ CORES = {
         # default-parameter `picorv32` unit, and three always-open latches the
         # sim color planner could not lower). Green since 2026-09-19; keep the
         # architectural gate live.
+        # The program spins after its store and the run continues: every cycle
+        # folds the bus transaction into a checksum on both sides (only what the
+        # protocol defines, since picorv32's bus registers have no reset).
+        # Resized 2026-11-03 (mascm1) to a ~2 s `lhd sim` run with the default
+        # tune vector, Verilator at the SAME count (verilator_cycles ==
+        # sim_cycles, so bench/sim_verilator.sh runs one matched leg), and the
+        # checksum recorded from Verilator and reproduced by `lhd sim`.
         "sim_tb": "picorv32_prog_tb.prp",
-        "sim_cycles": 500000,
+        "sim_cycles": 6000000,
         "sim_tb_unit": "picorv32_top",
         "sim_marker": "picorv32 prog:",
-        "sim_expect": "stored=30",
+        "sim_expect": "stored=30 at cycle 124 of 6000000 sum=3034750043386134156",
         "sim_top_tb": "",
         "sim_prog_tb": "",
         "sim_prog_tb_unit": "",
@@ -331,7 +341,7 @@ CORES = {
         # Same ROM and one-cycle memory response as the Pyrope testbench.
         "verilator_tb": "picorv32_prog_tb_verilator.cpp",
         "verilator_flags": "-Dassert(assert_expr)=",
-        "verilator_cycles": 500000,
+        "verilator_cycles": 6000000,
     },
     "ibex": {
         "pkg": "//ibex",
@@ -362,17 +372,26 @@ CORES = {
         "color_algs": ["synth"],
         # The picorv32 program (10 x `acc += 3`, stored to 0x100) with the
         # testbench as Ibex's instruction and data memory.
+        # Resized 2026-11-03 (mascm1) to a ~2 s `lhd sim` run with the default
+        # tune vector, Verilator at the SAME count (verilator_cycles ==
+        # sim_cycles, so bench/sim_verilator.sh runs one matched leg), and the
+        # checksum recorded from Verilator and reproduced by `lhd sim`.
         "sim_tb": "ibex_prog_tb.prp",
-        "sim_cycles": 2000,
+        "sim_cycles": 5000000,
         "sim_tb_unit": "ibex_suite_top",
         "sim_marker": "ibex prog:",
-        "sim_expect": "stored=30",
+        "sim_expect": "stored=30 at cycle 88 of 5000000 sum=2883546350395500131",
         "sim_top_tb": "",
         "sim_prog_tb": "",
         "sim_prog_tb_unit": "",
         "sim_prog_cycles": "",
         "lec_trust": "",
-        "verilator_tb": "",
+        # ibex_prog_tb_verilator.cpp: the Verilator twin of ibex_prog_tb.prp (same
+        # stimulus, checks and per-cycle checksum), so `sim_expect` is a
+        # cross-simulator oracle here too.
+        "verilator_tb": "ibex_prog_tb_verilator.cpp",
+        "verilator_flags": "",
+        "verilator_cycles": 5000000,
     },
     "minion": {
         "pkg": "//minion",
@@ -464,9 +483,9 @@ CORES = {
         # comment here asked for exactly this file.
         "verilator_tb": "minion_prog_tb_verilator.cpp",
         "verilator_flags": "",
-        # 200k for the throughput run: 10x the matched count, so the measured
-        # interval is dominated by simulation rather than process startup.
-        "verilator_cycles": 200000,
+        # Equal to sim_cycles (2026-11-03): 100k is ~1.1 s of `lhd sim`, and the
+        # two simulators should run the same amount of work.
+        "verilator_cycles": 100000,
     },
     # The two XS blocks that also carry the SIM phase. Their drivers are
     # compile/throughput benchmarks and a cross-language oracle, NOT functional
@@ -485,12 +504,20 @@ CORES = {
         "v_flags": "--single-unit",
         "color_algs": ["synth"],
         "synth_only": True,
-        "sim_tb": "xs_rob_tb.prp",
-        # 25k cycles: a 1.6 s run on BOTH simulators (they measure within a few
-        # ms of each other here — 15.2k cycles/s each), so the interval is the
-        # simulation and not the ~16-19 ms process startup. The old 1000 was a
-        # marker/checksum gate and nothing else (T1).
-        "sim_cycles": 25000,
+        # SIM DISABLED 2026-11-03 (owner): each xs_rob sim leg spends ~5 min in
+        # lhd codegen + host C++ alone, which stalls the sim sweep. Restore
+        # "xs_rob_tb.prp" here and "xs_rob_tb_verilator.cpp" below to re-enable;
+        # sim_cycles / sim_expect are already re-pinned (4k cycles, Verilator
+        # and `lhd sim` agree on the *31 checksum).
+        "sim_tb": "",
+        # 4k cycles (2026-11-03): ~1.9 s of `lhd sim` (~2.1k cycles/s with the
+        # default tune vector) and ~0.26 s of Verilator. 25k had grown to ~12 s
+        # of `lhd sim`. The old 1000 was a marker/checksum gate and nothing
+        # else (T1).
+        # Resized 2026-11-03 (mascm1) to a ~2 s `lhd sim` run, Verilator at the
+        # SAME count, and the checksum recorded from Verilator and reproduced
+        # by `lhd sim`.
+        "sim_cycles": 4000,
         "sim_tb_unit": "Rob",
         "sim_marker": "xs_rob:",
         # X-FILL, and why this core needs the knob the others do not. `Rob` has
@@ -511,20 +538,20 @@ CORES = {
         # help: it covers state with no initializer, and these flops reach the
         # simulator carrying an unknown one.
         "sim_sets": "--set sim.unknown_zero=true",
-        # Verified identical from ALL THREE simulators at 25k cycles under that
+        # Verified identical from ALL THREE simulators at sim_cycles under that
         # fill: the .prp tree, `lhd compile verilog --top Rob`, and Verilator on
         # the same .sv. Do NOT re-pin this from one side's output.
-        "sim_expect": "sum=9223372036854775801",
+        "sim_expect": "sum=4364181239840216576",
         # ROB is deliberately partitioned into many bounded ABC colors. Its
         # cache-disabled full/cold aggregates can therefore be long even though
         # every individual color must stay under the shared 15-minute/16-GiB
         # gates; the slow-target backstop below leaves room for those aggregates.
         "slow": True,
         # No sim_perf_cycles: sim_cycles IS the throughput count now.
-        "verilator_tb": "xs_rob_tb_verilator.cpp",
+        "verilator_tb": "",  # disabled with sim_tb above
         "verilator_flags": "",
         # Equal to sim_cycles on purpose — see xs_alu.
-        "verilator_cycles": 25000,
+        "verilator_cycles": 4000,
     },
     "matched_filter": {
         # Streaming 64-tap signed-8-bit matched filter: x advances every cycle,
@@ -547,11 +574,13 @@ CORES = {
         # 64-cycle reference load, then a free-running xorshift64 return
         # signal; the checksum folds each valid 10-bit result.
         "sim_tb": "matched_filter_tb.prp",
-        # 5M cycles: `lhd sim` runs the filter at ~2.5-4M cycles/s (measured
-        # 2026-08-22, 1.3-2.1 s here) and Verilator at ~18M (0.27 s), so the
-        # simulation, not the ~15 ms process startup, is what the interval
-        # measures. 200k was 80 ms / 14 ms — startup.
-        "sim_cycles": 5000000,
+        # 10M cycles (2026-11-03): ~1.9 s of `lhd sim` and ~1.0 s of Verilator.
+        # 5M had dropped to ~0.95 s; 200k was 80 ms / 14 ms — startup.
+        # Resized 2026-11-03 (mascm1) to a ~2 s `lhd sim` run with the default
+        # tune vector, Verilator at the SAME count (verilator_cycles ==
+        # sim_cycles, so bench/sim_verilator.sh runs one matched leg), and the
+        # checksum recorded from Verilator and reproduced by `lhd sim`.
+        "sim_cycles": 10000000,
         "sim_tb_unit": "matched_filter",
         "sim_tb_v": "",
         "sim_sets": "",
@@ -559,7 +588,7 @@ CORES = {
         # Pinned from ALL THREE simulators at sim_cycles (the .prp tree,
         # `lhd compile verilog --top matched_filter`, and Verilator on the
         # same .sv), which is what makes it safe to gate on.
-        "sim_expect": "sum=6209346479474330016",
+        "sim_expect": "sum=5658805124359021794",
         "sim_top_tb": "",
         "sim_top_tb_unit": "",
         "sim_top_cycles": "",
@@ -570,8 +599,8 @@ CORES = {
         "lec_trust": "",
         "verilator_tb": "matched_filter_tb_verilator.cpp",
         "verilator_flags": "",
-        # 20M for the long throughput leg: ~1.2 s of Verilator, well past startup.
-        "verilator_cycles": 20000000,
+        # Equal to sim_cycles: one matched leg, the same work on both sides.
+        "verilator_cycles": 10000000,
     },
     "xs_alu": {
         "pkg": "//xiangshan/Backend",
@@ -581,26 +610,28 @@ CORES = {
         "color_algs": ["synth"],
         "synth_only": True,
         "sim_tb": "xs_alu_tb.prp",
-        # 25M cycles, sized so the SIMULATION dominates the measured interval on
-        # BOTH simulators rather than their ~16-19 ms process startup: measured
-        # 2026-08-19, verilator runs Alu at ~15.8M cycles/s (1.6 s here) and
-        # `lhd sim` at ~30M (0.8 s). The old 1000 was a checksum gate and
-        # nothing else (T1) — it left `sim_cycles_per_s` reporting startup.
-        "sim_cycles": 25000000,
+        # 100M cycles (2026-11-03): ~2.0 s of `lhd sim` (~51M cycles/s) and
+        # ~5.6 s of Verilator. 25M had dropped to ~0.4 s of `lhd sim`. The old
+        # 1000 was a checksum gate and nothing else (T1).
+        # Resized 2026-11-03 (mascm1) to a ~2 s `lhd sim` run with the default
+        # tune vector, Verilator at the SAME count (verilator_cycles ==
+        # sim_cycles, so bench/sim_verilator.sh runs one matched leg), and the
+        # checksum recorded from Verilator and reproduced by `lhd sim`.
+        "sim_cycles": 100000000,
         "sim_tb_unit": "Alu",
         "sim_marker": "xs_alu:",
-        # Verified identical from ALL THREE simulators at 25M cycles, which is
+        # Verified identical from ALL THREE simulators at sim_cycles, which is
         # what makes it safe to pin: the .prp tree, `lhd compile verilog --top
         # Alu`, and Verilator on the same .sv.
-        "sim_expect": "sum=3867054865904012236",
+        "sim_expect": "sum=6070709215184354828",
         # No sim_perf_cycles: sim_cycles IS the throughput count now, so the
         # separate perf leg of sim_incremental has nothing left to measure.
         "verilator_tb": "xs_alu_tb_verilator.cpp",
         "verilator_flags": "",
-        # Deliberately EQUAL to sim_cycles: the matched run is already a 1.6 s
+        # Deliberately EQUAL to sim_cycles: the matched run is already a long
         # verilator run, so bench/sim_verilator.sh skips its second (long) leg
         # instead of measuring the same thing twice.
-        "verilator_cycles": 25000000,
+        "verilator_cycles": 100000000,
     },
     "xs_renametable": {
         "pkg": "//xiangshan/Backend",
@@ -617,12 +648,14 @@ CORES = {
         "color_algs": ["synth"],
         "synth_only": True,
         "sim_tb": "xs_renametable_tb.prp",
-        # 40k cycles: verilator does RenameTableWrapper at ~25.9k cycles/s, so
-        # this is a 1.5 s verilator run — the count where the SIMULATION, not
-        # the ~16-19 ms process startup, is what the interval measures. `lhd
-        # sim` runs the same block at ~6.5k cycles/s, so its leg is ~6 s; that
-        # 4x is the comparison, not an accident of the count.
-        "sim_cycles": 40000,
+        # 200k cycles (2026-11-03): ~1.6 s of `lhd sim` (~130k cycles/s with
+        # the pinned vector below) and ~7.3 s of Verilator (~27k cycles/s).
+        # 40k had dropped to ~0.34 s of `lhd sim`.
+        # Resized 2026-11-03 (mascm1) to a ~2 s `lhd sim` run with the default
+        # tune vector, Verilator at the SAME count (verilator_cycles ==
+        # sim_cycles, so bench/sim_verilator.sh runs one matched leg), and the
+        # checksum recorded from Verilator and reproduced by `lhd sim`.
+        "sim_cycles": 200000,
         "sim_tb_unit": "RenameTableWrapper",
         # Per-benchmark tuning of livehd's idle-module gating. The driver only
         # exercises read ports, so the rename tables idle and gating them pays,
@@ -634,17 +667,22 @@ CORES = {
         # pre-rename spellings sim.color_dirty=true / sim.fence_ratio=0. lhd's
         # default became dirty on / fence 16 on 2026-09-19; fence=0 (L2) is
         # still the pinned vector here (pyrope2: ~1.4x fewer instructions than L1).
-        "sim_sets": "--set sim.tune.dirty=on --set sim.tune.fence=0",
+        # sim.init_zero: the fp rename table's read path holds reset-free state that
+        # reaches io_fpReadPorts_0_0_data on cycle 0 (inside reset). `lhd sim`
+        # powers it on from its seeded PRNG and Verilator zero-fills, so the
+        # per-cycle checksum disagreed at cycle 0 only (measured 2026-11-03;
+        # identical with --init-zero at 1, 3 and 4000 cycles).
+        "sim_sets": "--set sim.tune.dirty=on --set sim.tune.fence=0 --set sim.init_zero=true",
         "sim_marker": "xs_renametable:",
-        # Verified identical from ALL THREE simulators at 40k cycles, which is
+        # Verified identical from ALL THREE simulators at sim_cycles, which is
         # what makes it safe to pin: the .prp tree, `lhd compile verilog --top
         # RenameTableWrapper`, and Verilator on the same .sv.
-        "sim_expect": "sum=9076940568747704320",
+        "sim_expect": "sum=827134333427580928",
         # No sim_perf_cycles: sim_cycles IS the throughput count now.
         "verilator_tb": "xs_renametable_tb_verilator.cpp",
         "verilator_flags": "",
         # Equal to sim_cycles on purpose — see xs_alu.
-        "verilator_cycles": 40000,
+        "verilator_cycles": 200000,
     },
     "xs_div": {
         "pkg": "//xiangshan/Backend",

@@ -1,4 +1,5 @@
-// Same program, one-cycle memory response, and checks as picorv32_prog_tb.prp.
+// Same program, one-cycle memory response, checks AND per-cycle checksum fold
+// as picorv32_prog_tb.prp: the two must print the same `sum`.
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -34,6 +35,7 @@ int main(int argc, char **argv) {
   const uint32_t expected = config_test ? 58 : 30;
   uint32_t req_valid = 0, req_addr = 0, stored = 0;
   uint64_t done_cycle = 0;
+  uint64_t sum = 0;
   bool got = false, trapped = false;
   for (uint64_t cycle = 0; cycle < cycles; ++cycle) {
     dut.clk = 0;
@@ -53,13 +55,22 @@ int main(int argc, char **argv) {
       done_cycle = cycle;
     }
     trapped |= dut.trap != 0;
+    uint64_t obs = dut.trap;
+    if (dut.mem_valid) {
+      obs ^= 2 ^ (uint64_t{dut.mem_addr} << 2) ^ (uint64_t{dut.mem_wstrb} << 34);
+      if (dut.mem_wstrb) {
+        obs ^= uint64_t{dut.mem_wdata} << 38;
+      }
+    }
+    sum = (sum * 31 + obs) & 0x7fffffffffffffffULL;
     req_valid = dut.mem_valid;
     req_addr = dut.mem_addr;
   }
   dut.final();
-  std::printf("picorv32 prog: stored=%u at cycle %llu of %llu\n", stored,
+  std::printf("picorv32 prog: stored=%u at cycle %llu of %llu sum=%llu\n", stored,
               static_cast<unsigned long long>(done_cycle),
-              static_cast<unsigned long long>(cycles));
+              static_cast<unsigned long long>(cycles),
+              static_cast<unsigned long long>(sum));
   if (trapped || !got || stored != expected) {
     std::fprintf(stderr, "FAIL picorv32.prog: trapped=%d got=%d stored=%u\n",
                  trapped, got, stored);

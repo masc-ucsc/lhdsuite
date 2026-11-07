@@ -16,9 +16,17 @@
 // (never one it already granted), then raises rvalid the cycle after the grant.
 // That keeps at most one transaction in flight per bus and never grants
 // without a request (Ibex's own MemGntOnRequest assumption).
+//
+// After the store the program spins, and the benchmark keeps running it: every
+// cycle folds the bus outputs into `sum`, and the Verilator twin
+// (ibex_prog_tb_verilator.cpp) folds the SAME values the same way, so the
+// pinned checksum is a cycle-by-cycle cross-simulator oracle, not only an end
+// state. Keep the fold identical on both sides. Only what the bus protocol
+// defines is folded (a bus's address while it requests, write data while
+// data_we_o), so the power-on fill of reset-free registers cannot move it.
 const cpu = import("lg:ibex_suite_top")
 
-test ibex.prog(cycles:U20 = 2000) {
+test ibex.prog(cycles:U32 = 2000) {
   mut acc = cpu
   mut rom = [0x00000093,  // [0] 0x80: addi x1, x0, 0    ; acc = 0
              0x00A00113,  // [1] 0x84: addi x2, x0, 10   ; n = 10
@@ -41,6 +49,7 @@ test ibex.prog(cycles:U20 = 2000) {
   mut stored = 0     // data of the `sw` to 0x100
   mut got    = 0
   mut done_cycle = 0
+  mut sum:U64    = 0
   tick cycles {
     acc.rst_ni = U1(clock >= 4)      // active LOW reset, held for the first cycles
     // Grant a request seen last cycle that has not been granted yet.
@@ -65,6 +74,17 @@ test ibex.prog(cycles:U20 = 2000) {
       got = 1
       done_cycle = clock
     }
+    mut obs = 0
+    if acc.instr_req_o != 0 {
+      obs = obs ^ 1 ^ (acc.instr_addr_o << 2)
+    }
+    if acc.data_req_o != 0 {
+      obs = obs ^ 2 ^ (acc.data_addr_o << 9) ^ (acc.data_we_o << 41) ^ (acc.data_be_o << 42)
+      if acc.data_we_o != 0 {
+        obs = obs ^ (acc.data_wdata_o << 23)
+      }
+    }
+    wrap sum = ((sum * 31) + obs) & 0x7fffffffffffffff
     i_gnt = U1(i_give)
     d_gnt = U1(d_give)
     i_req = acc.instr_req_o
@@ -72,5 +92,5 @@ test ibex.prog(cycles:U20 = 2000) {
   }
   assert(got == 1, "the program's store to 0x100 never appeared on the bus")
   assert(stored == 30, "10 iterations of `acc += 3` must store 30")
-  puts("ibex prog: stored={stored} at cycle {done_cycle} of {cycles}")
+  puts("ibex prog: stored={stored} at cycle {done_cycle} of {cycles} sum={sum}")
 }

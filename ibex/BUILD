@@ -38,10 +38,14 @@ filegroup(
 )
 
 # Simulation driver. ibex_prog_tb.prp runs a real RISC-V program with the
-# testbench acting as Ibex's instruction and data memory.
+# testbench acting as Ibex's instruction and data memory; ibex_prog_tb_verilator.cpp
+# is its Verilator twin (same stimulus, checks and checksum).
 filegroup(
     name = "sim",
-    srcs = glob(["sim/*.prp"]),
+    srcs = glob([
+        "sim/*.prp",
+        "sim/*.cpp",
+    ]),
     visibility = ["//visibility:public"],
 )
 

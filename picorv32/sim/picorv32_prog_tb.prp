@@ -4,6 +4,15 @@
 // architectural (x1 == 30 observed through the program's own `sw`) rather than
 // a tap on any internal signal — the same discipline as dino_prog_tb.prp.
 //
+// After the store the program spins, and the benchmark keeps running it: every
+// cycle folds the bus transaction into `sum`, and the Verilator twin
+// (picorv32_prog_tb_verilator.cpp) folds the SAME values the same way, so the
+// pinned checksum is a cycle-by-cycle cross-simulator oracle, not only an end
+// state. Keep the fold identical on both sides. Only what the bus protocol
+// defines is folded (address/strobes while mem_valid, data while a strobe is
+// set): picorv32's bus registers have no reset, and `lhd sim` powers them on
+// from its seeded PRNG while Verilator zero-fills, a legitimate difference.
+//
 // The memory model is picorv32's simple (non-look-ahead) interface, served with
 // ONE cycle of latency: `mem_ready` and `mem_rdata` answer the request that was
 // latched below the previous `step`. That is not a workaround, it is what the
@@ -15,7 +24,7 @@
 // cycle where `mem_valid` is still high, never spuriously.
 const cpu = import("lg:picorv32_top")
 
-test picorv32.prog(cycles:U20 = 2000) {
+test picorv32.prog(cycles:U32 = 2000) {
   mut acc = cpu
   mut rom = [0x00000093,  // [0] 0x00: addi x1, x0, 0    ; acc = 0
              0x00A00113,  // [1] 0x04: addi x2, x0, 10   ; n = 10
@@ -31,6 +40,7 @@ test picorv32.prog(cycles:U20 = 2000) {
   mut got       = 0
   mut trapped   = 0
   mut done_cycle = 0
+  mut sum:U64   = 0
   tick cycles {
     acc.resetn = U1(clock >= 4)      // active LOW reset, held for the first cycles
     acc.irq    = 0
@@ -49,11 +59,19 @@ test picorv32.prog(cycles:U20 = 2000) {
     if acc.trap != 0 {
       trapped = 1
     }
+    mut obs = acc.trap
+    if acc.mem_valid != 0 {
+      obs = obs ^ 2 ^ (acc.mem_addr << 2) ^ (acc.mem_wstrb << 34)
+      if acc.mem_wstrb != 0 {
+        obs = obs ^ (acc.mem_wdata << 38)
+      }
+    }
+    wrap sum = ((sum * 31) + obs) & 0x7fffffffffffffff
     req_valid = acc.mem_valid
     req_addr  = acc.mem_addr
   }
   assert(trapped == 0, "picorv32 must not trap on this program")
   assert(got == 1, "the program's store to 0x100 never appeared on the bus")
   assert(stored == 30, "10 iterations of `acc += 3` must store 30")
-  puts("picorv32 prog: stored={stored} at cycle {done_cycle} of {cycles}")
+  puts("picorv32 prog: stored={stored} at cycle {done_cycle} of {cycles} sum={sum}")
 }
