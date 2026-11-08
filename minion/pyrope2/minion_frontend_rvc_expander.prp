@@ -1,0 +1,256 @@
+// RVC (RISC-V compressed) instruction expander (verilog: minion_frontend_rvc_expander).
+// Purely combinational: a 16-bit C-extension instruction becomes its 32-bit RV64 form,
+// a 32-bit instruction (bits[1:0] == 3) passes through. Reserved encodings are marked
+// by forcing the opcode field to the reserved 5'b11111; an all-zero halfword stays zero.
+
+comptime const OpLoad:U7 = 0x03
+comptime const OpLoadFp:U7 = 0x07
+comptime const OpImm:U7 = 0x13
+comptime const OpStore:U7 = 0x23
+comptime const OpStoreFp:U7 = 0x27
+comptime const OpReg:U7 = 0x33
+comptime const OpLui:U7 = 0x37
+comptime const OpReg32:U7 = 0x3b
+comptime const OpImm32:U7 = 0x1b
+comptime const OpBranch:U7 = 0x63
+comptime const OpJalr:U7 = 0x67
+comptime const OpJal:U7 = 0x6f
+comptime const IllegalOpcode:U5 = 0x1f
+
+// RISC-V 32-bit formats; the first field is the most significant. S and B share the
+// layout (a split immediate around rs2/rs1/funct3), as do U and J (one 20-bit field).
+comb rv_i(f3:U3, imm:U12, op:U7, rd:U5, rs1:U5) -> (inst:U32) {
+  const w:U32 = (op, rd, f3, rs1, imm)#[..]
+  inst = w
+}
+
+comb rv_r(f3:U3, f7:U7, op:U7, rd:U5, rs1:U5, rs2:U5) -> (inst:U32) {
+  const w:U32 = (op, rd, f3, rs1, rs2, f7)#[..]
+  inst = w
+}
+
+comb rv_s(f3:U3, hi:U7, lo:U5, op:U7, rs1:U5, rs2:U5) -> (inst:U32) {
+  const w:U32 = (op, lo, f3, rs1, rs2, hi)#[..]
+  inst = w
+}
+
+comb rv_u(imm:U20, op:U7, rd:U5) -> (inst:U32) {
+  const w:U32 = (op, rd, imm)#[..]
+  inst = w
+}
+
+pub comb minion_frontend_rvc_expander::[timecheck=false](in_bits:U32) -> (out_bits:U32) {
+  const b = in_bits // the compressed halfword is in the low 16 bits
+  const op = b#[0..<2]
+  const funct3 = b#[13..<16]
+  const rs2 = b#[2..<7] // full registers (quadrant 2)
+  const rd = b#[7..<12]
+  const rs1p:U5 = 8 | b#[7..<10] // 3-bit register fields name x8..x15
+  const rs2p:U5 = 8 | b#[2..<5]
+  const rdp = rs1p
+  const x0:U5 = 0
+  const x1:U5 = 1
+  const sp:U5 = 2
+  const zero2:U2 = 0
+  const zero3:U3 = 0
+  const zero4:U4 = 0
+  const zero5:U5 = 0
+  const zero6:U6 = 0
+  const zero12:U12 = 0
+  const srai_f6:U6 = 0x10 // funct7[5] marks the arithmetic shift
+  // b[12] replicated (sign extension of the short immediates)
+  const rep3:U3 = if b#[12] == 1 { 0x7 } else { 0 }
+  const rep4:U4 = if b#[12] == 1 { 0xf } else { 0 }
+  const rep9:U9 = if b#[12] == 1 { 0x1ff } else { 0 }
+  // nzimm[5|4:0] = b[12|6:2], sign-extended to 12 / 20 bits
+  const imm6:U6 = (b#[2..<7], b#[12])#[..]
+  const imm6_s12:U12 = imm6#sext[0..=5]#[0..<12]
+  const imm6_s20:U20 = imm6#sext[0..=5]#[0..<20]
+  // shamt[5|4:0] = b[12|6:2] (srli/srai/slli)
+  const shamt:U6 = imm6
+
+  mut expanded:U32 = b
+  mut illegal = false
+
+  if op != 3 {
+    match op {
+      == 0 { // quadrant 0: loads/stores off a compressed base
+        match funct3 {
+          == 0 { // C.ADDI4SPN: addi rd', x2, nzuimm[5:4|9:6|2|3]
+            const imm:U12 = (zero2, b#[6], b#[5], b#[11..<13], b#[7..<11], zero2)#[..]
+            expanded = rv_i(f3=0, imm, op=OpImm, rd=rs2p, rs1=sp)
+            illegal = b#[5..<13] == 0
+          }
+          == 1 { // C.FLD
+            const imm:U12 = (zero3, b#[10..<13], b#[5..<7], zero4)#[..]
+            expanded = rv_i(f3=3, imm, op=OpLoadFp, rd=rs2p, rs1=rs1p)
+          }
+          == 2 { // C.LW
+            const imm:U12 = (zero2, b#[6], b#[10..<13], b#[5], zero5)#[..]
+            expanded = rv_i(f3=2, imm, op=OpLoad, rd=rs2p, rs1=rs1p)
+          }
+          == 3 { // C.LD
+            const imm:U12 = (zero3, b#[10..<13], b#[5..<7], zero4)#[..]
+            expanded = rv_i(f3=3, imm, op=OpLoad, rd=rs2p, rs1=rs1p)
+          }
+          == 4 { // reserved
+            expanded = 0
+          }
+          == 5 { // C.FSD
+            const hi:U7 = (b#[12], b#[5..<7], zero4)#[..]
+            const lo:U5 = (zero3, b#[10..<12])#[..]
+            expanded = rv_s(f3=3, hi, lo, op=OpStoreFp, rs1=rs1p, rs2=rs2p)
+          }
+          == 6 { // C.SW
+            const hi:U7 = (b#[12], b#[5], zero5)#[..]
+            const lo:U5 = (zero2, b#[6], b#[10..<12])#[..]
+            expanded = rv_s(f3=2, hi, lo, op=OpStore, rs1=rs1p, rs2=rs2p)
+          }
+          == 7 { // C.SD
+            const hi:U7 = (b#[12], b#[5..<7], zero4)#[..]
+            const lo:U5 = (zero3, b#[10..<12])#[..]
+            expanded = rv_s(f3=3, hi, lo, op=OpStore, rs1=rs1p, rs2=rs2p)
+          }
+        }
+      }
+      == 1 { // quadrant 1: immediates, ALU ops on x8..x15, jumps and branches
+        match funct3 {
+          == 0 { // C.NOP / C.ADDI
+            expanded = rv_i(f3=0, imm=imm6_s12, op=OpImm, rd, rs1=rd)
+          }
+          == 1 { // C.ADDIW (reserved for rd == x0)
+            expanded = rv_i(f3=0, imm=imm6_s12, op=OpImm32, rd, rs1=rd)
+            illegal = rd == 0
+          }
+          == 2 { // C.LI
+            expanded = rv_i(f3=0, imm=imm6_s12, op=OpImm, rd, rs1=x0)
+          }
+          == 3 { // C.ADDI16SP, or C.LUI (rd == x0 and x2 use the ADDI16SP encoding)
+            if rd == 2 or rd == 0 {
+              // nzimm[9|4|6|8:7|5] = b[12|6|5|4:3|2], sign-extended
+              const imm10:U10 = (zero4, b#[6], b#[2], b#[5], b#[3..<5], b#[12])#[..]
+              expanded = rv_i(f3=0, imm=imm10#sext[0..=9]#[0..<12], op=OpImm, rd, rs1=rd)
+            } else {
+              expanded = rv_u(imm=imm6_s20, op=OpLui, rd)
+            }
+            illegal = b#[12] == 0 and b#[2..<7] == 0
+          }
+          == 4 { // C.SRLI, C.SRAI, C.ANDI and the register-register ALU ops
+            match b#[10..<12] {
+              == 0 { // C.SRLI
+                const imm:U12 = (shamt, zero6)#[..]
+                expanded = rv_i(f3=5, imm, op=OpImm, rd=rdp, rs1=rs1p)
+              }
+              == 1 { // C.SRAI
+                const imm:U12 = (shamt, srai_f6)#[..]
+                expanded = rv_i(f3=5, imm, op=OpImm, rd=rdp, rs1=rs1p)
+              }
+              == 2 { // C.ANDI
+                expanded = rv_i(f3=7, imm=imm6_s12, op=OpImm, rd=rdp, rs1=rs1p)
+              }
+              == 3 { // C.SUB/XOR/OR/AND and the W forms; b[12:5] picks the operation
+                match (b#[5..<7], b#[12])#[..] {
+                  == 0 {
+                    expanded = rv_r(f3=0, f7=0x20, op=OpReg, rd=rdp, rs1=rs1p, rs2=rs2p)
+                  } // C.SUB
+                  == 1 {
+                    expanded = rv_r(f3=4, f7=0, op=OpReg, rd=rdp, rs1=rs1p, rs2=rs2p)
+                  } // C.XOR
+                  == 2 {
+                    expanded = rv_r(f3=6, f7=0, op=OpReg, rd=rdp, rs1=rs1p, rs2=rs2p)
+                  } // C.OR
+                  == 3 {
+                    expanded = rv_r(f3=7, f7=0, op=OpReg, rd=rdp, rs1=rs1p, rs2=rs2p)
+                  } // C.AND
+                  == 4 {
+                    expanded = rv_r(f3=0, f7=0x20, op=OpReg32, rd=rdp, rs1=rs1p, rs2=rs2p)
+                  } // C.SUBW
+                  == 5 {
+                    expanded = rv_r(f3=0, f7=0, op=OpReg32, rd=rdp, rs1=rs1p, rs2=rs2p)
+                  } // C.ADDW
+                  == 6 {
+                    expanded = rv_r(f3=2, f7=0, op=OpReg32, rd=rdp, rs1=rs1p, rs2=rs2p)
+                  } // ET custom
+                  == 7 {
+                    expanded = rv_r(f3=3, f7=0, op=OpReg32, rd=rdp, rs1=rs1p, rs2=rs2p)
+                  } // ET custom
+                }
+              }
+            }
+          }
+          == 5 { // C.J: jal x0, offset[11|4|9:8|10|6|7|3:1|5]
+            const imm:U20 = (rep9, b#[3..<6], b#[11], b#[2], b#[7], b#[6], b#[9..<11], b#[8], b#[12])#[..]
+            expanded = rv_u(imm, op=OpJal, rd=x0)
+          }
+          == 6 { // C.BEQZ: beq rs1', x0, offset[8|4:3|7:6|2:1|5]
+            const hi:U7 = (b#[2], b#[5..<7], b#[12], rep3)#[..]
+            const lo:U5 = (b#[12], b#[3..<5], b#[10..<12])#[..]
+            expanded = rv_s(f3=0, hi, lo, op=OpBranch, rs1=rs1p, rs2=x0)
+          }
+          == 7 { // C.BNEZ
+            const hi:U7 = (b#[2], b#[5..<7], b#[12], rep3)#[..]
+            const lo:U5 = (b#[12], b#[3..<5], b#[10..<12])#[..]
+            expanded = rv_s(f3=1, hi, lo, op=OpBranch, rs1=rs1p, rs2=x0)
+          }
+        }
+      }
+      == 2 { // quadrant 2: stack-pointer relative accesses, jumps and moves
+        match funct3 {
+          == 0 { // C.SLLI
+            const imm:U12 = (shamt, zero6)#[..]
+            expanded = rv_i(f3=1, imm, op=OpImm, rd, rs1=rd)
+          }
+          == 1 { // C.FLDSP
+            const imm:U12 = (zero3, b#[5..<7], b#[12], b#[2..<5], zero3)#[..]
+            expanded = rv_i(f3=3, imm, op=OpLoadFp, rd, rs1=sp)
+          }
+          == 2 { // C.LWSP (reserved for rd == x0)
+            const imm:U12 = (zero2, b#[4..<7], b#[12], b#[2..<4], zero4)#[..]
+            expanded = rv_i(f3=2, imm, op=OpLoad, rd, rs1=sp)
+            illegal = rd == 0
+          }
+          == 3 { // C.LDSP (reserved for rd == x0)
+            const imm:U12 = (zero3, b#[5..<7], b#[12], b#[2..<5], zero3)#[..]
+            expanded = rv_i(f3=3, imm, op=OpLoad, rd, rs1=sp)
+            illegal = rd == 0
+          }
+          == 4 { // C.JR / C.MV / C.EBREAK / C.JALR / C.ADD
+            if b#[12] == 0 {
+              if rs2 != 0 {
+                expanded = rv_r(f3=0, f7=0, op=OpReg, rd, rs1=x0, rs2) // C.MV
+              } elif rd == 0 {
+                expanded = rv_i(f3=0, imm=zero12, op=OpImm, rd=x0, rs1=x0) // C.JR x0 is reserved
+                illegal = true
+              } else {
+                expanded = rv_i(f3=0, imm=zero12, op=OpJalr, rd=x0, rs1=rd) // C.JR
+              }
+            } elif rs2 == 0 and rd == 0 {
+              expanded = 0x00100073 // C.EBREAK
+            } elif rs2 == 0 {
+              expanded = rv_i(f3=0, imm=zero12, op=OpJalr, rd=x1, rs1=rd) // C.JALR
+            } else {
+              expanded = rv_r(f3=0, f7=0, op=OpReg, rd, rs1=rd, rs2) // C.ADD
+            }
+          }
+          == 5 { // C.FSDSP
+            const hi:U7 = (b#[12], b#[7..<10], zero3)#[..]
+            const lo:U5 = (zero3, b#[10..<12])#[..]
+            expanded = rv_s(f3=3, hi, lo, op=OpStoreFp, rs1=sp, rs2)
+          }
+          == 6 { // C.SWSP
+            const hi:U7 = (b#[12], b#[7..<9], zero4)#[..]
+            const lo:U5 = (zero2, b#[9..<12])#[..]
+            expanded = rv_s(f3=2, hi, lo, op=OpStore, rs1=sp, rs2)
+          }
+          == 7 { // C.SDSP
+            const hi:U7 = (b#[12], b#[7..<10], zero3)#[..]
+            const lo:U5 = (zero3, b#[10..<12])#[..]
+            expanded = rv_s(f3=3, hi, lo, op=OpStore, rs1=sp, rs2)
+          }
+        }
+      }
+    }
+  }
+  const marked:U32 = (IllegalOpcode, expanded#[5..<32])#[..]
+  out_bits = if op == 3 { in_bits } elif b#[0..<16] == 0 { 0 } elif illegal { marked } else { expanded }
+}

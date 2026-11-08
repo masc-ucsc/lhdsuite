@@ -1,0 +1,28 @@
+// Sequential assert collateral for sha256_core — a sidecar, so the design file
+// is never touched. The core's handshake: `ready` is high exactly in its idle
+// state, and a block it accepts (init or next while ready) starts 64 rounds,
+// so the NEXT cycle the core is busy and the previous digest is no longer
+// flagged valid. Both are `past` claims by construction, which is why this
+// module is the core's `seq_unit` rather than the combinational `unit`, and
+// both are reachable from the first cycle after reset, so a short window
+// checks them for real instead of passing over an idle core. `reset_n` is
+// active LOW and asynchronous: a reset in either cycle forces the core back to
+// idle (ready) whatever was accepted, hence the guard on accept_goes_busy.
+//
+// Usage:
+//   lhd formal verify bitcoin/pyrope/sha256_core.prp \
+//       bitcoin/verif/sha256_core.verify.prp --top sha256_core
+const core = import("sha256_core.sha256_core")
+
+formal sha256_core.accept_goes_busy {
+  mut acc = core
+  assert((past(acc.reset_n, 1) and acc.reset_n and past(acc.ready, 1) and (past(acc.init, 1) or past(acc.next, 1)))
+           implies not acc.ready,
+         "an accepted block must take the core out of idle")
+}
+
+formal sha256_core.accept_clears_valid {
+  mut acc = core
+  assert((past(acc.ready, 1) and (past(acc.init, 1) or past(acc.next, 1))) implies not acc.digest_valid,
+         "an accepted block must retire the previous digest_valid")
+}

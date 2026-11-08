@@ -1,0 +1,63 @@
+const minion_pkg = import("minion_pkg")
+
+// Address breakpoint comparator for one thread, pure combinational. The per-thread
+// CSR fields come packed (thread 0 in the low bits) and thread_id_ip selects them.
+// TriggerType 0 matches the fetch PC (cmd_ip is ignored, so callers may omit it);
+// TriggerType 1 matches a load/store address qualified by the access kind in cmd_ip.
+// A match with action=0 raises an exception, with action=1 enters debug mode.
+
+// Fields of one thread's minion_bp_ctrl_t (9 bits).
+comptime const CTL_BITS = 9
+comptime const CTL_LOAD = 0
+comptime const CTL_STORE = 1
+comptime const CTL_EXECUTE = 2
+comptime const CTL_U = 3
+comptime const CTL_S = 4
+comptime const CTL_M = 5
+comptime const CTL_MATCH = 6
+comptime const CTL_ACTION = 7
+// Low address bits that "match" (napot-style) control ignores.
+comptime const MASK_BITS = 6
+
+pub comb debug_breakpoint<TriggerType=0>::[timecheck=false](address_ip:minion_pkg.VaSizeExt_T, cmd_ip:U3=0, control_ip:U18, in_debug_ip:minion_pkg.NrThreadsDefault_T, prv_ip:U4, tdata2_ip:U96, thread_id_ip:U1, valid_ip:U1) -> (enter_debug_op:U1, timing_op:U1, update_op:U1, xcpt_op:U1) {
+  cassert(TriggerType == 0 or TriggerType == 1, "TriggerType: 0 = fetch, 1 = data")
+
+  const ctl = (control_ip >> (thread_id_ip*CTL_BITS))#[0..<CTL_BITS]
+  const prv = (prv_ip >> (thread_id_ip*2))#[0..<2]
+  const tdata2 = (tdata2_ip >> (thread_id_ip*minion_pkg.VaSize))#[0..<minion_pkg.VaSize]
+
+  const prv_enable = (prv == minion_pkg.PrvM and ctl#[CTL_M] == 1) or (prv == minion_pkg.PrvS and ctl#[CTL_S] == 1) or (prv == minion_pkg.PrvU and ctl#[CTL_U] == 1)
+  const not_debug = in_debug_ip#[thread_id_ip] == 0
+  const valid = valid_ip == 1
+
+  // Access kind of the data trigger; unknown encodings are neither load nor store.
+  const cmd_is_load = cmd_ip == minion_pkg.DbgBpLoad or cmd_ip == minion_pkg.DbgBpTensorLoad or cmd_ip == minion_pkg.DbgBpAmo or cmd_ip == minion_pkg.DbgBpCo
+  const cmd_is_store = cmd_ip == minion_pkg.DbgBpStore or cmd_ip == minion_pkg.DbgBpTensorStore or cmd_ip == minion_pkg.DbgBpAmo
+
+  const enabled = if TriggerType == 1 {
+    not_debug and valid and ((ctl#[CTL_LOAD] == 1 and cmd_is_load) or (ctl#[CTL_STORE] == 1 and cmd_is_store)) and prv_enable
+  } else {
+    not_debug and ctl#[CTL_EXECUTE] == 1 and valid and prv_enable
+  }
+
+  // trigger data is sign-extended by one bit to the extended virtual address
+  const tdata2_ext:U49 = tdata2 | (U49(tdata2#[minion_pkg.VaSize - 1]) << minion_pkg.VaSize)
+
+  // napot mask: ones up to and including the lowest zero bit of the low trigger bits
+  const low:U6 = tdata2_ext#[0..<MASK_BITS]
+  mut mask:U6 = 0
+  wrap mask = low ^ (low + 1)
+
+  const ignored:U49 = if ctl#[CTL_MATCH] == 1 { mask } else { 0 }
+  const hit = (address_ip | ignored) == (tdata2_ext | ignored) and enabled
+
+  xcpt_op = U1(hit and ctl#[CTL_ACTION] == 0)
+  enter_debug_op = U1(hit and ctl#[CTL_ACTION] == 1)
+  update_op = U1(hit)
+
+  timing_op = if TriggerType == 1 {
+    U1(cmd_ip == minion_pkg.DbgBpTensorLoad or cmd_ip == minion_pkg.DbgBpTensorStore or cmd_ip == minion_pkg.DbgBpCo)
+  } else {
+    0
+  }
+}

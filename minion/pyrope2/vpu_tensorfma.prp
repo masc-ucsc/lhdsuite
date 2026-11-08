@@ -1,0 +1,643 @@
+// TensorFMA sequencer of the VPU: A x B = C matrix multiply-accumulate (16x16 blocks,
+// FP32 accumulate, or int8 through the TIMA units).  It is expected that the operands
+// were prefetched into the scratchpad; this module
+//   * walks the A / B scratchpad lines and issues the dcache read requests (A has
+//     priority; B lines go to the TENB buffer, with credits returned to the loader),
+//   * generates one FMA instruction per (A row, B column) step for the VPU pipeline
+//     (FP32 / FP16-with-FP32-accumulate), interlocked against accumulator collisions,
+//   * for int8 (TIMA) mode steers the detached TIMA control pipeline instead,
+//   * and keeps the enable / pending-write sticky bits other units wait on.
+// All state is clock-gated in the original by `working`; here that is an enable.
+const vpu_defs_pkg = import("vpu_defs_pkg")
+const scp_set_way = import("vpu_tensorquant.scp_set_way")
+const scp_wrap = import("vpu_tensorquant.scp_wrap")
+const tensor_lane_mask = import("vpu_tensorquant.tensor_lane_mask")
+
+// Instruction templates (verilog vpu_defs_pkg); the register / rounding fields are filled in below.
+comptime const FXOR_PI = 0ub0000011??????????100?????1111011 // writes a zero for a skipped convolution step
+comptime const TMUL_PH_PS = 0ub???0101??????????????????1000011 // first pass: multiply, FP16 inputs
+comptime const TFMA_PH_PS = 0ub?????01??????????????????1001011 // FP16 inputs, FP32 accumulate
+comptime const FMUL_PS = 0ub0001000??????????????????1111011 // first pass: multiply
+comptime const FMADD_PS = 0ub?????00??????????????????1011011
+
+// tensorfma_ctrl.mode encodings
+comptime const ModeFp32 = 0
+comptime const ModeFp16Fp32 = 1
+comptime const ModeInt8 = 3
+
+// Widths of the clock-hold / flush shift registers.  A type bound cannot be read from
+// vpu_defs_pkg (see livehd_bugs/L2u6_02), so they are spelled here and checked against it.
+comptime const TxfmaHold = 7
+comptime const TimaHold = 3
+comptime const FlushBits = 3
+cassert(TxfmaHold == vpu_defs_pkg.TXFMA_CLOCK_EN_DELAY and TimaHold == vpu_defs_pkg.TIMA_CLOCK_EN_DELAY and FlushBits == vpu_defs_pkg.TFMA_ENABLED_FLUSH_BITS, "clock-hold widths differ from vpu_defs_pkg")
+comptime const NumTima = 2 // TIMA units; lane l / unit t owns bit l * NumTima + t of the TIMA enables
+
+// Clock-enable hold: while `active` the unit runs; afterwards its clock stays on for N more
+// cycles (a shift register that is refilled with ones) so the pipeline drains.
+comb hold_clock<N=1>(active:Bool, delay:Unsigned(bits=N)) -> (en:Bool, next:Unsigned(bits=N)) {
+  en = active or delay#[N - 1] == 1
+  next = delay
+  if active {
+    next = (1 << N) - 1
+  } else {
+    wrap next = delay << 1
+  }
+}
+
+// reset stays a U1 net: the caller (vpu_ml) hands it over as plain data.
+// prp-style-allow reset-port-type
+pub mod vpu_tensorfma::[timecheck=false](clock:Clock, dcache_scp_resp:(fill_is_tenb_early:U1, fill_is_tenb:U1, tenb_flush:U1, tenb_line:U4), f0_core_ctrl:(tensorfma_start:U1, tensorfma_ctrl:(is_conv:U1, padding3:U6, cols_b:U2, rows_a:U4, cols_a:U4, start_a:U4, padding2:U19, to_vrf:U1, u_b:U1, u_a:U1, ten_b:U1, padding1:U2, scp_b:U6, padding0:U2, scp_a:U6, mode:U3, first_pass:U1), tensorfma_conv_bits_ready:U1, tensorfma_conv_bits:U16, reduce_start:U1, tensorstore_start:U1, reduce_ctrl:U64, tensorquant_start:U1, tensorquant_ctrl:(padding2:U2, start_reg:U5, cols:U2, rows:U4, scp_src:U6, padding:U5, trans:U40), pending_scoreboard_t0:U1), fma_inst:vpu_defs_pkg.INST_SIZE_T, reset:U1, tensorquant_pend:U1, tensorstore_pend:U1) -> (dcache_ctrl:(scp_req:(read_en:U1, way:U2, addr:U10, size64:U1, size256:U1, bid:U1), tenb_credit:U1, tenb_credit_entry:U2, tfma_enabled:U1, reduce_wait:U1, tfma_rf_write:U1)@[], enabled:U1@[], ex_tena_rdata_mask:U1@[], ex_tentmp_raddr:vpu_defs_pkg.VPU_TENTMP_ADDR_W_T@[], ex_tentmp_ren:U1@[], ex_tima_last_pass:U1@[], ex_tima_mask:U16@[], ex_tima_ren3:U1@[], ex_tima_sa:U1@[], ex_tima_sb:U1@[], ex_tima_tena_raddr:U1@[], ex_tima_tenb_raddr:vpu_defs_pkg.VPU_TENB_ADDR_W_T@[], ex_tima_valid:U1@[], f2_tentmp_wen_early:U1@[], f2_tima_ren3:U1@[], f2_tima_rf_wen:U16@[], f2_tima_tenc_raddr:U4@[], f2_tima_tenc_wen:U16@[], f3_tentmp_waddr:vpu_defs_pkg.VPU_TENTMP_ADDR_W_T@[], f3_tentmp_wen:U1@[], f3_tima_rf_wen:U16@[], f3_tima_tenc_waddr:U4@[], f3_tima_tenc_wen:U16@[], fma_en:U1@[], fma_en_next:U1@[], fma_inst_next:vpu_defs_pkg.INST_SIZE_T@[], fma_mask_next:vpu_defs_pkg.VPU_LANE_NUM_T@[], io_events_wait_tenb:U1@[], load_ctrl:(wen:U1, thread_id:U1, broadcast_sel:U3, waddr:U5)@[], load_ctrl_pre_tena_wen:U1@[], load_ctrl_pre_tenb_wen:U1@[], pending_vpu_rf_write:U1@[], pending_vpu_tenc_vrf_write:U1@[], vpu_tensorfma_debug:U25@[]) {
+  comptime const Lanes = vpu_defs_pkg.VPU_LANE_NUM
+
+  // ---- state
+  // enables and pending-writer bookkeeping
+  reg enabled_int:Bool:[reset_pin=reset] = false // a TensorFMA is in flight
+  reg enabled_flush:Unsigned(bits=FlushBits):[reset_pin=reset] = 0 // keeps `enabled` up while the pipeline drains
+  reg txfma_clock_valid_delay:Unsigned(bits=TxfmaHold):[reset_pin=reset] = 0
+  reg tima_clock_valid_delay:Unsigned(bits=TimaHold):[reset_pin=reset] = 0
+  reg done_sticky:Bool:[reset_pin=reset] = false // all FMAs of the TensorFMA were issued
+  reg fma_exec_cd:U3:[reset_pin=reset] = 0 // count down from the last exec op
+  reg scoreboard_pend_sticky:Bool:[reset_pin=reset] = false
+  reg tquant_pend_sticky:Bool:[reset_pin=reset] = false
+  reg tstore_pend_sticky:Bool:[reset_pin=reset] = false
+  reg first_pass:Bool = nil // multiply instead of FMA on the first pass over an A column
+  reg conv_bits:U16 = nil // convolution: which A rows are loaded, which skipped
+  reg conv_bits_pending:Bool = nil // waiting for the convolution bits
+  reg pending_vpu_rf_write:U1:[reset_pin=reset] = 0
+  reg pending_vpu_tenc_vrf_write:U1:[reset_pin=reset] = 0
+  // dcache request walk: A position, B position, what was already requested
+  reg dc_read_scp_a_addr:U6 = nil
+  reg dc_read_scp_b_addr:U6 = nil
+  reg dc_read_a_col:U4:[reset_pin=reset] = 0
+  reg dc_read_a_row:U4:[reset_pin=reset] = 0
+  reg dc_read_a_done:Bool:[reset_pin=reset] = true
+  reg dc_read_start_a_is_odd:Bool:[reset_pin=reset] = false
+  reg dc_read_b_col:U1:[reset_pin=reset] = 0
+  reg dc_read_b_row:U4:[reset_pin=reset] = 0
+  reg dc_read_b_done:Bool:[reset_pin=reset] = true
+  reg dc_read_a_req_sent:U2:[reset_pin=reset] = 0 // A requests in flight / not yet consumed
+  reg dc_read_b_req_sent:U8:[reset_pin=reset] = 0 // TENB entry (2 bits per line, 4 lines) already requested
+  reg dc_read_a_wr_ptr:U1 = nil
+  reg dc_read_b_wr_ptr:U2 = nil
+  reg tenb_fill_pass:Bool:[reset_pin=reset] = false
+  // read-data write control, delayed to line up with the data (pre0 -> pre1 -> load_ctrl)
+  reg load_ctrl_pre1:U10 = nil
+  reg load_ctrl_q:U10 = nil
+  // FMA issue
+  reg fma_exec_b_col:U1:[reset_pin=reset] = 0
+  reg fma_exec_a_row:U4:[reset_pin=reset] = 0
+  reg fma_exec_a_col:U4:[reset_pin=reset] = 0
+  reg fma_exec_start_a_is_odd:Bool:[reset_pin=reset] = false
+  reg fma_exec_a_rd_ptr:U1 = nil
+  reg fma_exec_b_rd_ptr:U2 = nil
+  reg fma_exec_hazard_wait:Bool:[reset_pin=reset] = false
+  reg fma_mask_next:U8:[reset_pin=reset] = 0
+  reg fma_en_next:U1:[reset_pin=reset] = 0
+  reg fma_en:U1:[reset_pin=reset] = 0
+  reg fma_inst_next:U32 = nil
+  // accumulator collision tracking: the accumulator of the FMAs issued 3..6 cycles ago
+  reg fma_valid_3_cycle:Bool:[reset_pin=reset] = false
+  reg fma_valid_4_cycle:Bool:[reset_pin=reset] = false
+  reg fma_valid_5_cycle:Bool:[reset_pin=reset] = false
+  reg fma_valid_6_cycle:Bool:[reset_pin=reset] = false
+  reg fma_accum_3_cycle:U5 = nil
+  reg fma_accum_4_cycle:U5 = nil
+  reg fma_accum_5_cycle:U5 = nil
+  reg fma_accum_6_cycle:U5 = nil
+  // TENB credit release, delayed 3 cycles so a line is not overwritten before its last read
+  reg tenb_credit_s1:U1 = nil
+  reg tenb_credit_s2:U1 = nil
+  reg tenb_credit_s3:U1 = nil
+  reg tenb_credit_entry_s1:U2 = nil
+  reg tenb_credit_entry_s2:U2 = nil
+  reg tenb_credit_entry_s3:U2 = nil
+  // TIMA control pipeline: S1 -> EX -> F2 -> F3
+  reg s1_tima_valid:U1:[reset_pin=reset] = 0
+  reg s1_tima_tena_raddr:U1 = nil
+  reg s1_tima_tenb_raddr:U3 = nil
+  reg s1_tima_last_pass:U1 = nil
+  reg s1_tima_ren3:U1 = nil
+  reg s1_tima_tenc_raddr:U4 = nil
+  reg s1_tena_rf_rdata_mask:U1 = nil
+  reg ex_tima_valid:U1:[reset_pin=reset] = 0
+  reg ex_fma_mask:U8:[reset_pin=reset] = 0
+  reg ex_tima_tena_raddr:U1 = nil
+  reg ex_tima_tenb_raddr:U3 = nil
+  reg ex_tima_last_pass:U1 = nil
+  reg ex_tima_ren3:U1 = nil
+  reg ex_tima_tenc_raddr:U4 = nil
+  reg ex_tima_sa:U1 = nil
+  reg ex_tima_sb:U1 = nil
+  reg ex_tena_rdata_mask:U1 = nil
+  reg f2_tima_tenc_wen:U16:[reset_pin=reset] = 0
+  reg f2_tima_rf_wen:U16:[reset_pin=reset] = 0
+  reg f2_tima_ren3:U1:[reset_pin=reset] = 0
+  reg f2_tima_tenc_raddr:U4 = nil
+  reg f3_tima_tenc_wen:U16:[reset_pin=reset] = 0
+  reg f3_tima_rf_wen:U16:[reset_pin=reset] = 0
+  reg f3_tima_tenc_waddr:U4 = nil
+  // TensorTMP (int8: 64-bit A reads stashed for the odd A column pass)
+  reg tensortmp_rf_written:U8 = nil
+  reg f2_tentmp_wen_early:U1:[reset_pin=reset] = 0
+  reg f3_tentmp_wen:U1:[reset_pin=reset] = 0
+  reg f2_tentmp_waddr:U3 = nil
+  reg f3_tentmp_waddr:U3 = nil
+  reg s1_tentmp_acol_odd:U1 = nil
+  reg ex_tentmp_acol_odd:U1 = nil
+
+  // ---- request decode
+  const tensorfma_start = f0_core_ctrl.tensorfma_start != 0
+  const start_a = f0_core_ctrl.tensorfma_ctrl.start_a
+  const cols_a = f0_core_ctrl.tensorfma_ctrl.cols_a
+  const rows_a = f0_core_ctrl.tensorfma_ctrl.rows_a
+  const cols_b = f0_core_ctrl.tensorfma_ctrl.cols_b
+  const mode = f0_core_ctrl.tensorfma_ctrl.mode
+  const is_conv = f0_core_ctrl.tensorfma_ctrl.is_conv != 0
+  const to_vrf = f0_core_ctrl.tensorfma_ctrl.to_vrf != 0
+  const ten_b = f0_core_ctrl.tensorfma_ctrl.ten_b != 0
+  const req_fp32 = mode == ModeFp32
+  const req_fp16afp32 = mode == ModeFp16Fp32
+  const req_int8 = mode == ModeInt8
+  const cols_start_a:U5 = start_a + cols_a // last A column block to compute (low 4 bits)
+  const last_a_col = cols_start_a#[0..<4]
+  mut a_col_no_start:U4 = 0 // A column block being executed, relative to the start
+  wrap a_col_no_start = fma_exec_a_col - start_a
+
+  // ---- enable, pipeline flush and clock-enable holds
+  const enabled_out = enabled_int or enabled_flush#[FlushBits - 1] == 1
+  const txfma_hold = hold_clock<N=TxfmaHold>(active=enabled_int and not req_int8, delay=txfma_clock_valid_delay)
+  const tima_hold = hold_clock<N=TimaHold>(active=enabled_int and req_int8, delay=tima_clock_valid_delay)
+  const start = tensorfma_start
+  const working = start or enabled_int or reset != 0 or txfma_hold.en or tima_hold.en // state clock enable
+  const tima_clk_en = working and req_int8
+
+  // ---- accumulator collision: FMAs have a 5-cycle latency, so an FMA cannot reuse the
+  // accumulator of any FMA issued in the last few cycles
+  const accum_reg:U5 = (fma_exec_a_row << 1) | fma_exec_b_col // accumulator (and destination) register of the step being issued
+  const fma_accum_collision = (fma_en_next != 0 and accum_reg == fma_inst_next#[7..<12]) or (fma_en != 0 and accum_reg == fma_inst#[7..<12]) or (fma_valid_3_cycle and accum_reg == fma_accum_3_cycle) or (fma_valid_4_cycle and accum_reg == fma_accum_4_cycle) or (fma_valid_5_cycle and accum_reg == fma_accum_5_cycle) or (fma_valid_6_cycle and accum_reg == fma_accum_6_cycle)
+
+  // Wait for earlier tensor ops that write the VPU RF.  An int8 op that does not write the
+  // VPU RF has no such dependency.
+  const pend_sticky_wait = (scoreboard_pend_sticky or tquant_pend_sticky or tstore_pend_sticky) and not (req_int8 and not to_vrf)
+
+  // ---- FMA issue.  An FMA is generated only when its A and B data were requested (B line
+  // entries: 2 bits per TENB line, one per B column block; int8 needs both).
+  const b_have_col = dc_read_b_req_sent#[(fma_exec_b_rd_ptr << 1) + fma_exec_b_col] == 1
+  const b_have_hi = dc_read_b_req_sent#[(fma_exec_b_rd_ptr << 1) + 1] == 1
+  const s0_fma_en = enabled_int and not pend_sticky_wait and dc_read_a_req_sent != 0 and b_have_col and (b_have_hi or not req_int8) and not fma_accum_collision and (not is_conv or not conv_bits_pending) and not fma_exec_hazard_wait
+  const fma_exec_last_b_col = fma_exec_b_col == 1 or req_int8
+  // A convolution step whose bit is clear is skipped (the first pass still writes a zero).
+  const conv_skip = not conv_bits_pending and is_conv and conv_bits#[fma_exec_a_row] == 0
+  const s0_tima_last_pass = req_int8 and fma_exec_a_col == last_a_col and to_vrf
+  const s0_fma_en_conv = s0_fma_en and (not conv_skip or first_pass or s0_tima_last_pass)
+
+  // lanes used for this step
+  mut s0_fma_mask:U8 = 0
+  if req_int8 {
+    // int8: B columns are consecutive pairs of lanes, cols_b + 1 pairs in use (0x03, 0x0f, 0x3f, 0xff)
+    s0_fma_mask = 0xff
+    if cols_b == 0 {
+      s0_fma_mask#[2..<4] = 0
+    }
+    if cols_b#[1] == 0 {
+      s0_fma_mask#[4..<6] = 0
+    }
+    if cols_b != 3 {
+      s0_fma_mask#[6..<8] = 0
+    }
+  } else {
+    s0_fma_mask = tensor_lane_mask(cols=cols_b, b_col=fma_exec_b_col)
+  }
+
+  // instruction: mul on the first pass, else FMA; FP16 ops only support RTZ, FP32 uses dynamic rounding
+  const mat_a_reg:U5 = fma_exec_a_rd_ptr
+  const mat_b_reg:U5 = (1 << 3) | (fma_exec_b_rd_ptr << 1) | fma_exec_b_col
+  mut fma_inst_s0:U32 = FMADD_PS
+  if conv_skip {
+    fma_inst_s0 = FXOR_PI
+  } elif first_pass and req_fp16afp32 {
+    fma_inst_s0 = TMUL_PH_PS
+  } elif not first_pass and req_fp16afp32 {
+    fma_inst_s0 = TFMA_PH_PS
+  } elif first_pass and req_fp32 {
+    fma_inst_s0 = FMUL_PS
+  }
+  if not conv_skip {
+    fma_inst_s0#[12..<15] = if req_fp16afp32 { vpu_defs_pkg.RTZ } else { vpu_defs_pkg.VPU_RM_DYN }
+  }
+  fma_inst_s0#[7..<12] = accum_reg // rd
+  fma_inst_s0#[15..<20] = if conv_skip { accum_reg } else { mat_a_reg } // rs1
+  fma_inst_s0#[20..<25] = if conv_skip { accum_reg } else { mat_b_reg } // rs2
+  if not first_pass {
+    fma_inst_s0#[27..<32] = accum_reg // rs3: only FMAs accumulate
+  }
+
+  // ---- issue pointers: B column, then A row, then A column (int8 does both B columns at once)
+  mut first_pass_clear = false // moving to the next A column
+  mut done_sticky_next = done_sticky
+  mut fma_exec_b_col_next = fma_exec_b_col
+  mut fma_exec_a_row_next = fma_exec_a_row
+  mut fma_exec_a_col_next = fma_exec_a_col
+  mut fma_exec_start_a_is_odd_next = fma_exec_start_a_is_odd
+  const last_a_row = fma_exec_a_row == rows_a
+  if s0_fma_en {
+    fma_exec_b_col_next = if req_int8 { fma_exec_b_col } else { ~fma_exec_b_col }
+    if fma_exec_last_b_col {
+      wrap fma_exec_a_row_next = fma_exec_a_row + 1
+      if last_a_row {
+        fma_exec_a_row_next = 0
+        first_pass_clear = true
+        wrap fma_exec_a_col_next = fma_exec_a_col + 1
+        done_sticky_next = fma_exec_a_col == last_a_col
+        fma_exec_start_a_is_odd_next = false
+      }
+    }
+  }
+  if start {
+    done_sticky_next = false
+  }
+  mut fma_exec_a_rd_ptr_next = fma_exec_a_rd_ptr
+  if start {
+    fma_exec_a_rd_ptr_next = 0
+    fma_exec_a_col_next = start_a
+    fma_exec_start_a_is_odd_next = start_a#[0] == 1
+  } elif s0_fma_en and fma_exec_last_b_col {
+    fma_exec_a_rd_ptr_next = ~fma_exec_a_rd_ptr
+  }
+  mut fma_exec_b_rd_ptr_next = fma_exec_b_rd_ptr
+  if start {
+    fma_exec_b_rd_ptr_next = 0
+  } elif s0_fma_en and last_a_row and fma_exec_last_b_col {
+    wrap fma_exec_b_rd_ptr_next = fma_exec_b_rd_ptr + 1
+  }
+  // int8: a one-row matrix needs a bubble after each issue
+  mut fma_exec_hazard_wait_next = fma_exec_hazard_wait
+  if fma_exec_hazard_wait {
+    fma_exec_hazard_wait_next = false
+  } elif s0_fma_en and rows_a == 0 {
+    fma_exec_hazard_wait_next = true
+  }
+
+  // ---- enable of the whole unit
+  mut enabled_next = enabled_int
+  mut first_pass_next = first_pass
+  if start {
+    enabled_next = true
+    first_pass_next = f0_core_ctrl.tensorfma_ctrl.first_pass != 0
+  }
+  // done when every FMA is issued and has drained
+  if enabled_int and done_sticky and not s0_fma_en and fma_en_next == 0 and fma_exec_cd == 0 {
+    enabled_next = false
+  }
+  if first_pass_clear {
+    first_pass_next = false
+  }
+  // NB: any non-zero count drops straight to 0 and a zero count wraps to 7 (as in the reference RTL).
+  mut fma_exec_cd_next:U3 = 0
+  if fma_en != 0 {
+    fma_exec_cd_next = 4
+  } elif fma_exec_cd == 0 {
+    fma_exec_cd_next = 7
+  }
+
+  // convolution bits: captured at start when ready, otherwise as soon as they become ready
+  const conv_bits_ready = f0_core_ctrl.tensorfma_conv_bits_ready != 0
+  const conv_bits_up = (start and conv_bits_ready) or (conv_bits_pending and conv_bits_ready)
+  mut conv_bits_pending_next = conv_bits_pending
+  if start {
+    conv_bits_pending_next = not conv_bits_ready
+  }
+  if conv_bits_pending and conv_bits_ready {
+    conv_bits_pending_next = false
+  }
+
+  // sticky bits: wait for earlier scoreboard / TensorQuant / TensorStore writers
+  mut scoreboard_pend_sticky_next = scoreboard_pend_sticky
+  mut tquant_pend_sticky_next = tquant_pend_sticky
+  mut tstore_pend_sticky_next = tstore_pend_sticky
+  if start {
+    scoreboard_pend_sticky_next = f0_core_ctrl.pending_scoreboard_t0 != 0
+    tquant_pend_sticky_next = tensorquant_pend != 0
+    tstore_pend_sticky_next = tensorstore_pend != 0
+  } else {
+    if enabled_int and scoreboard_pend_sticky and f0_core_ctrl.pending_scoreboard_t0 == 0 {
+      scoreboard_pend_sticky_next = false
+    }
+    if (enabled_int and tquant_pend_sticky and tensorquant_pend == 0) or f0_core_ctrl.tensorquant_start != 0 {
+      tquant_pend_sticky_next = false
+    }
+    if (enabled_int and tstore_pend_sticky and tensorstore_pend == 0) or f0_core_ctrl.tensorstore_start != 0 {
+      tstore_pend_sticky_next = false
+    }
+  }
+
+  // ---- dcache read request: A has priority over B
+  const acol_even_arow_even = dc_read_a_col#[0] == 0 and dc_read_a_row#[0] == 0
+  const acol_odd_arow_even = dc_read_a_col#[0] == 1 and dc_read_a_row#[0] == 0
+  // int8: the even-row 64-bit reads of an even A column are stashed in TensorTMP, so the
+  // odd column pass does not read them again
+  const tmp_holds_row = req_int8 and tensortmp_rf_written#[dc_read_a_row#[1..<4]] == 1 and acol_even_arow_even
+  const doing_a = dc_read_a_req_sent < vpu_defs_pkg.VPU_TENA_SIZE and not dc_read_a_done and not tmp_holds_row
+  // B: some half of the line the issue pointer moves to next is still missing
+  const b_line_next = (dc_read_b_req_sent >> (fma_exec_b_rd_ptr_next << 1))#[0..<2]
+  const doing_b = b_line_next != 3 and not dc_read_b_done and not doing_a and not ten_b
+
+  // scratchpad position (byte level); the line index picks the dcache set and way
+  mut addr_flat:U12 = 0
+  if doing_a {
+    wrap addr_flat = ((dc_read_scp_a_addr << 6) | (dc_read_a_col << 2)) + (dc_read_a_row << 6)
+  } else {
+    wrap addr_flat = ((dc_read_scp_b_addr << 6) | (dc_read_b_col << 5)) + (dc_read_b_row << 6)
+  }
+  const scp_dest = scp_set_way(addr_flat#[6..<12])
+  const addr_mod:U12 = (scp_dest.way << 10) | (scp_dest.set << 6) | addr_flat#[0..<6]
+
+  // int8 odd-column / even-row steps are served from TensorTMP: skip the read
+  const a_skip = req_int8 and acol_odd_arow_even and not dc_read_start_a_is_odd
+  const read_en = enabled_int and ((doing_a and not a_skip) or doing_b)
+  // int8 A even-row reads use 64 bits (stashed in TensorTMP, freeing the scratchpad port)
+  const size64 = req_int8 and doing_a and acol_even_arow_even
+  const dc_read_tentmp_wen = read_en and size64
+  const dc_read_req_a = (read_en or (enabled_int and a_skip)) and doing_a
+  const dc_read_req_b = read_en and not doing_a
+  // tell the dcache a scratchpad read is coming so other bids are not replayed
+  const scp_bid = if not enabled_out { false } elif req_int8 { read_en } else { dc_read_req_a }
+
+  mut a_req_sent_next = dc_read_a_req_sent
+  if dc_read_req_a {
+    wrap a_req_sent_next = a_req_sent_next + 1
+  }
+  if s0_fma_en and fma_exec_last_b_col {
+    wrap a_req_sent_next = a_req_sent_next - 1
+  }
+  mut b_req_sent_next = dc_read_b_req_sent
+  if dc_read_req_b {
+    b_req_sent_next#[(dc_read_b_row#[0..<2] << 1) + dc_read_b_col] = 1
+  }
+  if dcache_scp_resp.fill_is_tenb != 0 {
+    b_req_sent_next#[(dcache_scp_resp.tenb_line#[0..<2] << 1) + U1(tenb_fill_pass)] = 1
+  }
+  if dcache_scp_resp.tenb_flush != 0 {
+    b_req_sent_next = 0
+  }
+  const b_req_sent_up = working or dcache_scp_resp.fill_is_tenb != 0 or dcache_scp_resp.tenb_flush != 0
+  // the last A row of a B line frees it (both lines in int8) and returns a TENB credit
+  mut tenb_credit_s0 = false
+  if s0_fma_en and last_a_row {
+    b_req_sent_next#[(a_col_no_start#[0..<2] << 1) + fma_exec_b_col] = 0
+    if req_int8 {
+      b_req_sent_next#[(a_col_no_start#[0..<2] << 1) + 1] = 0
+    }
+    tenb_credit_s0 = ten_b and (req_int8 or fma_exec_b_col == 1)
+  }
+
+  mut dc_read_a_wr_ptr_next = dc_read_a_wr_ptr
+  if start {
+    dc_read_a_wr_ptr_next = 0
+  } elif dc_read_req_a {
+    dc_read_a_wr_ptr_next = ~dc_read_a_wr_ptr
+  }
+  mut dc_read_b_wr_ptr_next = dc_read_b_wr_ptr
+  if start {
+    dc_read_b_wr_ptr_next = 0
+  } elif dc_read_req_b and dc_read_b_col == 1 {
+    wrap dc_read_b_wr_ptr_next = dc_read_b_wr_ptr + 1
+  }
+
+  // A position: rows within a column, then the next column
+  mut dc_read_a_col_next = dc_read_a_col
+  mut dc_read_a_row_next = dc_read_a_row
+  mut dc_read_a_done_next = dc_read_a_done
+  mut dc_read_start_a_is_odd_next = dc_read_start_a_is_odd
+  if start {
+    dc_read_a_col_next = start_a
+    dc_read_a_done_next = false
+    dc_read_start_a_is_odd_next = start_a#[0] == 1
+  }
+  if dc_read_req_a {
+    wrap dc_read_a_row_next = dc_read_a_row + 1
+    if dc_read_a_row == rows_a {
+      wrap dc_read_a_col_next = dc_read_a_col + 1
+      dc_read_start_a_is_odd_next = false
+      dc_read_a_row_next = 0
+      if dc_read_a_col == last_a_col {
+        dc_read_a_done_next = true
+      }
+    }
+  }
+  // B position: two column blocks per row
+  mut dc_read_b_col_next = dc_read_b_col
+  mut dc_read_b_row_next = dc_read_b_row
+  mut dc_read_b_done_next = dc_read_b_done
+  if start {
+    dc_read_b_done_next = false
+    dc_read_b_row_next = 0
+  }
+  if dc_read_req_b {
+    dc_read_b_col_next = ~dc_read_b_col
+    if dc_read_b_col == 1 {
+      wrap dc_read_b_row_next = dc_read_b_row + 1
+      if dc_read_b_row == cols_a {
+        dc_read_b_done_next = true
+      }
+    }
+  }
+
+  // ---- write control for the read data (always thread 1): wen, thread, broadcast select, RF address
+  // (A: ptr; B: 01 ptr col).  Delayed two stages to line up with the data.
+  const load_waddr:U5 = if doing_a { dc_read_a_wr_ptr } else { (1 << 3) | (dc_read_b_wr_ptr << 1) | dc_read_b_col }
+  const load_ctrl_pre0:U10 = (U1(read_en) << 9) | (1 << 8) | (addr_flat#[2..<5] << 5) | load_waddr
+  const load_ctrl_pre_wen = load_ctrl_pre1#[9] == 1
+  const load_ctrl_pre_tenb = load_ctrl_pre1#[3] == 1 // waddr bit 3 selects TENB
+
+  // ---- TIMA enables per lane/unit.  Lane l, unit t takes mask bit (l >> 1) + 4 t of the lanes in use.
+  mut ex_tima_mask_out:U16 = 0
+  mut ex_tima_tenc_wen:U16 = 0
+  mut ex_tima_rf_wen:U16 = 0
+  for l in 0..<Lanes {
+    for t in 0..<NumTima {
+      const bit = l*NumTima + t
+      const lane_on = ex_fma_mask#[(l >> 1) + (t << 2)] & ex_tima_valid
+      ex_tima_mask_out#[bit] = ex_fma_mask#[(l >> 1) + (t << 2)]
+      ex_tima_tenc_wen#[bit] = lane_on & ~ex_tima_last_pass
+      ex_tima_rf_wen#[bit] = lane_on & ex_tima_last_pass
+    }
+  }
+
+  // ---- TensorTMP bookkeeping: which TMP lines hold stashed int8 A data
+  const tentmp_use = req_int8 and ex_tentmp_acol_odd == 1
+  mut tensortmp_rf_written_next = tensortmp_rf_written
+  if start {
+    tensortmp_rf_written_next = 0
+  }
+  if dc_read_tentmp_wen {
+    tensortmp_rf_written_next#[dc_read_a_row#[1..<4]] = 1
+  }
+  // read back by TIMA (or dropped by a skipped convolution step): free the line
+  if (ex_tima_valid == 1 and ex_tentmp_acol_odd == 1) or (not first_pass and conv_skip and dc_read_a_row#[0] == 0) {
+    tensortmp_rf_written_next#[ex_tima_tenc_raddr#[1..<4]] = 0
+  }
+
+  // scratchpad start addresses wrap back to line 0 past the last line
+  const scp_a_addr_next = scp_wrap(f0_core_ctrl.tensorfma_ctrl.scp_a)
+  const scp_b_addr_next = scp_wrap(f0_core_ctrl.tensorfma_ctrl.scp_b)
+
+  // ---- state updates
+  if enabled_int or enabled_flush != 0 {
+    wrap enabled_flush = (enabled_flush << 1) | U1(enabled_int)
+  }
+  if txfma_hold.en {
+    txfma_clock_valid_delay = txfma_hold.next
+  }
+  if tima_hold.en {
+    tima_clock_valid_delay = tima_hold.next
+  }
+  if working {
+    enabled_int = enabled_next
+    fma_exec_cd = fma_exec_cd_next
+    scoreboard_pend_sticky = scoreboard_pend_sticky_next
+    tquant_pend_sticky = tquant_pend_sticky_next
+    tstore_pend_sticky = tstore_pend_sticky_next
+    first_pass = first_pass_next
+    dc_read_a_req_sent = a_req_sent_next
+    dc_read_a_wr_ptr = dc_read_a_wr_ptr_next
+    dc_read_b_wr_ptr = dc_read_b_wr_ptr_next
+    dc_read_scp_a_addr = scp_a_addr_next
+    dc_read_scp_b_addr = scp_b_addr_next
+    dc_read_a_col = dc_read_a_col_next
+    dc_read_a_row = dc_read_a_row_next
+    dc_read_a_done = dc_read_a_done_next
+    dc_read_start_a_is_odd = dc_read_start_a_is_odd_next
+    dc_read_b_col = dc_read_b_col_next
+    dc_read_b_row = dc_read_b_row_next
+    dc_read_b_done = dc_read_b_done_next
+    load_ctrl_pre1 = load_ctrl_pre0
+    load_ctrl_q = load_ctrl_pre1
+    fma_exec_b_col = fma_exec_b_col_next
+    fma_exec_a_row = fma_exec_a_row_next
+    fma_exec_a_col = fma_exec_a_col_next
+    fma_mask_next = s0_fma_mask
+    fma_exec_start_a_is_odd = fma_exec_start_a_is_odd_next
+    done_sticky = done_sticky_next
+    fma_exec_a_rd_ptr = fma_exec_a_rd_ptr_next
+    fma_exec_b_rd_ptr = fma_exec_b_rd_ptr_next
+    fma_valid_3_cycle = fma_en != 0
+    fma_valid_4_cycle = fma_valid_3_cycle
+    fma_valid_5_cycle = fma_valid_4_cycle
+    fma_valid_6_cycle = fma_valid_5_cycle
+    s1_tena_rf_rdata_mask = U1(not conv_skip)
+    ex_tena_rdata_mask = s1_tena_rf_rdata_mask
+  }
+  if conv_bits_up {
+    conv_bits = f0_core_ctrl.tensorfma_conv_bits
+  }
+  conv_bits_pending = conv_bits_pending_next
+  pending_vpu_rf_write = U1(enabled_next or (working and (not req_int8 or to_vrf)))
+  pending_vpu_tenc_vrf_write = U1(working)
+  if b_req_sent_up {
+    dc_read_b_req_sent = b_req_sent_next
+  }
+  if dcache_scp_resp.fill_is_tenb != 0 {
+    tenb_fill_pass = not tenb_fill_pass
+  }
+  if working and not req_int8 {
+    fma_en_next = U1(s0_fma_en_conv and (req_fp32 or req_fp16afp32))
+    fma_en = fma_en_next
+    fma_inst_next = fma_inst_s0
+  }
+  if working and req_int8 {
+    fma_exec_hazard_wait = fma_exec_hazard_wait_next
+  }
+  if fma_en != 0 {
+    fma_accum_3_cycle = fma_inst#[7..<12]
+  }
+  if fma_valid_3_cycle {
+    fma_accum_4_cycle = fma_accum_3_cycle
+  }
+  if fma_valid_4_cycle {
+    fma_accum_5_cycle = fma_accum_4_cycle
+  }
+  if fma_valid_5_cycle {
+    fma_accum_6_cycle = fma_accum_5_cycle
+  }
+  tenb_credit_s1 = U1(tenb_credit_s0)
+  tenb_credit_s2 = tenb_credit_s1
+  tenb_credit_s3 = tenb_credit_s2
+  if tenb_credit_s0 {
+    tenb_credit_entry_s1 = a_col_no_start#[0..<2]
+  }
+  if tenb_credit_s1 == 1 {
+    tenb_credit_entry_s2 = tenb_credit_entry_s1
+  }
+  if tenb_credit_s2 == 1 {
+    tenb_credit_entry_s3 = tenb_credit_entry_s2
+  }
+  if tima_clk_en {
+    s1_tima_valid = U1(s0_fma_en_conv and req_int8)
+    s1_tima_tena_raddr = fma_exec_a_rd_ptr
+    s1_tima_tenb_raddr = fma_exec_b_rd_ptr << 1
+    s1_tima_last_pass = U1(s0_tima_last_pass)
+    s1_tima_ren3 = U1(not first_pass)
+    s1_tima_tenc_raddr = fma_exec_a_row
+    ex_tima_valid = s1_tima_valid
+    ex_fma_mask = fma_mask_next
+    ex_tima_tenb_raddr = s1_tima_tenb_raddr
+    ex_tima_tena_raddr = s1_tima_tena_raddr
+    ex_tima_last_pass = s1_tima_last_pass
+    ex_tima_ren3 = s1_tima_ren3
+    ex_tima_tenc_raddr = s1_tima_tenc_raddr
+    f2_tima_tenc_wen = ex_tima_tenc_wen
+    f2_tima_rf_wen = ex_tima_rf_wen
+    f2_tima_ren3 = ex_tima_ren3
+    f2_tima_tenc_raddr = ex_tima_tenc_raddr
+    f3_tima_tenc_wen = f2_tima_tenc_wen
+    f3_tima_rf_wen = f2_tima_rf_wen
+    f3_tima_tenc_waddr = f2_tima_tenc_raddr
+  }
+  if tensorfma_start {
+    ex_tima_sa = U1(f0_core_ctrl.tensorfma_ctrl.u_a == 0)
+    ex_tima_sb = U1(f0_core_ctrl.tensorfma_ctrl.u_b == 0)
+  }
+  if working and req_int8 {
+    f2_tentmp_wen_early = U1(dc_read_tentmp_wen)
+    f3_tentmp_wen = f2_tentmp_wen_early
+  }
+  // not updated while reset is held (the registers below have no reset of their own)
+  if reset == 0 and working and req_int8 {
+    tensortmp_rf_written = tensortmp_rf_written_next
+    s1_tentmp_acol_odd = fma_exec_a_col#[0] & U1(not fma_exec_start_a_is_odd)
+    ex_tentmp_acol_odd = s1_tentmp_acol_odd
+  }
+  if dc_read_tentmp_wen {
+    f2_tentmp_waddr = dc_read_a_row#[1..<4]
+  }
+  if f2_tentmp_wen_early == 1 {
+    f3_tentmp_waddr = f2_tentmp_waddr
+  }
+
+  // ---- outputs
+  enabled = U1(enabled_out)
+  dcache_ctrl.scp_req.read_en = U1(read_en)
+  dcache_ctrl.scp_req.way = addr_mod#[10..<12]
+  dcache_ctrl.scp_req.addr = addr_mod#[0..<10]
+  dcache_ctrl.scp_req.size64 = U1(size64)
+  dcache_ctrl.scp_req.size256 = U1(not doing_a)
+  dcache_ctrl.scp_req.bid = U1(scp_bid)
+  dcache_ctrl.tenb_credit = tenb_credit_s3
+  dcache_ctrl.tenb_credit_entry = tenb_credit_entry_s3
+  dcache_ctrl.tfma_enabled = U1(enabled_int and not pend_sticky_wait)
+  dcache_ctrl.reduce_wait = 0 // the VPU ML top uses the reduce_wait of vpu_tensorreduce instead
+  dcache_ctrl.tfma_rf_write = U1(working and req_int8 and to_vrf and not pend_sticky_wait)
+  load_ctrl.wen = load_ctrl_q#[9]
+  load_ctrl.thread_id = load_ctrl_q#[8]
+  load_ctrl.broadcast_sel = load_ctrl_q#[5..<8]
+  load_ctrl.waddr = load_ctrl_q#[0..<5]
+  load_ctrl_pre_tena_wen = U1(load_ctrl_pre_wen and not load_ctrl_pre_tenb)
+  load_ctrl_pre_tenb_wen = U1(load_ctrl_pre_wen and load_ctrl_pre_tenb)
+  ex_tentmp_ren = U1(tentmp_use and ex_tima_tenc_raddr#[0] == 0)
+  ex_tentmp_raddr = if tentmp_use { ex_tima_tenc_raddr#[1..<4] } else { 0 }
+  ex_tima_mask = ex_tima_mask_out
+  io_events_wait_tenb = U1(enabled_int and dc_read_a_req_sent != 0 and not b_have_col and (not b_have_hi or not req_int8) and not fma_accum_collision and (not is_conv or not conv_bits_pending))
+  vpu_tensorfma_debug = (tenb_credit_entry_s3, tenb_credit_entry_s2, tenb_credit_entry_s1, U1(conv_bits_pending), U1(fma_accum_collision), U1(req_int8), fma_exec_b_col, fma_exec_b_rd_ptr, dc_read_b_req_sent, dc_read_a_req_sent, U1(pend_sticky_wait), U1(working), U1(enabled_int))#[..]
+}

@@ -1,0 +1,40 @@
+// SHA-256 message schedule W[t] as a 16-word sliding window.
+//
+// Rounds 0..15 read the block's own words straight out of the window; from
+// round 16 on, each `next` computes W[t] = s1(W[t-2]) + W[t-7] + s0(W[t-15]) +
+// W[t-16] from window slots 14, 9, 1 and 0 and shifts it in at slot 15.
+// Word 0 of the window is the block's MOST significant 32 bits.
+comb rotr<N>(x:U32) -> (r:U32) {
+  wrap r = (x >> N) | (x << (32 - N))
+}
+
+pub mod sha256_w_mem(block:U512, clk:Clock, init:Bool, next:Bool, reset_n:Reset, round:U6) -> (w:U32@[]) {
+  // `old`: every read sees the committed window, the Verilog non-blocking view.
+  // The synchronous reset is an explicit write below rather than a declared
+  // reset: `lhd sim` runs the whole design ~25% faster that way.
+  reg w_mem:[16]U32:[ordering="old"] = nil
+
+  const w1        = w_mem[1]
+  const w14       = w_mem[14]
+  const s0:U32    = rotr<N=7>(x=w1) ^ rotr<N=18>(x=w1) ^ (w1 >> 3)
+  const s1:U32    = rotr<N=17>(x=w14) ^ rotr<N=19>(x=w14) ^ (w14 >> 10)
+  const w_new:U32 = (s1 + w_mem[9] + s0 + w_mem[0])#[0..<32]
+
+  w = if round < 16 { w_mem[round#[0..<4]] } else { w_new }
+
+  // One write per slot: a shift outranks a (re)load, as in the Verilog.
+  const shift = next and round > 15
+  if not reset_n {
+    for i in 0..<16 {
+      w_mem[i] = 0
+    }
+  } elif shift or init {
+    for i in 0..<16 {
+      mut shifted:U32 = w_new
+      if i < 15 {
+        shifted = w_mem[i + 1]
+      }
+      w_mem[i] = if shift { shifted } else { block#[((15 - i)*32)..+32] }
+    }
+  }
+}

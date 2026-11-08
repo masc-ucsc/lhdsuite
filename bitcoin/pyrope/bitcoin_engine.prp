@@ -1,0 +1,68 @@
+// One nonce-search mining lane: starting at nonce_init and stepping by
+// NONCE_STRIDE, insert the trial nonce into the header's second block, run
+// SHA256d, and compare against the target. The first hit latches the golden
+// nonce, raises `found`, and parks the lane until the next reset.
+const bitcoin_compare = import("bitcoin_compare.bitcoin_compare")
+const bitcoin_sha256d = import("bitcoin_sha256d.bitcoin_sha256d")
+
+// The nonce field of the header's second SHA-256 block (bytes 76..79).
+comptime const NONCE_LSB = 384
+
+enum State:U2 = (Idle, Run, Wait, Done)
+
+pub mod bitcoin_engine<NONCE_STRIDE=1>(
+  block_a:U512,
+  block_b_base:U512,
+  clk:Clock,
+  nonce_init:U32,
+  reset_n:Reset,
+  start:Bool,
+  target:U256,
+) -> (busy:Bool@[], found:Bool@[], golden_nonce:U32@[]) {
+  reg nonce:U32:[negreset=true]      = 0
+  reg d_start:Bool:[negreset=true]   = false
+  reg state:State:[negreset=true]    = State.Idle
+  reg found_reg:Bool:[negreset=true] = false
+  reg golden_reg:U32:[negreset=true] = 0
+
+  mut block_b:U512 = block_b_base
+  block_b#[NONCE_LSB..+32] = nonce
+
+  const u_hash = bitcoin_sha256d(start=d_start, block_a, block_b)
+  const hit    = bitcoin_compare(hash=u_hash.hash, target)
+
+  found        = found_reg
+  golden_nonce = golden_reg
+  busy         = state == State.Run or state == State.Wait
+
+  d_start = false
+  match state {
+    == State.Idle {
+      if start {
+        nonce     = nonce_init
+        found_reg = false
+        state     = State.Run
+      }
+    }
+    == State.Run {
+      // Launch one SHA256d over the current nonce.
+      d_start = true
+      state   = State.Wait
+    }
+    == State.Wait {
+      if u_hash.done {
+        if hit {
+          found_reg  = true
+          golden_reg = nonce
+          state      = State.Done
+        } else {
+          wrap nonce = nonce + NONCE_STRIDE
+          state = State.Run
+        }
+      }
+    }
+    == State.Done {
+      // Hold the result until reset.
+    }
+  }
+}

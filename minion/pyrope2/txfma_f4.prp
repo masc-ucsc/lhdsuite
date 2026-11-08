@@ -1,0 +1,41 @@
+// Stage f4: carry-propagate add of the multiplier-tree (sum, carry) pair, field clearing
+// for the half/single-precision results, plus the leading-x-detect and trailing-zero counts.
+const txfma_adder = import("txfma_adder.txfma_adder")
+const txfma_lxd = import("txfma_lxd.txfma_lxd")
+const txfma_trz2 = import("txfma_trz2.txfma_trz2")
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+pub mod txfma_f4::[timecheck=false](al1c3_neg_cin_f3a_h:U1, clear16frnd_nshin_f4a_l:U1, clearphps_en_f4a_h:U1, comb_c_f4a_h:U52, comb_s_f4a_h:U52, ctrl_f3_clk:Clock, ctrl_f4_clk:Clock, fma_subopc3_f3a_h:U1, int_minmax_res_f4a_h:vpu_defs_pkg.VPU_DATA_S_SZ_T, neg_norm_a3_f4a_h:U1, neg_norm_na3_f4a_h:U1, op2_sxtto_g_f3a_h:U1, ph_ps_clear_f4a_l:U1) -> (comb_add_f5a_h:U52@[], elxd_f4a_h:vpu_defs_pkg.TXFMA_LXD_PS_SZ_T@[], etrz50_f4a_h:vpu_defs_pkg.TXFMA_WSPS_ETRZ_SZ_T@[], int_minmax_res_f5a_h:vpu_defs_pkg.VPU_DATA_S_SZ_T@[], neg_norm_f5a_h:U1@[]) {
+  reg neg_norm_f5a_h:U1:[clock_pin=ctrl_f4_clk]
+  reg int_minmax_res_f5a_h:U32:[clock_pin=ctrl_f4_clk]
+  reg comb_add_f5a_h:U52:[clock_pin=ctrl_f4_clk]
+  reg al1c3_neg_cin_f4a_h:U1:[clock_pin=ctrl_f3_clk]
+  reg fma_subopc3_f4a_h:U1:[clock_pin=ctrl_f3_clk]
+  reg op2_sxtto_g_f4a_h:U1:[clock_pin=ctrl_f3_clk]
+  // f3 controls delayed into the f4 domain
+  al1c3_neg_cin_f4a_h = al1c3_neg_cin_f3a_h
+  fma_subopc3_f4a_h = fma_subopc3_f3a_h
+  op2_sxtto_g_f4a_h = op2_sxtto_g_f3a_h
+
+  // Carry-propagate add of the (sum, carry) pair; the carry vector is weighted one bit up.
+  const carry_sh = comb_c_f4a_h#[0..<51] << 1
+  const comb_adder_52 = txfma_adder<Width=52>(a_i=(comb_c_f4a_h#[0..<51] << 1) | (op2_sxtto_g_f4a_h & 1), b_i=comb_s_f4a_h#[0..<52], cin_i=al1c3_neg_cin_f4a_h)
+  const comb_add = comb_adder_52
+  const neg_norm = neg_norm_na3_f4a_h | (comb_add#[vpu_defs_pkg.TXFMA_A3 - 12] & neg_norm_a3_f4a_h)
+  const ph_ps_sxt = clearphps_en_f4a_h & neg_norm
+
+  // Clear the half/single-precision LSB fields of the sum: bits [0..17) also depend on
+  // clear16frnd_nshin; a negative ph/ps result sign-extends ones into both fields.
+  const lo:U17 = if ph_ps_sxt != 0 { 0x1ffff } elif (clear16frnd_nshin_f4a_l & ph_ps_clear_f4a_l) != 0 { comb_add#[0..<17] } else { 0 }
+  const mid:U6 = if ph_ps_sxt != 0 { 0x3f } elif ph_ps_clear_f4a_l != 0 { comb_add#[17..<23] } else { 0 }
+  const hi:U29 = comb_add#[23..<52]
+  const comb_add_cleared:U52 = (lo, mid, hi)#[..]
+
+  const lxd_ps_hi = txfma_lxd<AftA0BitsNum=4, InWidth=52, OutWidth=7>(in1_i=carry_sh#[0..<52], in2_i=comb_s_f4a_h#[0..<52], sub_op_i=fma_subopc3_f4a_h)
+  const addnd_trz_ps = txfma_trz2<InWidth=52>(in1_i=comb_s_f4a_h#[0..<52], in2_i=carry_sh, add_cin_i=al1c3_neg_cin_f4a_h)
+  comb_add_f5a_h = comb_add_cleared
+  int_minmax_res_f5a_h = int_minmax_res_f4a_h
+  neg_norm_f5a_h = neg_norm
+  elxd_f4a_h = lxd_ps_hi
+  etrz50_f4a_h = addnd_trz_ps
+}

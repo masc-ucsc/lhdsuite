@@ -1,0 +1,121 @@
+const minion_pkg = import("minion_pkg")
+const vpu_pkg = import("vpu_pkg")
+
+// VPU operand bypass network. Each execute-stage operand (in1..in3) starts from the
+// register-file read and is overridden, lowest to highest priority, by: results in
+// flight in write-back stages f8..f3 (match on register address, write mask and
+// thread), the f4 late write port, then the per-operand forced sources (from-int
+// data, txfma result, shsw result, tensor-RF bypass). The f3 result is also shifted
+// down the f4..f8 chain ({data, exc}, advancing on each stage's clock enable) so
+// later stages can bypass it. For lanes other than 0, f3/f8 results without a vector
+// destination are zeroed.
+pub mod vpu_bypass::[timecheck=false](clk_i:Clock, ex_bypass_force_ctrl_i:(txfma_in0:U1, txfma_in1:U1, txfma_in2:U1, shsw_in1:U1, shsw_in2:U1), ex_fromint_data_i:minion_pkg.VpuDataSSz_T, ex_regfile_thread_id_i:(e2:U1, e1:U1, e0:U1), ex_req_lane_i:(use_prev_sigs:U1, sigs:(cmd:U7, txfma:U1, shsw:U1, rom:U1, scatter:U1, cvt:U1, trans:U1, gcvt:U1, fromintf:U1, tointm:U1, tointf:U1, maskop:U1, ldst:U1, m0ren:U1, mallren:U1, mren1:U1, mren2:U1, wen:U1, ren1:U1, ren2:U1, ren3:U1, rend:U1, swap12:U1, swap23:U1, swap13:U1, vector:U1, dtype:U4, fromint:U1, toint:U1, fma:U1, fms:U1, add:U1, sub:U1, mul:U1, round:U1, wflags:U1), imm:U20, rm:U3, typ:U2, in1:U32, in2:U32, in3:U32), ex_rf_raddr_i:U15, ex_rf_rdata_i:U96, ex_tena_regfile_bypass_en_i:U1, ex_tena_rf_rdata_i:minion_pkg.VpuDataSSz_T, ex_tenb_regfile_bypass_en_i:U1, ex_tenb_rf_rdata_i:minion_pkg.VpuDataSSz_T, f3_bypass_clk_en_i:U1, f3_data_vector_i:U1, f3_regfile_waddr_i:U5, f3_regfile_wmask_i:U1, f3_sh_sw_bits_i:(data:U32, exc:U6), f3_thread_id_i:U1, f4_bypass_clk_en_i:U1, f4_regfile_thread_id_l_i:U1, f4_regfile_waddr_i:U5, f4_regfile_waddr_l_i:U5, f4_regfile_wdata_l_i:minion_pkg.VpuDataSSz_T, f4_regfile_wmask_i:U1, f4_regfile_wmask_l_i:(e1:U1, e0:U1), f4_thread_id_i:U1, f5_bypass_clk_en_i:U1, f5_regfile_waddr_i:U5, f5_regfile_wmask_i:U1, f5_thread_id_i:U1, f6_bypass_clk_en_i:U1, f6_regfile_waddr_i:U5, f6_regfile_wmask_i:U1, f6_thread_id_i:U1, f7_bypass_clk_en_i:U1, f7_regfile_waddr_i:U5, f7_regfile_wmask_i:U1, f7_thread_id_i:U1, f8_data_vector_i:U1, f8_regfile_waddr_i:U5, f8_regfile_wmask_i:U1, f8_thread_id_i:U1, f8_txfma_op_i:U1, f8_txfma_res_i:(data:U32, exc:U6), lane_id_i:minion_pkg.CoreGscCntBits_T) -> (ex_req_o:(use_prev_sigs:U1, sigs:(cmd:U7, txfma:U1, shsw:U1, rom:U1, scatter:U1, cvt:U1, trans:U1, gcvt:U1, fromintf:U1, tointm:U1, tointf:U1, maskop:U1, ldst:U1, m0ren:U1, mallren:U1, mren1:U1, mren2:U1, wen:U1, ren1:U1, ren2:U1, ren3:U1, rend:U1, swap12:U1, swap23:U1, swap13:U1, vector:U1, dtype:U4, fromint:U1, toint:U1, fma:U1, fms:U1, add:U1, sub:U1, mul:U1, round:U1, wflags:U1), imm:U20, rm:U3, typ:U2, in1:U32, in2:U32, in3:U32)@[], f3_maskop_bit_o:U1@[], f8_sh_sw_wdata_o:minion_pkg.VpuDataSSz_T@[], f8_wdata_o:minion_pkg.VpuDataSSz_T@[], f8_wflags_o:vpu_pkg.CoreFcsrFlagBitsSz_T@[]) {
+  comptime const EXC_W = 6
+  comptime const DATA_W = 32
+
+  reg f4_bits_q:U38:[clock_pin=clk_i]
+  reg f5_bits_q:U38:[clock_pin=clk_i]
+  reg f6_bits_q:U38:[clock_pin=clk_i]
+  reg f7_bits_q:U38:[clock_pin=clk_i]
+  reg f8_bits_q:U38:[clock_pin=clk_i]
+
+  // f3 result: only lane 0 (or vector results) are kept
+  mut f3_data:U32 = f3_sh_sw_bits_i.data
+  mut f3_exc:U6 = f3_sh_sw_bits_i.exc
+  if lane_id_i != 0 and f3_data_vector_i == 0 {
+    f3_data = 0
+    f3_exc = 0
+  }
+  if f3_bypass_clk_en_i != 0 {
+    f4_bits_q = (f3_exc, f3_data)#[..]
+  }
+  if f4_bypass_clk_en_i != 0 {
+    f5_bits_q = f4_bits_q
+  }
+  if f5_bypass_clk_en_i != 0 {
+    f6_bits_q = f5_bits_q
+  }
+  if f6_bypass_clk_en_i != 0 {
+    f7_bits_q = f6_bits_q
+  }
+  if f7_bypass_clk_en_i != 0 {
+    f8_bits_q = f7_bits_q
+  }
+
+  // f8 result: a txfma result overrides the shsw one
+  mut f8_data:U32 = f8_bits_q#[EXC_W..]
+  mut f8_exc:U6 = f8_bits_q#[0..<EXC_W]
+  if f8_txfma_op_i != 0 {
+    f8_data = f8_txfma_res_i.data
+    f8_exc = f8_txfma_res_i.exc
+  }
+  if lane_id_i != 0 and f8_data_vector_i == 0 {
+    f8_data = 0
+  }
+
+  // in-flight write-back results, youngest (f3) first
+  const wb_waddr = (f3_regfile_waddr_i, f4_regfile_waddr_i, f5_regfile_waddr_i, f6_regfile_waddr_i, f7_regfile_waddr_i, f8_regfile_waddr_i)
+  const wb_wmask = (f3_regfile_wmask_i, f4_regfile_wmask_i, f5_regfile_wmask_i, f6_regfile_wmask_i, f7_regfile_wmask_i, f8_regfile_wmask_i)
+  const wb_thread = (f3_thread_id_i, f4_thread_id_i, f5_thread_id_i, f6_thread_id_i, f7_thread_id_i, f8_thread_id_i)
+  const f4_data:U32 = f4_bits_q#[EXC_W..]
+  const f5_data:U32 = f5_bits_q#[EXC_W..]
+  const f6_data:U32 = f6_bits_q#[EXC_W..]
+  const f7_data:U32 = f7_bits_q#[EXC_W..]
+  const wb_data = (f3_data, f4_data, f5_data, f6_data, f7_data, f8_data)
+  // the f4 late write port has one mask bit per operand pair (operand 0, then 1 and 2)
+  const f4_late_wmask = (f4_regfile_wmask_l_i.e0, f4_regfile_wmask_l_i.e1, f4_regfile_wmask_l_i.e1)
+  const ex_thread = (ex_regfile_thread_id_i.e0, ex_regfile_thread_id_i.e1, ex_regfile_thread_id_i.e2)
+
+  mut ex_rdata:[3]U32 = 0
+  for i in 0..<3 {
+    const raddr:U5 = ex_rf_raddr_i#[(i*5)..<((i + 1)*5)]
+    mut rdata:U32 = ex_rf_rdata_i#[(i*DATA_W)..<((i + 1)*DATA_W)]
+    for k in 0..<6 {
+      // f8 is the lowest priority, f3 the highest of the write-back stages
+      comptime const s = 5 - k
+      if raddr == wb_waddr[s] and wb_wmask[s] != 0 and ex_thread[i] == wb_thread[s] {
+        rdata = wb_data[s]
+      }
+    }
+    if raddr == f4_regfile_waddr_l_i and f4_late_wmask[i] != 0 and ex_thread[i] == f4_regfile_thread_id_l_i {
+      rdata = f4_regfile_wdata_l_i
+    }
+    ex_rdata[i] = rdata
+  }
+  if ex_req_lane_i.sigs.fromint != 0 {
+    ex_rdata[0] = ex_fromint_data_i
+  }
+  if ex_bypass_force_ctrl_i.txfma_in0 != 0 {
+    ex_rdata[0] = f8_txfma_res_i.data
+  }
+  if ex_tena_regfile_bypass_en_i != 0 {
+    ex_rdata[0] = ex_tena_rf_rdata_i
+  }
+  if ex_bypass_force_ctrl_i.txfma_in1 != 0 {
+    ex_rdata[1] = f8_txfma_res_i.data
+  }
+  if ex_bypass_force_ctrl_i.shsw_in1 != 0 {
+    ex_rdata[1] = f8_bits_q#[EXC_W..]
+  }
+  if ex_tenb_regfile_bypass_en_i != 0 {
+    ex_rdata[1] = ex_tenb_rf_rdata_i
+  }
+  if ex_req_lane_i.sigs.fromint != 0 and ex_req_lane_i.sigs.txfma != 0 {
+    ex_rdata[2] = ex_fromint_data_i
+  }
+  if ex_bypass_force_ctrl_i.txfma_in2 != 0 {
+    ex_rdata[2] = f8_txfma_res_i.data
+  }
+  if ex_bypass_force_ctrl_i.shsw_in2 != 0 {
+    ex_rdata[2] = f8_bits_q#[EXC_W..]
+  }
+
+  ex_req_o = ex_req_lane_i
+  ex_req_o.in1 = ex_rdata[0]
+  ex_req_o.in2 = ex_rdata[1]
+  ex_req_o.in3 = ex_rdata[2]
+  f3_maskop_bit_o = f3_data#[0]
+  f8_wflags_o = f8_exc
+  f8_wdata_o = f8_data
+  f8_sh_sw_wdata_o = f8_bits_q#[EXC_W..]
+}

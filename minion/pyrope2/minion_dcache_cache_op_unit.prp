@@ -1,0 +1,614 @@
+const prim_clk_gate = import("prim_clk_gate.prim_clk_gate")
+const minion_dcache_pkg = import("minion_dcache_pkg")
+const minion_pkg = import("minion_pkg")
+
+// Layout of the 140-bit tag-array response: four ways of {coh_state:2, tag:33}, way 0 lowest.
+comptime const WAY_BITS = 35
+comptime const TAG_BITS = 33
+
+// Tag and coherence state of way `w` in a meta response.
+comb resp_tag(resp:U140, w:U2) -> (tag:U33) {
+  tag = (resp >> (w*WAY_BITS))#[0..<TAG_BITS]
+}
+
+comb resp_state(resp:U140, w:U2) -> (st:U2) {
+  st = (resp >> (w*WAY_BITS))#[TAG_BITS..<WAY_BITS]
+}
+
+// Way mask -> way index. Every set bit i contributes i, so a one-hot mask encodes to its
+// index and a multi-hot mask ORs the indices (this is what the RTL's encoder does).
+comb way_encode(ways:U4) -> (enc:U2) {
+  mut e:U2 = 0
+  for i in 1..<4 {
+    if ways#[i] != 0 {
+      e = e | i
+    }
+  }
+  enc = e
+}
+
+// Set index actually used by the cache: a split cache gives each thread half of the sets,
+// scratchpad mode reserves the upper sets of thread 1 and the middle ones of thread 0.
+comb set_correct(mode:U2, set:U4, thread:U1) -> (r:U4) {
+  const split_set:U4 = if thread == 0 { set#[0..<3] } else { 0xe | (set & 1) }
+  const scratchpad_set:U4 = if thread == 0 { 0xc | (set & 1) } else { 0xe | (set & 1) }
+  r = if mode == minion_dcache_pkg.DcacheModeSplit { split_set }
+    elif mode == minion_dcache_pkg.DcacheModeScratchpad { scratchpad_set }
+    else { set }
+}
+
+// Sequencer for the L1 cache operations (lock/unlock, flush/evict by set-way or by virtual
+// address, prefetch). A request is latched when accepted, then walks the states below once
+// per cache line: read the tag array, wait for the response, optionally write the line
+// back, rewrite the tag, and repeat for `count` lines. It also owns the hardware/software
+// lock bit arrays (4 ways x 16 sets) and the scratchpad clear sequence. State sits on a
+// gated clock that runs only while the unit is busy, in reset, or has an error pending.
+pub mod minion_dcache_cache_op_unit::[timecheck=false](cache_op_ready_byp_i:U1, cache_op_req_i:(cmd:U4, start_level:U2, dest_level:U2, count:U4, addr:U48, way:U2, stride:U48, thread_id:U1, use_tmask:U1, tmask_ready:U1, tmask_bits:U16, l2_scp_dest:U17, l2_scp_fill:U1), cache_op_req_next_i:(cmd:U4, start_level:U2, dest_level:U2), cache_op_valid_i:U1, cfg_alloc_scp_i:U1, cfg_cache_mode_i:U2, cfg_clear_all_i:U1, cfg_clear_low_i:U1, chicken_bit_dcache_i:U1, clk_i:Clock, da_clear_rdy_i:U1, id_co_pf_grant_i:U1, id_rq_full_i:U1, meta_read_grant_i:U1, meta_read_resp_i:U140, meta_read_resp_way_en_i:(e3:U1, e2:U1, e1:U1, e0:U1), meta_write_ready_i:U1, mh_clear_slock_set_i:minion_dcache_pkg.DcacheSetIdxWidth_T, mh_clear_slock_valid_i:U1, mh_clear_slock_way_i:minion_dcache_pkg.DcacheWayIdxWidth_T, mh_metaw_rdy_i:minion_dcache_pkg.DcacheMhFileSize_T, mh_probe_rdy_i:minion_dcache_pkg.DcacheMhFileSize_T, rq_conflict_i:U1, rst_ni:U1, s1_phys_addr_tag_i:minion_dcache_pkg.PaTagExtSize_T, s1_tlb_fail_i:U1, s1_tlb_wait_i:U1, vm_status_i:U16, writeback_done_i:U1, writeback_ready_i:U1) -> (busy_o:U1@[], cache_op_ready_o:U1@[], cache_op_req_byp_o:(cmd:U4, start_level:U2, dest_level:U2, count:U4, addr:U48, way:U2, stride:U48, thread_id:U1, use_tmask:U1, tmask_ready:U1, tmask_bits:U16, l2_scp_dest:U17, l2_scp_fill:U1)@[], cache_op_valid_byp_o:U1@[], csr_debug_signals_o:U4@[], da_clear_en_o:U1@[], da_clear_idx_o:U1@[], da_clear_set_o:minion_dcache_pkg.DcacheSetIdxWidth_T@[], da_clear_val_o:U1@[], da_clear_way_o:minion_dcache_pkg.DcacheWayIdxWidth_T@[], err_flags_o:U4@[], hlock_state_o:U64@[], id_co_pf_bid_o:U1@[], meta_read_addr_msb_err_o:U1@[], meta_read_addr_o:U48@[], meta_read_bid_o:U1@[], meta_read_force_set_o:U1@[], meta_read_phys_o:U1@[], meta_read_skip_pma_o:U1@[], meta_read_thread_id_o:U1@[], meta_read_valid_o:U1@[], meta_write_req_o:(set_idx:U4, way_en:U4, data:(coh_state:U2, tag:U33))@[], meta_write_valid_next_o:U1@[], meta_write_valid_o:U1@[], nack_set_valid_o:U1@[], nack_set_value_o:minion_dcache_pkg.DcacheSetIdxWidth_T@[], s0_co_pf_req_o:(addr:U49, addr_msb_err:U1, set:U4, phys:U1, misaligned:U1, misaligned_2nd:U1, dest:(fp:U1, addr:U5, thread_id:U1), cmd:U5, typ:U4, gsc_cnt:U3, ps_mask:U8, data:U256, replay:U1, replay_entry:U3, replay_age:U5, cache_op:U1, buf_alloc:U1, buf_id:U3, cacheable:U1, chunk_read:U4, uc_load_2nd:U1, uc_load_ok:U1, miss_fill_ok:U1, gsc32_idx:U40, vm_sel:U3, mem_global:U1)@[], s0_co_pf_valid_o:U1@[], slock_state_o:U64@[], sm_data_debug_signals_o:minion_dcache_pkg.DcacheDbgSmDataBits_T@[], sm_filter_debug_signals_o:minion_dcache_pkg.DcacheDbgSmFilterBits_T@[], sm_match_debug_signals_o:minion_dcache_pkg.DcacheDbgSmMatchBits_T@[], th_id_complete_o:U4@[], vm_status_co_o:(prv:U2, mprv:U1, mpp:U2, sum:U1, mxr:U1, debug:U1)@[], writeback_req_o:(tag:U33, set:U4, way_en:U4, is_tbox:U1, mem_idx:U1, addr_low:U7)@[], writeback_valid_o:U1@[]) {
+  comptime const SET_BITS = minion_dcache_pkg.DcacheSetIdxWidth
+  comptime const SET_WAY_BITS = minion_dcache_pkg.DcacheWayIdxWidth + SET_BITS
+  comptime const NUM_WAYS = 4
+  comptime const ALL_THREADS_DONE = 0xf
+  // lock bit arrays hold one nibble (a bit per way) per set
+  comptime const SCP_LOCK_BITS = 48 // alloc_scp locks the sets given to the scratchpad
+  comptime const LOW_LOCK_BITS = 56 // clear_low unlocks the lower sets
+
+  // gated clock: forward-declared because the state it gates feeds its own enable
+  wire clkgt:Clock = nil
+
+  reg state_q:U4:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg req_q:U18:[clock_pin=clkgt] = nil // {cmd:4, snoop_type:2, thread_id:1, use_tmask:1, count:4, start_level:2, dest_level:2, prefetch:1, send_to_l2:1}
+  reg req_addr_q:U48:[clock_pin=clkgt] = nil
+  reg req_addr_msb_err_q:U1:[clock_pin=clkgt] = nil
+  reg req_tmask_bits_q:U16:[clock_pin=clkgt] = nil
+  reg req_count_q:U4:[clock_pin=clkgt] = nil
+  reg req_stride_q:U42:[clock_pin=clkgt] = nil
+  reg req_set_way_q:U6:[clock_pin=clkgt] = nil
+  reg id_running_q:U1:[clock_pin=clkgt] = nil
+  reg vm_status_co_o_q:U8:[clock_pin=clkgt] = nil
+  reg meta_data_way_en_q:U4:[clock_pin=clkgt] = nil
+  reg meta_data_req_addr_q:U40:[clock_pin=clkgt] = nil
+  reg phys_addr_tag_q:U33:[clock_pin=clkgt] = nil
+  reg new_coh_q:U2:[clock_pin=clkgt] = nil
+  reg abort_operation_q:Bool:[clock_pin=clkgt] = nil
+  reg err_lock_q:Bool:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg err_mem_q:Bool:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg term_loop_q:Bool:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg send_op_to_l2_q:Bool:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg mh_probe_rdy_reg_q:U2:[clock_pin=clkgt] = nil
+  reg conflict_reason_q:U1:[clock_pin=clkgt] = nil
+  reg clear_line_on_q:Bool:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg da_clear_idx_o:U1:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg meta_read_valid_o:U1:[clock_pin=clkgt] = nil
+  reg s0_co_pf_valid_o:U1:[clock_pin=clkgt] = nil
+  // the next request's class, registered on the ungated clock
+  reg cache_op_is_l1_q:Bool:[clock_pin=clk_i] = nil
+  reg cache_op_is_nop_q:Bool:[clock_pin=clk_i] = nil
+  // lock bits: hlock = hardware (lock ops), slock = scratchpad/pending
+  reg hlock_state_o:U64:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg slock_state_o:U64:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+
+  // ---- request and state decode -------------------------------------------------------
+  const cache_op_valid = cache_op_valid_i != 0
+  const req_cmd = req_q#[14..<18]
+  const req_snoop = req_q#[12..<14]
+  const req_thread = req_q#[11..<12]
+  const req_use_tmask = req_q#[10..<11]
+  const req_count_max = req_q#[6..<10]
+  const req_start_level = req_q#[4..<6]
+  const req_dest_level = req_q#[2..<4]
+  const req_prefetch = req_q#[1..<2]
+  const req_send_to_l2 = req_q#[0..<1]
+  const req_set = req_set_way_q#[0..<SET_BITS]
+  const req_way = req_set_way_q#[SET_BITS..<SET_WAY_BITS]
+  const busy = state_q != minion_dcache_pkg.CacheOpInvalid
+  const state_up = busy or cache_op_valid
+  const cache_op_accepted = cache_op_valid and not send_op_to_l2_q and cache_op_is_l1_q
+  const cache_op_ready = state_q == minion_dcache_pkg.CacheOpInvalid and not send_op_to_l2_q and (cache_op_is_l1_q or cache_op_is_nop_q)
+
+  // set-way operations name the line by (way, set) in the request instead of by address
+  const is_set_way_op = req_cmd == minion_pkg.cache_op_Flush_SW or req_cmd == minion_pkg.cache_op_Evict_SW or req_cmd == minion_pkg.cache_op_Unlock_SW
+  const is_lock_xx_op = req_cmd == minion_pkg.cache_op_Lock_SW or req_cmd == minion_pkg.cache_op_Lock_VA
+
+  const cur_set_va = set_correct(mode=cfg_cache_mode_i, set=req_addr_q#[6..<10], thread=req_thread)
+  const cur_set:U4 = if is_set_way_op { req_set } else { cur_set_va }
+
+  // the lock nibbles (one bit per way) of the set being worked on
+  const hlock_nib = (hlock_state_o >> (cur_set*NUM_WAYS))#[0..<4]
+  const slock_nib = (slock_state_o >> (cur_set*NUM_WAYS))#[0..<4]
+
+  // a tag write that locks a line also starts a clear of the line in the data array
+  const meta_write_valid = state_q == minion_dcache_pkg.CacheOpMetaWrite and not abort_operation_q
+  const meta_write_valid_lock = state_q == minion_dcache_pkg.CacheOpMetaWriteLock and not abort_operation_q
+  const lock_zero = (meta_write_valid or meta_write_valid_lock) and is_lock_xx_op
+  const clear_line = lock_zero or clear_line_on_q
+
+  // ---- tag-array response ---------------------------------------------------------------
+  const way_en:U4 = (meta_read_resp_way_en_i.e0, meta_read_resp_way_en_i.e1, meta_read_resp_way_en_i.e2, meta_read_resp_way_en_i.e3)#[..]
+  const resp_way_encode = way_encode(ways=way_en)
+
+  // some hit way holds a valid line (used to decide whether a lock needs a write-back)
+  mut resp_match = false
+  for i in 0..<NUM_WAYS {
+    if way_en#[i] != 0 and resp_state(resp=meta_read_resp_i, w=i) >= minion_dcache_pkg.StateShared {
+      resp_match = true
+    }
+  }
+
+  // way, tag and state the operation works on, and whether that line was found
+  mut mux_tag:U33 = 0
+  mut mux_state:U2 = 0
+  mut mux_way:U2 = 0
+  mut mux_match = false
+  // carried like the RTL's shared encoder variable: lock_way below reuses it when way 0 is not hit
+  mut way_enc_carry:U2 = 0
+  if is_set_way_op or req_cmd == minion_pkg.cache_op_Lock_SW {
+    // the way comes straight from the request
+    mux_tag = resp_tag(resp=meta_read_resp_i, w=req_way)
+    mux_state = resp_state(resp=meta_read_resp_i, w=req_way)
+    mux_way = req_way
+    mux_match = true
+  } else {
+    // by address: the (highest) hit way
+    mux_match = way_en != 0
+    mux_tag = resp_tag(resp=meta_read_resp_i, w=0)
+    mux_state = resp_state(resp=meta_read_resp_i, w=0)
+    for i in 1..<NUM_WAYS {
+      if way_en#[i] != 0 {
+        mux_tag = resp_tag(resp=meta_read_resp_i, w=i)
+        mux_state = resp_state(resp=meta_read_resp_i, w=i)
+      }
+    }
+    mux_way = resp_way_encode
+    way_enc_carry = resp_way_encode
+
+    if not mux_match and req_cmd == minion_pkg.cache_op_Lock_VA {
+      // lock miss: pick a victim way, preferring an invalid one, then one that is neither
+      // hardware- nor software-locked, then one that is not hardware-locked
+      mut found_free_way = false
+      for i in 0..<NUM_WAYS {
+        if resp_state(resp=meta_read_resp_i, w=i) == minion_dcache_pkg.StateInvalid and not found_free_way {
+          found_free_way = true
+          mux_way = i
+          mux_tag = resp_tag(resp=meta_read_resp_i, w=i)
+          mux_state = resp_state(resp=meta_read_resp_i, w=i)
+        }
+      }
+      for i in 0..<NUM_WAYS {
+        if hlock_nib#[i] == 0 and slock_nib#[i] == 0 and not found_free_way {
+          found_free_way = true
+          mux_way = i
+          mux_tag = resp_tag(resp=meta_read_resp_i, w=i)
+          mux_state = resp_state(resp=meta_read_resp_i, w=i)
+        }
+      }
+      for i in 0..<NUM_WAYS {
+        if hlock_nib#[i] == 0 and not found_free_way {
+          found_free_way = true
+          mux_way = i
+          mux_tag = resp_tag(resp=meta_read_resp_i, w=i)
+          mux_state = resp_state(resp=meta_read_resp_i, w=i)
+        }
+      }
+    }
+    if not mux_match and (req_cmd == minion_pkg.cache_op_Evict_VA or req_cmd == minion_pkg.cache_op_Flush_VA) {
+      mux_tag = phys_addr_tag_q
+    }
+  }
+
+  // ---- sequencer ------------------------------------------------------------------------
+  const more_ops = req_count_q != req_count_max
+  const next_or_done:U4 = if more_ops { minion_dcache_pkg.CacheOpNextOperation } else { minion_dcache_pkg.CacheOpInvalid }
+  const start_op:U4 = if req_prefetch != 0 { minion_dcache_pkg.CacheOpL1Prefetch } else { minion_dcache_pkg.CacheOpMetaRead }
+  const resp_modified = mux_state == minion_dcache_pkg.StateModified
+  const cache_op_prefetch = cache_op_req_i.cmd == minion_pkg.cache_op_Pref and cache_op_req_i.dest_level == minion_pkg.cache_op_L1
+  mut state_d:U4 = state_q
+  mut cancel_send_to_l2 = false // the l2 half of the op is not needed (conflict, nothing cached, aborted)
+  mut conflict_reason_d:U1 = conflict_reason_q
+  mut err_mem_d = false
+  match state_q {
+    == minion_dcache_pkg.CacheOpInvalid {
+      if cache_op_accepted {
+        if cache_op_req_i.use_tmask == 0 {
+          state_d = if cache_op_prefetch { minion_dcache_pkg.CacheOpL1Prefetch } else { minion_dcache_pkg.CacheOpMetaRead }
+        } else {
+          state_d = minion_dcache_pkg.CacheOpWaitTmask
+        }
+      }
+    }
+    == minion_dcache_pkg.CacheOpWaitTmask {
+      if cache_op_req_i.tmask_ready != 0 {
+        state_d = if cache_op_req_i.tmask_bits#[0] != 0 { start_op } else { next_or_done }
+      }
+    }
+    == minion_dcache_pkg.CacheOpMetaRead {
+      if meta_read_valid_o != 0 {
+        state_d = minion_dcache_pkg.CacheOpMetaRespWait
+      }
+    }
+    == minion_dcache_pkg.CacheOpMetaRespWait {
+      state_d = minion_dcache_pkg.CacheOpMetaResp
+      if s1_tlb_wait_i != 0 {
+        state_d = minion_dcache_pkg.CacheOpWaitTlb
+      } elif s1_tlb_fail_i != 0 {
+        state_d = minion_dcache_pkg.CacheOpInvalid
+        err_mem_d = true
+      }
+    }
+    == minion_dcache_pkg.CacheOpMetaResp {
+      if mh_probe_rdy_i != 3 {
+        state_d = minion_dcache_pkg.CacheOpWaitConflict
+        conflict_reason_d = minion_dcache_pkg.CoConflictMh
+        cancel_send_to_l2 = true
+      } elif rq_conflict_i != 0 {
+        state_d = minion_dcache_pkg.CacheOpWaitConflict
+        conflict_reason_d = minion_dcache_pkg.CoConflictRq
+        cancel_send_to_l2 = true
+      } elif req_cmd == minion_pkg.cache_op_Evict_SW or req_cmd == minion_pkg.cache_op_Flush_SW {
+        if resp_modified {
+          state_d = minion_dcache_pkg.CacheOpWritebackReq
+        } else {
+          if mux_state == minion_dcache_pkg.StateInvalid {
+            cancel_send_to_l2 = true
+          }
+          state_d = minion_dcache_pkg.CacheOpMetaWrite
+        }
+      } elif req_cmd == minion_pkg.cache_op_Lock_SW or req_cmd == minion_pkg.cache_op_Lock_VA {
+        state_d = if not resp_match and resp_modified { minion_dcache_pkg.CacheOpWritebackReq } else { minion_dcache_pkg.CacheOpMetaWrite }
+      } elif req_cmd == minion_pkg.cache_op_Unlock_SW {
+        state_d = minion_dcache_pkg.CacheOpMetaWriteLock
+      } elif req_cmd == minion_pkg.cache_op_Evict_VA or req_cmd == minion_pkg.cache_op_Flush_VA {
+        state_d = if mux_match and resp_modified { minion_dcache_pkg.CacheOpWritebackReq } elif mux_match { minion_dcache_pkg.CacheOpMetaWrite } elif req_send_to_l2 != 0 { minion_dcache_pkg.CacheOpWaitNext } else { next_or_done }
+      } elif req_cmd == minion_pkg.cache_op_Unlock_VA {
+        state_d = if mux_match { minion_dcache_pkg.CacheOpMetaWriteLock } else { next_or_done }
+      } else {
+        state_d = minion_dcache_pkg.CacheOpInvalid
+      }
+    }
+    == minion_dcache_pkg.CacheOpWaitConflict {
+      if conflict_reason_q == minion_dcache_pkg.CoConflictMh {
+        if (mh_probe_rdy_reg_q | mh_metaw_rdy_i) == 3 {
+          state_d = minion_dcache_pkg.CacheOpMetaRead
+        }
+      } elif rq_conflict_i == 0 {
+        state_d = minion_dcache_pkg.CacheOpMetaRead
+      }
+    }
+    == minion_dcache_pkg.CacheOpWritebackReq {
+      if abort_operation_q {
+        state_d = minion_dcache_pkg.CacheOpMetaWrite
+      } elif writeback_ready_i != 0 {
+        state_d = minion_dcache_pkg.CacheOpWritebackResp
+      }
+    }
+    == minion_dcache_pkg.CacheOpWritebackResp {
+      if writeback_done_i != 0 {
+        state_d = minion_dcache_pkg.CacheOpMetaWrite
+      }
+    }
+    == minion_dcache_pkg.CacheOpMetaWrite {
+      if meta_write_ready_i != 0 or abort_operation_q {
+        state_d = if send_op_to_l2_q or clear_line { minion_dcache_pkg.CacheOpWaitNext } else { next_or_done }
+      }
+    }
+    == minion_dcache_pkg.CacheOpMetaWriteLock {
+      state_d = if clear_line { minion_dcache_pkg.CacheOpWaitNext } else { next_or_done }
+    }
+    == minion_dcache_pkg.CacheOpL1Prefetch {
+      if s0_co_pf_valid_o != 0 {
+        state_d = minion_dcache_pkg.CacheOpNextOpOrInvalid
+      }
+    }
+    == minion_dcache_pkg.CacheOpNextOpOrInvalid {
+      if s1_tlb_fail_i == 0 {
+        state_d = next_or_done
+      } else {
+        state_d = minion_dcache_pkg.CacheOpInvalid
+        err_mem_d = true
+      }
+    }
+    == minion_dcache_pkg.CacheOpWaitNext {
+      if not send_op_to_l2_q and not clear_line {
+        state_d = next_or_done
+      }
+    }
+    == minion_dcache_pkg.CacheOpWaitTlb {
+      if s1_tlb_wait_i == 0 {
+        state_d = minion_dcache_pkg.CacheOpMetaRead
+      }
+    }
+    == minion_dcache_pkg.CacheOpNextOperation {
+      if term_loop_q {
+        state_d = minion_dcache_pkg.CacheOpInvalid
+      } elif not send_op_to_l2_q and not clear_line {
+        if req_use_tmask == 0 or req_tmask_bits_q#[req_count_q] != 0 {
+          state_d = start_op
+        } elif not more_ops {
+          state_d = minion_dcache_pkg.CacheOpInvalid
+        }
+      }
+    }
+    else {
+      state_d = minion_dcache_pkg.CacheOpInvalid
+    }
+  }
+
+  const state_meta_resp_qual = state_q == minion_dcache_pkg.CacheOpMetaResp and state_d != minion_dcache_pkg.CacheOpWaitConflict
+
+  // ---- abort / lock errors --------------------------------------------------------------
+  // an operation hitting a hardware-locked way is dropped; lock ops fail with err_lock
+  const hlocked = mux_match and hlock_nib#[mux_way] != 0
+  mut abort_operation_d = abort_operation_q
+  mut err_lock_d = false
+  if (cache_op_valid and state_q == minion_dcache_pkg.CacheOpInvalid) or state_q == minion_dcache_pkg.CacheOpNextOperation {
+    abort_operation_d = false
+  } elif state_meta_resp_qual {
+    if hlocked {
+      if req_cmd != minion_pkg.cache_op_Unlock_VA and req_cmd != minion_pkg.cache_op_Unlock_SW and req_cmd != minion_pkg.cache_op_Flush_VA and req_cmd != minion_pkg.cache_op_Flush_SW and req_cmd != minion_pkg.cache_op_Lock_VA {
+        abort_operation_d = true
+      }
+      if req_cmd == minion_pkg.cache_op_Lock_SW {
+        abort_operation_d = true
+        err_lock_d = true
+      }
+    }
+    if req_cmd == minion_pkg.cache_op_Evict_SW and hlocked {
+      abort_operation_d = true
+    }
+    if req_cmd == minion_pkg.cache_op_Lock_SW {
+      way_enc_carry = resp_way_encode
+      // the requested way must be the hit way, and at least two ways must stay unlocked
+      if way_en != 0 and resp_way_encode != mux_way {
+        abort_operation_d = true
+        err_lock_d = true
+      }
+      mut count_hlock_zero:U3 = 0
+      for i in 0..<NUM_WAYS {
+        if hlock_nib#[i] == 0 {
+          wrap count_hlock_zero += 1
+        }
+      }
+      if count_hlock_zero <= 1 {
+        abort_operation_d = true
+        err_lock_d = true
+      }
+    }
+  }
+  if state_q == minion_dcache_pkg.CacheOpMetaResp and abort_operation_d {
+    cancel_send_to_l2 = true
+  }
+  const term_loop_d = if state_q == minion_dcache_pkg.CacheOpInvalid { false } else { err_lock_d or term_loop_q }
+
+  // does the op have an l2 half still to launch (set when the l1 half is done)
+  const send_op_to_l2_d = if not send_op_to_l2_q {
+    req_send_to_l2 != 0 and not abort_operation_q and not cancel_send_to_l2 and ((state_meta_resp_qual and state_d != minion_dcache_pkg.CacheOpWritebackReq) or (state_q == minion_dcache_pkg.CacheOpWritebackResp and state_d != minion_dcache_pkg.CacheOpWritebackResp))
+  } else {
+    cache_op_ready_byp_i == 0
+  }
+
+  // ---- next request ---------------------------------------------------------------------
+  const req_up = state_q == minion_dcache_pkg.CacheOpInvalid and state_d != minion_dcache_pkg.CacheOpInvalid
+  const next_cmd = cache_op_req_next_i.cmd
+  const next_start_l1 = cache_op_req_next_i.start_level == minion_pkg.cache_op_L1
+  const next_dest_l1 = cache_op_req_next_i.dest_level == minion_pkg.cache_op_L1
+  const next_is_sw_victim = next_cmd == minion_pkg.cache_op_Flush_SW or next_cmd == minion_pkg.cache_op_Evict_SW
+  const next_is_va_victim = next_cmd == minion_pkg.cache_op_Flush_VA or next_cmd == minion_pkg.cache_op_Evict_VA
+  // ops that finish in the l1 alone (or start there) vs ops that are l2-only (nop here)
+  const next_is_l1 = next_cmd == minion_pkg.cache_op_Lock_VA or next_cmd == minion_pkg.cache_op_Unlock_VA or next_cmd == minion_pkg.cache_op_Lock_SW or next_cmd == minion_pkg.cache_op_Unlock_SW or ((next_is_sw_victim or next_is_va_victim) and not next_dest_l1 and next_start_l1) or (next_cmd == minion_pkg.cache_op_Pref and next_dest_l1)
+  const next_is_nop = (next_is_sw_victim and (next_dest_l1 or not next_start_l1)) or (next_is_va_victim and next_dest_l1)
+
+  // the request as latched on acceptance
+  const new_snoop:U2 = if cache_op_req_i.cmd == minion_pkg.cache_op_Flush_SW or cache_op_req_i.cmd == minion_pkg.cache_op_Flush_VA {
+    minion_dcache_pkg.SnoopToExclusive
+  } else {
+    minion_dcache_pkg.SnoopToInvalid
+  }
+  const new_send_to_l2 = cache_op_req_i.dest_level > minion_pkg.cache_op_L2 and (cache_op_req_i.cmd == minion_pkg.cache_op_Flush_SW or cache_op_req_i.cmd == minion_pkg.cache_op_Evict_SW or cache_op_req_i.cmd == minion_pkg.cache_op_Flush_VA or cache_op_req_i.cmd == minion_pkg.cache_op_Evict_VA)
+
+  // line address stepping: first line from the request, then +stride lines
+  mut req_addr_d:U48 = 0
+  mut req_addr_msb_err_d:U1 = 0
+  mut req_set_way_d:U6 = 0
+  mut req_count_d:U4 = 0
+  if state_q == minion_dcache_pkg.CacheOpInvalid {
+    req_addr_d = cache_op_req_i.addr
+    req_addr_msb_err_d = 0
+    req_set_way_d = (cache_op_req_i.way << SET_BITS) | cache_op_req_i.addr#[6..<(6 + SET_BITS)]
+    req_count_d = 0
+  } else {
+    wrap req_addr_d = (req_addr_q#[6..<48] + req_stride_q) << 6
+    // stepping past the top of the virtual address space is flagged
+    req_addr_msb_err_d = U1(req_addr_q#[minion_dcache_pkg.VaSize - 1] != 0 and req_addr_d#[minion_dcache_pkg.VaSize - 1] == 0)
+    wrap req_set_way_d = req_set_way_q + 1
+    wrap req_count_d = req_count_q + 1
+  }
+
+  // ---- tag / data array side effects ----------------------------------------------------
+  const new_coh:U2 = if mux_state == minion_dcache_pkg.StateInvalid {
+    minion_dcache_pkg.StateInvalid
+  } elif mux_state == minion_dcache_pkg.StateShared {
+    if req_snoop == minion_dcache_pkg.SnoopToInvalid { minion_dcache_pkg.StateInvalid } else { minion_dcache_pkg.StateShared }
+  } else {
+    if req_snoop == minion_dcache_pkg.SnoopToInvalid { minion_dcache_pkg.StateInvalid } else { minion_dcache_pkg.StateExclusive }
+  }
+  // tag-array address of the line (tag, then the set's low bit; a set-way op names it directly)
+  const data_set_bit:U1 = if is_set_way_op { req_set#[0] } else { req_addr_q#[6] }
+  const meta_data_req_addr_d:U40 = (mux_tag << 7) | (data_set_bit << 6)
+  const meta_data_way_en_d:U4 = 1 << mux_way
+
+  // lock bit arrays: updated on the tag write of a lock/unlock/evict op, or by a cfg write
+  const lock_set = cur_set
+  mut lock_way:U2 = way_enc_carry
+  if meta_data_way_en_q#[0] != 0 {
+    lock_way = 0
+  }
+  for i in 1..<NUM_WAYS {
+    if meta_data_way_en_q#[i] != 0 {
+      lock_way = lock_way | i
+    }
+  }
+  const lock_bit:U6 = lock_set*NUM_WAYS + lock_way
+  const lock_op = (meta_write_valid or meta_write_valid_lock) and (req_cmd == minion_pkg.cache_op_Lock_SW or req_cmd == minion_pkg.cache_op_Unlock_SW or req_cmd == minion_pkg.cache_op_Lock_VA or req_cmd == minion_pkg.cache_op_Unlock_VA or req_cmd == minion_pkg.cache_op_Evict_VA or req_cmd == minion_pkg.cache_op_Evict_SW)
+  const lock_en = lock_op or cfg_clear_all_i != 0 or cfg_clear_low_i != 0 or cfg_alloc_scp_i != 0
+  mut hlock_state_d = hlock_state_o
+  mut slock_state_d = slock_state_o
+  if lock_en {
+    if cfg_alloc_scp_i != 0 {
+      hlock_state_d#[0..<SCP_LOCK_BITS] = (1 << SCP_LOCK_BITS) - 1
+      slock_state_d#[0..<SCP_LOCK_BITS] = (1 << SCP_LOCK_BITS) - 1
+    } elif cfg_clear_low_i != 0 {
+      hlock_state_d#[0..<LOW_LOCK_BITS] = 0
+      slock_state_d#[0..<LOW_LOCK_BITS] = 0
+    } elif cfg_clear_all_i != 0 {
+      hlock_state_d = 0
+      slock_state_d = 0
+    } elif req_cmd == minion_pkg.cache_op_Lock_SW {
+      hlock_state_d#[lock_bit] = 1
+      slock_state_d#[lock_bit] = 0
+    } elif req_cmd == minion_pkg.cache_op_Unlock_SW {
+      hlock_state_d#[lock_bit] = 0
+      slock_state_d#[lock_bit] = 0
+    } elif req_cmd == minion_pkg.cache_op_Evict_SW {
+      slock_state_d#[lock_bit] = 0
+    } elif req_cmd == minion_pkg.cache_op_Lock_VA {
+      // a virtual-address lock is soft-locked unless the way is already hard-locked
+      slock_state_d#[lock_bit] = U1(hlock_nib#[lock_way] == 0)
+    } elif req_cmd == minion_pkg.cache_op_Unlock_VA or req_cmd == minion_pkg.cache_op_Evict_VA {
+      slock_state_d#[lock_bit] = 0
+    }
+  }
+  if mh_clear_slock_valid_i != 0 {
+    slock_state_d#[mh_clear_slock_set_i*NUM_WAYS + mh_clear_slock_way_i] = 0
+  }
+
+  // scratchpad clear: lines are cleared in the data array two at a time (da_clear_idx alternates)
+  const da_clear_step = clear_line_on_q and da_clear_rdy_i != 0
+  const da_clear_idx_d:U1 = da_clear_idx_o ^ U1(da_clear_step)
+  const clear_line_on_d = lock_zero or (clear_line_on_q and not (da_clear_step and da_clear_idx_o != 0))
+
+  // ---- thread completion ----------------------------------------------------------------
+  // slot {thread, id_running} is complete unless it is the one currently running
+  mut th_id_complete:U4 = 0
+  for i in 0..<4 {
+    th_id_complete#[i] = U1(not (id_running_q == (i & 1) and req_thread == (i >> 1)) or not busy)
+  }
+
+  // ---- clock gate and state update ------------------------------------------------------
+  const u_cgate = prim_clk_gate(clk_i=clk_i, en_i=U1(cache_op_accepted or busy or th_id_complete != ALL_THREADS_DONE or rst_ni == 0 or err_lock_q or err_mem_q or term_loop_q or chicken_bit_dcache_i != 0), dft_i=(scanmode=0))
+  clkgt = u_cgate
+
+  if state_up {
+    state_q = state_d
+  }
+  meta_read_valid_o = meta_read_grant_i
+  s0_co_pf_valid_o = id_co_pf_grant_i
+  if state_q == minion_dcache_pkg.CacheOpMetaResp {
+    mh_probe_rdy_reg_q = mh_probe_rdy_i
+    conflict_reason_q = conflict_reason_d
+  }
+  if req_up {
+    const q_snoop:U2 = new_snoop
+    const q_thread:U1 = cache_op_req_i.thread_id
+    const q_use_tmask:U1 = cache_op_req_i.use_tmask
+    const q_prefetch:U1 = U1(cache_op_prefetch)
+    const q_send_to_l2:U1 = U1(new_send_to_l2)
+    const q_cmd:U4 = cache_op_req_i.cmd
+    const q_count:U4 = cache_op_req_i.count
+    const q_start_level:U2 = cache_op_req_i.start_level
+    const q_dest_level:U2 = cache_op_req_i.dest_level
+    req_q = (q_send_to_l2, q_prefetch, q_dest_level, q_start_level, q_count, q_use_tmask, q_thread, q_snoop, q_cmd)#[..]
+    req_stride_q = cache_op_req_i.stride#[6..<48]
+    vm_status_co_o_q = if cache_op_req_i.thread_id != 0 { vm_status_i#[8..<16] } else { vm_status_i#[0..<8] }
+  }
+  if state_q == minion_dcache_pkg.CacheOpWaitTmask {
+    req_tmask_bits_q = cache_op_req_i.tmask_bits
+  }
+  if state_q == minion_dcache_pkg.CacheOpInvalid and cache_op_ready and cache_op_valid {
+    id_running_q = cache_op_req_i.stride & 1
+  }
+  if req_up or (state_d == minion_dcache_pkg.CacheOpNextOperation and not send_op_to_l2_q) {
+    req_addr_q = req_addr_d
+    req_addr_msb_err_q = req_addr_msb_err_d
+    req_count_q = req_count_d
+    req_set_way_q = req_set_way_d
+  }
+  if state_meta_resp_qual {
+    meta_data_way_en_q = meta_data_way_en_d
+    meta_data_req_addr_q = meta_data_req_addr_d
+    new_coh_q = new_coh
+  }
+  if state_q == minion_dcache_pkg.CacheOpMetaRespWait {
+    phys_addr_tag_q = s1_phys_addr_tag_i
+  }
+  if (cache_op_valid and state_q == minion_dcache_pkg.CacheOpInvalid) or state_q == minion_dcache_pkg.CacheOpNextOperation or state_meta_resp_qual {
+    abort_operation_q = abort_operation_d
+  }
+  send_op_to_l2_q = send_op_to_l2_d
+  err_lock_q = err_lock_d
+  err_mem_q = err_mem_d
+  term_loop_q = term_loop_d
+  clear_line_on_q = clear_line_on_d
+  da_clear_idx_o = da_clear_idx_d
+  cache_op_is_l1_q = next_is_l1
+  cache_op_is_nop_q = next_is_nop
+  if lock_en {
+    hlock_state_o = hlock_state_d
+  }
+  if lock_en or mh_clear_slock_valid_i != 0 {
+    slock_state_o = slock_state_d
+  }
+
+  const meta_read_addr:U48 = if is_set_way_op { (req_addr_q#[10..<48] << 10) | (req_set << 6) } else { req_addr_q }
+
+  // ---- outputs --------------------------------------------------------------------------
+  busy_o = U1(busy)
+  cache_op_ready_o = U1(cache_op_ready)
+  th_id_complete_o = th_id_complete
+  cache_op_valid_byp_o = U1(send_op_to_l2_q)
+  cache_op_req_byp_o = (addr=meta_data_req_addr_q, cmd=req_cmd, count=0, dest_level=req_dest_level, l2_scp_dest=0, l2_scp_fill=0, start_level=req_start_level, stride=id_running_q, thread_id=req_thread, tmask_bits=0, tmask_ready=0, use_tmask=0, way=0)
+
+  meta_read_bid_o = U1(state_q == minion_dcache_pkg.CacheOpMetaRead and meta_read_valid_o == 0)
+  meta_read_phys_o = U1(req_cmd == minion_pkg.cache_op_Lock_SW)
+  meta_read_force_set_o = U1(is_set_way_op)
+  meta_read_thread_id_o = req_thread
+  meta_read_skip_pma_o = U1(state_q == minion_dcache_pkg.CacheOpMetaRespWait and is_set_way_op)
+  meta_read_addr_o = meta_read_addr
+  meta_read_addr_msb_err_o = if is_set_way_op { 0 } else { req_addr_msb_err_q }
+  nack_set_valid_o = U1(state_meta_resp_qual or state_q == minion_dcache_pkg.CacheOpWritebackReq or state_q == minion_dcache_pkg.CacheOpWritebackResp or state_q == minion_dcache_pkg.CacheOpMetaWrite or state_q == minion_dcache_pkg.CacheOpMetaWriteLock or clear_line_on_q)
+  nack_set_value_o = cur_set
+
+  meta_write_valid_next_o = U1(state_d == minion_dcache_pkg.CacheOpMetaWrite and not abort_operation_q)
+  meta_write_valid_o = U1(meta_write_valid)
+  meta_write_req_o = (data=(coh_state=if is_lock_xx_op { minion_dcache_pkg.StateModified } else { new_coh_q }, tag=if is_lock_xx_op {
+        phys_addr_tag_q
+      } else {
+        meta_data_req_addr_q#[7..<40]
+      }), set_idx=lock_set, way_en=meta_data_way_en_q)
+
+  // write-back of a dirty line: its tag/set come from the tag-array address captured earlier
+  const wb_set = set_correct(mode=cfg_cache_mode_i, set=meta_data_req_addr_q#[6..<10], thread=req_thread)
+  writeback_valid_o = U1(state_q == minion_dcache_pkg.CacheOpWritebackReq and not abort_operation_q)
+  writeback_req_o = (addr_low=0, is_tbox=0, mem_idx=0, set=if is_set_way_op { req_set } else { wb_set }, tag=meta_data_req_addr_q#[7..<40], way_en=meta_data_way_en_q)
+
+  // l1 prefetch of the current line (read-only request, data cache, cacheable)
+  id_co_pf_bid_o = U1(state_q == minion_dcache_pkg.CacheOpL1Prefetch and id_rq_full_i == 0 and s0_co_pf_valid_o == 0)
+  s0_co_pf_req_o = (addr=req_addr_q#[6..<48] << 6, addr_msb_err=req_addr_msb_err_q, buf_alloc=0, buf_id=0, cache_op=1, cacheable=1, chunk_read=0, cmd=minion_dcache_pkg.DcCmdPfr, data=0, dest=(addr=0, fp=0, thread_id=req_thread), gsc32_idx=0, gsc_cnt=0, mem_global=0, misaligned=0, misaligned_2nd=0, miss_fill_ok=0, phys=0, ps_mask=0, replay=0, replay_age=0, replay_entry=0, set=0, typ=minion_dcache_pkg.DcTypeD, uc_load_2nd=0, uc_load_ok=0, vm_sel=minion_dcache_pkg.DcacheVmSelCo)
+
+  da_clear_en_o = U1(clear_line)
+  da_clear_val_o = U1(clear_line_on_q)
+  da_clear_set_o = lock_set
+  da_clear_way_o = lock_way
+  vm_status_co_o = (debug=vm_status_co_o_q#[0..<1], mpp=vm_status_co_o_q#[3..<5], mprv=vm_status_co_o_q#[5..<6], mxr=vm_status_co_o_q#[1..<2], prv=vm_status_co_o_q#[6..<8], sum=vm_status_co_o_q#[2..<3])
+
+  // error flags: {mem, lock} errors per thread
+  err_flags_o = (U1(err_lock_q and req_thread == 0), U1(err_lock_q and req_thread != 0), U1(err_mem_q and req_thread == 0), U1(err_mem_q and req_thread != 0))#[..]
+
+  // debug taps
+  csr_debug_signals_o = state_q
+  const sm_match:U7 = (U1(cache_op_accepted), U1(abort_operation_q), U1(state_up), U1(term_loop_q), U1(err_mem_q), U1(err_lock_q), meta_read_valid_o)#[..]
+  const sm_filter:U76 = (state_q, req_q, req_addr_q, U1(cache_op_accepted), U1(abort_operation_q), U1(state_up), U1(term_loop_q), U1(err_mem_q), U1(err_lock_q))#[..]
+  sm_match_debug_signals_o = sm_match
+  sm_filter_debug_signals_o = sm_filter
+  const dbg_req:U120 = (req_q, req_addr_q, req_set_way_q, req_stride_q, req_count_q, U1(cache_op_is_nop_q), U1(cache_op_is_l1_q))#[..]
+  const dbg_resp:U126 = (phys_addr_tag_q, way_en, meta_read_addr, mux_state, mux_way, mux_tag, U1(mux_match), U1(term_loop_q), U1(err_mem_q), U1(err_lock_q))#[..]
+  sm_data_debug_signals_o = dbg_req | (dbg_resp << 128)
+}

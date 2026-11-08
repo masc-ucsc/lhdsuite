@@ -1,0 +1,75 @@
+const txfma_booth_ppg_32r4_msb = import("txfma_booth_ppg_32r4_msb.txfma_booth_ppg_32r4_msb")
+const txfma_booth_ppg_32r4_norm = import("txfma_booth_ppg_32r4_norm.txfma_booth_ppg_32r4_norm")
+const minion_pkg = import("minion_pkg")
+
+comptime const NUM_NORM_PP = 16 // radix-4 digits of a 32-bit multiplier
+comptime const NUM_PP = 17 // plus the extra msb digit used by unsigned multiplies
+comptime const FULL_PP:U33 = 0x1_ffff_ffff
+// Half-precision mode (mode_i) splits the 32-bit multiplier into two 16-bit halves: the
+// partial products of the low half keep only their low 13 bits and those of the high half
+// drop their low 18 bits, so the two halves cannot overlap in the wallace tree.
+comptime const LOW_HALF_PP_MASK:U33 = 0x1fff
+comptime const HIGH_HALF_PP_MASK:U33 = 0x7fff << 18
+
+// Radix-4 Booth partial-product generator for a 32x32 multiply (verilog: txfma_booth_ppg_32r4).
+// pp1_o..pp17_o are the (not yet negated) partial products; negative digits are one's
+// complemented there and the missing +1 is returned in cin_o. sxt_o carries the sign-extension
+// ones that the wallace tree adds instead of replicating sign bits in every row. Both are
+// laid out for either one 32-bit multiply or two 16-bit halves (mode_i).
+pub mod txfma_booth_ppg_32r4::[timecheck=false](mode_i:U1, mpcnd_i:minion_pkg.VpuDataSSz_T, mplr_i:minion_pkg.VpuDataSSz_T, sign_i:U1) -> (cin_o:minion_pkg.VpuDataSSz_T@[], pp10_o:U33@[], pp11_o:U33@[], pp12_o:U33@[], pp13_o:U33@[], pp14_o:U33@[], pp15_o:U33@[], pp16_o:U33@[], pp17_o:U33@[], pp1_o:U33@[], pp2_o:U33@[], pp3_o:U33@[], pp4_o:U33@[], pp5_o:U33@[], pp6_o:U33@[], pp7_o:U33@[], pp8_o:U33@[], pp9_o:U33@[], sxt_o:minion_pkg.VpuDataSSz_T@[]) {
+  const half_mode = mode_i
+  const ext_mplr:U35 = mplr_i << 1 // implicit 0 below the lsb for the first digit
+
+  // Per-digit sign-extension bit (ext_sxt) and +1 of the negation (ext_cin): even bits only,
+  // the odd bits are the constants 1 and 0.
+  mut ext_cin:U34 = 0
+  mut ext_sxt:U34 = 0
+  const msb_neg = mpcnd_i#[31] & sign_i
+  for i in 0..<NUM_PP {
+    const top = ext_mplr#[2*i + 2]
+    const mid = ext_mplr#[2*i + 1]
+    const bot = ext_mplr#[2*i]
+    const win = ext_mplr#[(2*i)..<(2*i + 3)]
+    const trivial = U1(win == 7 or win == 0)
+    ext_cin#[2*i] = top & ~(top & mid & bot)
+    ext_cin#[2*i + 1] = 0
+    ext_sxt#[2*i] = ~((top ^ msb_neg) & ~trivial)
+    ext_sxt#[2*i + 1] = 1
+  }
+
+  sxt_o = (ext_sxt#[0..<31] << 1) | ext_cin#[32]
+  cin_o = ext_cin#[0..<32]
+  if half_mode != 0 {
+    sxt_o = (ext_sxt#[20..<31] << 21) | (ext_cin#[20..<33] << 6)
+    cin_o = (ext_sxt#[0..<12] << 13) | ext_cin#[0..<13]
+  }
+
+  mut pp:[NUM_PP]U33 = 0
+  for i in 0..<NUM_NORM_PP {
+    const digit = txfma_booth_ppg_32r4_norm(mulcand_i=mpcnd_i, r4input_i=ext_mplr#[(2*i)..<(2*i + 3)], sign_i=sign_i)
+    const mask:U33 = if i < 7 { if half_mode != 0 { LOW_HALF_PP_MASK } else { FULL_PP } }
+      elif i >= 10 { if half_mode != 0 { HIGH_HALF_PP_MASK } else { FULL_PP } }
+      else { FULL_PP }
+    pp[i] = digit & mask
+  }
+  const msb_digit = txfma_booth_ppg_32r4_msb(mulcand_i=mpcnd_i, msb_i=mplr_i#[31], sign_i=sign_i)
+  pp[16] = msb_digit & (if half_mode != 0 { HIGH_HALF_PP_MASK } else { FULL_PP })
+
+  pp1_o = pp[0]
+  pp2_o = pp[1]
+  pp3_o = pp[2]
+  pp4_o = pp[3]
+  pp5_o = pp[4]
+  pp6_o = pp[5]
+  pp7_o = pp[6]
+  pp8_o = pp[7]
+  pp9_o = pp[8]
+  pp10_o = pp[9]
+  pp11_o = pp[10]
+  pp12_o = pp[11]
+  pp13_o = pp[12]
+  pp14_o = pp[13]
+  pp15_o = pp[14]
+  pp16_o = pp[15]
+  pp17_o = pp[16]
+}

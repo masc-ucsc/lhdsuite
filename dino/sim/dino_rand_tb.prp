@@ -1,0 +1,83 @@
+// Differential stimulus for the dino CPU: random but VALID RV64I instruction pairs
+// over a small register set (so forwarding, load-use stalls, branches and jumps
+// really occur), random load data, and a mid-run reset. Every cycle's externally
+// visible outputs are folded into one FNV-style checksum, so two implementations
+// agree only if they match cycle by cycle. Run the same file on the Verilog
+// (`lg:`), dino/pyrope and dino/pyrope2 and compare the printed checksum:
+//   lhd sim <design> dino/sim/dino_rand_tb.prp --arg cycles=20000 --arg seed=1
+// The generator is an xorshift64; right shifts are spelled as slices because a
+// wrapped U64 variable can hold a negative representative (see AGENTS.md).
+const cpu = import("lg:PipelinedDualIssueCPU")
+
+test cpu.rand(cycles:U20 = 20000, seed:U32 = 1) {
+  mut acc = cpu
+  mut lfsr:U64 = 0x9E3779B97F4A7C15
+  wrap lfsr = lfsr ^ seed
+  mut chk:U64 = 0xCBF29CE484222325
+  mut stores = 0
+  mut taken_pc_jumps = 0
+  mut last_pc:U64 = 0
+  tick cycles {
+    acc.reset = clock < 2 or (clock >= 3000 and clock < 3003)
+    acc.io_imem_good = 1
+    acc.io_imem_ready = 1
+    acc.io_dmem_good = 1
+    // Four draws per cycle: two instruction slots plus load data.
+    wrap lfsr = lfsr ^ (lfsr << 13)
+    wrap lfsr = lfsr ^ lfsr#[7..=63]
+    wrap lfsr = lfsr ^ (lfsr << 17)
+    mut ra:U64 = lfsr
+    wrap lfsr = lfsr ^ (lfsr << 13)
+    wrap lfsr = lfsr ^ lfsr#[7..=63]
+    wrap lfsr = lfsr ^ (lfsr << 17)
+    mut rb:U64 = lfsr
+    wrap lfsr = lfsr ^ (lfsr << 13)
+    wrap lfsr = lfsr ^ lfsr#[7..=63]
+    wrap lfsr = lfsr ^ (lfsr << 17)
+    acc.io_dmem_readdata = lfsr
+
+    // opcode choice per slot from 4 bits of entropy (15 = fully random opcode)
+    mut opa:U7 = 0
+    mut opb:U7 = 0
+    mut sela = ra#[0..=3]
+    mut selb = rb#[0..=3]
+    if sela == 0 { opa = 0x33 } elif sela == 1 { opa = 0x13 } elif sela == 2 { opa = 0x3b } elif sela == 3 { opa = 0x1b }
+    elif sela == 4 { opa = 0x03 } elif sela == 5 { opa = 0x23 } elif sela == 6 { opa = 0x63 } elif sela == 7 { opa = 0x37 }
+    elif sela == 8 { opa = 0x17 } elif sela == 9 { opa = 0x6f } elif sela == 10 { opa = 0x67 } elif sela == 11 { opa = 0x13 }
+    elif sela == 12 or sela == 13 { opa = 0x23 }
+    elif sela == 14 { opa = 0x33 }
+    else { opa = ra#[56..=62] }
+    if selb == 0 { opb = 0x33 } elif selb == 1 { opb = 0x13 } elif selb == 2 { opb = 0x3b } elif selb == 3 { opb = 0x1b }
+    elif selb == 4 { opb = 0x03 } elif selb == 5 { opb = 0x23 } elif selb == 6 { opb = 0x63 } elif selb == 7 { opb = 0x37 }
+    elif selb == 8 { opb = 0x17 } elif selb == 9 { opb = 0x6f } elif selb == 10 { opb = 0x67 } elif selb == 11 { opb = 0x13 }
+    elif selb == 12 or selb == 13 { opb = 0x23 }
+    elif selb == 14 { opb = 0x33 }
+    else { opb = rb#[56..=62] }
+    // Registers are x0..x7 (dense dependences) and, one time in four, any of x0..x31.
+    // The 7-bit fields of ra/rb above bit 15 supply funct7/immediate bits at random.
+    const wide_a = ra#[48..=49] == 0
+    const wide_b = rb#[48..=49] == 0
+    // funct7: mostly 0 or 0x20 (add/sub, srl/sra), sometimes random.
+    const f7_a:U7 = if ra#[27..=29] == 0 { ra#[20..=26] } else { U7(ra#[30] << 5) }
+    const f7_b:U7 = if rb#[27..=29] == 0 { rb#[20..=26] } else { U7(rb#[30] << 5) }
+    const rd_a:U5 = if wide_a { ra#[4..=8] } else { ra#[4..=6] }
+    const rs1_a:U5 = if wide_a { ra#[10..=14] } else { ra#[10..=12] }
+    const rs2_a:U5 = if wide_a { ra#[15..=19] } else { ra#[13..=15] }
+    const rd_b:U5 = if wide_b { rb#[4..=8] } else { rb#[4..=6] }
+    const rs1_b:U5 = if wide_b { rb#[10..=14] } else { rb#[10..=12] }
+    const rs2_b:U5 = if wide_b { rb#[15..=19] } else { rb#[13..=15] }
+    const ia:U32 = U32(opa | (rd_a << 7) | (ra#[7..=9] << 12) | (rs1_a << 15) | (rs2_a << 20) | (f7_a << 25))
+    const ib:U32 = U32(opb | (rd_b << 7) | (rb#[7..=9] << 12) | (rs1_b << 15) | (rs2_b << 20) | (f7_b << 25))
+    acc.io_imem_instruction = (ib << 32) | ia
+    step
+    mut pc:U64 = acc.io_imem_address
+    mut sample:U64 = pc ^ (acc.io_dmem_address << 1) ^ (acc.io_dmem_writedata << 3)
+    wrap sample = sample + U64(acc.io_dmem_memread) + (U64(acc.io_dmem_memwrite) << 1) + (U64(acc.io_dmem_valid) << 2) + (U64(acc.io_dmem_maskmode) << 3) + (U64(acc.io_dmem_sext) << 5) + U64(acc.io_imem_valid)
+    wrap chk = (chk ^ sample) * 0x100000001B3
+    if acc.io_dmem_memwrite != 0 { stores = stores + 1 }
+    if pc != last_pc + 4 and pc != last_pc + 8 { taken_pc_jumps = taken_pc_jumps + 1 }
+    last_pc = pc
+  }
+  const chk_bits:U64 = chk#[0..=63]
+  puts("dino rand: cycles={cycles} checksum={chk_bits} stores={stores} pc_jumps={taken_pc_jumps} pc={last_pc}")
+}

@@ -1,0 +1,39 @@
+const minion_tlb = import("minion_tlb.minion_tlb")
+
+// Data-cache TLB wrapper (verilog: minion_dcache_tlb_array): one minion_tlb whose
+// satp/matp translation-root registers are loaded one cycle after the enable pulse.
+// The delay registers only update when something is pending (a power-saving enable;
+// logically a hold of zero otherwise).
+comptime const PPN_BITS = 28 // width of the ppn field; mode sits above it in the packed root
+
+pub mod minion_dcache_tlb_array::[timecheck=false](clk_i:Clock, dft_i:(scanmode:U1, scan_reset_n:U1, sram_clk_override:U1, ram_rei:U1, ram_wei:U1), esr_vmspagesize_i:U2, matp_info_en_i:U1, matp_info_i:(mode:U4, ppn:U28), ptw_req_ready_i:U1, ptw_resp_data_i:(canceled_req:U1, access_fault:U1, rsvd_for_hw:U8, ppn:U44, rsvd_for_sw:U2, d:U1, a:U1, g:U1, u:U1, x:U1, w:U1, r:U1, v:U1), ptw_resp_valid_i:U1, req_data_i:(status:(prv:U2, mprv:U1, mpp:U2, sum:U1, mxr:U1, debug:U1), vpn:U36, passthrough:U1, store:U1, msb_err:U1), req_valid_i:U1, rst_ni:U1, satp_info_en_i:U1, satp_info_i:(mode:U4, ppn:U28), tlb_invalidate_i:U1) -> (ptw_req_data_o:(satp_mode:U4, satp_ppn:U28, prv:U2, addr:U36)@[], ptw_req_valid_o:U1@[], resp_data_o:(fill_pending:U1, miss:U1, ppn:U28, xcpt_ld:U1, xcpt_st:U1, access_fault:U1)@[], vm_enabled_o:U1@[]) {
+  reg satp_info_en_del_q:U1:[negreset=true, reset_pin=rst_ni] = 0
+  reg matp_info_en_del_q:U1:[negreset=true, reset_pin=rst_ni] = 0
+  reg satp_info_reg_q:U32:[negreset=true, reset_pin=rst_ni] = 0
+  reg matp_info_reg_q:U32:[negreset=true, reset_pin=rst_ni] = 0
+
+  const pending = satp_info_en_del_q != 0 or satp_info_en_i != 0 or matp_info_en_del_q != 0 or matp_info_en_i != 0
+  if pending {
+    satp_info_en_del_q = satp_info_en_i
+    matp_info_en_del_q = matp_info_en_i
+  }
+  if satp_info_en_del_q != 0 {
+    satp_info_reg_q = (satp_info_i.mode << PPN_BITS) | satp_info_i.ppn
+  }
+  if matp_info_en_del_q != 0 {
+    matp_info_reg_q = (matp_info_i.mode << PPN_BITS) | matp_info_i.ppn
+  }
+
+  const u_tlb = minion_tlb::[name=u_tlb](clk_i=clk_i, rst_ni=rst_ni, dft_i=dft_i, vmspagesize_i=esr_vmspagesize_i, coop_mode_i=0, req_min_id_i=0, req_data_i.status.prv=req_data_i.status.prv, req_data_i.status.mprv=req_data_i.status.mprv, req_data_i.status.mpp=req_data_i.status.mpp, req_data_i.status.sum=req_data_i.status.sum, req_data_i.status.mxr=req_data_i.status.mxr, req_data_i.status.debug=req_data_i.status.debug, req_data_i.vpn=req_data_i.vpn, req_data_i.passthrough=req_data_i.passthrough, req_data_i.instruction=0, req_data_i.store=req_data_i.store, req_data_i.msb_err=req_data_i.msb_err, req_valid_i=req_valid_i, satp_info_i=satp_info_reg_q, matp_info_i=matp_info_reg_q, tlb_invalidate_i=tlb_invalidate_i, ptw_req_ready_i=ptw_req_ready_i, ptw_resp_data_i=ptw_resp_data_i, ptw_resp_valid_i=ptw_resp_valid_i)
+
+  // the instruction-fetch exception is not used by the data cache
+  resp_data_o.fill_pending = u_tlb.resp_data_o.fill_pending
+  resp_data_o.miss = u_tlb.resp_data_o.miss
+  resp_data_o.ppn = u_tlb.resp_data_o.ppn
+  resp_data_o.xcpt_ld = u_tlb.resp_data_o.xcpt_ld
+  resp_data_o.xcpt_st = u_tlb.resp_data_o.xcpt_st
+  resp_data_o.access_fault = u_tlb.resp_data_o.access_fault
+  ptw_req_data_o = u_tlb.ptw_req_data_o
+  ptw_req_valid_o = u_tlb.ptw_req_valid_o
+  vm_enabled_o = u_tlb.vm_enabled_o
+}

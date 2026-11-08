@@ -1,0 +1,39 @@
+// Assert collateral for bitcoin_engine, one mining lane — a sidecar, so the
+// design file is never touched. This is the core's `unit`: its lane-protocol
+// claims are visible at bitcoin_top's `busy` within a few cycles of reset,
+// so the bench's bug1 edit is caught by LEC from reset too, not only here.
+// (A bug in bitcoin_compare reaches the top only when the first double hash
+// completes, ~200 cycles in, far past a from-reset LEC window. Its own
+// properties live in bitcoin_compare.verify.prp.)
+//
+// The core's verify_bound is 4: reset holds 17 cycles, and a lane needs three
+// (start -> RUN -> WAIT) before the bug1 edit (`busy` dropping in WAIT) is
+// observable; at the default bound=2 that bug PROVES.
+//
+// `reset_n` is active LOW and asynchronous: a reset in either cycle returns
+// the lane to ST_IDLE whatever it was doing, hence the guards.
+//
+// Usage:
+//   lhd formal verify bitcoin/pyrope/bitcoin_engine.prp \
+//       bitcoin/verif/bitcoin_engine.verify.prp --top bitcoin_engine
+const lane = import("bitcoin_engine.bitcoin_engine")
+
+// A lane searches until it finds: busy never drops without `found` rising.
+formal bitcoin_engine.busy_until_found {
+  mut acc = lane
+  assert((past(acc.reset_n, 1) and acc.reset_n and past(acc.busy, 1)) implies (acc.busy or acc.found),
+         "a searching lane stays busy until it reports a golden nonce")
+}
+
+// `start` on an idle lane begins a search on the next cycle.
+formal bitcoin_engine.start_goes_busy {
+  mut acc = lane
+  assert((past(acc.reset_n, 1) and acc.reset_n and past(acc.start, 1) and not past(acc.busy, 1)
+            and not past(acc.found, 1)) implies acc.busy,
+         "an idle lane given start must be searching the next cycle")
+}
+
+// Not claimed here: that `found` is sticky. It first rises ~200 cycles after
+// start, so inside any affordable window it would pass without checking
+// anything, and it is not 1-inductive (found_reg only implies ST_DONE on
+// reachable states).

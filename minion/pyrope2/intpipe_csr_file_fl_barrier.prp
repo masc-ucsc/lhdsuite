@@ -1,0 +1,57 @@
+const minion_pkg = import("minion_pkg")
+
+// Fast local barrier unit (verilog: intpipe_csr_file_fl_barrier). A barrier start
+// makes the unit busy so no other one is accepted: it sends the request to the
+// neighbour, waits for the neighbour's one-bit response, writes it to the register
+// file and becomes available again. Only the state and the thread id are reset;
+// the request/address/response registers are loaded when used.
+enum FlbState = (Invalid=0, SendReq=1, WaitReq=2, WriteRes=3)
+
+pub mod intpipe_csr_file_fl_barrier::[timecheck=false](clk_i:Clock, neigh_resp_data:U1, neigh_resp_valid:U1, rf_wen_ready:U1, rst_ni:U1, start_data:minion_pkg.CsrFlBarrierSize_T, start_thread_id:U1, start_valid:U1, start_waddr:minion_pkg.XregAddrSize_T) -> (neigh_req_data:minion_pkg.CsrFlBarrierSize_T@[], neigh_req_valid:U1@[], rf_wen_addr:minion_pkg.XregAddrSize_T@[], rf_wen_data:minion_pkg.XregSize_T@[], rf_wen_thread_id:U1@[], rf_wen_valid:U1@[], rf_wen_valid_early:U1@[], scoreboard_addr:(fp:U1, addr:U5, thread_id:U1)@[], scoreboard_valid:U1@[], start_ready:U1@[]) {
+  reg state_q:FlbState:[async=true, negreset=true, reset_pin=rst_ni] = FlbState.Invalid
+  reg neigh_req_data:minion_pkg.CsrFlBarrierSize_T = nil
+  reg rf_wen_addr:minion_pkg.XregAddrSize_T = nil
+  reg rf_wen_thread_id:U1:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg rf_wen_data_r:U1 = nil
+
+  const idle = state_q == FlbState.Invalid
+  const start_accepted = idle and start_valid == 1
+
+  start_ready = U1(idle)
+  neigh_req_valid = U1(state_q == FlbState.SendReq)
+  rf_wen_valid = U1(state_q == FlbState.WriteRes)
+  rf_wen_valid_early = U1(state_q == FlbState.WriteRes or neigh_resp_valid == 1) // the response is known a cycle ahead
+  rf_wen_data = rf_wen_data_r
+  scoreboard_valid = U1(not idle)
+  scoreboard_addr = (addr=rf_wen_addr, fp=0, thread_id=rf_wen_thread_id)
+
+  match state_q {
+    == FlbState.Invalid {
+      if start_valid == 1 {
+        state_q = FlbState.SendReq
+      }
+    }
+    == FlbState.SendReq {
+      state_q = FlbState.WaitReq
+    }
+    == FlbState.WaitReq {
+      if neigh_resp_valid == 1 {
+        state_q = FlbState.WriteRes
+      }
+    }
+    == FlbState.WriteRes {
+      if rf_wen_ready == 1 {
+        state_q = FlbState.Invalid
+      }
+    }
+  }
+
+  if start_accepted {
+    neigh_req_data = start_data
+    rf_wen_addr = start_waddr
+    rf_wen_thread_id = start_thread_id
+  }
+  if neigh_resp_valid == 1 {
+    rf_wen_data_r = neigh_resp_data
+  }
+}

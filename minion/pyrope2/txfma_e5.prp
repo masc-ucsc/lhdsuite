@@ -1,0 +1,55 @@
+// Exponent stage 5: sticky-exponent carry (stky2g), rounding-direction bit and
+// the final result exponent (priority mux over forced-zero/min-max/compare/lxd cases).
+const txfma_csa = import("txfma_csa.txfma_csa")
+const txfma_adder = import("txfma_adder.txfma_adder")
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+pub mod txfma_e5::[timecheck=false](cmd_f5a_h:vpu_defs_pkg.VPU_FCMD_SZ_T, comp_op_f5a_h:U1, comp_op_true_f5a_h:U1, e_force_to_zero_f5a_h:U1, e_sticky1_f5a_h:U1, e_sticky2_f5a_h:U1, ea_hi_f5a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T, eb_hi_lsb_f5a_h:U1, ec_f5a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T, ediff1_zap_f5a_h:U1, elxd_add_in2_mux_sel_f5a_h:U1, elxd_f5a_h:vpu_defs_pkg.TXFMA_LXD_PS_SZ_T, etrz50_f5a_h:vpu_defs_pkg.TXFMA_WSPS_ETRZ_SZ_T, exp_res_in_f5a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T, fb_hi_zero_f5a_h:U1, int_minmax_mux_sel_a_f5a_h:U1, int_minmax_mux_sel_c_f5a_h:U1, nshc_f5a_h:U1, op_dtype_f5a_h:vpu_defs_pkg.VPU_DTYPE_SZ_T, rm_f5a_h:vpu_defs_pkg.FP_RM_BITS_T, s_res_f5a_h:U1, sigs_f5a_h:(e18:U1, e17:U1, e16:U1, e15:U1, e14:U1, e13:U1, e12:U1, e11:U1, e10:U1, e9:U1, e8:U1, e7:U1, e6:U1, e5:U1, e4:U1, e3:U1, e2:U1, e1:U1, e0:U1), use_elxd_f5a_h:U1) -> (exp_res_f5a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T@[], rmode_f5a_h:U1@[], stky2g_f5a_h:U1@[]) {
+  const frac_op = cmd_f5a_h == vpu_defs_pkg.VPU_TRANS_EXP_FRAC
+  const rsqrt_op = cmd_f5a_h == vpu_defs_pkg.VPU_TRANS_RSQRT_FMA2
+  const elxd_ext:U10 = elxd_f5a_h#[0..<7]#sext[0..=6]#[0..<10]
+  comptime const SIGN_BIT = vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ - 1
+
+  // Sticky exponent: constant K chosen by dtype, plus the (sign-extended) lxd when used.
+  mut sticky_k:U10 = 0
+  if op_dtype_f5a_h == vpu_defs_pkg.VPU_DTYPE_F32 {
+    if sigs_f5a_h.e8 != 0 or sigs_f5a_h.e15 != 0 {
+      sticky_k = vpu_defs_pkg.TXFMA_STICKY_K_FI
+    } elif use_elxd_f5a_h != 0 {
+      sticky_k = vpu_defs_pkg.TXFMA_STICKY_K_F32
+    }
+  } elif op_dtype_f5a_h == vpu_defs_pkg.VPU_DTYPE_F16_F32 {
+    sticky_k = vpu_defs_pkg.TXFMA_STICKY_TO_G_K_F16_L
+  } elif op_dtype_f5a_h == vpu_defs_pkg.VPU_DTYPE_INT {
+    sticky_k = vpu_defs_pkg.TXFMA_STICKY_TO_R_K_IF
+  }
+  const sticky_lxd:U10 = if use_elxd_f5a_h != 0 { elxd_ext } else { 0 }
+  const sticky_csa = txfma_csa<Bits=10>(a_i=sticky_k, b_i=sticky_lxd, cin_i=etrz50_f5a_h#[0..<6])
+  const sticky = txfma_adder<Width=10>(a_i=sticky_csa.sum_o, b_i=sticky_csa.cout_o#[0..<9] << 1, cin_i=use_elxd_f5a_h)
+
+  // Result exponent adder: in1 + in2 (+1 unless a fraction/int op), and the same without the carry-in (nshc == 1).
+  const in1:U10 = if cmd_f5a_h == vpu_defs_pkg.VPU_TRANS_LOG_MUL { 0x85 - (if exp_res_in_f5a_h#[0..<7] == 0 { 7 } else { 0 }) }
+    elif rsqrt_op { ~(((exp_res_in_f5a_h#[7] << 7) | (~exp_res_in_f5a_h#[7] << 6) | exp_res_in_f5a_h#[1..<7])#[0..=9]) }
+    else { exp_res_in_f5a_h }
+  const in2:U10 = if elxd_add_in2_mux_sel_f5a_h != 0 or sigs_f5a_h.e12 != 0 or sigs_f5a_h.e13 != 0 { 0 }
+    elif cmd_f5a_h == vpu_defs_pkg.VPU_TRANS_RCP_FMA2 { fb_hi_zero_f5a_h }
+    elif rsqrt_op { if fb_hi_zero_f5a_h == 0 or eb_hi_lsb_f5a_h == 0 { 0x3ff } else { 0 } }
+    elif frac_op { ~U10(ec_f5a_h) }
+    else { ~elxd_ext }
+  const cin = U1(not (sigs_f5a_h.e17 != 0 or frac_op or sigs_f5a_h.e12 != 0))
+  const lxd_adder = txfma_adder<Width=10>(a_i=in1, b_i=in2, cin_i=cin)
+  const lxd_m1_adder = txfma_adder<Width=10>(a_i=in1, b_i=in2, cin_i=0)
+  const elxd_res = if nshc_f5a_h == 0 { lxd_adder } else { lxd_m1_adder }
+
+  // Final exponent, in priority order.
+  const force_zero = (e_force_to_zero_f5a_h != 0 and sigs_f5a_h.e17 == 0) or (comp_op_f5a_h != 0 and comp_op_true_f5a_h == 0)
+  exp_res_f5a_h = if force_zero { 0 }
+    elif int_minmax_mux_sel_a_f5a_h != 0 and sigs_f5a_h.e13 == 0 { ea_hi_f5a_h }
+    elif (int_minmax_mux_sel_c_f5a_h != 0 and sigs_f5a_h.e12 == 0) or ediff1_zap_f5a_h != 0 { ec_f5a_h }
+    elif comp_op_f5a_h != 0 and comp_op_true_f5a_h != 0 { 0x3ff }
+    elif sigs_f5a_h.e13 != 0 or sigs_f5a_h.e12 != 0 or cmd_f5a_h == vpu_defs_pkg.VPU_TRANS_EXP_FMA2 { exp_res_in_f5a_h }
+    else { elxd_res }
+
+  stky2g_f5a_h = U1(sticky#[SIGN_BIT] != 0 or e_sticky1_f5a_h != 0 or (e_sticky2_f5a_h != 0 and op_dtype_f5a_h == vpu_defs_pkg.VPU_DTYPE_F16_F32) or sigs_f5a_h.e14 != 0)
+  rmode_f5a_h = U1(rm_f5a_h == vpu_defs_pkg.RNE or rm_f5a_h == vpu_defs_pkg.RMM or (rm_f5a_h == vpu_defs_pkg.RUP and s_res_f5a_h == 0) or (rm_f5a_h == vpu_defs_pkg.RDN and s_res_f5a_h != 0))
+}

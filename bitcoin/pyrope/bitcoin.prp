@@ -1,0 +1,38 @@
+// Parametrized SHA256d proof-of-work miner: NENGINES lanes interleave the
+// nonce space (lane g tries nonce_base + g, then steps by NENGINES), sharing
+// the two SHA-256 message blocks split out of the 80-byte header once.
+//
+// Header layout, as hashed (most significant byte first):
+//   block_a = header[639:128]                 bytes 0..63, nonce-independent
+//   block_b = header[127:0] + SHA padding     bytes 64..79, holds the nonce
+const bitcoin_engine = import("bitcoin_engine.bitcoin_engine")
+
+pub mod bitcoin<NENGINES=128>(
+  clk:Clock,
+  header:U640,
+  nonce_base:U32,
+  reset_n:Reset,
+  start:Bool,
+  target:U256,
+) -> (busy:Bool@[], found:Bool@[], golden_nonce:U32@[]) {
+  const block_a:U512 = header#[128..<640]
+  // header tail, then 0x80, zeros, and the 64-bit message length (640 bits).
+  const block_b_base:U512 = (header#[0..<128] << 384) | (0x80 << 376) | 640
+
+  mut any_found  = false
+  mut any_busy   = false
+  mut golden:U32 = 0
+  for g in 0..<NENGINES {
+    const lane = bitcoin_engine<NONCE_STRIDE=NENGINES>(start, block_a, block_b_base, target, nonce_init=(nonce_base + g)#[0..<32])
+    // The lowest-index lane that hit reports its nonce.
+    if lane.found and not any_found {
+      golden = lane.golden_nonce
+    }
+    any_found = any_found or lane.found
+    any_busy  = any_busy or lane.busy
+  }
+
+  found        = any_found
+  golden_nonce = golden
+  busy         = any_busy
+}

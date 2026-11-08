@@ -1,0 +1,25 @@
+const prim_rf_2r1w_preview = import("prim_rf_2r1w_preview.prim_rf_2r1w_preview")
+
+// Integer register file of the two-thread core: 2 async read ports, 1 write
+// port, 32 x 64-bit registers per thread. Entry 0 of each thread is hardwired
+// to zero and x31 of each thread is also exposed in parallel (wb_x31_reg).
+// prim_rf_2r1w_preview's defaults for Zero/Parallel are exactly that layout:
+// entries 0 and 32 zero, entries 31 and 63 parallel-read.
+//
+// Packed port lanes, lowest first: rd_addr = {read-B addr, read-A addr} (5 bits
+// each), rd_data = {read-B data, read-A data} (64 bits each), wb_x31_reg =
+// {thread 1 x31, thread 0 x31}. The RF index is {thread, addr}.
+//
+// rd_en (one per read port) is unused: the RF reads are always combinational.
+// It is kept, as in the Verilog interface, so the caller's rxs1/rxs2 decode
+// stays a live cone; dropping it makes the whole-intpipe_top LEC go from
+// PROVEN to UNKNOWN (dead-state mismatch against the reference).
+pub mod intpipe_rf::[timecheck=false](clk_i:Clock, rd_en:U2, rd_addr:U10, rd_thread_id:U1, wr_addr:U5, wr_data:U64, wr_en:U1, wr_en_early:U1, wr_thread_id:U1) -> (rd_data:U128@[], wb_x31_reg:U128@[]) {
+  const rd_addr_a:U6 = (rd_addr#[0..<5], rd_thread_id)#[..]
+  const rd_addr_b:U6 = (rd_addr#[5..<10], rd_thread_id)#[..]
+  const wr_index:U6 = (wr_addr, wr_thread_id)#[..]
+  const u_rf = prim_rf_2r1w_preview<Entries=64, Width=64>(preview_clk_i=clk_i, rf_clk_i=clk_i, rd_addr_a_i=rd_addr_a, rd_addr_b_i=rd_addr_b, wr_en_i=wr_en, wr_data_en_1p_next_i=wr_en_early, wr_addr_i=wr_index, wr_data_i=wr_data)
+  rd_data#[0..<64] = u_rf.rd_data_a_o
+  rd_data#[64..<128] = u_rf.rd_data_b_o
+  wb_x31_reg = u_rf.rd_par_o
+}

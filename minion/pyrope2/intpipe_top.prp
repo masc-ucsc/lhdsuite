@@ -1,0 +1,1092 @@
+// intpipe_top: the Minion integer pipeline for two hardware threads. One instruction
+// per cycle flows through the ID, EX (+ a GSC stage for gather/scatter elements), TAG,
+// MEM and WB stages. Besides the in-order core it owns the integer register file, the
+// mul/div unit, the CSR file, the hazard / scoreboard stall logic and the requests to the
+// front end, the data cache and the vector unit.
+const debug_breakpoint = import("debug_breakpoint.debug_breakpoint")
+const intpipe_alu = import("intpipe_alu.intpipe_alu")
+const intpipe_csr_file = import("intpipe_csr_file.intpipe_csr_file")
+const intpipe_fp_scoreboard = import("intpipe_fp_scoreboard.intpipe_fp_scoreboard")
+const intpipe_imm = import("intpipe_imm.intpipe_imm")
+const intpipe_inst_bits_stage = import("intpipe_inst_bits_stage.intpipe_inst_bits_stage")
+const intpipe_int_scoreboard = import("intpipe_int_scoreboard.intpipe_int_scoreboard")
+const intpipe_mask_scoreboard = import("intpipe_mask_scoreboard.intpipe_mask_scoreboard")
+const intpipe_mul_div_top = import("intpipe_mul_div_top.intpipe_mul_div_top")
+const intpipe_rf = import("intpipe_rf.intpipe_rf")
+const minion_pkg = import("minion_pkg")
+const intpipe_csr_pkg = import("intpipe_csr_pkg")
+
+// Gather/scatter lane counter value of the last lane; geometry of the VPU scoreboards (dcache
+// replay-queue entries, trans-unit slots, total FP slots); width of the VPU gather/scatter index.
+comptime const LAST_LANE:U3 = minion_pkg.VpuLaneNum - 1
+comptime const DCACHE_SB_SLOTS = 8
+comptime const TRANS_SB_SLOTS = 12
+comptime const VPU_FP_SB_SLOTS = 14
+comptime const GSC32_IDX_BITS = 40
+
+// Decoded instruction control as the front end delivers it (id_ctrl) and as it is
+// kept per stage in the packed ex_ctrl / tag_ctrl / mem_ctrl / wb_ctrl registers.
+type Ctrl = (legal:Bool, mcode:Bool, fp:Bool, br:Bool, jal:Bool, jalr:Bool, rxs2:Bool, rxs1:Bool, sel_alu2:U2, sel_alu1:U2, sel_imm:U3, alu_dw:U1, alu_fn:U5, mem:Bool, mem_cmd:U5, mem_type:U4, rma:Bool, wmd:Bool, wmad:Bool, wfd:Bool, div:Bool, wxd:Bool, csr:U3, fence:Bool, mem_g:Bool, gsc:Bool, gfx:Bool, x31:Bool)
+
+// The front end's id_ctrl port: the same fields with integer flags.
+type CtrlPort = (legal:U1, mcode:U1, fp:U1, br:U1, jal:U1, jalr:U1, rxs2:U1, rxs1:U1, sel_alu2:U2, sel_alu1:U2, sel_imm:U3, alu_dw:U1, alu_fn:U5, mem:U1, mem_cmd:U5, mem_type:U4, rma:U1, wmd:U1, wmad:U1, wfd:U1, div:U1, wxd:U1, csr:U3, fence:U1, mem_g:U1, gsc:U1, gfx:U1, x31:U1)
+
+// Per-stage register word layout, bit 44 (legal) down to bit 0 (x31). Issuing from ID packs the
+// decoded control, except for the fields ID overrides (CSR command, ALU config, operand selects, mem/gsc kill).
+comb ctrl_pack(alu_dw:U1, alu_fn:U5, c:Ctrl, csr:U3, gsc:Bool, mem:Bool, sel_alu1:U2, sel_alu2:U2) -> (w:U45) {
+  const bits:U45 = (U1(c.x31), U1(c.gfx), U1(gsc), U1(c.mem_g), U1(c.fence), csr, U1(c.wxd), U1(c.div), U1(c.wfd), U1(c.wmad), U1(c.wmd), U1(c.rma), c.mem_type, c.mem_cmd, U1(mem), alu_fn, alu_dw, c.sel_imm, sel_alu1, sel_alu2, U1(c.rxs1), U1(c.rxs2), U1(c.jalr), U1(c.jal), U1(c.br), U1(c.fp), U1(c.mcode), U1(c.legal))#[..]
+  w = bits
+}
+
+comb ctrl_unpack(w:U45) -> (c:Ctrl) {
+  c.legal = w#[44] == 1
+  c.mcode = w#[43] == 1
+  c.fp = w#[42] == 1
+  c.br = w#[41] == 1
+  c.jal = w#[40] == 1
+  c.jalr = w#[39] == 1
+  c.rxs2 = w#[38] == 1
+  c.rxs1 = w#[37] == 1
+  c.sel_alu2 = w#[35..=36]
+  c.sel_alu1 = w#[33..=34]
+  c.sel_imm = w#[30..=32]
+  c.alu_dw = w#[29]
+  c.alu_fn = w#[24..=28]
+  c.mem = w#[23] == 1
+  c.mem_cmd = w#[18..=22]
+  c.mem_type = w#[14..=17]
+  c.rma = w#[13] == 1
+  c.wmd = w#[12] == 1
+  c.wmad = w#[11] == 1
+  c.wfd = w#[10] == 1
+  c.div = w#[9] == 1
+  c.wxd = w#[8] == 1
+  c.csr = w#[5..=7]
+  c.fence = w#[4] == 1
+  c.mem_g = w#[3] == 1
+  c.gsc = w#[2] == 1
+  c.gfx = w#[1] == 1
+  c.x31 = w#[0] == 1
+}
+
+// prp-style-allow whole-tuple-copy
+comb ctrl_from_port(p:CtrlPort) -> (c:Ctrl) {
+  c.legal = p.legal == 1
+  c.mcode = p.mcode == 1
+  c.fp = p.fp == 1
+  c.br = p.br == 1
+  c.jal = p.jal == 1
+  c.jalr = p.jalr == 1
+  c.rxs2 = p.rxs2 == 1
+  c.rxs1 = p.rxs1 == 1
+  c.sel_alu2 = p.sel_alu2
+  c.sel_alu1 = p.sel_alu1
+  c.sel_imm = p.sel_imm
+  c.alu_dw = p.alu_dw
+  c.alu_fn = p.alu_fn
+  c.mem = p.mem == 1
+  c.mem_cmd = p.mem_cmd
+  c.mem_type = p.mem_type
+  c.rma = p.rma == 1
+  c.wmd = p.wmd == 1
+  c.wmad = p.wmad == 1
+  c.wfd = p.wfd == 1
+  c.div = p.div == 1
+  c.wxd = p.wxd == 1
+  c.csr = p.csr
+  c.fence = p.fence == 1
+  c.mem_g = p.mem_g == 1
+  c.gsc = p.gsc == 1
+  c.gfx = p.gfx == 1
+  c.x31 = p.x31 == 1
+}
+
+// What the ID instruction reads and writes, for the hazard checks against the older stages:
+// 3 integer and 4 FP register candidates (enable + 5-bit address each, candidate 0 is the
+// destination) and the mask-register read/write sets.
+type IdHazard = (int_en:U3, int_addr:U15, fp_en:U4, fp_addr:U20, mask_raddr:U8, mask_waddr:U8, mem:Bool, fp:Bool, wmd:Bool, wmad:Bool)
+
+// Does the instruction in one older stage (c, waddr, valid) conflict with the one in ID? An
+// integer hazard only stalls when that stage cannot bypass its result; FP and mask hazards
+// always stall. waw_other / raw_other are the stage-specific extra conditions on FP
+// write-after-write (besides ID being a load) and read-after-write hazards.
+comb stage_hazard(c:Ctrl, cannot_bypass:Bool, id:IdHazard, raw_other:Bool, same_thread:Bool, tointm:U1, valid:Bool, waddr:U5, waw_other:Bool) -> (hazard:Bool) {
+  mut int_hit = false
+  for i in 0..<3 {
+    if id.int_en#[i] == 1 and id.int_addr#[(5*i)..<(5*i + 5)] == waddr {
+      int_hit = true
+    }
+  }
+  int_hit = int_hit and c.wxd
+
+  // FP: WAW on the destination (candidate 0), RAW on the three sources.
+  mut fp_hit = id.fp_en#[0] == 1 and id.fp_addr#[0..<5] == waddr and (id.mem or waw_other)
+  for i in 1..<4 {
+    if id.fp_en#[i] == 1 and id.fp_addr#[(5*i)..<(5*i + 5)] == waddr and raw_other {
+      fp_hit = true
+    }
+  }
+  fp_hit = fp_hit and c.wfd and id.fp
+
+  // Mask: older writes vs ID reads, a read-all-mask-to-X vs an ID mask write, and a
+  // mask-producing compare vs ID mask writes.
+  const older_writes:U8 = (U1(c.wmd) << waddr#[0..<3]) | (if c.wmad { 0xff } else { 0 })
+  const cmp_writes:U8 = U1(c.wmd and tointm == 1) << waddr#[0..<3]
+  const mask_hit = (older_writes & id.mask_raddr) != 0 or (c.rma and (id.wmd or id.wmad)) or (cmp_writes & id.mask_waddr) != 0
+
+  hazard = valid and ((int_hit and cannot_bypass) or fp_hit or mask_hit) and same_thread
+}
+
+// One thread's byte of vm_status: {prv[1:0], mprv, mpp[1:0], sum, mxr, debug}. status is
+// the thread's 6-bit mstatus view (mprv, mpp, sum, mxr in bits 5..1).
+comb vm_status_byte(debug:U1, prv:U2, status:U6) -> (r:U8) {
+  r = (prv << 6) | (status#[1..=5] << 1) | debug
+}
+
+// Trans-unit instructions (FRCP/FRSQ/FLOG/FEXP/FSIN.ps and FRCP_FIX_RAST): opcode, funct3 and
+// the funct12/funct7 selector, ignoring the register fields.
+comb is_trans_inst(inst:U32) -> (r:Bool) {
+  const sel12 = inst & 0xfff0707f
+  const sel7 = inst & 0xfe00707f
+  r = sel12 == 0x5870007b or sel12 == 0x5880007b or sel12 == 0x5830007b or sel12 == 0x5840007b or sel12 == 0x5860007b or sel7 == 0x3000007b
+}
+
+pub mod intpipe_top<VpuEn=1>::[timecheck=false](cache_ops_err_flags:U4, chicken_bit_intpipe:U1, clk_i:Clock, dcache_bus_error:minion_pkg.NrThreads_T, dcache_bus_error_addr:U80, dcache_ctrl_resp:(cache_op_ready:U1, cache_op_busy_changed:U2, cache_op_complete_l1:U4, cache_op_complete_l2:U4, tl_ready_0:U1, tl_ready_1:U1, ts_ready:U1, tl_complete_0:U2, reduce_ready:U1, tex_send_ready:U1, gsc_progress_save:U2, gsc_progress:U3), dcache_debug_signals:(csr_signals_tl0:U3, csr_signals_tl1:U3, csr_signals_ts:U4, csr_signals_cou:U4, csr_signals_coul2:U3, csr_signals_txsnd:U2, csr_signals_mh0:U4, csr_signals_mh1:U4), debug_ex_program_buffer:minion_pkg.NrThreads_T, dft__reset:U1, dft__reset_byp:U1, esr_features:(disable_lock_unlock:U1, disable_multithreading:U1, trap_on_u_scp:U1, trap_on_u_cacheops:U1, trap_on_ml:U1, trap_on_gfx:U1), esr_shire_coop_mode:U1, ex_vpu_ctrl:(tointm:U1, illegal_rm:U1, ps_mask:U8, gsc_fs:U32), flb_neigh_resp_data:U1, flb_neigh_resp_valid:U1, halt:minion_pkg.NrThreads_T, id_ctrl:(legal:U1, mcode:U1, fp:U1, br:U1, jal:U1, jalr:U1, rxs2:U1, rxs1:U1, sel_alu2:U2, sel_alu1:U2, sel_imm:U3, alu_dw:U1, alu_fn:U5, mem:U1, mem_cmd:U5, mem_type:U4, rma:U1, wmd:U1, wmad:U1, wfd:U1, div:U1, wxd:U1, csr:U3, fence:U1, mem_g:U1, gsc:U1, gfx:U1, x31:U1), id_dcache_idle:U1, id_dcache_ordered:minion_pkg.NrThreads_T, id_dcache_ready:U1, id_dcache_sb_fp_dealloc:minion_pkg.NrThreads_T, id_dcache_sb_int_dealloc:minion_pkg.NrThreads_T, id_dcache_scoreboard:(valid:U8, dest:U56), id_fe_resp:(pc:U49, inst_bits:U32, pf0:U1, pf1:U1, af0:U1, af1:U1, replay:U1, rvc:U1, bus_error:U1, ecc_error:U1), id_fe_resp_thread_id:U1, id_fe_resp_valid:U1, id_frontend_vpu_ctrl:(m0ren:U1, mallren:U1, mren1:U1, mren2:U1, wen:U1, ren1:U1, ren2:U1, ren3:U1, rend:U1, is_trans:U1, trans_busy:U1, id_trans_insert:U1, scoreboard:(fp_valid:U14, fp_dest:U98, toint_valid:U4, toint_dest:U28, mask_valid:U4, mask_dest:U16), tfma_enabled:U1, tfma_wrrf_enabled:U1, tquant_enabled:U1, reduce_enabled:U1, fflags_stall:U1, fromint:U1), id_vpu_ctrl:(m0ren:U1, mallren:U1, mren1:U1, mren2:U1, wen:U1, ren1:U1, ren2:U1, ren3:U1, rend:U1, is_trans:U1, trans_busy:U1, id_trans_insert:U1, scoreboard:(fp_valid:U14, fp_dest:U98, toint_valid:U4, toint_dest:U28, mask_valid:U4, mask_dest:U16), tfma_enabled:U1, tfma_wrrf_enabled:U1, tquant_enabled:U1, reduce_enabled:U1, fflags_stall:U1, fromint:U1), interrupts:(mieco:U2, mtip:U2, msip:U2, meip:U2, seip:U2, fcc:U4, ipi_with_pc:U2, ipi_pc:U47), io_events_dcache_vpu:U23, l2_resp:(id:U8, dest:U1, wdata:U1, opcode:U2, data:U256, size:U3, qwen:U4), l2_resp_ready:U1, l2_resp_valid:U1, mem_dcache_flush_pipeline:U1, mem_dcache_resp_int_valid:U1, mem_vpu_ctrl:(fma:U1, tointm:U1), pmu_read_data:U128, read_ddata0:U128, resume:minion_pkg.NrThreads_T, rst_d_ni:U1, rst_ni:U1, rst_w_ni:U1, shire_id:U8, shire_min_id:U5, tag_dcache_bp:(thread_id:U1, address:U49, cmd:U3), tag_dcache_bp_valid:U1, tag_dcache_replay_next:U1, tag_dcache_xcpt:(pf_ld:U1, pf_st:U1, mf_ld:U1, mf_st:U1, af_ld:U1, af_st:U1, ps_ld:U1, ps_st:U1), tag_vpu_ctrl:(fma:U1, store_data:U256, scatter_data:U32, tointm:U1), te_enable:U1, te_thread_sel:U1, tensor_load_err_flags:U3, tensor_reduce_err_flags:U1, thread0_enable:U1, thread1_enable:U1, vpu_tfma_tenb_working:U1, wb_dcache_resp:(dest:(fp:U1, addr:U5, thread_id:U1), typ:U4, gsc_cnt:U3, ps_mask:U8, data:U256, addr:U49), wb_dcache_resp_valid:U1, wb_vpu_ctrl:(fma:U1, toint_data:U64, mova_mx:U1, fcsr_flags_valid:U1, fcsr_flags:U6, thread_id:U1, tointm:U1)) -> (id_fe_req_valid:minion_pkg.NrThreads_T@[], id_fe_req:U104@[], id_fe_stall:(e1:U1, e0:U1)@[], id_fe_resp_ready:U1@[], icache_invalidate:U1@[], dcache_ctrl:(tensorload_ctrl:(use_tmask:U1, use_coop:U1, transform:U3, scp_dest:U6, tl_sel:U1, addr:U42, offset:U2, num_lines:U4), tensorcoop_ctrl:(neigh_mask:U4, minion_mask:U8, padding:U3, id:U5), tensorload_stride:U48, tensorload_start:U1, tensorload_restart_b:U1, tensorload_tmask_ready:U1, tensorload_tmask_bits:U16, cache_op_valid:U1, cache_op_req:(cmd:U4, start_level:U2, dest_level:U2, count:U4, addr:U48, way:U2, stride:U48, thread_id:U1, use_tmask:U1, tmask_ready:U1, tmask_bits:U16, l2_scp_dest:U17, l2_scp_fill:U1), cache_op_req_next:(cmd:U4, start_level:U2, dest_level:U2), msg_port_wr_way:U2, msg_port_wr_addr:U10, msg_port_wr_en:U1, reduce_start:U1, tensorstore_start:U1, reduce_tensorstore_ctrl:U64, tensorstore_stride:U48, tex_send_valid:U1, tex_send_ctrl:(port_id:U2, size:U3, way:U2, set:U4, port_en:U1, thread_id:U1), cache_ctrl:(cacheop_max:U5, padding:U1, cacheop_reprate:U3, scpenable:U1, d1split:U1), thread_id:U1)@[], vpu_ctrl:(tensorfma_start:U1, tensorfma_ctrl:(is_conv:U1, padding3:U6, cols_b:U2, rows_a:U4, cols_a:U4, start_a:U4, padding2:U19, to_vrf:U1, u_b:U1, u_a:U1, ten_b:U1, padding1:U2, scp_b:U6, padding0:U2, scp_a:U6, mode:U3, first_pass:U1), tensorfma_conv_bits_ready:U1, tensorfma_conv_bits:U16, reduce_start:U1, tensorstore_start:U1, reduce_ctrl:U64, tensorquant_start:U1, tensorquant_ctrl:(padding2:U2, start_reg:U5, cols:U2, rows:U4, scp_src:U6, padding:U5, trans:U40), pending_scoreboard_t0:U1)@[], id_dcache_alloc_rq_pre:U1@[], ex_dcache_alloc_rq_val:U1@[], id_dcache_gsc:U1@[], ex_dcache_req_valid:U1@[], ex_dcache_req:(addr:U48, addr_msb_err:U1, dest:(fp:U1, addr:U5, thread_id:U1), cmd:U5, typ:U4, gsc_cnt:U3, ps_mask:U8, phys:U1, gsc32_idx:U40, mem_global:U1)@[], ex_dcache_gsc:U1@[], tag_dcache_kill:U1@[], tag_dcache_store_data:U256@[], mem_dcache_kill:U1@[], wb_dcache_x31:minion_pkg.XregSize_T@[], wb_dcache_invalidate_lr:U1@[], wb_dcache_fp_toint:U1@[], satp_info:(mode:U4, ppn:U28)@[], matp_info:(mode:U4, ppn:U28)@[], satp_info_en:U1@[], matp_info_en:U1@[], vm_status:U16@[], tlb_invalidate:U1@[], id_vpu_req:(valid:U1, thread_id:U1, fcsr_rm:U3, inst_bits:U32)@[], ex_vpu_req:(gscing:U1, gsc_src:U3, kill:U1, fromint_data:U64, thread_id:U1)@[], tag_vpu_kill:U1@[], mem_vpu_kill:U1@[], wb_vpu_kill:U1@[], wb_vpu_dcache_resp_valid:U1@[], wb_vpu_dcache_resp:(thread_id:U1, gdst:U3, typ:U4, addr:U5, data:U256, ps_mask:U8)@[], flb_neigh_req_valid:U1@[], flb_neigh_req_data:minion_pkg.CsrFlBarrierSize_T@[], TE_wb_reg_inst:minion_pkg.InstSize_T@[], TE_wb_reg_cause_ie:(interrupt_x:U1, reserved1:U58, cause:U5)@[], TE_wb_reg_context:U1@[], TE_tval:minion_pkg.VaSizeExt_T@[], TE_prv:U2@[], TE_exception:U1@[], update_ddata0:minion_pkg.NrThreads_T@[], ddata0_wdata:U64@[], in_debug_mode:minion_pkg.NrThreads_T@[], debug_busy:minion_pkg.NrThreads_T@[], debug_exception:minion_pkg.NrThreads_T@[], debug_monitor_out:(id_thread_id:U1, id_pc:U49, id_valid:U1, id_valid_qual:U1, id_inst_replay:U1, id_take_pc:U1, id_csr_interrupt:U1, excl_mode_stall:U1, ex_valid_qual:U1, tag_valid_qual:U1, mem_valid_qual:U1, wb_valid:U1, gsc_reg_gsc_cnt:U3, tag_take_pc:U1, ipi_with_pc:U2, wb_take_pc:U1, id_xcpt:U1, wb_xcpt:U1, id_stall_fp2int:U1, ex_gsc_busy:U1, csr_fe_stall:U1, id_ctrl_stall_csr:U1, id_ctrl_stall_dcache:U1, id_do_fence:U1, id_ctrl_stall_trans:U1, id_ctrl_stall_div:U1, id_int_sboard_hazard:U1, id_ctrl_stall_hazard_vpu:U1, id_ctrl_stall_hazard:U1)@[], wb_valid:U1@[], wb_thread_id:U1@[], wb_reg_pc:minion_pkg.PcSizeExt_T@[], pmu_count_up:minion_pkg.PmuMinionCountersNum_T@[], pmu_read_sel:U8@[], pmu_write_en:minion_pkg.PmuTotalCountersNum_T@[], pmu_write_data:minion_pkg.XregSize_T@[], pmu_neigh_event_sel:minion_pkg.PmuNeighEventCntSelBits_T@[]) {
+  // Pipeline state resets synchronously on rst_w_ni; rst_ni / rst_d_ni only reach the CSR file.
+  const reset_w = rst_w_ni == 0
+
+  // ---- State, grouped by stage; a register without a reset value holds unreset state ----
+  // Interrupt inputs and IPI redirect, registered for timing.
+  reg intpipe_int_mieco:U2
+  reg intpipe_int_mtip:U2
+  reg intpipe_int_msip:U2
+  reg intpipe_int_meip:U2
+  reg intpipe_int_seip:U2
+  reg intpipe_int_fcc:U4
+  reg ipi_with_pc:U2
+  reg ipi_pc_reg:U47
+
+  // ID: fences, exclusive-mode stall, trans-unit starvation counters and front-end stalls.
+  reg id_reg_fence:U2:[reset_pin=reset_w] = 0
+  reg csr_excl_mode_stall_dcache:Bool:[reset_pin=reset_w] = false
+  reg intpipe_trans_busy:U4:[reset_pin=reset_w] = 0
+  reg id_ctrl_stall_trans_cnt:[2]U3:[ordering="old"]
+  reg fence_fe_stall:U2:[reset_pin=reset_w] = 0
+  reg fp_sboard_fe_stall:U2:[reset_pin=reset_w] = 0
+  reg int_sboard_fe_stall:U2:[reset_pin=reset_w] = 0
+  reg muldiv_needed:U2:[reset_pin=reset_w] = 0
+  reg next_muldiv_thread:U1:[reset_pin=reset_w] = 0
+  reg ex_div_ready_prev:Bool
+  reg debug_timing:U2:[reset_pin=reset_w] = 0
+
+  // EX
+  reg ex_reg_valid:Bool:[reset_pin=reset_w] = false
+  reg ex_thread_id:U1
+  reg ex_ctrl:U45
+  reg ex_ctrl_fp_toint:Bool:[reset_pin=reset_w] = false
+  reg ex_uses_alu:Bool
+  reg ex_reg_data:U128
+  reg vpu_ex_reg_data:U64
+  reg ex_reg_pc:U49
+  reg ex_reg_rvc:Bool
+  reg ex_reg_flush_pipe:Bool
+  reg ex_reg_cause:U5
+  reg ex_reg_xcpt:Bool
+  reg ex_reg_xcpt_interrupt:Bool
+  reg ex_reg_replay:Bool
+  reg ex_csr_flush:Bool
+  reg ex_csr_vpu:Bool
+  reg ex_csr_excl_mode:Bool
+  reg ex_op1:U64
+  reg ex_op2:U64
+  reg ex_dcache_alloc_rq_val:U1
+  // Gather/scatter element counter (reset to the last lane) and the delayed VPU index word.
+  reg ex_reg_gsc_cnt:U3:[reset_pin=reset_w] = 7
+  reg ex_gscing_one_lane:Bool:[reset_pin=reset_w] = false
+  reg ex_gsc_fs_valid:U2
+  reg tag_div_req:Bool:[reset_pin=reset_w] = false
+  reg mem_div_req:Bool:[reset_pin=reset_w] = false
+
+  // GSC (the extra stage gather/scatter elements go through)
+  reg gsc_reg_valid:Bool:[reset_pin=reset_w] = false
+  reg gsc_reg_gscing:Bool:[reset_pin=reset_w] = false
+  reg gsc_reg_gsc_cnt:U3:[reset_pin=reset_w] = 0
+  reg gsc_reg_ps_mask:U8
+  reg gsc_pc_valid:Bool
+  reg gsc_reg_flush_pipe:Bool
+
+  // TAG
+  reg tag_reg_valid:Bool:[reset_pin=reset_w] = false
+  reg tag_thread_id:U1
+  reg tag_ctrl:U45
+  reg tag_ctrl_fp_toint:Bool:[reset_pin=reset_w] = false
+  reg tag_reg_pc:U49
+  reg tag_reg_wdata:U64
+  reg tag_reg_rs2:U64
+  reg tag_reg_rvc:Bool
+  reg tag_reg_flush_pipe:Bool
+  reg tag_reg_cause:U5
+  reg tag_reg_xcpt:Bool
+  reg tag_reg_xcpt_interrupt:Bool
+  reg tag_reg_replay:Bool
+  reg tag_reg_gscing:Bool
+  reg tag_csr_flush:Bool
+  reg tag_csr_vpu:Bool
+  reg tag_csr_excl_mode:Bool
+  reg vpu_scatter_store_data:U32
+
+  // MEM
+  reg mem_reg_valid:Bool:[reset_pin=reset_w] = false
+  reg mem_thread_id:U1:[reset_pin=reset_w] = 0
+  reg mem_ctrl:U45
+  reg mem_ctrl_fp_toint:Bool:[reset_pin=reset_w] = false
+  reg mem_dcache_bp_triggered:Bool:[reset_pin=reset_w] = false
+  reg mem_reg_pc:U49
+  reg mem_reg_wdata:U64
+  reg mem_uses_wdata:Bool
+  reg mem_reg_rvc:Bool
+  reg mem_reg_cause:U5
+  reg mem_reg_xcpt:Bool
+  reg mem_reg_xcpt_interrupt:Bool
+  reg mem_reg_replay:Bool
+  reg mem_reg_gscing:Bool
+  reg mem_csr_flush:Bool
+  reg mem_csr_vpu:Bool
+  reg mem_csr_excl_mode:Bool
+
+  // WB (wb_thread_id, wb_reg_pc and wb_dcache_fp_toint are also output ports)
+  reg wb_reg_valid:Bool:[reset_pin=reset_w] = false
+  reg wb_thread_id:U1
+  reg wb_ctrl:U45
+  reg wb_dcache_fp_toint:U1:[reset_pin=reset_w] = 0
+  reg wb_reg_pc:U49
+  reg wb_reg_wdata:U64
+  reg wb_reg_rvc:Bool
+  reg wb_reg_cause:U5
+  reg wb_reg_xcpt:Bool
+  reg wb_reg_xcpt_interrupt:Bool
+  reg wb_reg_replay:Bool
+  reg wb_reg_gscing:Bool
+  reg wb_csr_flush:Bool
+  reg wb_csr_vpu:Bool
+
+  // ---- Nets that are read before the stage producing them (the pipeline is a feedback loop) ----
+  wire id_valid_qual:Bool = nil
+  wire id_take_pc:Bool = nil
+  wire id_fe_req_valid:U2 = nil
+  wire id_fe_stall_v:U2 = nil
+  wire id_bp_xcpt:Bool = nil
+  wire id_take_redirect:U2 = nil
+  wire id_bad_redirect:U2 = nil
+  wire id_pending_scoreboard_t0:Bool = nil
+  wire ex_waddr:U5 = nil
+  wire tag_waddr:U5 = nil
+  wire mem_waddr:U5 = nil
+  wire wb_waddr:U5 = nil
+  wire mem_reg_inst:U32 = nil
+  wire wb_reg_inst:U32 = nil
+  wire ex_gscing:Bool = nil
+  wire ex_ctrl_kill:Bool = nil
+  wire ex_dcache_req_en:Bool = nil
+  wire tag_take_pc:Bool = nil
+  wire tag_replay:Bool = nil
+  wire tag_ctrl_kill:Bool = nil
+  wire tag_dcache_bp_triggered:Bool = nil
+  wire tag_npc:U49 = nil
+  wire tbranch_up:U2 = nil
+  wire mem_ctrl_kill:Bool = nil
+  wire mem_csr_rw_cmd:U3 = nil
+  wire wb_csr_rw_cmd:U3 = nil
+  wire wb_take_pc:Bool = nil
+  wire wb_xcpt:Bool = nil
+  wire wb_retire:Bool = nil
+  wire wb_dcache_wen:Bool = nil
+  wire wb_wen:Bool = nil
+  wire wb_div_resp_ready:Bool = nil
+  wire wb_flb_wen_ready:Bool = nil
+  wire wb_rf_wen:Bool = nil
+  wire wb_rf_wen_early:Bool = nil
+  wire wb_rf_waddr:U5 = nil
+  wire wb_rf_wdata:U64 = nil
+  wire wb_rf_thread_id:U1 = nil
+  wire div_kill:Bool = nil
+  wire csr_tensorfma_start:Bool = nil
+  wire csr_tensorquant_start:Bool = nil
+
+  // ================================ ID stage ================================
+  // Front-end response.
+  const id_valid = id_fe_resp_valid == 1
+  const id_thread_id = id_fe_resp_thread_id
+  const id_pc = id_fe_resp.pc
+  const id_inst = id_fe_resp.inst_bits
+  const id_waddr = id_inst#[7..=11]
+  const id_raddr1 = id_inst#[15..=19]
+  const id_raddr2 = id_inst#[20..=24]
+  const id_xcpt_pf = id_fe_resp.pf0 == 1 or id_fe_resp.pf1 == 1
+  const id_xcpt_af = id_fe_resp.af0 == 1 or id_fe_resp.af1 == 1
+  const id_fetch_bus_error = id_fe_resp.bus_error == 1
+  const id_fetch_ecc_error = id_fe_resp.ecc_error == 1
+  const id_inst_replay = id_fe_resp.replay == 1
+  // For gather/scatter the third source is encoded in the rd field.
+  const id_raddr3:U5 = if id_frontend_vpu_ctrl.rend == 1 { id_inst#[7..=11] } else { id_inst#[27..=31] }
+  const id_raddr:U10 = (id_raddr1, id_raddr2)#[..]
+  const id_c = ctrl_from_port(p=id_ctrl)
+
+  intpipe_int_mieco = interrupts.mieco
+  intpipe_int_mtip = interrupts.mtip
+  intpipe_int_msip = interrupts.msip
+  intpipe_int_meip = interrupts.meip
+  intpipe_int_seip = interrupts.seip
+  intpipe_int_fcc = interrupts.fcc
+
+  // Candidate registers for hazards: 3 integer (rs1, rs2, rd) and 4 FP (rs1, rs2, rs3, rd) ports.
+  const id_int_hazard_en:U3 = (U1(id_c.wxd and id_waddr != 0), U1(id_c.rxs2 and id_raddr2 != 0), U1(id_c.rxs1 and id_raddr1 != 0))#[..]
+  const id_int_hazard_addr:U15 = (id_waddr, id_raddr2, id_raddr1)#[..]
+  const id_fp_hazard_en:U4 = (id_frontend_vpu_ctrl.wen, id_frontend_vpu_ctrl.ren3, id_frontend_vpu_ctrl.ren2, id_frontend_vpu_ctrl.ren1)#[..]
+  const id_fp_hazard_addr:U20 = (id_waddr, id_raddr3, id_raddr2, id_raddr1)#[..]
+  // Mask registers read / written by the ID instruction, one bit per mask register.
+  const id_mask_all_read:U8 = if id_frontend_vpu_ctrl.mallren == 1 and id_c.fp { 0xff } else { 0 }
+  const id_mask_raddr_hazard:U8 = id_mask_all_read | U1(id_frontend_vpu_ctrl.m0ren == 1 and id_c.fp) | (U1(id_frontend_vpu_ctrl.mren1 == 1 and id_c.fp) << id_raddr1#[0..<3]) | (U1(id_frontend_vpu_ctrl.mren2 == 1 and id_c.fp) << id_raddr2#[0..<3])
+  const id_mask_all_written:U8 = if id_c.wmad { 0xff } else { 0 }
+  const id_mask_waddr_hazard:U8 = id_mask_all_written | (U1(id_c.wmd) << id_waddr#[0..<3])
+  const id_hazard:IdHazard = (fp=id_c.fp, fp_addr=id_fp_hazard_addr, fp_en=id_fp_hazard_en, int_addr=id_int_hazard_addr, int_en=id_int_hazard_en, mask_raddr=id_mask_raddr_hazard, mask_waddr=id_mask_waddr_hazard, mem=id_c.mem, wmad=id_c.wmad, wmd=id_c.wmd)
+
+  // A trans-unit operation in flight keeps the following ~4 stages "busy" for CSR accesses.
+  const intpipe_trans_busy_next:U4 = if id_vpu_ctrl.trans_busy == 1 { 15 } else { intpipe_trans_busy#[0..<3] << 1 }
+  if id_vpu_ctrl.trans_busy == 1 or intpipe_trans_busy#[3] == 1 {
+    intpipe_trans_busy = intpipe_trans_busy_next
+  }
+  const trans_draining = id_vpu_ctrl.trans_busy == 1 or intpipe_trans_busy#[3] == 1
+
+  // ---- Scoreboards for long-latency results (dcache, div, VPU, fast local barrier) ----
+  const scoreboard_fp = intpipe_fp_scoreboard(rd_thread_id=id_thread_id, rd_addr=id_fp_hazard_addr, dcache_scoreboard=id_dcache_scoreboard, vpu_scoreboard=(fp_dest=id_vpu_ctrl.scoreboard.fp_dest, fp_valid=id_vpu_ctrl.scoreboard.fp_valid))
+  const scoreboard_mask = intpipe_mask_scoreboard(rd_thread_id=id_thread_id, rd_addr=id_mask_raddr_hazard, wd_addr=id_mask_waddr_hazard, vpu_scoreboard=(mask_dest=id_vpu_ctrl.scoreboard.mask_dest, mask_valid=id_vpu_ctrl.scoreboard.mask_valid))
+
+  // Anything pending for thread 0: dcache FP loads, VPU operations (both threads below the trans
+  // slots, because tensor instructions interfere with the trans sequencer) and a trans insertion.
+  mut pending_t0 = false
+  for i in 0..<DCACHE_SB_SLOTS {
+    if id_dcache_scoreboard.valid#[i] == 1 and id_dcache_scoreboard.dest#[7*i + 6] == 1 and id_dcache_scoreboard.dest#[7*i] == 0 {
+      pending_t0 = true
+    }
+  }
+  for i in 0..<VPU_FP_SB_SLOTS {
+    if id_vpu_ctrl.scoreboard.fp_valid#[i] == 1 and (i < TRANS_SB_SLOTS or id_vpu_ctrl.scoreboard.fp_dest#[7*i] == 0) {
+      pending_t0 = true
+    }
+  }
+  id_pending_scoreboard_t0 = pending_t0 or id_vpu_ctrl.id_trans_insert == 1
+
+  // ---- IPI redirect: a registered inter-processor interrupt can force a PC ----
+  ipi_with_pc = interrupts.ipi_with_pc
+  if interrupts.ipi_with_pc != 0 {
+    ipi_pc_reg = interrupts.ipi_pc
+  }
+  const ipi_pc:U48 = ipi_pc_reg << 1
+  const imm_src2 = intpipe_imm(inst_bits=id_inst, sel_imm=id_ctrl.sel_imm)
+
+  // ---- Integer ALU (operands are registered at the EX boundary) ----
+  const alu = intpipe_alu(dw=ex_ctrl#[29], fn=ex_ctrl#[24..=28], in1=ex_op1, in2=ex_op2)
+
+  // Unpacked per-stage control words.
+  const ex_c = ctrl_unpack(w=ex_ctrl)
+  const tag_c = ctrl_unpack(w=tag_ctrl)
+  const mem_c = ctrl_unpack(w=mem_ctrl)
+  const wb_c = ctrl_unpack(w=wb_ctrl)
+  const ex_csr_en = ex_c.csr != minion_pkg.CsrN
+  const tag_csr_en = tag_c.csr != minion_pkg.CsrN
+  const mem_csr_en = mem_c.csr != minion_pkg.CsrN
+  const wb_csr_en = wb_c.csr != minion_pkg.CsrN
+
+  // ---- Integer register file (read in ID, written from WB) ----
+  const rf = intpipe_rf(rd_en=(U1(id_c.rxs2) << 1) | U1(id_c.rxs1), rd_thread_id=id_thread_id, rd_addr=id_raddr, wr_en=U1(wb_rf_wen), wr_en_early=U1(wb_rf_wen_early), wr_thread_id=wb_rf_thread_id, wr_addr=wb_rf_waddr, wr_data=wb_rf_wdata)
+  // X31 of the WB thread, for the dcache.
+  const wb_x31 = rf.wb_x31_reg#[(64*wb_thread_id)..<(64*wb_thread_id + 64)]
+
+  // Exception cause as the CSR file sees it, with the interrupt/exception flag.
+  const wb_reg_cause_ie = (const cause:U5=wb_reg_cause, const interrupt_x:U1=U1(wb_reg_xcpt_interrupt), const reserved1:U58=0)
+
+  // ---- CSR file: status registers, interrupts, exceptions, debug, and the tensor/cache-op CSR commands ----
+  const csr_file = intpipe_csr_file(test_en=0, dft__reset_byp=dft__reset_byp, dft__reset=dft__reset, rst_ni=rst_ni, rst_w_ni=rst_w_ni, rst_d_ni=rst_d_ni, int_mieco=intpipe_int_mieco, int_mtip=intpipe_int_mtip, int_msip=intpipe_int_msip, int_meip=intpipe_int_meip, int_seip=intpipe_int_seip, int_fcc=intpipe_int_fcc, shire_id=shire_id, shire_min_id=shire_min_id, wb_thread_id=wb_thread_id, mem_thread_id=mem_thread_id, dcache_ctrl_resp=dcache_ctrl_resp, pending_scoreboard_t0=U1(id_pending_scoreboard_t0), vpu_tfma_enabled=U1(id_vpu_ctrl.tfma_enabled == 1 or csr_tensorfma_start), vpu_tfma_tenb_working=vpu_tfma_tenb_working, vpu_tquant_enabled=U1(id_vpu_ctrl.tquant_enabled == 1 or csr_tensorquant_start), vpu_treduce_enabled=id_vpu_ctrl.reduce_enabled, io_rw_mem_addr=mem_reg_inst#[20..=31], io_rw_wb_cmd=wb_csr_rw_cmd, io_rw_mem_cmd=mem_csr_rw_cmd, io_rw_wb_inst=wb_reg_inst#[20..=22], io_rw_mem_wdata=mem_reg_wdata, io_rw_wb_wdata=wb_reg_wdata, io_rw_wb_waddr=wb_waddr, wb_x31_reg=wb_x31, l2_resp_valid=l2_resp_valid, l2_resp_ready=l2_resp_ready, l2_resp=l2_resp, io_events_ext=(tbranch_up, io_events_dcache_vpu)#[..], io_exception=U1(wb_reg_xcpt), io_retire=U1(wb_retire), io_cause=wb_reg_cause_ie, io_pc=wb_reg_pc, io_badaddr=wb_dcache_resp.addr, io_inst_bits=wb_reg_inst, io_inst_rvc=U1(wb_reg_rvc), io_bad_redirect=id_bad_redirect, io_redirect=id_take_redirect, io_fcsr_flags_valid=wb_vpu_ctrl.fcsr_flags_valid, io_fcsr_flags_bits=wb_vpu_ctrl.fcsr_flags, io_fcsr_thread_id=wb_vpu_ctrl.thread_id, dcache_bus_error=(e0=dcache_bus_error#[0], e1=dcache_bus_error#[1]), dcache_bus_error_addr=dcache_bus_error_addr, debug_timing=debug_timing, bp_progress_save=U1(mem_dcache_bp_triggered and mem_c.gsc), read_ddata0=read_ddata0, halt=(e0=halt#[0], e1=halt#[1]), resume=resume, ex_progbuf=debug_ex_program_buffer, flb_neigh_resp_valid=flb_neigh_resp_valid, flb_neigh_resp_data=flb_neigh_resp_data, flb_rf_wen_ready=U1(wb_flb_wen_ready), te_thread_sel=te_thread_sel, esr_shire_coop_mode=esr_shire_coop_mode, esr_features=esr_features, tensor_load_err_flags=tensor_load_err_flags, cache_ops_err_flags=cache_ops_err_flags, tensor_reduce_err_flags=tensor_reduce_err_flags, pmu_read_data=pmu_read_data, dcache_debug_signals=dcache_debug_signals)
+  csr_tensorfma_start = csr_file.vpu_ctrl.tensorfma_start == 1
+  csr_tensorquant_start = csr_file.vpu_ctrl.tensorquant_start == 1
+
+  const csr_excl_mode_transition = csr_file.io_excl_mode_transition == 1
+  const id_csr_interrupt:U2 = (csr_file.io_interrupt.e1 << 1) | csr_file.io_interrupt.e0
+  const id_single_step:U2 = (csr_file.io_singleStep.e1 << 1) | csr_file.io_singleStep.e0
+  // Threads that are in exclusive mode with the other thread selected must not issue.
+  const excl_mode_blocks = csr_file.io_excl_mode == 1 and csr_file.io_excl_mode_sel != id_thread_id
+
+  // ---- Multiply / divide unit (one request per cycle, response through the WB write port) ----
+  const ex_div_req = ex_reg_valid and ex_c.div
+  const mul_div = intpipe_mul_div_top(rst_ni=rst_w_ni, dft_i=(ram_rei=0, ram_wei=0, scan_reset_n=0, scanmode=0, sram_clk_override=0), req_valid=U1(ex_div_req), req_valid_early=U1(id_valid_qual and id_c.div), req_fn=ex_c.alu_fn, req_fn_early=id_c.alu_fn, req_dw=ex_c.alu_dw, req_in1=ex_reg_data#[0..<64], req_in2=ex_reg_data#[64..<128], req_dest=(addr=ex_waddr, fp=0, thread_id=ex_thread_id), kill=U1(div_kill), chicken_bit_mul_div=chicken_bit_intpipe, resp_ready=U1(wb_div_resp_ready))
+  const ex_div_ready = mul_div.req_ready == 1
+  const wb_div_resp_valid = mul_div.resp_valid == 1
+  const wb_div_resp_dest = mul_div.resp_dest
+
+  // ---- Gather/scatter bookkeeping in ID ----
+  const id_reg_gsc_cnt = csr_file.gsc_progress#[(3*id_thread_id)..<(3*id_thread_id + 3)]
+  wire id_keepgsc:Bool = nil
+  wire ex_gsc_busy:Bool = nil
+  id_keepgsc = ex_gscing and not ex_ctrl_kill and id_dcache_ready == 1
+  ex_gsc_busy = (ex_gscing or gsc_reg_gscing) and not ex_ctrl_kill
+
+  // ---- Instruction pattern for the mcode trap, fences and exclusive mode ----
+  // minstmask/minstmatch hold one 33-bit mask (+enable in bit 32) and one 32-bit match value per thread.
+  const minst_mask = csr_file.io_minstmask#[(33*id_thread_id)..<(33*id_thread_id + 33)]
+  const minst_match_bits = csr_file.io_minstmatch#[(32*id_thread_id)..<(32*id_thread_id + 32)]
+  const minst_match = ((id_inst ^ minst_match_bits) & minst_mask#[0..=31]) == 0 and minst_mask#[32] == 1
+  // Faults and mcode instructions have no meaningful opcode.
+  const id_xcpt_ignore_opcode = id_xcpt_af or id_xcpt_pf or id_fetch_bus_error or id_fetch_ecc_error or id_c.mcode or minst_match
+  // A fence (or acquire atomic) puts the thread in fence mode until its dcache traffic drains.
+  const id_fence_new = id_c.fence and not id_xcpt_ignore_opcode
+
+  const ex_same_thread = ex_reg_valid and ex_thread_id == id_thread_id
+  const tag_same_thread = tag_reg_valid and tag_thread_id == id_thread_id
+  const mem_same_thread = mem_reg_valid and mem_thread_id == id_thread_id
+  const wb_same_thread = wb_reg_valid and wb_thread_id == id_thread_id
+
+  // Per thread: is a CSR access in flight (it may start dcache work), and is the dcache busy.
+  mut id_csr_inflight:U2 = 0
+  mut id_dcache_busy:U2 = 0
+  mut id_reg_fence_next:U2 = 0
+  for i in 0..<2 {
+    id_csr_inflight#[i] = U1((ex_reg_valid and ex_csr_en and ex_thread_id == i) or (tag_reg_valid and tag_csr_en and tag_thread_id == i) or (mem_reg_valid and mem_csr_en and mem_thread_id == i) or (wb_reg_valid and wb_csr_en and wb_thread_id == i))
+    id_dcache_busy#[i] = U1(id_dcache_ordered#[i] == 0 or (ex_dcache_req_en and ex_thread_id == i) or id_csr_inflight#[i] == 1)
+    id_reg_fence_next#[i] = U1((id_fence_new and id_valid_qual and id_thread_id == i) or (id_reg_fence#[i] == 1 and id_dcache_busy#[i] == 1))
+  }
+  id_reg_fence = id_reg_fence_next
+  // The instruction may not move on while fenced and it is a memory instruction, CSR access or fence.
+  const id_csr_en = id_c.csr != minion_pkg.CsrN
+  const id_do_fence = id_dcache_busy#[id_thread_id] == 1 and id_reg_fence#[id_thread_id] == 1 and (id_c.mem or id_csr_en or id_c.fence) and not id_xcpt_ignore_opcode
+
+  // Exclusive-mode stalls: waiting for the dcache to drain, about to start a gather/scatter while
+  // an older instruction may enter exclusive mode (the other thread's, hence no thread check), or transitioning.
+  csr_excl_mode_stall_dcache = if csr_excl_mode_transition { true }
+    elif csr_excl_mode_stall_dcache { id_dcache_idle == 0 }
+    else { csr_excl_mode_stall_dcache }
+  const csr_excl_mode_stall = csr_excl_mode_stall_dcache or (id_c.gsc and ((ex_csr_excl_mode and ex_reg_valid) or (tag_csr_excl_mode and tag_reg_valid) or (mem_csr_excl_mode and mem_reg_valid))) or csr_excl_mode_transition
+
+  // ---- Register bypass into ID: EX ALU, TAG, MEM, the dcache response, then WB, else the register file ----
+  mut id_reg_data:U128 = 0
+  for i in 0..<2 {
+    const raddr = id_raddr#[(5*i)..<(5*i + 5)]
+    const not_zero = raddr != 0
+    id_reg_data#[(64*i)..<(64*i + 64)] = if not_zero and ex_same_thread and ex_c.wxd and ex_waddr == raddr {
+      alu.out
+    } elif not_zero and tag_same_thread and tag_c.wxd and tag_waddr == raddr {
+      tag_reg_wdata
+    } elif not_zero and mem_same_thread and mem_c.wxd and mem_waddr == raddr {
+      mem_reg_wdata
+    } elif not_zero and wb_dcache_resp.dest.thread_id == id_thread_id and wb_dcache_wen and wb_dcache_resp.dest.addr == raddr {
+      wb_dcache_resp.data#[0..<64]
+    } elif not_zero and wb_thread_id == id_thread_id and wb_wen and wb_waddr == raddr {
+      wb_reg_wdata
+    } else {
+      rf.rd_data#[(64*i)..<(64*i + 64)]
+    }
+  }
+
+  // ---- Fetch breakpoint and ID exceptions ----
+  const fetch_bp = debug_breakpoint<TriggerType=0>(control_ip=csr_file.bp_control, in_debug_ip=csr_file.io_debug, prv_ip=csr_file.io_prv, tdata2_ip=csr_file.bp_address, address_ip=id_pc, valid_ip=U1(id_valid_qual), thread_id_ip=id_thread_id)
+  id_bp_xcpt = fetch_bp.xcpt_op == 1
+  // A fault in the second half of a split fetch; a breakpoint has priority over a page fault.
+  const id_split_fetch_fault = if id_fe_resp.af1 == 1 { id_fe_resp.af0 == 0 }
+    elif id_bp_xcpt { false }
+    elif id_fe_resp.pf1 == 1 { id_fe_resp.pf0 == 0 }
+    else { false }
+  const id_illegal_insn = not id_c.legal or (id_c.fp and csr_file.io_status#[(6*id_thread_id)] == 0) or (id_c.gfx and esr_features.trap_on_gfx == 1)
+
+  // Exception cause by priority; the lowest priority (mcode) is the default.
+  mut id_xcpt = true
+  mut id_xcpt_cause:U5 = minion_pkg.XcptMcodeInstruction
+  if id_csr_interrupt#[id_thread_id] == 1 {
+    id_xcpt_cause = csr_file.io_interrupt_cause#[(5*id_thread_id)..<(5*id_thread_id + 5)]
+  } elif fetch_bp.enter_debug_op == 1 {
+    id_xcpt_cause = minion_pkg.XcptDebug
+  } elif id_bp_xcpt {
+    id_xcpt_cause = minion_pkg.XcptBreakpoint
+  } elif id_xcpt_af and id_valid {
+    id_xcpt_cause = minion_pkg.XcptFetchAccess
+  } elif id_xcpt_pf and id_valid {
+    id_xcpt_cause = minion_pkg.XcptFetchPageFault
+  } elif id_fetch_bus_error and id_valid {
+    id_xcpt_cause = minion_pkg.XcptFetchBusError
+  } elif id_fetch_ecc_error and id_valid {
+    id_xcpt_cause = minion_pkg.XcptFetchEccError
+  } elif id_illegal_insn and id_valid {
+    id_xcpt_cause = minion_pkg.XcptIllegalInstruction
+  } elif (id_c.mcode or minst_match) and id_valid {
+    id_xcpt_cause = minion_pkg.XcptMcodeInstruction
+  } else {
+    id_xcpt = false
+  }
+
+  // ---- CSR instruction classification ----
+  const id_csr_addr = id_inst#[20..=31]
+  const id_system_insn = id_c.csr == minion_pkg.CsrI
+  const id_csr_ren = (id_c.csr == minion_pkg.CsrS or id_c.csr == minion_pkg.CsrC) and id_raddr1 == 0
+  // CSRs whose write does not require draining the pipe first.
+  const id_csr_wr_safe = id_csr_addr in (intpipe_csr_pkg.csr_ad_CO_EVICT_VA, intpipe_csr_pkg.csr_ad_CO_FLUSH_VA, intpipe_csr_pkg.csr_ad_CO_LOCK_VA, intpipe_csr_pkg.csr_ad_CO_UNLOCK_VA, intpipe_csr_pkg.csr_ad_CO_PREFETCH_VA, intpipe_csr_pkg.csr_ad_TENSOR_LOAD, intpipe_csr_pkg.csr_ad_TENSOR_FMA, intpipe_csr_pkg.csr_ad_TENSOR_QUANT, intpipe_csr_pkg.csr_ad_TENSOR_REDUCE, intpipe_csr_pkg.csr_ad_TENSOR_STORE, intpipe_csr_pkg.csr_ad_TENSOR_CONV_CTRL, intpipe_csr_pkg.csr_ad_TENSOR_WAIT, intpipe_csr_pkg.csr_ad_TENSOR_COOPERATION, intpipe_csr_pkg.csr_ad_FLB, intpipe_csr_pkg.csr_ad_FCC)
+  // A CSR write that changes VPU register-file contents.
+  const id_csr_vpu = id_csr_en and not id_csr_ren and id_csr_addr in (intpipe_csr_pkg.csr_ad_TENSOR_REDUCE, intpipe_csr_pkg.csr_ad_TENSOR_FMA, intpipe_csr_pkg.csr_ad_TENSOR_QUANT, intpipe_csr_pkg.csr_ad_TENSOR_STORE)
+  const id_csr_excl_mode = id_csr_en and not id_csr_ren and id_csr_addr == intpipe_csr_pkg.csr_ad_EXCL_MODE
+  // This CSR instruction needs a flush behind it.
+  const id_csr_flush = id_system_insn or (id_csr_en and not (id_csr_ren or id_csr_wr_safe))
+  // A CSR instruction of this thread that needs a flush is still in the pipe.
+  const id_csr_flush_stall = (ex_same_thread and ex_csr_flush) or (tag_same_thread and tag_csr_flush) or (mem_same_thread and mem_csr_flush) or (wb_same_thread and wb_csr_flush)
+  // A reading CSR with no read side effect becomes a plain CSR read.
+  const id_csr_cmd:U3 = if id_csr_ren { minion_pkg.CsrR } else { id_c.csr }
+
+  // ---- Hazards of the ID instruction against the older stages ----
+  const ex_hazard = stage_hazard(c=ex_c, cannot_bypass=ex_csr_en or ex_c.jalr or ex_c.mem or ex_c.div or ex_c.fp, id=id_hazard, raw_other=true, same_thread=id_thread_id == ex_thread_id, tointm=ex_vpu_ctrl.tointm, valid=ex_reg_valid or gsc_reg_valid, waddr=ex_waddr, waw_other=ex_c.mem)
+  const tag_hazard = stage_hazard(c=tag_c, cannot_bypass=tag_csr_en or tag_c.mem or tag_c.div or tag_c.fp, id=id_hazard, raw_other=tag_c.mem or tag_vpu_ctrl.fma == 1, same_thread=id_thread_id == tag_thread_id, tointm=tag_vpu_ctrl.tointm, valid=tag_reg_valid, waddr=tag_waddr, waw_other=tag_c.mem)
+  const mem_hazard = stage_hazard(c=mem_c, cannot_bypass=mem_csr_en or mem_c.mem or mem_c.div or mem_c.fp, id=id_hazard, raw_other=mem_c.mem or mem_vpu_ctrl.fma == 1, same_thread=id_thread_id == mem_thread_id, tointm=mem_vpu_ctrl.tointm, valid=mem_reg_valid, waddr=mem_waddr, waw_other=mem_c.mem)
+  const wb_hazard = stage_hazard(c=wb_c, cannot_bypass=wb_csr_en or wb_c.div or wb_c.fp, id=id_hazard, raw_other=wb_vpu_ctrl.fma == 1, same_thread=id_thread_id == wb_thread_id, tointm=wb_vpu_ctrl.tointm, valid=wb_reg_valid, waddr=wb_waddr, waw_other=wb_vpu_ctrl.fma == 1 or wb_c.mem)
+  const id_ctrl_stall_hazard = ex_hazard or tag_hazard or mem_hazard or wb_hazard
+
+  const scoreboard_int = intpipe_int_scoreboard(rd_thread_id=id_thread_id, rd_addr=id_int_hazard_addr, dcache_scoreboard=id_dcache_scoreboard, int_div_valid=U1(not ex_div_ready), int_div_dest=wb_div_resp_dest, int_flb_valid=csr_file.flb_scoreboard_valid, int_flb_dest=csr_file.flb_scoreboard_addr, vpu_scoreboard=(toint_dest=id_vpu_ctrl.scoreboard.toint_dest, toint_valid=id_vpu_ctrl.scoreboard.toint_valid))
+  const id_int_sboard_hazard = (scoreboard_int.rd_data & id_int_hazard_en) != 0 or (scoreboard_int.rd_x31 == 1 and id_c.x31)
+
+  // ---- Stall reasons for the ID instruction ----
+  const vpu_csr_pending = ex_csr_vpu or tag_csr_vpu or mem_csr_vpu or wb_csr_vpu
+  const id_vpu_mask_read = id_frontend_vpu_ctrl.m0ren == 1 or id_frontend_vpu_ctrl.mallren == 1 or id_frontend_vpu_ctrl.mren1 == 1 or id_frontend_vpu_ctrl.mren2 == 1
+  const id_stall_vpu = (scoreboard_fp.rd_data & id_fp_hazard_en) != 0 or scoreboard_mask.rd_data != 0 or scoreboard_mask.wd_data != 0 or id_vpu_ctrl.tfma_wrrf_enabled == 1 or csr_tensorfma_start or id_vpu_ctrl.tquant_enabled == 1 or csr_tensorquant_start or id_vpu_ctrl.reduce_enabled == 1 or vpu_csr_pending
+  const id_ctrl_stall_hazard_vpu = id_c.fp and (id_stall_vpu or (id_vpu_mask_read and wb_vpu_ctrl.mova_mx == 1))
+  // Divide: the unit must be free, and fairness with the other thread's pending request.
+  const id_ctrl_stall_div = id_c.div and (not ex_div_ready or (wb_div_resp_valid and not wb_div_resp_ready) or ex_div_req)
+  const id_ctrl_stall_div_dist = id_c.div and muldiv_needed#[~id_thread_id] == 1 and id_thread_id != next_muldiv_thread
+  // The trans unit is going to use the WB slot.
+  const id_ctrl_stall_trans = (id_vpu_ctrl.id_trans_insert == 1 and id_c.fp) or (id_vpu_ctrl.trans_busy == 1 and id_c.fp and id_c.gsc)
+  const id_ctrl_stall_dcache = id_dcache_ready == 0 and id_c.mem
+  const id_ctrl_stall_csr = (id_csr_en and not id_csr_wr_safe and (ex_same_thread or tag_same_thread or mem_same_thread or wb_same_thread or trans_draining or (id_csr_addr in (intpipe_csr_pkg.csr_ad_FCSR, intpipe_csr_pkg.csr_ad_FFLAGS) and id_vpu_ctrl.fflags_stall == 1))) or id_csr_flush_stall or (id_csr_addr in (intpipe_csr_pkg.csr_ad_UCACHE_CONTROL, intpipe_csr_pkg.csr_ad_SATP, intpipe_csr_pkg.csr_ad_MATP, intpipe_csr_pkg.csr_ad_MENABLE_SHADOWS, intpipe_csr_pkg.csr_ad_MCACHE_CONTROL) and ex_reg_valid and ex_csr_en)
+  // FP-to-int results are written back late, so they stall an integer writer behind them.
+  const id_stall_fp2int = id_c.wxd and ((not id_c.fp and ex_reg_valid and ex_ctrl_fp_toint) or (tag_reg_valid and tag_ctrl_fp_toint) or (not id_c.fp and mem_reg_valid and mem_ctrl_fp_toint) or wb_dcache_fp_toint == 1)
+  const id_stall_gsc_progress = wb_reg_gscing and id_reg_gsc_cnt != 0 and id_c.gsc
+
+  // Trans-unit starvation: per-thread counters of stalls caused by the busy trans unit.
+  const stall_cnt_maxed:U2 = (U1(id_ctrl_stall_trans_cnt[0] == 7), U1(id_ctrl_stall_trans_cnt[1] == 7))#[..]
+  const id_ctrl_stall_trans_starve = is_trans_inst(inst=id_inst) and stall_cnt_maxed#[~id_thread_id] == 1
+
+  const id_ctrl_stall = id_ctrl_stall_hazard or id_ctrl_stall_hazard_vpu or id_int_sboard_hazard or id_ctrl_stall_div or id_ctrl_stall_div_dist or id_ctrl_stall_trans or id_ctrl_stall_trans_starve or id_do_fence or id_ctrl_stall_dcache or id_ctrl_stall_csr or csr_file.fe_ctrl_stall#[id_thread_id] == 1 or ex_gsc_busy or id_stall_fp2int or id_stall_gsc_progress
+  const id_ctrl_kill = id_inst_replay or id_take_pc or id_ctrl_stall or id_csr_interrupt#[id_thread_id] == 1 or excl_mode_blocks or csr_excl_mode_stall
+  id_valid_qual = id_valid and not id_ctrl_kill
+
+  mut stall_cnt_next:U6 = id_ctrl_stall_trans_cnt#[0..<6]
+  if csr_file.io_excl_mode == 1 or thread0_enable == 0 or thread1_enable == 0 {
+    // Exclusive mode or a disabled thread: nothing can starve.
+    stall_cnt_next = 0
+  } elif id_valid_qual or not trans_draining {
+    stall_cnt_next#[(3*id_thread_id)..<(3*id_thread_id + 3)] = 0
+  } elif stall_cnt_maxed#[id_thread_id] == 0 and (id_ctrl_stall_trans or (id_csr_en and not id_csr_wr_safe and trans_draining) or (id_vpu_ctrl.tfma_enabled == 1 and id_pending_scoreboard_t0)) {
+    stall_cnt_next#[(3*id_thread_id)..<(3*id_thread_id + 3)] = (id_ctrl_stall_trans_cnt[id_thread_id] + 1)#[0..<3]
+  }
+  // A thread that is redirected or stalled by the front end is not waiting for the trans unit.
+  for i in 0..<2 {
+    if id_fe_stall_v#[i] == 1 or id_fe_req_valid#[i] == 1 {
+      stall_cnt_next#[(3*i)..<(3*i + 3)] = 0
+    }
+  }
+  if reset_w {
+    id_ctrl_stall_trans_cnt#[0..<6] = 0
+  } else {
+    id_ctrl_stall_trans_cnt#[0..<6] = stall_cnt_next
+  }
+
+  // ---- Redirects from IPIs ----
+  mut id_redirect_allowed:U2 = 0
+  for i in 0..<2 {
+    id_redirect_allowed#[i] = U1(csr_file.io_prv#[(2*i)..<(2*i + 2)] == minion_pkg.PrvU and csr_file.io_csr_stall#[i] == 1)
+  }
+  id_bad_redirect = ipi_with_pc & ~id_redirect_allowed
+  id_take_redirect = ipi_with_pc & id_redirect_allowed
+
+  // ---- Stalls reported to the front end: do not send more for a thread until the cause changes ----
+  mut fence_fe_stall_next:U2 = fence_fe_stall
+  if id_do_fence and id_valid {
+    fence_fe_stall_next#[id_thread_id] = 1
+  }
+  fence_fe_stall = fence_fe_stall_next & id_dcache_busy & ~id_fe_req_valid
+
+  mut int_sboard_fe_stall_next:U2 = int_sboard_fe_stall
+  if (scoreboard_int.rd_data_dcache_div & id_int_hazard_en) != 0 and id_valid {
+    int_sboard_fe_stall_next#[id_thread_id] = 1
+  }
+  int_sboard_fe_stall = if ex_div_ready and not ex_div_ready_prev { 0 } else { int_sboard_fe_stall_next & ~id_dcache_sb_int_dealloc }
+
+  const new_id_fp_stall_dcache = (scoreboard_fp.rd_data_dcache & id_fp_hazard_en) != 0 and not (id_reg_gsc_cnt != 0 and id_c.gsc)
+  mut fp_sboard_fe_stall_next:U2 = fp_sboard_fe_stall
+  if new_id_fp_stall_dcache and id_valid {
+    fp_sboard_fe_stall_next#[id_thread_id] = 1
+  }
+  fp_sboard_fe_stall = fp_sboard_fe_stall_next & ~id_dcache_sb_fp_dealloc
+
+  // The mul/div unit is shared: remember which thread has been waiting for it.
+  mut muldiv_needed_next:U2 = muldiv_needed & ~id_fe_stall_v & ~id_fe_req_valid
+  if csr_file.io_excl_mode == 1 or thread0_enable == 0 or thread1_enable == 0 {
+    muldiv_needed_next = 0
+  } elif id_valid and (id_ctrl_stall_div or id_ctrl_stall_div_dist) {
+    muldiv_needed_next#[id_thread_id] = 1
+  } elif id_valid_qual {
+    muldiv_needed_next#[id_thread_id] = 0
+  }
+  muldiv_needed = muldiv_needed_next
+  ex_div_ready_prev = ex_div_ready
+  if ex_div_req {
+    next_muldiv_thread = U1(ex_thread_id == 0)
+  }
+
+  // ---- Request to the front end: per thread a redirect (resume, exception/eret, replay, TAG
+  // misprediction, IPI, in that priority) plus whether the thread has instructions in flight ----
+  mut fe_req_valid:U2 = 0
+  mut fe_req_stall:U2 = 0
+  mut fe_req_bits:U104 = 0
+  for i in 0..<2 {
+    fe_req_valid#[i] = U1((tag_take_pc and tag_thread_id == i) or (wb_take_pc and wb_thread_id == i) or csr_file.io_resume#[i] == 1 or id_take_redirect#[i] == 1)
+    const fe_pc:U49 = if csr_file.io_resume#[i] == 1 { csr_file.io_evec_resume }
+      elif (wb_xcpt or csr_file.io_eret == 1) and wb_thread_id == i { csr_file.io_evec }
+      elif (wb_reg_replay or csr_file.io_replay == 1) and wb_thread_id == i { wb_reg_pc }
+      elif tag_take_pc and tag_thread_id == i { tag_npc }
+      else { ipi_pc#sext[0..=47]#[0..<49] }
+    // Speculative whenever the thread has an instruction in flight.
+    const fe_speculative = (ex_reg_valid and ex_thread_id == i) or (tag_reg_valid and tag_thread_id == i) or (mem_reg_valid and mem_thread_id == i) or (wb_reg_valid and wb_thread_id == i)
+    const fe_debug_info:U2 = (csr_file.io_resume#[i], U1(csr_file.xcpt_traps_to_debug == 1 and wb_thread_id == i))#[..]
+    const fe_req_i:U52 = (fe_debug_info, U1(fe_speculative), fe_pc)#[..]
+    fe_req_bits#[(52*i)..<(52*i + 52)] = fe_req_i
+    fe_req_stall#[i] = U1(csr_file.fe_ctrl_stall#[i] == 1 or (csr_file.io_excl_mode == 1 and csr_file.io_excl_mode_sel != i) or fence_fe_stall#[i] == 1 or int_sboard_fe_stall#[i] == 1 or fp_sboard_fe_stall#[i] == 1)
+  }
+  id_fe_req_valid = fe_req_valid
+  id_fe_stall_v = fe_req_stall
+  id_take_pc = fe_req_valid#[id_thread_id] == 1
+
+  // ---- ID -> EX control: the decoded control with the CSR command, ALU configuration and
+  // exception overrides ----
+  // Uses the ALU (not mul/div), also for faulting fetches which compute the faulting PC.
+  const id_uses_alu = (id_c.alu_fn#[4] == 0 or id_xcpt_pf or id_xcpt_af or id_bp_xcpt) and id_valid_qual
+  // A fetch fault becomes PC+0 (or PC+2 for a fault in the second half of a split fetch).
+  const id_fetch_fault = id_xcpt_af or id_xcpt_pf or id_bp_xcpt
+  // An instruction that does not use the ALU leaves its configuration alone.
+  const id_keep_alu = not id_uses_alu and not id_c.div
+  const to_ex_alu_fn:U5 = if id_fetch_fault { minion_pkg.AluAdd } elif id_keep_alu { ex_c.alu_fn } else { id_c.alu_fn }
+  const to_ex_alu_dw:U1 = if id_fetch_fault { minion_pkg.Dw64 } elif id_keep_alu { ex_c.alu_dw } else { id_c.alu_dw }
+  const to_ex_sel_alu1:U2 = if id_fetch_fault { minion_pkg.A1Pc } else { id_c.sel_alu1 }
+  const to_ex_sel_alu2:U2 = if id_fetch_fault { if id_split_fetch_fault { minion_pkg.A2Size } else { minion_pkg.A2Zero } }
+    else { id_c.sel_alu2 }
+  const id_rvc = if id_fetch_fault { id_split_fetch_fault } else { id_fe_resp.rvc == 1 }
+  // No dcache request for an excepting instruction.
+  const id_to_ex_word = ctrl_pack(alu_dw=to_ex_alu_dw, alu_fn=to_ex_alu_fn, c=id_c, csr=id_csr_cmd, gsc=id_c.gsc and not id_xcpt, mem=id_c.mem and not id_xcpt, sel_alu1=to_ex_sel_alu1, sel_alu2=to_ex_sel_alu2)
+
+  const id_replay = not id_take_pc and id_valid and id_inst_replay
+  const id_xcpt_interrupt = not id_take_pc and id_valid and id_csr_interrupt#[id_thread_id] == 1 and not id_csr_flush_stall and not ex_gsc_busy
+  // Sample the instruction bits and PC into EX.
+  const id_inst_en = id_valid_qual or id_xcpt_interrupt or (id_inst_replay and id_valid)
+
+  // The VPU gets the instruction too; the dcache replay queue is pre-allocated for memory
+  // instructions in ID and confirmed in EX.
+  id_vpu_req = (fcsr_rm=if id_valid_qual and id_c.fp and id_thread_id != 0 { csr_file.io_fcsr_rm_thread1 }
+      else { csr_file.io_fcsr_rm_thread0 }, inst_bits=id_inst, thread_id=id_thread_id, valid=U1(id_valid_qual and id_c.fp))
+  id_dcache_alloc_rq_pre = U1((id_valid and id_c.mem) or id_keepgsc)
+  id_dcache_gsc = U1(id_c.gsc or id_keepgsc)
+  id_fe_resp_ready = U1(id_valid_qual)
+
+  // ================================ EX stage ================================
+  ex_reg_valid = id_valid_qual or id_keepgsc
+  ex_ctrl_fp_toint = id_c.wxd and id_c.fp
+  if id_valid_qual or id_xcpt_interrupt {
+    ex_ctrl = id_to_ex_word
+  }
+  if id_valid_qual {
+    ex_reg_rvc = id_rvc
+    ex_reg_flush_pipe = id_single_step#[id_thread_id] == 1
+  }
+  // rs1 is captured whole for div, only its gather/scatter index (low 40 bits) for G32/SC32; rs2 for div and stores.
+  if id_valid_qual and id_c.div {
+    ex_reg_data#[GSC32_IDX_BITS..<64] = id_reg_data#[GSC32_IDX_BITS..<64]
+  }
+  if id_valid_qual and ((id_c.mem and id_c.mem_cmd in (minion_pkg.DcCmdG32, minion_pkg.DcCmdSc32)) or id_c.div) {
+    ex_reg_data#[0..<GSC32_IDX_BITS] = id_reg_data#[0..<GSC32_IDX_BITS]
+  }
+  if id_valid_qual and id_c.rxs1 and id_frontend_vpu_ctrl.fromint == 1 and id_c.fp {
+    vpu_ex_reg_data = id_reg_data#[0..<64]
+  }
+  if id_valid_qual and (id_c.div or (id_c.mem and id_c.rxs2)) {
+    ex_reg_data#[64..<128] = id_reg_data#[64..<128]
+  }
+  if id_xcpt {
+    ex_reg_cause = id_xcpt_cause
+  }
+  if id_inst_en {
+    ex_reg_pc = id_pc
+    ex_uses_alu = id_uses_alu
+    ex_thread_id = id_thread_id
+    ex_csr_flush = id_csr_flush
+  }
+  ex_reg_xcpt_interrupt = id_xcpt_interrupt and not id_take_pc
+  ex_reg_xcpt = id_valid_qual and id_xcpt
+  ex_reg_replay = id_replay
+  ex_csr_vpu = id_valid_qual and id_csr_vpu
+  ex_csr_excl_mode = id_csr_excl_mode
+  ex_dcache_alloc_rq_val = U1((id_valid_qual and id_c.mem) or id_keepgsc)
+
+  // Instruction bits are flopped only where later stages use them (power).
+  const ex_reg_inst_ff = intpipe_inst_bits_stage<BrMask=0xffffff80>(enable_i=U1(id_inst_en), is_csr_i=U1(id_csr_en), is_br_jal_i=U1(id_c.br or id_c.jal), te_enable_i=te_enable, xcpt_i=U1(id_valid_qual and (id_xcpt or id_c.fp)), in_i=id_inst)
+  const ex_reg_inst = ex_reg_inst_ff.out_o
+  ex_waddr = ex_reg_inst#[7..=11]
+
+  // Exceptions detected in EX: an illegal FP rounding mode (the default cause) or a late one from ID.
+  mut ex_xcpt = true
+  mut ex_xcpt_cause:U5 = minion_pkg.XcptIllegalInstruction
+  const ex_replay = ex_reg_replay or (csr_excl_mode_transition and ex_reg_valid)
+  if ex_reg_xcpt_interrupt or ex_reg_xcpt {
+    ex_xcpt_cause = ex_reg_cause
+  } elif not (ex_c.fp and ex_vpu_ctrl.illegal_rm == 1 and ex_reg_valid) {
+    ex_xcpt = false
+  }
+  ex_ctrl_kill = id_fe_req_valid#[ex_thread_id] == 1 or ex_replay or ((tag_replay or tag_dcache_bp_triggered) and tag_thread_id == ex_thread_id) or (mem_dcache_flush_pipeline == 1 and mem_thread_id == ex_thread_id)
+  const ex_valid_qual = ex_reg_valid and not ex_ctrl_kill and not ex_c.gsc
+  const ex_valid_qual_to_gsc = ex_reg_valid and not ex_ctrl_kill and ex_c.gsc and ex_gsc_fs_valid#[0] == 1
+  const ex_pc_valid = (ex_reg_valid or ex_replay or ex_reg_xcpt_interrupt) and not ex_c.gsc
+  const ex_pc_valid_to_gsc = (ex_reg_valid or ex_replay or ex_reg_xcpt_interrupt) and ex_c.gsc and not (tag_dcache_bp_triggered and tag_thread_id == ex_thread_id)
+
+  // ---- Kill a div issued earlier when the TAG or MEM instruction carrying it dies ----
+  tag_div_req = ex_div_req
+  mem_div_req = tag_div_req and not div_kill
+  div_kill = (tag_div_req and (not tag_reg_valid or tag_ctrl_kill)) or (mem_div_req and mem_ctrl_kill)
+
+  // ---- Gather/scatter FSM: ID keeps issuing one element per cycle while EX works through the lanes ----
+  ex_reg_gsc_cnt = if id_keepgsc and ex_gsc_fs_valid#[0] == 1 { (ex_reg_gsc_cnt + 1)#[0..<3] }
+    elif id_valid_qual { id_reg_gsc_cnt }
+    elif ex_ctrl_kill { LAST_LANE }
+    else { ex_reg_gsc_cnt }
+  // Still gathering/scattering while elements remain (or the last lane is the first one started).
+  ex_gscing = ex_c.gsc and (ex_reg_gsc_cnt != LAST_LANE or ex_gscing_one_lane) and not ex_ctrl_kill
+  const id_gscing_one_lane = id_valid_qual and id_reg_gsc_cnt == LAST_LANE and id_c.gsc
+  ex_gscing_one_lane = if id_gscing_one_lane { true } elif id_dcache_ready == 1 or id_valid_qual { false } else { ex_gscing_one_lane }
+  // Valid shift register for the VPU gather/scatter index word (gsc_fs), which arrives a cycle late: bit 0 means the word may be used.
+  ex_gsc_fs_valid = if id_valid_qual { 2 } elif ex_c.gsc and id_keepgsc { (2 | (ex_gsc_fs_valid >> 1))#[0..<2] } else { ex_gsc_fs_valid }
+
+  // ---- GSC stage ----
+  gsc_reg_valid = ex_valid_qual_to_gsc
+  gsc_reg_gsc_cnt = ex_reg_gsc_cnt
+  gsc_reg_gscing = ex_gscing
+  gsc_pc_valid = ex_pc_valid_to_gsc
+  gsc_reg_flush_pipe = ex_reg_flush_pipe
+  if ex_valid_qual_to_gsc {
+    gsc_reg_ps_mask = ex_vpu_ctrl.ps_mask
+  }
+  const gsc_valid_qual = gsc_reg_valid and not ex_ctrl_kill
+
+  ex_vpu_req = (fromint_data=vpu_ex_reg_data, gsc_src=ex_reg_gsc_cnt, gscing=U1(ex_gscing), kill=U1(ex_ctrl_kill), thread_id=ex_thread_id)
+
+  // ---- ALU operands, selected in ID ----
+  const gsc_fs_sext:U64 = ex_vpu_ctrl.gsc_fs#sext[0..=31]#[0..<64]
+  const id_op1:U64 = if ex_gsc_busy or to_ex_sel_alu1 == minion_pkg.A1Fs1 { gsc_fs_sext }
+    elif to_ex_sel_alu1 == minion_pkg.A1Rs1 { id_reg_data#[0..<64] }
+    elif to_ex_sel_alu1 == minion_pkg.A1Pc { id_pc#sext[0..=48]#[0..<64] }
+    else { 0 }
+  const id_op2:U64 = if to_ex_sel_alu2 == minion_pkg.A2Rs2 { id_reg_data#[64..<128] }
+    elif to_ex_sel_alu2 == minion_pkg.A2Imm { imm_src2 }
+    elif to_ex_sel_alu2 == minion_pkg.A2Size { if id_rvc { 2 } else { 4 } }
+    else { 0 }
+  if id_uses_alu or ex_gsc_busy {
+    ex_op1 = id_op1
+  }
+  if id_uses_alu {
+    ex_op2 = id_op2
+  }
+
+  // ---- Request to the dcache (EX, or the GSC stage for gather/scatter elements) ----
+  // The address must be canonical: bits 63..47 all equal.
+  const addr_hi = alu.adder_out#[47..<64]
+  ex_dcache_req_en = (ex_reg_valid and ex_c.mem and not ex_c.gsc) or gsc_reg_valid
+  ex_dcache_req_valid = U1(ex_dcache_req_en)
+  ex_dcache_req = (addr=alu.adder_out#[0..<48], addr_msb_err=U1(not (addr_hi == 0 or addr_hi == 0x1ffff)), cmd=ex_c.mem_cmd, dest=(addr=ex_waddr, fp=U1(ex_c.fp), thread_id=ex_thread_id), gsc32_idx=ex_reg_data#[0..<GSC32_IDX_BITS], gsc_cnt=gsc_reg_gsc_cnt, mem_global=U1(ex_c.mem_g), phys=0, ps_mask=if gsc_reg_valid {
+      gsc_reg_ps_mask
+    } else {
+      ex_vpu_ctrl.ps_mask
+    }, typ=ex_c.mem_type)
+  ex_dcache_gsc = U1(ex_valid_qual_to_gsc)
+
+  // ================================ TAG stage ================================
+  tag_reg_valid = ex_valid_qual or gsc_valid_qual
+  tag_reg_xcpt_interrupt = id_fe_req_valid#[ex_thread_id] == 0 and ex_reg_xcpt_interrupt
+  tag_reg_xcpt = ex_xcpt and ex_valid_qual
+  tag_reg_replay = ex_replay and not id_take_pc
+  tag_reg_gscing = gsc_reg_gscing
+  tag_ctrl_fp_toint = ex_c.wxd and ex_c.fp
+  tag_csr_vpu = ex_valid_qual and ex_csr_vpu
+  tag_csr_excl_mode = ex_csr_excl_mode
+  if ex_xcpt {
+    tag_reg_cause = ex_xcpt_cause
+  }
+  if ex_pc_valid or gsc_pc_valid {
+    tag_ctrl = ex_ctrl
+    tag_reg_rvc = ex_reg_rvc
+    tag_reg_flush_pipe = if gsc_pc_valid { gsc_reg_flush_pipe } else { ex_reg_flush_pipe }
+    tag_reg_pc = ex_reg_pc
+    tag_thread_id = ex_thread_id
+    tag_csr_flush = ex_csr_flush
+  }
+  if (ex_pc_valid or gsc_pc_valid) and ex_uses_alu {
+    tag_reg_wdata = alu.out
+  }
+  // Store data / atomic operand for integer memory operations.
+  if ex_c.rxs2 and ex_c.mem and ex_c.mem_cmd != minion_pkg.DcCmdXrd and not ex_c.fp {
+    tag_reg_rs2 = ex_reg_data#[64..<128]
+  }
+  const tag_reg_inst_ff = intpipe_inst_bits_stage<BrMask=0xffffff80>(enable_i=U1(ex_pc_valid or gsc_pc_valid), is_csr_i=U1(ex_csr_en), is_br_jal_i=U1(ex_c.br or ex_c.jal), te_enable_i=te_enable, xcpt_i=U1(ex_xcpt), in_i=ex_reg_inst)
+  const tag_reg_inst = tag_reg_inst_ff.out_o
+  tag_waddr = tag_reg_inst#[7..=11]
+
+  // ---- Branch resolution: the branch outcome is the ALU result bit 0 ----
+  const tag_br_taken = tag_reg_wdata#[0] == 1
+  mut tbranch_up_v:U2 = 0
+  tbranch_up_v#[tag_thread_id] = U1(tag_br_taken and tag_c.br)
+  tbranch_up = tbranch_up_v
+  const tag_sign:U1 = tag_reg_inst#[31]
+  const tag_sign_jal:U29 = if tag_sign == 1 { 0x1fffffff } else { 0 }
+  const tag_sign_br:U37 = if tag_sign == 1 { 0x1fffffffff } else { 0 }
+  const tag_jal_imm:U49 = (tag_sign_jal << 20) | (tag_reg_inst#[12..=19] << 12) | (tag_reg_inst#[20] << 11) | (tag_reg_inst#[21..=30] << 1)
+  const tag_br_imm:U49 = (tag_sign_br << 12) | (tag_reg_inst#[7] << 11) | (tag_reg_inst#[25..=30] << 5) | (tag_reg_inst#[8..=11] << 1)
+  // Next sequential PC or the taken-branch / JAL target.
+  const tag_pc_step:U49 = if tag_c.br and tag_br_taken { tag_br_imm } elif tag_c.jal { tag_jal_imm } elif tag_reg_rvc { 2 } else { 4 }
+  const tag_br_target:U49 = (tag_reg_pc + tag_pc_step)#[0..<49]
+  // JALR targets come from the ALU result, with bit 48 made the complement of bit 47 unless canonical.
+  const jalr_hi = tag_reg_wdata#[47..<64]
+  const jalr_bit48:U1 = if jalr_hi == 0x1ffff or jalr_hi == 0 { tag_reg_wdata#[47] } else { U1(tag_reg_wdata#[47] == 0) }
+  const jalr_target:U49 = (tag_reg_wdata#[0..<48], jalr_bit48)#[..]
+  mut tag_npc_v:U49 = if tag_c.jalr { jalr_target } else { tag_br_target }
+  tag_npc_v#[0] = 0
+  tag_npc = tag_npc_v
+  // A taken branch or a jump that does not trail an exception redirects fetch (compressed ISA is always on, so no misaligned-fetch exception).
+  const tag_misprediction = ((tag_c.br and tag_br_taken) or tag_c.jal or tag_c.jalr) and not (tag_reg_xcpt or tag_reg_xcpt_interrupt)
+  tag_take_pc = tag_reg_valid and (tag_misprediction or tag_reg_flush_pipe)
+  // A JALR writes the return address (the sequential PC) to rd, not its own target.
+  const tag_int_wdata:U64 = if not tag_reg_xcpt and tag_c.jalr { tag_br_target#sext[0..=48]#[0..<64] } else { tag_reg_wdata }
+
+  // ---- Data breakpoint and TAG exceptions ----
+  const dcache_bp = debug_breakpoint<TriggerType=1>(control_ip=csr_file.bp_control, in_debug_ip=csr_file.io_debug, prv_ip=csr_file.io_prv, tdata2_ip=csr_file.bp_address, address_ip=tag_dcache_bp.address, cmd_ip=tag_dcache_bp.cmd, valid_ip=tag_dcache_bp_valid, thread_id_ip=tag_dcache_bp.thread_id)
+  tag_dcache_bp_triggered = dcache_bp.update_op == 1
+  const tag_breakpoint = dcache_bp.xcpt_op == 1
+  const tag_debug_breakpoint = dcache_bp.enter_debug_op == 1
+  // Access faults precede page faults on purpose: a misaligned AMO may raise both and must report the access fault.
+  mut tag_new_xcpt = true
+  mut tag_new_cause:U5 = minion_pkg.XcptMisalignedFetch
+  if tag_debug_breakpoint {
+    tag_new_cause = minion_pkg.XcptDebug
+  } elif tag_breakpoint {
+    tag_new_cause = minion_pkg.XcptBreakpoint
+  } elif tag_c.mem and tag_dcache_xcpt.mf_ld == 1 {
+    tag_new_cause = minion_pkg.XcptMisalignedLoad
+  } elif tag_c.mem and tag_dcache_xcpt.mf_st == 1 {
+    tag_new_cause = minion_pkg.XcptMisalignedStore
+  } elif tag_c.mem and tag_dcache_xcpt.af_ld == 1 {
+    tag_new_cause = minion_pkg.XcptLoadAccess
+  } elif tag_c.mem and tag_dcache_xcpt.af_st == 1 {
+    tag_new_cause = minion_pkg.XcptStoreAccess
+  } elif tag_c.mem and tag_dcache_xcpt.ps_ld == 1 {
+    tag_new_cause = 16
+  } elif tag_c.mem and tag_dcache_xcpt.ps_st == 1 {
+    tag_new_cause = 17
+  } elif tag_c.mem and tag_dcache_xcpt.pf_ld == 1 {
+    tag_new_cause = minion_pkg.XcptLoadPageFault
+  } elif tag_c.mem and tag_dcache_xcpt.pf_st == 1 {
+    tag_new_cause = minion_pkg.XcptStorePageFault
+  } else {
+    tag_new_xcpt = false
+  }
+  const tag_xcpt = tag_reg_xcpt_interrupt or tag_reg_xcpt or (tag_reg_valid and tag_new_xcpt)
+  const tag_xcpt_cause:U5 = if tag_reg_xcpt_interrupt or tag_reg_xcpt { tag_reg_cause } else { tag_new_cause }
+
+  // A fetch breakpoint (id) and a data breakpoint (tag) both update the debug timing; the dcache one wins.
+  mut debug_timing_next:U2 = debug_timing
+  if fetch_bp.update_op == 1 {
+    debug_timing_next#[id_thread_id] = fetch_bp.timing_op
+  }
+  if tag_dcache_bp_triggered {
+    debug_timing_next#[tag_thread_id] = dcache_bp.timing_op
+  }
+  debug_timing = debug_timing_next
+
+  // ---- TAG kills ----
+  const tag_killed_by_dcache = tag_reg_valid and tag_c.wxd and tag_dcache_replay_next == 1
+  tag_replay = tag_reg_replay or tag_killed_by_dcache or (csr_excl_mode_transition and tag_reg_valid)
+  const tag_wb_redirects = (wb_take_pc and wb_thread_id == tag_thread_id) or csr_file.io_resume#[tag_thread_id] == 1
+  const tag_kill_common = tag_killed_by_dcache or tag_wb_redirects or tag_reg_xcpt or (mem_dcache_flush_pipeline == 1 and mem_thread_id == tag_thread_id) or csr_excl_mode_transition
+  tag_ctrl_kill = tag_kill_common or tag_xcpt
+  const tag_valid_qual = tag_reg_valid and not tag_ctrl_kill
+  const tag_pc_valid = tag_reg_valid or tag_replay or tag_reg_xcpt_interrupt
+  const tag_thread_disabled = (tag_thread_id != 0 and thread1_enable == 0) or (tag_thread_id == 0 and thread0_enable == 0)
+  // A data breakpoint exception reports the breakpoint address as the trap value.
+  mut tag_final_wdata:U64 = tag_int_wdata
+  tag_final_wdata#[0..<49] = if tag_breakpoint { tag_dcache_bp.address } else { tag_int_wdata#[0..<49] }
+  // The result is needed for integer-writing ALU ops (incl. jal and CSRs), CSR accesses, exceptions (fetch faults) and data breakpoints.
+  const tag_uses_wdata = (tag_c.wxd and tag_c.alu_fn#[4] == 0) or tag_csr_en or tag_reg_xcpt or tag_breakpoint
+  tag_vpu_kill = U1(not tag_reg_valid or tag_kill_common or tag_thread_disabled)
+  tag_dcache_kill = U1(not tag_reg_valid or tag_kill_common or tag_dcache_bp_triggered or tag_thread_disabled)
+
+  // ---- Store data to the dcache: VPU data by default, integer rs2 in the low 64 bits ----
+  // Scatter data from the VPU is delayed one cycle to line up with the GSC stage.
+  const ex_cmd_is_write = ex_c.mem_cmd in (minion_pkg.DcCmdXwr, minion_pkg.DcCmdXsc, minion_pkg.DcCmdXaSwap, minion_pkg.DcCmdXaAdd, minion_pkg.DcCmdXaXor, minion_pkg.DcCmdXaOr, minion_pkg.DcCmdXaAnd, minion_pkg.DcCmdXaMin, minion_pkg.DcCmdXaMax, minion_pkg.DcCmdXaMinu, minion_pkg.DcCmdXaMaxu, minion_pkg.DcCmdXaCmpswp, minion_pkg.DcCmdXaMinPs, minion_pkg.DcCmdXaMaxPs, minion_pkg.DcCmdSc32, minion_pkg.DcCmdXwrb)
+  if gsc_reg_valid and ex_cmd_is_write {
+    vpu_scatter_store_data = tag_vpu_ctrl.scatter_data
+  }
+  mut tag_dcache_store_data_v:U256 = if tag_c.gsc { vpu_scatter_store_data } else { tag_vpu_ctrl.store_data }
+  if not (tag_c.fp or not (tag_reg_valid and tag_c.mem)) {
+    tag_dcache_store_data_v#[0..<64] = tag_reg_rs2
+  }
+  tag_dcache_store_data = tag_dcache_store_data_v
+
+  // ================================ MEM stage ================================
+  mem_reg_valid = tag_valid_qual
+  // Only the first of consecutive breakpoints of one thread updates the progress CSR.
+  mem_dcache_bp_triggered = tag_dcache_bp_triggered and (not mem_dcache_bp_triggered or mem_thread_id != tag_thread_id)
+  mem_ctrl_fp_toint = tag_c.wxd and tag_c.fp
+  if tag_xcpt {
+    mem_reg_cause = tag_xcpt_cause
+    mem_reg_xcpt_interrupt = tag_reg_xcpt_interrupt
+  }
+  if tag_pc_valid {
+    mem_ctrl = tag_ctrl
+    mem_reg_rvc = tag_reg_rvc
+    mem_reg_pc = tag_reg_pc
+    mem_uses_wdata = tag_uses_wdata
+    mem_csr_flush = tag_csr_flush
+    mem_thread_id = tag_thread_id
+  }
+  if tag_pc_valid and tag_uses_wdata {
+    mem_reg_wdata = tag_final_wdata
+  }
+  mem_reg_xcpt = tag_xcpt and not tag_wb_redirects
+  mem_reg_replay = tag_replay and not tag_wb_redirects
+  mem_reg_gscing = tag_reg_gscing
+  mem_csr_vpu = tag_valid_qual and tag_csr_vpu
+  mem_csr_excl_mode = tag_csr_excl_mode
+
+  const mem_reg_inst_ff = intpipe_inst_bits_stage<BrMask=0>(enable_i=U1(tag_pc_valid), is_csr_i=U1(tag_csr_en), is_br_jal_i=0, te_enable_i=te_enable, xcpt_i=U1(tag_xcpt), in_i=tag_reg_inst)
+  mem_reg_inst = mem_reg_inst_ff.out_o
+  mem_waddr = mem_reg_inst#[7..=11]
+
+  // A replay comes from earlier stages, a dcache pipeline flush or an exclusive-mode transition.
+  const mem_replay = mem_reg_replay or mem_dcache_flush_pipeline == 1 or (csr_excl_mode_transition and mem_reg_valid)
+  const mem_pc_valid = mem_reg_valid or mem_replay or mem_reg_xcpt
+  // A WB redirect, a disabled thread or an exclusive-mode transition kills the MEM instruction; a dcache flush kills it too.
+  const mem_ctrl_kill_no_tlb_miss = (wb_take_pc and wb_thread_id == mem_thread_id) or csr_file.io_resume#[mem_thread_id] == 1 or (mem_thread_id != 0 and thread1_enable == 0) or (mem_thread_id == 0 and thread0_enable == 0) or csr_excl_mode_transition
+  mem_ctrl_kill = mem_ctrl_kill_no_tlb_miss or mem_dcache_flush_pipeline == 1
+  const mem_valid_qual = mem_reg_valid and not mem_ctrl_kill
+  mem_vpu_kill = U1(mem_ctrl_kill)
+  mem_dcache_kill = U1(mem_ctrl_kill)
+  // The integer RF is written next cycle by a regular integer instruction.
+  const mem_rfen_early = mem_reg_valid and mem_c.wxd and not mem_c.fp
+  mem_csr_rw_cmd = if mem_valid_qual { mem_c.csr } else { minion_pkg.CsrN }
+
+  // ================================ WB stage ================================
+  wb_reg_valid = mem_valid_qual
+  wb_dcache_fp_toint = U1(mem_c.wxd and mem_c.fp and mem_valid_qual)
+  if mem_reg_xcpt {
+    wb_reg_cause = mem_reg_cause
+    wb_reg_xcpt_interrupt = mem_reg_xcpt_interrupt
+  }
+  if mem_pc_valid {
+    wb_ctrl = mem_ctrl
+    wb_reg_pc = mem_reg_pc
+    wb_csr_flush = mem_csr_flush
+    wb_reg_rvc = mem_reg_rvc
+    wb_thread_id = mem_thread_id
+  }
+  if mem_uses_wdata and mem_pc_valid {
+    wb_reg_wdata = mem_reg_wdata
+  }
+  const mem_wb_redirects = (wb_take_pc and wb_thread_id == mem_thread_id) or csr_file.io_resume#[mem_thread_id] == 1
+  wb_reg_xcpt = mem_reg_xcpt and not mem_wb_redirects
+  wb_reg_replay = mem_replay and not mem_wb_redirects
+  wb_reg_gscing = mem_reg_gscing
+  wb_csr_vpu = mem_valid_qual and mem_csr_vpu
+
+  const wb_reg_inst_ff = intpipe_inst_bits_stage<BrMask=0>(enable_i=U1(mem_pc_valid), is_csr_i=U1(mem_csr_en), is_br_jal_i=0, te_enable_i=te_enable, xcpt_i=U1(mem_reg_xcpt), in_i=mem_reg_inst)
+  wb_reg_inst = wb_reg_inst_ff.out_o
+  wb_waddr = wb_reg_inst#[7..=11]
+
+  // Valid, replay and exception in WB; a replay, exception, eret or CSR replay redirects fetch.
+  wb_xcpt = wb_reg_xcpt or csr_file.io_csr_xcpt == 1
+  const wb_pre_valid = wb_reg_valid and not wb_reg_replay and not wb_xcpt and csr_file.io_replay == 0
+  wb_retire = wb_pre_valid and not wb_reg_gscing
+  wb_take_pc = wb_reg_replay or wb_xcpt or csr_file.io_eret == 1 or csr_file.io_replay == 1
+  wb_csr_rw_cmd = if wb_reg_valid { wb_c.csr } else { minion_pkg.CsrN }
+
+  // ---- Integer RF write port: dcache load > FP-to-int > div/mul > WB instruction > fast local barrier ----
+  const toint_last = minion_pkg.VpuTointScoreboardSize - 1
+  const wb_fp_toint_wen = id_vpu_ctrl.scoreboard.toint_valid#[toint_last] == 1
+  const wb_fp_toint_dest = id_vpu_ctrl.scoreboard.toint_dest#[(7*toint_last)..<(7*toint_last + 7)]
+  const wb_fp_toint_addr = wb_fp_toint_dest#[1..=5]
+  const wb_fp_toint_thread = wb_fp_toint_dest#[0]
+  wb_dcache_wen = wb_dcache_resp_valid == 1 and wb_dcache_resp.dest.fp == 0
+  const wb_div_wen = wb_div_resp_valid and wb_div_resp_ready
+  wb_wen = wb_retire and wb_c.wxd and not wb_c.fp and not wb_c.mem and not wb_c.div
+  // The write port is free for the divider when neither the dcache, an instruction nor FP-to-int use it.
+  wb_div_resp_ready = not (wb_dcache_wen or wb_wen or wb_fp_toint_wen)
+  wb_flb_wen_ready = not (wb_dcache_wen or wb_div_wen or wb_wen or wb_fp_toint_wen)
+  wb_rf_wen = wb_dcache_wen or wb_div_wen or wb_wen or wb_fp_toint_wen or csr_file.flb_rf_wen_valid == 1
+  wb_rf_waddr = if wb_dcache_wen { wb_dcache_resp.dest.addr }
+    elif wb_fp_toint_wen { wb_fp_toint_addr }
+    elif wb_div_wen { wb_div_resp_dest.addr }
+    elif wb_wen { wb_waddr }
+    else { csr_file.flb_rf_wen_addr }
+  wb_rf_wdata = if wb_dcache_wen { wb_dcache_resp.data#[0..<64] }
+    elif wb_fp_toint_wen { wb_vpu_ctrl.toint_data }
+    elif wb_div_wen { mul_div.resp_data }
+    elif wb_wen and wb_csr_en { csr_file.io_rw_wb_rdata }
+    elif wb_wen { wb_reg_wdata }
+    else { csr_file.flb_rf_wen_data }
+  wb_rf_thread_id = if wb_dcache_wen { wb_dcache_resp.dest.thread_id }
+    elif wb_fp_toint_wen { wb_fp_toint_thread }
+    elif wb_div_wen { wb_div_resp_dest.thread_id }
+    elif wb_wen { wb_thread_id }
+    else { csr_file.flb_rf_wen_thread_id }
+  // The RF write enable is issued one cycle early to clock-gate the data write latch.
+  wb_rf_wen_early = mem_rfen_early or mem_dcache_resp_int_valid == 1 or mul_div.resp_valid_early == 1 or id_vpu_ctrl.scoreboard.toint_valid#[toint_last - 1] == 1 or csr_file.flb_rf_wen_valid_early == 1
+
+  // ---- Outputs ----
+  id_fe_req = fe_req_bits
+  id_fe_stall = (e0=id_fe_stall_v#[0], e1=id_fe_stall_v#[1])
+  icache_invalidate = csr_file.icache_invalidate
+  dcache_ctrl = csr_file.dcache_ctrl
+  vpu_ctrl = csr_file.vpu_ctrl
+  ex_dcache_gsc = U1(ex_valid_qual_to_gsc)
+  wb_dcache_x31 = wb_x31
+  wb_dcache_invalidate_lr = U1(wb_xcpt)
+  satp_info = (mode=csr_file.io_satp.mode, ppn=csr_file.io_satp.ppn)
+  matp_info = (mode=csr_file.io_matp.mode, ppn=csr_file.io_matp.ppn)
+  satp_info_en = csr_file.io_satp_en
+  matp_info_en = csr_file.io_matp_en
+  // vm_status: thread 1 in the high byte, each from the thread's status, privilege and debug bits.
+  const vm_status_t0:U8 = vm_status_byte(debug=csr_file.io_debug#[0], prv=csr_file.io_prv#[0..<2], status=csr_file.io_status#[0..<6])
+  const vm_status_t1:U8 = vm_status_byte(debug=csr_file.io_debug#[1], prv=csr_file.io_prv#[2..<4], status=csr_file.io_status#[6..<12])
+  vm_status = (vm_status_t0, vm_status_t1)#[..]
+  tlb_invalidate = csr_file.tlb_invalidate
+  wb_vpu_kill = 0
+  wb_vpu_dcache_resp_valid = U1(wb_dcache_resp_valid == 1 and wb_dcache_resp.dest.fp == 1)
+  wb_vpu_dcache_resp = (addr=wb_dcache_resp.dest.addr, data=wb_dcache_resp.data, gdst=wb_dcache_resp.gsc_cnt, ps_mask=wb_dcache_resp.ps_mask, thread_id=wb_dcache_resp.dest.thread_id, typ=wb_dcache_resp.typ)
+  flb_neigh_req_valid = csr_file.flb_neigh_req_valid
+  flb_neigh_req_data = csr_file.flb_neigh_req_data
+  TE_wb_reg_inst = wb_reg_inst
+  TE_wb_reg_cause_ie = csr_file.TE_wb_reg_cause_ie
+  TE_wb_reg_context = 0
+  TE_tval = csr_file.TE_tval
+  TE_prv = csr_file.TE_prv
+  TE_exception = csr_file.TE_exception
+  update_ddata0 = csr_file.update_ddata0
+  ddata0_wdata = csr_file.ddata0_wdata
+  in_debug_mode = csr_file.io_debug
+  debug_busy = csr_file.busy
+  debug_exception = csr_file.debug_out_exception
+  wb_valid = U1(wb_retire)
+  pmu_count_up = csr_file.pmu_count_up
+  pmu_read_sel = csr_file.pmu_read_sel
+  pmu_write_en = csr_file.pmu_write_en
+  pmu_write_data = csr_file.pmu_write_data
+  pmu_neigh_event_sel = csr_file.pmu_neigh_event_sel
+
+  // Probe signals for netlist debug.
+  debug_monitor_out = (id_thread_id=id_thread_id, id_pc=id_pc, id_valid=U1(id_valid), id_valid_qual=U1(id_valid_qual), id_inst_replay=U1(id_inst_replay), id_take_pc=U1(id_take_pc), id_csr_interrupt=id_csr_interrupt#[id_thread_id], excl_mode_stall=U1(excl_mode_blocks or csr_excl_mode_stall), ex_valid_qual=U1(ex_valid_qual), tag_valid_qual=U1(tag_valid_qual), mem_valid_qual=U1(mem_valid_qual), wb_valid=U1(wb_retire), gsc_reg_gsc_cnt=gsc_reg_gsc_cnt, tag_take_pc=U1(tag_take_pc), ipi_with_pc=ipi_with_pc, wb_take_pc=U1(wb_take_pc), id_xcpt=U1(id_xcpt), wb_xcpt=U1(wb_xcpt), id_stall_fp2int=U1(id_stall_fp2int), ex_gsc_busy=U1(ex_gsc_busy), csr_fe_stall=csr_file.fe_ctrl_stall#[id_thread_id], id_ctrl_stall_csr=U1(id_ctrl_stall_csr), id_ctrl_stall_dcache=U1(id_ctrl_stall_dcache), id_do_fence=U1(id_do_fence), id_ctrl_stall_trans=U1(id_ctrl_stall_trans), id_ctrl_stall_div=U1(id_ctrl_stall_div), id_int_sboard_hazard=U1(id_int_sboard_hazard), id_ctrl_stall_hazard_vpu=U1(id_ctrl_stall_hazard_vpu), id_ctrl_stall_hazard=U1(id_ctrl_stall_hazard))
+}

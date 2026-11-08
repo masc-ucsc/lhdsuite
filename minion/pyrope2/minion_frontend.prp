@@ -1,0 +1,543 @@
+// Minion frontend (verilog: minion_frontend): instruction fetch, decode and issue
+// for two hardware threads. Each thread has its own fetch engine (thread buffer);
+// an LRU arbiter picks which thread's icache request goes out, the F5 response is
+// delayed to F6/F7 for the buffers, and one thread's F7 instruction (chosen by the
+// scheduler's awake mask) is decoded by the intpipe and VPU decoders and parked in
+// that thread's 2-entry FIFO: a head slot (memory) plus one pending register. The ID
+// stage reads the head of the thread the scheduler selected last cycle.
+// Only the shipped configuration (the generic defaults: 2 threads, VPU decoder on, no
+// extra transcendental ops) is built. The module stays generic only because a concrete
+// parent trips a LiveHD loop-lifting bug with the thread buffers (livehd_bugs/L2u3_01).
+// FIFO entries are kept packed: the memories and the pending registers keep the Verilog
+// state names, which is what pairs them in LEC. The unpack_* helpers below are the entry
+// layouts (first field = most significant bit); the pack side sits next to the decoders.
+const intpipe_decode = import("intpipe_decode.intpipe_decode")
+const minion_frontend_thread_buffer = import("minion_frontend_thread_buffer.minion_frontend_thread_buffer")
+const minion_frontend_thread_buffer_p1 = import("minion_frontend_thread_buffer_p1.minion_frontend_thread_buffer_p1")
+const minion_frontend_thread_sched = import("minion_frontend_thread_sched.minion_frontend_thread_sched")
+const prim_arb_lru = import("prim_arb_lru.prim_arb_lru")
+const vpu_decoder = import("vpu_decoder.vpu_decoder")
+
+comptime const NR_THREADS = 2
+
+// fe_core_resp_t: the instruction handed to the ID stage (89 bits).
+comb pack_core_resp(af0:U1, af1:U1, bus_error:U1, ecc_error:U1, inst_bits:U32, pc:U49, pf0:U1, pf1:U1, replay:U1, rvc:U1) -> (w:U89) {
+  w = (ecc_error, bus_error, rvc, replay, af1, af0, pf1, pf0, inst_bits, pc)#[..]
+}
+
+comb unpack_core_resp(w:U89) -> (af0:U1, af1:U1, bus_error:U1, ecc_error:U1, inst_bits:U32, pc:U49, pf0:U1, pf1:U1, replay:U1, rvc:U1) {
+  pc = w#[40..<89]
+  inst_bits = w#[8..<40]
+  pf0 = w#[7]
+  pf1 = w#[6]
+  af0 = w#[5]
+  af1 = w#[4]
+  replay = w#[3]
+  rvc = w#[2]
+  bus_error = w#[1]
+  ecc_error = w#[0]
+}
+
+// minion_control_t: intpipe decode of the instruction (45 bits).
+comb unpack_intpipe_ctrl(w:U45) -> (alu_dw:U1, alu_fn:U5, br:U1, csr:U3, div:U1, fence:U1, fp:U1, gfx:U1, gsc:U1, jal:U1, jalr:U1, legal:U1, mcode:U1, mem:U1, mem_cmd:U5, mem_g:U1, mem_type:U4, rma:U1, rxs1:U1, rxs2:U1, sel_alu1:U2, sel_alu2:U2, sel_imm:U3, wfd:U1, wmad:U1, wmd:U1, wxd:U1, x31:U1) {
+  legal = w#[44]
+  mcode = w#[43]
+  fp = w#[42]
+  br = w#[41]
+  jal = w#[40]
+  jalr = w#[39]
+  rxs2 = w#[38]
+  rxs1 = w#[37]
+  sel_alu2 = w#[35..<37]
+  sel_alu1 = w#[33..<35]
+  sel_imm = w#[30..<33]
+  alu_dw = w#[29]
+  alu_fn = w#[24..<29]
+  mem = w#[23]
+  mem_cmd = w#[18..<23]
+  mem_type = w#[14..<18]
+  rma = w#[13]
+  wmd = w#[12]
+  wmad = w#[11]
+  wfd = w#[10]
+  div = w#[9]
+  wxd = w#[8]
+  csr = w#[5..<8]
+  fence = w#[4]
+  mem_g = w#[3]
+  gsc = w#[2]
+  gfx = w#[1]
+  x31 = w#[0]
+}
+
+// vpu_ctrl_sigs_t: VPU decode of the instruction (45 bits).
+comb unpack_vpu_sigs(w:U45) -> (add:U1, cmd:U7, cvt:U1, dtype:U4, fma:U1, fms:U1, fromint:U1, fromintf:U1, gcvt:U1, ldst:U1, m0ren:U1, mallren:U1, maskop:U1, mren1:U1, mren2:U1, mul:U1, ren1:U1, ren2:U1, ren3:U1, rend:U1, rom:U1, round:U1, scatter:U1, shsw:U1, sub:U1, swap12:U1, swap13:U1, swap23:U1, toint:U1, tointf:U1, tointm:U1, trans:U1, txfma:U1, vector:U1, wen:U1, wflags:U1) {
+  cmd = w#[38..<45]
+  txfma = w#[37]
+  shsw = w#[36]
+  rom = w#[35]
+  scatter = w#[34]
+  cvt = w#[33]
+  trans = w#[32]
+  gcvt = w#[31]
+  fromintf = w#[30]
+  tointm = w#[29]
+  tointf = w#[28]
+  maskop = w#[27]
+  ldst = w#[26]
+  m0ren = w#[25]
+  mallren = w#[24]
+  mren1 = w#[23]
+  mren2 = w#[22]
+  wen = w#[21]
+  ren1 = w#[20]
+  ren2 = w#[19]
+  ren3 = w#[18]
+  rend = w#[17]
+  swap12 = w#[16]
+  swap23 = w#[15]
+  swap13 = w#[14]
+  vector = w#[13]
+  dtype = w#[9..<13]
+  fromint = w#[8]
+  toint = w#[7]
+  fma = w#[6]
+  fms = w#[5]
+  add = w#[4]
+  sub = w#[3]
+  mul = w#[2]
+  round = w#[1]
+  wflags = w#[0]
+}
+
+pub mod minion_frontend<NrThreads=2, VpuEn=1, EnableExtraTrans=0>::[timecheck=false](chicken_bit_i:U1, clk_i:Clock, debug_ffb_en_i:U4, debug_ffb_exec_i:U2, debug_ffb_thread_sel_i:U1, debug_ffb_wdata_i:U64, dft_i:(scanmode:U1, scan_reset_n:U1, sram_clk_override:U1, ram_rei:U1, ram_wei:U1), f0_core_req_i:U104, f0_core_req_valid_i:U2, f0_reset_vector_i:U48, f0_thread_enabled_i:U2, f1_icache_req_ready_i:U1, f5_icache_resp_i:(data:U256, page_fault:U1, access_fault:U1, cacheable:U1, bus_err:U1, ecc_err:U1), f5_icache_resp_miss_i:U1, f5_icache_resp_valid_i:U1, f6_icache_fill_done_i:U1, halt_i:U2, halted_i:U2, id_core_stall_i:U2, id_inst_ready_i:U1, reset_debug_i:U1, rst_ni:U1, vm_status_i:U16) -> (debug_inst_fifo_empty_o:U2@[], debug_inst_fifo_full_o:U2@[], debug_tb_inst_ready_o:U2@[], debug_tb_inst_valid_o:U2@[], debug_thread_o:U566@[], f1_icache_req_o:(thread_id:U1, vm_status:(prv:U2, mprv:U1, mpp:U2, sum:U1, mxr:U1, debug:U1), addr:U49)@[], f1_icache_req_valid_o:U1@[], id_inst_data_o:(pc:U49, inst_bits:U32, pf0:U1, pf1:U1, af0:U1, af1:U1, replay:U1, rvc:U1, bus_error:U1, ecc_error:U1)@[], id_inst_thread_id_o:U1@[], id_inst_valid_o:U1@[], id_intpipe_ctrl_o:(legal:U1, mcode:U1, fp:U1, br:U1, jal:U1, jalr:U1, rxs2:U1, rxs1:U1, sel_alu2:U2, sel_alu1:U2, sel_imm:U3, alu_dw:U1, alu_fn:U5, mem:U1, mem_cmd:U5, mem_type:U4, rma:U1, wmd:U1, wmad:U1, wfd:U1, div:U1, wxd:U1, csr:U3, fence:U1, mem_g:U1, gsc:U1, gfx:U1, x31:U1)@[], id_vpu_core_ctrl_o:(m0ren:U1, mallren:U1, mren1:U1, mren2:U1, wen:U1, ren1:U1, ren2:U1, ren3:U1, rend:U1, is_trans:U1, trans_busy:U1, id_trans_insert:U1, scoreboard:(fp_valid:U14, fp_dest:U98, toint_valid:U4, toint_dest:U28, mask_valid:U4, mask_dest:U16), tfma_enabled:U1, tfma_wrrf_enabled:U1, tquant_enabled:U1, reduce_enabled:U1, fflags_stall:U1, fromint:U1)@[], id_vpu_decoder_sigs_o:(cmd:U7, txfma:U1, shsw:U1, rom:U1, scatter:U1, cvt:U1, trans:U1, gcvt:U1, fromintf:U1, tointm:U1, tointf:U1, maskop:U1, ldst:U1, m0ren:U1, mallren:U1, mren1:U1, mren2:U1, wen:U1, ren1:U1, ren2:U1, ren3:U1, rend:U1, swap12:U1, swap23:U1, swap13:U1, vector:U1, dtype:U4, fromint:U1, toint:U1, fma:U1, fms:U1, add:U1, sub:U1, mul:U1, round:U1, wflags:U1)@[]) {
+  // ---- state ----
+  reg f1_icache_req_valid_o:U1:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg f1_icache_req_o_q:U58 = nil // packed fe_icache_req_t, loaded with the arbiter winner's request
+  reg id_inst_thread_id_o:U1:[negreset=true, reset_pin=rst_ni] = 0 // thread read by the ID stage
+  reg thread_enabled_f_q:U2 = nil // unreset: they must follow f0_thread_enabled_i through reset
+  reg thread_enabled_ff_q:U2 = nil
+  reg f6_resp_valid_q:U1:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg f6_resp_miss_q:U1 = nil
+  reg f6_resp_q:U261 = nil // packed icache_fe_resp_t: {data, page_fault, access_fault, cacheable, bus_err, ecc_err}
+  reg f7_fill_done_q:U1:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  // per-thread 2-entry FIFO: the head slot is a memory, entries are packed (see the unpack_* helpers)
+  reg `inst_fifo_data.core_resp`:[NR_THREADS]U89:[ordering="old"] = nil
+  reg `inst_fifo_data.vpu_ctrl_sigs`:[NR_THREADS]U45:[ordering="old"] = nil
+  reg `inst_fifo_data.intpipe_ctrl`:[NR_THREADS]U45:[ordering="old"] = nil
+  reg fifo_rd_ptr:[NR_THREADS]U2:[ordering="old"] = nil
+  reg fifo_wr_ptr:[NR_THREADS]U2:[ordering="old"] = nil
+  // second slot of each thread's FIFO, packed {core_resp [178:90], vpu_ctrl_sigs [89:45], intpipe_ctrl [44:0]}; one named register per thread
+  reg pending_data:U179 = nil
+  reg pending_data_s1:U179 = nil
+  reg pending_data_is_fp:U1 = nil
+  reg pending_data_is_fp_s1:U1 = nil
+
+  // Same-cycle loops through the thread buffers are cut with wires.
+  wire tb_grant:U2 = nil // icache request granted to each thread
+  wire tb_inst_ready:U2 = nil // the decode stage takes the thread's F7 instruction
+  wire f7_thread_awake:U2 = nil // scheduler output
+
+  // ---- thread enable detection ----
+  if thread_enabled_f_q != f0_thread_enabled_i or thread_enabled_f_q != thread_enabled_ff_q or rst_ni == 0 {
+    thread_enabled_f_q = f0_thread_enabled_i
+    thread_enabled_ff_q = thread_enabled_f_q
+  }
+  const f0_disable_thread:U2 = ~thread_enabled_f_q & thread_enabled_ff_q
+  const f0_enable_thread:U2 = thread_enabled_f_q & ~thread_enabled_ff_q
+
+  // ---- icache response pipeline F5 -> F6 -> F7 ----
+  f6_resp_valid_q = f5_icache_resp_valid_i
+  f7_fill_done_q = f6_icache_fill_done_i
+  if f5_icache_resp_valid_i != 0 {
+    f6_resp_miss_q = f5_icache_resp_miss_i
+    f6_resp_q = (f5_icache_resp_i.ecc_err, f5_icache_resp_i.bus_err, f5_icache_resp_i.cacheable, f5_icache_resp_i.access_fault, f5_icache_resp_i.page_fault, f5_icache_resp_i.data)#[..]
+  }
+
+  // ---- per-thread fetch buffers ----
+  // The two threads use two named definitions (the Verilog has one per thread id), so they are instantiated side by side.
+  const f1_req_ready = f1_icache_req_ready_i != 0 or f1_icache_req_valid_o == 0
+  const reset_vector_ext:U49 = (f0_reset_vector_i, f0_reset_vector_i#[47])#[..] // sign-extended to VaSizeExt
+
+  const vm0 = vm_status_i#[0..<8]
+  const req0 = f0_core_req_i#[0..<52]
+  const tb0 = minion_frontend_thread_buffer::[name=gen_thread_buf_0_u_tb](clk_i=clk_i, rst_ni=rst_ni, reset_debug_i=reset_debug_i, chicken_bit_i=chicken_bit_i, dft_i=dft_i, f0_thread_enabled_i=thread_enabled_f_q#[0], f0_reset_vector_i=reset_vector_ext, f0_disable_thread_i=f0_disable_thread#[0], f0_enable_thread_i=f0_enable_thread#[0], in_debug_mode_i=halted_i#[0], vm_status_i=(debug=vm0#[0], mpp=vm0#[3..<5], mprv=vm0#[5], mxr=vm0#[1], prv=vm0#[6..<8], sum=vm0#[2]), f0_icache_req_ready_i=tb_grant#[0], f1_icache_req_ready_i=U1(f1_req_ready), f5_icache_resp_miss_i=f5_icache_resp_miss_i, f6_icache_resp_valid_i=f6_resp_valid_q, f6_icache_resp_miss_i=f6_resp_miss_q, f6_icache_resp_i=(access_fault=f6_resp_q#[3], bus_err=f6_resp_q#[1], cacheable=f6_resp_q#[2], data=f6_resp_q#[5..<261], ecc_err=f6_resp_q#[0], page_fault=f6_resp_q#[4]), f7_icache_fill_done_i=f7_fill_done_q, f0_core_req_valid_i=f0_core_req_valid_i#[0], f0_core_req_i.pc=req0#[3..<52], f0_core_req_i.speculative=req0#[2], f0_core_req_i.debug_info.halt=req0#[1], f0_core_req_i.debug_info.resume=req0#[0], f7_inst_ready_i=tb_inst_ready#[0], debug_ffb_wdata_i=debug_ffb_wdata_i, debug_ffb_en_i=if debug_ffb_thread_sel_i == 0 {
+      debug_ffb_en_i
+    } else {
+      0
+    }, debug_ffb_exec_i=debug_ffb_exec_i#[0], io_halt_i=halt_i#[0])
+
+  const vm1 = vm_status_i#[8..<16]
+  const req1 = f0_core_req_i#[52..<104]
+  const tb1 = minion_frontend_thread_buffer_p1::[name=gen_thread_buf_1_u_tb](clk_i=clk_i, rst_ni=rst_ni, reset_debug_i=reset_debug_i, chicken_bit_i=chicken_bit_i, dft_i=dft_i, f0_thread_enabled_i=thread_enabled_f_q#[1], f0_reset_vector_i=reset_vector_ext, f0_disable_thread_i=f0_disable_thread#[1], f0_enable_thread_i=f0_enable_thread#[1], in_debug_mode_i=halted_i#[1], vm_status_i=(debug=vm1#[0], mpp=vm1#[3..<5], mprv=vm1#[5], mxr=vm1#[1], prv=vm1#[6..<8], sum=vm1#[2]), f0_icache_req_ready_i=tb_grant#[1], f1_icache_req_ready_i=U1(f1_req_ready), f5_icache_resp_miss_i=f5_icache_resp_miss_i, f6_icache_resp_valid_i=f6_resp_valid_q, f6_icache_resp_miss_i=f6_resp_miss_q, f6_icache_resp_i=(access_fault=f6_resp_q#[3], bus_err=f6_resp_q#[1], cacheable=f6_resp_q#[2], data=f6_resp_q#[5..<261], ecc_err=f6_resp_q#[0], page_fault=f6_resp_q#[4]), f7_icache_fill_done_i=f7_fill_done_q, f0_core_req_valid_i=f0_core_req_valid_i#[1], f0_core_req_i.pc=req1#[3..<52], f0_core_req_i.speculative=req1#[2], f0_core_req_i.debug_info.halt=req1#[1], f0_core_req_i.debug_info.resume=req1#[0], f7_inst_ready_i=tb_inst_ready#[1], debug_ffb_wdata_i=debug_ffb_wdata_i, debug_ffb_en_i=if debug_ffb_thread_sel_i == 1 {
+      debug_ffb_en_i
+    } else {
+      0
+    }, debug_ffb_exec_i=debug_ffb_exec_i#[1], io_halt_i=halt_i#[1])
+
+  // Gather the per-thread buffer outputs: icache request (packed), F7 instruction word, valids, debug.
+  // Faults and bus/ecc errors only count while the instruction is valid.
+  const req_valid0:U1 = tb0.f0_icache_req_valid_o
+  const req_valid1:U1 = tb1.f0_icache_req_valid_o
+  const v0:U1 = tb0.f7_inst_valid_o
+  const v1:U1 = tb1.f7_inst_valid_o
+  const tb_req_valid:U2 = (req_valid0, req_valid1)#[..]
+  const tb_inst_valid:U2 = (v0, v1)#[..]
+  const d0 = tb0.f7_inst_data_o
+  const d1 = tb1.f7_inst_data_o
+  mut tb_req0:U58 = 0 // fe_icache_req_t: {thread_id, vm_status, addr}
+  tb_req0#[0..<49] = tb0.f0_icache_req_o.addr
+  tb_req0#[49] = tb0.f0_icache_req_o.vm_status.debug
+  tb_req0#[50] = tb0.f0_icache_req_o.vm_status.mxr
+  tb_req0#[51] = tb0.f0_icache_req_o.vm_status.sum
+  tb_req0#[52..<54] = tb0.f0_icache_req_o.vm_status.mpp
+  tb_req0#[54] = tb0.f0_icache_req_o.vm_status.mprv
+  tb_req0#[55..<57] = tb0.f0_icache_req_o.vm_status.prv
+  tb_req0#[57] = tb0.f0_icache_req_o.thread_id
+  mut tb_req1:U58 = 0 // fe_icache_req_t: {thread_id, vm_status, addr}
+  tb_req1#[0..<49] = tb1.f0_icache_req_o.addr
+  tb_req1#[49] = tb1.f0_icache_req_o.vm_status.debug
+  tb_req1#[50] = tb1.f0_icache_req_o.vm_status.mxr
+  tb_req1#[51] = tb1.f0_icache_req_o.vm_status.sum
+  tb_req1#[52..<54] = tb1.f0_icache_req_o.vm_status.mpp
+  tb_req1#[54] = tb1.f0_icache_req_o.vm_status.mprv
+  tb_req1#[55..<57] = tb1.f0_icache_req_o.vm_status.prv
+  tb_req1#[57] = tb1.f0_icache_req_o.thread_id
+  const core0 = pack_core_resp(af0=v0 & d0.access_fault0, af1=v0 & d0.access_fault1, bus_error=v0 & d0.bus_err, ecc_error=v0 & d0.ecc_err, inst_bits=d0.inst_bits, pc=d0.pc, pf0=v0 & d0.page_fault0, pf1=v0 & d0.page_fault1, replay=d0.replay, rvc=tb0.f7_inst_rvc_o)
+  const core1 = pack_core_resp(af0=v1 & d1.access_fault0, af1=v1 & d1.access_fault1, bus_error=v1 & d1.bus_err, ecc_error=v1 & d1.ecc_err, inst_bits=d1.inst_bits, pc=d1.pc, pf0=v1 & d1.page_fault0, pf1=v1 & d1.page_fault1, replay=d1.replay, rvc=tb1.f7_inst_rvc_o)
+  // fe_thread_debug_t of each buffer (283 bits): core_req_valid is the top bit, f7_stall bit 0
+  mut thread_debug0:U283 = 0
+  thread_debug0#[0] = tb0.debug_o.f7_stall
+  thread_debug0#[1] = tb0.debug_o.f7_valid
+  thread_debug0#[2] = tb0.debug_o.f6_stall
+  thread_debug0#[3] = tb0.debug_o.f6_valid
+  thread_debug0#[4] = tb0.debug_o.f6_buffer_wr
+  thread_debug0#[5] = tb0.debug_o.f6_req_valid
+  thread_debug0#[6] = tb0.debug_o.f5_req_valid
+  thread_debug0#[7] = tb0.debug_o.f1_req_valid
+  thread_debug0#[8] = tb0.debug_o.miss_pending
+  thread_debug0#[9] = tb0.debug_o.icache_inflight
+  thread_debug0#[10..<15] = tb0.debug_o.f7_buffer_ptr
+  thread_debug0#[15..<20] = tb0.debug_o.f6_buffer_ptr_next
+  thread_debug0#[20..<25] = tb0.debug_o.f6_buffer_ptr
+  thread_debug0#[25] = tb0.debug_o.f7_buffer_id
+  thread_debug0#[26] = tb0.debug_o.f6_buffer_id
+  thread_debug0#[27] = tb0.debug_o.f6_req_buffer
+  thread_debug0#[28] = tb0.debug_o.req_buffer
+  thread_debug0#[29..<78] = tb0.debug_o.buffer_pc1
+  thread_debug0#[78..<127] = tb0.debug_o.buffer_pc0
+  thread_debug0#[127..<129] = tb0.debug_o.buffer_empty
+  thread_debug0#[129..<133] = tb0.debug_o.gated_clk_ticks
+  thread_debug0#[133] = tb0.debug_o.clock_enable
+  thread_debug0#[134] = tb0.debug_o.f0_pc_update
+  thread_debug0#[135..<184] = tb0.debug_o.f0_pc_next
+  thread_debug0#[184..<233] = tb0.debug_o.f0_pc
+  thread_debug0#[233..<282] = tb0.debug_o.core_req_pc
+  thread_debug0#[282] = tb0.debug_o.core_req_valid
+  mut thread_debug1:U283 = 0
+  thread_debug1#[0] = tb1.debug_o.f7_stall
+  thread_debug1#[1] = tb1.debug_o.f7_valid
+  thread_debug1#[2] = tb1.debug_o.f6_stall
+  thread_debug1#[3] = tb1.debug_o.f6_valid
+  thread_debug1#[4] = tb1.debug_o.f6_buffer_wr
+  thread_debug1#[5] = tb1.debug_o.f6_req_valid
+  thread_debug1#[6] = tb1.debug_o.f5_req_valid
+  thread_debug1#[7] = tb1.debug_o.f1_req_valid
+  thread_debug1#[8] = tb1.debug_o.miss_pending
+  thread_debug1#[9] = tb1.debug_o.icache_inflight
+  thread_debug1#[10..<15] = tb1.debug_o.f7_buffer_ptr
+  thread_debug1#[15..<20] = tb1.debug_o.f6_buffer_ptr_next
+  thread_debug1#[20..<25] = tb1.debug_o.f6_buffer_ptr
+  thread_debug1#[25] = tb1.debug_o.f7_buffer_id
+  thread_debug1#[26] = tb1.debug_o.f6_buffer_id
+  thread_debug1#[27] = tb1.debug_o.f6_req_buffer
+  thread_debug1#[28] = tb1.debug_o.req_buffer
+  thread_debug1#[29..<78] = tb1.debug_o.buffer_pc1
+  thread_debug1#[78..<127] = tb1.debug_o.buffer_pc0
+  thread_debug1#[127..<129] = tb1.debug_o.buffer_empty
+  thread_debug1#[129..<133] = tb1.debug_o.gated_clk_ticks
+  thread_debug1#[133] = tb1.debug_o.clock_enable
+  thread_debug1#[134] = tb1.debug_o.f0_pc_update
+  thread_debug1#[135..<184] = tb1.debug_o.f0_pc_next
+  thread_debug1#[184..<233] = tb1.debug_o.f0_pc
+  thread_debug1#[233..<282] = tb1.debug_o.core_req_pc
+  thread_debug1#[282] = tb1.debug_o.core_req_valid
+  debug_thread_o#[0..<283] = thread_debug0
+  debug_thread_o#[283..<566] = thread_debug1
+
+  // ---- icache request arbitration ----
+  const gen_multi_thread_arb_u_icache_arb = prim_arb_lru<NumClients=2>(clk_i=clk_i, rst_ni=rst_ni, bid_i=tb_req_valid, stall_i=U1(not f1_req_ready))
+  tb_grant = gen_multi_thread_arb_u_icache_arb.grant_o
+  if f1_req_ready {
+    f1_icache_req_valid_o = U1(tb_req_valid != 0)
+    if tb_req_valid != 0 {
+      f1_icache_req_o_q = if gen_multi_thread_arb_u_icache_arb.winner_o == 1 { tb_req1 } else { tb_req0 }
+    }
+  }
+  f1_icache_req_o.thread_id = f1_icache_req_o_q#[57]
+  f1_icache_req_o.vm_status.prv = f1_icache_req_o_q#[55..<57]
+  f1_icache_req_o.vm_status.mprv = f1_icache_req_o_q#[54]
+  f1_icache_req_o.vm_status.mpp = f1_icache_req_o_q#[52..<54]
+  f1_icache_req_o.vm_status.sum = f1_icache_req_o_q#[51]
+  f1_icache_req_o.vm_status.mxr = f1_icache_req_o_q#[50]
+  f1_icache_req_o.vm_status.debug = f1_icache_req_o_q#[49]
+  f1_icache_req_o.addr = f1_icache_req_o_q#[0..<49]
+
+  // ---- FIFO occupancy ----
+  // The FIFO pointers and entries are memories; everything that touches them is written out per thread rather than in a
+  // loop, because a rolled loop over a memory is lifted into a sub-module that hides its ports from LEC (livehd_bugs/L2u3_04).
+  const full_0 = (fifo_rd_ptr[0] ^ fifo_wr_ptr[0]) == 2
+  const full_1 = (fifo_rd_ptr[1] ^ fifo_wr_ptr[1]) == 2
+  const empty_0 = (fifo_rd_ptr[0] ^ fifo_wr_ptr[0]) == 0
+  const empty_1 = (fifo_rd_ptr[1] ^ fifo_wr_ptr[1]) == 0
+  const inst_fifo_full:U2 = (U1(full_0), U1(full_1))#[..]
+  const inst_fifo_empty:U2 = (U1(empty_0), U1(empty_1))#[..]
+
+  // ---- F7: pick the thread to decode, then decode ----
+  // Prefer a thread that is awake, has an instruction and room; otherwise alternate away from the thread ID reads.
+  const f7_candidates:U2 = ~inst_fifo_full & f7_thread_awake & tb_inst_valid
+  const f7_exp_thread_id:U1 = if f7_candidates == 1 { 0 } elif f7_candidates == 2 { 1 } else { ~id_inst_thread_id_o }
+  const f7_arb_data:U89 = if f7_exp_thread_id == 1 { core1 } else { core0 }
+  const f7_inst_bits:U32 = f7_arb_data#[8..<40]
+
+  const intpipe_dec = intpipe_decode(inst_bits=f7_inst_bits)
+  const vpu_dec = vpu_decoder(id_inst=f7_inst_bits)
+  // pack the decoder outputs into the FIFO entry layouts (see unpack_*)
+  mut f7_intpipe_ctrl:U45 = 0
+  f7_intpipe_ctrl#[44] = intpipe_dec.inst_ctrl.legal
+  f7_intpipe_ctrl#[43] = intpipe_dec.inst_ctrl.mcode
+  f7_intpipe_ctrl#[42] = intpipe_dec.inst_ctrl.fp
+  f7_intpipe_ctrl#[41] = intpipe_dec.inst_ctrl.br
+  f7_intpipe_ctrl#[40] = intpipe_dec.inst_ctrl.jal
+  f7_intpipe_ctrl#[39] = intpipe_dec.inst_ctrl.jalr
+  f7_intpipe_ctrl#[38] = intpipe_dec.inst_ctrl.rxs2
+  f7_intpipe_ctrl#[37] = intpipe_dec.inst_ctrl.rxs1
+  f7_intpipe_ctrl#[35..<37] = intpipe_dec.inst_ctrl.sel_alu2
+  f7_intpipe_ctrl#[33..<35] = intpipe_dec.inst_ctrl.sel_alu1
+  f7_intpipe_ctrl#[30..<33] = intpipe_dec.inst_ctrl.sel_imm
+  f7_intpipe_ctrl#[29] = intpipe_dec.inst_ctrl.alu_dw
+  f7_intpipe_ctrl#[24..<29] = intpipe_dec.inst_ctrl.alu_fn
+  f7_intpipe_ctrl#[23] = intpipe_dec.inst_ctrl.mem
+  f7_intpipe_ctrl#[18..<23] = intpipe_dec.inst_ctrl.mem_cmd
+  f7_intpipe_ctrl#[14..<18] = intpipe_dec.inst_ctrl.mem_type
+  f7_intpipe_ctrl#[13] = intpipe_dec.inst_ctrl.rma
+  f7_intpipe_ctrl#[12] = intpipe_dec.inst_ctrl.wmd
+  f7_intpipe_ctrl#[11] = intpipe_dec.inst_ctrl.wmad
+  f7_intpipe_ctrl#[10] = intpipe_dec.inst_ctrl.wfd
+  f7_intpipe_ctrl#[9] = intpipe_dec.inst_ctrl.div
+  f7_intpipe_ctrl#[8] = intpipe_dec.inst_ctrl.wxd
+  f7_intpipe_ctrl#[5..<8] = intpipe_dec.inst_ctrl.csr
+  f7_intpipe_ctrl#[4] = intpipe_dec.inst_ctrl.fence
+  f7_intpipe_ctrl#[3] = intpipe_dec.inst_ctrl.mem_g
+  f7_intpipe_ctrl#[2] = intpipe_dec.inst_ctrl.gsc
+  f7_intpipe_ctrl#[1] = intpipe_dec.inst_ctrl.gfx
+  f7_intpipe_ctrl#[0] = intpipe_dec.inst_ctrl.x31
+  mut f7_vpu_sigs:U45 = 0
+  f7_vpu_sigs#[38..<45] = vpu_dec.id_sigs.cmd
+  f7_vpu_sigs#[37] = vpu_dec.id_sigs.txfma
+  f7_vpu_sigs#[36] = vpu_dec.id_sigs.shsw
+  f7_vpu_sigs#[35] = vpu_dec.id_sigs.rom
+  f7_vpu_sigs#[34] = vpu_dec.id_sigs.scatter
+  f7_vpu_sigs#[33] = vpu_dec.id_sigs.cvt
+  f7_vpu_sigs#[32] = vpu_dec.id_sigs.trans
+  f7_vpu_sigs#[31] = vpu_dec.id_sigs.gcvt
+  f7_vpu_sigs#[30] = vpu_dec.id_sigs.fromintf
+  f7_vpu_sigs#[29] = vpu_dec.id_sigs.tointm
+  f7_vpu_sigs#[28] = vpu_dec.id_sigs.tointf
+  f7_vpu_sigs#[27] = vpu_dec.id_sigs.maskop
+  f7_vpu_sigs#[26] = vpu_dec.id_sigs.ldst
+  f7_vpu_sigs#[25] = vpu_dec.id_sigs.m0ren
+  f7_vpu_sigs#[24] = vpu_dec.id_sigs.mallren
+  f7_vpu_sigs#[23] = vpu_dec.id_sigs.mren1
+  f7_vpu_sigs#[22] = vpu_dec.id_sigs.mren2
+  f7_vpu_sigs#[21] = vpu_dec.id_sigs.wen
+  f7_vpu_sigs#[20] = vpu_dec.id_sigs.ren1
+  f7_vpu_sigs#[19] = vpu_dec.id_sigs.ren2
+  f7_vpu_sigs#[18] = vpu_dec.id_sigs.ren3
+  f7_vpu_sigs#[17] = vpu_dec.id_sigs.rend
+  f7_vpu_sigs#[16] = vpu_dec.id_sigs.swap12
+  f7_vpu_sigs#[15] = vpu_dec.id_sigs.swap23
+  f7_vpu_sigs#[14] = vpu_dec.id_sigs.swap13
+  f7_vpu_sigs#[13] = vpu_dec.id_sigs.vector
+  f7_vpu_sigs#[9..<13] = vpu_dec.id_sigs.dtype
+  f7_vpu_sigs#[8] = vpu_dec.id_sigs.fromint
+  f7_vpu_sigs#[7] = vpu_dec.id_sigs.toint
+  f7_vpu_sigs#[6] = vpu_dec.id_sigs.fma
+  f7_vpu_sigs#[5] = vpu_dec.id_sigs.fms
+  f7_vpu_sigs#[4] = vpu_dec.id_sigs.add
+  f7_vpu_sigs#[3] = vpu_dec.id_sigs.sub
+  f7_vpu_sigs#[2] = vpu_dec.id_sigs.mul
+  f7_vpu_sigs#[1] = vpu_dec.id_sigs.round
+  f7_vpu_sigs#[0] = vpu_dec.id_sigs.wflags
+  const f7_is_vpu_insn = vpu_dec.id_vpu_insn != 0
+
+  // ---- ID stage view: head of the selected thread's FIFO ----
+  const id_inst_valid = inst_fifo_empty#[id_inst_thread_id_o] == 0
+
+  // ---- per-thread FIFO ----
+  // Empty: a push goes to the head. One entry: a push with a pop replaces the head, a push alone fills the pending slot.
+  // Full: a pop moves pending to the head, a push (after the pop) refills pending.
+  // The VPU part of an entry is only written when the instruction is a VPU one. Same case split as the RTL (one write per
+  // case), which is what LEC pairs the memory write ports by.
+  // thread 0
+  const push_0 = f7_exp_thread_id == 0 and tb_inst_valid#[0] == 1 and not full_0
+  const pop_0 = id_inst_valid and id_inst_ready_i != 0 and id_inst_thread_id_o == 0
+  if rst_ni == 0 {
+    fifo_rd_ptr[0] = 0
+    fifo_wr_ptr[0] = 0
+  } elif f0_core_req_valid_i#[0] != 0 {
+    fifo_rd_ptr[0] = 0
+    fifo_wr_ptr[0] = 0
+  } else {
+    mut rd_next_0:U2 = 0
+    mut wr_next_0:U2 = 0
+    wrap rd_next_0 = fifo_rd_ptr[0] + U1(pop_0)
+    wrap wr_next_0 = fifo_wr_ptr[0] + U1(push_0)
+    fifo_rd_ptr[0] = rd_next_0
+    fifo_wr_ptr[0] = wr_next_0
+  }
+  mut pend_load_0 = false // pending slot loads the F7 instruction
+  if empty_0 {
+    if push_0 {
+      `inst_fifo_data.core_resp`[0] = f7_arb_data
+      `inst_fifo_data.intpipe_ctrl`[0] = f7_intpipe_ctrl
+      if f7_is_vpu_insn {
+        `inst_fifo_data.vpu_ctrl_sigs`[0] = f7_vpu_sigs
+      }
+    }
+  } elif not full_0 {
+    if pop_0 and push_0 {
+      `inst_fifo_data.core_resp`[0] = f7_arb_data
+      `inst_fifo_data.intpipe_ctrl`[0] = f7_intpipe_ctrl
+      if f7_is_vpu_insn {
+        `inst_fifo_data.vpu_ctrl_sigs`[0] = f7_vpu_sigs
+      }
+    } elif push_0 {
+      pend_load_0 = true
+    }
+  } else {
+    if pop_0 {
+      `inst_fifo_data.core_resp`[0] = pending_data#[90..<179]
+      `inst_fifo_data.intpipe_ctrl`[0] = pending_data#[0..<45]
+      if pending_data_is_fp == 1 {
+        `inst_fifo_data.vpu_ctrl_sigs`[0] = pending_data#[45..<90]
+      }
+    }
+    if push_0 {
+      pend_load_0 = true
+    }
+  }
+
+  // thread 1
+  const push_1 = f7_exp_thread_id == 1 and tb_inst_valid#[1] == 1 and not full_1
+  const pop_1 = id_inst_valid and id_inst_ready_i != 0 and id_inst_thread_id_o == 1
+  if rst_ni == 0 {
+    fifo_rd_ptr[1] = 0
+    fifo_wr_ptr[1] = 0
+  } elif f0_core_req_valid_i#[1] != 0 {
+    fifo_rd_ptr[1] = 0
+    fifo_wr_ptr[1] = 0
+  } else {
+    mut rd_next_1:U2 = 0
+    mut wr_next_1:U2 = 0
+    wrap rd_next_1 = fifo_rd_ptr[1] + U1(pop_1)
+    wrap wr_next_1 = fifo_wr_ptr[1] + U1(push_1)
+    fifo_rd_ptr[1] = rd_next_1
+    fifo_wr_ptr[1] = wr_next_1
+  }
+  mut pend_load_1 = false // pending slot loads the F7 instruction
+  if empty_1 {
+    if push_1 {
+      `inst_fifo_data.core_resp`[1] = f7_arb_data
+      `inst_fifo_data.intpipe_ctrl`[1] = f7_intpipe_ctrl
+      if f7_is_vpu_insn {
+        `inst_fifo_data.vpu_ctrl_sigs`[1] = f7_vpu_sigs
+      }
+    }
+  } elif not full_1 {
+    if pop_1 and push_1 {
+      `inst_fifo_data.core_resp`[1] = f7_arb_data
+      `inst_fifo_data.intpipe_ctrl`[1] = f7_intpipe_ctrl
+      if f7_is_vpu_insn {
+        `inst_fifo_data.vpu_ctrl_sigs`[1] = f7_vpu_sigs
+      }
+    } elif push_1 {
+      pend_load_1 = true
+    }
+  } else {
+    if pop_1 {
+      `inst_fifo_data.core_resp`[1] = pending_data_s1#[90..<179]
+      `inst_fifo_data.intpipe_ctrl`[1] = pending_data_s1#[0..<45]
+      if pending_data_is_fp_s1 == 1 {
+        `inst_fifo_data.vpu_ctrl_sigs`[1] = pending_data_s1#[45..<90]
+      }
+    }
+    if push_1 {
+      pend_load_1 = true
+    }
+  }
+
+  tb_inst_ready = (U1(f7_exp_thread_id == 0 and not full_0), U1(f7_exp_thread_id == 1 and not full_1))#[..]
+  const f7_inst_valid_th:U2 = (U1((not empty_0 or push_0) and f0_core_req_valid_i#[0] == 0), U1((not empty_1 or push_1) and f0_core_req_valid_i#[1] == 0))#[..]
+
+  // The pending slot is a separate register per thread (state names follow the Verilog).
+  if pend_load_0 {
+    pending_data#[90..<179] = f7_arb_data
+    pending_data#[0..<45] = f7_intpipe_ctrl
+    if f7_is_vpu_insn {
+      pending_data#[45..<90] = f7_vpu_sigs
+    }
+    pending_data_is_fp = U1(f7_is_vpu_insn)
+  }
+  if pend_load_1 {
+    pending_data_s1#[90..<179] = f7_arb_data
+    pending_data_s1#[0..<45] = f7_intpipe_ctrl
+    if f7_is_vpu_insn {
+      pending_data_s1#[45..<90] = f7_vpu_sigs
+    }
+    pending_data_is_fp_s1 = U1(f7_is_vpu_insn)
+  }
+
+  // ---- thread scheduler ----
+  const sched = minion_frontend_thread_sched::[name=gen_multi_sched_u_sched](clk_i=clk_i, rst_ni=rst_ni, f7_valid_tid_i=f7_inst_valid_th, f0_thread_enabled_i=thread_enabled_f_q, id_core_stall_i=id_core_stall_i)
+  f7_thread_awake = sched.f7_thread_awake_o
+  id_inst_thread_id_o = sched.f7_thread_id_o
+
+  // ---- ID stage outputs ----
+  id_inst_valid_o = U1(id_inst_valid)
+  id_inst_data_o = unpack_core_resp(w=`inst_fifo_data.core_resp`[id_inst_thread_id_o])
+  id_intpipe_ctrl_o = unpack_intpipe_ctrl(w=`inst_fifo_data.intpipe_ctrl`[id_inst_thread_id_o])
+  id_vpu_decoder_sigs_o = unpack_vpu_sigs(w=`inst_fifo_data.vpu_ctrl_sigs`[id_inst_thread_id_o])
+
+  // VPU core control: a direct map of the decoder signals; the rest (scoreboard, transcendental busy, ...) is tied off here.
+  id_vpu_core_ctrl_o.m0ren = id_vpu_decoder_sigs_o.m0ren
+  id_vpu_core_ctrl_o.mallren = id_vpu_decoder_sigs_o.mallren
+  id_vpu_core_ctrl_o.mren1 = id_vpu_decoder_sigs_o.mren1
+  id_vpu_core_ctrl_o.mren2 = id_vpu_decoder_sigs_o.mren2
+  id_vpu_core_ctrl_o.wen = id_vpu_decoder_sigs_o.wen | id_vpu_decoder_sigs_o.rend
+  id_vpu_core_ctrl_o.ren1 = id_vpu_decoder_sigs_o.ren1
+  id_vpu_core_ctrl_o.ren2 = id_vpu_decoder_sigs_o.ren2
+  id_vpu_core_ctrl_o.ren3 = id_vpu_decoder_sigs_o.ren3
+  id_vpu_core_ctrl_o.rend = id_vpu_decoder_sigs_o.rend
+  id_vpu_core_ctrl_o.is_trans = id_vpu_decoder_sigs_o.trans
+  id_vpu_core_ctrl_o.trans_busy = 0
+  id_vpu_core_ctrl_o.id_trans_insert = 0
+  id_vpu_core_ctrl_o.scoreboard.fp_valid = 0
+  id_vpu_core_ctrl_o.scoreboard.fp_dest = 0
+  id_vpu_core_ctrl_o.scoreboard.toint_valid = 0
+  id_vpu_core_ctrl_o.scoreboard.toint_dest = 0
+  id_vpu_core_ctrl_o.scoreboard.mask_valid = 0
+  id_vpu_core_ctrl_o.scoreboard.mask_dest = 0
+  id_vpu_core_ctrl_o.tfma_enabled = 0
+  id_vpu_core_ctrl_o.tfma_wrrf_enabled = 0
+  id_vpu_core_ctrl_o.tquant_enabled = 0
+  id_vpu_core_ctrl_o.reduce_enabled = 0
+  id_vpu_core_ctrl_o.fflags_stall = 0
+  id_vpu_core_ctrl_o.fromint = id_vpu_decoder_sigs_o.fromint
+
+  // ---- debug exposure ----
+  debug_inst_fifo_empty_o = inst_fifo_empty
+  debug_inst_fifo_full_o = inst_fifo_full
+  debug_tb_inst_valid_o = tb_inst_valid
+  debug_tb_inst_ready_o = tb_inst_ready
+}

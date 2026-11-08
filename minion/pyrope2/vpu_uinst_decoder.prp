@@ -1,0 +1,402 @@
+// Decoder for the vector-unit (VPU) micro-instruction table: maps a 32-bit instruction word to the
+// control signals the VPU pipeline needs. Each row matches (inst & mask) == value and sets only its
+// nonzero signals (everything else decodes to 0). Rows are mutually exclusive, and an instruction
+// matching no row decodes to all zeros. The rows for the extra transcendentals (RSQRT, SIN) exist
+// only when EnableExtraTrans is set; the VPU is built with it clear.
+const minion_pkg = import("minion_pkg")
+
+// Opcode and data-type codes that minion_pkg.prp does not carry (same values as the Verilog package).
+comptime const VpuCmdNr2Frcpfxp:U7 = 13
+comptime const VpuTransRcpFma2:U7 = 100
+comptime const VpuTransRsqrtFma2:U7 = 103
+comptime const VpuTransSinTrans:U7 = 117
+comptime const VpuTransSinP3:U7 = 121
+comptime const VpuTransExpFma2:U7 = 125
+comptime const VpuDtypeF16f32:U4 = 14
+
+type VpuCtrlSigs = (cmd:U7, txfma:U1, shsw:U1, rom:U1, scatter:U1, cvt:U1, trans:U1, gcvt:U1, fromintf:U1, tointm:U1, tointf:U1, maskop:U1, ldst:U1, m0ren:U1, mallren:U1, mren1:U1, mren2:U1, wen:U1, ren1:U1, ren2:U1, ren3:U1, rend:U1, swap12:U1, swap23:U1, swap13:U1, vector:U1, dtype:U4, fromint:U1, toint:U1, fma:U1, fms:U1, add:U1, sub:U1, mul:U1, round:U1, wflags:U1)
+
+pub comb vpu_uinst_decoder<EnableExtraTrans=0>(id_inst_i:U32) -> (id_sigs_o:VpuCtrlSigs) {
+  comptime const extra = EnableExtraTrans != 0
+  mut sigs:VpuCtrlSigs = (add=0, cmd=0, cvt=0, dtype=0, fma=0, fms=0, fromint=0, fromintf=0, gcvt=0, ldst=0, m0ren=0, mallren=0, maskop=0, mren1=0, mren2=0, mul=0, ren1=0, ren2=0, ren3=0, rend=0, rom=0, round=0, scatter=0, shsw=0, sub=0, swap12=0, swap13=0, swap23=0, toint=0, tointf=0, tointm=0, trans=0, txfma=0, vector=0, wen=0, wflags=0)
+
+  // Packed-single
+  unique if (id_inst_i & 0x0000707f) == 0x0000600b { // FSW_PS
+    sigs.cmd = minion_pkg.VpuCmdMvXf
+    sigs.ldst = 1
+    sigs.m0ren = 1
+    sigs.ren2 = 1
+    sigs.swap12 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+  } elif (id_inst_i & 0xfe00007f) == 0x0000007b { // FADD_PS
+    sigs.cmd = minion_pkg.VpuCmdAdd
+    sigs.txfma = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.ren2 = 1
+    sigs.swap23 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+    sigs.add = 1
+    sigs.round = 1
+    sigs.wflags = 1
+  } elif (id_inst_i & 0xfe00007f) == 0x0800007b { // FSUB_PS
+    sigs.cmd = minion_pkg.VpuCmdSub
+    sigs.txfma = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.ren2 = 1
+    sigs.swap23 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+    sigs.sub = 1
+    sigs.round = 1
+    sigs.wflags = 1
+  } elif (id_inst_i & 0xfe00007f) == 0x1000007b { // FMUL_PS
+    sigs.cmd = minion_pkg.VpuCmdMul
+    sigs.txfma = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+    sigs.mul = 1
+    sigs.round = 1
+    sigs.wflags = 1
+  } elif (id_inst_i & 0xfe00707f) == 0x2800007b { // FMIN_PS
+    sigs.cmd = minion_pkg.VpuCmdMin
+    sigs.txfma = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.ren2 = 1
+    sigs.swap23 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+    sigs.wflags = 1
+  } elif (id_inst_i & 0xfe00707f) == 0x2800107b { // FMAX_PS
+    sigs.cmd = minion_pkg.VpuCmdMax
+    sigs.txfma = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.ren2 = 1
+    sigs.swap23 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+    sigs.wflags = 1
+  } elif (id_inst_i & 0x0600007f) == 0x0000005b { // FMADD_PS
+    sigs.cmd = minion_pkg.VpuCmdMadd
+    sigs.txfma = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.ren2 = 1
+    sigs.ren3 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+    sigs.fma = 1
+    sigs.round = 1
+    sigs.wflags = 1
+  } elif (id_inst_i & 0xfff0007f) == 0xc000007b { // FCVT_PW_PS
+    sigs.cmd = minion_pkg.VpuCmdCvtIntf32
+    sigs.txfma = 1
+    sigs.cvt = 1
+    sigs.tointf = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.swap13 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+    sigs.round = 1
+    sigs.wflags = 1
+  } elif (id_inst_i & 0xfff0007f) == 0xd000007b { // FCVT_PS_PW
+    sigs.cmd = minion_pkg.VpuCmdCvtF32int
+    sigs.txfma = 1
+    sigs.cvt = 1
+    sigs.fromintf = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.swap13 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeInt
+    sigs.round = 1
+    sigs.wflags = 1
+  } elif (id_inst_i & 0xfe00707f) == 0x00000077 { // FCMOVM_PS
+    sigs.cmd = minion_pkg.VpuCmdFcmovm
+    sigs.shsw = 1
+    sigs.fromintf = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.ren2 = 1
+    sigs.swap13 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+
+    // Trans
+  } elif (id_inst_i & 0xfe00007f) == 0x00000033 { // TR_FMA1_RCP
+    sigs.cmd = minion_pkg.VpuTransRcpFma1
+    sigs.txfma = 1
+    sigs.rom = 1
+    sigs.trans = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeInt
+    sigs.fma = 1
+  } elif (id_inst_i & 0xfe00007f) == 0x02000033 { // TR_FMA2_RCP
+    sigs.cmd = VpuTransRcpFma2
+    sigs.txfma = 1
+    sigs.trans = 1
+    sigs.wen = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeInt
+    sigs.fma = 1
+    sigs.wflags = 1
+  } elif extra and (id_inst_i & 0xfe00007f) == 0x04000033 { // TR_FMA1_RSQRT
+    sigs.cmd = minion_pkg.VpuTransRsqrtFma1
+    sigs.txfma = 1
+    sigs.rom = 1
+    sigs.trans = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeInt
+    sigs.fma = 1
+  } elif extra and (id_inst_i & 0xfe00007f) == 0x06000033 { // TR_FMA2_RSQRT
+    sigs.cmd = VpuTransRsqrtFma2
+    sigs.txfma = 1
+    sigs.trans = 1
+    sigs.wen = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeInt
+    sigs.fma = 1
+    sigs.wflags = 1
+  } elif (id_inst_i & 0xfe00007f) == 0x0e000033 { // TR_FMA1_LOG
+    sigs.cmd = minion_pkg.VpuTransLogFma1
+    sigs.txfma = 1
+    sigs.shsw = 1
+    sigs.rom = 1
+    sigs.trans = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeInt
+    sigs.fma = 1
+  } elif (id_inst_i & 0xfe00007f) == 0x10000033 { // TR_FMA2_LOG
+    sigs.cmd = minion_pkg.VpuTransLogFma2
+    sigs.txfma = 1
+    sigs.shsw = 1
+    sigs.trans = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeInt
+    sigs.fma = 1
+  } elif (id_inst_i & 0xfe00007f) == 0x12000033 { // TR_MUL_LOG
+    sigs.cmd = minion_pkg.VpuTransLogMul
+    sigs.txfma = 1
+    sigs.trans = 1
+    sigs.wen = 1
+    sigs.ren2 = 1
+    sigs.swap23 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+    sigs.fma = 1
+    sigs.mul = 1
+    sigs.wflags = 1
+  } elif extra and (id_inst_i & 0xfe00007f) == 0x14000033 { // TR_TR_SIN
+    sigs.cmd = VpuTransSinTrans
+    sigs.txfma = 1
+    sigs.trans = 1
+    sigs.wen = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+    sigs.round = 1
+  } elif extra and (id_inst_i & 0xfe00007f) == 0x16000033 { // TR_RR_SIN
+    sigs.cmd = minion_pkg.VpuTransSinRr
+    sigs.rom = 1
+    sigs.trans = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeInt
+  } elif extra and (id_inst_i & 0xfe00007f) == 0x18000033 { // TR_P1_SIN
+    sigs.cmd = minion_pkg.VpuTransSinP1
+    sigs.txfma = 1
+    sigs.rom = 1
+    sigs.trans = 1
+    sigs.ren1 = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+    sigs.mul = 1
+    sigs.round = 1
+  } elif extra and (id_inst_i & 0xfe00007f) == 0x1a000033 { // TR_P2_SIN
+    sigs.cmd = minion_pkg.VpuTransSinP2
+    sigs.txfma = 1
+    sigs.rom = 1
+    sigs.trans = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+    sigs.fma = 1
+    sigs.round = 1
+  } elif extra and (id_inst_i & 0xfe00007f) == 0x1c000033 { // TR_P3_SIN
+    sigs.cmd = VpuTransSinP3
+    sigs.txfma = 1
+    sigs.trans = 1
+    sigs.wen = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+    sigs.mul = 1
+    sigs.round = 1
+    sigs.wflags = 1
+  } elif (id_inst_i & 0xfe00007f) == 0x1e000033 { // TR_RR_EXP
+    sigs.cmd = minion_pkg.VpuTransExpRr
+    sigs.rom = 1
+    sigs.trans = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+  } elif (id_inst_i & 0xfe00007f) == 0x20000033 { // TR_FMA1_EXP
+    sigs.cmd = minion_pkg.VpuTransExpFma1
+    sigs.txfma = 1
+    sigs.rom = 1
+    sigs.trans = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeInt
+    sigs.fma = 1
+  } elif (id_inst_i & 0xfe00007f) == 0x22000033 { // TR_FMA2_EXP
+    sigs.cmd = VpuTransExpFma2
+    sigs.txfma = 1
+    sigs.trans = 1
+    sigs.wen = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeInt
+    sigs.fma = 1
+    sigs.wflags = 1
+  } elif (id_inst_i & 0xfe00007f) == 0x08000033 { // TR_NR
+    sigs.cmd = VpuCmdNr2Frcpfxp
+    sigs.txfma = 1
+    sigs.trans = 1
+    sigs.wen = 1
+    sigs.ren2 = 1
+    sigs.ren3 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeInt
+    sigs.fma = 1
+    sigs.wflags = 1
+
+    // Packed-integer
+  } elif (id_inst_i & 0xfe00707f) == 0x0600007b { // FADD_PI
+    sigs.cmd = minion_pkg.VpuCmdAdd
+    sigs.shsw = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.ren2 = 1
+    sigs.swap23 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeInt
+    sigs.add = 1
+  } elif (id_inst_i & 0xfe00707f) == 0x0e00007b { // FSUB_PI
+    sigs.cmd = minion_pkg.VpuCmdSub
+    sigs.shsw = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.ren2 = 1
+    sigs.swap23 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeInt
+    sigs.sub = 1
+  } elif (id_inst_i & 0xfe00707f) == 0x2e00007b { // FMIN_PI
+    sigs.cmd = minion_pkg.VpuCmdMin
+    sigs.shsw = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeInt
+  } elif (id_inst_i & 0xfe00707f) == 0x2e00107b { // FMAX_PI
+    sigs.cmd = minion_pkg.VpuCmdMax
+    sigs.shsw = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeInt
+  } elif (id_inst_i & 0xfe00707f) == 0x0600407b { // FXOR_PI
+    sigs.cmd = minion_pkg.VpuCmdXor
+    sigs.shsw = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeInt
+  } elif (id_inst_i & 0xfff0707f) == 0x0600307b { // FSAT8_PI
+    sigs.cmd = minion_pkg.VpuCmdFsat8
+    sigs.shsw = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+  } elif (id_inst_i & 0xfff0707f) == 0x0610307b { // FSATU8_PI
+    sigs.cmd = minion_pkg.VpuCmdFsatu8
+    sigs.shsw = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+  } elif (id_inst_i & 0xfff0707f) == 0x2600007b { // FPACKREPB_PI
+    sigs.cmd = minion_pkg.VpuCmdPackrepb
+    sigs.shsw = 1
+    sigs.fromintf = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.vector = 1
+    sigs.dtype = minion_pkg.VpuDtypeF32
+
+    // Tensor
+  } elif (id_inst_i & 0x1e00007f) == 0x0a000043 { // TMUL_PH_PS
+    sigs.cmd = minion_pkg.VpuCmdMul
+    sigs.txfma = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.ren2 = 1
+    sigs.vector = 1
+    sigs.dtype = VpuDtypeF16f32
+    sigs.mul = 1
+    sigs.round = 1
+    sigs.wflags = 1
+  } elif (id_inst_i & 0x0600007f) == 0x0200004b { // TFMA_PH_PS
+    sigs.cmd = minion_pkg.VpuCmdMadd
+    sigs.txfma = 1
+    sigs.m0ren = 1
+    sigs.wen = 1
+    sigs.ren1 = 1
+    sigs.ren2 = 1
+    sigs.ren3 = 1
+    sigs.vector = 1
+    sigs.dtype = VpuDtypeF16f32
+    sigs.fma = 1
+    sigs.round = 1
+    sigs.wflags = 1
+  }
+  id_sigs_o = sigs
+}

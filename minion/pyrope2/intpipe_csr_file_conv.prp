@@ -1,0 +1,57 @@
+// Tensor convolution boundary computation (verilog: intpipe_csr_file_conv).
+// A write to either conv CSR (while one is accepted) starts a 16-step walk over
+// the window: each step records in conv_bits whether the sliding position
+// (base + accumulated offset) is still inside the tensor, then advances the
+// offsets. New CSR writes are refused while a tensorload/fma/cacheop is pending
+// on an unfinished walk. The walk logic is clock-enabled; unreset state is
+// only meaningful once a trigger has initialised it.
+pub mod intpipe_csr_file_conv::[timecheck=false](cacheop_wen:U1, clk_i:Clock, rst_ni:U1, tensorconv_ctrl_data:(row_pos:U16, padding1:U16, col_pos:U16), tensorconv_ctrl_wen:U1, tensorconv_size_data:(row_step_offset:U8, padding2:U8, row_size:U16, col_step_offset:U8, padding1:U8, col_size:U16), tensorconv_size_wen:U1, tensorfma_wen:U1, tensorload_wen:U1) -> (can_accept_new_write:U1@[], conv_bits:U16@[], conv_bits_ready:U1@[], conv_save_mask:U1@[]) {
+  reg compute_done_q:U1:[async=true, negreset=true, reset_pin=rst_ni] = 1
+  reg pending_q:U1:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg conv_save_mask:U1:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg conv_bits:U16 = nil
+  reg conv_idx:U4 = nil
+  reg conv_col_offset:U16 = nil
+  reg conv_row_offset:U16 = nil
+
+  const compute_done = compute_done_q == 1
+  const pending = pending_q == 1
+  const trigger = (tensorconv_size_wen == 1 or tensorconv_ctrl_wen == 1) and not pending
+  const walk_done = conv_idx == 15
+  const compute_done_d = if trigger { false } elif walk_done { true } else { compute_done }
+  const clk_en = trigger or not compute_done or pending
+
+  // A consumer write during an unfinished walk makes the result pending until it completes.
+  const consumer_wen = tensorload_wen == 1 or tensorfma_wen == 1 or cacheop_wen == 1
+  const pending_d = if compute_done { false } elif consumer_wen { true } else { pending }
+
+  // Position of the window corner: signed base + signed accumulated offset (18 bits).
+  mut col_pos:U18 = 0
+  mut row_pos:U18 = 0
+  wrap col_pos = tensorconv_ctrl_data.col_pos#sext[0..=15] + conv_col_offset#sext[0..=15]
+  wrap row_pos = tensorconv_ctrl_data.row_pos#sext[0..=15] + conv_row_offset#sext[0..=15]
+  const inside = col_pos#[17] == 0 and row_pos#[17] == 0 and col_pos < tensorconv_size_data.col_size and row_pos < tensorconv_size_data.row_size
+
+  mut bits_d:U16 = conv_bits
+  bits_d#[conv_idx] = U1(inside)
+
+  if clk_en {
+    conv_bits = bits_d
+    if trigger {
+      conv_idx = 0
+      conv_col_offset = 0
+      conv_row_offset = 0
+    } else {
+      wrap conv_idx += 1
+      wrap conv_col_offset += tensorconv_size_data.col_step_offset#sext[0..=7]
+      wrap conv_row_offset += tensorconv_size_data.row_step_offset#sext[0..=7]
+    }
+    compute_done_q = U1(compute_done_d)
+    pending_q = U1(pending_d)
+  }
+  // the mask pulses for one cycle when the walk completes
+  conv_save_mask = U1(compute_done_d and not compute_done)
+
+  can_accept_new_write = U1(not pending)
+  conv_bits_ready = compute_done_q
+}

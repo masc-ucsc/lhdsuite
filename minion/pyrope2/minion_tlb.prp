@@ -1,0 +1,190 @@
+// Translation lookaside buffer of one minion (verilog: minion_tlb).
+// A request is translated by a direct-mapped cache of leaf PTEs (one RF read per
+// request, index = low vpn bits above the page offset). A miss starts the PTW
+// request state machine (Ready -> Request -> Wait); the PTW response is written
+// to the cache one cycle later. Only the single-minion configuration exists:
+// satp_info_i/matp_info_i, tlb_invalidate_i and req_min_id_i are one minion wide.
+const prim_rf_1r1w_preview = import("prim_rf_1r1w_preview.prim_rf_1r1w_preview")
+const minion_pkg = import("minion_pkg")
+const tlb_pkg = import("tlb_pkg")
+
+comptime const EntryW = 36 // cached PTE: ppn(28) + u, sr, sw, sx, access, dirty, expected_ex_mode, ptw_access_fault
+
+// Page-size dependent shift: a 2M (1G) page ignores the vpn bits of the 1 (2) lower page-table levels.
+comb page_shift(typ:U2) -> (shift:U5) {
+  shift = if typ == minion_pkg.tlb_entry_type_2M { minion_pkg.PtwPgIdxSz }
+    elif typ == minion_pkg.tlb_entry_type_1G { 2*minion_pkg.PtwPgIdxSz }
+    else { 0 }
+}
+
+pub mod minion_tlb<Entries=8, NrMinions=1>::[timecheck=false](clk_i:Clock, coop_mode_i:U1, dft_i:(scanmode:U1, scan_reset_n:U1, sram_clk_override:U1, ram_rei:U1, ram_wei:U1), matp_info_i:U32, ptw_req_ready_i:U1, ptw_resp_data_i:(canceled_req:U1, access_fault:U1, rsvd_for_hw:U8, ppn:U44, rsvd_for_sw:U2, d:U1, a:U1, g:U1, u:U1, x:U1, w:U1, r:U1, v:U1), ptw_resp_valid_i:U1, req_data_i:(status:(prv:U2, mprv:U1, mpp:U2, sum:U1, mxr:U1, debug:U1), vpn:U36, passthrough:U1, instruction:U1, store:U1, msb_err:U1), req_min_id_i:U1, req_valid_i:U1, rst_ni:U1, satp_info_i:U32, tlb_invalidate_i:U1, vmspagesize_i:U2) -> (ptw_invalidate_o:U1@[], ptw_req_data_o:(satp_mode:U4, satp_ppn:U28, prv:U2, addr:U36)@[], ptw_req_valid_o:U1@[], resp_data_o:(fill_pending:U1, miss:U1, ppn:U28, xcpt_ld:U1, xcpt_st:U1, xcpt_if:U1, access_fault:U1)@[], vm_enabled_o:U1@[]) {
+  cassert(NrMinions == 1, "only the single-minion TLB is supported")
+  cassert(Entries == 8, "the cache index and tag widths are derived for 8 entries")
+  comptime const IdxW = 3 // cache index bits: clog2(Entries)
+  comptime const TagSz = 33 // vpn bits above the index: VaTransSize - IdxW
+
+  reg coop_mode_q:U1:[clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg tlb_invalidate_q:U1:[clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg tlb_invalidated_q:U1:[clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0 // invalidate seen, applied to the cache next cycle
+  reg state_q:U2:[clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = tlb_pkg.TlbStateReady
+  reg ptw_req_valid_q:U1:[clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg tlb_cache_valid_q:U8:[clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg ptw_resp_valid_q:U1:[clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  // the request that missed, as sent to the PTW and kept to fill the cache
+  reg req_min_id_q:U1:[clock_pin=clk_i] = nil
+  reg req_vpn_q:U36:[clock_pin=clk_i] = nil
+  reg req_tag_q:U33:[clock_pin=clk_i] = nil
+  reg ptw_req_data_q:U70:[clock_pin=clk_i] = nil // packed lsb first as (addr, prv, satp_ppn, satp_mode)
+  // last PTW response, packed as the 64-bit RISC-V PTE (lsb first v r w x u g a d rsw ppn rsvd_hw) plus access_fault and canceled_req on top
+  reg ptw_resp_data_q:U64:[clock_pin=clk_i] = nil
+
+  // ---- PTW response capture ----
+  if ptw_resp_valid_i == 1 {
+    ptw_resp_data_q = (ptw_resp_data_i.v, ptw_resp_data_i.r, ptw_resp_data_i.w, ptw_resp_data_i.x, ptw_resp_data_i.u, ptw_resp_data_i.g, ptw_resp_data_i.a, ptw_resp_data_i.d, ptw_resp_data_i.rsvd_for_sw, ptw_resp_data_i.ppn, ptw_resp_data_i.rsvd_for_hw, ptw_resp_data_i.access_fault, ptw_resp_data_i.canceled_req)#[..]
+  }
+  ptw_resp_valid_q = ptw_resp_valid_i
+  const pte_v = ptw_resp_data_q#[0] == 1
+  const pte_r = ptw_resp_data_q#[1] == 1
+  const pte_w = ptw_resp_data_q#[2] == 1
+  const pte_x = ptw_resp_data_q#[3] == 1
+  const pte_access_fault = ptw_resp_data_q#[62] == 1
+  const pte_canceled = ptw_resp_data_q#[63] == 1
+  const resp_valid_q:Bool = ptw_resp_valid_q == 1
+  const state_ready:Bool = state_q == tlb_pkg.TlbStateReady
+
+  // ---- address mode ----
+  const priv_is_mpp:Bool = req_data_i.status.mprv == 1 and req_data_i.instruction == 0
+  const privilege_mode:U2 = if priv_is_mpp { req_data_i.status.mpp } else { req_data_i.status.prv }
+  // Only minion 0 exists: a req_min_id_i of 1 would index past the satp/matp arrays and reads as 0.
+  const satp_info:U32 = if req_min_id_i == 0 { satp_info_i } else { 0 }
+  const matp_info:U32 = if req_min_id_i == 0 { matp_info_i } else { 0 }
+  const translation_info:U32 = if privilege_mode == minion_pkg.PrvM { matp_info } else { satp_info }
+  const vm_mode:U4 = translation_info#[28..<32]
+  const vm_ppn:U28 = translation_info#[0..<28]
+  const vm_enabled:Bool = vm_mode != minion_pkg.CsrSatpModeBare and (priv_is_mpp or req_data_i.status.debug == 0) and req_data_i.passthrough == 0
+  const vpn_high_bits = req_data_i.vpn#[26..<36]
+  const invalid_address:Bool = if vm_mode == minion_pkg.CsrSatpModeSv48 {
+    req_data_i.msb_err == 1
+  } elif vm_mode == minion_pkg.CsrSatpModeSv39 {
+    // an Sv39 address must be sign extended from bit 38
+    req_data_i.msb_err == 1 or not (vpn_high_bits == 0 or vpn_high_bits == 0x3ff)
+  } else {
+    false
+  }
+
+  // ---- invalidation ----
+  const tlb_invalidated_d:U1 = (if state_ready or (state_q == tlb_pkg.TlbStateWait and resp_valid_q) { 0 } else { tlb_invalidated_q }) | tlb_invalidate_i
+  // coop mode: any invalidate applies; otherwise only the request's own minion (minion 0)
+  const ptw_req_invalidated:Bool = tlb_invalidated_q == 1 and (coop_mode_q == 1 or req_min_id_q == 0)
+  // the three state bits only change when an input differs from them
+  if (coop_mode_q ^ coop_mode_i) == 1 or (tlb_invalidate_q ^ tlb_invalidate_i) == 1 or (tlb_invalidated_q ^ tlb_invalidated_d) == 1 {
+    coop_mode_q = coop_mode_i
+    tlb_invalidate_q = tlb_invalidate_i
+    tlb_invalidated_q = tlb_invalidated_d
+  }
+
+  // ---- cache lookup (index and tag depend on the page size of the request) ----
+  const shift:U5 = page_shift(vmspagesize_i)
+  const req_tag:U33 = ((req_data_i.vpn#[IdxW..<36] >> shift) << shift)#[0..<TagSz]
+  const tlb_cache_raddr:U3 = (req_data_i.vpn >> shift)#[0..<IdxW]
+  // the fill uses the page size and vpn of the request that missed
+  const tlb_cache_waddr:U3 = (req_vpn_q >> page_shift(vmspagesize_i))#[0..<IdxW]
+
+  const pte_is_leaf:Bool = pte_v and (pte_r or (pte_x and not pte_w)) and not pte_access_fault
+  const tlb_cache_wdata:U36 = (ptw_resp_data_q#[10..<38], ptw_resp_data_q#[4], U1(pte_is_leaf and pte_r), U1(pte_is_leaf and pte_w), U1(pte_is_leaf and pte_x), ptw_resp_data_q#[6], ptw_resp_data_q#[7], ptw_resp_data_q#[54], ptw_resp_data_q#[62])#[..]
+  const rf_wr_en:Bool = not ptw_req_invalidated and resp_valid_q and not pte_canceled
+  // the write data is previewed a cycle early, from the PTW response itself
+  const rf_wr_en_early:Bool = tlb_invalidated_d == 0 and ptw_resp_valid_i == 1 and ptw_resp_data_i.canceled_req == 0
+  const u_tlb_cache_rf = prim_rf_1r1w_preview<Depth=8, Width=69>(preview_clk_i=clk_i, rf_clk_i=clk_i, wr_data_en_1p_next_i=U1(rf_wr_en_early), wr_en_i=U1(rf_wr_en), wr_addr_i=tlb_cache_waddr, wr_data_i=(tlb_cache_wdata, req_tag_q)#[..], rd_addr_i=tlb_cache_raddr)
+  const rdata_tag:U33 = u_tlb_cache_rf#[EntryW..<(TagSz + EntryW)]
+  const rdata_ppn:U28 = u_tlb_cache_rf#[0..<28]
+  const rdata_u:Bool = u_tlb_cache_rf#[28] == 1
+  const rdata_sr:Bool = u_tlb_cache_rf#[29] == 1
+  const rdata_sw:Bool = u_tlb_cache_rf#[30] == 1
+  const rdata_sx:Bool = u_tlb_cache_rf#[31] == 1
+  const rdata_accessed:Bool = u_tlb_cache_rf#[32] == 1
+  const rdata_dirty:Bool = u_tlb_cache_rf#[33] == 1
+  const rdata_expected_ex_mode:Bool = u_tlb_cache_rf#[34] == 1
+  const rdata_access_fault:Bool = u_tlb_cache_rf#[35] == 1
+
+  if resp_valid_q and not pte_canceled {
+    tlb_cache_valid_q#[tlb_cache_waddr] = 1
+  }
+  if tlb_invalidated_q == 1 {
+    tlb_cache_valid_q = 0
+  }
+
+  const tlb_cache_hit:Bool = tlb_cache_valid_q#[tlb_cache_raddr] == 1 and vm_enabled and rdata_tag == req_tag and rdata_expected_ex_mode != (privilege_mode != minion_pkg.PrvM)
+  const tlb_miss:Bool = vm_enabled and not tlb_cache_hit
+
+  // ---- permission checks ----
+  const priv_ok:Bool = if privilege_mode == minion_pkg.PrvU { rdata_u } elif req_data_i.status.sum == 1 { true } else { not rdata_u }
+  const w_perm_ok:Bool = priv_ok and rdata_sw
+  const r_perm_ok:Bool = priv_ok and (rdata_sr or (req_data_i.status.mxr == 1 and rdata_sx))
+  const x_perm_ok:Bool = priv_ok and rdata_sx
+  const xcpt_accessed:Bool = not rdata_accessed
+  const xcpt_dirty:Bool = not rdata_dirty and req_data_i.store == 1
+
+  resp_data_o.fill_pending = U1(not state_ready)
+  resp_data_o.miss = U1(tlb_miss)
+  resp_data_o.ppn = if vm_enabled { rdata_ppn } else { req_data_i.vpn#[0..<28] }
+  resp_data_o.xcpt_ld = U1(((not r_perm_ok or xcpt_accessed) and tlb_cache_hit) or invalid_address)
+  resp_data_o.xcpt_st = U1(((not w_perm_ok or xcpt_dirty) and tlb_cache_hit) or invalid_address)
+  resp_data_o.xcpt_if = U1(((not x_perm_ok or xcpt_accessed) and tlb_cache_hit) or invalid_address)
+  resp_data_o.access_fault = U1(rdata_access_fault and tlb_cache_hit)
+
+  // ---- PTW request state machine ----
+  mut state_d:U2 = state_q
+  mut req_min_id_d:U1 = req_min_id_q
+  mut req_vpn_d:U36 = req_vpn_q
+  mut req_tag_d:U33 = req_tag_q
+  mut ptw_req_data_d:U70 = ptw_req_data_q
+  mut ptw_req_valid_d:U1 = ptw_req_valid_q
+  match state_q {
+    == tlb_pkg.TlbStateReady {
+      if req_valid_i == 1 and tlb_miss and not invalid_address {
+        state_d = tlb_pkg.TlbStateRequest
+        req_min_id_d = req_min_id_i
+        req_vpn_d = req_data_i.vpn
+        req_tag_d = req_tag
+        ptw_req_data_d = (req_data_i.vpn, req_data_i.status.prv, vm_ppn, vm_mode)#[..]
+        ptw_req_valid_d = 1
+      }
+    }
+    == tlb_pkg.TlbStateRequest {
+      if ptw_req_invalidated {
+        state_d = tlb_pkg.TlbStateReady
+        ptw_req_valid_d = 0
+      } elif ptw_req_ready_i == 1 {
+        state_d = tlb_pkg.TlbStateWait
+        ptw_req_valid_d = 0
+      }
+    }
+    == tlb_pkg.TlbStateWait {
+      if resp_valid_q {
+        state_d = tlb_pkg.TlbStateReady
+      }
+    }
+    else {
+      state_d = tlb_pkg.TlbStateReady
+      ptw_req_valid_d = 0
+    }
+  }
+  // the machine only clocks while it is busy or on a miss, and never while in reset (the request registers have no reset value)
+  if rst_ni == 1 and (not state_ready or (req_valid_i == 1 and tlb_miss)) {
+    state_q = state_d
+    req_min_id_q = req_min_id_d
+    req_vpn_q = req_vpn_d
+    req_tag_q = req_tag_d
+    ptw_req_data_q = ptw_req_data_d
+    ptw_req_valid_q = ptw_req_valid_d
+  }
+
+  ptw_req_data_o.addr = ptw_req_data_q#[0..<36]
+  ptw_req_data_o.prv = ptw_req_data_q#[36..<38]
+  ptw_req_data_o.satp_ppn = ptw_req_data_q#[38..<66]
+  ptw_req_data_o.satp_mode = ptw_req_data_q#[66..<70]
+  ptw_req_valid_o = ptw_req_valid_q
+  ptw_invalidate_o = tlb_invalidate_q
+  vm_enabled_o = U1(vm_enabled)
+}

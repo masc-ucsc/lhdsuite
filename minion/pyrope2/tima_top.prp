@@ -1,0 +1,55 @@
+// Tensor int8 multiply-accumulate lane group (verilog: tima_top). Each of the four
+// bytes of in1 and in2 is a 9-bit signed operand (the byte plus a sign bit that is
+// set only for a signed multiply with the byte's msb set). F1 registers the operands,
+// F2 multiplies the byte pairs and sums the four 18-bit products, F3 adds the (optionally
+// zapped) third operand to the sign-extended sum.
+const tima_adder = import("tima_adder.tima_adder")
+const minion_pkg = import("minion_pkg")
+
+pub mod tima_top::[timecheck=false](clk_i:Clock, f1_in1_i:minion_pkg.VpuDataSSz_T, f1_in1_signed_i:U1, f1_in2_i:minion_pkg.VpuDataSSz_T, f1_in2_signed_i:U1, f1_mul_en_i:U1, f2_in3_en_i:U1, f2_in3_i:minion_pkg.VpuDataSSz_T, f2_tima_en_i:U1, f2_zap_opd3_i:U1) -> (f3_out_o:minion_pkg.VpuDataSSz_T@[]) {
+  comptime const LANES = 4 // int8 multiplies per 32-bit operand
+
+  reg f2_in1_q:U32:[clock_pin=clk_i] = nil
+  reg f2_in2_q:U32:[clock_pin=clk_i] = nil
+  reg f2_in1_sign_q:U4:[clock_pin=clk_i] = nil // per byte: the operand's 9th (sign) bit
+  reg f2_in2_sign_q:U4:[clock_pin=clk_i] = nil
+  reg f3_prod_add_q:S19:[clock_pin=clk_i] = nil
+  reg f3_in3_q:U32:[clock_pin=clk_i] = nil
+  reg f3_zap_opd3_q:Bool:[clock_pin=clk_i] = nil
+
+  // F1: a byte is negative only when the multiply is signed and its msb is set
+  mut f1_in1_sign:U4 = 0
+  mut f1_in2_sign:U4 = 0
+  for lane in 0..<LANES {
+    f1_in1_sign#[lane] = U1(f1_in1_signed_i == 1 and f1_in1_i#[8*lane + 7] == 1)
+    f1_in2_sign#[lane] = U1(f1_in2_signed_i == 1 and f1_in2_i#[8*lane + 7] == 1)
+  }
+  if f1_mul_en_i == 1 {
+    f2_in1_q = f1_in1_i
+    f2_in2_q = f1_in2_i
+    f2_in1_sign_q = f1_in1_sign
+    f2_in2_sign_q = f1_in2_sign
+  }
+
+  // F2: signed 9x9 products, accumulated modulo 2^19
+  mut f2_prod_add:S19 = 0
+  for lane in 0..<LANES {
+    const in1_part:U9 = (f2_in1_sign_q#[lane] << 8) | f2_in1_q#[(8*lane)..+8]
+    const in2_part:U9 = (f2_in2_sign_q#[lane] << 8) | f2_in2_q#[(8*lane)..+8]
+    const prod:S18 = (in1_part#sext[0..=8]*in2_part#sext[0..=8])#sext[0..=17]
+    wrap f2_prod_add = f2_prod_add + prod
+  }
+  if f2_tima_en_i == 1 {
+    f3_prod_add_q = f2_prod_add
+  }
+  if f2_in3_en_i == 1 {
+    f3_in3_q = f2_in3_i
+  }
+  f3_zap_opd3_q = f2_zap_opd3_i == 1
+
+  // F3: add the third operand unless it is zapped
+  const f3_in3_zapped:U32 = if f3_zap_opd3_q { f3_in3_q } else { 0 }
+  const f3_prod_add_sx:U32 = f3_prod_add_q#sext[0..=18]#[0..<32]
+  const comb_adder = tima_adder<Width=32>(a_i=f3_prod_add_sx, b_i=f3_in3_zapped)
+  f3_out_o = comb_adder
+}

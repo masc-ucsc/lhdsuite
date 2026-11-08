@@ -1,0 +1,628 @@
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+// Classify one single-precision operand into the FP_CLASS_* vector. low_nonzero says that the
+// fraction bits below its msb are non-zero (so msb=0 & low_nonzero is a signalling NaN, and
+// msb=0 & !low_nonzero a zero fraction); zero_clr is the "exponent is zero" flag.
+comb classify_f32(exp_all1:Bool, frac_msb:Bool, low_nonzero:Bool, sign:Bool, zero_clr:Bool) -> (class:vpu_defs_pkg.FP_CLASS_BITS_T) {
+  const frac_zero = not frac_msb and not low_nonzero
+  const zero = zero_clr and frac_zero
+  class#[vpu_defs_pkg.FP_CLASS_NEG_INF] = U1(sign and exp_all1 and frac_zero)
+  class#[vpu_defs_pkg.FP_CLASS_NEG_NORMAL] = U1(sign and not zero_clr and not exp_all1)
+  class#[vpu_defs_pkg.FP_CLASS_NEG_DENORMAL] = U1(sign and zero_clr and not frac_zero)
+  class#[vpu_defs_pkg.FP_CLASS_NEG_ZERO] = U1(sign and zero)
+  class#[vpu_defs_pkg.FP_CLASS_POS_ZERO] = U1(not sign and zero)
+  class#[vpu_defs_pkg.FP_CLASS_POS_DENORMAL] = U1(not sign and zero_clr and not frac_zero)
+  class#[vpu_defs_pkg.FP_CLASS_POS_NORMAL] = U1(not sign and not zero_clr and not exp_all1)
+  class#[vpu_defs_pkg.FP_CLASS_POS_INF] = U1(not sign and exp_all1 and frac_zero)
+  class#[vpu_defs_pkg.FP_CLASS_SNAN] = U1(exp_all1 and not frac_msb and low_nonzero)
+  class#[vpu_defs_pkg.FP_CLASS_QNAN] = U1(exp_all1 and frac_msb)
+}
+
+// TXFMA control stage c0 (verilog: txfma_c0): decodes the instruction arriving in the exa stage
+// into the operand/exponent select signals of txfma_f0, flops the part that stays valid in f0
+// (valid, command, datatype, TXFMA control bits, rounding mode) and, in f0, classifies the
+// operands (zero/denormal/inf/NaN) to produce the special-result and flag controls.
+// prp-style-allow reset-port-type: reset is U1 data here (the parents drive it as data)
+pub mod txfma_c0::[timecheck=false](clock:Clock, ea_hi_all1_f0a_h:U1, ea_hi_zero_f0a_l:U1, ea_lo_all1_f0a_h:U1, ea_lo_zero_f0a_l:U1, eb_eql_125_f0a_h:U1, eb_eql_126_f0a_h:U1, eb_eql_127_f0a_h:U1, eb_hi_all1_f0a_h:U1, eb_hi_zero_f0a_l:U1, eb_lo_all1_f0a_h:U1, eb_lo_zero_f0a_l:U1, ec_all1_f0a_h:U1, ec_zero_f0a_l:U1, faph_hi_b0_f0a_h:U1, faph_hi_zero_f0a_l:U1, faph_lo_b0_f0a_h:U1, faph_lo_zero_f0a_l:U1, faps_b0_f0a_h:U1, faps_zero_f0a_l:U1, fbph_hi_b0_f0a_h:U1, fbph_hi_zero_f0a_l:U1, fbph_lo_b0_f0a_h:U1, fbph_lo_zero_f0a_l:U1, fbps_b0_f0a_h:U1, fbps_zero_f0a_l:U1, fc_31_f0a_h:U1, fcf10_b0_f0a_h:U1, fcf10_zero_f0a_l:U1, fcf11_b0_f0a_h:U1, fcf11_zero_f0a_l:U1, fcn10_one_30_22_f0a_h:U1, fcn16_one_30_16_f0a_h:U1, fcn24_one_30_8_f0a_h:U1, fcn8_one_30_24_f0a_h:U1, fcnorm16_eq_1_f0a_h:U1, fcnorm8_eq_1_f0a_h:U1, fcnorm_30_f0a_h:U1, fcnorm_zero_29_8_f0a_h:U1, fcph_b0_f0a_h:U1, fcph_zero_f0a_l:U1, fcps_b0_f0a_h:U1, fcps_zero_f0a_h:U1, in_valid_exa_h:U1, reset:U1, rm_in_exa_h:vpu_defs_pkg.TXFMA_RM_SZ_T, sa_hi_f0a_h:U1, sa_lo_f0a_h:U1, sb_hi_f0a_h:U1, sb_lo_f0a_h:U1, sc_f0a_h:U1, sigs_in_exa_h:(cmd:U7, txfma:U1, shsw:U1, rom:U1, scatter:U1, cvt:U1, trans:U1, gcvt:U1, fromintf:U1, tointm:U1, tointf:U1, maskop:U1, ldst:U1, m0ren:U1, mallren:U1, mren1:U1, mren2:U1, wen:U1, ren1:U1, ren2:U1, ren3:U1, rend:U1, swap12:U1, swap23:U1, swap13:U1, vector:U1, dtype:U4, fromint:U1, toint:U1, fma:U1, fms:U1, add:U1, sub:U1, mul:U1, round:U1, wflags:U1), trans_exp_fma2_exc_exa_h:U1, trans_mask_exa_h:vpu_defs_pkg.TRANS_MASK_SIZE_T, trans_taylor_exa_h:U1, use_prev_sigs_exa_h:U1) -> (a_inf_f0a_h:U1@[], a_is_qnan_hi_f0a_h:U1@[], a_is_snan_hi_f0a_h:U1@[], c_inf_f0a_h:U1@[], c_is_qnan_f0a_h:U1@[], c_is_snan_f0a_h:U1@[], classify_f0a_h:vpu_defs_pkg.FP_CLASS_BITS_T@[], cmd_f0a_h:vpu_defs_pkg.VPU_FCMD_SZ_T@[], ctrl_valid_f0a_h:U1@[], dtps_f0a_h:U1@[], ea_hi_zero_clr_f0a_h:U1@[], ea_lo_zero_clr_f0a_h:U1@[], eb_hi_k_exa_h:U6@[], eb_hi_zero_clr_f0a_h:U1@[], eb_lo_zero_clr_f0a_h:U1@[], ec_en_exa_h:U1@[], ec_zero_clr_f0a_h:U1@[], ehi_ea_en_exa_h:U1@[], ehi_eb_en_exa_h:U1@[], elo_ea_en_exa_h:U1@[], elo_eb_en_exa_h:U1@[], fa_en_exa_h:U1@[], fa_hi_zero_f0a_h:U1@[], fb_en_exa_h:U1@[], fb_hi_zero_f0a_h:U1@[], fc_dtps_exa_h:U1@[], fc_en_exa_h:U1@[], fc_zero30_8_f0a_h:U1@[], flags_en_f0a_h:U1@[], flags_f0a_h:vpu_defs_pkg.VPU_FLAGS_SZ_T@[], flog_mul_prod_zero_f0a_h:U1@[], is_trans_rfa_h:U1@[], mul_hp_mode_f0a_h:U1@[], mul_sign_f0a_h:U1@[], neg_fmaop_exa_h:U1@[], op_dtype_f0a_h:vpu_defs_pkg.VPU_DTYPE_SZ_T@[], opa_valid_rfa_h:U1@[], opb_valid_rfa_h:U1@[], opc_valid_rfa_h:U1@[], prod_inf_hi_f0a_h:U1@[], prod_inf_lo_f0a_h:U1@[], res_inf_f0a_h:U1@[], res_neg_int_nan_f0a_h:U1@[], res_one_f0a_h:U1@[], res_pos_int_nan_f0a_h:U1@[], res_qnan_f0a_h:U1@[], res_snan_f0a_h:U1@[], res_snorm_one_f0a_h:U1@[], res_uint_nan_f0a_h:U1@[], res_unorm_one_f0a_h:U1@[], res_zero_f0a_h:U1@[], rm_f0a_h:vpu_defs_pkg.TXFMA_RM_SZ_T@[], sa1_nr2_frcpfxp_exa_h:U1@[], sa_hi_en_exa_h:U1@[], sa_lo_en_exa_h:U1@[], sa_zap_exa_l:U1@[], sb_hi_en_exa_h:U1@[], sb_lo_en_exa_h:U1@[], sb_zap_exa_l:U1@[], sc_en_exa_h:U1@[], sel_eainmux_exa_h:U2@[], sel_ealo_ph_exa_h:U1@[], sel_ebin_hi_exa_h:U2@[], sel_eblo_ph_exa_h:U1@[], sel_ec5b_exa_h:U2@[], sel_ec5bdet_exa_h:U1@[], sel_ecin_exa_h:U2@[], sel_f10_exa_h:U1@[], sel_f11_exa_h:U1@[], sel_g1sk16_exa_h:U1@[], sel_g1sk24_exa_h:U1@[], sel_g1sk2_exa_h:U1@[], sel_g1sk8_exa_h:U1@[], sel_opafmt_exa_h:U2@[], sel_opbfmt_exa_h:U2@[], sel_opcfmt_exa_h:U2@[], sel_opcgfx_exa_h:U2@[], sel_sc_exa_h:U2@[], sel_sign_sinp2_exa_h:U1@[], sel_snorm_exa_h:U1@[], sel_transfa_exa_h:U2@[], sel_transfb_exa_h:U2@[], sel_xexpfrac_exa_h:U1@[], sel_xopc_exa_h:U2@[], sigs_f0a_h:vpu_defs_pkg.TXFMA_SIGS_SZ_T@[], sin_res_shf_idx_f0a_h:U3@[], spec_res_en_f0a_h:U1@[], trans_exp_fma2_exc_f0a_h:U1@[], trans_op2_exa_l:U1@[], use_mul_f0a_h:U1@[], use_prev_sigs_f0a_h:U1@[]) {
+  const valid = in_valid_exa_h == 1
+  const taylor = trans_taylor_exa_h == 1
+  const ctrl_en = valid and use_prev_sigs_exa_h == 0
+
+  // ---------------------------------------------------------------------------------------
+  // exa stage: instruction decode. Everything is qualified by in_valid (an invalid slot
+  // decodes as all-zero, i.e. cmd 0 / INT / no control bits).
+  // ---------------------------------------------------------------------------------------
+  const cmd_exa:U7 = if valid { sigs_in_exa_h.cmd } else { 0 }
+  const dtype_q:U4 = if valid { sigs_in_exa_h.dtype } else { 0 }
+  const rm_exa:vpu_defs_pkg.TXFMA_RM_SZ_T = if valid { rm_in_exa_h } else { 0 }
+  const q_trans = valid and sigs_in_exa_h.trans == 1
+  const q_rom = valid and sigs_in_exa_h.rom == 1
+  const q_ren1 = valid and sigs_in_exa_h.ren1 == 1
+  const q_ren2 = valid and sigs_in_exa_h.ren2 == 1
+  const q_ren3 = valid and sigs_in_exa_h.ren3 == 1
+
+  const sin_p1_rom = cmd_exa == vpu_defs_pkg.VPU_TRANS_SIN_P1 and not taylor
+  const sin_p2_rom = cmd_exa == vpu_defs_pkg.VPU_TRANS_SIN_P2 and not taylor
+  const sin_taylor_p2 = cmd_exa == vpu_defs_pkg.VPU_TRANS_SIN_P2 and taylor
+  const sin_rom_p3 = cmd_exa == vpu_defs_pkg.VPU_TRANS_SIN_P3 and not taylor
+  const exp_frac = cmd_exa == vpu_defs_pkg.VPU_TRANS_EXP_FRAC
+  const log_mul = cmd_exa == vpu_defs_pkg.VPU_TRANS_LOG_MUL
+  const sin_transform = cmd_exa == vpu_defs_pkg.VPU_TRANS_SIN_TRANSFORM
+  const nr2_frcpfxp = cmd_exa == vpu_defs_pkg.VPU_FCMD_NR2_FRCPFXP
+  const cvt_f32f16 = cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_F32F16
+  const cvt_f32f11 = cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_F32F11
+  const cvt_f32f10 = cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_F32F10
+  const cvt_f32un24 = cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_F32UN24
+  const cvt_f32un16 = cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_F32UN16
+  const cvt_f32un10 = cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_F32UN10
+  const cvt_f32un8 = cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_F32UN8
+  const cvt_f32un2 = cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_F32UN2
+  const cvt_f32sn16 = cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_F32SN16
+  const cvt_f32sn8 = cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_F32SN8
+  const cvt_un24f32 = cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_UN24F32
+  const cvt_un16f32 = cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_UN16F32
+  const cvt_un10f32 = cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_UN10F32
+  const cvt_un8f32 = cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_UN8F32
+  const cvt_un2f32 = cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_UN2F32
+  const cvt_sn16f32 = cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_SN16F32
+  const cvt_sn8f32 = cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_SN8F32
+  // float -> graphics-norm (and back) conversions
+  const cvt_ps2gfx = cvt_un24f32 or cvt_un16f32 or cvt_sn16f32 or cvt_un10f32 or cvt_un8f32 or cvt_sn8f32 or cvt_un2f32
+  const cvt_norm_f32 = cvt_f32un24 or cvt_f32un16 or cvt_f32un10 or cvt_f32un8 or cvt_f32un2 or cvt_f32sn16 or cvt_f32sn8
+  const cvt_f32_norm = cvt_un24f32 or cvt_un16f32 or cvt_un10f32 or cvt_un8f32 or cvt_un2f32 or cvt_sn16f32 or cvt_sn8f32
+
+  // INT unless the sin ROM phases 1 and 2 (they run as integer ops)
+  const op_dtype_exa:vpu_defs_pkg.VPU_DTYPE_SZ_T = if sin_p1_rom or sin_p2_rom { vpu_defs_pkg.VPU_DTYPE_INT } else { dtype_q }
+  const dt_f32 = op_dtype_exa == vpu_defs_pkg.VPU_DTYPE_F32
+  const dt_f16_f32 = op_dtype_exa == vpu_defs_pkg.VPU_DTYPE_F16_F32
+
+  // TXFMA control bits (indexed by the TXFMA_* positions of vpu_defs_pkg)
+  mut sigs_exa:vpu_defs_pkg.TXFMA_SIGS_SZ_T = 0
+  sigs_exa#[vpu_defs_pkg.TXFMA_NORM_F32] = U1(cvt_f32_norm)
+  sigs_exa#[vpu_defs_pkg.TXFMA_REN1] = U1(q_ren1 or q_trans or exp_frac or cmd_exa == vpu_defs_pkg.VPU_TRANS_SIN_P2 or nr2_frcpfxp)
+  sigs_exa#[vpu_defs_pkg.TXFMA_REN2] = U1(q_ren2 or cvt_f32_norm or (q_trans and not sin_transform))
+  sigs_exa#[vpu_defs_pkg.TXFMA_REN3] = U1(q_ren3 or q_trans or q_rom or cmd_exa == vpu_defs_pkg.VPU_TRANS_SIN_P2 or sin_transform or nr2_frcpfxp)
+  sigs_exa#[vpu_defs_pkg.TXFMA_FMA] = sigs_in_exa_h.fma & U1(valid)
+  sigs_exa#[vpu_defs_pkg.TXFMA_FMS] = sigs_in_exa_h.fms & U1(valid)
+  sigs_exa#[vpu_defs_pkg.TXFMA_ADD] = sigs_in_exa_h.add & U1(valid)
+  sigs_exa#[vpu_defs_pkg.TXFMA_SUB] = sigs_in_exa_h.sub & U1(valid)
+  sigs_exa#[vpu_defs_pkg.TXFMA_MUL] = sigs_in_exa_h.mul & U1(valid)
+  sigs_exa#[vpu_defs_pkg.TXFMA_CVT] = sigs_in_exa_h.cvt & U1(valid)
+  sigs_exa#[vpu_defs_pkg.TXFMA_GCVT] = sigs_in_exa_h.gcvt & U1(valid)
+  // unsigned graphics conversions (both directions)
+  sigs_exa#[vpu_defs_pkg.TXFMA_UGCVT] = U1(cvt_f32un24 or cvt_f32un16 or cvt_f32un10 or cvt_f32un8 or cvt_f32un2 or cvt_un24f32 or cvt_un16f32 or cvt_un10f32 or cvt_un8f32 or cvt_un2f32)
+  sigs_exa#[vpu_defs_pkg.TXFMA_SGCVT] = sigs_exa#[vpu_defs_pkg.TXFMA_GCVT] & ~sigs_exa#[vpu_defs_pkg.TXFMA_UGCVT]
+  sigs_exa#[vpu_defs_pkg.TXFMA_F32_FX] = U1(cvt_f32f16 or cvt_f32f11 or cvt_f32f10)
+  sigs_exa#[vpu_defs_pkg.TXFMA_FX_F32] = U1(cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_F16F32 or cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_F11F32 or cmd_exa == vpu_defs_pkg.VPU_FCMD_CVT_F10F32)
+  sigs_exa#[vpu_defs_pkg.TXFMA_F32_NORM] = U1(cvt_norm_f32)
+  sigs_exa#[vpu_defs_pkg.TXFMA_TRANS1] = U1(cmd_exa == vpu_defs_pkg.VPU_TRANS_RCP_FMA1 or cmd_exa == vpu_defs_pkg.VPU_TRANS_RSQRT_FMA1 or cmd_exa == vpu_defs_pkg.VPU_TRANS_LOG_FMA1 or cmd_exa == vpu_defs_pkg.VPU_TRANS_EXP_FMA1 or cmd_exa == vpu_defs_pkg.VPU_TRANS_LOG_FMA2 or sin_p1_rom)
+  sigs_exa#[vpu_defs_pkg.TXFMA_TRANS2] = U1(cmd_exa == vpu_defs_pkg.VPU_TRANS_RCP_FMA2 or cmd_exa == vpu_defs_pkg.VPU_TRANS_RSQRT_FMA2 or cmd_exa == vpu_defs_pkg.VPU_TRANS_EXP_FMA2 or sin_p2_rom)
+  sigs_exa#[vpu_defs_pkg.TXFMA_FP32_ADD_SUB] = U1(dt_f32 and (sigs_in_exa_h.fma == 1 or sigs_in_exa_h.fms == 1 or sigs_in_exa_h.add == 1 or sigs_in_exa_h.sub == 1) and valid)
+  const sx_ren1 = sigs_exa#[vpu_defs_pkg.TXFMA_REN1]
+  const sx_ren2 = sigs_exa#[vpu_defs_pkg.TXFMA_REN2]
+  const sx_ren3 = sigs_exa#[vpu_defs_pkg.TXFMA_REN3]
+  const sx_trans1 = sigs_exa#[vpu_defs_pkg.TXFMA_TRANS1]
+  const sx_trans2 = sigs_exa#[vpu_defs_pkg.TXFMA_TRANS2]
+
+  // Operand valid enables of the register-file stage
+  const opa_trans_valid = sigs_in_exa_h.trans == 1 or sigs_in_exa_h.cmd == vpu_defs_pkg.VPU_TRANS_EXP_FRAC or sigs_in_exa_h.cmd == vpu_defs_pkg.VPU_TRANS_SIN_P2 or sigs_in_exa_h.cmd == vpu_defs_pkg.VPU_FCMD_NR2_FRCPFXP
+  const opb_trans_valid = sigs_in_exa_h.trans == 1 and sigs_in_exa_h.cmd != vpu_defs_pkg.VPU_TRANS_SIN_TRANSFORM
+  const opc_trans_valid = sigs_in_exa_h.trans == 1 or sigs_in_exa_h.rom == 1 or sigs_in_exa_h.cmd == vpu_defs_pkg.VPU_TRANS_SIN_P2 or sigs_in_exa_h.cmd == vpu_defs_pkg.VPU_TRANS_SIN_TRANSFORM or sigs_in_exa_h.cmd == vpu_defs_pkg.VPU_FCMD_NR2_FRCPFXP
+  const cvt_norm_trans_valid = sigs_in_exa_h.cmd == vpu_defs_pkg.VPU_FCMD_CVT_UN24F32 or sigs_in_exa_h.cmd == vpu_defs_pkg.VPU_FCMD_CVT_UN16F32 or sigs_in_exa_h.cmd == vpu_defs_pkg.VPU_FCMD_CVT_UN10F32 or sigs_in_exa_h.cmd == vpu_defs_pkg.VPU_FCMD_CVT_UN8F32 or sigs_in_exa_h.cmd == vpu_defs_pkg.VPU_FCMD_CVT_UN2F32 or sigs_in_exa_h.cmd == vpu_defs_pkg.VPU_FCMD_CVT_SN16F32 or sigs_in_exa_h.cmd == vpu_defs_pkg.VPU_FCMD_CVT_SN8F32
+  opa_valid_rfa_h = U1(valid and (sigs_in_exa_h.ren1 == 1 or opa_trans_valid))
+  opb_valid_rfa_h = U1(valid and (sigs_in_exa_h.ren2 == 1 or opb_trans_valid or cvt_norm_trans_valid))
+  opc_valid_rfa_h = U1(valid and (sigs_in_exa_h.ren3 == 1 or opc_trans_valid))
+  is_trans_rfa_h = U1(valid and sigs_in_exa_h.trans == 1)
+  const use_mul_rfa = valid and (sigs_exa#[vpu_defs_pkg.TXFMA_FMA] == 1 or sigs_exa#[vpu_defs_pkg.TXFMA_MUL] == 1 or sigs_exa#[vpu_defs_pkg.TXFMA_FMS] == 1 or cvt_norm_trans_valid)
+
+  // sin result shift index: 2 by default, 0 for the first sin ROM phase when mask[5] is set,
+  // and a function of the mask for the second.
+  mut sin_res_shf_idx_exa:U3 = 2
+  if sin_p1_rom and trans_mask_exa_h#[5] == 1 {
+    sin_res_shf_idx_exa = 0
+  }
+  if sin_p2_rom {
+    match trans_mask_exa_h#[2..=6] {
+      == 0ub00000 {
+        sin_res_shf_idx_exa = 5
+      }
+      == 0ub00001 {
+        sin_res_shf_idx_exa = 4
+      }
+      == 0ub00011 {
+        sin_res_shf_idx_exa = 3
+      }
+      == 0ub01111 {
+        sin_res_shf_idx_exa = 2
+      }
+      == 0ub11111 {
+        sin_res_shf_idx_exa = 1
+      }
+      else {
+      }
+    }
+  }
+
+  // Exponent bias constant added to opb for the float -> norm conversions (and sin p2)
+  mut eb_hi_k:U6 = 0
+  if cvt_un24f32 {
+    eb_hi_k = 55
+  } // 0x37
+  if cvt_un16f32 or cvt_sn16f32 {
+    eb_hi_k = 47
+  } // 0x2f
+  if cvt_un10f32 {
+    eb_hi_k = 41
+  } // 0x29
+  if cvt_un8f32 or cvt_sn8f32 {
+    eb_hi_k = 39
+  } // 0x27
+  if cvt_un2f32 {
+    eb_hi_k = 33
+  } // 0x21
+  if cmd_exa == vpu_defs_pkg.VPU_TRANS_SIN_P2 {
+    eb_hi_k = 36
+  } // 0x24
+  eb_hi_k_exa_h = eb_hi_k
+
+  // Operand A / B / C exponent selects and enables
+  const dt_f32_notaylorp2 = dt_f32 and not sin_taylor_p2
+  trans_op2_exa_l = ~sx_trans2
+  const trans_op2 = trans_op2_exa_l == 0
+  sel_eainmux_exa_h#[1] = U1(exp_frac or dt_f16_f32)
+  sel_eainmux_exa_h#[0] = U1((dt_f32 and not (exp_frac or cmd_exa == vpu_defs_pkg.VPU_TRANS_SIN_P3)) or dt_f16_f32)
+  sel_ealo_ph_exa_h = U1(dt_f16_f32)
+  ehi_ea_en_exa_h = sx_ren1
+  elo_ea_en_exa_h = sx_ren1 & U1(dt_f16_f32)
+
+  sel_ebin_hi_exa_h#[1] = U1(dt_f16_f32 or (cmd_exa == vpu_defs_pkg.VPU_TRANS_EXP_FMA2 and trans_exp_fma2_exc_exa_h == 0))
+  sel_ebin_hi_exa_h#[0] = sx_trans2 | U1(dt_f32 and not cvt_ps2gfx and cmd_exa != vpu_defs_pkg.VPU_TRANS_SIN_P2)
+  sel_eblo_ph_exa_h = U1(dt_f16_f32)
+  ehi_eb_en_exa_h = sx_ren2
+  elo_eb_en_exa_h = sx_ren2 & U1(dt_f16_f32)
+
+  sel_ec5b_exa_h#[1] = U1(cvt_f32f10)
+  sel_ec5b_exa_h#[0] = U1(cvt_f32f11)
+  sel_ecin_exa_h#[1] = U1(cvt_f32f10 or cvt_f32f11 or cvt_f32f16 or cmd_exa == vpu_defs_pkg.VPU_TRANS_SIN_P2)
+  sel_ecin_exa_h#[0] = U1(cvt_f32f10 or cvt_f32f11 or cvt_f32f16 or dt_f32_notaylorp2 or dt_f16_f32)
+  sel_ec5bdet_exa_h = U1(cvt_f32f16 or cvt_f32f11 or cvt_f32f10)
+  ec_en_exa_h = sx_ren3
+
+  fa_en_exa_h = sx_ren1
+  fb_en_exa_h = sx_ren2
+  fc_en_exa_h = sx_ren3
+  sa_hi_en_exa_h = sx_ren1
+  sa_lo_en_exa_h = sx_ren1 & U1(dt_f16_f32)
+  sb_hi_en_exa_h = sx_ren2
+  sb_lo_en_exa_h = sx_ren2 & U1(dt_f16_f32)
+  sc_en_exa_h = sx_ren3
+  neg_fmaop_exa_h = U1(cmd_exa == vpu_defs_pkg.VPU_FCMD_NMADD or cmd_exa == vpu_defs_pkg.VPU_FCMD_NMSUB)
+  sa1_nr2_frcpfxp_exa_h = U1(nr2_frcpfxp)
+
+  // Operand C sign select / zap, operand A/B sign zap (low active)
+  const dt_sn16 = op_dtype_exa == vpu_defs_pkg.VPU_DTYPE_SN16
+  const dt_sn8 = op_dtype_exa == vpu_defs_pkg.VPU_DTYPE_SN8
+  const dt_f11 = op_dtype_exa == vpu_defs_pkg.VPU_DTYPE_F11
+  const dt_f10 = op_dtype_exa == vpu_defs_pkg.VPU_DTYPE_F10
+  const zap_sc = dt_f11 or dt_f10 or sin_taylor_p2
+  sel_sc_exa_h#[1] = U1(dt_sn16 or cvt_f32f16 or zap_sc)
+  sel_sc_exa_h#[0] = U1(dt_sn8 or zap_sc)
+  sel_sign_sinp2_exa_h = U1(sin_taylor_p2)
+  sa_zap_exa_l = U1(not (dt_sn16 or dt_sn8 or cvt_f32f16 or nr2_frcpfxp or dt_f10 or dt_f11))
+  sb_zap_exa_l = U1(not (sigs_exa#[vpu_defs_pkg.TXFMA_NORM_F32] == 1 or dt_sn16 or dt_sn8 or cvt_f32f16 or dt_f10 or dt_f11))
+  sel_f10_exa_h = U1(cvt_f32f10)
+  sel_f11_exa_h = U1(cvt_f32f11)
+
+  mut sel_opcgfx:U2 = 0
+  sel_opcgfx#[1] = U1(cvt_f32un8 or cvt_f32sn8 or cvt_f32un2)
+  sel_opcgfx#[0] = U1(cvt_f32un2 or cvt_f32un10)
+  sel_opcgfx_exa_h = sel_opcgfx
+  fc_dtps_exa_h = U1(dt_f32 or dt_f16_f32)
+
+  mut sel_xopc:U2 = 0
+  sel_xopc#[1] = U1(nr2_frcpfxp or dt_f32_notaylorp2 or dt_f16_f32 or op_dtype_exa == vpu_defs_pkg.VPU_DTYPE_UN24)
+  sel_xopc#[0] = U1(dt_f10 or dt_f11 or dt_f32_notaylorp2 or dt_f16_f32 or op_dtype_exa == vpu_defs_pkg.VPU_DTYPE_UN24)
+  sel_xopc_exa_h = sel_xopc
+  sel_opcfmt_exa_h#[1] = U1(sel_xopc != 0 or cvt_f32f16 or sin_taylor_p2 or sx_trans1 == 1 or trans_op2)
+  sel_opcfmt_exa_h#[0] = U1(sel_opcgfx != 0 or cvt_f32sn16 or cvt_f32un16 or cvt_f32f16)
+
+  sel_snorm_exa_h = U1(cvt_sn16f32 or cvt_sn8f32)
+  sel_g1sk2_exa_h = U1(cvt_un2f32)
+  sel_g1sk8_exa_h = U1(cvt_un8f32 or cvt_sn8f32)
+  sel_g1sk16_exa_h = U1(cvt_un16f32 or cvt_sn16f32)
+  sel_g1sk24_exa_h = U1(cvt_un24f32)
+  sel_xexpfrac_exa_h = U1(exp_frac)
+
+  sel_transfa_exa_h#[1] = U1(sin_transform or exp_frac or sin_rom_p3)
+  sel_transfa_exa_h#[0] = U1(sin_rom_p3 or log_mul)
+  mut sel_transfb:U2 = 0
+  sel_transfb#[1] = U1(log_mul or sin_taylor_p2)
+  sel_transfb#[0] = U1(sin_taylor_p2 or cvt_ps2gfx)
+  sel_transfb_exa_h = sel_transfb
+
+  const opafmt_trans = sin_transform or exp_frac or sin_rom_p3 or log_mul or (sx_trans1 == 1 and cmd_exa != vpu_defs_pkg.VPU_TRANS_LOG_FMA2)
+  sel_opafmt_exa_h#[1] = U1(dt_f16_f32 or opafmt_trans)
+  sel_opafmt_exa_h#[0] = U1(dt_f32 or opafmt_trans)
+  sel_opbfmt_exa_h#[1] = U1(sel_transfb != 0 or sx_trans1 == 1 or trans_op2 or dt_f16_f32)
+  sel_opbfmt_exa_h#[0] = U1((dt_f32 and sigs_exa#[vpu_defs_pkg.TXFMA_GCVT] == 0) or sel_transfb != 0 or sx_trans1 == 1 or sx_trans2 == 1)
+
+  // Multiplier controls: signed integer multiply only; half-precision mode for F16_F32.
+  const trans_mul_sign = (sx_trans2 == 1 and cmd_exa != vpu_defs_pkg.VPU_TRANS_EXP_FMA2) or cmd_exa == vpu_defs_pkg.VPU_TRANS_LOG_FMA2 or sin_p2_rom
+  const mul_sign_exa = (cmd_exa == vpu_defs_pkg.VPU_FCMD_MULL or cmd_exa == vpu_defs_pkg.VPU_FCMD_MULH or trans_mul_sign or nr2_frcpfxp) and op_dtype_exa == vpu_defs_pkg.VPU_DTYPE_INT
+
+  // ---------------------------------------------------------------------------------------
+  // exa -> f0 flops. Only the valid bit is reset; the control values are held while an
+  // instruction replays (use_prev_sigs).
+  // ---------------------------------------------------------------------------------------
+  reg ctrl_valid_f0a_h:U1:[reset_pin=reset] = 0
+  reg use_prev_sigs_f0a_h:U1 = nil
+  reg use_mul_op_f0a_h:U1 = nil
+  reg sin_res_shf_idx_f0a_h:U3 = nil
+  reg mul_sign_f0a_h:U1 = nil
+  reg mul_hp_mode_f0a_h:U1 = nil
+  reg rm_f0a_h:vpu_defs_pkg.TXFMA_RM_SZ_T = nil
+  reg op_dtype_f0a_h:vpu_defs_pkg.VPU_DTYPE_SZ_T = nil
+  reg cmd_f0a_h:vpu_defs_pkg.VPU_FCMD_SZ_T = nil
+  reg sigs_f0a_h_q:vpu_defs_pkg.TXFMA_SIGS_SZ_T = nil // _q: the flop's name in the Verilog (LEC state pairing)
+  reg trans_exp_fma2_exc_f0a_h:U1 = nil
+  ctrl_valid_f0a_h = in_valid_exa_h
+  if valid {
+    use_prev_sigs_f0a_h = use_prev_sigs_exa_h
+  }
+  if ctrl_en {
+    use_mul_op_f0a_h = U1(use_mul_rfa)
+    sin_res_shf_idx_f0a_h = sin_res_shf_idx_exa
+    mul_sign_f0a_h = U1(mul_sign_exa)
+    mul_hp_mode_f0a_h = U1(dt_f16_f32)
+    rm_f0a_h = rm_exa
+    op_dtype_f0a_h = op_dtype_exa
+    cmd_f0a_h = cmd_exa
+    sigs_f0a_h_q = sigs_exa
+    trans_exp_fma2_exc_f0a_h = trans_exp_fma2_exc_exa_h
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // f0 stage: mantissa special detect (split between this control and the f0 datapath).
+  // The *_f0a_l inputs are active-low zero flags; *_zero_clr are the zero flags qualified
+  // with the operand actually being read.
+  // ---------------------------------------------------------------------------------------
+  sigs_f0a_h = sigs_f0a_h_q
+  const f0_dtype = op_dtype_f0a_h
+  const f0_cmd = cmd_f0a_h
+  const f0_f32 = f0_dtype == vpu_defs_pkg.VPU_DTYPE_F32
+  const f0_f16_f32 = f0_dtype == vpu_defs_pkg.VPU_DTYPE_F16_F32
+  const f0_int = f0_dtype == vpu_defs_pkg.VPU_DTYPE_INT
+  const f0_ren1 = sigs_f0a_h_q#[vpu_defs_pkg.TXFMA_REN1] == 1
+  const f0_ren2 = sigs_f0a_h_q#[vpu_defs_pkg.TXFMA_REN2] == 1
+  const f0_ren3 = sigs_f0a_h_q#[vpu_defs_pkg.TXFMA_REN3] == 1
+  const f0_fma = sigs_f0a_h_q#[vpu_defs_pkg.TXFMA_FMA] == 1
+  const f0_fms = sigs_f0a_h_q#[vpu_defs_pkg.TXFMA_FMS] == 1
+  const f0_add = sigs_f0a_h_q#[vpu_defs_pkg.TXFMA_ADD] == 1
+  const f0_sub = sigs_f0a_h_q#[vpu_defs_pkg.TXFMA_SUB] == 1
+  const f0_mul = sigs_f0a_h_q#[vpu_defs_pkg.TXFMA_MUL] == 1
+  const f0_trans2 = sigs_f0a_h_q#[vpu_defs_pkg.TXFMA_TRANS2] == 1
+  const f0_norm_f32 = sigs_f0a_h_q#[vpu_defs_pkg.TXFMA_NORM_F32] == 1
+  const exp_fma2_not_exc = f0_cmd == vpu_defs_pkg.VPU_TRANS_EXP_FMA2 and trans_exp_fma2_exc_f0a_h == 0
+
+  const sa_hi = sa_hi_f0a_h == 1
+  const sa_lo = sa_lo_f0a_h == 1
+  const sb_hi = sb_hi_f0a_h == 1
+  const sb_lo = sb_lo_f0a_h == 1
+  const sc = sc_f0a_h == 1
+  const ea_hi_all1 = ea_hi_all1_f0a_h == 1
+  const ea_lo_all1 = ea_lo_all1_f0a_h == 1
+  const eb_hi_all1 = eb_hi_all1_f0a_h == 1
+  const eb_lo_all1 = eb_lo_all1_f0a_h == 1
+  const ec_all1 = ec_all1_f0a_h == 1
+
+  const ea_hi_zero_clr = ea_hi_zero_f0a_l == 0 and f0_ren1
+  const ea_lo_zero_clr = ea_lo_zero_f0a_l == 0 and f0_ren1 and f0_f16_f32
+  const eb_hi_zero_clr = eb_hi_zero_f0a_l == 0 and f0_ren2 and not f0_norm_f32 and f0_cmd != vpu_defs_pkg.VPU_TRANS_LOG_MUL
+  const eb_lo_zero_clr = eb_lo_zero_f0a_l == 0 and f0_ren2 and f0_f16_f32
+  const ec_zero_clr = ec_zero_f0a_l == 0 and f0_ren3
+  ea_hi_zero_clr_f0a_h = U1(ea_hi_zero_clr)
+  ea_lo_zero_clr_f0a_h = U1(ea_lo_zero_clr)
+  eb_hi_zero_clr_f0a_h = U1(eb_hi_zero_clr)
+  eb_lo_zero_clr_f0a_h = U1(eb_lo_zero_clr)
+  ec_zero_clr_f0a_h = U1(ec_zero_clr)
+
+  const sign_prod_hi = sa_hi != sb_hi
+  const sign_prod_lo = sa_lo != sb_lo
+  const s_prod_hi_prod_lo = sign_prod_hi != sign_prod_lo
+  const s_prod_hi_c_hi = sign_prod_hi != sc
+  const s_prod_lo_c_hi = sign_prod_lo != sc
+
+  // Fraction-is-zero flags per precision (opb is shifted down by 2 for the multiply)
+  const fa_zero30_21 = faph_hi_b0_f0a_h == 0 and faph_hi_zero_f0a_l == 0
+  const fa_zero30_8 = faps_b0_f0a_h == 0 and faps_zero_f0a_l == 0
+  const fb_zero28_19 = fbph_hi_b0_f0a_h == 0 and fbph_hi_zero_f0a_l == 0
+  const fb_zero28_6 = fbps_b0_f0a_h == 0 and fbps_zero_f0a_l == 0
+  const fc_zero30_21 = fcph_b0_f0a_h == 0 and fcph_zero_f0a_l == 0 // only used for ph to ps
+  const fc_zero30_8 = fcps_b0_f0a_h == 0 and fcps_zero_f0a_h == 1
+  const fcnorm_zero_30_8 = fcnorm_30_f0a_h == 0 and fcnorm_zero_29_8_f0a_h == 1
+  fc_zero30_8_f0a_h = U1(fc_zero30_8)
+  fa_hi_zero_f0a_h = U1(fa_zero30_8)
+  fb_hi_zero_f0a_h = U1(fb_zero28_6)
+  flog_mul_prod_zero_f0a_h = U1((fa_zero30_8 and faph_hi_zero_f0a_l == 0) or fb_zero28_6)
+  use_mul_f0a_h = ctrl_valid_f0a_h & use_mul_op_f0a_h
+
+  // Operand classification and special-result detection. Every flag defaults to 0 and the
+  // data-type branches below override it in order, like the original always_comb.
+  mut class_a_hi:vpu_defs_pkg.FP_CLASS_BITS_T = 0
+  mut class_a_lo:vpu_defs_pkg.FP_CLASS_BITS_T = 0
+  mut class_b_hi:vpu_defs_pkg.FP_CLASS_BITS_T = 0
+  mut class_b_lo:vpu_defs_pkg.FP_CLASS_BITS_T = 0
+  mut class_c:vpu_defs_pkg.FP_CLASS_BITS_T = 0
+  mut res_pot_inf = false
+  mut res_pot_qnan = false
+  mut res_snan = false
+  mut res_zero = false
+  mut res_one = false
+  mut res_inf_trans = false
+  mut res_pos_int_nan = false
+  mut res_neg_int_nan = false
+  mut res_uint_nan = false
+  mut res_unorm_one = false
+  mut res_snorm_one = false
+  mut prod_inf_hi = false
+  mut prod_inf_lo = false
+  mut a_inf = false
+  mut c_inf = false
+  mut inv_ops = false
+  mut inf_nan1_hi = false
+  mut inf_nan2_hi = false
+  mut rsqrt_res_nan_inv = false
+  mut sin_res_nan_inv = false
+  mut log_res_nan_inv = false
+
+  // trans2 frcp/frsqrt/exp work on opb only (integer datatype)
+  if f0_int and f0_trans2 and not exp_fma2_not_exc {
+    class_b_hi = classify_f32(exp_all1=eb_hi_all1, frac_msb=fbps_b0_f0a_h == 1, low_nonzero=fbps_zero_f0a_l == 1, sign=sb_hi, zero_clr=eb_hi_zero_clr)
+    class_b_hi#[vpu_defs_pkg.FP_CLASS_NEG_NORMAL] = 0
+    class_b_hi#[vpu_defs_pkg.FP_CLASS_POS_NORMAL] = 0
+    const b_zero = class_b_hi#[vpu_defs_pkg.FP_CLASS_NEG_ZERO] == 1 or class_b_hi#[vpu_defs_pkg.FP_CLASS_POS_ZERO] == 1
+    const b_denormal = class_b_hi#[vpu_defs_pkg.FP_CLASS_NEG_DENORMAL] == 1 or class_b_hi#[vpu_defs_pkg.FP_CLASS_POS_DENORMAL] == 1
+    const b_pos_inf = class_b_hi#[vpu_defs_pkg.FP_CLASS_POS_INF] == 1
+    const b_neg_inf = class_b_hi#[vpu_defs_pkg.FP_CLASS_NEG_INF] == 1
+    const b_qnan = class_b_hi#[vpu_defs_pkg.FP_CLASS_QNAN] == 1
+    const rcp_fma2 = f0_cmd == vpu_defs_pkg.VPU_TRANS_RCP_FMA2
+    // inf when zero or denormal
+    res_inf_trans = b_zero or b_denormal
+    // zero when inf (not for rsqrt), and for frcp on a value greater than 2^126
+    res_zero = b_pos_inf or (b_neg_inf and rcp_fma2) or ((eb_eql_127_f0a_h == 1 or (eb_eql_126_f0a_h == 1 and not fb_zero28_6)) and rcp_fma2)
+    res_pot_qnan = b_qnan
+    res_snan = class_b_hi#[vpu_defs_pkg.FP_CLASS_SNAN] == 1
+    // rsqrt is NaN when opb is negative and not zero/denormal
+    rsqrt_res_nan_inv = sb_hi and class_b_hi#[vpu_defs_pkg.FP_CLASS_NEG_ZERO] == 0 and class_b_hi#[vpu_defs_pkg.FP_CLASS_NEG_DENORMAL] == 0 and not b_qnan and f0_cmd == vpu_defs_pkg.VPU_TRANS_RSQRT_FMA2
+    res_pot_qnan = res_pot_qnan or rsqrt_res_nan_inv
+    // exp fma2: the specials were already handled by the exp frac operation
+    if f0_cmd == vpu_defs_pkg.VPU_TRANS_EXP_FMA2 {
+      res_inf_trans = b_pos_inf
+      res_one = b_denormal or b_zero
+      res_zero = b_neg_inf
+      res_pot_qnan = b_qnan or res_snan
+    }
+  }
+
+  if f0_f32 {
+    class_a_hi = classify_f32(exp_all1=ea_hi_all1, frac_msb=faps_b0_f0a_h == 1, low_nonzero=faps_zero_f0a_l == 1, sign=sa_hi, zero_clr=ea_hi_zero_clr)
+    class_b_hi = classify_f32(exp_all1=eb_hi_all1, frac_msb=fbps_b0_f0a_h == 1, low_nonzero=fbps_zero_f0a_l == 1, sign=sb_hi, zero_clr=eb_hi_zero_clr)
+    class_c = classify_f32(exp_all1=ec_all1, frac_msb=fcps_b0_f0a_h == 1, low_nonzero=fcps_zero_f0a_h == 0, sign=sc, zero_clr=ec_zero_clr)
+    c_inf = ec_all1 and fc_zero30_8
+
+    // sin enables ren3 for internal operation but opc is unused: clear its special detect
+    if f0_cmd == vpu_defs_pkg.VPU_TRANS_SIN_P1 or f0_cmd == vpu_defs_pkg.VPU_TRANS_SIN_P2 or f0_cmd == vpu_defs_pkg.VPU_TRANS_SIN_P3 {
+      class_c = 0
+      c_inf = false
+    }
+
+    a_inf = ea_hi_all1 and fa_zero30_8
+    const b_inf = eb_hi_all1 and fb_zero28_6
+    // potential infinity (in case NaN doesn't occur)
+    res_pot_inf = a_inf or b_inf or c_inf
+    prod_inf_hi = a_inf or b_inf
+    // potential qnan (in case the result isn't snan)
+    res_pot_qnan = class_a_hi#[vpu_defs_pkg.FP_CLASS_QNAN] == 1 or class_b_hi#[vpu_defs_pkg.FP_CLASS_QNAN] == 1 or class_c#[vpu_defs_pkg.FP_CLASS_QNAN] == 1
+    // 0*inf
+    inf_nan1_hi = ((a_inf and eb_hi_zero_clr) or (b_inf and ea_hi_zero_clr)) and (f0_fma or f0_fms or f0_mul)
+    // inf-inf
+    inf_nan2_hi = (prod_inf_hi and c_inf and (sign_prod_hi != sc) != (f0_sub or f0_fms)) and not res_pot_qnan and (f0_sub or f0_add or f0_fma or f0_fms or f0_mul)
+    inv_ops = inf_nan1_hi or inf_nan2_hi
+    res_snan = class_a_hi#[vpu_defs_pkg.FP_CLASS_SNAN] == 1 or class_b_hi#[vpu_defs_pkg.FP_CLASS_SNAN] == 1 or class_c#[vpu_defs_pkg.FP_CLASS_SNAN] == 1
+
+    // float -> int / uint conversions of inf and NaN
+    const c_pos_inf_or_nan = class_c#[vpu_defs_pkg.FP_CLASS_POS_INF] == 1 or class_c#[vpu_defs_pkg.FP_CLASS_SNAN] == 1 or class_c#[vpu_defs_pkg.FP_CLASS_QNAN] == 1
+    const c_snan_or_qnan = class_c#[vpu_defs_pkg.FP_CLASS_SNAN] == 1 or class_c#[vpu_defs_pkg.FP_CLASS_QNAN] == 1
+    const cvt_to_int = f0_cmd == vpu_defs_pkg.VPU_FCMD_CVT_INTF32 or f0_cmd == vpu_defs_pkg.VPU_FCMD_CVT_RASTF32
+    res_pos_int_nan = c_pos_inf_or_nan and cvt_to_int
+    res_neg_int_nan = class_c#[vpu_defs_pkg.FP_CLASS_NEG_INF] == 1 and cvt_to_int
+    res_uint_nan = c_pos_inf_or_nan and f0_cmd == vpu_defs_pkg.VPU_FCMD_CVT_UINTF32
+    res_zero = sc and not c_snan_or_qnan and f0_cmd == vpu_defs_pkg.VPU_FCMD_CVT_UINTF32
+
+    const c_zero_or_denormal = class_c#[vpu_defs_pkg.FP_CLASS_POS_ZERO] == 1 or class_c#[vpu_defs_pkg.FP_CLASS_NEG_ZERO] == 1 or class_c#[vpu_defs_pkg.FP_CLASS_POS_DENORMAL] == 1 or class_c#[vpu_defs_pkg.FP_CLASS_NEG_DENORMAL] == 1
+    const c_inf_any = class_c#[vpu_defs_pkg.FP_CLASS_POS_INF] == 1 or class_c#[vpu_defs_pkg.FP_CLASS_NEG_INF] == 1
+    // log: NaN when opc is negative or NaN, inf when opc is inf or zero
+    if f0_cmd == vpu_defs_pkg.VPU_TRANS_LOG_MUL {
+      res_inf_trans = class_c#[vpu_defs_pkg.FP_CLASS_POS_INF] == 1 or c_zero_or_denormal
+      log_res_nan_inv = sc and not (res_inf_trans or class_c#[vpu_defs_pkg.FP_CLASS_QNAN] == 1)
+      res_pot_qnan = log_res_nan_inv or class_c#[vpu_defs_pkg.FP_CLASS_QNAN] == 1
+    }
+    if f0_cmd == vpu_defs_pkg.VPU_TRANS_EXP_FRAC {
+      res_zero = class_c#[vpu_defs_pkg.FP_CLASS_NEG_ZERO] == 1 or class_c#[vpu_defs_pkg.FP_CLASS_POS_ZERO] == 1
+      res_inf_trans = c_inf_any
+      res_pot_qnan = class_c#[vpu_defs_pkg.FP_CLASS_QNAN] == 1
+      res_pot_inf = false
+      res_snan = class_c#[vpu_defs_pkg.FP_CLASS_SNAN] == 1
+    }
+    if f0_cmd == vpu_defs_pkg.VPU_TRANS_SIN_TRANSFORM or f0_cmd == vpu_defs_pkg.VPU_FCMD_FFRC_SIN {
+      res_pot_qnan = c_snan_or_qnan
+      res_inf_trans = c_inf_any
+    }
+    if f0_cmd == vpu_defs_pkg.VPU_TRANS_SIN_P3 {
+      sin_res_nan_inv = class_b_hi#[vpu_defs_pkg.FP_CLASS_POS_INF] == 1 or class_b_hi#[vpu_defs_pkg.FP_CLASS_NEG_INF] == 1
+      res_pot_qnan = sin_res_nan_inv or class_b_hi#[vpu_defs_pkg.FP_CLASS_SNAN] == 1 or class_b_hi#[vpu_defs_pkg.FP_CLASS_QNAN] == 1
+      // 0.25
+      res_one = eb_eql_125_f0a_h == 1 and fb_zero28_6
+    }
+  }
+
+  // Other data types: only the opc class matters (opa/opb hold two halves for F16_F32).
+  match f0_dtype {
+    == vpu_defs_pkg.VPU_DTYPE_F16_F32 {
+      // opa and opb hold two half-precision numbers (hi/lo), opc one single-precision
+      class_a_lo#[vpu_defs_pkg.FP_CLASS_SNAN] = U1(ea_lo_all1 and faph_lo_b0_f0a_h == 0 and faph_lo_zero_f0a_l == 1)
+      class_a_lo#[vpu_defs_pkg.FP_CLASS_QNAN] = U1(ea_lo_all1 and faph_lo_b0_f0a_h == 1)
+      class_b_lo#[vpu_defs_pkg.FP_CLASS_SNAN] = U1(eb_lo_all1 and fbph_lo_b0_f0a_h == 0 and fbph_lo_zero_f0a_l == 1)
+      class_b_lo#[vpu_defs_pkg.FP_CLASS_QNAN] = U1(eb_lo_all1 and fbph_lo_b0_f0a_h == 1)
+      class_a_hi#[vpu_defs_pkg.FP_CLASS_SNAN] = U1(ea_hi_all1 and faph_hi_b0_f0a_h == 0 and faph_hi_zero_f0a_l == 1)
+      class_a_hi#[vpu_defs_pkg.FP_CLASS_QNAN] = U1(ea_hi_all1 and faph_hi_b0_f0a_h == 1)
+      class_b_hi#[vpu_defs_pkg.FP_CLASS_SNAN] = U1(eb_hi_all1 and fbph_hi_b0_f0a_h == 0 and fbph_hi_zero_f0a_l == 1)
+      class_b_hi#[vpu_defs_pkg.FP_CLASS_QNAN] = U1(eb_hi_all1 and fbph_hi_b0_f0a_h == 1)
+      class_c#[vpu_defs_pkg.FP_CLASS_NEG_INF] = U1(sc and ec_all1 and fc_zero30_8)
+      class_c#[vpu_defs_pkg.FP_CLASS_POS_INF] = U1(not sc and ec_all1 and fc_zero30_8)
+      class_c#[vpu_defs_pkg.FP_CLASS_SNAN] = U1(ec_all1 and fcps_b0_f0a_h == 0 and fcps_zero_f0a_h == 0)
+      class_c#[vpu_defs_pkg.FP_CLASS_QNAN] = U1(ec_all1 and fcps_b0_f0a_h == 1)
+
+      // a half-precision inf is a max exponent with a zero fraction
+      const a_lo_inf = ea_lo_all1 and faph_lo_b0_f0a_h == 0 and faph_lo_zero_f0a_l == 0
+      const b_lo_inf = eb_lo_all1 and fbph_lo_b0_f0a_h == 0 and fbph_lo_zero_f0a_l == 0
+      const a_hi_inf = ea_hi_all1 and faph_hi_b0_f0a_h == 0 and faph_hi_zero_f0a_l == 0
+      const b_hi_inf = eb_hi_all1 and fbph_hi_b0_f0a_h == 0 and fbph_hi_zero_f0a_l == 0
+      prod_inf_lo = (a_lo_inf or b_lo_inf) and not (class_a_lo#[vpu_defs_pkg.FP_CLASS_QNAN] == 1 or class_b_lo#[vpu_defs_pkg.FP_CLASS_QNAN] == 1)
+      prod_inf_hi = (a_hi_inf or b_hi_inf) and not (class_a_hi#[vpu_defs_pkg.FP_CLASS_QNAN] == 1 or class_b_hi#[vpu_defs_pkg.FP_CLASS_QNAN] == 1)
+      c_inf = ec_all1 and fc_zero30_8
+      res_pot_inf = prod_inf_hi or prod_inf_lo or c_inf
+      res_pot_qnan = class_a_hi#[vpu_defs_pkg.FP_CLASS_QNAN] == 1 or class_b_hi#[vpu_defs_pkg.FP_CLASS_QNAN] == 1 or class_a_lo#[vpu_defs_pkg.FP_CLASS_QNAN] == 1 or class_b_lo#[vpu_defs_pkg.FP_CLASS_QNAN] == 1 or class_c#[vpu_defs_pkg.FP_CLASS_QNAN] == 1
+
+      // 0*inf
+      inf_nan1_hi = ((a_hi_inf and eb_hi_zero_clr) or (b_hi_inf and ea_hi_zero_clr) or (a_lo_inf and eb_lo_zero_clr) or (b_lo_inf and ea_lo_zero_clr)) and (f0_fma or f0_mul)
+      // inf-inf
+      inf_nan2_hi = ((prod_inf_hi and prod_inf_lo and s_prod_hi_prod_lo) or (prod_inf_hi and c_inf and s_prod_hi_c_hi) or (prod_inf_lo and c_inf and s_prod_lo_c_hi)) and (f0_fma or f0_mul)
+      res_snan = class_a_hi#[vpu_defs_pkg.FP_CLASS_SNAN] == 1 or class_b_hi#[vpu_defs_pkg.FP_CLASS_SNAN] == 1 or class_a_lo#[vpu_defs_pkg.FP_CLASS_SNAN] == 1 or class_b_lo#[vpu_defs_pkg.FP_CLASS_SNAN] == 1 or class_c#[vpu_defs_pkg.FP_CLASS_SNAN] == 1
+      inv_ops = inf_nan1_hi or inf_nan2_hi
+    }
+    in (vpu_defs_pkg.VPU_DTYPE_F16, vpu_defs_pkg.VPU_DTYPE_F11, vpu_defs_pkg.VPU_DTYPE_F10) {
+      // opc is a half / 11-bit / 10-bit float
+      const fc_msb = if f0_dtype == vpu_defs_pkg.VPU_DTYPE_F16 { fcph_b0_f0a_h }
+        elif f0_dtype == vpu_defs_pkg.VPU_DTYPE_F11 { fcf11_b0_f0a_h }
+        else { fcf10_b0_f0a_h }
+      const fc_low_nonzero = if f0_dtype == vpu_defs_pkg.VPU_DTYPE_F16 { fcph_zero_f0a_l }
+        elif f0_dtype == vpu_defs_pkg.VPU_DTYPE_F11 { fcf11_zero_f0a_l }
+        else { fcf10_zero_f0a_l }
+      class_c#[vpu_defs_pkg.FP_CLASS_SNAN] = U1(ec_all1 and fc_msb == 0 and fc_low_nonzero == 1)
+      class_c#[vpu_defs_pkg.FP_CLASS_QNAN] = U1(ec_all1 and fc_msb == 1)
+      class_c#[vpu_defs_pkg.FP_CLASS_NEG_INF] = U1(sc and ec_all1 and fc_msb == 0 and fc_low_nonzero == 0)
+      class_c#[vpu_defs_pkg.FP_CLASS_POS_INF] = U1(not sc and ec_all1 and fc_msb == 0 and fc_low_nonzero == 0)
+      res_pot_inf = class_c#[vpu_defs_pkg.FP_CLASS_NEG_INF] == 1 or class_c#[vpu_defs_pkg.FP_CLASS_POS_INF] == 1
+      res_pot_qnan = class_c#[vpu_defs_pkg.FP_CLASS_QNAN] == 1
+      res_snan = class_c#[vpu_defs_pkg.FP_CLASS_SNAN] == 1
+    }
+    in (vpu_defs_pkg.VPU_DTYPE_UN24, vpu_defs_pkg.VPU_DTYPE_UN16, vpu_defs_pkg.VPU_DTYPE_UN10, vpu_defs_pkg.VPU_DTYPE_UN8, vpu_defs_pkg.VPU_DTYPE_SN16, vpu_defs_pkg.VPU_DTYPE_SN8) {
+      // normalized integers: the low bits of the narrow formats are guaranteed zero, so the
+      // wide zero / "one" detects are reused
+      const c_zero = fc_31_f0a_h == 0 and fcnorm_zero_30_8
+      class_c#[vpu_defs_pkg.FP_CLASS_POS_ZERO] = U1(c_zero)
+      match f0_dtype {
+        == vpu_defs_pkg.VPU_DTYPE_UN24 {
+          res_unorm_one = fc_31_f0a_h == 1 and fcn24_one_30_8_f0a_h == 1
+        }
+        == vpu_defs_pkg.VPU_DTYPE_UN16 {
+          res_unorm_one = fc_31_f0a_h == 1 and fcn16_one_30_16_f0a_h == 1
+        }
+        == vpu_defs_pkg.VPU_DTYPE_UN10 {
+          res_unorm_one = fc_31_f0a_h == 1 and fcn10_one_30_22_f0a_h == 1
+        }
+        == vpu_defs_pkg.VPU_DTYPE_UN8 {
+          res_unorm_one = fc_31_f0a_h == 1 and fcn8_one_30_24_f0a_h == 1
+        }
+        == vpu_defs_pkg.VPU_DTYPE_SN16 {
+          res_snorm_one = (fc_31_f0a_h == 0 and fcn16_one_30_16_f0a_h == 1) or (fc_31_f0a_h == 1 and fcnorm_zero_30_8) or (fc_31_f0a_h == 1 and fcnorm16_eq_1_f0a_h == 1)
+        }
+        else {
+          res_snorm_one = (fc_31_f0a_h == 0 and fcn8_one_30_24_f0a_h == 1) or (fc_31_f0a_h == 1 and fcnorm_zero_30_8) or (fc_31_f0a_h == 1 and fcnorm8_eq_1_f0a_h == 1)
+        }
+      }
+    }
+    == vpu_defs_pkg.VPU_DTYPE_UN2 {
+      class_c#[vpu_defs_pkg.FP_CLASS_POS_ZERO] = U1(fc_31_f0a_h == 0 and fcnorm_30_f0a_h == 0)
+      res_unorm_one = fc_31_f0a_h == 1 and fcnorm_30_f0a_h == 1
+    }
+    else {
+    }
+  }
+
+  const res_snan_f0 = res_snan
+  const res_qnan = not res_snan and (res_pot_qnan or inv_ops)
+  const res_inf = (not (res_qnan or res_snan) and res_pot_inf) or res_inf_trans
+  res_inf_f0a_h = U1(res_inf)
+  res_qnan_f0a_h = U1(res_qnan)
+  res_snan_f0a_h = U1(res_snan_f0)
+  res_zero_f0a_h = U1(res_zero)
+  res_one_f0a_h = U1(res_one)
+  res_pos_int_nan_f0a_h = U1(res_pos_int_nan)
+  res_neg_int_nan_f0a_h = U1(res_neg_int_nan)
+  res_uint_nan_f0a_h = U1(res_uint_nan)
+  res_unorm_one_f0a_h = U1(res_unorm_one)
+  res_snorm_one_f0a_h = U1(res_snorm_one)
+  prod_inf_hi_f0a_h = U1(prod_inf_hi)
+  prod_inf_lo_f0a_h = U1(prod_inf_lo)
+  a_inf_f0a_h = U1(a_inf)
+  c_inf_f0a_h = U1(c_inf)
+  classify_f0a_h = class_c
+  a_is_qnan_hi_f0a_h = class_a_hi#[vpu_defs_pkg.FP_CLASS_QNAN]
+  c_is_qnan_f0a_h = class_c#[vpu_defs_pkg.FP_CLASS_QNAN]
+  a_is_snan_hi_f0a_h = class_a_hi#[vpu_defs_pkg.FP_CLASS_SNAN]
+  c_is_snan_f0a_h = class_c#[vpu_defs_pkg.FP_CLASS_SNAN]
+
+  // Denormal flag: which operands are denormal depends on the datatype (and the sin phases)
+  mut flags_denorm = false
+  match f0_dtype {
+    == vpu_defs_pkg.VPU_DTYPE_F32 {
+      flags_denorm = (f0_cmd != vpu_defs_pkg.VPU_TRANS_LOG_MUL and ((ea_hi_zero_clr and not fa_zero30_8) or (eb_hi_zero_clr and not fb_zero28_6))) or (ec_zero_clr and not fc_zero30_8)
+      if f0_norm_f32 {
+        flags_denorm = ea_hi_zero_clr and not fa_zero30_8
+      }
+    }
+    == vpu_defs_pkg.VPU_DTYPE_INT {
+      if f0_trans2 {
+        flags_denorm = (eb_hi_zero_clr and not fb_zero28_6) and not exp_fma2_not_exc
+      }
+    }
+    == vpu_defs_pkg.VPU_DTYPE_F16_F32 {
+      flags_denorm = (ea_hi_zero_clr and not fa_zero30_21) or (eb_hi_zero_clr and not fb_zero28_19) or (ec_zero_clr and not fc_zero30_8) or (ea_lo_zero_clr and (faph_lo_b0_f0a_h == 1 or faph_lo_zero_f0a_l == 1)) or (eb_lo_zero_clr and (fbph_lo_b0_f0a_h == 1 or fbph_lo_zero_f0a_l == 1))
+    }
+    in (vpu_defs_pkg.VPU_DTYPE_F16, vpu_defs_pkg.VPU_DTYPE_F11, vpu_defs_pkg.VPU_DTYPE_F10) {
+      // the narrow float is moved into fc[30:..]; the wider zero detect covers it
+      flags_denorm = ec_zero_clr and not fc_zero30_21
+    }
+    else {
+    }
+  }
+  // sin results are denormal for the intermediate sin u-inst so the final sin_p3 can flush them
+  if f0_cmd == vpu_defs_pkg.VPU_TRANS_SIN_TRANSFORM or f0_cmd == vpu_defs_pkg.VPU_FCMD_FFRC_SIN {
+    flags_denorm = class_c#[vpu_defs_pkg.FP_CLASS_POS_DENORMAL] == 1 or class_c#[vpu_defs_pkg.FP_CLASS_NEG_DENORMAL] == 1
+  }
+  if f0_cmd == vpu_defs_pkg.VPU_TRANS_SIN_P1 or f0_cmd == vpu_defs_pkg.VPU_TRANS_SIN_P2 {
+    flags_denorm = class_a_hi#[vpu_defs_pkg.FP_CLASS_POS_DENORMAL] == 1 or class_a_hi#[vpu_defs_pkg.FP_CLASS_NEG_DENORMAL] == 1 or class_b_hi#[vpu_defs_pkg.FP_CLASS_POS_DENORMAL] == 1 or class_b_hi#[vpu_defs_pkg.FP_CLASS_NEG_DENORMAL] == 1
+  }
+  if f0_cmd == vpu_defs_pkg.VPU_TRANS_SIN_P3 {
+    flags_denorm = eb_hi_zero_clr and not fb_zero28_6
+  }
+
+  // Flags. Overflow/underflow are set at the end of the pipeline; inexact comes from frcp.ps
+  // on a value greater than 2^126.
+  mut flags:vpu_defs_pkg.VPU_FLAGS_SZ_T = 0
+  flags#[vpu_defs_pkg.VPU_FLAG_OVF] = 0
+  flags#[vpu_defs_pkg.VPU_FLAG_UNF] = 0
+  flags#[vpu_defs_pkg.VPU_FLAG_DENORMAL] = U1(flags_denorm)
+  flags#[vpu_defs_pkg.VPU_FLAG_INVALID] = U1(res_snan or inf_nan1_hi or inf_nan2_hi or rsqrt_res_nan_inv or sin_res_nan_inv or log_res_nan_inv)
+  flags#[vpu_defs_pkg.VPU_FLAG_DIV0] = U1(res_inf_trans and (f0_cmd == vpu_defs_pkg.VPU_TRANS_RCP_FMA2 or f0_cmd == vpu_defs_pkg.VPU_TRANS_RSQRT_FMA2))
+  flags#[vpu_defs_pkg.VPU_FLAG_INEXACT] = U1(res_zero and f0_cmd == vpu_defs_pkg.VPU_TRANS_RCP_FMA2)
+  flags_f0a_h = flags
+  flags_en_f0a_h = U1(flags != 0)
+  dtps_f0a_h = U1(f0_f32)
+
+  // Special result enable
+  const spec_res_en_nan = res_snan or res_qnan or res_pos_int_nan or res_neg_int_nan or res_uint_nan
+  spec_res_en_f0a_h = U1(spec_res_en_nan or res_unorm_one or res_snorm_one or res_inf or res_zero or class_c != 0 or res_one)
+}

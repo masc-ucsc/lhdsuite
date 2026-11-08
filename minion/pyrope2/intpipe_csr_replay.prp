@@ -1,0 +1,163 @@
+const minion_pkg = import("minion_pkg")
+
+// CSR replay detection (verilog: intpipe_csr_replay). A CSR write in the write-back
+// stage that cannot complete yet (cache-op unit busy, barrier or tensor unit not
+// ready, message port blocked, a tensor-wait condition not met, ...) is replayed:
+// io_replay flags it and the reason is remembered per thread in csr_replay_stall,
+// one bit per reason, until the resource reports ready again (clear_stall), so
+// io_replay_stall keeps the thread's fetch stalled. An interrupt or redirect drops
+// all of a thread's reasons. The VPU-related reasons only exist when VpuEn is set.
+
+// Replay reasons: bit positions inside one thread's stall word.
+comptime const R_CACHE_OP = 0
+comptime const R_FLB = 1
+comptime const R_TL0 = 2
+comptime const R_TL1 = 3
+comptime const R_TFMA = 4
+comptime const R_TQUANT = 5
+comptime const R_TREDUCE = 6
+comptime const R_TS = 7
+comptime const R_CONV = 8
+comptime const R_PGET = 9
+comptime const R_FCC0 = 10
+comptime const R_FCC1 = 11
+comptime const R_TMASK = 12
+comptime const R_PMU_READ = 13
+comptime const R_TEX = 14
+// tensor_wait replays, selected by the low nibble of the write data
+comptime const R_TW_TL0 = 15
+comptime const R_TW_TL1 = 16
+comptime const R_TW_PREFETCH0 = 17
+comptime const R_TW_PREFETCH1 = 18
+comptime const R_TW_CACHE_OP = 19
+comptime const R_TW_TENSOR_FMA = 20
+comptime const R_TW_TENSOR_STORE = 21
+comptime const R_TW_TENSOR_REDUCE = 22
+comptime const R_TW_TENSOR_QUANT = 23
+comptime const N_REASONS = 24
+comptime const ALL_REASONS = (1 << N_REASONS) - 1
+
+comptime const N_THREADS = minion_pkg.NrThreads
+comptime const N_MSG_PORTS = 4
+comptime const FCC_PER_MIN = 2
+// The stall flops are enabled in groups of this many bits, only when the group changes.
+comptime const SELF_XOR_WIDTH = 8
+
+pub mod intpipe_csr_replay<VpuEn=1>::[timecheck=false](clk_i:Clock, conv_can_accept_new_write:minion_pkg.NrThreads_T, dcache_ctrl_resp:(cache_op_ready:U1, cache_op_busy_changed:U2, cache_op_complete_l1:U4, cache_op_complete_l2:U4, tl_ready_0:U1, tl_ready_1:U1, ts_ready:U1, tl_complete_0:U2, reduce_ready:U1, tex_send_ready:U1, gsc_progress_save:U2, gsc_progress:U3), fcc_ready:U4, fl_barrier_ready:U1, io_interrupt:minion_pkg.NrThreads_T, io_redirect:minion_pkg.NrThreads_T, msg_port_pget_block:U1, msg_port_stall:U8, pmu_read_en_wb:U1, pmu_read_mem_ready:minion_pkg.NrThreads_T, reg_co_evict_sw_en:U1, reg_co_evict_va_en:U1, reg_co_flush_sw_en:U1, reg_co_flush_va_en:U1, reg_co_lock_sw_en:U1, reg_co_lock_va_en_qual:U1, reg_co_prefetch_va_en:U1, reg_co_unlock_sw_en:U1, reg_co_unlock_va_en_qual:U1, reg_fcc_en:minion_pkg.NrThreads_T, reg_flb_en:U1, reg_tensor_conv_ctrl_en:minion_pkg.NrThreads_T, reg_tensor_conv_size_en:minion_pkg.NrThreads_T, reg_tensor_fma_en:U1, reg_tensor_load_en:U1, reg_tensor_load_l2scp_en:U1, reg_tensor_mask_read_invalid:U1, reg_tensor_mask_ready:minion_pkg.NrThreads_T, reg_tensor_quant_en:U1, reg_tensor_reduce_en:U1, reg_tensor_store_en:U1, reg_tensor_wait_en:minion_pkg.NrThreads_T, reg_tex_send_en:U1, rst_ni:U1, tenb_restart_process:U1, tenb_tl_pend_tfma_en:U1, tensor_fma_replay_condition:U1, tensor_quant_replay_condition:U1, tload_is_for_tenb:U1, vpu_treduce_enabled:U1, wb_fcc_addr:U2, wb_thread_id:U1, wb_wdata:minion_pkg.XregSize_T) -> (io_replay:U1@[], io_replay_stall:minion_pkg.NrThreads_T@[]) {
+  cassert(N_REASONS%SELF_XOR_WIDTH == 0, "stall word must split into whole enable groups")
+
+  // csr_replay_stall holds N_THREADS words of N_REASONS bits, thread 0 in the low bits
+  reg csr_replay_stall:Unsigned(bits=N_THREADS*N_REASONS):[async=true, negreset=true, reset_pin=rst_ni] = 0
+
+  const vpu = VpuEn != 0
+  const co_not_ready = dcache_ctrl_resp.cache_op_ready == 0
+  const wait_en = reg_tensor_wait_en != 0
+  const wait_cond = wb_wdata#[0..<4]
+  const thread0 = wb_thread_id == 0
+  // the write-back thread's slice of the per-thread inputs
+  const l2_done = (dcache_ctrl_resp.cache_op_complete_l2 >> (wb_thread_id*2))#[0..<2]
+  const l1_done = (dcache_ctrl_resp.cache_op_complete_l1 >> (wb_thread_id*2))#[0..<2]
+
+  // ---- replay raised by the CSR write in this write-back cycle ----
+  mut wb_csr_replay:Unsigned(bits=N_REASONS) = 0
+
+  const co_en = reg_co_evict_va_en == 1 or reg_co_flush_va_en == 1 or reg_co_lock_va_en_qual == 1 or reg_co_unlock_va_en_qual == 1 or reg_co_lock_sw_en == 1 or reg_co_unlock_sw_en == 1 or reg_co_prefetch_va_en == 1 or reg_co_evict_sw_en == 1 or reg_co_flush_sw_en == 1 or (vpu and reg_tensor_load_l2scp_en == 1)
+  wb_csr_replay#[R_CACHE_OP] = U1(co_en and co_not_ready)
+  wb_csr_replay#[R_FLB] = U1(reg_flb_en == 1 and fl_barrier_ready == 0)
+
+  // tensor load: unit 0 serves the tensor-A load, unit 1 the tenb one
+  const tload = vpu and reg_tensor_load_en == 1
+  wb_csr_replay#[R_TL0] = U1(tload and dcache_ctrl_resp.tl_ready_0 == 0 and tload_is_for_tenb == 0)
+  wb_csr_replay#[R_TL1] = U1(tload and (dcache_ctrl_resp.tl_ready_1 == 0 or tenb_tl_pend_tfma_en == 1) and tload_is_for_tenb == 1)
+
+  wb_csr_replay#[R_TFMA] = U1(reg_tensor_fma_en == 1 and (tensor_fma_replay_condition == 1 or tenb_restart_process == 1))
+  wb_csr_replay#[R_TQUANT] = U1(reg_tensor_quant_en == 1 and tensor_quant_replay_condition == 1)
+  wb_csr_replay#[R_TREDUCE] = U1(vpu and reg_tensor_reduce_en == 1 and (dcache_ctrl_resp.reduce_ready == 0 or vpu_treduce_enabled == 1))
+  wb_csr_replay#[R_TS] = U1(vpu and reg_tensor_store_en == 1 and (dcache_ctrl_resp.ts_ready == 0 or vpu_treduce_enabled == 1))
+
+  // conv CSRs are refused while the walk of the writing thread is busy
+  const conv_wen = reg_tensor_conv_ctrl_en != 0 or reg_tensor_conv_size_en != 0
+  wb_csr_replay#[R_CONV] = U1(conv_wen and conv_can_accept_new_write#[wb_thread_id] == 0)
+
+  // fcc: no credit on the addressed counter; the write-data parity picks the reason
+  const fcc_no_credit = reg_fcc_en != 0 and fcc_ready#[wb_fcc_addr] == 0
+  const fcc_sel = wb_wdata#[0..<std.clog2(FCC_PER_MIN)]
+  wb_csr_replay#[R_FCC0] = U1(fcc_no_credit and fcc_sel == 0)
+  wb_csr_replay#[R_FCC1] = U1(fcc_no_credit and fcc_sel == 1)
+
+  wb_csr_replay#[R_TMASK] = reg_tensor_mask_read_invalid
+  wb_csr_replay#[R_PMU_READ] = U1(pmu_read_en_wb == 1 and pmu_read_mem_ready#[wb_thread_id] == 0)
+  wb_csr_replay#[R_TEX] = U1(vpu and reg_tex_send_en == 1 and dcache_ctrl_resp.tex_send_ready == 0)
+  wb_csr_replay#[R_PGET] = msg_port_pget_block
+
+  // tensor_wait: wait_cond picks what is waited for; the prefetch conditions 2/4 and 3/5
+  // are aliases of each other
+  const tw_vpu = vpu and wait_en
+  wb_csr_replay#[R_TW_TL0] = U1(tw_vpu and dcache_ctrl_resp.tl_complete_0#[0] == 0 and thread0 and wait_cond == 0)
+  wb_csr_replay#[R_TW_TL1] = U1(tw_vpu and dcache_ctrl_resp.tl_complete_0#[1] == 0 and thread0 and wait_cond == 1)
+  wb_csr_replay#[R_TW_PREFETCH0] = U1(tw_vpu and l2_done#[0] == 0 and (wait_cond == 2 or wait_cond == 4))
+  wb_csr_replay#[R_TW_PREFETCH1] = U1(tw_vpu and l2_done#[1] == 0 and (wait_cond == 3 or wait_cond == 5))
+  wb_csr_replay#[R_TW_CACHE_OP] = U1(tw_vpu and (l2_done != 3 or l1_done != 3) and wait_cond == 6)
+  wb_csr_replay#[R_TW_TENSOR_FMA] = U1(wait_en and tensor_fma_replay_condition == 1 and thread0 and wait_cond == 7)
+  wb_csr_replay#[R_TW_TENSOR_STORE] = U1(tw_vpu and dcache_ctrl_resp.ts_ready == 0 and thread0 and wait_cond == 8)
+  wb_csr_replay#[R_TW_TENSOR_REDUCE] = U1(tw_vpu and dcache_ctrl_resp.reduce_ready == 0 and thread0 and wait_cond == 9)
+  wb_csr_replay#[R_TW_TENSOR_QUANT] = U1(wait_en and tensor_quant_replay_condition == 1 and thread0 and wait_cond == 10)
+
+  io_replay = U1(wb_csr_replay != 0)
+
+  // ---- per-thread stall words ----
+  mut stall_next:Unsigned(bits=N_THREADS*N_REASONS) = 0
+  mut replay_stall:Unsigned(bits=N_THREADS) = 0
+  for t in 0..<N_THREADS {
+    const stall = csr_replay_stall#[(t*N_REASONS)..<((t + 1)*N_REASONS)]
+    const l2 = (dcache_ctrl_resp.cache_op_complete_l2 >> (t*2))#[0..<2]
+    const l1 = (dcache_ctrl_resp.cache_op_complete_l1 >> (t*2))#[0..<2]
+    const is_thread0 = t == 0
+
+    // a reason is cleared when its resource is ready again; the tensor_wait ones
+    // other than the cache-op/prefetch ones only exist for thread 0
+    mut clear_stall:Unsigned(bits=N_REASONS) = 0
+    clear_stall#[R_CACHE_OP] = dcache_ctrl_resp.cache_op_busy_changed#[t]
+    clear_stall#[R_FLB] = fl_barrier_ready
+    clear_stall#[R_TL0] = U1(not vpu or dcache_ctrl_resp.tl_ready_0 == 1)
+    clear_stall#[R_TL1] = U1(not vpu or dcache_ctrl_resp.tl_ready_1 == 1)
+    clear_stall#[R_TFMA] = U1(tensor_fma_replay_condition == 0)
+    clear_stall#[R_TQUANT] = U1(tensor_quant_replay_condition == 0)
+    clear_stall#[R_TREDUCE] = U1((not vpu or dcache_ctrl_resp.reduce_ready == 1) and vpu_treduce_enabled == 0)
+    clear_stall#[R_TS] = U1((not vpu or dcache_ctrl_resp.ts_ready == 1) and vpu_treduce_enabled == 0)
+    clear_stall#[R_CONV] = conv_can_accept_new_write#[t]
+    clear_stall#[R_PGET] = U1(msg_port_stall#[(t*N_MSG_PORTS)..<((t + 1)*N_MSG_PORTS)] == 0)
+    clear_stall#[R_FCC0] = fcc_ready#[t*FCC_PER_MIN]
+    clear_stall#[R_FCC1] = fcc_ready#[t*FCC_PER_MIN + 1]
+    clear_stall#[R_TMASK] = reg_tensor_mask_ready#[t]
+    clear_stall#[R_PMU_READ] = pmu_read_mem_ready#[t]
+    clear_stall#[R_TEX] = U1(not vpu or dcache_ctrl_resp.tex_send_ready == 1)
+    clear_stall#[R_TW_TL0] = U1((not vpu or dcache_ctrl_resp.tl_complete_0#[0] == 1) and is_thread0)
+    clear_stall#[R_TW_TL1] = U1((not vpu or dcache_ctrl_resp.tl_complete_0#[1] == 1) and is_thread0)
+    clear_stall#[R_TW_PREFETCH0] = U1(not vpu or l2#[0] == 1)
+    clear_stall#[R_TW_PREFETCH1] = U1(not vpu or l2#[1] == 1)
+    clear_stall#[R_TW_CACHE_OP] = U1(not vpu or (l2 == 3 and l1 == 3))
+    clear_stall#[R_TW_TENSOR_FMA] = U1(tensor_fma_replay_condition == 0 and is_thread0)
+    clear_stall#[R_TW_TENSOR_STORE] = U1((not vpu or dcache_ctrl_resp.ts_ready == 1) and is_thread0)
+    clear_stall#[R_TW_TENSOR_REDUCE] = U1((not vpu or dcache_ctrl_resp.reduce_ready == 1) and is_thread0)
+    clear_stall#[R_TW_TENSOR_QUANT] = U1(tensor_quant_replay_condition == 0 and is_thread0)
+    if io_interrupt#[t] == 1 or io_redirect#[t] == 1 {
+      clear_stall = ALL_REASONS
+    }
+
+    // the write-back thread adds this cycle's reasons
+    const added:Unsigned(bits=N_REASONS) = if wb_thread_id == t { wb_csr_replay } else { 0 }
+    stall_next#[(t*N_REASONS)..<((t + 1)*N_REASONS)] = (stall & ~clear_stall) | added
+    replay_stall#[t] = U1(stall != 0)
+  }
+  io_replay_stall = replay_stall
+
+  // Self-XOR gating: a group of flops is only written when its next value differs.
+  for g in (0..<(N_THREADS*N_REASONS) step SELF_XOR_WIDTH) {
+    const cur = csr_replay_stall#[g..<(g + SELF_XOR_WIDTH)]
+    const nxt = stall_next#[g..<(g + SELF_XOR_WIDTH)]
+    if (cur ^ nxt) != 0 {
+      csr_replay_stall#[g..<(g + SELF_XOR_WIDTH)] = nxt
+    }
+  }
+}

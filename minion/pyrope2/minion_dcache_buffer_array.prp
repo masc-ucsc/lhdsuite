@@ -1,0 +1,120 @@
+const prim_rf_1r1w_preview = import("prim_rf_1r1w_preview.prim_rf_1r1w_preview")
+const minion_dcache_pkg = import("minion_dcache_pkg")
+
+// Dcache miss/write-back buffer array: DcacheBufferSize 256-bit entries in a 1R1W register
+// file plus the allocation bookkeeping around it. `entry_count_available_q` counts free
+// entries (`full_o` when zero), `entry_mask_available_q` marks which entries are free, and
+// `reduce_count_available_q` is the half-size budget the reduce engine may allocate from.
+// An allocation request travels down the s0..s3 pipeline regs, which only advance while
+// something is in flight (`busy`); entries are returned by the three dealloc inputs or when
+// an allocation turns out not to need its entry (no write needed, or not a gsc request).
+pub mod minion_dcache_buffer_array::[timecheck=false](alloc_gsc_i:U1, alloc_req_pre_i:U1, alloc_req_val_i:U1, clk_i:Clock, reduce_alloc_req_i:U1, reduce_dealloc_entry_i:minion_dcache_pkg.DcacheBufferIdxWidth_T, reduce_dealloc_req_i:U1, rst_ni:U1, s1_dealloc_uc_entry_i:minion_dcache_pkg.DcacheBufferIdxWidth_T, s1_dealloc_uc_i:U1, s1_read_entry_i:minion_dcache_pkg.DcacheBufferIdxWidth_T, s2_dealloc_entry_i:minion_dcache_pkg.DcacheBufferIdxWidth_T, s2_dealloc_i:U1, s2_write_en_ext_prev_i:U1, s2_write_en_i:U1, s2_write_needed_core_i:U1, s2_write_needed_i:U1, s2_write_replay_entry_i:minion_dcache_pkg.DcacheBufferIdxWidth_T, s2_write_replay_i:U1, s3_write_data_ext_i:minion_dcache_pkg.DcacheDataSize_T, s3_write_data_i:minion_dcache_pkg.DcacheDataSize_T, s3_write_en_ext_i:U1, s3_write_entry_ext_i:minion_dcache_pkg.DcacheBufferIdxWidth_T) -> (full_o:U1@[], reduce_full_o:U1@[], s1_read_data_o:minion_dcache_pkg.DcacheDataSize_T@[], s2_write_entry_o:minion_dcache_pkg.DcacheBufferIdxWidth_T@[], s3_write_en_o:U1@[]) {
+  comptime const BufferSize = minion_dcache_pkg.DcacheBufferSize
+  comptime const ReduceBufferSize = BufferSize/2
+  comptime const ALL_FREE = (1 << BufferSize) - 1
+
+  // all of these reset to "everything free / nothing in flight"
+  reg s0_alloc_req_pre_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s1_alloc_req_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s2_alloc_req_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s3_alloc_req_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s0_alloc_gsc_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s1_alloc_gsc_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s2_alloc_gsc_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg entry_count_available_q:U4:[negreset=true, reset_pin=rst_ni] = BufferSize
+  reg entry_mask_available_q:U8:[negreset=true, reset_pin=rst_ni] = ALL_FREE
+  reg alloc_req_pre_applied_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg reduce_count_available_q:U4:[negreset=true, reset_pin=rst_ni] = ReduceBufferSize
+  reg s3_write_entry_q:U3:[negreset=true, reset_pin=rst_ni] = 0
+  reg s3_write_en_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+
+  // allocation pipeline: s0 request is confirmed by alloc_req_val_i, s3 only for gsc requests
+  const s0_alloc_req = s0_alloc_req_pre_q and alloc_req_val_i != 0
+  const s3_alloc_req_d = s2_alloc_req_q and s2_alloc_gsc_q
+
+  // the entry the next write goes to: the highest free entry above 0, or 0; a replay overrides
+  mut s2_write_entry:U3 = 0
+  for i in 1..<BufferSize {
+    if entry_mask_available_q#[i] != 0 {
+      s2_write_entry = i
+    }
+  }
+  if s2_write_replay_i != 0 {
+    s2_write_entry = s2_write_replay_entry_i
+  }
+
+  // free-entry count: one allocation (unless full), then one return per source below
+  const full = entry_count_available_q == 0
+  mut entry_count_available_d:U4 = entry_count_available_q
+  mut alloc_req_pre_applied_d = false
+  if (alloc_req_pre_i != 0 or reduce_alloc_req_i != 0) and not full {
+    alloc_req_pre_applied_d = reduce_alloc_req_i == 0
+    wrap entry_count_available_d -= 1
+  }
+  const returned = (
+    alloc_req_pre_applied_q and not s0_alloc_req, // early allocation was not confirmed
+    s2_alloc_req_q and not s2_alloc_gsc_q and s2_write_needed_core_i == 0,
+    s3_alloc_req_q and s2_write_needed_core_i == 0,
+    s2_alloc_req_q and not s2_alloc_gsc_q and s3_alloc_req_q and s2_write_needed_core_i != 0,
+    s2_dealloc_i != 0,
+    s1_dealloc_uc_i != 0,
+    reduce_dealloc_req_i != 0,
+  )
+  for r in returned {
+    if r {
+      wrap entry_count_available_d += 1
+    }
+  }
+
+  // free-entry mask: take the entry being written, give back the deallocated ones
+  mut entry_mask_available_d:U8 = entry_mask_available_q
+  if s2_write_needed_i != 0 {
+    entry_mask_available_d#[s2_write_entry] = 0
+  }
+  if s2_dealloc_i != 0 {
+    entry_mask_available_d#[s2_dealloc_entry_i] = 1
+  }
+  if s1_dealloc_uc_i != 0 {
+    entry_mask_available_d#[s1_dealloc_uc_entry_i] = 1
+  }
+  if reduce_dealloc_req_i != 0 {
+    entry_mask_available_d#[reduce_dealloc_entry_i] = 1
+  }
+
+  mut reduce_count_available_d:U4 = reduce_count_available_q
+  if reduce_alloc_req_i != 0 and reduce_count_available_q != 0 {
+    wrap reduce_count_available_d -= 1
+  }
+  if reduce_dealloc_req_i != 0 {
+    wrap reduce_count_available_d += 1
+  }
+
+  const busy = alloc_req_pre_i != 0 or reduce_alloc_req_i != 0 or s0_alloc_req_pre_q or s1_alloc_req_q or s2_alloc_req_q or s3_alloc_req_q or s2_dealloc_i != 0 or s1_dealloc_uc_i != 0 or s2_write_needed_i != 0 or reduce_dealloc_req_i != 0
+  if busy {
+    s0_alloc_req_pre_q = alloc_req_pre_i != 0
+    s1_alloc_req_q = s0_alloc_req
+    s2_alloc_req_q = s1_alloc_req_q
+    s3_alloc_req_q = s3_alloc_req_d
+    s0_alloc_gsc_q = alloc_gsc_i != 0
+    s1_alloc_gsc_q = s0_alloc_gsc_q
+    s2_alloc_gsc_q = s1_alloc_gsc_q
+    entry_count_available_q = entry_count_available_d
+    entry_mask_available_q = entry_mask_available_d
+    alloc_req_pre_applied_q = alloc_req_pre_applied_d
+    reduce_count_available_q = reduce_count_available_d
+  }
+  s3_write_en_q = s2_write_en_i != 0
+  s3_write_entry_q = s2_write_entry
+
+  // a registered core write has priority over the external (l2 response) write port
+  const s3_write_entry:minion_dcache_pkg.DcacheBufferIdxWidth_T = if s3_write_en_q { s3_write_entry_q } else { s3_write_entry_ext_i }
+  const s3_write_data:minion_dcache_pkg.DcacheDataSize_T = if s3_write_en_q { s3_write_data_i } else { s3_write_data_ext_i }
+
+  mut u_rf_buffer_array = prim_rf_1r1w_preview<Depth=BufferSize, Width=256>(preview_clk_i=clk_i, rf_clk_i=clk_i, wr_data_en_1p_next_i=U1(s2_write_en_ext_prev_i != 0 or s2_write_en_i != 0), wr_en_i=U1(s3_write_en_q or s3_write_en_ext_i != 0), wr_addr_i=s3_write_entry, wr_data_i=s3_write_data, rd_addr_i=s1_read_entry_i)
+
+  full_o = U1(full)
+  reduce_full_o = U1(reduce_count_available_q == 0 or full)
+  s2_write_entry_o = s2_write_entry
+  s3_write_en_o = U1(s3_write_en_q)
+  s1_read_data_o = u_rf_buffer_array
+}

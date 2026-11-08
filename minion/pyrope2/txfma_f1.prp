@@ -1,0 +1,69 @@
+// Stage f1 of the TXFMA fraction datapath: register the f0 operands and multiplier
+// controls, run the Booth partial-product generator and the first Wallace level on
+// them, and count trailing zeros of the fa/fb/fc fractions (used for the exponent
+// work in f1/f2). fa/fc, the Wallace carry-save vectors and the Booth correction terms
+// are registered into f2 here.
+const txfma_booth_ppg_32r4 = import("txfma_booth_ppg_32r4.txfma_booth_ppg_32r4")
+const txfma_trz = import("txfma_trz.txfma_trz")
+const txfma_wallace1 = import("txfma_wallace1.txfma_wallace1")
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+// fc bit b0 sits at column TXFMA_B0+3 of the datapath, whose 32-bit fc word starts at column 32.
+comptime const FC_B0_BIT = (vpu_defs_pkg.TXFMA_B0 + 3) - 32
+
+pub mod txfma_f1::[timecheck=false](ctrl_f0_clk:Clock, ctrl_f1_clk:Clock, dtps_f0a_h:U1, fa_f0a_h:vpu_defs_pkg.VPU_DATA_S_SZ_T, fb_f0a_h:vpu_defs_pkg.VPU_DATA_S_SZ_T, fc_f0a_h:vpu_defs_pkg.VPU_DATA_S_SZ_T, mul_hp_mode_f0a_h:U1, mul_sign_f0a_h:U1, multype_f0_clk:Clock, multype_f1_clk:Clock) -> (booth_fCin_f2a_h:vpu_defs_pkg.VPU_DATA_S_SZ_T@[], booth_fSxt_f2a_h:vpu_defs_pkg.VPU_DATA_S_SZ_T@[], booth_fpp17_f2a_h:U33@[], etrz_fa_hi_ph_f1a_h:U4@[], etrz_fa_lo_ps_f1a_h:U5@[], etrz_fb_hi_ph_f1a_h:U4@[], etrz_fb_lo_ps_f1a_h:U5@[], etrz_fc_f1a_h:U5@[], fa_f2a_h:U32@[], fc_b0_f2a_h:U1@[], fc_f2a_h:U32@[], wallace_fC21_f2a_h:U64@[], wallace_fC22_f2a_h:U64@[], wallace_fS21_f2a_h:U64@[], wallace_fS22_f2a_h:U64@[]) {
+  // Operand and control registers, one flop group per clock domain.
+  reg fa_f1a_h:U32:[clock_pin=ctrl_f0_clk]
+  reg fb_f1a_h:U32:[clock_pin=ctrl_f0_clk]
+  reg fc_f1a_h:U32:[clock_pin=ctrl_f0_clk]
+  reg dtps_f1a_h:U1:[clock_pin=ctrl_f0_clk]
+  reg mul_sign_f1a_h:U1:[clock_pin=multype_f0_clk]
+  reg mul_hp_mode_f1a_h:U1:[clock_pin=multype_f0_clk]
+  reg fa_f2a_h:U32:[clock_pin=ctrl_f1_clk]
+  reg fc_f2a_h:U32:[clock_pin=ctrl_f1_clk]
+  reg wallace_fC21_f2a_h:U64:[clock_pin=multype_f1_clk]
+  reg wallace_fC22_f2a_h:U64:[clock_pin=multype_f1_clk]
+  reg wallace_fS21_f2a_h:U64:[clock_pin=multype_f1_clk]
+  reg wallace_fS22_f2a_h:U64:[clock_pin=multype_f1_clk]
+  reg booth_fCin_f2a_h:U32:[clock_pin=multype_f1_clk]
+  reg booth_fSxt_f2a_h:U32:[clock_pin=multype_f1_clk]
+  reg booth_fpp17_f2a_h:U33:[clock_pin=multype_f1_clk]
+  fa_f1a_h = fa_f0a_h
+  fb_f1a_h = fb_f0a_h
+  fc_f1a_h = fc_f0a_h
+  dtps_f1a_h = dtps_f0a_h
+  mul_sign_f1a_h = mul_sign_f0a_h
+  mul_hp_mode_f1a_h = mul_hp_mode_f0a_h
+
+  // Booth radix-4 partial products (with sign-extension and two's-complement
+  // correction terms) and the first Wallace compression level.
+  const ppg = txfma_booth_ppg_32r4(mpcnd_i=fb_f1a_h, mplr_i=fa_f1a_h, mode_i=mul_hp_mode_f1a_h, sign_i=mul_sign_f1a_h)
+  const wallace1 = txfma_wallace1(pp1_i=ppg.pp1_o, pp2_i=ppg.pp2_o, pp3_i=ppg.pp3_o, pp4_i=ppg.pp4_o, pp5_i=ppg.pp5_o, pp6_i=ppg.pp6_o, pp7_i=ppg.pp7_o, pp8_i=ppg.pp8_o, pp9_i=ppg.pp9_o, pp10_i=ppg.pp10_o, pp11_i=ppg.pp11_o, pp12_i=ppg.pp12_o, pp13_i=ppg.pp13_o, pp14_i=ppg.pp14_o, pp15_i=ppg.pp15_o, pp16_i=ppg.pp16_o, mode_i=mul_hp_mode_f1a_h)
+
+  // Trailing zeros of the single-precision fractions (the dtps operand selects the
+  // graphics/transcendental fraction window of fa/fb) and of the half-precision
+  // fractions of fa/fb.
+  const fa_ps_frac:U24 = if dtps_f1a_h != 0 { fa_f1a_h#[8..<32] } else { fa_f1a_h#[1..<12] }
+  const fb_ps_frac:U24 = if dtps_f1a_h != 0 { fb_f1a_h#[6..<30] } else { fb_f1a_h#[1..<12] }
+  const fa_lo_ps_trz = txfma_trz<Max=23>(frac_i=fa_ps_frac)
+  const fb_lo_ps_trz = txfma_trz<Max=23>(frac_i=fb_ps_frac)
+  const fc_lo_ps_trz = txfma_trz<Max=23>(frac_i=fc_f1a_h#[8..<32])
+  const fa_hi_ph_trz = txfma_trz<Max=10>(frac_i=fa_f1a_h#[21..<32])
+  const fb_hi_ph_trz = txfma_trz<Max=10>(frac_i=fb_f1a_h#[19..<30])
+
+  fa_f2a_h = fa_f1a_h
+  fc_f2a_h = fc_f1a_h
+  wallace_fC21_f2a_h = wallace1.c21_o
+  wallace_fC22_f2a_h = wallace1.c22_o
+  wallace_fS21_f2a_h = wallace1.s21_o
+  wallace_fS22_f2a_h = wallace1.s22_o
+  booth_fCin_f2a_h = ppg.cin_o
+  booth_fSxt_f2a_h = ppg.sxt_o
+  booth_fpp17_f2a_h = ppg.pp17_o
+  fc_b0_f2a_h = fc_f2a_h#[FC_B0_BIT]
+  etrz_fa_hi_ph_f1a_h = fa_hi_ph_trz
+  etrz_fa_lo_ps_f1a_h = fa_lo_ps_trz
+  etrz_fb_hi_ph_f1a_h = fb_hi_ph_trz
+  etrz_fb_lo_ps_f1a_h = fb_lo_ps_trz
+  etrz_fc_f1a_h = fc_lo_ps_trz
+}

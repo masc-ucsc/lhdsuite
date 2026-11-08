@@ -1,0 +1,42 @@
+const intpipe_mul_div_ctl = import("intpipe_mul_div_ctl.intpipe_mul_div_ctl")
+const intpipe_mul_div_dp = import("intpipe_mul_div_dp.intpipe_mul_div_dp")
+const prim_clk_gate = import("prim_clk_gate.prim_clk_gate")
+const minion_pkg = import("minion_pkg")
+
+// Multi-cycle multiplier/divider: controller (intpipe_mul_div_ctl) + datapath
+// (intpipe_mul_div_dp) running on a clock that is gated off while the unit is idle.
+pub mod prim_mul_div::[timecheck=false](chicken_bit_mul_div:U1, clk_i:Clock, dft_i:(scanmode:U1, scan_reset_n:U1, sram_clk_override:U1, ram_rei:U1, ram_wei:U1), kill:U1, req_dest:(fp:U1, addr:U5, thread_id:U1), req_dw:U1, req_fn:U5, req_fn_early:U5, req_in1:minion_pkg.XregSize_T, req_in2:minion_pkg.XregSize_T, req_valid:U1, req_valid_early:U1, resp_ready:U1, rst_ni:U1) -> (req_ready:U1@[], resp_data:minion_pkg.XregSize_T@[], resp_dest:(fp:U1, addr:U5, thread_id:U1)@[], resp_valid:U1@[], resp_valid_early:U1@[]) {
+  // The controller's ready feeds the clock gate that clocks the controller itself.
+  wire ctl_ready:U1 = nil
+  // The datapath status feeds the controller, whose selects feed the datapath back.
+  wire md_mplr_2d:U8 = nil
+  wire md_rem_sgn_1d:U1 = nil
+  wire md_zero_rem_1d:U1 = nil
+  wire md_nxt_quot_1q:U1 = nil
+  wire md_div_by_zero_1p:U1 = nil
+
+  const reset_w = U1(rst_ni == 0)
+  const clock_en = chicken_bit_mul_div | req_valid | req_valid_early | U1(ctl_ready == 0) | reset_w
+  const clock_gated = prim_clk_gate(clk_i=clk_i, en_i=clock_en, dft_i.scanmode=dft_i.scanmode)
+
+  // Operand sign bit as seen by the controller: bit 63 for a doubleword op, bit 31 otherwise.
+  const op1_msb:U1 = if req_dw != 0 { req_in1#[63] } else { req_in1#[31] }
+  const op2_msb:U1 = if req_dw != 0 { req_in2#[63] } else { req_in2#[31] }
+
+  const mul_div_ctl = intpipe_mul_div_ctl::[name=mul_div_ctl](ex_op1_msb_2p=op1_msb, ex_op2_msb_2p=op2_msb, md_mplr_2d=md_mplr_2d, md_rem_sgn_1d=md_rem_sgn_1d, md_zero_rem_1d=md_zero_rem_1d, md_nxt_quot_1q=md_nxt_quot_1q, md_div_by_zero_1p=md_div_by_zero_1p, req_fn=req_fn, req_fn_early=req_fn_early, req_valid_early=req_valid_early, resp_ready=resp_ready, req_dest=req_dest, kill=kill, ex_dw_2p=req_dw, reset=reset_w, clock=clock_gated)
+
+  const mul_div_dp = intpipe_mul_div_dp::[name=mul_div_dp](ex_op1_2p=req_in1#[0..<64], ex_op2_2p=req_in2#[0..<64], op1_sgnd_2p=mul_div_ctl.op1_sgnd_2p, op2_sgnd_2p=mul_div_ctl.op2_sgnd_2p, ex_dw_2p=req_dw, mdctl_besl_0_1p=(e0=mul_div_ctl.mdctl_besl_0_1p#[0], e1=mul_div_ctl.mdctl_besl_0_1p#[1], e2=mul_div_ctl.mdctl_besl_0_1p#[2]), mdctl_besl_1_1p=(e0=mul_div_ctl.mdctl_besl_1_1p#[0], e1=mul_div_ctl.mdctl_besl_1_1p#[1], e2=mul_div_ctl.mdctl_besl_1_1p#[2]), mdctl_besl_2_1p=(e0=mul_div_ctl.mdctl_besl_2_1p#[0], e1=mul_div_ctl.mdctl_besl_2_1p#[1], e2=mul_div_ctl.mdctl_besl_2_1p#[2]), mdctl_besl_3_1p=(e0=mul_div_ctl.mdctl_besl_3_1p#[0], e1=mul_div_ctl.mdctl_besl_3_1p#[1], e2=mul_div_ctl.mdctl_besl_3_1p#[2]), mdctl_start_op_2p=mul_div_ctl.mdctl_start_op_2p, mdctl_fnl_pp_1p=mul_div_ctl.mdctl_fnl_pp_1p, mdctl_dw_1q=mul_div_ctl.mdctl_dw_1q, mdctl_dw_2q=mul_div_ctl.mdctl_dw_2q, mdctl_acc_v1_sl_1d=U2((mul_div_ctl.mdctl_acc_v1_sl_1d.e1 << 1) | mul_div_ctl.mdctl_acc_v1_sl_1d.e0), mdctl_acc_v2_sl_1d=U2((mul_div_ctl.mdctl_acc_v2_sl_1d.e1 << 1) | mul_div_ctl.mdctl_acc_v2_sl_1d.e0), mdctl_add_ain_sl_1p=mul_div_ctl.mdctl_add_ain_sl_1p, mdctl_add_bin_sl_1p=mul_div_ctl.mdctl_add_bin_sl_1p, mdctl_se_zero_1p=mul_div_ctl.mdctl_se_zero_1p, mdctl_fnl_mul_cyc_1p=mul_div_ctl.mdctl_fnl_mul_cyc_1p, mdctl_start_div_2p=mul_div_ctl.mdctl_start_div_2p, mdctl_fc_zr_acc_1p=mul_div_ctl.mdctl_fc_zr_acc_1p, mdctl_dvsr_sgn_1p=mul_div_ctl.mdctl_dvsr_sgn_1p, mdctl_div_cin_1p=mul_div_ctl.mdctl_div_cin_1p, mdctl_resp_sl_2p=mul_div_ctl.mdctl_resp_sl_2p, mdctl_clken_mpcnd_1d=mul_div_ctl.mdctl_clken_mpcnd_1d, mdctl_clken_mul_ph1_2d=mul_div_ctl.mdctl_clken_mul_ph1_2d, mdctl_clken_muldvsr_ph2_1d=mul_div_ctl.mdctl_clken_muldvsr_ph2_1d, mdctl_clken_acc_v1_2p=mul_div_ctl.mdctl_clken_acc_v1_2p, mdctl_clken_acc_v1_1p=mul_div_ctl.mdctl_clken_acc_v1_1p, mdctl_clken_acc_v2_2p=mul_div_ctl.mdctl_clken_acc_v2_2p, mdctl_clken_acc_v2_1p=mul_div_ctl.mdctl_clken_acc_v2_1p, clock=clock_gated)
+
+  ctl_ready = mul_div_ctl.req_ready
+  md_mplr_2d = mul_div_dp.md_mplr_2d
+  md_rem_sgn_1d = mul_div_dp.md_rem_sgn_1d
+  md_zero_rem_1d = mul_div_dp.md_zero_rem_1d
+  md_nxt_quot_1q = mul_div_dp.md_nxt_quot_1q
+  md_div_by_zero_1p = mul_div_dp.md_div_by_zero_1p
+
+  req_ready = ctl_ready
+  resp_valid = mul_div_ctl.resp_valid
+  resp_valid_early = mul_div_ctl.resp_valid_early
+  resp_data = mul_div_dp.md_resp_data_2p
+  resp_dest = mul_div_ctl.resp_dest
+}

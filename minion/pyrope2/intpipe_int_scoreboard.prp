@@ -1,0 +1,44 @@
+// Integer register hazard scoreboard (verilog: intpipe_int_scoreboard).
+// For each source register read in decode (and for x31, which has its own flag) it
+// reports whether an in-flight writer targets that register of the same thread: the
+// divider, a dcache replay-queue load, the FLB, or a VPU to-int result.
+// rd_data_dcache_div keeps only the divider and dcache part of the hazard.
+const minion_pkg = import("minion_pkg")
+
+pub comb intpipe_int_scoreboard<ReadPorts=3>(dcache_scoreboard:(valid:U8, dest:U56), int_div_dest:(fp:U1, addr:U5, thread_id:U1), int_div_valid:U1, int_flb_dest:(fp:U1, addr:U5, thread_id:U1), int_flb_valid:U1, rd_addr:Unsigned(bits=5*ReadPorts), rd_thread_id:U1, vpu_scoreboard:(toint_valid:U4, toint_dest:U28)) -> (rd_data:Unsigned(bits=ReadPorts), rd_data_dcache_div:Unsigned(bits=ReadPorts), rd_x31:U1) {
+  comptime const DestBits = 7 // a destination is {fp, addr[4:0], thread_id}
+  comptime const DcacheEntries = minion_pkg.DcacheReplayqSize
+  comptime const ToIntEntries = minion_pkg.VpuTointScoreboardSize
+
+  const div_dest:U7 = int_div_dest.thread_id | (int_div_dest.addr << 1) | (int_div_dest.fp << 6)
+  const flb_dest:U7 = int_flb_dest.thread_id | (int_flb_dest.addr << 1) | (int_flb_dest.fp << 6)
+  // the read ports followed by the fixed x31 lookup
+  const lookup_addr:Unsigned(bits=5*ReadPorts + 5) = rd_addr | (0x1f << (5*ReadPorts))
+
+  mut data:Unsigned(bits=ReadPorts) = 0
+  mut data_dcache_div:Unsigned(bits=ReadPorts) = 0
+  mut x31 = false
+  for port in 0..=ReadPorts {
+    const addr:U5 = lookup_addr#[(5*port)..<(5*port + 5)]
+    const rd_dest:U7 = rd_thread_id | (addr << 1) // fp == 0: an integer register
+
+    mut dcache_div = int_div_valid == 1 and div_dest == rd_dest
+    for i in 0..<DcacheEntries {
+      dcache_div = dcache_div or (dcache_scoreboard.valid#[i] == 1 and dcache_scoreboard.dest#[(DestBits*i)..<(DestBits*i + DestBits)] == rd_dest)
+    }
+    mut any = dcache_div or (int_flb_valid == 1 and flb_dest == rd_dest)
+    for i in 0..<ToIntEntries {
+      any = any or (vpu_scoreboard.toint_valid#[i] == 1 and vpu_scoreboard.toint_dest#[(DestBits*i)..<(DestBits*i + DestBits)] == rd_dest)
+    }
+
+    if port == ReadPorts {
+      x31 = any
+    } else {
+      data#[port] = U1(any)
+      data_dcache_div#[port] = U1(dcache_div)
+    }
+  }
+  rd_data = data
+  rd_data_dcache_div = data_dcache_div
+  rd_x31 = U1(x31)
+}

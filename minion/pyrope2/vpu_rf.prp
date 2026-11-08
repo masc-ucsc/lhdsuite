@@ -1,0 +1,34 @@
+const prim_rf_3r2w_preview = import("prim_rf_3r2w_preview.prim_rf_3r2w_preview")
+const minion_pkg = import("minion_pkg")
+const vpu_pkg = import("vpu_pkg")
+
+// VPU vector register file: 3 read / 2 write ports of 32 bits, 32 registers per
+// thread, 2 threads (thread id is the MSB of the 6-bit entry address). Read
+// ports 0..2 each take a 5-bit register address, packed in rd_addr_i (port 0
+// lowest); write ports 0/1 likewise in wr_addr_i / wr_data_i. Read addresses are
+// registered (only when the port's read enable is set, no reset), so data comes
+// out one cycle after the request; writes are gated by wr_mask_i. The
+// UseMmi/UseMmiNetlist generics of the Verilog are unused here: only its
+// latch-array (prim_rf_3r2w_preview) path is implemented.
+pub mod vpu_rf<UseMmi=0, UseMmiNetlist=0>::[timecheck=false](clk_i:Clock, rd_addr_i:U15, rd_en_i:(e2:U1, e1:U1, e0:U1), rd_thread_id_i:(e2:U1, e1:U1, e0:U1), wr_addr_i:U10, wr_data_i:U64, wr_en_early_i:(e1:U1, e0:U1), wr_en_i:(e1:U1, e0:U1), wr_mask_i:(e1:U1, e0:U1), wr_thread_id_i:(e1:U1, e0:U1)) -> (rd_data_o:U96@[]) {
+  comptime const ADDR_W = 5
+
+  const rd_en = (rd_en_i.e0, rd_en_i.e1, rd_en_i.e2)
+  const rd_thread = (rd_thread_id_i.e0, rd_thread_id_i.e1, rd_thread_id_i.e2)
+  reg rd_addr_q:[3]U6:[clock_pin=clk_i, ordering="old"]
+  for i in 0..<3 {
+    if rd_en[i] != 0 {
+      rd_addr_q[i] = (rd_thread[i] << ADDR_W) | rd_addr_i#[(i*ADDR_W)..<((i + 1)*ADDR_W)]
+    }
+  }
+
+  const wr_addr_a = (wr_thread_id_i.e0 << ADDR_W) | wr_addr_i#[0..<ADDR_W]
+  const wr_addr_b = (wr_thread_id_i.e1 << ADDR_W) | wr_addr_i#[ADDR_W..<(2*ADDR_W)]
+
+  mut gen_latch_u_rf = prim_rf_3r2w_preview<Entries=64, Width=32>(preview_clk_i=clk_i, rf_clk_i=clk_i, rd_addr_a_i=rd_addr_q[0], rd_addr_b_i=rd_addr_q[1], rd_addr_c_i=rd_addr_q[2], wr_en_a_i=wr_en_i.e0 & wr_mask_i.e0, wr_addr_a_i=wr_addr_a, wr_data_a_en_1p_next_i=wr_en_early_i.e0, wr_data_a_i=wr_data_i#[0..<32], wr_en_b_i=wr_en_i.e1 & wr_mask_i.e1, wr_addr_b_i=wr_addr_b, wr_data_b_en_1p_next_i=wr_en_early_i.e1, wr_data_b_i=wr_data_i#[32..<64])
+
+  const rd_data_a:U32 = gen_latch_u_rf.rd_data_a_o
+  const rd_data_b:U32 = gen_latch_u_rf.rd_data_b_o
+  const rd_data_c:U32 = gen_latch_u_rf.rd_data_c_o
+  rd_data_o = (rd_data_a, rd_data_b, rd_data_c)#[..]
+}

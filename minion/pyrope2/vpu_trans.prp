@@ -1,0 +1,518 @@
+// Transcendental sequencer of the VPU (verilog: vpu_trans). A FRCP/FLOG/FEXP/FRCP_FIX_RAST
+// (and FRSQ/FSIN with EnableExtraTrans) seen in EX is expanded into a chain of micro-steps
+// (one trans state per step); each step is injected back into ID as an FP micro-instruction
+// at F6 and tracked by the FP scoreboard slots until it retires. The chain lives in a
+// 7-entry circular buffer: slot_current_q is the entry in ID, the entry two ahead is in
+// F5, and the one just behind is where EX pushes the next step. The whole block runs on a
+// gated clock that is only enabled while some step is in flight.
+const prim_clk_gate = import("prim_clk_gate.prim_clk_gate")
+const minion_pkg = import("minion_pkg")
+const vpu_pkg = import("vpu_pkg")
+
+// One step of a transcendental chain, packed as trans_state_t:
+// {id[24:20] (vpu_pkg.Trans*State), thread_id[19], rs[18:14], rd[13:9], mask_valid[8], mask[7:0]}.
+type TransState = U25
+type TransStateBus = (id:U5, thread_id:U1, rs:U5, rd:U5, mask_valid:U1, mask:U8)
+
+comptime const Stages = 7
+
+comptime const NullState:TransState = vpu_pkg.TransNullState << 20
+
+comb st_id(s:TransState) -> (id:U5) {
+  id = s#[20..<25]
+}
+comb st_thread(s:TransState) -> (thread:U1) {
+  thread = s#[19]
+}
+comb st_rs(s:TransState) -> (rs:U5) {
+  rs = s#[14..<19]
+}
+comb st_rd(s:TransState) -> (rd:U5) {
+  rd = s#[9..<14]
+}
+comb st_mask(s:TransState) -> (mask:U8) {
+  mask = s#[0..<8]
+}
+
+comb pack_state(id:U5, mask:U8, mask_valid:U1, rd:U5, rs:U5, thread_id:U1) -> (s:TransState) {
+  s = (id << 20) | (thread_id << 19) | (rs << 14) | (rd << 9) | (mask_valid << 8) | mask
+}
+
+// A freshly entered step (mask_valid is always 0).
+comb make_state(id:U5, mask:U8, rd:U5, rs:U5, thread:U1) -> (s:TransState) {
+  s = pack_state(id, mask, mask_valid=0, rd, rs, thread_id=thread)
+}
+
+// Micro-instruction encoding: R-type, funct3 = round-to-nearest-even.
+comptime const TransNop:U32 = 0x13
+comptime const RTypeOpcode:U32 = 0x33
+comptime const TrFma1RcpF7:U7 = 0
+comptime const TrFma2RcpF7:U7 = 1
+comptime const TrFma1RsqrtF7:U7 = 2
+comptime const TrFma2RsqrtF7:U7 = 3
+comptime const TrNrF7:U7 = 4
+comptime const TrFma1LogF7:U7 = 7
+comptime const TrFma2LogF7:U7 = 8
+comptime const TrMulLogF7:U7 = 9
+comptime const TrTrSinF7:U7 = 10
+comptime const TrRrSinF7:U7 = 11
+comptime const TrP1SinF7:U7 = 12
+comptime const TrP2SinF7:U7 = 13
+comptime const TrP3SinF7:U7 = 14
+comptime const TrRrExpF7:U7 = 15
+comptime const TrFma1ExpF7:U7 = 16
+comptime const TrFma2ExpF7:U7 = 17
+
+// The trans instructions all use custom opcode 0x7b with funct3 = 0. Their rs1/rd fields
+// are operands, so the match covers funct12 (or funct7), funct3 and the opcode.
+comptime const OpMask:U32 = 0xfff0707f
+comptime const FrcpPs:U32 = 0x5870007b
+comptime const FrsqPs:U32 = 0x5880007b
+comptime const FlogPs:U32 = 0x5830007b
+comptime const FsinPs:U32 = 0x5860007b
+comptime const FexpPs:U32 = 0x5840007b
+comptime const FixMask:U32 = 0xfe00707f
+comptime const FrcpFixRast:U32 = 0x3000007b
+
+comptime const KindNone:U3 = 0
+comptime const KindRcp:U3 = 1
+comptime const KindRsq:U3 = 2
+comptime const KindLog:U3 = 3
+comptime const KindSin:U3 = 4
+comptime const KindExp:U3 = 5
+comptime const KindRcpFix:U3 = 6
+
+// Which trans instruction, if any, an instruction word is (the patterns are disjoint).
+comb classify(instr:U32) -> (kind:U3) {
+  const op = instr & OpMask
+  kind = if op == FrcpPs { KindRcp }
+    elif op == FrsqPs { KindRsq }
+    elif op == FlogPs { KindLog }
+    elif op == FsinPs { KindSin }
+    elif op == FexpPs { KindExp }
+    elif (instr & FixMask) == FrcpFixRast { KindRcpFix }
+    else { KindNone }
+}
+
+// A step changes state only when it is not a null-to-null move and actually differs.
+comb state_update_en(current:TransState, proposed:TransState) -> (en:Bool) {
+  en = (st_id(proposed) != vpu_pkg.TransNullState or st_id(current) != vpu_pkg.TransNullState) and proposed != current
+}
+
+comb trans_instr(funct7:U7, rd:U5, rs1:U5, rs2:U5) -> (inst:U32) {
+  inst = (funct7 << 25) | (rs2 << 20) | (rs1 << 15) | (rd << 7) | RTypeOpcode
+}
+
+// FP register destination as the scoreboard stores it: {fp = 1, addr, thread_id}.
+comb reg_dest(addr:U5, thread:U1) -> (dest:U7) {
+  dest = 0x40 | (addr << 1) | thread
+}
+
+// One scoreboard slot {rs_valid, rs, rd_valid, rd}, 16 bits; an unused operand reads as 0.
+comb make_slot(rd:U5, rs:U5, thread:U1, use_rd:Bool, use_rs:Bool) -> (slot:U16) {
+  const rs_part:U16 = if use_rs { 0x8000 | (reg_dest(addr=rs, thread) << 8) } else { 0 }
+  const rd_part:U16 = if use_rd { 0x80 | reg_dest(addr=rd, thread) } else { 0 }
+  slot = rs_part | rd_part
+}
+
+// Write-control word {en, mask[8], thread_id, fcsr_en}, 11 bits.
+comb make_wctrl(en:Bool, fcsr_en:Bool, mask:U8, thread:U1) -> (ctrl:U11) {
+  ctrl = (U1(en) << 10) | (mask << 2) | (thread << 1) | U1(fcsr_en)
+}
+
+pub mod vpu_trans<EnableExtraTrans=0>::[timecheck=false](chicken_bit_vputrans_i:U1, clk_aon_i:Clock, ex_core_thread_id_i:U1, ex_instruction_i:minion_pkg.InstSize_T, ex_mask_rf0_i:minion_pkg.VpuLaneNum_T, ex_valid_i:U1, f6_killed_i:U1, f7_killed_i:U1, f8_killed_i:U1, id_core_thread_id_i:U1, id_instruction_i:minion_pkg.InstSize_T, id_valid_i:U1, rst_ni:U1) -> (ex_trans_thread_id_o:U1@[], f6_trans_ctrl_en_o:U1@[], f6_trans_thread_id_o:U1@[], f6_trans_wmask_o:minion_pkg.VpuLaneNum_T@[], f8_trans_ctrl_en_o:U1@[], f8_trans_fcsr_en_o:U1@[], id_insert_en_next_o:U1@[], id_insert_en_o:U1@[], id_insert_inst_next_o:minion_pkg.InstSize_T@[], id_trans_busy_o:U1@[], id_trans_scoreboard_o:U96@[], id_trans_thread_id_o:U1@[], state_o:TransStateBus@[]) {
+  // The sine and rsqrt steps exist only with EnableExtraTrans; without it a chain that
+  // reaches one simply ends (its successor is the null state).
+  comptime const Extra = EnableExtraTrans != 0
+
+  // First step entered when EX sees a trans instruction (null if it is none or disabled).
+  comb enter_state(instr:U32, mask:U8, thread:U1) -> (s:TransState) {
+    const kind = classify(instr)
+    mut first:U5 = vpu_pkg.TransNullState
+    if kind == KindRcp {
+      first = vpu_pkg.TransRcpFma1State
+    } elif kind == KindLog {
+      first = vpu_pkg.TransLogFma1State
+    } elif kind == KindExp {
+      first = vpu_pkg.TransExpRrState
+    } elif Extra and kind == KindRsq {
+      first = vpu_pkg.TransRsqrtFma1State
+    } elif Extra and kind == KindSin {
+      first = vpu_pkg.TransSinTrState
+    }
+    s = NullState
+    if kind == KindRcpFix {
+      // the fixed-point reciprocal takes its source from rs2
+      s = make_state(id=vpu_pkg.TransNrState, mask, rd=instr#[7..<12], rs=instr#[20..<25], thread)
+    } elif first != vpu_pkg.TransNullState {
+      s = make_state(id=first, mask, rd=instr#[7..<12], rs=instr#[15..<20], thread)
+    }
+  }
+
+  // The step that follows s; the null state when the chain ends (or the step is disabled).
+  comb next_state(s:TransState) -> (n:TransState) {
+    mut nxt:U5 = vpu_pkg.TransNullState
+    match st_id(s) {
+      == vpu_pkg.TransRcpFma1State {
+        nxt = vpu_pkg.TransRcpFma2State
+      }
+      == vpu_pkg.TransRcpFma2State {
+        nxt = vpu_pkg.TransDirtyState
+      }
+      == vpu_pkg.TransRsqrtFma1State {
+        if Extra {
+          nxt = vpu_pkg.TransRsqrtFma2State
+        }
+      }
+      == vpu_pkg.TransRsqrtFma2State {
+        if Extra {
+          nxt = vpu_pkg.TransDirtyState
+        }
+      }
+      == vpu_pkg.TransLogFma1State {
+        nxt = vpu_pkg.TransLogFma2State
+      }
+      == vpu_pkg.TransLogFma2State {
+        nxt = vpu_pkg.TransLogMulState
+      }
+      == vpu_pkg.TransLogMulState {
+        nxt = vpu_pkg.TransDirtyState
+      }
+      == vpu_pkg.TransSinTrState {
+        if Extra {
+          nxt = vpu_pkg.TransSinRrState
+        }
+      }
+      == vpu_pkg.TransSinRrState {
+        if Extra {
+          nxt = vpu_pkg.TransSinP1State
+        }
+      }
+      == vpu_pkg.TransSinP1State {
+        if Extra {
+          nxt = vpu_pkg.TransSinP2State
+        }
+      }
+      == vpu_pkg.TransSinP2State {
+        if Extra {
+          nxt = vpu_pkg.TransSinP3State
+        }
+      }
+      == vpu_pkg.TransSinP3State {
+        if Extra {
+          nxt = vpu_pkg.TransDirtyState
+        }
+      }
+      == vpu_pkg.TransExpRrState {
+        nxt = vpu_pkg.TransExpFma1State
+      }
+      == vpu_pkg.TransExpFma1State {
+        nxt = vpu_pkg.TransExpFma2State
+      }
+      == vpu_pkg.TransExpFma2State {
+        nxt = vpu_pkg.TransDirtyState
+      }
+      == vpu_pkg.TransNrState {
+        nxt = vpu_pkg.TransDirtyState
+      }
+      else {
+      }
+    }
+    n = if nxt == vpu_pkg.TransNullState { NullState } else { (nxt << 20) | s#[0..<20] }
+  }
+
+  // Write control of the register-file write that a step performs.
+  comb write_ctrl(s:TransState) -> (ctrl:U11) {
+    const id = st_id(s)
+    ctrl = 0
+    if id == vpu_pkg.TransNullState {
+      ctrl = 0
+    } elif id == vpu_pkg.TransExpRrState or (Extra and id == vpu_pkg.TransSinRrState) {
+      ctrl = make_wctrl(en=true, mask=st_mask(s), thread=st_thread(s), fcsr_en=false)
+    } elif id == vpu_pkg.TransDirtyState {
+      // the final step also raises the FP flags if any lane was active
+      ctrl = make_wctrl(en=true, mask=st_mask(s), thread=st_thread(s), fcsr_en=st_mask(s) != 0)
+    } elif id == vpu_pkg.TransSinRrState {
+      ctrl = 0
+    } else {
+      ctrl = make_wctrl(en=true, mask=0, thread=st_thread(s), fcsr_en=false)
+    }
+  }
+
+  // Scoreboard slot of an in-flight step: which of rs/rd it still holds busy.
+  comb slot_of_state(s:TransState) -> (slot:U16) {
+    const id = st_id(s)
+    mut both = id == vpu_pkg.TransRcpFma1State or id == vpu_pkg.TransRcpFma2State or id == vpu_pkg.TransLogFma1State or id == vpu_pkg.TransLogFma2State or id == vpu_pkg.TransLogMulState or id == vpu_pkg.TransNrState
+    mut dst = id == vpu_pkg.TransExpRrState or id == vpu_pkg.TransExpFma1State or id == vpu_pkg.TransExpFma2State or id == vpu_pkg.TransDirtyState
+    if Extra {
+      both = both or id == vpu_pkg.TransRsqrtFma1State or id == vpu_pkg.TransRsqrtFma2State
+      dst = dst or id == vpu_pkg.TransSinTrState or id == vpu_pkg.TransSinRrState or id == vpu_pkg.TransSinP1State or id == vpu_pkg.TransSinP2State or id == vpu_pkg.TransSinP3State
+    }
+    slot = make_slot(use_rs=both, use_rd=both or dst, rs=st_rs(s), rd=st_rd(s), thread=st_thread(s))
+  }
+
+  // Scoreboard slot of the entry that EX just pushed. While EX is idle (or being killed)
+  // the slot reserves the registers of the instruction in ID instead (instr_slot);
+  // otherwise it follows the chain, where the steps differ from slot_of_state in that
+  // the second reciprocal step and the multiply no longer hold rs.
+  comb slot_of_pushed(instr_slot:U16, killed:Bool, s:TransState) -> (slot:U16) {
+    const id = st_id(s)
+    mut both = id == vpu_pkg.TransRcpFma1State or id == vpu_pkg.TransLogFma1State or id == vpu_pkg.TransLogFma2State
+    mut dst = id == vpu_pkg.TransRcpFma2State or id == vpu_pkg.TransLogMulState or id == vpu_pkg.TransNrState or id == vpu_pkg.TransExpRrState or id == vpu_pkg.TransExpFma1State or id == vpu_pkg.TransExpFma2State
+    if Extra {
+      both = both or id == vpu_pkg.TransRsqrtFma1State
+      dst = dst or id == vpu_pkg.TransRsqrtFma2State or id == vpu_pkg.TransSinTrState or id == vpu_pkg.TransSinRrState or id == vpu_pkg.TransSinP1State or id == vpu_pkg.TransSinP2State or id == vpu_pkg.TransSinP3State
+    }
+    slot = if id == vpu_pkg.TransNullState or id == vpu_pkg.TransDirtyState or killed { instr_slot }
+      else { make_slot(use_rs=both, use_rd=both or dst, rs=st_rs(s), rd=st_rd(s), thread=st_thread(s)) }
+  }
+
+  // Micro-instruction that performs a step (TransNop when the step is disabled).
+  comb step_instr(s:TransState) -> (inst:U32) {
+    const rd = st_rd(s)
+    const rs = st_rs(s)
+    inst = TransNop
+    match st_id(s) {
+      == vpu_pkg.TransRcpFma1State {
+        inst = trans_instr(funct7=TrFma1RcpF7, rd, rs1=0, rs2=rs)
+      }
+      == vpu_pkg.TransRcpFma2State {
+        inst = trans_instr(funct7=TrFma2RcpF7, rd, rs1=0, rs2=rs)
+      }
+      == vpu_pkg.TransRsqrtFma1State {
+        if Extra {
+          inst = trans_instr(funct7=TrFma1RsqrtF7, rd, rs1=0, rs2=rs)
+        }
+      }
+      == vpu_pkg.TransRsqrtFma2State {
+        if Extra {
+          inst = trans_instr(funct7=TrFma2RsqrtF7, rd, rs1=0, rs2=rs)
+        }
+      }
+      == vpu_pkg.TransLogFma1State {
+        inst = trans_instr(funct7=TrFma1LogF7, rd, rs1=0, rs2=rs)
+      }
+      == vpu_pkg.TransLogFma2State {
+        inst = trans_instr(funct7=TrFma2LogF7, rd, rs1=0, rs2=rs)
+      }
+      == vpu_pkg.TransLogMulState {
+        inst = trans_instr(funct7=TrMulLogF7, rd, rs1=0, rs2=rs)
+      }
+      == vpu_pkg.TransSinTrState {
+        if Extra {
+          inst = trans_instr(funct7=TrTrSinF7, rd, rs1=0, rs2=0)
+        }
+      }
+      == vpu_pkg.TransSinRrState {
+        if Extra {
+          inst = trans_instr(funct7=TrRrSinF7, rd, rs1=0, rs2=rd)
+        }
+      }
+      == vpu_pkg.TransSinP1State {
+        if Extra {
+          inst = trans_instr(funct7=TrP1SinF7, rd, rs1=rd, rs2=rd)
+        }
+      }
+      == vpu_pkg.TransSinP2State {
+        if Extra {
+          inst = trans_instr(funct7=TrP2SinF7, rd, rs1=0, rs2=rd)
+        }
+      }
+      == vpu_pkg.TransSinP3State {
+        if Extra {
+          inst = trans_instr(funct7=TrP3SinF7, rd, rs1=0, rs2=rd)
+        }
+      }
+      == vpu_pkg.TransExpRrState {
+        inst = trans_instr(funct7=TrRrExpF7, rd, rs1=0, rs2=rd)
+      }
+      == vpu_pkg.TransExpFma1State {
+        inst = trans_instr(funct7=TrFma1ExpF7, rd, rs1=0, rs2=rd)
+      }
+      == vpu_pkg.TransExpFma2State {
+        inst = trans_instr(funct7=TrFma2ExpF7, rd, rs1=0, rs2=rd)
+      }
+      == vpu_pkg.TransNrState {
+        inst = trans_instr(funct7=TrNrF7, rd, rs1=0, rs2=rs)
+      }
+      else {
+      }
+    }
+  }
+
+  // Slot of the next scoreboard that follows buffer entry own. ex_here marks the entry EX just
+  // pushed (it reserves like slot_of_pushed); wrapped hands the slot the wrap-around entry
+  // last instead, which only slot 0 treats as freshly pushed.
+  comb board_slot(ex_here:Bool, instr_slot:U16, killed:Bool, last:U25, last_pushed:Bool, own:U25, wrapped:Bool) -> (slot:U16) {
+    if wrapped and last_pushed {
+      slot = slot_of_pushed(instr_slot, killed, s=last)
+    } elif wrapped {
+      slot = slot_of_state(last)
+    } elif ex_here {
+      slot = slot_of_pushed(instr_slot, killed, s=own)
+    } else {
+      slot = slot_of_state(own)
+    }
+  }
+
+  // ---- state storage: gated clock, circular step buffer, pipeline registers
+  wire clk_gated:Clock = nil
+  reg slot_current_q:U3:[async=true, clock_pin=clk_gated, negreset=true, reset_pin=rst_ni] = 0
+  // The buffer is one memory per trans_state_t field (the write below also clears it
+  // while rst_ni is low, which the gated clock stays enabled for).
+  reg `states_q.id`:[Stages]U5:[__store_clock_pin=clk_gated, __store_posclk=true, ordering="old"]
+  reg `states_q.thread_id`:[Stages]U1:[__store_clock_pin=clk_gated, __store_posclk=true, ordering="old"]
+  reg `states_q.rs`:[Stages]U5:[__store_clock_pin=clk_gated, __store_posclk=true, ordering="old"]
+  reg `states_q.rd`:[Stages]U5:[__store_clock_pin=clk_gated, __store_posclk=true, ordering="old"]
+  reg `states_q.mask_valid`:[Stages]U1:[__store_clock_pin=clk_gated, __store_posclk=true, ordering="old"]
+  reg `states_q.mask`:[Stages]U8:[__store_clock_pin=clk_gated, __store_posclk=true, ordering="old"]
+  reg ex_state_q:TransState:[async=true, clock_pin=clk_gated, negreset=true, reset_pin=rst_ni] = NullState
+  reg f6_state_q:TransState:[async=true, clock_pin=clk_gated, negreset=true, reset_pin=rst_ni] = NullState
+  // write-control pipes {en, mask, thread_id, fcsr_en} (make_wctrl layout) towards F6 and F8
+  reg f6_write_ctrl_q:U11:[async=true, clock_pin=clk_gated, negreset=true, reset_pin=rst_ni] = 0
+  reg f8_write_ctrl_q:U11:[async=true, clock_pin=clk_gated, negreset=true, reset_pin=rst_ni] = 0
+  reg id_insert_en_o:U1:[async=true, clock_pin=clk_gated, negreset=true, reset_pin=rst_ni] = 0
+  reg id_trans_thread_id_o:U1:[async=true, clock_pin=clk_gated, negreset=true, reset_pin=rst_ni] = 0
+  // the scoreboard slots are on the ungated clock
+  reg id_trans_scoreboard_o:U96:[async=true, clock_pin=clk_aon_i, negreset=true, reset_pin=rst_ni] = 0
+
+  // ---- circular buffer addressing
+  mut slot_next:U3 = 0
+  mut slot_next_next:U3 = 0
+  mut slot_previous:U3 = 0
+  wrap slot_next = if slot_current_q == Stages - 1 { 0 } else { slot_current_q + 1 }
+  wrap slot_next_next = if slot_current_q >= Stages - 2 { slot_current_q - (Stages - 2) } else { slot_current_q + 2 }
+  wrap slot_previous = if slot_current_q == 0 { Stages - 1 } else { slot_current_q - 1 }
+
+  // The steps in ID and F5. slot_current_q only ever holds 0..Stages-1; the out-of-range
+  // index reads as an empty step.
+  mut id_state:TransState = NullState
+  mut f5_state:TransState = NullState
+  if slot_current_q < Stages {
+    id_state = pack_state(id=`states_q.id`[slot_current_q], mask=`states_q.mask`[slot_current_q], mask_valid=`states_q.mask_valid`[slot_current_q], rd=`states_q.rd`[slot_current_q], rs=`states_q.rs`[slot_current_q], thread_id=`states_q.thread_id`[slot_current_q])
+  }
+  if slot_next_next < Stages {
+    f5_state = pack_state(id=`states_q.id`[slot_next_next], mask=`states_q.mask`[slot_next_next], mask_valid=`states_q.mask_valid`[slot_next_next], rd=`states_q.rd`[slot_next_next], rs=`states_q.rs`[slot_next_next], thread_id=`states_q.thread_id`[slot_next_next])
+  }
+  // One pass over the buffer: the registered steps, a working copy that EX's push goes into,
+  // and whether any step is still in flight.
+  mut states_cur:[Stages]U25 = 0
+  mut states_d:[Stages]U25 = 0
+  mut any_used = false
+  mut enable_slot = false
+  for i in 0..<Stages {
+    states_cur[i] = pack_state(id=`states_q.id`[i], mask=`states_q.mask`[i], mask_valid=`states_q.mask_valid`[i], rd=`states_q.rd`[i], rs=`states_q.rs`[i], thread_id=`states_q.thread_id`[i])
+    states_d[i] = states_cur[i]
+    const sid = st_id(states_cur[i])
+    any_used = any_used or (sid != vpu_pkg.TransNullState and sid != vpu_pkg.TransDirtyState)
+    enable_slot = enable_slot or sid != vpu_pkg.TransNullState
+  }
+  state_o.id = st_id(id_state)
+  state_o.thread_id = st_thread(id_state)
+  state_o.rs = st_rs(id_state)
+  state_o.rd = st_rd(id_state)
+  state_o.mask_valid = id_state#[8]
+  state_o.mask = st_mask(id_state)
+  ex_trans_thread_id_o = st_thread(ex_state_q)
+
+  // ---- EX stage: push the next step behind the current slot
+  mut push:TransState = NullState
+  mut busy = any_used
+  if st_id(ex_state_q) == vpu_pkg.TransNullState or st_id(ex_state_q) == vpu_pkg.TransDirtyState or f8_killed_i == 1 {
+    if ex_valid_i == 1 {
+      push = enter_state(instr=ex_instruction_i, mask=ex_mask_rf0_i, thread=ex_core_thread_id_i)
+      busy = busy or st_id(push) != vpu_pkg.TransNullState
+    }
+  } else {
+    push = next_state(ex_state_q)
+  }
+  enable_slot = enable_slot or st_id(push) != vpu_pkg.TransNullState
+  id_trans_busy_o = U1(busy)
+
+  states_d[slot_previous] = push
+
+  const u_clk_gate = prim_clk_gate(clk_i=clk_aon_i, dft_i=(scanmode=0), en_i=U1(enable_slot or chicken_bit_vputrans_i == 1 or rst_ni == 0))
+  clk_gated = u_clk_gate
+
+  for i in 0..<Stages {
+    if rst_ni == 0 {
+      `states_q.id`[i] = 0
+      `states_q.thread_id`[i] = 0
+      `states_q.rs`[i] = 0
+      `states_q.rd`[i] = 0
+      `states_q.mask_valid`[i] = 0
+      `states_q.mask`[i] = 0
+    } elif state_update_en(current=states_cur[i], proposed=states_d[i]) {
+      `states_q.id`[i] = st_id(states_d[i])
+      `states_q.thread_id`[i] = st_thread(states_d[i])
+      `states_q.rs`[i] = st_rs(states_d[i])
+      `states_q.rd`[i] = st_rd(states_d[i])
+      `states_q.mask_valid`[i] = states_d[i]#[8]
+      `states_q.mask`[i] = st_mask(states_d[i])
+    }
+  }
+  if enable_slot {
+    slot_current_q = slot_next
+  }
+  if state_update_en(current=ex_state_q, proposed=id_state) {
+    ex_state_q = id_state
+  }
+  if state_update_en(current=f6_state_q, proposed=f5_state) {
+    f6_state_q = f5_state
+  }
+
+  // ---- F6: inject the next micro-instruction into ID
+  mut insert_en = false
+  mut insert_thread:U1 = 0
+  mut insert_inst:U32 = TransNop
+  if st_id(f6_state_q) != vpu_pkg.TransNullState and st_id(f6_state_q) != vpu_pkg.TransDirtyState and f6_killed_i == 0 {
+    insert_en = true
+    insert_thread = st_thread(f6_state_q)
+    insert_inst = step_instr(f6_state_q)
+  }
+  id_insert_en_next_o = U1(insert_en)
+  id_insert_inst_next_o = insert_inst
+  id_insert_en_o = U1(insert_en)
+  if insert_en {
+    id_trans_thread_id_o = insert_thread
+  }
+
+  // ---- register-file write control (F6 data write, F8 flag write)
+  const f5_wctrl = write_ctrl(f5_state)
+  const f7_wctrl = write_ctrl(id_state)
+  if f5_wctrl#[10] == 1 or f6_write_ctrl_q#[10] == 1 {
+    f6_write_ctrl_q = f5_wctrl
+  }
+  if f7_wctrl#[10] == 1 or f8_write_ctrl_q#[10] == 1 {
+    f8_write_ctrl_q = f7_wctrl
+  }
+  const f6_write = f6_write_ctrl_q#[10] == 1 and f6_killed_i == 0
+  const f8_write = f8_write_ctrl_q#[10] == 1 and f8_killed_i == 0
+  f6_trans_ctrl_en_o = U1(f6_write)
+  f6_trans_wmask_o = if f6_write { f6_write_ctrl_q#[2..<10] } else { 0 }
+  f6_trans_thread_id_o = if f6_write { f6_write_ctrl_q#[1] } else { 0 }
+  f8_trans_ctrl_en_o = U1(f8_write)
+  f8_trans_fcsr_en_o = if f8_write { f8_write_ctrl_q#[0] } else { 0 }
+
+  // ---- FP scoreboard: the slots rotate with the buffer, so slot i takes the entry that the
+  // next cycle's ID slot makes it responsible for (slot 0 also catches the wrap-around).
+  // The six slots are written out instead of looped: the rolled-loop form of this block is
+  // not provable by `lhd lec` (livehd_bugs/L1u11_02), the unrolled one proves against the Verilog.
+  const instr_kind = classify(id_instruction_i)
+  mut instr_slot:U16 = 0
+  if id_valid_i == 1 {
+    const both = instr_kind == KindRcp or instr_kind == KindLog or instr_kind == KindRcpFix or (Extra and (instr_kind == KindRsq or instr_kind == KindSin))
+    instr_slot = make_slot(rd=id_instruction_i#[7..<12], rs=id_instruction_i#[15..<20], thread=id_core_thread_id_i, use_rd=both or instr_kind == KindExp, use_rs=both)
+  }
+  const killed7 = f7_killed_i == 1
+  mut next_board:U96 = 0
+  next_board#[0..+16] = board_slot(ex_here=slot_next == 1, instr_slot, killed=killed7, last=states_d[Stages - 1], last_pushed=true, own=states_d[0], wrapped=slot_next == 0)
+  next_board#[16..+16] = board_slot(ex_here=slot_next == 2, instr_slot, killed=killed7, last=states_d[Stages - 1], last_pushed=false, own=states_d[1], wrapped=slot_next == 1)
+  next_board#[32..+16] = board_slot(ex_here=slot_next == 3, instr_slot, killed=killed7, last=states_d[Stages - 1], last_pushed=false, own=states_d[2], wrapped=slot_next == 2)
+  next_board#[48..+16] = board_slot(ex_here=slot_next == 4, instr_slot, killed=killed7, last=states_d[Stages - 1], last_pushed=false, own=states_d[3], wrapped=slot_next == 3)
+  next_board#[64..+16] = board_slot(ex_here=slot_next == 5, instr_slot, killed=killed7, last=states_d[Stages - 1], last_pushed=false, own=states_d[4], wrapped=slot_next == 4)
+  next_board#[80..+16] = board_slot(ex_here=slot_next == 6, instr_slot, killed=killed7, last=states_d[Stages - 1], last_pushed=false, own=states_d[5], wrapped=slot_next == 5)
+  if id_valid_i == 1 or enable_slot {
+    id_trans_scoreboard_o = next_board
+  }
+}

@@ -343,6 +343,58 @@ CORES = {
         "verilator_flags": "-Dassert(assert_expr)=",
         "verilator_cycles": 6000000,
     },
+    "bitcoin": {
+        # LogikBench's SHA256d proof-of-work miner (bitcoin/README.md) under
+        # the NENGINES-pinning bitcoin_top wrapper (4 lanes, i.e. 4 secworks
+        # sha256_core instances). Both languages are the SAME design, so every
+        # cross-language scenario is real.
+        "pkg": "//bitcoin",
+        # bitcoin/pyrope/ is itself the hand-cleaned, loop-based translation
+        # (the user-facing tree for this core), not a raw emission; there is
+        # no second tree.
+        "pyrope2": False,
+        "top": "bitcoin_top",
+        # One mining lane. NOT bitcoin_compare: a compare bug reaches the top
+        # only when the first double hash completes (~200 cycles), far past
+        # the from-reset LEC window, so lec_bug could never catch it (measured:
+        # TESTED-sampled). The lane's `busy` is visible within a few cycles.
+        "unit": "bitcoin_engine",
+        # The core's accept handshake (`past` claims, reachable the first cycle
+        # after reset; both prove inductively).
+        "seq_unit": "sha256_core",
+        # Reset holds 17 cycles and a lane needs 3 (start -> RUN -> WAIT)
+        # before bug1 is observable: measured, bug1 PROVES at bound 2 and
+        # REFUTES at 3; 4 leaves one cycle of margin (<1 s either way).
+        "verify_bound": 4,
+        # One changed line, no checked-in tests/ copy needed: `busy` drops in
+        # ST_WAIT. Refutes busy_until_found and start_goes_busy, and LEC sees it
+        # on bitcoin_top's `busy` (REFUTED-cex).
+        "generated_variants": True,
+        "variant_bug_find": "  busy         = state == State.Run or state == State.Wait",
+        "variant_bug_replace": "  busy         = state == State.Run",
+        "v_flags": "",
+        "color_algs": ["synth"],
+        # Work item 0 is the real genesis block (golden nonce 0x1dac2b7c ==
+        # 497822588), then a stream of rolled-ntime headers against an easy
+        # target; every cycle folds found/busy/golden_nonce into the checksum.
+        # The Verilator twin also recomputes every golden nonce with a software
+        # SHA256d. 4M cycles (2026-11-07, this box): lhd sim on pyrope/ 2.5 s,
+        # 4349 work items. The sum is identical from lhd sim on pyrope/, lhd sim
+        # on the Verilog and Verilator. Do NOT re-pin from one side's output.
+        "sim_tb": "bitcoin_mine_tb.prp",
+        "sim_cycles": 4000000,
+        "sim_tb_unit": "bitcoin_top",
+        "sim_marker": "bitcoin mine:",
+        "sim_expect": "genesis=497822588 at cycle 412 jobs=4349 longest=5945 nonces=5321654734756578181 of 4000000 sum=5631022400016222101",
+        "sim_top_tb": "",
+        "sim_prog_tb": "",
+        "sim_prog_tb_unit": "",
+        "sim_prog_cycles": "",
+        "lec_trust": "",
+        "verilator_tb": "bitcoin_mine_tb_verilator.cpp",
+        "verilator_flags": "",
+        "verilator_cycles": 4000000,
+    },
     "ibex": {
         "pkg": "//ibex",
         # No maintained pyrope2 tree yet.

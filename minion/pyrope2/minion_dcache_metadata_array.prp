@@ -1,0 +1,50 @@
+// Tag/state metadata of the data cache (verilog: minion_dcache_metadata_array): per way, one
+// register file holding {coh_state, tag} for every set, plus a per-(set, way) valid bit kept in
+// flops so it can be cleared in bulk (cfg_clear_all_i: every set, cfg_clear_low_i: the sets below
+// DcacheSetsScpSplit, i.e. the cache half that is not scratchpad). A line is valid iff its last
+// written coh_state is not Invalid. s1_read_resp_o packs the ways with way 0 in the MSBs.
+const prim_rf_1r1w_preview = import("prim_rf_1r1w_preview.prim_rf_1r1w_preview")
+const minion_dcache_pkg = import("minion_dcache_pkg")
+
+pub mod minion_dcache_metadata_array::[timecheck=false](cfg_clear_all_i:U1, cfg_clear_low_i:U1, clk_i:Clock, rst_ni:U1, s1_read_set_i:minion_dcache_pkg.DcacheSetIdxWidth_T, s1_write_req_i:(set_idx:U4, way_en:U4, data:(coh_state:U2, tag:U33)), s1_write_valid_i:U1, s1_write_valid_prev_i:U1) -> (s1_read_resp_o:U140@[], s1_read_resp_valid_o:minion_dcache_pkg.DcacheWays_T@[]) {
+  comptime const WAYS = minion_dcache_pkg.DcacheWays
+  comptime const SETS = minion_dcache_pkg.DcacheSets
+  comptime const META_W = 35 // coh_state (2) + tag (33)
+
+  reg s1_valid_q:[SETS]minion_dcache_pkg.DcacheWays_T:[clock_pin=clk_i, negreset=true, ordering="old", reset_pin=rst_ni] = 0
+
+  // valid bits as one flat word, bit (set * WAYS + way)
+  mut s1_valid_d:U64 = s1_valid_q#[0..<64]
+  if cfg_clear_all_i == 1 {
+    s1_valid_d = 0
+  } elif cfg_clear_low_i == 1 {
+    for set in 0..<minion_dcache_pkg.DcacheSetsScpSplit {
+      s1_valid_d#[set*WAYS..<(set*WAYS + WAYS)] = 0
+    }
+  } elif s1_write_valid_i == 1 {
+    for way in 0..<WAYS {
+      if s1_write_req_i.way_en#[way] == 1 {
+        const bit = s1_write_req_i.set_idx*WAYS + way
+        s1_valid_d#[bit..<(bit + 1)] = U1(s1_write_req_i.data.coh_state != minion_dcache_pkg.StateInvalid)
+      }
+    }
+  }
+  if cfg_clear_all_i == 1 or cfg_clear_low_i == 1 or s1_write_valid_i == 1 {
+    s1_valid_q#[0..<64] = s1_valid_d
+  }
+
+  // One register file per way. The four instances are spelled out (not a loop) because the
+  // instance names gen_tag_way_<way>_u_mem_array are what LEC uses to pair their state with the
+  // Verilog generate block, and a loop cannot mint those names.
+  const s1_write_data:U35 = (s1_write_req_i.data.tag, s1_write_req_i.data.coh_state)#[..]
+  const gen_tag_way_0_u_mem_array = prim_rf_1r1w_preview<Depth=SETS, Width=META_W>(preview_clk_i=clk_i, rf_clk_i=clk_i, wr_data_en_1p_next_i=s1_write_valid_prev_i, wr_en_i=U1(s1_write_valid_i == 1 and s1_write_req_i.way_en#[0] == 1), wr_addr_i=s1_write_req_i.set_idx, wr_data_i=s1_write_data, rd_addr_i=s1_read_set_i)
+  const gen_tag_way_1_u_mem_array = prim_rf_1r1w_preview<Depth=SETS, Width=META_W>(preview_clk_i=clk_i, rf_clk_i=clk_i, wr_data_en_1p_next_i=s1_write_valid_prev_i, wr_en_i=U1(s1_write_valid_i == 1 and s1_write_req_i.way_en#[1] == 1), wr_addr_i=s1_write_req_i.set_idx, wr_data_i=s1_write_data, rd_addr_i=s1_read_set_i)
+  const gen_tag_way_2_u_mem_array = prim_rf_1r1w_preview<Depth=SETS, Width=META_W>(preview_clk_i=clk_i, rf_clk_i=clk_i, wr_data_en_1p_next_i=s1_write_valid_prev_i, wr_en_i=U1(s1_write_valid_i == 1 and s1_write_req_i.way_en#[2] == 1), wr_addr_i=s1_write_req_i.set_idx, wr_data_i=s1_write_data, rd_addr_i=s1_read_set_i)
+  const gen_tag_way_3_u_mem_array = prim_rf_1r1w_preview<Depth=SETS, Width=META_W>(preview_clk_i=clk_i, rf_clk_i=clk_i, wr_data_en_1p_next_i=s1_write_valid_prev_i, wr_en_i=U1(s1_write_valid_i == 1 and s1_write_req_i.way_en#[3] == 1), wr_addr_i=s1_write_req_i.set_idx, wr_data_i=s1_write_data, rd_addr_i=s1_read_set_i)
+  // way 0 lands in the most significant slot of the packed response
+  const s1_read_resp:U140 = (gen_tag_way_3_u_mem_array, gen_tag_way_2_u_mem_array, gen_tag_way_1_u_mem_array, gen_tag_way_0_u_mem_array)#[..]
+  s1_read_resp_o = s1_read_resp
+  for way in 0..<WAYS {
+    s1_read_resp_valid_o#[way] = s1_valid_q[s1_read_set_i]#[way]
+  }
+}

@@ -1,0 +1,391 @@
+const minion_dcache_pkg = import("minion_dcache_pkg")
+const minion_pkg = import("minion_pkg")
+
+// Handler FSM states (minion_dcache_pkg encodings).
+comptime const MhInvalid:U4 = minion_dcache_pkg.MhInvalid
+comptime const MhAcquireWb:U4 = minion_dcache_pkg.MhAcquireWb
+comptime const MhFillReq:U4 = minion_dcache_pkg.MhFillReq
+comptime const MhFillResp:U4 = minion_dcache_pkg.MhFillResp
+comptime const MhMetaWriteReq:U4 = minion_dcache_pkg.MhMetaWriteReq
+comptime const MhMetaHazard:U4 = minion_dcache_pkg.MhMetaHazard
+comptime const MhUcWaitIdle:U4 = minion_dcache_pkg.MhUcWaitIdle
+comptime const MhUcLoadReq:U4 = minion_dcache_pkg.MhUcLoadReq
+comptime const MhUcLoadResp:U4 = minion_dcache_pkg.MhUcLoadResp
+comptime const MhUcStoreWait:U4 = minion_dcache_pkg.MhUcStoreWait
+comptime const MhUcStoreReq:U4 = minion_dcache_pkg.MhUcStoreReq
+comptime const MhUcStoreAck:U4 = minion_dcache_pkg.MhUcStoreAck
+comptime const MhFillClean:U4 = minion_dcache_pkg.MhFillClean
+
+// inflight_misses_i packs one 9-bit {valid, way_en, set} entry per handler;
+// entry 0 sits in the HIGH bits, which is how the parent lays the bus out.
+comptime const MissEntryBits = 9
+
+// Atomic read-modify-write commands.
+comb cmd_is_amo(cmd:U5) -> (r:Bool) {
+  r = cmd in (minion_dcache_pkg.DcCmdXaSwap, minion_dcache_pkg.DcCmdXaAdd, minion_dcache_pkg.DcCmdXaXor, minion_dcache_pkg.DcCmdXaOr, minion_dcache_pkg.DcCmdXaAnd, minion_dcache_pkg.DcCmdXaMin, minion_dcache_pkg.DcCmdXaMax, minion_dcache_pkg.DcCmdXaMinu, minion_dcache_pkg.DcCmdXaMaxu, minion_dcache_pkg.DcCmdXaCmpswp, minion_dcache_pkg.DcCmdXaMinPs, minion_dcache_pkg.DcCmdXaMaxPs)
+}
+
+comb cmd_is_write(cmd:U5) -> (r:Bool) {
+  r = cmd_is_amo(cmd) or cmd in (minion_dcache_pkg.DcCmdXwr, minion_dcache_pkg.DcCmdXsc, minion_dcache_pkg.DcCmdSc32, minion_dcache_pkg.DcCmdXwrb)
+}
+
+// Commands that need the line exclusive (writes plus write prefetch / load-reserved).
+comb cmd_is_write_intent(cmd:U5) -> (r:Bool) {
+  r = cmd_is_write(cmd) or cmd in (minion_dcache_pkg.DcCmdPfw, minion_dcache_pkg.DcCmdXlr)
+}
+
+// Access class {is_write, is_write_intent}: a higher class needs a stronger line.
+comb cmd_to_type(cmd:U5) -> (t:U2) {
+  t = (U1(cmd_is_write_intent(cmd)), U1(cmd_is_write(cmd)))#[..]
+}
+
+// ET-link atomic opcode of an atomic command (anything unknown acts as swap).
+comb amo_opcode(cmd:U5) -> (op:U4) {
+  op = if cmd == minion_dcache_pkg.DcCmdXaAdd { minion_dcache_pkg.EtLinkAmoAdd }
+    elif cmd == minion_dcache_pkg.DcCmdXaXor { minion_dcache_pkg.EtLinkAmoXor }
+    elif cmd == minion_dcache_pkg.DcCmdXaAnd { minion_dcache_pkg.EtLinkAmoAnd }
+    elif cmd == minion_dcache_pkg.DcCmdXaOr { minion_dcache_pkg.EtLinkAmoOr }
+    elif cmd == minion_dcache_pkg.DcCmdXaMin { minion_dcache_pkg.EtLinkAmoMin }
+    elif cmd == minion_dcache_pkg.DcCmdXaMax { minion_dcache_pkg.EtLinkAmoMax }
+    elif cmd == minion_dcache_pkg.DcCmdXaMinu { minion_dcache_pkg.EtLinkAmoMinU }
+    elif cmd == minion_dcache_pkg.DcCmdXaMaxu { minion_dcache_pkg.EtLinkAmoMaxU }
+    elif cmd == minion_dcache_pkg.DcCmdXaMinPs { minion_dcache_pkg.EtLinkAmoMinPs }
+    elif cmd == minion_dcache_pkg.DcCmdXaMaxPs { minion_dcache_pkg.EtLinkAmoMaxPs }
+    elif cmd == minion_dcache_pkg.DcCmdXaCmpswp { minion_dcache_pkg.EtLinkAmoCmpSwap }
+    else { minion_dcache_pkg.EtLinkAmoSwap }
+}
+
+// ET-link atomic sub-opcode: {mem_global, 64-bit operand, opcode}.
+comb amo_config(cmd:U5, mem_g:U1, typ:U4) -> (cfg:U7) {
+  const wide = typ == minion_dcache_pkg.DcTypeD
+  cfg = amo_opcode(cmd) | (U1(wide) << 5) | (mem_g << 6)
+}
+
+// ET-link transfer size of an uncached access.
+comb uc_size(typ:U4) -> (size:U3) {
+  size = match typ {
+    in (minion_dcache_pkg.DcTypeB, minion_dcache_pkg.DcTypeBu, minion_dcache_pkg.DcTypePsGs8) { minion_dcache_pkg.EtLinkByte }
+    in (minion_dcache_pkg.DcTypeH, minion_dcache_pkg.DcTypeHu, minion_dcache_pkg.DcTypePsGs16) { minion_dcache_pkg.EtLinkHWord }
+    in (minion_dcache_pkg.DcTypeW, minion_dcache_pkg.DcTypeWu, minion_dcache_pkg.DcTypePsBr, minion_dcache_pkg.DcTypePsGs32) { minion_dcache_pkg.EtLinkWord }
+    == minion_dcache_pkg.DcTypeD { minion_dcache_pkg.EtLinkDWord }
+    == minion_dcache_pkg.DcTypePs { minion_dcache_pkg.EtLinkHLine }
+    else { minion_dcache_pkg.EtLinkWord }
+  }
+}
+
+// Quad-word enable: one quad word, or two for a packed-single access, at qwaddr.
+comb typ2qwen(qwaddr:U2, typ:U4) -> (qwen:U4) {
+  const lanes:U4 = if typ == minion_dcache_pkg.DcTypePs { 3 } else { 1 }
+  qwen = (lanes << qwaddr)#[0..<4]
+}
+
+// Encoded way of a one-hot way mask. Way 0 encodes as 0; the higher ways are
+// OR-ed in, so a multi-hot mask encodes as the OR of its way numbers.
+comb way_encode(ways:U4) -> (way:U2) {
+  mut code:U2 = 0
+  for i in 1..<4 {
+    if ways#[i] != 0 {
+      code = code | i
+    }
+  }
+  way = code
+}
+
+// Dcache miss handler. One instance owns one miss slot (Id selects the slot,
+// two slots exist): it takes a request from the cache pipeline, then walks the
+// refill / uncached-load / uncached-store sequence through the L2 miss and
+// evict request channels, and finally asks for the metadata write. Id picks
+// the L2 request ids, the thread that may start a non-cacheable request, and
+// which entry of inflight_misses_i is the OTHER handler's (a request that hits
+// the same set and way as the other handler's miss must wait).
+pub mod minion_dcache_miss_handler<Id=0>(clk_i:Clock, inflight_misses_i:U18, inflight_reduce_i:U1, l2_evict_ready_i:U1, l2_miss_ready_i:U1, l2_resp_data_i:(id:U8, dest:U1, wdata:U1, opcode:U2, data:U256, size:U3, qwen:U4), l2_resp_slot_avail_i:U1, l2_resp_valid_i:U1, meta_write_ready_i:U1, neigh_min_id_i:U3, req_info_i:(addr:U40, set:U4, cmd:U5, typ:U4, buf_id:U3, way_en:U4, tag_match:U1, old_meta:(coh_state:U2, tag:U33), cacheable:U1, thread_id:U1, mem_g:U1, is_amo:U1, is_msg:U1, is_bypass:U1), req_pri_val_i:U1, req_sec_val_i:U1, rst_ni:U1, writeback_done_i:U1, writeback_ready_i:U1) -> (ba_is_amo_o:U1@[0], ba_rptr_o:minion_dcache_pkg.DcacheBufferIdxWidth_T@[0], bus_err_addr_o:U40@[0], bus_err_o:minion_pkg.NrThreads_T@[0], can_accept_uc_o:U1@[0], csr_debug_signals_o:U4@[0], evict_match_o:U1@[0], fence_rdy_o:minion_pkg.NrThreads_T@[0], fill_bus_error_o:U1@[0], force_ba_rptr_next_o:U1@[0], force_ba_rptr_qual_o:U1@[0], going_to_uc_store_o:U1@[0], have_l2_to_ba_resp_o:U1@[0], idle_o:U1@[0], l2_evict_req_o:(id:U5, source:U1, wdata:U1, opcode:U5, address:U40, data:U256, size:U3, qwen:U4, subopcode:U7)@[0], l2_evict_valid_o:U1@[], l2_miss_req_o:(id:U5, source:U1, wdata:U1, opcode:U5, address:U40, data:U20, size:U3, qwen:U4, subopcode:U7)@[0], l2_miss_valid_o:U1@[], l2_resp_stall_o:U1@[0], meta_write_clear_slock_o:U1@[0], meta_write_req_o:(set_idx:U4, way_en:U4, data:(coh_state:U2, tag:U33))@[0], meta_write_valid_next_o:U1@[0], meta_write_valid_o:U1@[0], metaw_rdy_o:U1@[0], probe_rdy_o:U1@[0], ready_o:U1@[0], refill_addr_o:minion_dcache_pkg.DcacheLramAddrWidth_T@[0], refill_way_o:minion_dcache_pkg.DcacheWayIdxWidth_T@[0], req_pri_rdy_o:U1@[0], req_sec_rdy_o:U1@[0], set_o:minion_dcache_pkg.DcacheSetIdxWidth_T@[0], sm_data_debug_signals_o:minion_dcache_pkg.DcacheDbgSmDataBits_T@[0], sm_filter_debug_signals_o:minion_dcache_pkg.DcacheDbgSmFilterBits_T@[0], sm_match_debug_signals_o:minion_dcache_pkg.DcacheDbgSmMatchBits_T@[0], tag_match_o:U1@[0], uc_load_bus_error_o:U1@[0], wait_l2_to_ba_resp_o:U1@[0], writeback_req_o:(tag:U33, set:U4, way_en:U4, is_tbox:U1, mem_idx:U1, addr_low:U7)@[0], writeback_valid_o:U1@[0]) {
+  // L2 request ids of this slot: refill, uncached load, uncached store.
+  comptime const FILL_ID:U5 = minion_dcache_pkg.EtLinkCoreMissIdMissHandler0 + (Id & 1)
+  comptime const UC_LD_ID:U5 = minion_dcache_pkg.EtLinkCoreMissIdMissHandlerUcLd0 + (Id & 1)
+  comptime const UC_ST_ID:U5 = minion_dcache_pkg.EtLinkCoreMissIdMissHandlerUcSt0 + (Id & 1)
+
+  // Request being served, packed like req_info_i (address in the top bits); no reset,
+  // only meaningful while the FSM is not idle.
+  reg req_q:U102 = nil
+  reg state_q:U4:[negreset=true, reset_pin=rst_ni] = MhInvalid
+  reg new_coh_q:U2 = nil
+  reg writeback_pending_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg metawrite_pending_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg clear_soft_lock_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg state_was_fill_resp_q:Bool = nil
+  // Beat of the refill burst (the line comes back in two beats).
+  reg refill_address_inc_q:U1:[negreset=true, reset_pin=rst_ni] = 0
+  reg l2_evict_valid_o:U1 = nil
+  reg l2_miss_valid_o:U1 = nil
+
+  // Fields of the held request.
+  const q_addr:U40 = req_q#[62..<102]
+  const q_set:U4 = req_q#[58..<62]
+  const q_cmd:U5 = req_q#[53..<58]
+  const q_typ:U4 = req_q#[49..<53]
+  const q_buf_id:U3 = req_q#[46..<49]
+  const q_way_en:U4 = req_q#[42..<46]
+  const q_old_tag:U33 = req_q#[6..<39]
+  const q_thread_id:U1 = req_q#[4..<5]
+  const q_mem_g:U1 = req_q#[3..<4]
+  const q_is_amo:U1 = req_q#[2..<3]
+  const q_is_msg:U1 = req_q#[1..<2]
+
+  const pri_val = req_pri_val_i == 1
+  const sec_val = req_sec_val_i == 1
+  const cacheable = req_info_i.cacheable == 1
+  const is_msg = req_info_i.is_msg == 1
+  const is_bypass = req_info_i.is_bypass == 1
+  const meta_ready = meta_write_ready_i == 1
+  const wb_ready = writeback_ready_i == 1
+  const idle = state_q == MhInvalid
+
+  // L2 response decode.
+  const resp_valid = l2_resp_valid_i == 1
+  const resp_id = l2_resp_data_i.id#[0..<5]
+  const resp_is_fill = resp_id == FILL_ID
+  const resp_is_uc = resp_id == UC_ST_ID or resp_id == UC_LD_ID
+  const resp_opcode = l2_resp_data_i.opcode
+  const refill_address_inc_en = resp_valid and resp_is_fill and resp_opcode == minion_pkg.EtLinkRspAckData
+  const refill_inc_is_last = refill_address_inc_q == 1
+  const refill_done = refill_address_inc_en and refill_inc_is_last
+  const response_err_fill = resp_valid and resp_is_fill and resp_opcode == minion_pkg.EtLinkRspErr
+  const response_err_uc = resp_valid and resp_is_uc and resp_opcode == minion_pkg.EtLinkRspErr
+  const response_err = response_err_fill or response_err_uc
+  const uc_store_ack = resp_valid and resp_is_uc and (resp_opcode == minion_pkg.EtLinkRspAck or resp_opcode == minion_pkg.EtLinkRspErr)
+
+  // Identity of the held request against the incoming one.
+  const tag:U33 = q_addr#[7..<40]
+  const set_match = q_set == req_info_i.set and (not idle or state_was_fill_resp_q)
+  const tag_match = tag == req_info_i.addr#[7..<40] and set_match and not is_msg and not is_bypass and cacheable
+  const evict_match = not idle and q_set == req_info_i.set and q_way_en == req_info_i.way_en and not is_msg and not is_bypass and cacheable
+
+  // Coherence state granted to the requester.
+  const coh_on_grant:U2 = if cmd_to_type(cmd=req_info_i.cmd) == minion_dcache_pkg.DcacheAccessRd {
+    minion_dcache_pkg.StateExclusive
+  } else {
+    minion_dcache_pkg.StateModified
+  }
+
+  // A secondary request merges into the held one unless it needs a stronger line.
+  const needs_second_acquire = cmd_is_write_intent(cmd=req_info_i.cmd) and not cmd_is_write_intent(cmd=q_cmd)
+  const sec_rdy = tag_match and cacheable and not is_bypass and not needs_second_acquire
+
+  // Another handler's in-flight miss on the same set and way blocks a cacheable request.
+  mut set_way_conf = false
+  for i in 0..<minion_dcache_pkg.DcacheMhFileSize {
+    if i != Id {
+      const miss = inflight_misses_i#[(minion_dcache_pkg.DcacheMhFileSize - 1 - i)*MissEntryBits..+MissEntryBits]
+      if miss#[8] == 1 and miss#[0..<4] == req_info_i.set and miss#[4..<8] == req_info_i.way_en {
+        set_way_conf = true
+      }
+    }
+  }
+  const writeback_alloc_nack = not (req_info_i.tag_match == 1) and cacheable and req_info_i.old_meta.coh_state == minion_dcache_pkg.StateModified and not wb_ready and not is_bypass
+  const req_pri_rdy = idle and not writeback_alloc_nack and not (set_way_conf and not is_msg and cacheable) and (req_info_i.thread_id == (Id & 1) or cacheable)
+
+  // Request register: a primary request replaces it, a secondary one only
+  // upgrades its command.
+  const req_info_bits:U102 = (req_info_i.is_bypass, req_info_i.is_msg, req_info_i.is_amo, req_info_i.mem_g, req_info_i.thread_id, req_info_i.cacheable, req_info_i.old_meta.tag, req_info_i.old_meta.coh_state, req_info_i.tag_match, req_info_i.way_en, req_info_i.buf_id, req_info_i.typ, req_info_i.cmd, req_info_i.set, req_info_i.addr)#[..]
+  mut req_d:U102 = req_q
+  mut req_up = false
+  if pri_val and req_pri_rdy {
+    req_d = req_info_bits
+    req_up = true
+  } elif sec_val and sec_rdy and cmd_to_type(cmd=q_cmd) < cmd_to_type(cmd=req_info_i.cmd) {
+    req_d#[53..<58] = req_info_i.cmd
+    req_up = true
+  }
+
+  const meta_write_valid = metawrite_pending_q and not writeback_pending_q
+  const writeback_valid = state_q == MhAcquireWb
+  const meta_hand_off = meta_write_valid and meta_ready
+
+  // Next-state logic. The steps run in order, a later step overrides an earlier one.
+  mut state_d = state_q
+  mut new_coh_d = new_coh_q
+  mut writeback_pending_d = writeback_pending_q
+  mut metawrite_pending_d = metawrite_pending_q
+  mut clear_soft_lock_d = clear_soft_lock_q
+
+  if pri_val and req_pri_rdy {
+    if req_info_i.tag_match == 1 {
+      if cmd_is_write(cmd=req_info_i.cmd) and req_info_i.old_meta.coh_state == minion_dcache_pkg.StateExclusive {
+        new_coh_d = minion_dcache_pkg.StateModified
+        state_d = MhMetaWriteReq
+      } else {
+        new_coh_d = coh_on_grant
+        state_d = MhFillReq
+      }
+      metawrite_pending_d = true
+    } elif not cacheable {
+      state_d = MhUcWaitIdle
+    } else {
+      new_coh_d = coh_on_grant
+      clear_soft_lock_d = true
+      if req_info_i.old_meta.coh_state == minion_dcache_pkg.StateModified {
+        state_d = MhAcquireWb
+      } else {
+        state_d = MhFillReq
+        metawrite_pending_d = true
+      }
+    }
+  }
+
+  if writeback_valid {
+    if wb_ready {
+      state_d = MhFillReq
+      writeback_pending_d = true
+      metawrite_pending_d = true
+    }
+  }
+  if state_q == MhFillReq and l2_miss_ready_i == 1 {
+    state_d = MhFillResp
+  }
+  if state_q == MhFillResp and refill_done {
+    state_d = if not metawrite_pending_q { MhInvalid } elif meta_hand_off { MhMetaHazard } else { MhMetaWriteReq }
+  }
+  if state_q == MhFillResp and response_err_fill {
+    if meta_hand_off {
+      state_d = MhFillClean
+    } else {
+      metawrite_pending_d = true
+      new_coh_d = minion_dcache_pkg.StateInvalid
+      state_d = MhMetaWriteReq
+    }
+  }
+  if state_q == MhFillClean {
+    metawrite_pending_d = true
+    new_coh_d = minion_dcache_pkg.StateInvalid
+    state_d = MhMetaWriteReq
+  }
+  if state_q == MhMetaWriteReq and meta_ready {
+    state_d = MhMetaHazard
+  }
+  if state_q == MhMetaHazard {
+    state_d = MhInvalid
+  }
+
+  if state_q == MhUcWaitIdle {
+    state_d = if cmd_is_write(cmd=q_cmd) { MhUcStoreWait } else { MhUcLoadReq }
+  }
+  if state_q == MhUcLoadReq and l2_miss_ready_i == 1 {
+    state_d = MhUcLoadResp
+  }
+  if state_q == MhUcLoadResp and resp_valid and resp_is_uc and (resp_opcode == minion_pkg.EtLinkRspAckData or resp_opcode == minion_pkg.EtLinkRspErr) {
+    state_d = MhInvalid
+  }
+  if state_q == MhUcStoreWait and inflight_reduce_i == 0 {
+    state_d = MhUcStoreReq
+  }
+  if state_q == MhUcStoreReq and l2_evict_ready_i == 1 {
+    if q_is_amo == 1 {
+      state_d = MhUcLoadResp
+    } else {
+      state_d = if q_is_msg == 1 { MhInvalid } else { MhUcStoreAck }
+    }
+  }
+  if state_q == MhUcStoreAck and uc_store_ack {
+    state_d = MhInvalid
+  }
+
+  if writeback_pending_q and writeback_done_i == 1 {
+    writeback_pending_d = false
+  }
+  if metawrite_pending_q and meta_ready {
+    metawrite_pending_d = false
+    clear_soft_lock_d = false
+  }
+
+  // L2 evict channel: the uncached store / atomic / message of the held request.
+  const qwaddr:U2 = if q_is_amo == 1 or q_is_msg == 1 { 0 } else { q_addr#[4..<6] }
+  l2_evict_req_o = (id=UC_ST_ID, source=0, wdata=1, opcode=if q_is_amo == 1 { minion_dcache_pkg.EtLinkReqAtomic }
+      elif q_is_msg == 1 { minion_dcache_pkg.EtLinkReqMsgSendData }
+      else { minion_dcache_pkg.EtLinkReqWrite }, address=q_addr, data=0, size=uc_size(typ=q_typ), qwen=typ2qwen(qwaddr, typ=q_typ), subopcode=if q_is_amo == 1 {
+      amo_config(cmd=q_cmd, mem_g=q_mem_g, typ=q_typ)
+    } elif q_is_msg == 1 {
+      0
+    } else {
+      q_mem_g
+    })
+
+  // L2 miss channel: line refill, or an uncached load. data names the
+  // cooperating neighbour of this shire (one-hot over neigh_min_id_i).
+  const filling = state_q == MhFillReq
+  const neigh_mask:U8 = 1 << neigh_min_id_i
+  l2_miss_req_o = (id=if filling { FILL_ID } else { UC_LD_ID }, source=0, wdata=0, opcode=minion_dcache_pkg.EtLinkReqRead, address=if filling {
+      q_addr#[6..<40] << 6
+    } else {
+      q_addr
+    }, data=neigh_mask, size=if filling { minion_dcache_pkg.EtLinkLine } else { uc_size(typ=q_typ) }, qwen=0, subopcode=if filling {
+      0
+    } else {
+      q_mem_g
+    })
+
+  meta_write_req_o = (data=(coh_state=new_coh_q, tag=tag), set_idx=q_set, way_en=q_way_en)
+  writeback_req_o = (addr_low=0, is_tbox=0, mem_idx=0, set=q_set, tag=q_old_tag, way_en=q_way_en)
+
+  req_pri_rdy_o = U1(req_pri_rdy)
+  req_sec_rdy_o = U1(sec_rdy)
+  can_accept_uc_o = U1(req_pri_rdy and not cacheable)
+  tag_match_o = U1(tag_match)
+  evict_match_o = U1(evict_match)
+  set_o = q_set
+  going_to_uc_store_o = U1(state_q == MhUcStoreWait or state_q == MhUcStoreReq)
+  idle_o = U1(idle)
+  wait_l2_to_ba_resp_o = U1(state_q == MhUcLoadResp)
+  have_l2_to_ba_resp_o = U1(state_q == MhUcLoadResp and resp_valid and resp_is_uc)
+  l2_resp_stall_o = U1(metawrite_pending_q or (writeback_pending_q and writeback_done_i == 0))
+  refill_way_o = way_encode(ways=q_way_en)
+  refill_addr_o = (q_set << 6) | (refill_address_inc_q << 5)
+  force_ba_rptr_next_o = U1(state_d == MhUcStoreReq)
+  force_ba_rptr_qual_o = U1(state_q == MhUcStoreReq and l2_evict_ready_i == 1)
+  ba_rptr_o = q_buf_id
+  ba_is_amo_o = q_is_amo
+  meta_write_valid_next_o = U1(metawrite_pending_d and not writeback_pending_d)
+  meta_write_valid_o = U1(meta_write_valid)
+  meta_write_clear_slock_o = U1(clear_soft_lock_q)
+  writeback_valid_o = U1(writeback_valid)
+  const bus_err:U2 = (U1(response_err and q_thread_id == 0), U1(response_err and q_thread_id == 1))#[..]
+  bus_err_o = bus_err
+  bus_err_addr_o = q_addr
+  fill_bus_error_o = U1(response_err_fill and state_q == MhFillResp)
+  uc_load_bus_error_o = U1(response_err_uc and state_q == MhUcLoadResp)
+  probe_rdy_o = U1(not set_match or idle)
+  for i in 0..<minion_pkg.NrThreads {
+    fence_rdy_o#[i] = U1(idle or q_thread_id != i)
+  }
+  metaw_rdy_o = U1(not metawrite_pending_q and state_q != MhAcquireWb and state_q != MhFillReq and state_q != MhFillResp and state_q != MhFillClean)
+  ready_o = U1(idle or state_q == MhMetaHazard or (state_q == MhFillResp and refill_inc_is_last and l2_resp_slot_avail_i == 1))
+
+  // Debug taps: current state, a filter group and the packed handler state.
+  csr_debug_signals_o = state_q
+  sm_match_debug_signals_o = 0
+  const sm_filter:U14 = (state_q, U1(req_up), req_pri_val_i, req_sec_val_i, can_accept_uc_o, evict_match_o, tag_match_o, bus_err, writeback_valid_o, meta_write_valid_o)#[..]
+  sm_filter_debug_signals_o = sm_filter
+  // Group 0: held request (packed, address in the top bits), then new coherence state and pending flags.
+  const sm_data_group0:U106 = (req_q, new_coh_q, U1(metawrite_pending_q), U1(writeback_pending_q))#[..]
+  // Group 1: request handshakes, both handlers' in-flight misses, then the packed
+  // metadata-write request and writeback request (zero is_tbox, mem_idx, addr_low).
+  const meta_write_bits:U43 = (tag, new_coh_q, q_way_en, q_set)#[..]
+  const wb_bits:U50 = (q_way_en, q_set, q_old_tag)#[..] << 9
+  const sm_data_group1:U120 = (wb_bits, meta_write_bits, going_to_uc_store_o, inflight_reduce_i, inflight_misses_i#[9..<18], inflight_misses_i#[0..<9], evict_match_o, tag_match_o, can_accept_uc_o, req_sec_rdy_o, req_sec_val_i, req_pri_rdy_o, req_pri_val_i)#[..]
+  sm_data_debug_signals_o = sm_data_group0 | (sm_data_group1 << 128)
+
+  // Register updates (after every read of the current state).
+  if req_up {
+    req_q = req_d
+  }
+  state_q = state_d
+  new_coh_q = new_coh_d
+  writeback_pending_q = writeback_pending_d
+  metawrite_pending_q = metawrite_pending_d
+  clear_soft_lock_q = clear_soft_lock_d
+  state_was_fill_resp_q = state_q == MhFillResp
+  if refill_address_inc_en {
+    wrap refill_address_inc_q = if refill_inc_is_last or idle { 0 } else { refill_address_inc_q + 1 }
+  }
+  l2_evict_valid_o = U1(state_d == MhUcStoreReq)
+  l2_miss_valid_o = U1(state_d == MhFillReq or state_d == MhUcLoadReq)
+}

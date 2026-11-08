@@ -1,0 +1,103 @@
+// Debug APB slave of the minion core (verilog: minion_debug_apb_slv).
+// Two-stage APB access to the debug registers: stage 0 (setup phase) decodes the
+// register and thread from the address and registers the result; stage 1 (access
+// phase) answers, commits writes to the per-thread ddata0 registers and drives the
+// frontend program-buffer write strobes. A write that executes (abscmd, ax*
+// registers) holds pready until its execute strobe has gone through s1/s2.
+const minion_pkg = import("minion_pkg")
+
+pub mod minion_debug_apb_slv::[timecheck=false](apb_paddr_i:minion_pkg.MinRegApbAddrWidth_T, apb_penable_i:U1, apb_psel_i:U1, apb_pwdata_i:minion_pkg.MinionDebugApbDataWidth_T, apb_pwrite_i:U1, clk_i:Clock, csr_wdata_i:U64, in_debug_mode_i:minion_pkg.NrThreads_T, rst_ni:U1, update_ddata0_i:minion_pkg.NrThreads_T) -> (apb_prdata_o:minion_pkg.MinionDebugApbDataWidth_T@[], apb_pready_o:U1@[], apb_pslverr_o:U1@[], ex_program_buffer_o:minion_pkg.NrThreads_T@[], ffb_en_o:minion_pkg.MinionDebugFfbWords_T@[], ffb_thread_sel_o:U1@[], ffb_wdata_o:minion_pkg.MinionDebugApbDataWidth_T@[], read_ddata0_o:U128@[]) {
+  reg s1_execute_q:Bool:[clock_pin=clk_i] = nil
+  reg s2_execute_q:Bool:[clock_pin=clk_i] = nil
+  reg s1_addr_valid_q:Bool:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  reg s1_pp_valid_q:Bool:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  reg s1_rdata_q:U32:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg s1_reg_en_q:U10:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0 // one write-enable bit per minion_debug_* register
+  reg reg_ddata0_q:[minion_pkg.NrThreads]U64:[clock_pin=clk_i, ordering="old"] = nil
+
+  // APB address: {protection(2), thread(1), register index}
+  const reg_sel = apb_paddr_i#[0..<4]
+  const thread_sel = apb_paddr_i#[9]
+  const is_write:Bool = apb_pwrite_i == 1
+
+  // ---- stage 0: decode the address in the setup phase ----
+  const s0_en:Bool = apb_psel_i == 1 and apb_penable_i == 0
+  mut s0_addr_valid:Bool = true
+  mut s0_pp_valid:Bool = false
+  mut s0_execute:Bool = false
+  mut s0_rdata:U32 = 0
+  mut s0_reg_en:U10 = 0
+  if s0_en {
+    s0_pp_valid = apb_paddr_i#[10..<12] == minion_pkg.AdEsrProtBitsMsg
+    if reg_sel == minion_pkg.minion_debug_nxdata0 or reg_sel == minion_pkg.minion_debug_axdata0 {
+      s0_rdata = reg_ddata0_q[thread_sel]#[0..<32]
+    } elif reg_sel == minion_pkg.minion_debug_nxdata1 or reg_sel == minion_pkg.minion_debug_axdata1 {
+      s0_rdata = reg_ddata0_q[thread_sel]#[32..<64]
+    }
+    if reg_sel < minion_pkg.minion_debug_invalid {
+      s0_reg_en#[reg_sel] = U1(is_write)
+      // writes to the ax* data, abscmd and ax* program buffer registers also execute
+      s0_execute = is_write and (reg_sel == minion_pkg.minion_debug_axdata0 or reg_sel == minion_pkg.minion_debug_axdata1 or reg_sel == minion_pkg.minion_debug_abscmd or reg_sel == minion_pkg.minion_debug_axprogbuf0 or reg_sel == minion_pkg.minion_debug_axprogbuf1)
+    } else {
+      s0_addr_valid = false
+      s0_reg_en#[minion_pkg.minion_debug_invalid] = 1
+    }
+  }
+
+  // ---- stage 1: access phase ----
+  const apb_pslverr:Bool = not s1_addr_valid_q or not s1_pp_valid_q or in_debug_mode_i#[thread_sel] == 0
+  const apb_pready:Bool = apb_psel_i == 1 and apb_penable_i == 1 and (s1_reg_en_q#[minion_pkg.minion_debug_invalid] == 1 or (s1_addr_valid_q and not is_write) or (s1_addr_valid_q and is_write and not s1_execute_q) or s2_execute_q)
+  const s1_en:Bool = apb_psel_i == 1 and apb_penable_i == 1 and apb_pready
+
+  if s0_en and not is_write {
+    s1_rdata_q = s0_rdata
+  }
+  if s0_en or s1_en {
+    s1_reg_en_q = s0_reg_en
+  }
+  if s0_en {
+    s1_addr_valid_q = s0_addr_valid
+    s1_pp_valid_q = s0_pp_valid
+  }
+  s1_execute_q = s0_execute
+  s2_execute_q = s1_execute_q
+
+  // ddata0: the selected thread's low/high word takes the APB write data; the core's CSR write wins
+  const write_lo:Bool = s1_reg_en_q#[minion_pkg.minion_debug_nxdata0] == 1 or s1_reg_en_q#[minion_pkg.minion_debug_axdata0] == 1
+  const write_hi:Bool = s1_reg_en_q#[minion_pkg.minion_debug_nxdata1] == 1 or s1_reg_en_q#[minion_pkg.minion_debug_axdata1] == 1
+  mut reg_ddata0_d:U128 = reg_ddata0_q#[..]
+  for t in 0..<minion_pkg.NrThreads {
+    if thread_sel == t and not apb_pslverr {
+      if write_lo {
+        reg_ddata0_d#[(64*t)..+32] = apb_pwdata_i#[0..<32]
+      }
+      if write_hi {
+        reg_ddata0_d#[(64*t + 32)..+32] = apb_pwdata_i#[0..<32]
+      }
+    }
+    if update_ddata0_i#[t] == 1 {
+      reg_ddata0_d#[(64*t)..+64] = csr_wdata_i
+    }
+  }
+  for t in 0..<minion_pkg.NrThreads {
+    reg_ddata0_q[t] = reg_ddata0_d#[(64*t)..+64]
+  }
+
+  // ---- outputs ----
+  // program buffer words 0/1 (and the abscmd words 2/3) are written by the corresponding register accesses
+  const ffb_en_lo = s1_reg_en_q#[minion_pkg.minion_debug_abscmd]
+  const ffb_en_hi0 = U1(s1_reg_en_q#[minion_pkg.minion_debug_axprogbuf0] == 1 or s1_reg_en_q#[minion_pkg.minion_debug_nxprogbuf0] == 1)
+  const ffb_en_hi1 = U1(s1_reg_en_q#[minion_pkg.minion_debug_axprogbuf1] == 1 or s1_reg_en_q#[minion_pkg.minion_debug_nxprogbuf1] == 1)
+  const ffb_en:U4 = (ffb_en_lo, ffb_en_lo, ffb_en_hi0, ffb_en_hi1)#[..]
+
+  apb_pready_o = U1(apb_pready)
+  apb_prdata_o = s1_rdata_q
+  apb_pslverr_o = U1(apb_pslverr)
+  read_ddata0_o = reg_ddata0_q#[..]
+  ffb_wdata_o = apb_pwdata_i
+  ffb_en_o = if apb_pslverr { 0 } else { ffb_en }
+  ffb_thread_sel_o = thread_sel
+  for t in 0..<minion_pkg.NrThreads {
+    ex_program_buffer_o#[t] = U1(s1_execute_q and not apb_pslverr and thread_sel == t)
+  }
+}

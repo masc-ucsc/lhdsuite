@@ -1,0 +1,332 @@
+// Cache-op engine for the L2-level operations (prefetch, flush and evict above L1) issued by the
+// data cache (verilog: minion_dcache_cache_op_unit_l2). One request at a time walks the states
+// Invalid -> [WaitTmask] -> Translate -> [TranslateWait] -> Request -> [NextOperation] -> Invalid,
+// repeating per cache line (count + 1 times, optionally masked per line by tmask_bits). A request
+// that comes in through the bypass port (cache_op_*_byp_*) skips translation. Per (thread, id)
+// outstanding-prefetch counters let the core know when a thread has drained (th_id_complete_o).
+// All state sits behind the gated clock `clkgt`; only the two request-class flags use clk_i because
+// they are sampled before the engine wakes up. The Verilog `l2_scp_bad_source` is constant 0, so
+// that term is gone.
+const prim_clk_gate = import("prim_clk_gate.prim_clk_gate")
+const minion_pkg = import("minion_pkg")
+const minion_dcache_pkg = import("minion_dcache_pkg")
+
+// Cache-op request as it arrives on the cache_op_req_i / cache_op_req_byp_i ports.
+type CacheOpReqIn = (cmd:U4, start_level:U2, dest_level:U2, count:U4, addr:U48, way:U2, stride:U48, thread_id:U1, use_tmask:U1, tmask_ready:U1, tmask_bits:U16, l2_scp_dest:U17, l2_scp_fill:U1)
+
+pub mod minion_dcache_cache_op_unit_l2::[timecheck=false](cache_op_req_byp_i:(cmd:U4, start_level:U2, dest_level:U2, count:U4, addr:U48, way:U2, stride:U48, thread_id:U1, use_tmask:U1, tmask_ready:U1, tmask_bits:U16, l2_scp_dest:U17, l2_scp_fill:U1), cache_op_req_i:(cmd:U4, start_level:U2, dest_level:U2, count:U4, addr:U48, way:U2, stride:U48, thread_id:U1, use_tmask:U1, tmask_ready:U1, tmask_bits:U16, l2_scp_dest:U17, l2_scp_fill:U1), cache_op_req_next_i:(cmd:U4, start_level:U2, dest_level:U2), cache_op_valid_byp_i:U1, cache_op_valid_i:U1, cacheop_max_i:minion_pkg.DcacheCoL2MaxOpsBits_T, cacheop_reprate_i:minion_pkg.DcacheCoL2ReprateBits_T, chicken_bit_dcache_i:U1, clk_i:Clock, l2_req_ready_i:U1, l2_resp_i:(id:U8, dest:U1, wdata:U1, opcode:U2, data:U256, size:U3, qwen:U4), l2_resp_valid_i:U1, rst_ni:U1, s0_available_i:U1, s1_available_i:U1, s1_tlb_addr_i:U28, s1_tlb_fail_i:U1, s1_tlb_wait_i:U1, shire_id_i:minion_pkg.NumShireIdsBits_T, vm_status_co_i:(prv:U2, mprv:U1, mpp:U2, sum:U1, mxr:U1, debug:U1), vm_status_i:U16) -> (bus_err_o:minion_pkg.NrThreads_T@[], busy_o:U1@[], cache_op_ready_byp_o:U1@[], cache_op_ready_o:U1@[], csr_debug_signals_o:U3@[], err_flags_o:minion_pkg.NrThreads_T@[], l2_req_data_o:(id:U5, source:U1, wdata:U1, opcode:U5, address:U40, data:U256, size:U3, qwen:U4, subopcode:U7)@[], l2_req_valid_o:U1@[], s0_addr_load_o:U1@[], s0_addr_msb_err_o:U1@[], s0_addr_o:U48@[], s0_thread_id_o:U1@[], s1_addr_load_o:U1@[], sm_data_debug_signals_o:minion_dcache_pkg.DcacheDbgSmDataBits_T@[], sm_filter_debug_signals_o:minion_dcache_pkg.DcacheDbgSmFilterBits_T@[], sm_match_debug_signals_o:minion_dcache_pkg.DcacheDbgSmMatchBits_T@[], th_id_complete_o:U4@[], vm_status_l2_o:(prv:U2, mprv:U1, mpp:U2, sum:U1, mxr:U1, debug:U1)@[]) {
+  comptime const NT = minion_pkg.NrThreads
+  comptime const VA_MSB = minion_dcache_pkg.VaSize - 1
+
+  wire clkgt:Clock = nil
+
+  reg cache_op_req_is_l2_q:Bool:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  reg cache_op_req_is_nop_q:Bool:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+
+  reg state_q:U3:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = minion_dcache_pkg.L2CacheOpInvalid
+  // latched request, packed as verilog l2_cache_op_req_t (thread_id in the MSB); the fields are sliced out below
+  reg req_q:U58:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  // vm_status_t packed as {prv, mprv, mpp, sum, mxr, debug}, one byte per thread in vm_status_i
+  reg vm_status_l2_o_q:U8:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg req_addr_q:U48:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg req_addr_msb_err_q:Bool:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg req_count_q:U4:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg req_tmask_bits_q:U16:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg id_running_q:U1:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg l2_scp_dest_q:U17:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg err_mem_q:Bool:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg s1_addr_load_pre_q:Bool:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg reg_tlb_addr_q:U28:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg l2_cache_op_cnt_q:U5:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg cacheop_reprate_count_q:U9:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg cacheop_reprate_grant_q:U2:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg l2_req_valid_started_q:Bool:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  // outstanding prefetches per (thread, id), two 5-bit counters per thread
+  reg ready_counters_q:[2]U10:[async=true, clock_pin=clkgt, negreset=true, ordering="old", reset_pin=rst_ni] = 0
+
+  const invalid = state_q == minion_dcache_pkg.L2CacheOpInvalid
+  const busy = not invalid
+  const req_is_l2_scp = req_q#[0..<1]
+  const req_is_byp = req_q#[1..<2]
+  const req_count = req_q#[2..<6]
+  const req_use_tmask = req_q#[6..<7]
+  const req_stride = req_q#[7..<49]
+  const req_dest_level = req_q#[49..<51]
+  const req_start_level = req_q#[51..<53]
+  const req_cmd = req_q#[53..<57]
+  const thread = req_q#[57..<58]
+  const byp_valid = cache_op_valid_byp_i == 1
+  const virtual_addr:U48 = req_addr_q#[6..<48] << 6
+  const translated_addr:U40 = (reg_tlb_addr_q << 12) | virtual_addr#[0..<12]
+
+  // ---- L2 responses and outstanding-prefetch accounting ----
+  const resp_id5 = l2_resp_i.id#[0..<5]
+  const resp_is_prefetch = minion_dcache_pkg.EtLinkCoreMissIdL2Prefetch0 <= resp_id5 <= minion_dcache_pkg.EtLinkCoreMissIdL2Prefetch3
+  const resp_prefetch = l2_resp_valid_i == 1 and resp_is_prefetch
+  // Prefetch ids are Prefetch0 + {thread, id}.
+  const resp_slot = resp_id5#[0..<2]
+
+  mut l2_cache_op_next_cnt:U5 = l2_cache_op_cnt_q
+  if l2_req_ready_i == 1 {
+    wrap l2_cache_op_next_cnt += 1
+  }
+  if resp_prefetch {
+    wrap l2_cache_op_next_cnt -= 1
+  }
+
+  const resp_err = resp_prefetch and l2_resp_i.opcode == minion_pkg.EtLinkRspErr
+  mut bus_err:U2 = 0
+  mut err_flags:U2 = 0
+  for th in 0..<NT {
+    bus_err#[th] = U1(resp_err and thread == th)
+    err_flags#[th] = U1(err_mem_q and thread == th)
+  }
+
+  // ready_counters_q holds counter (th, id) in bits [(th * 2 + id) * 5 +: 5]
+  const ready_counters_flat:U20 = ready_counters_q#[0..<20]
+  mut ready_counters_d:U20 = ready_counters_flat
+  mut th_id_complete:U4 = 0
+  for th in 0..<NT {
+    for id in 0..<2 {
+      const lo = (th*2 + id)*5
+      const inc = l2_req_ready_i == 1 and thread == th and id_running_q == id
+      const dec = resp_prefetch and resp_slot == (th*2 + id)
+      const cnt = ready_counters_flat#[lo..<(lo + 5)]
+      // saturating up/down counter; a simultaneous increment and decrement cancel
+      if inc and not dec and cnt != 31 {
+        ready_counters_d#[lo..<(lo + 5)] = (cnt + 1)#[0..<5]
+      } elif dec and not inc and cnt != 0 {
+        ready_counters_d#[lo..<(lo + 5)] = (cnt - 1)#[0..<5]
+      }
+      // the running (thread, id) only completes once the engine itself is idle
+      const running = id_running_q == id and thread == th
+      th_id_complete#[th*2 + id] = U1(cnt == 0 and not (running and busy))
+    }
+  }
+  const ready_counters_up = l2_req_ready_i == 1 or resp_prefetch
+
+  // ---- request classification (registered one cycle ahead from the next-request bus) ----
+  const next_cmd = cache_op_req_next_i.cmd
+  const next_start = cache_op_req_next_i.start_level
+  const next_dest = cache_op_req_next_i.dest_level
+  const next_is_pref = next_cmd == minion_pkg.cache_op_Pref
+  const next_is_flush_evict = next_cmd == minion_pkg.cache_op_Flush_VA or next_cmd == minion_pkg.cache_op_Evict_VA
+  const next_from_l2 = next_start >= minion_pkg.cache_op_L2
+  cache_op_req_is_l2_q = (next_is_pref and next_dest >= minion_pkg.cache_op_L2 and next_dest < minion_pkg.cache_op_MEM) or (next_is_flush_evict and next_from_l2 and next_dest > next_start)
+  cache_op_req_is_nop_q = (next_is_pref and next_dest == minion_pkg.cache_op_MEM) or (next_is_flush_evict and next_from_l2 and next_dest <= next_start)
+
+  // ---- request sequencing ----
+  const s0_addr_load = s0_available_i == 1 and state_q == minion_dcache_pkg.L2CacheOpTranslate and not s1_addr_load_pre_q
+  const s1_addr_load = s1_addr_load_pre_q and s1_available_i == 1
+  const cache_op_ready = invalid and (cache_op_req_is_l2_q or cache_op_req_is_nop_q) and not byp_valid
+  const cache_op_ready_byp = invalid
+
+  const l2_req_throttle = (l2_cache_op_cnt_q >= cacheop_max_i and cacheop_max_i != 0) or cacheop_reprate_grant_q == 0
+  const l2_req_valid = state_q == minion_dcache_pkg.L2CacheOpRequest and not l2_req_throttle
+  const last_op = req_count_q == req_count
+
+  mut state_d:U3 = state_q
+  mut err_mem_d = false
+  match state_q {
+    == minion_dcache_pkg.L2CacheOpInvalid {
+      if byp_valid {
+        state_d = minion_dcache_pkg.L2CacheOpRequest
+      } elif cache_op_valid_i == 1 and cache_op_req_is_l2_q {
+        state_d = if cache_op_req_i.use_tmask == 0 { minion_dcache_pkg.L2CacheOpTranslate } else { minion_dcache_pkg.L2CacheOpWaitTmask }
+      }
+    }
+    == minion_dcache_pkg.L2CacheOpWaitTmask {
+      if cache_op_req_i.tmask_ready == 1 {
+        if cache_op_req_i.tmask_bits#[0] == 1 {
+          state_d = minion_dcache_pkg.L2CacheOpTranslate
+        } else {
+          state_d = if last_op { minion_dcache_pkg.L2CacheOpInvalid } else { minion_dcache_pkg.L2CacheOpNextOperation }
+        }
+      }
+    }
+    == minion_dcache_pkg.L2CacheOpTranslate {
+      if s1_addr_load {
+        if s1_tlb_fail_i == 1 {
+          state_d = minion_dcache_pkg.L2CacheOpInvalid
+          err_mem_d = true
+        } else {
+          state_d = if s1_tlb_wait_i == 1 { minion_dcache_pkg.L2CacheOpTranslateWait } else { minion_dcache_pkg.L2CacheOpRequest }
+        }
+      }
+    }
+    == minion_dcache_pkg.L2CacheOpTranslateWait {
+      if s1_tlb_wait_i == 0 {
+        state_d = minion_dcache_pkg.L2CacheOpTranslate
+      }
+    }
+    == minion_dcache_pkg.L2CacheOpRequest {
+      if l2_req_valid and l2_req_ready_i == 1 {
+        state_d = if last_op { minion_dcache_pkg.L2CacheOpInvalid } else { minion_dcache_pkg.L2CacheOpNextOperation }
+      }
+    }
+    == minion_dcache_pkg.L2CacheOpNextOperation {
+      if req_use_tmask == 0 {
+        state_d = minion_dcache_pkg.L2CacheOpTranslate
+      } elif req_tmask_bits_q#[req_count_q] == 1 {
+        state_d = minion_dcache_pkg.L2CacheOpTranslate
+      } elif last_op {
+        state_d = minion_dcache_pkg.L2CacheOpInvalid
+      }
+    }
+    else {
+      state_d = minion_dcache_pkg.L2CacheOpInvalid
+    }
+  }
+
+  const new_req = invalid and state_d != minion_dcache_pkg.L2CacheOpInvalid
+  const next_op = state_d == minion_dcache_pkg.L2CacheOpNextOperation
+  // address, count and scratchpad destination advance on a new request and on every further line
+  const advance = new_req or next_op
+  const accept_req = invalid and ((cache_op_valid_i == 1 and cache_op_ready) or (byp_valid and cache_op_ready_byp))
+
+  // latch the request from the bypass port when it is valid, else from the normal port
+  mut src:CacheOpReqIn = cache_op_req_i
+  if byp_valid {
+    src = cache_op_req_byp_i
+  }
+  const req_d:U58 = (src.l2_scp_fill, U1(byp_valid), src.count, src.use_tmask, src.stride#[6..<48], src.dest_level, src.start_level, src.cmd, src.thread_id)#[..]
+
+  mut adder_res:U48 = 0
+  wrap adder_res = virtual_addr + (req_stride << 6)
+  const req_addr_d:U48 = if next_op { adder_res } else { src.addr }
+  const req_addr_msb_err_d = next_op and req_addr_q#[VA_MSB] == 1 and adder_res#[VA_MSB] == 0
+
+  mut req_count_d:U4 = 0
+  mut l2_scp_dest_d:U17 = cache_op_req_i.l2_scp_dest
+  if not new_req {
+    wrap req_count_d = req_count_q + 1
+    wrap l2_scp_dest_d = l2_scp_dest_q + 1
+  }
+
+  // ---- repetition-rate throttle: a request may go out every 2^cacheop_reprate_i cycles ----
+  mut reprate_reload:U9 = 0
+  reprate_reload = (1 << cacheop_reprate_i) - 1
+  mut reprate_count_d:U9 = reprate_reload
+  if not invalid {
+    reprate_count_d = cacheop_reprate_count_q
+    if l2_req_valid_started_q {
+      if cacheop_reprate_count_q != 0 {
+        wrap reprate_count_d = cacheop_reprate_count_q - 1
+      } else {
+        reprate_count_d = reprate_reload
+      }
+    }
+  }
+  mut l2_req_valid_started_d = l2_req_valid_started_q
+  if state_d == minion_dcache_pkg.L2CacheOpRequest {
+    l2_req_valid_started_d = true
+  } elif invalid {
+    l2_req_valid_started_d = false
+  }
+  mut reprate_grant_d:U2 = 1
+  if not invalid {
+    reprate_grant_d = cacheop_reprate_grant_q
+    if l2_req_valid_started_q and cacheop_reprate_count_q == 0 and reprate_grant_d != 3 {
+      wrap reprate_grant_d += 1
+    }
+    if l2_req_valid and l2_req_ready_i == 1 {
+      wrap reprate_grant_d -= 1
+    }
+  }
+  // the throttle state only moves while a request is live
+  const throttle_en = new_req or busy
+
+  // ---- registers ----
+  state_q = state_d
+  err_mem_q = err_mem_d
+  s1_addr_load_pre_q = s0_addr_load
+  l2_cache_op_cnt_q = l2_cache_op_next_cnt
+  if new_req {
+    req_q = req_d
+    const vm_status_co:U8 = (vm_status_co_i.debug, vm_status_co_i.mxr, vm_status_co_i.sum, vm_status_co_i.mpp, vm_status_co_i.mprv, vm_status_co_i.prv)#[..]
+    const vm_status_th:U8 = if cache_op_req_i.thread_id == 1 { vm_status_i#[8..<16] } else { vm_status_i#[0..<8] }
+    vm_status_l2_o_q = if byp_valid { vm_status_co } else { vm_status_th }
+  }
+  if advance {
+    req_addr_q = req_addr_d
+    req_addr_msb_err_q = req_addr_msb_err_d
+    l2_scp_dest_q = l2_scp_dest_d
+    req_count_q = req_count_d
+  }
+  if state_q == minion_dcache_pkg.L2CacheOpWaitTmask {
+    req_tmask_bits_q = if req_is_byp == 1 { cache_op_req_byp_i.tmask_bits } else { cache_op_req_i.tmask_bits }
+  }
+  if accept_req {
+    id_running_q = src.stride#[0]
+  }
+  if s1_addr_load {
+    reg_tlb_addr_q = s1_tlb_addr_i
+  }
+  if ready_counters_up {
+    ready_counters_q#[0..<20] = ready_counters_d
+  }
+  if throttle_en {
+    cacheop_reprate_count_q = reprate_count_d
+    cacheop_reprate_grant_q = reprate_grant_d
+    l2_req_valid_started_q = l2_req_valid_started_d
+  }
+
+  // ---- L2 request ----
+  const co_cmd_up:U5 = if req_cmd == minion_pkg.cache_op_Flush_VA or req_cmd == minion_pkg.cache_op_Flush_SW {
+    minion_dcache_pkg.EtLinkReqFlush
+  } elif req_cmd == minion_pkg.cache_op_Evict_VA or req_cmd == minion_pkg.cache_op_Evict_SW {
+    minion_dcache_pkg.EtLinkReqEvict
+  } else {
+    minion_dcache_pkg.EtLinkReqPrefetch
+  }
+  const l2_scp_address:U40 = (minion_dcache_pkg.AdScpRegion << 31) | (shire_id_i << 23) | (l2_scp_dest_q << 6)
+  const l2_req_id:U5 = minion_dcache_pkg.EtLinkCoreMissIdL2Prefetch0 | ((thread << 1) | id_running_q)
+  const l2_req_address:U40 = if req_is_byp == 1 { virtual_addr#[0..<40] } elif req_is_l2_scp == 1 { l2_scp_address } else { translated_addr }
+  const l2_req_payload:U256 = if req_is_l2_scp == 1 { translated_addr } else { (req_dest_level << 5) | (req_start_level << 3) }
+  l2_req_data_o.id = l2_req_id
+  l2_req_data_o.source = 0
+  l2_req_data_o.wdata = 1
+  l2_req_data_o.opcode = if req_is_l2_scp == 1 { minion_dcache_pkg.EtLinkReqScpFill } else { co_cmd_up }
+  l2_req_data_o.address = l2_req_address
+  l2_req_data_o.data = l2_req_payload
+  l2_req_data_o.size = if req_is_l2_scp == 1 { minion_dcache_pkg.EtLinkDWord } else { minion_dcache_pkg.EtLinkByte }
+  l2_req_data_o.qwen = 1
+  l2_req_data_o.subopcode = 0
+
+  // ---- clock gate: the engine sleeps unless a request is live, a thread is draining or an error is pending ----
+  const clkgt_en = new_req or busy or th_id_complete != 15 or err_flags != 0 or chicken_bit_dcache_i == 1
+  const u_clk_gate = prim_clk_gate(clk_i=clk_i, en_i=U1(clkgt_en), dft_i=(scanmode=0))
+  clkgt = u_clk_gate
+
+  // ---- outputs ----
+  busy_o = U1(busy)
+  th_id_complete_o = th_id_complete
+  cache_op_ready_o = U1(cache_op_ready)
+  l2_req_valid_o = U1(l2_req_valid)
+  cache_op_ready_byp_o = U1(cache_op_ready_byp)
+  s0_addr_load_o = U1(s0_addr_load)
+  s0_addr_o = virtual_addr
+  s0_addr_msb_err_o = U1(req_addr_msb_err_q)
+  s0_thread_id_o = thread
+  s1_addr_load_o = U1(s1_addr_load)
+  vm_status_l2_o.prv = vm_status_l2_o_q#[6..<8]
+  vm_status_l2_o.mprv = vm_status_l2_o_q#[5..<6]
+  vm_status_l2_o.mpp = vm_status_l2_o_q#[3..<5]
+  vm_status_l2_o.sum = vm_status_l2_o_q#[2..<3]
+  vm_status_l2_o.mxr = vm_status_l2_o_q#[1..<2]
+  vm_status_l2_o.debug = vm_status_l2_o_q#[0..<1]
+  err_flags_o = err_flags
+  bus_err_o = bus_err
+  csr_debug_signals_o = state_q
+
+  // ---- debug taps (entry 0 of each packed tuple is the least significant field) ----
+  const sm_filter_raw:U119 = (state_q, req_q, req_addr_q, U1(new_req), U1(err_mem_q), l2_cache_op_cnt_q, U1(ready_counters_up), cache_op_valid_i, cache_op_valid_byp_i)#[..]
+  const sm_data0_raw:U127 = (req_q, req_addr_q, req_count_q, l2_scp_dest_q)#[..]
+  const sm_data1_raw:U27 = (l2_cache_op_cnt_q, ready_counters_flat, U1(cache_op_req_is_nop_q), U1(cache_op_req_is_l2_q))#[..]
+  sm_match_debug_signals_o = 0
+  sm_filter_debug_signals_o = sm_filter_raw
+  mut sm_data:U512 = 0
+  sm_data#[0..<0x80] = sm_data0_raw
+  sm_data#[0x80..<0x100] = sm_data1_raw
+  sm_data_debug_signals_o = sm_data
+}

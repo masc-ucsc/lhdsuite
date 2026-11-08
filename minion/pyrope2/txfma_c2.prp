@@ -1,0 +1,219 @@
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+// TXFMA control stage c2 (verilog: txfma_c2): effective-sign / effective-subtract of the
+// two product-vs-addend alignments, exponent-difference compare flags (convert overflow,
+// sin range reduction), alignment-shifter negate/zap controls and the operand-select buses
+// that txfma_f3 flops. Purely combinational.
+pub comb txfma_c2::[timecheck=false](align1_mux_sel_f2a_h:vpu_defs_pkg.TXFMA_EDIFF_OPD_SEL_SZ_T, align2_mux_sel_f2a_h:vpu_defs_pkg.TXFMA_EDIFF_OPD_SEL_SZ_T, cmd_f2a_h:vpu_defs_pkg.VPU_FCMD_SZ_T, e_sticky1_f2a_h:U1, e_sticky2_f2a_h:U1, ec_f2a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T, ec_zero_f2a_h:U1, ediff1_abs_f2a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T, ediff1_f2a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T, ediff1_sel_f2a_h:vpu_defs_pkg.TXFMA_EDIFF_OPD_SEL_SZ_T, ediff2_abs_f2a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T, ediff2_sel_f2a_h:vpu_defs_pkg.TXFMA_EDIFF_OPD_SEL_SZ_T, eprod_hi_zero_f2a_h:U1, fc_b0_f2a_h:U1, fc_zero30_8_f2a_h:U1, minmax_op_f2a_h:U1, op_dtype_f2a_h:vpu_defs_pkg.VPU_DTYPE_SZ_T, opd3_mux_sel_f2a_h:vpu_defs_pkg.TXFMA_EDIFF_OPD_SEL_SZ_T, prod_sign_hi_f2a_h:U1, prod_sign_lo_f2a_h:U1, rm_f2a_h:vpu_defs_pkg.TXFMA_RM_SZ_T, sc_f2a_h:U1, sel_fcmask_f2a_h:U1, sigs_f2a_h:vpu_defs_pkg.TXFMA_SIGS_SZ_T) -> (al1c3_neg_cin_f2a_h:U1, al1c_zap_f2a_h:U1, al1p1c_sel_f2a_h:U1, al1p2c_sel_f2a_h:U2, al1znp2c_sel_f2a_h:U2, al2c3_neg_cin_ps_f2a_h:U1, al2c_sel_f2a_h:U2, align2_zap_f2a_h:U1, align2c_neg_f2a_h:U1, comp_op_f2a_h:U1, cvt_fi_min_neg_f2a_h:U1, cvt_fi_neg_ovf_f2a_h:U1, cvt_fi_pos_ovf_f2a_h:U1, cvt_fui_pos_ovf_f2a_h:U1, ediff1_0_f2a_h:U1, ediff1_lt_31_f2a_h:U1, eff_sign1_f2a_h:U1, eff_sub1_f2a_h:U1, eff_sub2_f2a_h:U1, fa_eq_fc_comp_sign_hi_res_f2a_h:U1, fa_ge_fc_comp_sign_hi_res_f2a_h:U1, fc_sel_f2a_h:U1, frnd_rdnsc_f2a_h:U1, frnd_rupnsc_f2a_h:U1, frnd_t1_f2a_h:U1, frnd_t2_f2a_h:U1, icgfxc_sel_f2a_h:U2, int_minmax_mux_sel_fc_f2a_h:U1, negop1c_int_logmul_clr_f2a_h:U1, op1c_log_mul_clr_f2a_h:U1, op2_sxtto_g_f2a_h:U1, op3g_sel_f2a_h:U1, op3p1c_sel_p_f2a_h:U1, op3p1c_sel_r_f2a_h:U1, op3p2c_sel_f2a_h:U3, op3p3spc_sel_f2a_h:U2, psc_op1_clr_f2a_h:U1, rm_rmm_f2a_h:U1, rm_rne_f2a_h:U1, sgfxrplc_sel_f2a_h:U2, sin_align1_neg_f2a_h:U1, sin_align2_neg_f2a_h:U1, sin_check_fc_sign_f2a_h:U1, sin_ediff2_f2a_h:U1, sin_eff_sub1_f2a_h:U1, trans_log_rr_neg_f2a_h:U1, ugfxrplc_sel_f2a_h:U2) {
+  const sig_fma = sigs_f2a_h#[vpu_defs_pkg.TXFMA_FMA]
+  const sig_fms = sigs_f2a_h#[vpu_defs_pkg.TXFMA_FMS]
+  const sig_add = sigs_f2a_h#[vpu_defs_pkg.TXFMA_ADD]
+  const sig_sub = sigs_f2a_h#[vpu_defs_pkg.TXFMA_SUB]
+  const sig_cvt = sigs_f2a_h#[vpu_defs_pkg.TXFMA_CVT]
+  const sig_f32_norm = sigs_f2a_h#[vpu_defs_pkg.TXFMA_F32_NORM]
+  const sig_norm_f32 = sigs_f2a_h#[vpu_defs_pkg.TXFMA_NORM_F32]
+  const sig_trans1 = sigs_f2a_h#[vpu_defs_pkg.TXFMA_TRANS1]
+  const sig_trans2 = sigs_f2a_h#[vpu_defs_pkg.TXFMA_TRANS2]
+
+  const is_f32 = op_dtype_f2a_h == vpu_defs_pkg.VPU_DTYPE_F32
+  const is_f16_f32 = op_dtype_f2a_h == vpu_defs_pkg.VPU_DTYPE_F16_F32
+  const sc = sc_f2a_h == 1
+  const prod_sign_hi = prod_sign_hi_f2a_h == 1
+  const prod_sign_lo = prod_sign_lo_f2a_h == 1
+  const fc_b0 = fc_b0_f2a_h == 1
+  const sin_transform = cmd_f2a_h == vpu_defs_pkg.VPU_TRANS_SIN_TRANSFORM
+  const log_mul = cmd_f2a_h == vpu_defs_pkg.VPU_TRANS_LOG_MUL
+  const exp_frac = cmd_f2a_h == vpu_defs_pkg.VPU_TRANS_EXP_FRAC
+  const ffrc_op = cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_FFRC or cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_FFRC_SIN
+  const comp_op = cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_FLE or cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_FLT or cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_FEQ or cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CLASS
+  const cvt_f32int = cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CVT_F32INT
+  const cvt_f32rast = cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CVT_F32RAST
+  const cvt_intf32 = cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CVT_INTF32
+
+  // ediff1 is a signed 10-bit exponent difference
+  const ediff1 = ediff1_f2a_h#sext[0..=9]
+  const ediff1_gt_m1 = ediff1 > -1
+  const ediff1_gte_m1 = ediff1 >= -1
+  const ediff1_gte_m2 = ediff1 >= -2
+
+  // Effective sign of the two additions: product (hi/lo) against c, or hi against lo.
+  mut eff_sign1 = false
+  match ediff1_sel_f2a_h {
+    in (vpu_defs_pkg.TXFMA_SEL_EDIFF_EC_EPH, vpu_defs_pkg.TXFMA_SEL_EDIFF_N_EC_EPH, vpu_defs_pkg.TXFMA_SEL_EDIFF_NR2_FRCPFXP) {
+      eff_sign1 = prod_sign_hi != sc
+    }
+    in (vpu_defs_pkg.TXFMA_SEL_EDIFF_EC_EPL, vpu_defs_pkg.TXFMA_SEL_EDIFF_N_EC_EPL) {
+      eff_sign1 = prod_sign_lo != sc
+    }
+    else {
+    }
+  }
+  mut eff_sign2 = false
+  match ediff2_sel_f2a_h {
+    in (vpu_defs_pkg.TXFMA_SEL_EDIFF_EC_EPL, vpu_defs_pkg.TXFMA_SEL_EDIFF_N_EC_EPL) {
+      eff_sign2 = prod_sign_lo != sc
+    }
+    in (vpu_defs_pkg.TXFMA_SEL_EDIFF_ECH_EPH, vpu_defs_pkg.TXFMA_SEL_EDIFF_N_ECH_EPH) {
+      eff_sign2 = prod_sign_hi != sc
+    }
+    in (vpu_defs_pkg.TXFMA_SEL_EDIFF_EPH_EPL, vpu_defs_pkg.TXFMA_SEL_EDIFF_N_EPH_EPL) {
+      eff_sign2 = prod_sign_lo != prod_sign_hi
+    }
+    else {
+    }
+  }
+
+  const fp_sub = (sig_sub == 1 or sig_fms == 1) and is_f32
+  const eff_sub1 = if is_f32 {
+    (eff_sign1 != fp_sub and sig_cvt == 0 and sig_norm_f32 == 0 and not ffrc_op) or minmax_op_f2a_h == 1 or comp_op
+  } else {
+    eff_sign1
+  }
+  const eff_sub2 = eff_sign2
+
+  // Sin range reduction: classify fc against +-0.25/0.5/0.75 (from its exponent difference and
+  // top fraction bit) to pick the quartile's negate/ediff2 controls.
+  const fc_lt_0 = sc and ec_zero_f2a_h == 0
+  const fc_lte_m05 = sc and ediff1_gte_m1
+  const fc_lte_m075 = sc and ediff1_gte_m1 and fc_b0
+  const fc_lte_m025 = sc and ediff1_gte_m2
+  const fc_gte_05 = not sc and ediff1_gte_m1
+  const fc_gte_075 = not sc and ediff1_gte_m1 and fc_b0
+  const fc_gte_025 = not sc and ediff1_gte_m2
+  const fc_gt_0 = not sc and ediff1 <= 0 and ec_zero_f2a_h == 0
+
+  mut sin_align1_neg = false
+  mut sin_align2_neg = false
+  mut sin_ediff2 = false
+  mut sin_check_fc_sign = false
+  mut int_minmax_mux_sel_fc = false
+  if sin_transform {
+    if fc_lt_0 and fc_lte_m05 and fc_lte_m075 {
+      sin_align1_neg = sc
+    } elif fc_lt_0 and fc_lte_m05 {
+      sin_align1_neg = not sc
+      sin_align2_neg = true
+      sin_check_fc_sign = true
+      sin_ediff2 = true
+    } elif fc_lt_0 and fc_lte_m025 {
+      sin_align1_neg = not sc
+      sin_align2_neg = true
+      sin_ediff2 = true
+    } elif not fc_lt_0 {
+      if fc_gt_0 and fc_gte_05 and fc_gte_075 {
+        sin_align1_neg = sc
+        sin_align2_neg = true
+      } elif fc_gt_0 and fc_gte_05 {
+        sin_check_fc_sign = true
+        sin_align1_neg = not sc
+        sin_ediff2 = true
+      } elif fc_gt_0 and fc_gte_025 {
+        sin_align1_neg = not sc
+        sin_ediff2 = true
+      } else {
+        int_minmax_mux_sel_fc = true
+      }
+    } else {
+      int_minmax_mux_sel_fc = true
+    }
+  }
+
+  const ec_hi_gte_127 = ec_f2a_h >= 0x7f
+  const trans_log_rr_neg = fc_b0 and cmd_f2a_h == vpu_defs_pkg.VPU_TRANS_LOG_RR
+  // log mul: negate align1 when (ec >= 127) and fc_b0 agree (the xor is false)
+  const trans_log_mul_align1_neg = log_mul and ec_hi_gte_127 == fc_b0
+
+  // Alignment shifter controls
+  const use_align1 = sig_fma == 1 or sig_fms == 1 or sig_add == 1 or sig_sub == 1 or sig_trans1 == 1 or sig_trans2 == 1 or sin_transform or exp_frac or cmd_f2a_h == vpu_defs_pkg.VPU_TRANS_LOG_RR or sig_cvt == 1 or sig_norm_f32 == 1 or ffrc_op
+  const use_align2 = is_f16_f32 or sin_transform
+
+  // Negate on effective sub (and integer sub with a non-zero product), negative int to float
+  // convert or min/max.
+  const align1_neg = (((eff_sub1 or (sc and (cvt_f32int or cvt_f32rast))) and use_align1) or trans_log_rr_neg or sin_align1_neg or trans_log_mul_align1_neg) and not exp_frac
+  const align2_neg = (eff_sub2 and use_align2) or sin_align2_neg
+  const align1_neg_cin = (align1_neg and e_sticky1_f2a_h == 0) or trans_log_mul_align1_neg
+  const align2_neg_cin = align2_neg and e_sticky2_f2a_h == 0
+
+  // Clear A2-A1 during CVT IF + negation (and for log mul)
+  const negated_op1_a2a1_clr = cvt_f32int or (cvt_f32rast and align1_neg)
+  const negated_op1_log_mul_clr = log_mul and (eprod_hi_zero_f2a_h == 0 or ec_hi_gte_127)
+
+  // Out-of-range exponent differences zap the aligned operand.
+  const out_of_range_1 = if is_f32 {
+    if cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_FROUND { ediff1_abs_f2a_h > vpu_defs_pkg.TXFMA_EDIFF_OUT_OF_RANGE_CVT_F32INT } else { ediff1_abs_f2a_h > vpu_defs_pkg.TXFMA_F32_EDIFF_OUT_OF_RANGE }
+  } elif is_f16_f32 {
+    // ph goes to align 1 when opd3 is c, otherwise c goes to align 1
+    if opd3_mux_sel_f2a_h == vpu_defs_pkg.TXFMA_SEL_C { ediff1_abs_f2a_h > vpu_defs_pkg.TXFMA_PH_PS_P_EDIFF_OUT_OF_RANGE } else { ediff1_abs_f2a_h > vpu_defs_pkg.TXFMA_PH_PS_C_EDIFF_OUT_OF_RANGE }
+  } else {
+    ediff1_abs_f2a_h > vpu_defs_pkg.TXFMA_PH_EDIFF_OUT_OF_RANGE
+  }
+  const out_of_range_2 = ediff2_abs_f2a_h > vpu_defs_pkg.TXFMA_PH_EDIFF_OUT_OF_RANGE
+
+  const opd3 = opd3_mux_sel_f2a_h
+  const al1_sel = align1_mux_sel_f2a_h
+  const al2_sel = align2_mux_sel_f2a_h
+
+  // Operand-select buses driven straight to txfma_f3 (flopped there for timing)
+  op3p3spc_sel_f2a_h#[1] = U1(opd3 == vpu_defs_pkg.TXFMA_SEL_A or opd3 == vpu_defs_pkg.TXFMA_SEL_C)
+  op3p3spc_sel_f2a_h#[0] = U1(opd3 == vpu_defs_pkg.TXFMA_SEL_EXP_RES or opd3 == vpu_defs_pkg.TXFMA_SEL_C)
+  op3p2c_sel_f2a_h#[2] = U1(opd3 == vpu_defs_pkg.TXFMA_SEL_P_INT)
+  op3p2c_sel_f2a_h#[1] = U1(opd3 == vpu_defs_pkg.TXFMA_SEL_P or opd3 == vpu_defs_pkg.TXFMA_SEL_PH or sel_fcmask_f2a_h == 1 or opd3 == vpu_defs_pkg.TXFMA_SEL_P_INT)
+  op3p2c_sel_f2a_h#[0] = U1(opd3 == vpu_defs_pkg.TXFMA_SEL_PL or opd3 == vpu_defs_pkg.TXFMA_SEL_P or opd3 == vpu_defs_pkg.TXFMA_SEL_PH or opd3 == vpu_defs_pkg.TXFMA_SEL_P_INT)
+  ugfxrplc_sel_f2a_h#[1] = U1(cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CVT_F32UN16 or cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CVT_F32UN24)
+  ugfxrplc_sel_f2a_h#[0] = U1(cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CVT_F32UN10 or cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CVT_F32UN24)
+  sgfxrplc_sel_f2a_h#[1] = U1(cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CVT_F32UN2)
+  sgfxrplc_sel_f2a_h#[0] = U1(cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CVT_F32SN16)
+  icgfxc_sel_f2a_h#[1] = U1(cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CVT_F32UN16 or cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CVT_F32UN8 or cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CVT_F32UN10 or cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CVT_F32UN24)
+  icgfxc_sel_f2a_h#[0] = U1(cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CVT_F32SN16 or cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CVT_F32SN8 or cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CVT_F32UN2)
+  al1p2c_sel_f2a_h#[1] = U1(al1_sel == vpu_defs_pkg.TXFMA_SEL_P or al1_sel == vpu_defs_pkg.TXFMA_SEL_PH)
+  al1p2c_sel_f2a_h#[0] = U1(al1_sel == vpu_defs_pkg.TXFMA_SEL_A)
+  al1znp2c_sel_f2a_h#[1] = U1(align1_neg)
+  al1znp2c_sel_f2a_h#[0] = U1(not align1_neg and sig_f32_norm == 0 and not ffrc_op)
+  al2c_sel_f2a_h#[1] = U1(al2_sel == vpu_defs_pkg.TXFMA_SEL_PH or al2_sel == vpu_defs_pkg.TXFMA_SEL_PL)
+  al2c_sel_f2a_h#[0] = U1(al2_sel == vpu_defs_pkg.TXFMA_SEL_PH or al2_sel == vpu_defs_pkg.TXFMA_SEL_A)
+  al1p1c_sel_f2a_h = U1(al1_sel == vpu_defs_pkg.TXFMA_SEL_P)
+
+  op3p1c_sel_r_f2a_h = U1(opd3 == vpu_defs_pkg.TXFMA_SEL_ROUND and ec_zero_f2a_h == 0)
+  op3p1c_sel_p_f2a_h = U1(opd3 == vpu_defs_pkg.TXFMA_SEL_P or opd3 == vpu_defs_pkg.TXFMA_SEL_P_INT)
+  op3g_sel_f2a_h = U1(opd3 == vpu_defs_pkg.TXFMA_SEL_PH or opd3 == vpu_defs_pkg.TXFMA_SEL_PL or (opd3 == vpu_defs_pkg.TXFMA_SEL_C and is_f16_f32))
+
+  // Rounding-mode decode
+  rm_rne_f2a_h = U1(rm_f2a_h == vpu_defs_pkg.RNE)
+  rm_rmm_f2a_h = U1(rm_f2a_h == vpu_defs_pkg.RMM)
+  frnd_rupnsc_f2a_h = U1(rm_f2a_h == vpu_defs_pkg.RUP and not sc)
+  frnd_rdnsc_f2a_h = U1(rm_f2a_h == vpu_defs_pkg.RDN and sc)
+  frnd_t1_f2a_h = U1(rm_f2a_h == vpu_defs_pkg.RNE and e_sticky1_f2a_h == 1)
+  frnd_t2_f2a_h = U1(e_sticky1_f2a_h == 1 and ((rm_f2a_h == vpu_defs_pkg.RDN and sc) or (rm_f2a_h == vpu_defs_pkg.RUP and not sc)))
+
+  eff_sub1_f2a_h = U1(eff_sub1)
+  eff_sub2_f2a_h = U1(eff_sub2)
+  eff_sign1_f2a_h = U1(eff_sign1)
+  comp_op_f2a_h = U1(comp_op)
+  ediff1_0_f2a_h = U1(ediff1 == 0)
+  fa_ge_fc_comp_sign_hi_res_f2a_h = U1(eff_sign1 and not prod_sign_hi and not exp_frac)
+  fa_eq_fc_comp_sign_hi_res_f2a_h = U1(prod_sign_hi == sc)
+  ediff1_lt_31_f2a_h = U1(ediff1 < (0 - vpu_defs_pkg.TXFMA_CVT_INTF32_OFFSET)#[0..<10]#sext[0..=9])
+  cvt_fui_pos_ovf_f2a_h = U1(not sc and ediff1 > 0 and cmd_f2a_h == vpu_defs_pkg.VPU_FCMD_CVT_UINTF32)
+  cvt_fi_pos_ovf_f2a_h = U1(not sc and ediff1_gt_m1 and cvt_intf32)
+  const cvt_fi_min_neg = sc and ediff1_gt_m1 and cvt_intf32
+  cvt_fi_min_neg_f2a_h = U1(cvt_fi_min_neg)
+  cvt_fi_neg_ovf_f2a_h = U1(cvt_fi_min_neg and not (ediff1 == 0 and fc_zero30_8_f2a_h == 1) and cvt_intf32)
+  fc_sel_f2a_h = U1((ffrc_op and ediff1 < 0) or int_minmax_mux_sel_fc)
+  int_minmax_mux_sel_fc_f2a_h = U1(int_minmax_mux_sel_fc)
+  trans_log_rr_neg_f2a_h = U1(trans_log_rr_neg)
+  sin_align1_neg_f2a_h = U1(sin_align1_neg)
+  sin_align2_neg_f2a_h = U1(sin_align2_neg)
+  sin_check_fc_sign_f2a_h = U1(sin_check_fc_sign)
+  sin_ediff2_f2a_h = U1(sin_ediff2)
+  sin_eff_sub1_f2a_h = U1(sin_align1_neg != sin_align2_neg)
+
+  al1c_zap_f2a_h = U1(out_of_range_1 or not use_align1)
+  op1c_log_mul_clr_f2a_h = U1(log_mul and eprod_hi_zero_f2a_h == 0 and ediff1_abs_f2a_h != 0)
+  negop1c_int_logmul_clr_f2a_h = U1(negated_op1_a2a1_clr or negated_op1_log_mul_clr)
+  psc_op1_clr_f2a_h = U1(not is_f16_f32)
+  align2_zap_f2a_h = U1(out_of_range_2 or not use_align2)
+  align2c_neg_f2a_h = U1((eff_sub2 and use_align2) or sin_align2_neg)
+  al2c3_neg_cin_ps_f2a_h = U1(align2_neg_cin and is_f16_f32)
+  al1c3_neg_cin_f2a_h = U1(align1_neg_cin)
+  op2_sxtto_g_f2a_h = U1(align2_neg and sin_transform)
+}

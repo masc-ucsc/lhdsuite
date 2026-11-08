@@ -1,0 +1,65 @@
+const minion_dcache_pkg = import("minion_dcache_pkg")
+
+// Dcache scratchpad mode controller. A change of scratchpad_ctrl_i (seen in
+// the AllSet state) walks Initial -> Clear -> Zero -> AllSet: Clear arms the
+// row counter and tells the cache what to flush, Zero clears every data-array
+// row (set/idx/way come straight from the counter) and AllSet latches the new
+// mode. dcache_cfg_stall_o is high in every state but AllSet.
+comptime const ScpInitial:U2 = 0
+comptime const ScpClear:U2 = 1
+comptime const ScpZero:U2 = 2
+comptime const ScpAllSet:U2 = 3
+
+// Row counter: way is bits [1:0], idx bit 2, set bits [6:3].
+// rst_ni stays a U1 net: the caller (minion_dcache_top) hands it over as plain data.
+// prp-style-allow reset-port-type
+pub mod minion_dcache_scratchpad_ctrl(clk_i:Clock, da_clear_rdy_i:U1, dcache_idle_i:U1, rst_ni:U1, scratchpad_ctrl_i:U2) -> (da_clear_en_o:U1@[0], da_clear_idx_o:U1@[0], da_clear_set_o:minion_dcache_pkg.DcacheSetIdxWidth_T@[0], da_clear_val_o:U1@[0], da_clear_way_o:minion_dcache_pkg.DcacheWayIdxWidth_T@[0], dcache_cfg_alloc_scp_o:U1@[0], dcache_cfg_clear_all_o:U1@[0], dcache_cfg_clear_low_o:U1@[0], dcache_cfg_mode_o:U2@[0], dcache_cfg_stall_o:U1@[0]) {
+  comptime const ROW_BITS = std.clog2(minion_dcache_pkg.DcacheLramRows)
+  reg state:U2:[negreset=true, reset_pin=rst_ni] = ScpInitial
+  reg current_mode:U2:[negreset=true, reset_pin=rst_ni] = minion_dcache_pkg.DcacheModeShared
+  // No reset: only ever consumed after Clear has zeroed it.
+  reg zero_counter:Unsigned(bits=ROW_BITS) = nil
+
+  const in_clear = state == ScpClear
+  const in_zero = state == ScpZero
+  // Moving to or from Shared flushes the whole cache, other changes only the low part.
+  const touches_shared = current_mode == minion_dcache_pkg.DcacheModeShared or scratchpad_ctrl_i == minion_dcache_pkg.DcacheModeShared
+  const zero_limit:Unsigned(bits=ROW_BITS) = if touches_shared { minion_dcache_pkg.DcacheLramRows - 1 }
+    else { minion_dcache_pkg.DcacheLramRowsSplit - 1 }
+
+  const zero_count_up = (in_zero and da_clear_rdy_i != 0) or in_clear
+  const zero_count_end = zero_counter == zero_limit and zero_count_up
+
+  if zero_count_up {
+    wrap zero_counter = if in_clear { 0 } else { zero_counter + 1 }
+  }
+
+  // Hold in AllSet while the requested mode is the current one.
+  if state != ScpAllSet or current_mode != scratchpad_ctrl_i {
+    if state == ScpInitial {
+      if dcache_idle_i != 0 {
+        state = ScpClear
+      }
+    } elif in_clear {
+      state = ScpZero
+    } elif in_zero {
+      if zero_count_end {
+        state = ScpAllSet
+        current_mode = scratchpad_ctrl_i
+      }
+    } else {
+      state = ScpInitial
+    }
+  }
+
+  dcache_cfg_stall_o = U1(state != ScpAllSet)
+  dcache_cfg_clear_all_o = U1(in_clear and touches_shared)
+  dcache_cfg_clear_low_o = U1(in_clear and not touches_shared)
+  dcache_cfg_alloc_scp_o = U1(in_clear and current_mode == minion_dcache_pkg.DcacheModeSplit and scratchpad_ctrl_i == minion_dcache_pkg.DcacheModeScratchpad)
+  dcache_cfg_mode_o = current_mode
+  da_clear_en_o = U1(in_clear or in_zero)
+  da_clear_val_o = U1(in_zero)
+  da_clear_way_o = zero_counter#[0..<2]
+  da_clear_idx_o = zero_counter#[2]
+  da_clear_set_o = zero_counter#[3..<7]
+}

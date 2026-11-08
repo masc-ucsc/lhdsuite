@@ -1,0 +1,92 @@
+// VPU machine-learning front end: arbitrates the tensor-reduce, tensor-FMA and
+// tensor-quant units that share the instruction issue slot, the scratchpad
+// (dcache) request port and the "enabled" stall.
+const vpu_tensorfma = import("vpu_tensorfma.vpu_tensorfma")
+const vpu_tensorquant = import("vpu_tensorquant.vpu_tensorquant")
+const vpu_tensorreduce = import("vpu_tensorreduce.vpu_tensorreduce")
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+pub mod vpu_ml::[timecheck=false](clock:Clock, dcache_reduce_ctrl:(send_reg:U1, exec_op:U1, nothing:U1), dcache_scp_data:vpu_defs_pkg.DCACHE_DATA_SIZE_T, dcache_scp_resp:(fill_is_tenb_early:U1, fill_is_tenb:U1, tenb_flush:U1, tenb_line:U4), f0_core_ctrl:(tensorfma_start:U1, tensorfma_ctrl:(is_conv:U1, padding3:U6, cols_b:U2, rows_a:U4, cols_a:U4, start_a:U4, padding2:U19, to_vrf:U1, u_b:U1, u_a:U1, ten_b:U1, padding1:U2, scp_b:U6, padding0:U2, scp_a:U6, mode:U3, first_pass:U1), tensorfma_conv_bits_ready:U1, tensorfma_conv_bits:U16, reduce_start:U1, tensorstore_start:U1, reduce_ctrl:U64, tensorquant_start:U1, tensorquant_ctrl:(padding2:U2, start_reg:U5, cols:U2, rows:U4, scp_src:U6, padding:U5, trans:U40), pending_scoreboard_t0:U1), id_inst:vpu_defs_pkg.INST_SIZE_T, reset:U1) -> (tfma_enabled:U1@[], tfma_wrrf_enabled:U1@[], tquant_enabled:U1@[], tstore_reduce_enabled:U1@[], dcache_ctrl:(scp_req:(read_en:U1, way:U2, addr:U10, size64:U1, size256:U1, bid:U1), tenb_credit:U1, tenb_credit_entry:U2, tfma_enabled:U1, reduce_wait:U1, tfma_rf_write:U1)@[], reduce_load_ctrl:(wen:U1, thread_id:U1, broadcast_sel:U3, waddr:U5)@[], tensorfma_load_ctrl:(wen:U1, thread_id:U1, broadcast_sel:U3, waddr:U5)@[], load_ctrl_pre_tena_wen:U1@[], load_ctrl_pre_tenb_wen:U1@[], id_inst_en_next:U1@[], id_inst_next:vpu_defs_pkg.INST_SIZE_T@[], id_mask_next:vpu_defs_pkg.VPU_LANE_NUM_T@[], id_inst_en:U1@[], id_inst_fma_en:U1@[], id_inst_tena_quant_en:U1@[], f2_tentmp_wen_early:U1@[], f3_tentmp_wen:U1@[], f3_tentmp_waddr:vpu_defs_pkg.VPU_TENTMP_ADDR_W_T@[], ex_tentmp_ren:U1@[], ex_tentmp_raddr:vpu_defs_pkg.VPU_TENTMP_ADDR_W_T@[], ex_tquant_ren:U1@[], ex_tquant_rdata:U256@[], ex_tima_valid:U1@[], ex_tima_mask:U16@[], ex_tima_tena_raddr:U1@[], ex_tima_tenb_raddr:vpu_defs_pkg.VPU_TENB_ADDR_W_T@[], ex_tima_last_pass:U1@[], ex_tima_ren3:U1@[], ex_tima_sa:U1@[], ex_tima_sb:U1@[], ex_tena_rdata_mask:U1@[], f2_tima_ren3:U1@[], f2_tima_tenc_raddr:U4@[], f2_tima_tenc_wen:U16@[], f2_tima_rf_wen:U16@[], f3_tima_tenc_wen:U16@[], f3_tima_tenc_waddr:U4@[], f3_tima_rf_wen:U16@[], io_events_wait_tenb:U1@[], vpu_tensorquant_debug:U11@[], vpu_tensorreduce_debug:U25@[], vpu_tensorfma_debug:U25@[]) {
+  // Each unit stalls on the others' pending work, so these two nets close loops between the instances.
+  wire tfma_wrtenc_wrrf_enabled:U1 = nil
+  wire tquant_enabled:U1 = nil
+
+  const tensorreduce = vpu_tensorreduce::[name=tensorreduce](reset=reset, reduce_start=f0_core_ctrl.reduce_start, tensorstore_start=f0_core_ctrl.tensorstore_start, tensorfma_start=f0_core_ctrl.tensorfma_start, tensorquant_start=f0_core_ctrl.tensorquant_start, reduce_ctrl=f0_core_ctrl.reduce_ctrl, scoreboard_pend=f0_core_ctrl.pending_scoreboard_t0, tensorfma_pend=tfma_wrtenc_wrrf_enabled, tensorquant_pend=tquant_enabled, dcache_reduce_ctrl=dcache_reduce_ctrl)
+  const tensorfma = vpu_tensorfma::[name=tensorfma](reset=reset, f0_core_ctrl=f0_core_ctrl, tensorquant_pend=tquant_enabled, tensorstore_pend=tensorreduce.enabled, dcache_scp_resp=dcache_scp_resp, fma_inst=id_inst)
+  tfma_wrtenc_wrrf_enabled = tensorfma.pending_vpu_tenc_vrf_write
+
+  // The scratchpad port is the FMA unit's unless it is idle and the quant unit asks for it.
+  const fma_port_idle = tensorfma.dcache_ctrl.scp_req.read_en == 0
+  const tensorquant = vpu_tensorquant::[name=tensorquant](reset=reset, f0_core_ctrl=f0_core_ctrl, tensorfma_pend=tfma_wrtenc_wrrf_enabled, tensorstore_pend=tensorreduce.enabled, dcache_scp_available=U1(fma_port_idle), dcache_scp_data=dcache_scp_data)
+  tquant_enabled = tensorquant.enabled
+
+  dcache_ctrl = tensorfma.dcache_ctrl
+  // Leaf-wise on purpose: the whole-bundle copy under this `if` miscompiles in LiveHD (livehd_bugs/L3u2_01).
+  // prp-style-allow whole-tuple-copy
+  if fma_port_idle and tensorquant.dcache_scp_req.read_en != 0 {
+    dcache_ctrl.scp_req.read_en = tensorquant.dcache_scp_req.read_en
+    dcache_ctrl.scp_req.way = tensorquant.dcache_scp_req.way
+    dcache_ctrl.scp_req.addr = tensorquant.dcache_scp_req.addr
+    dcache_ctrl.scp_req.size64 = tensorquant.dcache_scp_req.size64
+    dcache_ctrl.scp_req.size256 = tensorquant.dcache_scp_req.size256
+  }
+  // The buffer id is the OR of both requesters even when the quant request wins.
+  dcache_ctrl.scp_req.bid = tensorfma.dcache_ctrl.scp_req.bid | tensorquant.dcache_scp_req.bid
+  dcache_ctrl.reduce_wait = tensorreduce.reduce_wait
+
+  // Issue slot: reduce > quant > FMA.
+  if tensorreduce.reduce_inst_en_next != 0 {
+    id_inst_next = tensorreduce.reduce_inst_next
+    id_mask_next = 0xff
+  } elif tensorquant.quant_en_next != 0 {
+    id_inst_next = tensorquant.quant_inst_next
+    id_mask_next = tensorquant.quant_mask_next
+  } else {
+    id_inst_next = tensorfma.fma_inst_next
+    id_mask_next = tensorfma.fma_mask_next
+  }
+
+  const id_inst_en_next_w = tensorfma.fma_en_next != 0 or tensorreduce.reduce_inst_en_next != 0 or tensorquant.quant_en_next != 0
+  reg id_inst_en:U1:[reset_pin=reset] = 0
+  if tensorfma.enabled != 0 or tensorreduce.enabled != 0 or tquant_enabled != 0 {
+    id_inst_en = U1(id_inst_en_next_w)
+  }
+
+  tfma_enabled = tensorfma.enabled
+  tfma_wrrf_enabled = tensorfma.pending_vpu_rf_write
+  tstore_reduce_enabled = tensorreduce.enabled
+  reduce_load_ctrl = tensorreduce.load_ctrl
+  tensorfma_load_ctrl = tensorfma.load_ctrl
+  load_ctrl_pre_tena_wen = tensorfma.load_ctrl_pre_tena_wen
+  load_ctrl_pre_tenb_wen = tensorfma.load_ctrl_pre_tenb_wen
+  id_inst_en_next = U1(id_inst_en_next_w)
+  id_inst_fma_en = tensorfma.fma_en
+  id_inst_tena_quant_en = tensorquant.quant_tena_en
+  f2_tentmp_wen_early = tensorfma.f2_tentmp_wen_early
+  f3_tentmp_wen = tensorfma.f3_tentmp_wen
+  f3_tentmp_waddr = tensorfma.f3_tentmp_waddr
+  ex_tentmp_ren = tensorfma.ex_tentmp_ren
+  ex_tentmp_raddr = tensorfma.ex_tentmp_raddr
+  ex_tquant_ren = tensorquant.ex_ren
+  ex_tquant_rdata = tensorquant.ex_rdata
+  ex_tima_valid = tensorfma.ex_tima_valid
+  ex_tima_mask = tensorfma.ex_tima_mask
+  ex_tima_tena_raddr = tensorfma.ex_tima_tena_raddr
+  ex_tima_tenb_raddr = tensorfma.ex_tima_tenb_raddr
+  ex_tima_last_pass = tensorfma.ex_tima_last_pass
+  ex_tima_ren3 = tensorfma.ex_tima_ren3
+  ex_tima_sa = tensorfma.ex_tima_sa
+  ex_tima_sb = tensorfma.ex_tima_sb
+  ex_tena_rdata_mask = tensorfma.ex_tena_rdata_mask
+  f2_tima_ren3 = tensorfma.f2_tima_ren3
+  f2_tima_tenc_raddr = tensorfma.f2_tima_tenc_raddr
+  f2_tima_tenc_wen = tensorfma.f2_tima_tenc_wen
+  f2_tima_rf_wen = tensorfma.f2_tima_rf_wen
+  f3_tima_tenc_wen = tensorfma.f3_tima_tenc_wen
+  f3_tima_tenc_waddr = tensorfma.f3_tima_tenc_waddr
+  f3_tima_rf_wen = tensorfma.f3_tima_rf_wen
+  io_events_wait_tenb = tensorfma.io_events_wait_tenb
+  vpu_tensorquant_debug = tensorquant.vpu_tensorquant_debug
+  vpu_tensorreduce_debug = tensorreduce.vpu_tensorreduce_debug
+  vpu_tensorfma_debug = tensorfma.vpu_tensorfma_debug
+}

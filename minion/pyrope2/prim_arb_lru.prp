@@ -1,0 +1,42 @@
+// LRU arbiter for NumClients requesters (verilog: prim_arb_lru).
+// prio_q[i]#[j] (j < i) set means client i beats lower-numbered client j; only
+// that lower triangle is used. The granted client is moved to lowest priority.
+// The priority matrix only updates when someone bids and the grant is not stalled.
+pub mod prim_arb_lru<NumClients=2>::[timecheck=false](bid_i:Unsigned(bits=NumClients), clk_i:Clock, rst_ni:U1, stall_i:U1) -> (grant_o:Unsigned(bits=NumClients)@[], winner_o:Unsigned(bits=std.clog2(NumClients))@[]) {
+  reg prio_q:[NumClients]Unsigned(bits=NumClients):[async=true, negreset=true, ordering="old", reset_pin=rst_ni] = 0
+
+  mut win:Unsigned(bits=NumClients) = 0
+  mut grant:Unsigned(bits=NumClients) = 0
+  for i in 0..<NumClients {
+    mut w = bid_i#[i] == 1
+    for j in 0..<i {
+      w = w and (bid_i#[j] == 0 or prio_q[i]#[j] == 1)
+    }
+    for j in (i + 1)..<NumClients {
+      w = w and (bid_i#[j] == 0 or prio_q[j]#[i] == 0)
+    }
+    win#[i] = U1(w)
+    grant#[i] = U1(w and stall_i == 0)
+  }
+  grant_o = grant
+
+  mut winner:Unsigned(bits=std.clog2(NumClients)) = 0
+  for i in 0..<NumClients {
+    if win#[i] == 1 {
+      winner = i
+    }
+  }
+  winner_o = winner
+
+  // The granted client drops below every other one: it loses its row bits and
+  // wins the bit in every later client's row.
+  if bid_i != 0 and stall_i == 0 {
+    for i in 0..<NumClients {
+      mut row = prio_q[i]
+      for j in 0..<i {
+        row#[j] = if grant#[i] == 1 { 0 } elif grant#[j] == 1 { 1 } else { prio_q[i]#[j] }
+      }
+      prio_q[i] = row
+    }
+  }
+}

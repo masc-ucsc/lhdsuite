@@ -1,0 +1,178 @@
+const prim_cmp_32 = import("prim_cmp_32.prim_cmp_32")
+const prim_cmp_42 = import("prim_cmp_42.prim_cmp_42")
+const prim_phase_pair_hi_lo = import("prim_phase_pair_hi_lo.prim_phase_pair_hi_lo")
+const minion_pkg = import("minion_pkg")
+
+comptime const ALL65 = 0x1ffffffffffffffff // 65 one bits
+
+// A multiplicand/dividend/divisor operand widened to 65 bits: a 64-bit op gets
+// one extra bit, a 32-bit op 33 (sign-filled when `signed`).
+comb extend_operand(dw, op, signed) -> (ext:U65) {
+  const fill:U33 = if signed == 1 and op#[31] == 1 { 0x1ffffffff } else { 0 }
+  ext = if dw == 1 { (U1(signed == 1 and op#[63] == 1) << 64) | op } else { (fill << 32) | op#[0..<32] }
+}
+
+// One Booth partial product from the multiplicand and its active-low select
+// {negate, 2x, 1x}: 0, +-1x or +-2x as a 66-bit value (negation is the one's
+// complement; the +1 enters through the compressor tree).
+comb booth_pp(besl:(e2:U1, e1:U1, e0:U1), mpcnd) -> (pp:U66) {
+  const base:U66 = if besl.e1 == 0 { mpcnd << 1 } else { mpcnd | (mpcnd#[64] << 65) }
+  const plain:U66 = if besl.e0 == 0 { base } else { 0 }
+  const negated:U66 = if besl.e2 == 0 { ~base } else { 0 }
+  pp = plain | negated
+}
+
+// Multiplier/divider datapath: a Booth-encoded radix-16 multiplier (four
+// partial products per cycle through a 4:2 / 3:2 compressor tree) and a
+// restoring divider that shares the accumulator and adder. All control comes
+// from intpipe_mul_div_ctl. It is a latch-based two-phase pipeline (see the
+// control for the 1p/2p naming): each *_en latch captures a clock enable in the
+// phase opposite to the data latch it gates.
+pub mod intpipe_mul_div_dp::[timecheck=false](clock:Clock, ex_dw_2p:U1, ex_op1_2p:minion_pkg.XregSize_T, ex_op2_2p:minion_pkg.XregSize_T, mdctl_acc_v1_sl_1d:U2, mdctl_acc_v2_sl_1d:U2, mdctl_add_ain_sl_1p:U1, mdctl_add_bin_sl_1p:U2, mdctl_besl_0_1p:(e2:U1, e1:U1, e0:U1), mdctl_besl_1_1p:(e2:U1, e1:U1, e0:U1), mdctl_besl_2_1p:(e2:U1, e1:U1, e0:U1), mdctl_besl_3_1p:(e2:U1, e1:U1, e0:U1), mdctl_clken_acc_v1_1p:U1, mdctl_clken_acc_v1_2p:U1, mdctl_clken_acc_v2_1p:U1, mdctl_clken_acc_v2_2p:U1, mdctl_clken_mpcnd_1d:U1, mdctl_clken_mul_ph1_2d:U1, mdctl_clken_muldvsr_ph2_1d:U1, mdctl_div_cin_1p:U1, mdctl_dvsr_sgn_1p:U1, mdctl_dw_1q:U1, mdctl_dw_2q:U1, mdctl_fc_zr_acc_1p:U1, mdctl_fnl_mul_cyc_1p:U1, mdctl_fnl_pp_1p:U1, mdctl_resp_sl_2p:(e1:U1, e0:U1), mdctl_se_zero_1p:U1, mdctl_start_div_2p:U1, mdctl_start_op_2p:U1, op1_sgnd_2p:U1, op2_sgnd_2p:U1) -> (debug_acc_v1_1q_o:U66@[], debug_acc_v2_1q_o:U66@[], debug_mpcnd_1p_o:U65@[], debug_mul_lo_2p_o:minion_pkg.XregSize_T@[], debug_mul_lo_dvsr_1p_o:U65@[], md_div_by_zero_1p:U1@[], md_mplr_2d:U8@[], md_nxt_quot_1q:U1@[], md_rem_sgn_1d:U1@[], md_resp_data_2p:minion_pkg.XregSize_T@[], md_zero_rem_1d:U1@[]) {
+  // Operand and result latches. The multiplicand is held for the whole multiply;
+  // mul_lo_dvsr holds the multiplier (low half of the product) or the divisor.
+  reg mpcnd_1p:U65:[enable=clock, enable_high=false, latch=true] = nil
+  reg mul_lo_dvsr_1p:U65:[enable=clock, enable_high=false, latch=true] = nil
+  reg mul_lo_2p:U64:[enable=clock, latch=true] = nil
+  reg mpcnd_en_2p:U1:[enable=clock, latch=true] = nil
+  reg mul_lo_dvsr_en_2p:U1:[enable=clock, latch=true] = nil
+  reg mul_lo_en_1p:U1:[enable=clock, enable_high=false, latch=true] = nil
+  // Quotient/carry accumulator (v2) and its enables.
+  reg acc_v2_1q:U66:[enable=clock, enable_high=false, latch=true] = nil
+  reg acc_v2_2q:U66:[enable=clock, latch=true] = nil
+  reg acc_v2_2q_en_1p:U1:[enable=clock, enable_high=false, latch=true] = nil
+  reg acc_v2_1q_en_2p:U1:[enable=clock, latch=true] = nil
+
+  // Sum/remainder accumulator (v1) and the multiply carry-out come from phase
+  // pairs that depend on the adder below, so they are read before they are defined.
+  wire acc_v1_1q:U66 = nil
+  wire acc_v1_2p:U66 = nil
+  wire fa_cout_1q:U1 = nil
+
+  const mpcnd_1d = extend_operand(dw=ex_dw_2p, op=ex_op1_2p, signed=op1_sgnd_2p)
+  const dvsr_1d = extend_operand(dw=ex_dw_2p, op=ex_op2_2p, signed=op2_sgnd_2p)
+  const mul_lo_dvsr_2d:U65 = if mdctl_start_op_2p == 1 { dvsr_1d } else { mul_lo_2p }
+
+  mpcnd_en_2p = mdctl_clken_mpcnd_1d
+  if mpcnd_en_2p == 1 {
+    mpcnd_1p = mpcnd_1d
+  }
+  mul_lo_dvsr_en_2p = mdctl_clken_muldvsr_ph2_1d
+  if mul_lo_dvsr_en_2p == 1 {
+    mul_lo_dvsr_1p = mul_lo_dvsr_2d
+  }
+  md_div_by_zero_1p = U1(mul_lo_dvsr_1p#[0..<64] == 0)
+  md_mplr_2d = mul_lo_dvsr_2d#[0..<8]
+
+  // ---- Multiplier: four Booth partial products plus the final adjustment.
+  const pp_0_1p = booth_pp(besl=mdctl_besl_0_1p, mpcnd=mpcnd_1p)
+  const pp_1_1p = booth_pp(besl=mdctl_besl_1_1p, mpcnd=mpcnd_1p)
+  const pp_2_1p = booth_pp(besl=mdctl_besl_2_1p, mpcnd=mpcnd_1p)
+  const pp_3_1p = booth_pp(besl=mdctl_besl_3_1p, mpcnd=mpcnd_1p)
+  const pp_l_1p:U64 = if mdctl_fnl_pp_1p == 1 { mpcnd_1p#[0..<64] } else { 0 }
+
+  // The "+1" of a negated partial product enters as the low bit of the next
+  // operand: neg_k is 1 when pp_k was negated.
+  const neg_0:U1 = U1(mdctl_besl_0_1p.e2 == 0)
+  const neg_1:U1 = U1(mdctl_besl_1_1p.e2 == 0)
+  const neg_2:U1 = U1(mdctl_besl_2_1p.e2 == 0)
+  const neg_3:U1 = U1(mdctl_besl_3_1p.e2 == 0)
+
+  // The accumulators are zeroed on the first multiply cycle and during divides.
+  const acc_v1_1d:U66 = if mdctl_fc_zr_acc_1p == 1 { acc_v1_1q } else { 0 }
+  const acc_v2_1d:U66 = if mdctl_fc_zr_acc_1p == 1 { acc_v2_1q } else { 0 }
+  const fa_cout_1d:U1 = U1(fa_cout_1q == 1 and mdctl_fc_zr_acc_1p == 1)
+
+  // Level 0: a 4:2 (accumulators + pp_0 + pp_1) and a 3:2 (pp_2, pp_3, final adjustment).
+  const l0_42_a:U68 = acc_v1_1d#sext[0..=65]#[0..<68]
+  const l0_42_b:U68 = acc_v2_1d#sext[0..=65]#[0..<68]
+  const l0_42_c:U68 = pp_0_1p#sext[0..=65]#[0..<68]
+  const l0_42_d:U68 = (pp_1_1p << 2) | neg_0
+  const l0_42_i = prim_cmp_42<Width=68>(a=l0_42_a, b=l0_42_b, c=l0_42_c, d=l0_42_d, cin=fa_cout_1d)
+  const l0_32_a:U68 = pp_2_1p#sext[0..=65]#[0..<68]
+  const l0_32_b:U68 = (pp_3_1p << 2) | neg_2
+  const l0_32_c:U68 = (pp_l_1p << 4) | (neg_3 << 2)
+  const l0_32_i = prim_cmp_32<Width=68>(a=l0_32_a, b=l0_32_b, c=l0_32_c)
+
+  // Level 1: a 4:2 over the two level-0 results.
+  const l1_42_a:U71 = l0_42_i.sv#[2..<68]#sext[0..=65]#[0..<71]
+  const l1_42_b:U71 = l0_42_i.cv#[1..<68]#sext[0..=66]#[0..<71]
+  const l1_42_c:U71 = ((l0_32_i.sv << 2) | neg_1)#sext[0..=69]#[0..<71]
+  const l1_42_d:U71 = l0_32_i.cv << 3
+  const l1_42_i = prim_cmp_42<Width=71>(a=l1_42_a, b=l1_42_b, c=l1_42_c, d=l1_42_d, cin=0)
+
+  // Level 2: a 6-bit adder yields 8 result bits per iteration and the carry-out
+  // for the next one (fa_cout_1q); the rest stays in the sum/carry vectors.
+  const l2_low:U2 = ((l0_42_i.sv#[1] ^ l0_42_i.cv#[0]) << 1) | l0_42_i.sv#[0]
+  const l2_carry_in:U1 = l0_42_i.sv#[1] & l0_42_i.cv#[0]
+  const l2_sum:U7 = l1_42_i.sv#[0..<6] + ((l1_42_i.cv#[0..<5] << 1) | l2_carry_in)
+  const l2_mul_res_1p:U8 = (l2_sum#[0..<6] << 2) | l2_low
+  const nxt_fa_cout_1p = l2_sum#[6]
+  const nxt_acc_v1_1p:U66 = l1_42_i.sv#[6..<71] | (l1_42_i.sv#[70] << 65)
+  const nxt_acc_v2_1p:U66 = l1_42_i.cv#[5..<71]
+
+  // Multiply: shift the 8 result bits into the low half of the product while the
+  // multiplier bits shift out.
+  const mul_lo_1d:U64 = if mdctl_dw_1q == 1 { (l2_mul_res_1p << 56) | mul_lo_dvsr_1p#[8..<64] }
+    else { (l2_mul_res_1p << 24) | mul_lo_dvsr_1p#[8..<32] }
+  mul_lo_en_1p = mdctl_clken_mul_ph1_2d
+  if mul_lo_en_1p == 1 {
+    mul_lo_2p = mul_lo_1d
+  }
+
+  // ---- Adder shared by the divide loop and the final multiply sum.
+  const ain_1p:U65 = if mdctl_se_zero_1p == 1 { ALL65 } elif mdctl_add_ain_sl_1p == 1 { acc_v1_1q#[0..<65] } else { 0 }
+  // B input: ~divisor / divisor for the divide loop, acc_v2 for the final
+  // multiply sum, zero during the multiply loop to save power.
+  const bin_1p:U65 = if mdctl_add_bin_sl_1p == 3 { ~mul_lo_dvsr_1p }
+    elif mdctl_add_bin_sl_1p == 2 { mul_lo_dvsr_1p }
+    elif mdctl_add_bin_sl_1p == 1 { acc_v2_1q#[0..<65] }
+    else { 0 }
+  const cin_1p:U1 = if mdctl_fnl_mul_cyc_1p == 1 { fa_cout_1q } else { mdctl_div_cin_1p }
+  const total:U66 = ain_1p + bin_1p + cin_1p
+  const sum_1d = total#[0..<65]
+  const cout_1d = total#[65]
+  md_rem_sgn_1d = sum_1d#[64]
+  md_zero_rem_1d = U1(sum_1d == 0)
+  md_nxt_quot_1q = if mdctl_dw_1q == 1 { acc_v2_1q#[63] } else { acc_v2_1q#[31] }
+
+  // ---- Accumulator next values. v1: remainder adjust / final multiply take the
+  // sum, the multiply loop the sum vector, the divide loop shifts in the quotient bit.
+  const nxt_acc_v1_1d:U66 = if mdctl_acc_v1_sl_1d#[1] == 1 { sum_1d }
+    elif mdctl_acc_v1_sl_1d == 1 { nxt_acc_v1_1p }
+    else { (sum_1d << 1) | md_nxt_quot_1q }
+  // v2: quotient adjust takes the sum, the multiply loop the carry vector, the
+  // divide loop shifts in the next quotient bit (set on divide by zero).
+  const quot_bit:U1 = U1(((cout_1d ^ mdctl_dvsr_sgn_1p) & 1) == 1 or md_div_by_zero_1p == 1)
+  const nxt_acc_v2_1d:U66 = if mdctl_acc_v2_sl_1d#[1] == 1 { sum_1d }
+    elif mdctl_acc_v2_sl_1d == 1 { nxt_acc_v2_1p }
+    else { (acc_v2_1q#[0..<65] << 1) | quot_bit }
+  const u_acc_v1_pair = prim_phase_pair_hi_lo<Width=66>(clk_i=clock, hi_en_i=mdctl_clken_acc_v1_2p, lo_en_i=mdctl_clken_acc_v1_1p, d_i=nxt_acc_v1_1d)
+  acc_v1_2p = u_acc_v1_pair.q_hi_o
+  acc_v1_1q = u_acc_v1_pair.q_lo_o
+
+  const acc_v2_2d:U66 = if mdctl_start_div_2p == 1 { mpcnd_1d } else { acc_v2_2q }
+  acc_v2_2q_en_1p = mdctl_clken_acc_v2_2p
+  if acc_v2_2q_en_1p == 1 {
+    acc_v2_2q = nxt_acc_v2_1d
+  }
+  acc_v2_1q_en_2p = mdctl_clken_acc_v2_1p
+  if acc_v2_1q_en_2p == 1 {
+    acc_v2_1q = acc_v2_2d
+  }
+  const u_fa_cout_pair = prim_phase_pair_hi_lo<Width=1>(clk_i=clock, hi_en_i=mdctl_clken_acc_v2_2p, lo_en_i=mdctl_clken_acc_v2_1p, d_i=nxt_fa_cout_1p)
+  fa_cout_1q = u_fa_cout_pair.q_lo_o
+
+  // ---- Response: multiply low half, quotient, or remainder/product high half;
+  // 32-bit ops sign-extend bit 31.
+  const resp_data_2d:U64 = if mdctl_resp_sl_2p.e1 == 1 { mul_lo_2p }
+    elif mdctl_resp_sl_2p.e0 == 1 { acc_v2_2q#[0..<64] }
+    else { acc_v1_2p#[0..<64] }
+  md_resp_data_2p = if mdctl_dw_2q == 1 { resp_data_2d } else { resp_data_2d#[0..<32]#sext[0..=31]#[0..<64] }
+
+  debug_mpcnd_1p_o = mpcnd_1p
+  debug_mul_lo_dvsr_1p_o = mul_lo_dvsr_1p
+  debug_mul_lo_2p_o = mul_lo_2p
+  debug_acc_v1_1q_o = acc_v1_1q
+  debug_acc_v2_1q_o = acc_v2_1q
+}

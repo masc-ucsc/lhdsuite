@@ -1,0 +1,156 @@
+// Exponent datapath of the transcendental FMA (stages E1..E6). Each stage is a
+// combinational block (txfma_e1/e2/e5/e6) followed by enable-gated pipeline
+// registers that advance only when that stage's ctrl_valid is set; none of the
+// pipeline registers is reset. The E4 stage has no logic besides the sticky OR.
+const txfma_e1 = import("txfma_e1.txfma_e1")
+const txfma_e2 = import("txfma_e2.txfma_e2")
+const txfma_e5 = import("txfma_e5.txfma_e5")
+const txfma_e6 = import("txfma_e6.txfma_e6")
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+// Split the packed 19-bit signal vector into the named bits the stage exponent blocks take.
+comb unpack_sigs(v:U19) -> (e0:U1, e1:U1, e10:U1, e11:U1, e12:U1, e13:U1, e14:U1, e15:U1, e16:U1, e17:U1, e18:U1, e2:U1, e3:U1, e4:U1, e5:U1, e6:U1, e7:U1, e8:U1, e9:U1) {
+  e18 = v#[18]
+  e17 = v#[17]
+  e16 = v#[16]
+  e15 = v#[15]
+  e14 = v#[14]
+  e13 = v#[13]
+  e12 = v#[12]
+  e11 = v#[11]
+  e10 = v#[10]
+  e9 = v#[9]
+  e8 = v#[8]
+  e7 = v#[7]
+  e6 = v#[6]
+  e5 = v#[5]
+  e4 = v#[4]
+  e3 = v#[3]
+  e2 = v#[2]
+  e1 = v#[1]
+  e0 = v#[0]
+}
+
+pub mod txfmaexp_top::[timecheck=false](clock:Clock, cmd_f1a_h:vpu_defs_pkg.VPU_FCMD_SZ_T, cmd_f2a_h:vpu_defs_pkg.VPU_FCMD_SZ_T, cmd_f5a_h:vpu_defs_pkg.VPU_FCMD_SZ_T, cmd_f6a_h:vpu_defs_pkg.VPU_FCMD_SZ_T, comp_op_f5a_h:U1, comp_op_true_f5a_h:U1, ctrl_valid_f1a_h:U1, ctrl_valid_f2a_h:U1, ctrl_valid_f3a_h:U1, ctrl_valid_f4a_h:U1, ctrl_valid_f5a_h:U1, e_force_to_zero_f5a_h:U1, ea_hi_f1a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T, ea_hi_f5a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T, ea_hi_zero_f1a_h:U1, ea_lo_f1a_h:vpu_defs_pkg.TXFMA_EXP_PH_SZ_T, eb_hi_f1a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T, eb_hi_lsb_f4a_h:U1, eb_lo_f1a_h:vpu_defs_pkg.TXFMA_EXP_PH_SZ_T, ec_all1_f1a_h:U1, ec_f1a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T, ec_zero_f1a_h:U1, ec_zero_f2a_h:U1, elxd_add_in2_mux_sel_f4a_h:U1, elxd_f4a_h:vpu_defs_pkg.TXFMA_LXD_PS_SZ_T, eprod_hi_zero_f2a_h:U1, eprod_lo_zero_f2a_h:U1, etrz50_f4a_h:vpu_defs_pkg.TXFMA_WSPS_ETRZ_SZ_T, etrz_fa_hi_ph_f1a_h:U4, etrz_fa_lo_ps_f1a_h:U5, etrz_fb_hi_ph_f1a_h:U4, etrz_fb_lo_ps_f1a_h:U5, etrz_fc_f1a_h:U5, exp_fma2_exc_f2a_h:U1, fb_hi_zero_f4a_h:U1, fc_zero30_8_f1a_h:U1, int_minmax_mux_sel_a_f5a_h:U1, int_minmax_mux_sel_c_f5a_h:U1, nshc_f5a_h:U1, op_dtype_f1a_h:vpu_defs_pkg.VPU_DTYPE_SZ_T, op_dtype_f2a_h:vpu_defs_pkg.VPU_DTYPE_SZ_T, op_dtype_f5a_h:vpu_defs_pkg.VPU_DTYPE_SZ_T, op_dtype_f6a_h:vpu_defs_pkg.VPU_DTYPE_SZ_T, ph_rndovf_f6a_h:U1, ps_rndovf_f6a_h:U1, rm_f5a_h:vpu_defs_pkg.TXFMA_RM_SZ_T, s_res_f5a_h:U1, sigs_f1a_h:vpu_defs_pkg.TXFMA_SIGS_SZ_T, sigs_f2a_h:vpu_defs_pkg.TXFMA_SIGS_SZ_T, sigs_f5a_h:vpu_defs_pkg.TXFMA_SIGS_SZ_T, sigs_f6a_h:vpu_defs_pkg.TXFMA_SIGS_SZ_T, sin_ediff2_f2a_h:U1, use_elxd_f4a_h:U1) -> (align1_mux_sel_f2a_h:vpu_defs_pkg.TXFMA_EDIFF_OPD_SEL_SZ_T@[], align2_mux_sel_f2a_h:vpu_defs_pkg.TXFMA_EDIFF_OPD_SEL_SZ_T@[], align2_rshamt_c3_f2a_h:U5@[], def_ovf_ph_f6a_h:U1@[], def_ovf_ps_f6a_h:U1@[], def_unf_ph_f6a_h:U1@[], def_unf_ps_f6a_h:U1@[], e_sticky1_f2a_h:U1@[], e_sticky1_f3a_h:U1@[], e_sticky2_f2a_h:U1@[], ec_f2a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T@[], ec_f3a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T@[], ediff1_abs_f2a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T@[], ediff1_f2a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T@[], ediff1_sel_f2a_h:vpu_defs_pkg.TXFMA_EDIFF_OPD_SEL_SZ_T@[], ediff1_zap_f5a_h:U1@[], ediff2_abs_f2a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T@[], ediff2_f3a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T@[], ediff2_sel_f2a_h:vpu_defs_pkg.TXFMA_EDIFF_OPD_SEL_SZ_T@[], ediff_abs_diff_hi_f2a_h:U6@[], exp_res_2f3_f2a_h:U7@[], exp_res_f6a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T@[], exp_res_zero_f6a_h:U1@[], opd3_mux_sel_f2a_h:vpu_defs_pkg.TXFMA_EDIFF_OPD_SEL_SZ_T@[], ph_comb_stiky_f4a_h:U1@[], pot_ovf_ph_f6a_h:U1@[], pot_ovf_ps_f6a_h:U1@[], pot_unf_ph_f6a_h:U1@[], pot_unf_ps_f6a_h:U1@[], rmode_f5a_h:U1@[], stky2g_f5a_h:U1@[]) {
+  // ---- E1: product exponents and exponent differences, registered into E2 ----
+  const txfma0_e1 = txfma_e1::[name=txfma0_e1](op_dtype_f1a_h=op_dtype_f1a_h, sigs_f1a_h=unpack_sigs(v=sigs_f1a_h), cmd_f1a_h=cmd_f1a_h, ea_hi_f1a_h=ea_hi_f1a_h, eb_hi_f1a_h=eb_hi_f1a_h, ea_lo_f1a_h=ea_lo_f1a_h, eb_lo_f1a_h=eb_lo_f1a_h, ec_f1a_h=ec_f1a_h, ec_zero_f1a_h=ec_zero_f1a_h, ec_all1_f1a_h=ec_all1_f1a_h, ea_hi_zero_f1a_h=ea_hi_zero_f1a_h, etrz_fa_hi_ph_f1a_h=etrz_fa_hi_ph_f1a_h, etrz_fa_lo_ps_f1a_h=etrz_fa_lo_ps_f1a_h, etrz_fb_hi_ph_f1a_h=etrz_fb_hi_ph_f1a_h, etrz_fb_lo_ps_f1a_h=etrz_fb_lo_ps_f1a_h, fc_zero30_8_f1a_h=fc_zero30_8_f1a_h)
+  reg ec_f2a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T = nil
+  reg eb_hi_f2a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T = nil
+  reg ediff_ec_eph_f2a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T = nil
+  reg ediff_ec_epl_f2a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T = nil
+  reg ediff_eph_epl_f2a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T = nil
+  reg eprod_hi_f2a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T = nil
+  reg eprod_lo_f2a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T = nil
+  reg etrz_prod_hi_ph_f2a_h:vpu_defs_pkg.TXFMA_ETRZ_PROD_PH_SZ_T = nil
+  reg etrz_prod_lo_ps_f2a_h:vpu_defs_pkg.TXFMA_ETRZ_PROD_PS_SZ_T = nil
+  reg etrz_fa_lo_ps_f2a_h:U5 = nil
+  reg etrz_fc_f2a_h:U5 = nil
+  if ctrl_valid_f1a_h != 0 {
+    ec_f2a_h = txfma0_e1.ec_out_f1a_h
+    eb_hi_f2a_h = eb_hi_f1a_h
+    ediff_ec_eph_f2a_h = txfma0_e1.ediff_ec_eph_f1a_h
+    ediff_ec_epl_f2a_h = txfma0_e1.ediff_ec_epl_f1a_h
+    ediff_eph_epl_f2a_h = txfma0_e1.ediff_eph_epl_f1a_h
+    eprod_hi_f2a_h = txfma0_e1.eprod_hi_f1a_h
+    eprod_lo_f2a_h = txfma0_e1.eprod_lo_f1a_h
+    etrz_prod_hi_ph_f2a_h = txfma0_e1.etrz_prod_hi_ph_f1a_h
+    etrz_prod_lo_ps_f2a_h = txfma0_e1.etrz_prod_lo_ps_f1a_h
+    etrz_fa_lo_ps_f2a_h = etrz_fa_lo_ps_f1a_h
+    etrz_fc_f2a_h = etrz_fc_f1a_h
+  }
+
+  // ---- E2: operand ordering, ediffs and sticky exponents, registered into E3 ----
+  const txfma0_e2 = txfma_e2::[name=txfma0_e2](cmd_f2a_h=cmd_f2a_h, op_dtype_f2a_h=op_dtype_f2a_h, sigs_f2a_h=unpack_sigs(v=sigs_f2a_h), ediff_ec_eph_f2a_h=ediff_ec_eph_f2a_h, ediff_ec_epl_f2a_h=ediff_ec_epl_f2a_h, ediff_eph_epl_f2a_h=ediff_eph_epl_f2a_h, eprod_hi_f2a_h=eprod_hi_f2a_h, eprod_lo_f2a_h=eprod_lo_f2a_h, ec_f2a_h=ec_f2a_h, eb_hi_f2a_h=eb_hi_f2a_h, etrz_fa_lo_ps_f2a_h=etrz_fa_lo_ps_f2a_h, etrz_fc_f2a_h=etrz_fc_f2a_h, etrz_prod_hi_ph_f2a_h=etrz_prod_hi_ph_f2a_h, etrz_prod_lo_ps_f2a_h=etrz_prod_lo_ps_f2a_h, sin_ediff2_f2a_h=sin_ediff2_f2a_h, eprod_hi_zero_f2a_h=eprod_hi_zero_f2a_h, eprod_lo_zero_f2a_h=eprod_lo_zero_f2a_h, ec_zero_f2a_h=ec_zero_f2a_h, exp_fma2_exc_f2a_h=exp_fma2_exc_f2a_h)
+  reg ediff1_zap_f3a_h:U1 = nil
+  reg ec_f3a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T = nil
+  reg exp_res_f3a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T = nil
+  reg ediff2_f3a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T = nil
+  reg e_sticky2_f3a_h:U1 = nil
+  reg e_sticky1_f3a_h:U1 = nil
+  if ctrl_valid_f2a_h != 0 {
+    ediff1_zap_f3a_h = txfma0_e2.ediff1_zap_f2a_h
+    ec_f3a_h = ec_f2a_h
+    exp_res_f3a_h = txfma0_e2.exp_res_f2a_h
+    ediff2_f3a_h = txfma0_e2.ediff2_f2a_h
+    e_sticky2_f3a_h = txfma0_e2.e_sticky2_f2a_h
+    e_sticky1_f3a_h = txfma0_e2.e_sticky1_f2a_h
+  }
+
+  // ---- E3 -> E4: pure delay of the exponent state ----
+  reg ediff1_zap_f4a_h:U1 = nil
+  reg ec_f4a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T = nil
+  reg exp_res_f4a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T = nil
+  reg e_sticky2_f4a_h:U1 = nil
+  reg e_sticky1_f4a_h:U1 = nil
+  if ctrl_valid_f3a_h != 0 {
+    ediff1_zap_f4a_h = ediff1_zap_f3a_h
+    ec_f4a_h = ec_f3a_h
+    exp_res_f4a_h = exp_res_f3a_h
+    e_sticky2_f4a_h = e_sticky2_f3a_h
+    e_sticky1_f4a_h = e_sticky1_f3a_h
+  }
+
+  // ---- E4 -> E5: the combined sticky is a plain OR; the lxd/etrz50 inputs join the pipe here ----
+  reg eb_hi_lsb_f5a_h:U1 = nil
+  reg fb_hi_zero_f5a_h:U1 = nil
+  reg elxd_add_in2_mux_sel_f5a_h:U1 = nil
+  reg use_elxd_f5a_h:U1 = nil
+  reg etrz50_f5a_h:vpu_defs_pkg.TXFMA_WSPS_ETRZ_SZ_T = nil
+  reg elxd_f5a_h:vpu_defs_pkg.TXFMA_LXD_PS_SZ_T = nil
+  reg e_sticky2_f5a_h:U1 = nil
+  reg e_sticky1_f5a_h:U1 = nil
+  reg ediff1_zap_f5a_h:U1 = nil
+  reg ec_f5a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T = nil
+  reg exp_res_in_f5a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T = nil
+  if ctrl_valid_f4a_h != 0 {
+    eb_hi_lsb_f5a_h = eb_hi_lsb_f4a_h
+    fb_hi_zero_f5a_h = fb_hi_zero_f4a_h
+    elxd_add_in2_mux_sel_f5a_h = elxd_add_in2_mux_sel_f4a_h
+    use_elxd_f5a_h = use_elxd_f4a_h
+    etrz50_f5a_h = etrz50_f4a_h
+    elxd_f5a_h = elxd_f4a_h
+    e_sticky2_f5a_h = e_sticky2_f4a_h
+    e_sticky1_f5a_h = e_sticky1_f4a_h
+    ediff1_zap_f5a_h = ediff1_zap_f4a_h
+    ec_f5a_h = ec_f4a_h
+    exp_res_in_f5a_h = exp_res_f4a_h
+  }
+
+  // ---- E5: sticky carry, rounding direction and result exponent, registered into E6 ----
+  const txfma0_e5 = txfma_e5::[name=txfma0_e5](cmd_f5a_h=cmd_f5a_h, rm_f5a_h=rm_f5a_h, op_dtype_f5a_h=op_dtype_f5a_h, sigs_f5a_h=unpack_sigs(v=sigs_f5a_h), exp_res_in_f5a_h=exp_res_in_f5a_h, ea_hi_f5a_h=ea_hi_f5a_h, ec_f5a_h=ec_f5a_h, s_res_f5a_h=s_res_f5a_h, comp_op_f5a_h=comp_op_f5a_h, comp_op_true_f5a_h=comp_op_true_f5a_h, nshc_f5a_h=nshc_f5a_h, int_minmax_mux_sel_a_f5a_h=int_minmax_mux_sel_a_f5a_h, int_minmax_mux_sel_c_f5a_h=int_minmax_mux_sel_c_f5a_h, e_force_to_zero_f5a_h=e_force_to_zero_f5a_h, ediff1_zap_f5a_h=ediff1_zap_f5a_h, e_sticky1_f5a_h=e_sticky1_f5a_h, e_sticky2_f5a_h=e_sticky2_f5a_h, elxd_f5a_h=elxd_f5a_h, etrz50_f5a_h=etrz50_f5a_h, use_elxd_f5a_h=use_elxd_f5a_h, elxd_add_in2_mux_sel_f5a_h=elxd_add_in2_mux_sel_f5a_h, fb_hi_zero_f5a_h=fb_hi_zero_f5a_h, eb_hi_lsb_f5a_h=eb_hi_lsb_f5a_h)
+  reg exp_res_in_f6a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T = nil
+  if ctrl_valid_f5a_h != 0 {
+    exp_res_in_f6a_h = txfma0_e5.exp_res_f5a_h
+  }
+
+  // ---- E6: over/underflow flags and the final exponent ----
+  const txfma0_e6 = txfma_e6::[name=txfma0_e6](exp_res_in_f6a_h=exp_res_in_f6a_h, ps_rndovf_f6a_h=ps_rndovf_f6a_h, ph_rndovf_f6a_h=ph_rndovf_f6a_h, cmd_f6a_h=cmd_f6a_h, sigs_f6a_h=unpack_sigs(v=sigs_f6a_h), op_dtype_f6a_h=op_dtype_f6a_h)
+
+  // Outputs
+  e_sticky1_f2a_h = txfma0_e2.e_sticky1_f2a_h
+  e_sticky2_f2a_h = txfma0_e2.e_sticky2_f2a_h
+  align1_mux_sel_f2a_h = txfma0_e2.align1_mux_sel_f2a_h
+  align2_mux_sel_f2a_h = txfma0_e2.align2_mux_sel_f2a_h
+  opd3_mux_sel_f2a_h = txfma0_e2.opd3_mux_sel_f2a_h
+  ediff1_f2a_h = txfma0_e2.ediff1_f2a_h
+  ediff1_sel_f2a_h = txfma0_e2.ediff1_sel_f2a_h
+  ediff2_sel_f2a_h = txfma0_e2.ediff2_sel_f2a_h
+  ediff1_abs_f2a_h = txfma0_e2.ediff1_abs_f2a_h
+  ediff2_abs_f2a_h = txfma0_e2.ediff2_abs_f2a_h
+  ediff_abs_diff_hi_f2a_h = txfma0_e2.ediff_abs_diff_hi_f2a_h
+  align2_rshamt_c3_f2a_h = txfma0_e2.align2_rshamt_c3_f2a_h
+  ph_comb_stiky_f4a_h = e_sticky1_f4a_h | e_sticky2_f4a_h
+  exp_res_2f3_f2a_h = txfma0_e2.exp_res_2f3_f2a_h
+  stky2g_f5a_h = txfma0_e5.stky2g_f5a_h
+  exp_res_f6a_h = txfma0_e6.exp_res_f6a_h
+  exp_res_zero_f6a_h = txfma0_e6.exp_res_zero_f6a_h
+  rmode_f5a_h = txfma0_e5.rmode_f5a_h
+  def_ovf_ps_f6a_h = txfma0_e6.def_ovf_ps_f6a_h
+  pot_ovf_ps_f6a_h = txfma0_e6.pot_ovf_ps_f6a_h
+  def_unf_ps_f6a_h = txfma0_e6.def_unf_ps_f6a_h
+  pot_unf_ps_f6a_h = txfma0_e6.pot_unf_ps_f6a_h
+  def_ovf_ph_f6a_h = txfma0_e6.def_ovf_ph_f6a_h
+  pot_ovf_ph_f6a_h = txfma0_e6.pot_ovf_ph_f6a_h
+  def_unf_ph_f6a_h = txfma0_e6.def_unf_ph_f6a_h
+  pot_unf_ph_f6a_h = txfma0_e6.pot_unf_ph_f6a_h
+}

@@ -1,0 +1,113 @@
+// Writeback unit of the data cache (verilog: minion_dcache_writeback_unit).
+// Takes one eviction request at a time, reads the victim line out of the data
+// array (CoreL2BlockExtPasses passes, a single half-line pass for tbox) and sends
+// each pass to the L2 when the read data returns three cycles later. A nacked
+// read or a busy L2 rewinds the pass counter over the reads still in flight, so
+// those passes are issued again.
+const minion_dcache_pkg = import("minion_dcache_pkg")
+
+pub mod minion_dcache_writeback_unit::[timecheck=false](clk_i:Clock, data_req_grant_i:U1, data_req_nack_i:U1, data_resp_i:U256, l2_req_ready_i:U1, req_data_i:(tag:U33, set:U4, way_en:U4, is_tbox:U1, mem_idx:U1, addr_low:U7), req_valid_i:U1, rst_ni:U1) -> (data_req_bid_o:U1@[], data_req_o:(valid_l:U1, valid_h:U1, way:U2, addr:U10)@[], data_req_valid_o:U1@[], l2_req_data_o:(id:U5, source:U1, wdata:U1, opcode:U5, address:U40, data:U256, size:U3, qwen:U4, subopcode:U7)@[], l2_req_valid_o:U1@[], req_ready_o:U1@[]) {
+  // Latched request, packed lsb first as (addr_low, mem_idx, is_tbox, way_en, set, tag).
+  reg req_q:U50:[clock_pin=clk_i] = nil
+  reg data_req_cnt_q:U2:[clock_pin=clk_i] = nil
+  reg data_req_cnt_idx_q:U1:[clock_pin=clk_i] = nil
+  reg active_q:Bool:[clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  // data array read pipeline: request fired at the array, then 3 cycles to the data
+  reg data_req_valid_o:U1:[clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg r1_data_req_fired_q:Bool:[clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  reg r2_data_req_fired_q:Bool:[clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  reg r3_data_req_fired_q:Bool:[clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  reg r2_invalid_q:U1:[clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg r3_invalid_q:U1:[clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+
+  const req_addr_low = req_q#[0..<7]
+  const req_mem_idx = req_q#[7]
+  const is_tbox = req_q#[8] == 1
+  const req_way_en = req_q#[9..<13]
+  const req_set = req_q#[13..<17]
+  const req_tag = req_q#[17..<50]
+
+  const req_ready:Bool = not active_q
+  const new_req:Bool = req_ready and req_valid_i == 1
+  req_ready_o = U1(req_ready)
+
+  if new_req {
+    req_q = (req_data_i.addr_low, req_data_i.mem_idx, req_data_i.is_tbox, req_data_i.way_en, req_data_i.set, req_data_i.tag)#[..]
+  }
+
+  // ---- data array read request ----
+  const data_req_cnt_limit:U2 = if is_tbox { 1 } else { minion_dcache_pkg.CoreL2BlockExtPasses }
+  // way index: OR of the indices of the selected ways
+  mut way:U2 = 0
+  for i in 0..<minion_dcache_pkg.DcacheWays {
+    if req_way_en#[i] == 1 {
+      way = way | i
+    }
+  }
+  data_req_o.valid_l = 1
+  data_req_o.valid_h = 1
+  data_req_o.way = way
+  // a normal line is read in two halves (the counter lsb picks one), a tbox line is one pass at mem_idx
+  data_req_o.addr = (req_set << 6) | ((if is_tbox { req_mem_idx } else { data_req_cnt_idx_q }) << 5)
+
+  // ---- L2 write request: the line (or the tbox half line) read back from the array ----
+  l2_req_data_o.id = minion_dcache_pkg.EtLinkCoreMissIdWriteBack
+  l2_req_data_o.source = 0
+  l2_req_data_o.wdata = 1
+  l2_req_data_o.subopcode = 0
+  l2_req_data_o.data = data_resp_i
+  l2_req_data_o.opcode = if is_tbox { minion_dcache_pkg.EtLinkReqMsgSendData } else { minion_dcache_pkg.EtLinkReqWrite }
+  l2_req_data_o.address = if is_tbox { (req_tag << 7) | req_addr_low } else { (req_tag << 7) | (req_set#[0] << 6) }
+  l2_req_data_o.size = if is_tbox { minion_dcache_pkg.EtLinkHLine } else { minion_dcache_pkg.EtLinkLine }
+  l2_req_data_o.qwen = if is_tbox { 3 } else { 15 }
+
+  // ---- pass sequencing ----
+  mut data_req_cnt_d:U2 = data_req_cnt_q
+  mut active_d:Bool = active_q
+  mut data_req_valid_d:U1 = data_req_grant_i
+  mut r1_data_req_fired_d:Bool = false
+  mut r2_data_req_fired_d:Bool = false
+  mut r3_data_req_fired_d:Bool = false
+  mut data_req_bid:Bool = false
+  mut l2_req_valid:Bool = false
+  if new_req {
+    active_d = true
+    data_req_cnt_d = 0
+  } elif active_q {
+    data_req_bid = data_req_cnt_q < data_req_cnt_limit
+    r2_data_req_fired_d = r1_data_req_fired_q
+    r3_data_req_fired_d = r2_data_req_fired_q
+    if data_req_grant_i == 1 {
+      wrap data_req_cnt_d = data_req_cnt_q + 1
+    }
+    if data_req_valid_o == 1 {
+      r1_data_req_fired_d = true
+    }
+    if r3_data_req_fired_q {
+      l2_req_valid = r3_invalid_q == 0
+      if l2_req_ready_i == 0 or r3_invalid_q == 1 {
+        // pass lost (nack or L2 busy): forget the reads in flight and take them back off the counter
+        data_req_valid_d = 0
+        r1_data_req_fired_d = false
+        r2_data_req_fired_d = false
+        r3_data_req_fired_d = false
+        wrap data_req_cnt_d = data_req_cnt_d - data_req_grant_i - data_req_valid_o - U1(r1_data_req_fired_q) - U1(r2_data_req_fired_q) - U1(r3_data_req_fired_q)
+      } elif not r1_data_req_fired_q and not r2_data_req_fired_q and data_req_valid_o == 0 {
+        // last pass delivered with nothing in flight: stay active only while passes remain
+        active_d = data_req_cnt_q < data_req_cnt_limit
+      }
+    }
+  }
+  data_req_bid_o = U1(data_req_bid)
+  l2_req_valid_o = U1(l2_req_valid)
+
+  active_q = active_d
+  data_req_cnt_q = data_req_cnt_d
+  data_req_cnt_idx_q = data_req_cnt_q#[0]
+  r1_data_req_fired_q = r1_data_req_fired_d
+  r2_data_req_fired_q = r2_data_req_fired_d
+  r3_data_req_fired_q = r3_data_req_fired_d
+  data_req_valid_o = data_req_valid_d
+  r2_invalid_q = data_req_nack_i
+  r3_invalid_q = r2_invalid_q
+}

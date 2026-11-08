@@ -1,0 +1,360 @@
+// TensorQuant sequencer of the VPU.
+// A TensorQuant runs up to nine "transforms" (int32<->fp32 convert, ReLU, int32
+// add, fp32 multiply by a row/column of the scratchpad, saturate to int8/uint8,
+// pack to 128 bits) over an A-rows x B-columns block of VPU registers.  This
+// module walks the block, issues one VPU instruction per register per
+// transform, streams the scratchpad operand lines the transform needs, and
+// inserts bubbles for the TXFMA / SH-SW pipeline hazards.  It also waits
+// (sticky "pend" bits) for earlier VPU RF writers (scoreboard, TensorFMA,
+// TensorStore).
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+// Scratchpad lines 0..59 are laid out 12 sets per way over four ways, then wrap
+// (verilog get_set_from_scp_dest / get_way_from_scp_dest).
+pub comb scp_set_way(dest:U6) -> (set:U4, way:U2) {
+  mut base:U6 = 0
+  mut line_way:U2 = 0
+  for k in 1..=5 {
+    if dest >= (12*k) {
+      base = 12*k
+      line_way = k & 3
+    }
+  }
+  wrap set = dest - base
+  way = line_way
+}
+
+// Scratchpad start addresses wrap back to line 0 past this line.
+pub comb scp_wrap(addr:U6) -> (r:U6) {
+  r = addr
+  if addr >= vpu_defs_pkg.DCACHE_TL_SCP_MAX_IDX_SCP_ADDR {
+    wrap r = addr - vpu_defs_pkg.DCACHE_TL_SCP_MAX_IDX_SCP_ADDR
+  }
+}
+
+// Lanes in use for a block `cols`+1 column chunks wide: a register holds two chunks (lanes 0-3
+// and 4-7) and b_col picks the register of the pair being walked, so chunk 2*b_col (+1 for the
+// upper lanes) must not exceed `cols`.
+pub comb tensor_lane_mask(b_col:U1, cols:U2) -> (mask:U8) {
+  mask = 0xff
+  if cols < 2 and b_col == 1 {
+    mask#[0..<4] = 0
+  }
+  if (cols == 0 and b_col == 0) or (cols < 3 and b_col == 1) {
+    mask#[4..<8] = 0
+  }
+}
+
+// Instruction templates (verilog vpu_defs_pkg); the register fields are filled in
+// below.  The *_DYN ones carry the dynamic rounding mode (rm = 111).
+comptime const FCVT_PS_PW_DYN = 0ub110100000000?????111?????1111011 // int32 -> fp32
+comptime const FCVT_PW_PS_DYN = 0ub110000000000?????111?????1111011 // fp32 -> int32
+comptime const FMAX_PI = 0ub0010111??????????001?????1111011 // ReLU is max(x, 0)
+comptime const FADD_PI = 0ub0000011??????????000?????1111011
+comptime const FMUL_PS_DYN = 0ub0001000??????????111?????1111011
+comptime const FSAT8_PI = 0ub000001100000?????011?????1111011
+comptime const FSATU8_PI = 0ub000001100001?????011?????1111011
+comptime const FPACKREPB_PI = 0ub001001100000?????000?????1111011
+
+// Layout of the packed tensorquant_ctrl register, LSB first (core_vpu_ctrl.tensorquant_ctrl):
+// trans:40 (nine 4-bit transform codes, the next one in the low nibble), padding:5,
+// scp_src:6, rows:4, cols:2, start_reg:5, padding2:2.
+comptime const NumTransforms = 9
+comptime const TransBits = 4*(NumTransforms + 1)
+comptime const PaddingLsb = TransBits
+comptime const ScpSrcLsb = 45
+comptime const RowsLsb = 51
+comptime const ColsLsb = 55
+comptime const StartRegLsb = 57
+comptime const Padding2Lsb = 62
+
+// Bubble lengths after a TXFMA op (7-stage pipeline) and after a SH-SW op (shorter, 2-stage).
+comptime const TxfmaBubble = 7
+comptime const ShswBubble = 4
+
+// reset stays a U1 net: the caller (vpu_ml) hands it over as plain data.
+// prp-style-allow reset-port-type
+pub mod vpu_tensorquant::[timecheck=false](clock:Clock, dcache_scp_available:U1, dcache_scp_data:vpu_defs_pkg.DCACHE_DATA_SIZE_T, f0_core_ctrl:(tensorfma_start:U1, tensorfma_ctrl:(is_conv:U1, padding3:U6, cols_b:U2, rows_a:U4, cols_a:U4, start_a:U4, padding2:U19, to_vrf:U1, u_b:U1, u_a:U1, ten_b:U1, padding1:U2, scp_b:U6, padding0:U2, scp_a:U6, mode:U3, first_pass:U1), tensorfma_conv_bits_ready:U1, tensorfma_conv_bits:U16, reduce_start:U1, tensorstore_start:U1, reduce_ctrl:U64, tensorquant_start:U1, tensorquant_ctrl:(padding2:U2, start_reg:U5, cols:U2, rows:U4, scp_src:U6, padding:U5, trans:U40), pending_scoreboard_t0:U1), reset:U1, tensorfma_pend:U1, tensorstore_pend:U1) -> (dcache_scp_req:(read_en:U1, way:U2, addr:U10, size64:U1, size256:U1, bid:U1)@[], enabled:U1@[], ex_rdata:U256@[], ex_ren:U1@[], quant_en_next:U1@[], quant_inst_next:vpu_defs_pkg.INST_SIZE_T@[], quant_mask_next:vpu_defs_pkg.VPU_LANE_NUM_T@[], quant_tena_en:U1@[], vpu_tensorquant_debug:U11@[]) {
+  comptime const Lanes = vpu_defs_pkg.VPU_LANE_NUM
+  comptime const LaneBits = vpu_defs_pkg.VPU_DATA_S_SZ
+  const quant_start = f0_core_ctrl.tensorquant_start != 0
+
+  // ---- state
+  reg enabled:U1:[reset_pin=reset] = 0
+  reg tensorquant_ctrl:U64:[reset_pin=reset] = 0
+  reg tensorquant_last:Bool:[reset_pin=reset] = false
+  reg scoreboard_pend_sticky:Bool:[reset_pin=reset] = false
+  reg tfma_pend_sticky:Bool:[reset_pin=reset] = false
+  reg tstore_pend_sticky:Bool:[reset_pin=reset] = false
+  // scratchpad operand streaming
+  reg scp_read_pending:Bool:[reset_pin=reset] = false
+  reg scp_read_set_pending:U2:[reset_pin=reset] = 0
+  reg scp_read_buf:U1 = nil
+  reg scp_data:[2]U256:[ordering="old"] = nil
+  reg scp_data_en_s1:U2:[reset_pin=reset] = 0
+  reg scp_data_en_s2:U2:[reset_pin=reset] = 0
+  // walk position, pre-ID / ID / EX
+  reg exec_b_col:U1 = nil
+  reg exec_a_row:U4 = nil
+  reg id_b_col:U1 = nil
+  reg id_a_row:U4 = nil
+  reg ex_b_col:U1 = nil
+  reg ex_a_row:U4 = nil
+  // operand select for the instruction in EX
+  reg quant_tena_scp_en:Bool:[reset_pin=reset] = false
+  reg quant_tena_zero_en:Bool:[reset_pin=reset] = false
+  reg quant_rdata_col:Bool:[reset_pin=reset] = false
+  reg ex_rdata_zero:Bool:[reset_pin=reset] = false
+  reg ex_rdata_col:Bool:[reset_pin=reset] = false
+  reg ex_ren:U1:[reset_pin=reset] = 0
+  // hazards
+  reg exec_hazard_wait:U3:[reset_pin=reset] = 0
+  reg prev_is_txfma:Bool:[reset_pin=reset] = false
+  reg prev_is_shsw:Bool:[reset_pin=reset] = false
+
+  const ctrl_trans = tensorquant_ctrl#[0..<TransBits]
+  const exec_curr_transform:U4 = ctrl_trans#[0..<4]
+  const ctrl_scp_src = tensorquant_ctrl#[ScpSrcLsb..<RowsLsb]
+  const ctrl_rows = tensorquant_ctrl#[RowsLsb..<ColsLsb]
+  const ctrl_cols = tensorquant_ctrl#[ColsLsb..<StartRegLsb]
+  const ctrl_start_reg = tensorquant_ctrl#[StartRegLsb..<(StartRegLsb + 5)]
+  const is_enabled = enabled != 0
+  const is_last = exec_curr_transform == vpu_defs_pkg.TQUANT_LAST
+
+  // A new request with at least one transform starts the FSM.
+  const new_req = quant_start and f0_core_ctrl.tensorquant_ctrl.trans#[0..<4] != 0
+
+  // ---- issue: one VPU instruction per register per transform
+  mut dest_reg:U5 = 0
+  wrap dest_reg = (exec_a_row << 1) + exec_b_col + ctrl_start_reg
+  const is_txfma = exec_curr_transform == vpu_defs_pkg.TQUANT_INT32_TO_FP32_CVT or exec_curr_transform == vpu_defs_pkg.TQUANT_FP32_TO_INT32_CVT or exec_curr_transform == vpu_defs_pkg.TQUANT_FP32_MUL_ROW or exec_curr_transform == vpu_defs_pkg.TQUANT_FP32_MUL_COL
+  const is_shsw = exec_curr_transform == vpu_defs_pkg.TQUANT_RELU or exec_curr_transform == vpu_defs_pkg.TQUANT_INT32_ADD_ROW or exec_curr_transform == vpu_defs_pkg.TQUANT_INT32_ADD_COL or exec_curr_transform == vpu_defs_pkg.TQUANT_SAT_INT8 or exec_curr_transform == vpu_defs_pkg.TQUANT_SAT_UINT8 or exec_curr_transform == vpu_defs_pkg.TQUANT_PACK_128B
+  // Multipass TXFMA writes land a cycle late: a short op right behind needs a bubble, and
+  // any op behind a TXFMA on a matrix shorter than its pipeline needs one too.
+  const hazard_to_short = exec_hazard_wait == 1
+  const hazard_to_txfma = exec_hazard_wait != 0
+
+  mut issue = is_enabled and not scoreboard_pend_sticky and not tfma_pend_sticky and not tstore_pend_sticky and exec_hazard_wait == 0 and not is_last
+  mut inst:U32 = FPACKREPB_PI
+  mut tena_scp_en_next = false // the op reads a scratchpad operand (TENA)
+  mut tena_zero_en_next = false // the op reads zero as operand (ReLU)
+
+  mut mask:U8 = tensor_lane_mask(b_col=exec_b_col, cols=ctrl_cols)
+
+  if exec_curr_transform == vpu_defs_pkg.TQUANT_INT32_TO_FP32_CVT {
+    inst = FCVT_PS_PW_DYN
+    inst#[7..<12] = dest_reg // rd
+    inst#[15..<20] = dest_reg // rs1
+    issue = issue and not hazard_to_txfma
+  } elif exec_curr_transform == vpu_defs_pkg.TQUANT_FP32_TO_INT32_CVT {
+    inst = FCVT_PW_PS_DYN
+    inst#[7..<12] = dest_reg
+    inst#[15..<20] = dest_reg
+    issue = issue and not hazard_to_txfma
+  } elif exec_curr_transform == vpu_defs_pkg.TQUANT_RELU {
+    inst = FMAX_PI
+    inst#[7..<12] = dest_reg
+    inst#[15..<20] = dest_reg
+    inst#[20..<25] = dest_reg // rs2
+    issue = issue and not hazard_to_short
+    tena_zero_en_next = issue
+  } elif exec_curr_transform == vpu_defs_pkg.TQUANT_INT32_ADD_ROW or exec_curr_transform == vpu_defs_pkg.TQUANT_INT32_ADD_COL {
+    inst = FADD_PI
+    inst#[7..<12] = dest_reg
+    inst#[15..<20] = dest_reg
+    inst#[20..<25] = dest_reg
+    issue = issue and not scp_read_pending and not hazard_to_txfma // the operand line must have arrived
+    tena_scp_en_next = issue
+  } elif exec_curr_transform == vpu_defs_pkg.TQUANT_FP32_MUL_ROW or exec_curr_transform == vpu_defs_pkg.TQUANT_FP32_MUL_COL {
+    inst = FMUL_PS_DYN
+    inst#[7..<12] = dest_reg
+    inst#[15..<20] = dest_reg
+    inst#[20..<25] = dest_reg
+    issue = issue and not scp_read_pending and not hazard_to_txfma
+    tena_scp_en_next = issue
+  } elif exec_curr_transform == vpu_defs_pkg.TQUANT_SAT_INT8 {
+    inst = FSAT8_PI
+    inst#[7..<12] = dest_reg
+    inst#[15..<20] = dest_reg
+    issue = issue and not hazard_to_short
+  } elif exec_curr_transform == vpu_defs_pkg.TQUANT_SAT_UINT8 {
+    inst = FSATU8_PI
+    inst#[7..<12] = dest_reg
+    inst#[15..<20] = dest_reg
+    issue = issue and not hazard_to_short
+  } else {
+    // Pack to 128 bits.  With cols >= 3 (512 bits) the f0 and f1 packs write the same
+    // register, so rd steps back by one on odd columns and, for the 2-cycle dependency,
+    // the walk order differs from the other transforms.
+    inst = FPACKREPB_PI
+    const start_odd:U1 = ctrl_start_reg#[0]
+    wrap inst#[7..<12] = (dest_reg#[1..<5] << 1) + (start_odd & ~exec_b_col) - (start_odd & exec_b_col)
+    inst#[15..<20] = dest_reg
+    issue = issue and not hazard_to_short
+    mask = if exec_b_col == 1 { (U1(ctrl_cols == 3) << 3) | (U1(ctrl_cols >= 2) << 2) } else { (U1(ctrl_cols >= 1) << 1) | 1 }
+  }
+
+  // an op that waits out a hazard keeps its operand selects
+  if exec_hazard_wait != 0 {
+    tena_scp_en_next = quant_tena_scp_en
+    tena_zero_en_next = quant_tena_zero_en
+  }
+
+  // ---- walk position: A rows first, then (for cols >= 2) even registers then odd registers
+  mut a_row_next:U4 = 0
+  wrap a_row_next = exec_a_row + 1
+  mut b_col_next = exec_b_col
+  const row_done = exec_a_row == ctrl_rows
+  mut last_op_trans = row_done and is_enabled and issue // last op of a transform
+  if ctrl_cols >= 2 {
+    if row_done {
+      a_row_next = 0
+      b_col_next = 1
+    }
+    last_op_trans = row_done and exec_b_col == 1 and is_enabled and issue
+  }
+  if last_op_trans or quant_start {
+    a_row_next = 0
+    b_col_next = 0
+  }
+
+  // ---- control for the next transform: shift the transform list (LAST fills in so the
+  // FSM always terminates) and step the scratchpad source line after an operand-reading op
+  mut ctrl_next:U64 = tensorquant_ctrl
+  if quant_start {
+    ctrl_next = f0_core_ctrl.tensorquant_ctrl.trans | (f0_core_ctrl.tensorquant_ctrl.padding << PaddingLsb) | (f0_core_ctrl.tensorquant_ctrl.scp_src << ScpSrcLsb) | (f0_core_ctrl.tensorquant_ctrl.rows << RowsLsb) | (f0_core_ctrl.tensorquant_ctrl.cols << ColsLsb) | (f0_core_ctrl.tensorquant_ctrl.start_reg << StartRegLsb) | (f0_core_ctrl.tensorquant_ctrl.padding2 << Padding2Lsb)
+  } else {
+    ctrl_next#[0..<TransBits] = (ctrl_trans >> 4) | (vpu_defs_pkg.TQUANT_LAST << (TransBits - 4))
+    if tena_scp_en_next {
+      wrap ctrl_next#[ScpSrcLsb..<RowsLsb] = ctrl_scp_src + 1
+    }
+  }
+  ctrl_next#[ScpSrcLsb..<RowsLsb] = scp_wrap(ctrl_next#[ScpSrcLsb..<RowsLsb])
+  const rows_next = ctrl_next#[RowsLsb..<ColsLsb]
+
+  // ---- hazard bubbles for the next cycle
+  mut hazard_next:U3 = exec_hazard_wait
+  if exec_hazard_wait != 0 {
+    wrap hazard_next = exec_hazard_wait - 1
+  } elif (issue and prev_is_txfma and last_op_trans and (rows_next < TxfmaBubble or new_req)) or ((prev_is_txfma or prev_is_shsw) and is_last) {
+    hazard_next = TxfmaBubble
+  } elif ((issue and last_op_trans) or new_req) and rows_next < 2 {
+    hazard_next = ShswBubble
+  }
+
+  // ---- FSM enable and sticky pending bits
+  const finishing = is_last and hazard_next == 0
+  const enabled_next = if new_req { true } elif finishing { false } else { is_enabled }
+  const clock_en = is_enabled or quant_start or tensorquant_last or scp_read_pending
+
+  mut scoreboard_sticky_next = scoreboard_pend_sticky
+  mut tfma_sticky_next = tfma_pend_sticky
+  mut tstore_sticky_next = tstore_pend_sticky
+  if new_req {
+    scoreboard_sticky_next = f0_core_ctrl.pending_scoreboard_t0 != 0
+    tfma_sticky_next = tensorfma_pend != 0
+    tstore_sticky_next = tensorstore_pend != 0
+  } else {
+    if is_enabled and scoreboard_pend_sticky and f0_core_ctrl.pending_scoreboard_t0 == 0 {
+      scoreboard_sticky_next = false
+    }
+    if (is_enabled and tfma_pend_sticky and tensorfma_pend == 0) or f0_core_ctrl.tensorfma_start != 0 {
+      tfma_sticky_next = false
+    }
+    if (is_enabled and tstore_pend_sticky and tensorstore_pend == 0) or f0_core_ctrl.tensorstore_start != 0 {
+      tstore_sticky_next = false
+    }
+  }
+
+  // ---- scratchpad operand streaming: a line is read as two 256b halves, one half ahead
+  const scp_dest = scp_set_way(ctrl_scp_src)
+  const scp_set_idx = (scp_dest.set << 6) | (scp_read_buf << 5)
+  mut read_pending_next = scp_read_pending
+  mut read_buf_next = scp_read_buf
+  mut data_en_s0:U2 = 0
+  if new_req {
+    // speculatively read the first half at start to hide the latency
+    read_pending_next = true
+    read_buf_next = 0
+  } elif scp_read_pending and dcache_scp_available != 0 {
+    // request accepted: the second half is read next, then the read is done; the data
+    // lands in scp_data two cycles later
+    read_pending_next = scp_read_buf == 0
+    read_buf_next = ~scp_read_buf
+    for i in 0..<2 {
+      data_en_s0#[i] = U1(scp_read_buf == i)
+    }
+  }
+  // After the last op of a scratchpad-reading transform, fetch the next line.  A
+  // multipass op delays this by a cycle so the RF is not updated too early.
+  const rolled_over = last_op_trans and tena_scp_en_next
+  if (rolled_over and hazard_next == 0) or scp_read_set_pending == 1 {
+    read_pending_next = true
+  }
+  mut read_set_pending_next:U2 = 0
+  if scp_read_set_pending != 0 {
+    wrap read_set_pending_next = scp_read_set_pending - 1
+  }
+  if rolled_over and hazard_next != 0 {
+    read_set_pending_next = 2
+  }
+
+  // ---- operand data in EX: zero (ReLU), one scratchpad element per lane (column-wise),
+  // or the scratchpad line itself (row-wise)
+  const col_word:U32 = (scp_data[ex_a_row#[3]] >> (ex_a_row#[0..<3]*LaneBits))#[0..<LaneBits]
+  mut rdata:U256 = 0
+  for i in 0..<Lanes {
+    const lo = i*LaneBits
+    rdata#[lo..<(lo + LaneBits)] = if ex_rdata_zero { 0 }
+      elif ex_rdata_col { col_word }
+      else { scp_data[ex_b_col]#[lo..<(lo + LaneBits)] }
+  }
+
+  // ---- state updates
+  for i in 0..<2 {
+    if scp_data_en_s2#[i] != 0 {
+      scp_data[i] = dcache_scp_data
+    }
+  }
+  if clock_en {
+    enabled = U1(enabled_next)
+    tensorquant_last = is_last and hazard_next == 0 and is_enabled
+    scoreboard_pend_sticky = scoreboard_sticky_next
+    tfma_pend_sticky = tfma_sticky_next
+    tstore_pend_sticky = tstore_sticky_next
+    scp_data_en_s1 = data_en_s0
+    scp_data_en_s2 = scp_data_en_s1
+    scp_read_pending = read_pending_next
+    scp_read_set_pending = read_set_pending_next
+    quant_tena_scp_en = tena_scp_en_next
+    quant_tena_zero_en = tena_zero_en_next
+    quant_rdata_col = exec_curr_transform#[0] == 1
+    ex_rdata_zero = quant_tena_zero_en
+    ex_rdata_col = quant_rdata_col
+    exec_hazard_wait = hazard_next
+    prev_is_txfma = is_txfma
+    prev_is_shsw = is_shsw
+    scp_read_buf = read_buf_next
+    id_b_col = exec_b_col
+    id_a_row = exec_a_row
+    ex_b_col = id_b_col
+    ex_a_row = id_a_row
+  }
+  if quant_start or last_op_trans {
+    tensorquant_ctrl = ctrl_next
+  }
+  if issue or new_req {
+    exec_a_row = a_row_next
+    exec_b_col = b_col_next
+  }
+  const quant_tena = (quant_tena_scp_en or quant_tena_zero_en) and is_enabled
+  ex_ren = U1(quant_tena)
+
+  quant_en_next = U1(issue)
+  quant_inst_next = inst
+  quant_mask_next = mask
+  quant_tena_en = U1(quant_tena)
+  ex_rdata = rdata
+  dcache_scp_req = (addr=scp_set_idx, bid=0, read_en=U1(scp_read_pending), size256=1, size64=0, way=scp_dest.way)
+  vpu_tensorquant_debug = (U1(dcache_scp_available != 0), exec_curr_transform, exec_hazard_wait#[0..<2], U1(tstore_pend_sticky), U1(tfma_pend_sticky), U1(scoreboard_pend_sticky), enabled)#[..]
+}

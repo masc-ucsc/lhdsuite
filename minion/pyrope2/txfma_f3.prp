@@ -1,0 +1,168 @@
+// Stage f3: align the three FMA operands (A/C shifted by the exponent difference, product
+// partial sums, graphics replicate modes), assemble operand 3 and compress the three
+// with a 3:2 carry-save adder; the (sum, carry) pair is registered for f4.
+const txfma_csa = import("txfma_csa.txfma_csa")
+const txfma_align_shf = import("txfma_align_shf.txfma_align_shf")
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+// r = x repeated N times, W bits apart (x in the lowest lane).
+comb replicate<W=1, N=1>(x:Unsigned(bits=W)) -> (r:Unsigned(bits=W*N)) {
+  mut acc:Unsigned(bits=W*N) = 0
+  for i in 0..<N {
+    acc = acc | (x << (i*W))
+  }
+  r = acc
+}
+
+pub mod txfma_f3::[timecheck=false](al1c_zap_f2a_h:U1, al1p1c_sel_f2a_h:U1, al1p2c_sel_f2a_h:U2, al1znp2c_sel_f2a_h:U2, al2c3_neg_cin_ps_f3a_h:U1, al2c_sel_f2a_h:U2, align2_rshamt_c3_f2a_h:U5, align2_zap_f2a_h:U1, align2c_neg_f2a_h:U1, ctrl_f2_clk:Clock, ctrl_f3_clk:Clock, ediff_abs_diff_hi_f2a_h:U6, exp_res_f2a_h:U7, fa_f3a_h:U32, fc_f3a_h:U32, frnd_rdnsc_f2a_h:U1, frnd_rupnsc_f2a_h:U1, frnd_t1_f2a_h:U1, frnd_t2_f2a_h:U1, icgfxc_sel_f2a_h:U2, imxc_sel_f3a_h:U2, negop1c_int_logmul_clr_f2a_h:U1, op1c_log_mul_clr_f2a_h:U1, op2_sxtto_g_f2a_h:U1, op3g_sel_f2a_h:U1, op3p1c_sel_p_f2a_h:U1, op3p1c_sel_r_f2a_h:U1, op3p2c_sel_f2a_h:U3, op3p3spc_sel_f2a_h:U2, prodsum_f3a_h:U64, psc_op1_clr_f2a_h:U1, rm_rmm_f2a_h:U1, rm_rne_f2a_h:U1, sgfxrplc_sel_f2a_h:U2, ugfxrplc_sel_f2a_h:U2) -> (comb_c_f4a_h:U52@[], comb_s_f4a_h:U52@[], fround_rbit_f3a_h:U1@[], int_minmax_res_f4a_h:U32@[], op2_sxtto_g_f3a_h:U1@[], prodsum_a2_f3a_h:U1@[]) {
+  // f3-domain results (landing in f4)
+  reg comb_s_f4a_h:U52:[clock_pin=ctrl_f3_clk]
+  reg comb_c_f4a_h:U52:[clock_pin=ctrl_f3_clk]
+  reg int_minmax_res_f4a_h:U32:[clock_pin=ctrl_f3_clk]
+  // f2 controls/operands delayed into the f3 domain
+  reg op2_sxtto_g_f3a_h:U1:[clock_pin=ctrl_f2_clk]
+  reg ediff_abs_diff_hi_f3a_h:U6:[clock_pin=ctrl_f2_clk]
+  reg align2_rshamt_c3_f3a_h:U5:[clock_pin=ctrl_f2_clk]
+  reg exp_res_f3a_h:U7:[clock_pin=ctrl_f2_clk]
+  reg op3p3spc_sel_f3a_h:U2:[clock_pin=ctrl_f2_clk]
+  reg op3p2c_sel_f3a_h:U3:[clock_pin=ctrl_f2_clk]
+  reg op3p1c_sel_p_f3a_h:U1:[clock_pin=ctrl_f2_clk]
+  reg op3p1c_sel_r_f3a_h:U1:[clock_pin=ctrl_f2_clk]
+  reg op3g_sel_f3a_h:U1:[clock_pin=ctrl_f2_clk]
+  reg ugfxrplc_sel_f3a_h:U2:[clock_pin=ctrl_f2_clk]
+  reg sgfxrplc_sel_f3a_h:U2:[clock_pin=ctrl_f2_clk]
+  reg icgfxc_sel_f3a_h:U2:[clock_pin=ctrl_f2_clk]
+  reg al1p2c_sel_f3a_h:U2:[clock_pin=ctrl_f2_clk]
+  reg al1p1c_sel_f3a_h:U1:[clock_pin=ctrl_f2_clk]
+  reg rm_rne_f3a_h:U1:[clock_pin=ctrl_f2_clk]
+  reg rm_rmm_f3a_h:U1:[clock_pin=ctrl_f2_clk]
+  reg frnd_rupnsc_f3a_h:U1:[clock_pin=ctrl_f2_clk]
+  reg frnd_rdnsc_f3a_h:U1:[clock_pin=ctrl_f2_clk]
+  reg frnd_t1_f3a_h:U1:[clock_pin=ctrl_f2_clk]
+  reg frnd_t2_f3a_h:U1:[clock_pin=ctrl_f2_clk]
+  reg al1znp2c_sel_f3a_h:U2:[clock_pin=ctrl_f2_clk]
+  reg al1c_zap_f3a_h:U1:[clock_pin=ctrl_f2_clk]
+  reg op1c_log_mul_clr_f3a_h:U1:[clock_pin=ctrl_f2_clk]
+  reg negop1c_int_logmul_clr_f3a_h:U1:[clock_pin=ctrl_f2_clk]
+  reg psc_op1_clr_f3a_h:U1:[clock_pin=ctrl_f2_clk]
+  reg al2c_sel_f3a_h:U2:[clock_pin=ctrl_f2_clk]
+  reg align2_zap_f3a_h:U1:[clock_pin=ctrl_f2_clk]
+  reg align2c_neg_f3a_h:U1:[clock_pin=ctrl_f2_clk]
+
+  exp_res_f3a_h = exp_res_f2a_h
+  ediff_abs_diff_hi_f3a_h = ediff_abs_diff_hi_f2a_h
+  align2_rshamt_c3_f3a_h = align2_rshamt_c3_f2a_h
+  op3p3spc_sel_f3a_h = op3p3spc_sel_f2a_h
+  op3p2c_sel_f3a_h = op3p2c_sel_f2a_h
+  op3p1c_sel_p_f3a_h = op3p1c_sel_p_f2a_h
+  op3p1c_sel_r_f3a_h = op3p1c_sel_r_f2a_h
+  op3g_sel_f3a_h = op3g_sel_f2a_h
+  ugfxrplc_sel_f3a_h = ugfxrplc_sel_f2a_h
+  sgfxrplc_sel_f3a_h = sgfxrplc_sel_f2a_h
+  icgfxc_sel_f3a_h = icgfxc_sel_f2a_h
+  al1p1c_sel_f3a_h = al1p1c_sel_f2a_h
+  al1p2c_sel_f3a_h = al1p2c_sel_f2a_h
+  rm_rne_f3a_h = rm_rne_f2a_h
+  rm_rmm_f3a_h = rm_rmm_f2a_h
+  frnd_rupnsc_f3a_h = frnd_rupnsc_f2a_h
+  frnd_rdnsc_f3a_h = frnd_rdnsc_f2a_h
+  frnd_t1_f3a_h = frnd_t1_f2a_h
+  frnd_t2_f3a_h = frnd_t2_f2a_h
+  al1znp2c_sel_f3a_h = al1znp2c_sel_f2a_h
+  al1c_zap_f3a_h = al1c_zap_f2a_h
+  op1c_log_mul_clr_f3a_h = op1c_log_mul_clr_f2a_h
+  negop1c_int_logmul_clr_f3a_h = negop1c_int_logmul_clr_f2a_h
+  psc_op1_clr_f3a_h = psc_op1_clr_f2a_h
+  al2c_sel_f3a_h = al2c_sel_f2a_h
+  align2_zap_f3a_h = align2_zap_f2a_h
+  align2c_neg_f3a_h = align2c_neg_f2a_h
+  op2_sxtto_g_f3a_h = op2_sxtto_g_f2a_h
+
+  // ---- operand 1 alignment (A or P/C operand, shifted right by the exponent difference) ----
+  const al1_hi:U33 = if al1p2c_sel_f3a_h == 0 { fc_f3a_h } elif al1p2c_sel_f3a_h == 1 { fa_f3a_h } else { prodsum_f3a_h#[29..<62] }
+  const al1_lo:U15 = if al1p1c_sel_f3a_h != 0 { prodsum_f3a_h#[14..<29] } else { 0 }
+  const align_in_48:U48 = (al1_lo, al1_hi)#[..]
+  const align_shf_48 = txfma_align_shf<ShftSize=6, Width=50>(op_i=align_in_48 << 2, shfamnt_i=ediff_abs_diff_hi_f3a_h)
+  const zapped_op1:U50 = if al1c_zap_f3a_h == 0 { align_shf_48 } else { 0 }
+
+  // ---- operand 2 alignment, optionally negated ----
+  const align_in_25:U25 = if al2c_sel_f3a_h == 0 { 0 }
+    elif al2c_sel_f3a_h == 1 { fa_f3a_h#[8..<32] }
+    elif al2c_sel_f3a_h == 2 { prodsum_f3a_h#[2..<24] << 3 }
+    else { prodsum_f3a_h#[40..<62] << 3 }
+  const align_shf_27 = txfma_align_shf<ShftSize=5, Width=27>(op_i=align_in_25 << 2, shfamnt_i=align2_rshamt_c3_f3a_h)
+  const op2_aligned:U27 = if align2_zap_f3a_h == 0 { align_shf_27 } else { 0 }
+  const op2_neg_mask:U28 = if align2c_neg_f3a_h != 0 { 0xfffffff } else { 0 }
+  const negated_op2:U28 = op2_neg_mask ^ op2_aligned
+  const op2_sxt:U23 = if op2_sxtto_g_f3a_h != 0 { 0x7fffff } else { 0 }
+  // csa operand b = {sign(neg_op2), neg_op2, sxt}: the 28-bit operand sign-extended to bit 51
+  const op2_sign:U1 = negated_op2#[vpu_defs_pkg.TXFMA_A2 - 35]
+  const csa_b:U52 = (op2_sxt, negated_op2, op2_sign)#[..]
+
+  // ---- operand 3: special / product / min-max inputs ----
+  const opd3_special_in:U26 = if op3p3spc_sel_f3a_h == 0 { 0 }
+    elif op3p3spc_sel_f3a_h == 1 { exp_res_f3a_h << 18 }
+    elif op3p3spc_sel_f3a_h == 2 { fa_f3a_h#[7..<32] }
+    else { fc_f3a_h#[7..<32] }
+  const opd3_prod:U52 = if op3p2c_sel_f3a_h#[2] == 0 { prodsum_f3a_h#[14..<62] << 2 } else { prodsum_f3a_h#[17..<64] << 2 }
+  const int_minmax_res:U32 = if imxc_sel_f3a_h == 0 { fa_f3a_h }
+    elif imxc_sel_f3a_h == 1 { fc_f3a_h }
+    elif imxc_sel_f3a_h == 2 { prodsum_f3a_h#[0..<32] }
+    else { prodsum_f3a_h#[32..<64] }
+
+  // ---- graphics replicate patterns (unsigned / signed) of the aligned operand ----
+  const ugfxrpl1_in:U48 = if ugfxrplc_sel_f3a_h == 0 { replicate<N=6, W=8>(align_in_48#[39..<47]) }
+    elif ugfxrplc_sel_f3a_h == 1 { replicate<N=4, W=10>(align_in_48#[37..<47]) << 8 }
+    elif ugfxrplc_sel_f3a_h == 2 { replicate<N=3, W=16>(align_in_48#[31..<47]) }
+    else { replicate<N=2, W=24>(align_in_48#[23..<47]) }
+  const sgfxrpl1_in:U48 = if sgfxrplc_sel_f3a_h == 0 { replicate<N=6, W=7>(align_in_48#[39..<46]) << 6 }
+    elif sgfxrplc_sel_f3a_h == 1 { replicate<N=3, W=15>(align_in_48#[31..<46]) << 3 }
+    else { replicate<N=24, W=2>(align_in_48#[45..<47]) }
+  const int_gfxrpl1_out:U50 = if icgfxc_sel_f3a_h == 0 { 0 } elif icgfxc_sel_f3a_h == 1 { sgfxrpl1_in } else { ugfxrpl1_in }
+
+  // ---- operand 1 as seen by the csa: graphics / plain / inverted, with log-mul/int/ps clears ----
+  const ext_negop1c_a3a1_clr:U3 = if negop1c_int_logmul_clr_f3a_h != 0 { 7 } else { 0 }
+  const ext_op1c_a0b5_clr:U7 = if op1c_log_mul_clr_f3a_h != 0 { 0x7f } else { 0 }
+  const ext_psc_op1_clr:U23 = if psc_op1_clr_f3a_h != 0 { 0x7fffff } else { 0 }
+  const zapped_a1:U1 = zapped_op1#[vpu_defs_pkg.TXFMA_A1 - 12]
+  const al1_bits_lo:U23 = if al1znp2c_sel_f3a_h == 0 { int_gfxrpl1_out#[0..<21] << 2 }
+    elif al1znp2c_sel_f3a_h == 1 { (zapped_op1#[0..<23] & ext_psc_op1_clr)#[0..<23] }
+    else { ~(zapped_op1#[0..<23] & ext_psc_op1_clr)#[0..<23] }
+  const al1_bits_mid:U19 = if al1znp2c_sel_f3a_h == 0 { int_gfxrpl1_out#[21..<40] }
+    elif al1znp2c_sel_f3a_h == 1 { zapped_op1#[23..<42] }
+    else { ~zapped_op1#[23..<42] }
+  const al1_bits_a0b5:U7 = if al1znp2c_sel_f3a_h == 0 { int_gfxrpl1_out#[40..<47] }
+    elif al1znp2c_sel_f3a_h == 1 { (zapped_op1#[42..<49] & ~ext_op1c_a0b5_clr)#[0..<7] }
+    else { ~(zapped_op1#[42..<49] | ext_op1c_a0b5_clr)#[0..<7] }
+  const al1_bits_a3a1:U3 = if al1znp2c_sel_f3a_h == 0 { int_gfxrpl1_out#[47..<50] }
+    elif al1znp2c_sel_f3a_h == 1 { (zapped_a1 & ~ext_negop1c_a3a1_clr)#[0..<3] }
+    else { ~(zapped_a1 | ext_negop1c_a3a1_clr)#[0..<3] }
+  const align1_gfx:U52 = (al1_bits_lo, al1_bits_mid, al1_bits_a0b5, al1_bits_a3a1)#[..]
+
+  // ---- rounding bits taken from the aligned operand ----
+  const aligned_48b_int_r:U1 = zapped_op1#[vpu_defs_pkg.TXFMA_INT_R - 12]
+  const round_rbit:U1 = ~(aligned_48b_int_r & (rm_rmm_f3a_h | frnd_rdnsc_f3a_h | frnd_rupnsc_f3a_h))
+  const rnet1:U1 = ~((zapped_op1#[vpu_defs_pkg.TXFMA_INT_L - 12] & aligned_48b_int_r & rm_rne_f3a_h) | (aligned_48b_int_r & frnd_t1_f3a_h))
+
+  // ---- operand 3 assembly: [51:24] select, [23] carry-in/sticky, [22:0] product bits ----
+  const opd3_hi:U28 = if op3p2c_sel_f3a_h#[0..<2] == 0 { opd3_special_in#[0..<26] }
+    elif op3p2c_sel_f3a_h#[0..<2] == 1 { prodsum_f3a_h#[2..<24] << 4 }
+    elif op3p2c_sel_f3a_h#[0..<2] == 2 { (fc_f3a_h#[8..<32] & zapped_op1#[25..<49])#[0..<24] << 1 }
+    else { opd3_prod#[24..<52] }
+  const opd3_b23:U1 = if op3p1c_sel_p_f3a_h != 0 { opd3_prod#[vpu_defs_pkg.TXFMA_B24 - 12] }
+    elif op3g_sel_f3a_h != 0 { al2c3_neg_cin_ps_f3a_h }
+    else { 0 }
+  const opd3_mid5:U5 = if op3p1c_sel_p_f3a_h != 0 { opd3_prod#[18..<23] } else { 0 }
+  const opd3_b17:U1 = (opd3_prod#[vpu_defs_pkg.TXFMA_B30 - 12] & op3p1c_sel_p_f3a_h) | (~(round_rbit & ~frnd_t2_f3a_h & rnet1) & op3p1c_sel_r_f3a_h)
+  const opd3_b16:U1 = opd3_prod#[vpu_defs_pkg.TXFMA_B31 - 12] & op3p1c_sel_p_f3a_h
+  const opd3_lo16:U16 = if op3p1c_sel_p_f3a_h != 0 { opd3_prod#[0..<16] } else { 0 }
+  const opd3:U52 = (opd3_lo16, opd3_b16, opd3_b17, opd3_mid5, opd3_b23, opd3_hi)#[..]
+
+  // ---- 3:2 compression of the three operands ----
+  const f3_32csa = txfma_csa<Bits=52>(a_i=opd3, b_i=csa_b, cin_i=align1_gfx)
+  comb_c_f4a_h = f3_32csa.cout_o
+  comb_s_f4a_h = f3_32csa.sum_o
+  int_minmax_res_f4a_h = int_minmax_res
+  fround_rbit_f3a_h = aligned_48b_int_r
+  prodsum_a2_f3a_h = prodsum_f3a_h#[vpu_defs_pkg.TXFMA_A2]
+}

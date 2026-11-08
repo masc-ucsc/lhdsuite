@@ -1,0 +1,31 @@
+// Floating-point register hazard scoreboard (verilog: intpipe_fp_scoreboard).
+// For each source register read in decode it reports whether an in-flight writer
+// targets that fp register of the same thread: a dcache replay-queue load or a VPU
+// fp result. rd_data_dcache keeps only the dcache part of the hazard.
+const minion_pkg = import("minion_pkg")
+
+pub comb intpipe_fp_scoreboard<ReadPorts=4>(dcache_scoreboard:(valid:U8, dest:U56), rd_addr:Unsigned(bits=5*ReadPorts), rd_thread_id:U1, vpu_scoreboard:(fp_valid:U14, fp_dest:U98)) -> (rd_data:Unsigned(bits=ReadPorts), rd_data_dcache:Unsigned(bits=ReadPorts)) {
+  comptime const DestBits = 7 // a destination is {fp, addr[4:0], thread_id}
+  comptime const DcacheEntries = minion_pkg.DcacheReplayqSize
+  comptime const FpEntries = minion_pkg.VpuFpScoreboardSize
+
+  mut data:Unsigned(bits=ReadPorts) = 0
+  mut data_dcache:Unsigned(bits=ReadPorts) = 0
+  for port in 0..<ReadPorts {
+    const addr:U5 = rd_addr#[(5*port)..<(5*port + 5)]
+    const rd_dest:U7 = rd_thread_id | (addr << 1) | (1 << 6) // fp register
+
+    mut dcache = false
+    for i in 0..<DcacheEntries {
+      dcache = dcache or (dcache_scoreboard.valid#[i] == 1 and dcache_scoreboard.dest#[(DestBits*i)..<(DestBits*i + DestBits)] == rd_dest)
+    }
+    mut any = dcache
+    for i in 0..<FpEntries {
+      any = any or (vpu_scoreboard.fp_valid#[i] == 1 and vpu_scoreboard.fp_dest#[(DestBits*i)..<(DestBits*i + DestBits)] == rd_dest)
+    }
+    data#[port] = U1(any)
+    data_dcache#[port] = U1(dcache)
+  }
+  rd_data = data
+  rd_data_dcache = data_dcache
+}

@@ -1,0 +1,194 @@
+const minion_dcache_miss_handler = import("minion_dcache_miss_handler.minion_dcache_miss_handler")
+const prim_arb_lru = import("prim_arb_lru.prim_arb_lru")
+const minion_dcache_pkg = import("minion_dcache_pkg")
+const minion_pkg = import("minion_pkg")
+
+type EvictReq = (id:U5, source:U1, wdata:U1, opcode:U5, address:U40, data:U256, size:U3, qwen:U4, subopcode:U7)
+type MissReq = (id:U5, source:U1, wdata:U1, opcode:U5, address:U40, data:U20, size:U3, qwen:U4, subopcode:U7)
+type MetaData = (coh_state:U2, tag:U33)
+type MetaWriteReq = (set_idx:U4, way_en:U4, data:MetaData)
+type WritebackReq = (tag:U33, set:U4, way_en:U4, is_tbox:U1, mem_idx:U1, addr_low:U7)
+
+// Miss-handler file: one minion_dcache_miss_handler per miss slot. A request
+// goes to the single slot that is ready (the highest-numbered one wins), or
+// merges into the slot that already holds its line. The L2 evict channel, L2
+// miss channel and metadata write port are each shared by the slots through an
+// LRU arbiter, and the single writeback port is the OR of the slots' requests.
+// Slot i sits at bit i of every per-slot vector output (probe_rdy_o, ...),
+// and at lane i of the packed debug buses.
+pub mod minion_dcache_miss_handler_unit::[timecheck=false](clk_i:Clock, inflight_reduce_i:U1, l2_evict_ready_i:U1, l2_miss_ready_i:U1, l2_resp_data_i:(id:U8, dest:U1, wdata:U1, opcode:U2, data:U256, size:U3, qwen:U4), l2_resp_slot_avail_i:U1, l2_resp_valid_i:U1, meta_write_ready_i:U1, neigh_min_id_i:U3, req_info_i:(addr:U40, set:U4, cmd:U5, typ:U4, buf_id:U3, way_en:U4, tag_match:U1, old_meta:MetaData, cacheable:U1, thread_id:U1, mem_g:U1, is_amo:U1, is_msg:U1, is_bypass:U1), req_valid_i:U1, rst_ni:U1, writeback_done_i:U1, writeback_ready_i:U1) -> (ba_is_amo_o:U1@[], ba_rptr_o:minion_dcache_pkg.DcacheBufferIdxWidth_T@[], ba_wptr_o:minion_dcache_pkg.DcacheBufferIdxWidth_T@[], bus_err_addr_o:U40@[], bus_err_o:minion_pkg.NrThreads_T@[], can_accept_uc_o:U1@[], csr_debug_signals_o:U8@[], fence_rdy_o:U2@[], force_ba_rptr_o:U1@[], force_ba_rptr_qual_o:U1@[], going_to_uc_store_o:U1@[], handler_fill_bus_error_o:U2@[], handler_ready_o:U2@[], handler_uc_load_bus_error_o:U2@[], idle_o:U1@[], l2_evict_req_o:EvictReq@[], l2_evict_valid_o:U1@[], l2_miss_req_o:MissReq@[], l2_miss_valid_o:U1@[], l2_resp_stall_o:U2@[], match_miss_line_o:U1@[], meta_write_clear_slock_o:U1@[], meta_write_req_o:MetaWriteReq@[], meta_write_valid_next_o:U1@[], meta_write_valid_o:U1@[], metaw_rdy_o:minion_dcache_pkg.DcacheMhFileSize_T@[], probe_rdy_o:minion_dcache_pkg.DcacheMhFileSize_T@[], refill_addr_o:minion_dcache_pkg.DcacheLramAddrWidth_T@[], refill_way_o:minion_dcache_pkg.DcacheWayIdxWidth_T@[], req_accepted_o:minion_dcache_pkg.DcacheMhFileSize_T@[], req_assigned_o:minion_dcache_pkg.DcacheMhFileSize_T@[], req_ready_o:U1@[], sm_data_debug_signals_o:U1024@[], sm_filter_debug_signals_o:U400@[], sm_match_debug_signals_o:U128@[], wait_l2_to_ba_resp_o:U1@[], writeback_req_o:WritebackReq@[], writeback_valid_o:U1@[]) {
+  comptime const NH = minion_dcache_pkg.DcacheMhFileSize
+  comptime const MhIdxWidth = std.clog2(NH)
+  comptime const MissEntryBits = 9 // one slot's in-flight miss: {valid, way_en:4, set:4}
+  comptime const CsrBits = 4
+  comptime const MatchBits = minion_dcache_pkg.DcacheDbgSmMatchBits
+  comptime const FilterBits = minion_dcache_pkg.DcacheDbgSmFilterBits
+  comptime const DataBits = minion_dcache_pkg.DcacheDbgSmDataBits
+
+  // The slots are coupled combinationally: each one sees the other slots'
+  // in-flight misses, the arbiter grants, and its own primary-request
+  // qualification, all derived from the slots' outputs. Forward-declared as
+  // wires and driven once after the slot loop.
+  wire pri_val:U2 = nil
+  wire req_sec_val:U1 = nil
+  wire miss_info:U18 = nil
+  wire evict_valid:U2 = nil
+  wire miss_valid:U2 = nil
+  wire mw_valid:U2 = nil
+
+  const u_l2_evict_arb = prim_arb_lru<NumClients=NH>(clk_i=clk_i, rst_ni=rst_ni, bid_i=evict_valid, stall_i=U1(l2_evict_ready_i == 0))
+  const u_l2_miss_arb = prim_arb_lru<NumClients=NH>(clk_i=clk_i, rst_ni=rst_ni, bid_i=miss_valid, stall_i=U1(l2_miss_ready_i == 0))
+  const u_meta_write_arb = prim_arb_lru<NumClients=NH>(clk_i=clk_i, rst_ni=rst_ni, bid_i=mw_valid, stall_i=U1(meta_write_ready_i == 0))
+
+  // Per-slot results (slot i at bit i / array index i), collected by the loop.
+  mut pri_rdy:U2 = 0
+  mut sec_rdy:U2 = 0
+  mut tag_match:U2 = 0
+  mut evict_match:U2 = 0
+  mut idle:U2 = 0
+  mut miss_info_v:U18 = 0
+  mut evict_valid_v:U2 = 0
+  mut miss_valid_v:U2 = 0
+  mut mw_valid_v:U2 = 0
+
+  // Outputs combined across the slots.
+  mut wb:WritebackReq = (addr_low=0, is_tbox=0, mem_idx=0, set=0, tag=0, way_en=0)
+  mut mw_valid_next:U2 = 0
+  mut wb_valid:U2 = 0
+  mut force_next:U2 = 0
+  mut force_qual:U2 = 0
+  mut can_accept_uc:U2 = 0
+  mut wait_l2:U2 = 0
+  mut going_to_uc_store:U2 = 0
+  mut fence:U2 = 3
+  mut bus_err:minion_pkg.NrThreads_T = 0
+  mut ba_wptr:minion_dcache_pkg.DcacheBufferIdxWidth_T = 0
+  mut bus_err_addr:U40 = 0
+
+  // Instance names mirror the Verilog generate-loop names (LEC pairs state by instance path).
+  const gen_handlers_0_u_miss_handler = minion_dcache_miss_handler(rst_ni=rst_ni, neigh_min_id_i=neigh_min_id_i, req_pri_val_i=pri_val#[0], req_sec_val_i=req_sec_val, req_info_i=req_info_i, inflight_misses_i=miss_info, inflight_reduce_i=inflight_reduce_i, l2_evict_ready_i=u_l2_evict_arb.grant_o#[0], l2_miss_ready_i=u_l2_miss_arb.grant_o#[0], l2_resp_valid_i=l2_resp_valid_i, l2_resp_data_i=l2_resp_data_i, l2_resp_slot_avail_i=l2_resp_slot_avail_i, meta_write_ready_i=u_meta_write_arb.grant_o#[0], writeback_ready_i=writeback_ready_i, writeback_done_i=writeback_done_i)
+  const gen_handlers_1_u_miss_handler = minion_dcache_miss_handler<Id=1>(rst_ni=rst_ni, neigh_min_id_i=neigh_min_id_i, req_pri_val_i=pri_val#[1], req_sec_val_i=req_sec_val, req_info_i=req_info_i, inflight_misses_i=miss_info, inflight_reduce_i=inflight_reduce_i, l2_evict_ready_i=u_l2_evict_arb.grant_o#[1], l2_miss_ready_i=u_l2_miss_arb.grant_o#[1], l2_resp_valid_i=l2_resp_valid_i, l2_resp_data_i=l2_resp_data_i, l2_resp_slot_avail_i=l2_resp_slot_avail_i, meta_write_ready_i=u_meta_write_arb.grant_o#[1], writeback_ready_i=writeback_ready_i, writeback_done_i=writeback_done_i)
+  const handlers = (gen_handlers_0_u_miss_handler, gen_handlers_1_u_miss_handler)
+
+  for (i, h) in handlers {
+    pri_rdy#[i] = h.req_pri_rdy_o
+    sec_rdy#[i] = h.req_sec_rdy_o
+    tag_match#[i] = h.tag_match_o
+    evict_match#[i] = h.evict_match_o
+    idle#[i] = h.idle_o
+    can_accept_uc#[i] = h.can_accept_uc_o
+    wait_l2#[i] = h.wait_l2_to_ba_resp_o
+    going_to_uc_store#[i] = h.going_to_uc_store_o
+
+    // This slot's in-flight miss as the other slots see it (entry 0 in the high bits).
+    // All three fields are wired, as in the Verilog (the machine-emitted tree left the set fields
+    // undriven for the other slot: a front-end defect, see livehd_bugs/L2u2_01). A LEC against the
+    // unpatched reference library therefore REFUTES on sm_data_debug_signals_o (the set bit of each
+    // in-flight entry); against a reference that drives mh_inflight_misses[i].set through an
+    // always_comb it is PROVEN, and the Verilator oracle agrees with this file.
+    const way_en:U4 = 1 << h.refill_way_o
+    const miss:U9 = (h.set_o, way_en, U1(h.idle_o == 0))#[..]
+    miss_info_v#[(NH - 1 - i)*MissEntryBits..+MissEntryBits] = miss
+
+    evict_valid_v#[i] = h.l2_evict_valid_o
+    miss_valid_v#[i] = h.l2_miss_valid_o
+    mw_valid_v#[i] = h.meta_write_valid_o
+    mw_valid_next#[i] = h.meta_write_valid_next_o
+    force_next#[i] = h.force_ba_rptr_next_o
+    force_qual#[i] = h.force_ba_rptr_qual_o
+    fence = fence & h.fence_rdy_o
+    bus_err = bus_err | h.bus_err_o
+
+    // The shared writeback port carries the OR of the slots that ask for it.
+    wb_valid#[i] = h.writeback_valid_o
+    if h.writeback_valid_o == 1 {
+      wb.tag = wb.tag | h.writeback_req_o.tag
+      wb.set = wb.set | h.writeback_req_o.set
+      wb.way_en = wb.way_en | h.writeback_req_o.way_en
+      wb.is_tbox = wb.is_tbox | h.writeback_req_o.is_tbox
+      wb.mem_idx = wb.mem_idx | h.writeback_req_o.mem_idx
+      wb.addr_low = wb.addr_low | h.writeback_req_o.addr_low
+    }
+
+    // Write pointer and bus-error address: the last slot that has one wins.
+    if i == 0 or h.have_l2_to_ba_resp_o == 1 {
+      ba_wptr = h.ba_rptr_o
+    }
+    if i == 0 or h.bus_err_o != 0 {
+      bus_err_addr = h.bus_err_addr_o
+    }
+
+    // Shared channels: the arbiter winner's slot drives the port.
+    if u_l2_evict_arb.winner_o == i {
+      l2_evict_valid_o = h.l2_evict_valid_o
+      l2_evict_req_o = h.l2_evict_req_o
+      ba_rptr_o = h.ba_rptr_o
+      ba_is_amo_o = h.ba_is_amo_o
+    }
+    if u_l2_miss_arb.winner_o == i {
+      l2_miss_valid_o = h.l2_miss_valid_o
+      l2_miss_req_o = h.l2_miss_req_o
+    }
+    if u_meta_write_arb.winner_o == i {
+      meta_write_clear_slock_o = h.meta_write_clear_slock_o
+      meta_write_req_o = h.meta_write_req_o
+    }
+    // A fill response is steered to the slot named by the low bits of its id.
+    if l2_resp_data_i.id#[0..<MhIdxWidth] == i {
+      refill_way_o = h.refill_way_o
+      refill_addr_o = h.refill_addr_o
+    }
+
+    probe_rdy_o#[i] = h.probe_rdy_o
+    metaw_rdy_o#[i] = h.metaw_rdy_o
+    l2_resp_stall_o#[i] = h.l2_resp_stall_o
+    handler_ready_o#[i] = h.ready_o
+    handler_fill_bus_error_o#[i] = h.fill_bus_error_o
+    handler_uc_load_bus_error_o#[i] = h.uc_load_bus_error_o
+    csr_debug_signals_o#[i*CsrBits..+CsrBits] = h.csr_debug_signals_o
+    sm_match_debug_signals_o#[i*MatchBits..+MatchBits] = h.sm_match_debug_signals_o
+    sm_filter_debug_signals_o#[i*FilterBits..+FilterBits] = h.sm_filter_debug_signals_o
+    sm_data_debug_signals_o#[i*DataBits..+DataBits] = h.sm_data_debug_signals_o
+  }
+
+  // A request goes to the highest-numbered ready slot unless a slot already holds its line.
+  mut pri_val_v:U2 = 0
+  for i in 0..<NH {
+    mut sel = pri_rdy#[i] == 1
+    for j in (i + 1)..<NH {
+      sel = sel and pri_rdy#[j] == 0
+    }
+    pri_val_v#[i] = U1(req_valid_i == 1 and tag_match == 0 and sel)
+  }
+  pri_val = pri_val_v
+  req_sec_val = U1(req_valid_i == 1 and tag_match != 0)
+  miss_info = miss_info_v
+  evict_valid = evict_valid_v
+  miss_valid = miss_valid_v
+  mw_valid = mw_valid_v
+
+  req_ready_o = U1(if tag_match != 0 { (tag_match & sec_rdy) != 0 } else { pri_rdy != 0 })
+  for i in 0..<NH {
+    const accepted = (pri_val#[i] == 1 and pri_rdy#[i] == 1) or (req_sec_val == 1 and sec_rdy#[i] == 1)
+    req_accepted_o#[i] = U1(accepted)
+    req_assigned_o#[i] = U1(accepted or tag_match#[i] == 1 or evict_match#[i] == 1 or (req_info_i.thread_id == (i & 1) and req_info_i.cacheable == 0))
+  }
+  match_miss_line_o = U1(tag_match != 0 or evict_match != 0)
+  can_accept_uc_o = U1(can_accept_uc != 0)
+  wait_l2_to_ba_resp_o = U1(wait_l2 != 0)
+  going_to_uc_store_o = U1(going_to_uc_store != 0)
+  idle_o = U1(idle == 3)
+  fence_rdy_o = fence
+  bus_err_o = bus_err
+  bus_err_addr_o = bus_err_addr
+  ba_wptr_o = ba_wptr
+  meta_write_valid_o = U1(mw_valid_v != 0)
+  meta_write_valid_next_o = U1(mw_valid_next != 0)
+  writeback_valid_o = U1(wb_valid != 0)
+  writeback_req_o = wb
+  force_ba_rptr_qual_o = U1(force_qual != 0)
+
+  // Registered with the unit's own active-low synchronous reset.
+  reg force_ba_rptr_o:U1:[negreset=true, reset_pin=rst_ni] = 0
+  force_ba_rptr_o = U1(force_next != 0)
+}

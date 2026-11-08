@@ -1,0 +1,76 @@
+// Mining benchmark for bitcoin_top (4 lanes): a sequence of work items, each
+// reset -> start -> run until a lane reports a golden nonce.
+//
+// Work item 0 is the real Bitcoin GENESIS block at its real difficulty,
+// seeded 5 nonces below the known winner 0x1dac2b7c (497822588), so lane 1
+// finds it on its second trial: an end-to-end check of SHA256d, the
+// little-endian target compare and the lowest-lane arbitration against a value
+// nobody in this suite computed. Every later item rolls the header's timestamp
+// (`job` XORed into header bits [95:64], as a miner rolls ntime) and mines it
+// against an EASY target (top four bits zero, a 1-in-16 hit per trial), so a
+// run is a steady stream of found nonces rather than one 2^32 search.
+//
+// Every cycle folds the interface into `sum`; the Verilator twin
+// (bitcoin_mine_tb_verilator.cpp) folds the SAME values the same way and also
+// recomputes every golden nonce with a software SHA256d, so the pinned checksum
+// is backed by an independent model, not only by agreement of two simulators.
+// Every register in the design has a reset, so all of found/busy/golden_nonce
+// is defined from the first cycle and folded unconditionally.
+//
+// Stimulus schedule (keep it in lockstep with the twin): drive, `step`, read.
+// A work item holds reset_n low for 2 cycles, raises start for 1, then waits.
+// The miner parks a lane in ST_DONE until reset, which is why every item
+// starts with a reset rather than a bare start pulse.
+const miner = import("lg:bitcoin_top")
+
+test bitcoin.mine(cycles:U32 = 20000) {
+  mut dut = miner
+  mut genesis = 0x0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c
+  mut genesis_target = 0x00000000ffff0000000000000000000000000000000000000000000000000000
+  mut easy_target = 0x0fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+  mut job = 0
+  mut phase = 0           // 0,1: reset   2: start   3: mining
+  mut job_start = 0
+  mut genesis_nonce = 0
+  mut genesis_cycle = 0
+  mut longest = 0         // most cycles any one work item took
+  mut nonce_fold = 0      // order-sensitive fold of every golden nonce
+  mut sum:U64 = 0
+  tick cycles {
+    dut.reset_n = phase >= 2
+    dut.start = if phase == 2 { 1 } else { 0 }
+    if job == 0 {
+      dut.header = genesis
+      dut.target = genesis_target
+      dut.nonce_base = 0x1dac2b7c - 5
+    } else {
+      dut.header = genesis ^ (job << 64)
+      dut.target = easy_target
+      wrap dut.nonce_base = (job * 0x9e3779b9) & 0xffffffff
+    }
+    step
+    const found = dut.found
+    const golden = dut.golden_nonce
+    wrap sum = ((sum * 31) + found + (dut.busy << 1) + (golden << 2)) & 0x7fffffffffffffff
+    if phase < 3 {
+      if phase == 2 {
+        job_start = clock
+      }
+      phase = phase + 1
+    } elif found != 0 {
+      if job == 0 {
+        genesis_nonce = golden
+        genesis_cycle = clock
+      }
+      if clock - job_start > longest {
+        longest = clock - job_start
+      }
+      wrap nonce_fold = ((nonce_fold * 31) + golden) & 0x7fffffffffffffff
+      job = job + 1
+      phase = 0
+    }
+  }
+  assert(genesis_nonce == 0x1dac2b7c, "the genesis block's golden nonce is 0x1dac2b7c")
+  assert(job > 1, "no easy-target work item completed")
+  puts("bitcoin mine: genesis={genesis_nonce} at cycle {genesis_cycle} jobs={job} longest={longest} nonces={nonce_fold} of {cycles} sum={sum}")
+}

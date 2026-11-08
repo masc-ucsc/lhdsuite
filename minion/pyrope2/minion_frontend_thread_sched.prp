@@ -1,0 +1,21 @@
+// Frontend thread scheduler (verilog: minion_frontend_thread_sched): picks the
+// thread whose instruction goes to ID this cycle. A thread is awake when it was
+// enabled and not stalled last cycle; with both threads valid the pick
+// alternates, otherwise the one valid thread wins. Written for two threads.
+pub mod minion_frontend_thread_sched<NrThreads=2>::[timecheck=false](clk_i:Clock, f0_thread_enabled_i:U2, f7_valid_tid_i:U2, id_core_stall_i:U2, rst_ni:U1) -> (f7_thread_awake_o:U2@[], f7_thread_id_o:U1@[]) {
+  cassert(NrThreads == 2, "the thread picker below is written for exactly two threads")
+
+  reg thread_id_prev_q:U1:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg thread_awake_q:U2:[async=true, negreset=true, reset_pin=rst_ni] = 3 // both threads awake out of reset
+
+  const valid_tid_qual:U2 = f7_valid_tid_i & thread_awake_q
+  const thread_id:U1 = if valid_tid_qual#[1] == 0 { 0 } elif valid_tid_qual#[0] == 0 { 1 } else { ~thread_id_prev_q }
+
+  if valid_tid_qual != 0 {
+    thread_id_prev_q = thread_id
+  }
+  thread_awake_q = f0_thread_enabled_i & ~id_core_stall_i
+
+  f7_thread_awake_o = thread_awake_q
+  f7_thread_id_o = thread_id
+}

@@ -1,0 +1,33 @@
+const minion_pkg = import("minion_pkg")
+
+// RISC-V immediate generator: picks the immediate bits out of the instruction
+// according to the format selector (S, SB, U, UJ, I, Z=CSR zimm) and sign-extends
+// to XLEN. The Z format has no sign, so its upper bits are zero.
+pub comb intpipe_imm(inst_bits:minion_pkg.InstSize_T, sel_imm:U3) -> (imm:minion_pkg.XregSize_T) {
+  const is_u = sel_imm == minion_pkg.ImmU
+  const is_z = sel_imm == minion_pkg.ImmZ
+
+  const sign:U1 = if is_z { 0 } else { inst_bits#[31] }
+  const sign_fill:U33 = if sign == 1 { 0x1ffffffff } else { 0 }
+
+  // imm[30:20] is the U-type field, otherwise just the sign
+  const b30_b20:U11 = if is_u { inst_bits#[20..=30] } else { sign_fill#[0..<11] }
+  // imm[19:12] is the field for U and UJ, otherwise just the sign
+  const b19_b12:U8 = if is_u or sel_imm == minion_pkg.ImmUj { inst_bits#[12..=19] } else { sign_fill#[0..<8] }
+  const b11:U1 = if is_u or is_z { 0 }
+    elif sel_imm == minion_pkg.ImmUj { inst_bits#[20] }
+    elif sel_imm == minion_pkg.ImmSb { inst_bits#[7] }
+    else { sign }
+  const b10_b5:U6 = if is_u or is_z { 0 } else { inst_bits#[25..=30] }
+  const b4_b1:U4 = if is_u { 0 }
+    elif sel_imm == minion_pkg.ImmS or sel_imm == minion_pkg.ImmSb { inst_bits#[8..=11] }
+    elif is_z { inst_bits#[16..=19] }
+    else { inst_bits#[21..=24] }
+  const b0:U1 = if sel_imm == minion_pkg.ImmS { inst_bits#[7] }
+    elif sel_imm == minion_pkg.ImmI { inst_bits#[20] }
+    elif is_z { inst_bits#[15] }
+    else { 0 }
+
+  // (entry 0 is the least significant field)
+  imm = (b0, b4_b1, b10_b5, b11, b19_b12, b30_b20, sign_fill)#[..]
+}

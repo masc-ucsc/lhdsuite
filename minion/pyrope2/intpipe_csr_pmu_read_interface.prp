@@ -1,0 +1,60 @@
+const minion_pkg = import("minion_pkg")
+const intpipe_csr_pkg = import("intpipe_csr_pkg")
+
+// PMU counter read interface (verilog: intpipe_csr_pmu_read_interface). A CSR read of
+// (m)hpmcounter3..8 selects one counter per thread (pmu_read_sel, {counter, thread}).
+// The read is accepted only while no other thread's read is in flight; its
+// result is ready PmuCountersReadDelay cycles later (pmu_read_prop is the delay line)
+// and stays ready for as long as the same counter keeps being read.
+comptime const NThreads = minion_pkg.NrThreads
+comptime const AddrBits = 3 // counter offset: 6 counters, 3..8
+comptime const SelBits = AddrBits + 1
+comptime const Delay = minion_pkg.PmuCountersReadDelay
+
+pub mod intpipe_csr_pmu_read_interface::[timecheck=false](clk_i:Clock, io_rw_mem_addr:minion_pkg.CsrRegAddrSize_T, io_rw_mem_thread_id:U1, io_rw_mem_valid:U1, rst_ni:U1) -> (io_rw_mem_ready:minion_pkg.NrThreads_T@[], pmu_read_en_wb:U1@[], pmu_read_sel:U8@[]) {
+  reg pmu_read_sel:Unsigned(bits=NThreads*SelBits):[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg pmu_read_en_wb:U1:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg pmu_read_prop:[NThreads]Unsigned(bits=Delay):[async=true, negreset=true, ordering="old", reset_pin=rst_ni] = 0
+  reg pmu_read_ready:Unsigned(bits=NThreads):[async=true, negreset=true, reset_pin=rst_ni] = 0
+
+  // access to a machine-mode or user-mode counter; the counters are consecutive CSRs
+  const valid_mm = io_rw_mem_valid == 1 and io_rw_mem_addr >= intpipe_csr_pkg.csr_ad_MHPMCOUNTER3 and io_rw_mem_addr <= intpipe_csr_pkg.csr_ad_MHPMCOUNTER8
+  const valid_um = io_rw_mem_valid == 1 and io_rw_mem_addr >= intpipe_csr_pkg.csr_ad_HPMCOUNTER3 and io_rw_mem_addr <= intpipe_csr_pkg.csr_ad_HPMCOUNTER8
+  const addr_mm:Unsigned(bits=AddrBits) = (io_rw_mem_addr - intpipe_csr_pkg.csr_ad_MHPMCOUNTER3)#[0..<AddrBits]
+  const addr_um:Unsigned(bits=AddrBits) = (io_rw_mem_addr - intpipe_csr_pkg.csr_ad_HPMCOUNTER3)#[0..<AddrBits]
+  const read_valid = valid_mm or valid_um
+  const read_addr = if valid_mm { addr_mm } else { addr_um }
+  const sel_next:Unsigned(bits=SelBits) = (io_rw_mem_thread_id, read_addr)#[..]
+
+  mut ready_next:Unsigned(bits=NThreads) = 0
+  mut any_valid = false
+  for i in 0..<NThreads {
+    // another thread's read is still propagating
+    mut others_ongoing = false
+    for j in 0..<NThreads {
+      if j != i {
+        others_ongoing = others_ongoing or pmu_read_prop[j] != 0
+      }
+    }
+    const sel = pmu_read_sel#[(i*SelBits)..<((i + 1)*SelBits)]
+    const valid_th = read_valid and io_rw_mem_thread_id == i and not others_ongoing
+    const current_sel = read_valid and io_rw_mem_thread_id == i and sel == sel_next
+    const ready = pmu_read_ready#[i] == 1
+
+    // the delay line completing marks ready; a new different read clears it
+    const next_ready = if pmu_read_prop[i]#[Delay - 1] == 1 { true }
+      elif ready and current_sel { true }
+      elif valid_th and not current_sel { false }
+      else { ready }
+    ready_next#[i] = U1(next_ready)
+    pmu_read_prop[i] = (pmu_read_prop[i]#[0..<(Delay - 1)] << 1) | U1(valid_th and not next_ready)
+
+    if valid_th {
+      pmu_read_sel#[(i*SelBits)..<((i + 1)*SelBits)] = sel_next
+    }
+    any_valid = any_valid or valid_th
+  }
+  pmu_read_ready = ready_next
+  pmu_read_en_wb = U1(any_valid)
+  io_rw_mem_ready = pmu_read_ready
+}

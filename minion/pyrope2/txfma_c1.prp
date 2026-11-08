@@ -1,0 +1,47 @@
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+// TXFMA control stage c1 (verilog: txfma_c1): product sign / zero detection, f32 overflow
+// flags of the exponent, and the adder-input selects that txfma_f2 flops (some were moved here
+// from c2 for timing). Purely combinational.
+pub comb txfma_c1::[timecheck=false](cmd_in_f1a_h:vpu_defs_pkg.VPU_FCMD_SZ_T, ctrl_valid_f1a_h:U1, ea_hi_f1a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T, ea_hi_zero_f1a_h:U1, ea_lo_zero_f1a_h:U1, eb_hi_zero_f1a_h:U1, eb_lo_zero_f1a_h:U1, fa_hi_zero_f1a_h:U1, flog_mul_prod_zero_f1a_h:U1, op_dtype_f1a_h:vpu_defs_pkg.VPU_DTYPE_SZ_T, sa_hi_f1a_h:U1, sa_lo_f1a_h:U1, sb_hi_f1a_h:U1, sb_lo_f1a_h:U1, sc_f1a_h:U1, sigs_f1a_h:vpu_defs_pkg.TXFMA_SIGS_SZ_T) -> (cmd_f1a_h:vpu_defs_pkg.VPU_FCMD_SZ_T, eprod_hi_zero_f1a_h:U1, eprod_lo_zero_f1a_h:U1, fa_en_f1a_h:U1, minmax_op_f1a_h:U1, norm_f32_ovf_f1a_h:U1, norm_one_out_f1a_h:U1, padd_cin_f1a_h:U1, paddin1_sels_f1a_h:U1, paddin2_selc_f1a_h:U1, paddin2_selfcneg_f1a_h:U1, prod_sign_hi_f1a_h:U1, prod_sign_lo_f1a_h:U1, sel_famask_f1a_h:U1, sel_fcmask_f1a_h:U1, use_mul_f1a_h:U1) {
+  const cmd = cmd_in_f1a_h
+  const sig_fma = sigs_f1a_h#[vpu_defs_pkg.TXFMA_FMA]
+  const sig_fms = sigs_f1a_h#[vpu_defs_pkg.TXFMA_FMS]
+  const sig_mul = sigs_f1a_h#[vpu_defs_pkg.TXFMA_MUL]
+  const sig_norm_f32 = sigs_f1a_h#[vpu_defs_pkg.TXFMA_NORM_F32]
+  const sig_sgcvt = sigs_f1a_h#[vpu_defs_pkg.TXFMA_SGCVT]
+  const sig_f32_norm = sigs_f1a_h#[vpu_defs_pkg.TXFMA_F32_NORM]
+  const sig_ren2 = sigs_f1a_h#[vpu_defs_pkg.TXFMA_REN2]
+
+  const minmax_op = cmd == vpu_defs_pkg.VPU_FCMD_MIN or cmd == vpu_defs_pkg.VPU_FCMD_MAX
+  const comp_op = cmd == vpu_defs_pkg.VPU_FCMD_FLE or cmd == vpu_defs_pkg.VPU_FCMD_FLT or cmd == vpu_defs_pkg.VPU_FCMD_FEQ or cmd == vpu_defs_pkg.VPU_FCMD_CLASS
+  const is_exp_frac = cmd == vpu_defs_pkg.VPU_TRANS_EXP_FRAC
+
+  // adder cin / negate-c select
+  const fc_neg = U1(minmax_op or comp_op or is_exp_frac) | (sig_sgcvt & sig_f32_norm & sc_f1a_h)
+  const use_product = sig_fma | sig_fms | sig_mul | sig_norm_f32
+  const sel_famask = U1(cmd == vpu_defs_pkg.VPU_FCMD_FFRC or cmd == vpu_defs_pkg.VPU_FCMD_FFRC_SIN)
+
+  const cvt_norm_trans = cmd == vpu_defs_pkg.VPU_FCMD_CVT_UN24F32 or cmd == vpu_defs_pkg.VPU_FCMD_CVT_UN16F32 or cmd == vpu_defs_pkg.VPU_FCMD_CVT_UN10F32 or cmd == vpu_defs_pkg.VPU_FCMD_CVT_UN8F32 or cmd == vpu_defs_pkg.VPU_FCMD_CVT_UN2F32 or cmd == vpu_defs_pkg.VPU_FCMD_CVT_SN16F32 or cmd == vpu_defs_pkg.VPU_FCMD_CVT_SN8F32
+
+  cmd_f1a_h = cmd
+  minmax_op_f1a_h = U1(minmax_op)
+  prod_sign_hi_f1a_h = (sa_hi_f1a_h ^ (sb_hi_f1a_h & sig_ren2)) | U1(is_exp_frac)
+  prod_sign_lo_f1a_h = sa_lo_f1a_h ^ sb_lo_f1a_h
+  eprod_hi_zero_f1a_h = if cmd == vpu_defs_pkg.VPU_TRANS_LOG_MUL { flog_mul_prod_zero_f1a_h } else { ea_hi_zero_f1a_h | eb_hi_zero_f1a_h }
+  eprod_lo_zero_f1a_h = ea_lo_zero_f1a_h | eb_lo_zero_f1a_h
+
+  const ea_is_bias = ea_hi_f1a_h == vpu_defs_pkg.FLOAT32_E_BIAS
+  norm_f32_ovf_f1a_h = U1((fa_hi_zero_f1a_h == 0 and ea_is_bias) or ea_hi_f1a_h > vpu_defs_pkg.FLOAT32_E_BIAS)
+  norm_one_out_f1a_h = U1(fa_hi_zero_f1a_h == 1 and ea_is_bias)
+
+  fa_en_f1a_h = U1(op_dtype_f1a_h != vpu_defs_pkg.VPU_DTYPE_F16_F32 or (sig_fma | sig_mul) == 0)
+  use_mul_f1a_h = ctrl_valid_f1a_h & (sig_fma | sig_mul | sig_fms | U1(cvt_norm_trans))
+
+  paddin1_sels_f1a_h = use_product
+  paddin2_selc_f1a_h = use_product
+  paddin2_selfcneg_f1a_h = fc_neg
+  padd_cin_f1a_h = fc_neg
+  sel_famask_f1a_h = sel_famask
+  sel_fcmask_f1a_h = sel_famask
+}

@@ -1,0 +1,23 @@
+const minion_pkg = import("minion_pkg")
+
+comptime const MASK_ENTRIES = 4 // VpuMaskScoreboardSize: in-flight VPU mask destinations
+comptime const DEST_BITS = 4 // one packed entry: {addr:3, thread_id:1}, thread_id in bit 0
+
+// Mask-register hazard scoreboard. rd_data/wd_data[r] is set when mask register r
+// is named in rd_addr/wd_addr and a valid in-flight VPU mask write targets it.
+// Only the mask fields of the VPU scoreboard bundle are used (mask_valid[i] and
+// mask_dest[i*DEST_BITS +: DEST_BITS]), so only those are declared. As in the
+// Verilog, wd_data also filters on rd_thread_id.
+pub comb intpipe_mask_scoreboard(rd_addr:minion_pkg.VpuRegmaskNum_T, rd_thread_id:U1, vpu_scoreboard:(mask_valid:U4, mask_dest:U16), wd_addr:minion_pkg.VpuRegmaskNum_T) -> (rd_data:minion_pkg.VpuRegmaskNum_T, wd_data:minion_pkg.VpuRegmaskNum_T) {
+  mut rd:minion_pkg.VpuRegmaskNum_T = 0
+  mut wd:minion_pkg.VpuRegmaskNum_T = 0
+  for i in 0..<MASK_ENTRIES {
+    const dest = vpu_scoreboard.mask_dest#[i*DEST_BITS..+DEST_BITS]
+    const addr = dest#[1..<DEST_BITS]
+    const mine = vpu_scoreboard.mask_valid#[i] == 1 and dest#[0] == rd_thread_id
+    rd#[addr] = rd#[addr] | U1(mine and rd_addr#[addr] == 1)
+    wd#[addr] = wd#[addr] | U1(mine and wd_addr#[addr] == 1)
+  }
+  rd_data = rd
+  wd_data = wd
+}

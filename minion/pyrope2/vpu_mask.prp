@@ -1,0 +1,263 @@
+const minion_pkg = import("minion_pkg")
+
+// VPU mask-register file and mask-op pipeline. Eight 8-lane mask registers per
+// thread (2 threads). Mask ops read their operands in the execute stage with
+// bypass from the in-flight writers (f2, f3, f8), compute in f2, and carry the
+// write (store lanes, destination, popcount/mova result) down the f3..f8 shift
+// chain; the register file itself is written in f8 (or earlier for a full-row
+// write from f3). The valid/store bits of the chain reset asynchronously (low),
+// the data side is unreset and only advances while its stage is valid.
+pub mod vpu_mask::[timecheck=false](clk_i:Clock, ex_cmd_i:U7, ex_fromint_data_i:minion_pkg.XregSize_T, ex_fromint_i:U1, ex_ignore_mask_i:U1, ex_imm_i:minion_pkg.VpuLaneNum_T, ex_in_valid_i:U1, ex_inst_valid_i:U1, ex_regfile_raddr1_i:minion_pkg.MregAddrSize_T, ex_regfile_raddr2_i:minion_pkg.MregAddrSize_T, ex_thread_id_i:U1, f2_core_kill_i:U1, f2_maskop_i:U1, f2_thread_id_i:U1, f2_tointm_i:U1, f2_waddr_i:minion_pkg.MregAddrSize_T, f2_wen_i:U1, f3_core_kill_i:U1, f3_regmask_from_short_i:U1, f3_regmask_from_txfma_i:U1, f3_regmask_wdata_lane_i:minion_pkg.VpuLaneNum_T, f3_thread_id_i:U1, f4_core_kill_i:U1, f4_regmask_from_txfma_i:U1, f5_thread_id_i:U1, f6_thread_id_i:U1, f7_thread_id_i:U1, f8_regmask_comp_res_i:(e7:U1, e6:U1, e5:U1, e4:U1, e3:U1, e2:U1, e1:U1, e0:U1), f8_thread_id_i:U1, rst_ni:U1) -> (ex_mask_in1_o:minion_pkg.VpuLaneNum_T@[], ex_mask_rf0_o:minion_pkg.VpuLaneNum_T@[], f2_mask_rf0_o:minion_pkg.VpuLaneNum_T@[], f8_regmask_store_o:minion_pkg.VpuLaneNum_T@[], f8_toint_data_o:minion_pkg.XregSize_T@[], wb_mask_dest_o:U16@[], wb_mask_valid_o:(e3:U1, e2:U1, e1:U1, e0:U1)@[]) {
+  comptime const LANES = 8
+  comptime const ROW_BITS = 64 // one thread: 8 mask registers x 8 lanes
+  comptime const RF_BITS = 128 // 2 threads
+
+  reg ex_mask_rf_q:[2]U64:[ordering="old"]
+
+  // f2: operands registered from the execute stage
+  reg f2_valid_q:U1:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg f2_cmd_q:U7
+  reg f2_in1_q:U32
+  reg f2_in2_q:U32
+  reg f2_imm_q:U8
+  reg f2_mask_rf0_q:U8
+
+  // f3..f8: write-back chain (valid, lanes to store, dest register, popcount, mova_x_m)
+  reg f3_valid_q:U1:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg f3_regmask_store_q:U8:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg f3_regmask_store_all_q:U1:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg f3_regmask_wdata_q:U64
+  reg f3_toint_data_q:U5
+  reg f3_regmask_waddr_q:U3
+  reg f3_mova_x_m_q:U1
+  reg f4_valid_q:U1:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg f4_regmask_store_q:U8:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg f4_toint_data_q:U5
+  reg f4_regmask_waddr_q:U3
+  reg f4_mova_x_m_q:U1
+  reg f5_valid_q:U1:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg f5_regmask_store_q:U8:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg f5_toint_data_q:U5
+  reg f5_regmask_waddr_q:U3
+  reg f5_mova_x_m_q:U1
+  reg f6_valid_q:U1:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg f6_regmask_store_q:U8:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg f6_toint_data_q:U5
+  reg f6_regmask_waddr_q:U3
+  reg f6_mova_x_m_q:U1
+  reg f7_valid_q:U1:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg f7_regmask_store_q:U8:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg f7_toint_data_q:U5
+  reg f7_regmask_waddr_q:U3
+  reg f7_mova_x_m_q:U1
+  reg f8_regmask_store_q:U8:[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg f8_toint_data_pre_q:U5
+  reg f8_regmask_waddr_q:U3
+  reg f8_mova_x_m_q:U1
+
+  // f2: mask-op result (bit 0 of mask register 0 is lane 0), popcounts and store lanes
+  const f2_cmd:U7 = f2_cmd_q
+  const f2_in1:U32 = f2_in1_q
+  const f2_in2:U32 = f2_in2_q
+  const f2_in1_lanes:U8 = f2_in1_q#[0..<LANES]
+  const f2_in_pair:U64 = (f2_in1, f2_in2)#[..]
+  const f2_regmask_wdata_d:U64 = if f2_cmd == minion_pkg.VpuCmdMovMX { f2_in1_lanes | f2_imm_q }
+    elif f2_cmd == minion_pkg.VpuCmdMand { f2_in1 & f2_in2 }
+    elif f2_cmd == minion_pkg.VpuCmdMor { f2_in1 | f2_in2 }
+    elif f2_cmd == minion_pkg.VpuCmdMxor { f2_in1 ^ f2_in2 }
+    elif f2_cmd == minion_pkg.VpuCmdMnot { ~f2_in1 }
+    else { f2_in_pair }
+
+  // mpoc_rast: popcount of the 16 raster lanes selected by imm[3:0] (a window per quad)
+  const mpopc_mask:U16 = match f2_imm_q#[0..<4] {
+    == 0 { 0x0f0f }
+    == 1 { 0x3c3c }
+    == 2 { 0xf0f0 }
+    else { 0xffff }
+  }
+  const mpopc_rast:U16 = (f2_in1#[0..<LANES], f2_in2#[0..<LANES])#[..] & mpopc_mask
+  const f2_toint_data_d:U5 = if f2_cmd == minion_pkg.VpuCmdMpocRast { mpopc_rast#+[..] }
+    elif f2_cmd == minion_pkg.VpuCmdMpopcz { (~f2_in1_lanes)#+[..] }
+    else { f2_in1_lanes#+[..] }
+  const f2_mova_x_m_d = f2_cmd == minion_pkg.VpuCmdMovaXM
+
+  mut f2_regmask_store_to_mask_d:U8 = 0
+  if f2_wen_i != 0 and f2_cmd != minion_pkg.VpuCmdMovaMX {
+    if f2_maskop_i != 0 {
+      f2_regmask_store_to_mask_d = 0xff
+    }
+    if f2_tointm_i != 0 {
+      f2_regmask_store_to_mask_d = f2_mask_rf0_q
+    }
+  }
+  const f2_store_any = f2_regmask_store_to_mask_d != 0
+  const f2_regmask_store_d:U8 = if f2_core_kill_i == 0 { f2_regmask_store_to_mask_d } else { 0 }
+  const f2_regmask_store_all_d:U1 = if f2_wen_i != 0 and f2_maskop_i != 0 and f2_cmd == minion_pkg.VpuCmdMovaMX and f2_core_kill_i == 0 {
+    1
+  } else {
+    0
+  }
+  const f2_regmask_waddr_d:U3 = if f2_store_any { f2_waddr_i } else { 0 }
+
+  // f3 operand select: the short path replaces the registered wdata by the lane result
+  const f3_regmask_wdata_sel_d:U64 = if f3_regmask_from_short_i != 0 { f3_regmask_wdata_lane_i } else { f3_regmask_wdata_q }
+  const f3_regmask_store_to_f4_d:U8 = if (f3_core_kill_i == 0 and f3_regmask_from_txfma_i != 0) or f3_regmask_from_short_i != 0 {
+    f3_regmask_store_q
+  } else {
+    0
+  }
+  const f3_store_all_qual = f3_regmask_store_all_q != 0 and f3_core_kill_i == 0
+  const f3_store_qual = f3_regmask_store_q != 0 and f3_regmask_from_txfma_i == 0 and f3_core_kill_i == 0
+  const f4_regmask_store_to_f5_d:U8 = if f4_core_kill_i == 0 and f4_regmask_from_txfma_i != 0 { f4_regmask_store_q } else { 0 }
+
+  // chain: valid always advances, a stage's store lanes / dest register move only when
+  // there is something to move (so a store is held for exactly one stage)
+  f2_valid_q = ex_in_valid_i
+  f3_valid_q = f2_valid_q
+  if f3_regmask_store_q != 0 or f2_regmask_store_d != 0 {
+    f3_regmask_store_q = f2_regmask_store_d
+  }
+  f3_regmask_store_all_q = f2_regmask_store_all_d
+  if f2_store_any or f2_regmask_store_all_d != 0 {
+    f3_regmask_wdata_q = f2_regmask_wdata_d
+  }
+  if f2_valid_q != 0 {
+    f3_toint_data_q = f2_toint_data_d
+    f3_mova_x_m_q = U1(f2_mova_x_m_d)
+  }
+  if f2_store_any {
+    f3_regmask_waddr_q = f2_regmask_waddr_d
+  }
+
+  f4_valid_q = f3_valid_q
+  if f4_regmask_store_q != 0 or f3_regmask_store_to_f4_d != 0 {
+    f4_regmask_store_q = f3_regmask_store_to_f4_d
+  }
+  if f3_valid_q != 0 {
+    f4_toint_data_q = f3_toint_data_q
+    f4_mova_x_m_q = f3_mova_x_m_q
+  }
+  if f3_regmask_store_q != 0 {
+    f4_regmask_waddr_q = f3_regmask_waddr_q
+  }
+
+  f5_valid_q = f4_valid_q
+  if f5_regmask_store_q != 0 or f4_regmask_store_to_f5_d != 0 {
+    f5_regmask_store_q = f4_regmask_store_to_f5_d
+  }
+  if f4_valid_q != 0 {
+    f5_toint_data_q = f4_toint_data_q
+    f5_mova_x_m_q = f4_mova_x_m_q
+  }
+  if f4_regmask_store_q != 0 {
+    f5_regmask_waddr_q = f4_regmask_waddr_q
+  }
+
+  f6_valid_q = f5_valid_q
+  if f6_regmask_store_q != 0 or f5_regmask_store_q != 0 {
+    f6_regmask_store_q = f5_regmask_store_q
+  }
+  if f5_valid_q != 0 {
+    f6_toint_data_q = f5_toint_data_q
+    f6_mova_x_m_q = f5_mova_x_m_q
+  }
+  if f5_regmask_store_q != 0 {
+    f6_regmask_waddr_q = f5_regmask_waddr_q
+  }
+
+  f7_valid_q = f6_valid_q
+  if f7_regmask_store_q != 0 or f6_regmask_store_q != 0 {
+    f7_regmask_store_q = f6_regmask_store_q
+  }
+  if f6_valid_q != 0 {
+    f7_toint_data_q = f6_toint_data_q
+    f7_mova_x_m_q = f6_mova_x_m_q
+  }
+  if f6_regmask_store_q != 0 {
+    f7_regmask_waddr_q = f6_regmask_waddr_q
+  }
+
+  if f8_regmask_store_q != 0 or f7_regmask_store_q != 0 {
+    f8_regmask_store_q = f7_regmask_store_q
+  }
+  if f7_valid_q != 0 {
+    f8_toint_data_pre_q = f7_toint_data_q
+    f8_mova_x_m_q = f7_mova_x_m_q
+  }
+  if f7_regmask_store_q != 0 {
+    f8_regmask_waddr_q = f7_regmask_waddr_q
+  }
+
+  // mask register file write (f8): a full-row write and per-lane writes from f3, then
+  // per-lane writes from f8 (which wins on overlap)
+  const f8_comp_res:U8 = (f8_regmask_comp_res_i.e0, f8_regmask_comp_res_i.e1, f8_regmask_comp_res_i.e2, f8_regmask_comp_res_i.e3, f8_regmask_comp_res_i.e4, f8_regmask_comp_res_i.e5, f8_regmask_comp_res_i.e6, f8_regmask_comp_res_i.e7)#[..]
+  mut f8_mask_rf_wdata_d:U128 = ex_mask_rf_q#[0..<RF_BITS]
+  if f3_store_all_qual {
+    const row = f3_thread_id_i*ROW_BITS
+    f8_mask_rf_wdata_d#[row..<(row + ROW_BITS)] = f3_regmask_wdata_sel_d
+  }
+  if f3_store_qual {
+    const lane0 = (f3_thread_id_i*ROW_BITS) + (f3_regmask_waddr_q*LANES)
+    for i in 0..<LANES {
+      if f3_regmask_store_q#[i] != 0 {
+        f8_mask_rf_wdata_d#[lane0 + i] = f3_regmask_wdata_sel_d#[i]
+      }
+    }
+  }
+  if f8_regmask_store_q != 0 {
+    const lane0 = (f8_thread_id_i*ROW_BITS) + (f8_regmask_waddr_q*LANES)
+    for i in 0..<LANES {
+      if f8_regmask_store_q#[i] != 0 {
+        f8_mask_rf_wdata_d#[lane0 + i] = f8_comp_res#[i]
+      }
+    }
+  }
+  if (f3_regmask_store_q != 0 and f3_core_kill_i == 0) or f3_store_all_qual or f8_regmask_store_q != 0 {
+    ex_mask_rf_q#[0..<RF_BITS] = f8_mask_rf_wdata_d
+  }
+
+  // execute-stage reads: operand 1, operand 2 and mask register 0 (always lane mask),
+  // each bypassed from the in-flight writers f2 > f3 > f8 on matching register + thread
+  const byp_waddr = (f2_regmask_waddr_d, f3_regmask_waddr_q, f8_regmask_waddr_q)
+  const byp_thread = (f2_thread_id_i, f3_thread_id_i, f8_thread_id_i)
+  const byp_store = (f2_regmask_store_to_mask_d, f3_regmask_store_q, f8_regmask_store_q)
+  const f2_wdata_lanes:U8 = f2_regmask_wdata_d#[0..<LANES]
+  const f3_wdata_lanes:U8 = f3_regmask_wdata_sel_d#[0..<LANES]
+  const byp_data = (f2_wdata_lanes, f3_wdata_lanes, f8_comp_res)
+  const rd_addr = (ex_regfile_raddr1_i, ex_regfile_raddr2_i, 0)
+  const ex_row:U64 = ex_mask_rf_q[ex_thread_id_i]
+  mut ex_rd:[3]U8 = 0
+  for r in 0..<3 {
+    mut bits:U8 = (ex_row >> (rd_addr[r]*LANES))#[0..<LANES]
+    for k in 0..<3 {
+      // f8 is applied first, f2 last, so f2 has the highest priority
+      comptime const s = 2 - k
+      const hit:U8 = if rd_addr[r] == byp_waddr[s] and ex_thread_id_i == byp_thread[s] { byp_store[s] } else { 0 }
+      bits = (bits & ~hit) | (byp_data[s] & hit)
+    }
+    ex_rd[r] = bits
+  }
+  const mask_rf0_bypass_d:U8 = ex_rd[2]
+
+  const ex_mask_rf0_d:U8 = if ex_ignore_mask_i != 0 { 0xff } else { mask_rf0_bypass_d }
+  const ex_in1_d:U32 = if ex_fromint_i != 0 { ex_fromint_data_i#[0..<32] } else { ex_rd[0] }
+  const ex_in2_d:U32 = if ex_fromint_i != 0 { ex_fromint_data_i#[32..<64] } else { ex_rd[1] }
+  f2_cmd_q = ex_cmd_i
+  if ex_in_valid_i != 0 {
+    f2_in1_q = ex_in1_d
+    f2_in2_q = ex_in2_d
+    f2_imm_q = ex_imm_i
+  }
+  if ex_inst_valid_i != 0 {
+    f2_mask_rf0_q = ex_mask_rf0_d
+  }
+
+  ex_mask_rf0_o = ex_mask_rf0_d
+  ex_mask_in1_o = mask_rf0_bypass_d
+  f2_mask_rf0_o = f2_mask_rf0_q
+  f8_toint_data_o = if f8_mova_x_m_q != 0 { ex_mask_rf_q[f8_thread_id_i] } else { f8_toint_data_pre_q }
+  f8_regmask_store_o = f8_regmask_store_q
+  // scoreboard of the writers still in flight (f5..f8): {thread, dest reg} per entry, f5 lowest
+  wb_mask_valid_o = (e0=U1(f5_regmask_store_q != 0), e1=U1(f6_regmask_store_q != 0), e2=U1(f7_regmask_store_q != 0), e3=U1(f8_regmask_store_q != 0))
+  wb_mask_dest_o = (f5_thread_id_i, f5_regmask_waddr_q, f6_thread_id_i, f6_regmask_waddr_q, f7_thread_id_i, f7_regmask_waddr_q, f8_thread_id_i, f8_regmask_waddr_q)#[..]
+}

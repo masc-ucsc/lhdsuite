@@ -1,0 +1,15 @@
+const prim_rf_1r1w_reg_preview = import("prim_rf_1r1w_reg_preview.prim_rf_1r1w_reg_preview")
+
+// 128-entry x 64-bit 1R1W register file for the dcache data array, built from two
+// independent 32-bit halves so each half has its own write enable (byte-lane
+// groups) and its own read enable. A half only reads when the array read is
+// enabled and that half's read-blocking (`..b`) input is low.
+pub mod minion_dcache_128x64_1r1w_lram::[timecheck=false](clk_i:Clock, rd_addr_i:U7, rd_enable_i:U1, rd_enablehib_i:U1, rd_enablelob_i:U1, wr_addr_i:U7, wr_data_i:U64, wr_enablehi_i:U1, wr_enablehi_pre_i:U1, wr_enablelo_i:U1, wr_enablelo_pre_i:U1) -> (rd_data_o:U64@[]) {
+  comptime const HALF = 32
+
+  mut u_rf_lo = prim_rf_1r1w_reg_preview<Depth=128, Width=HALF>(preview_clk_i=clk_i, rf_clk_i=clk_i, wr_data_en_1p_next_i=wr_enablelo_pre_i, wr_data_i=wr_data_i#[0..<HALF], wr_addr_i=wr_addr_i, wr_en_i=wr_enablelo_i, rd_addr_i=rd_addr_i, rd_en_i=U1(rd_enable_i != 0 and rd_enablelob_i == 0))
+  mut u_rf_hi = prim_rf_1r1w_reg_preview<Depth=128, Width=HALF>(preview_clk_i=clk_i, rf_clk_i=clk_i, wr_data_en_1p_next_i=wr_enablehi_pre_i, wr_data_i=wr_data_i#[HALF..<64], wr_addr_i=wr_addr_i, wr_en_i=wr_enablehi_i, rd_addr_i=rd_addr_i, rd_en_i=U1(rd_enable_i != 0 and rd_enablehib_i == 0))
+
+  rd_data_o#[0..<HALF] = u_rf_lo
+  rd_data_o#[HALF..<64] = u_rf_hi
+}

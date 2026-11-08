@@ -1,0 +1,285 @@
+// Stage f0: register the bypassed FMA operands and their controls, then format them
+// (exponent select, F16/F11/F10/graphics/transcendental fraction words, denormal flush)
+// and extract the sign/exponent classification flags used by later stages.
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+// {hidden bit = nz, fraction (flushed to 0 when nz is 0)} placed at bit positions HID and POS.
+comb mant<N=23, HID=31, POS=8>(frac:Unsigned(bits=N), nz:U1) -> (r:U32) {
+  const f:Unsigned(bits=N) = if nz != 0 { frac } else { 0 }
+  r = (nz << HID) | (f << POS)
+}
+
+// 1 when the 8-bit exponent, with its upper three bits forced to ones when force_hi is set, is all ones.
+comb exp_all1(e:U8, force_hi:U1) -> (r:U1) {
+  const upper:U3 = if force_hi != 0 { 7 } else { e#[5..<8] }
+  r = U1(((upper << 5) | e#[0..<5]) == 0xff)
+}
+
+pub mod txfma_f0::[timecheck=false](ctrl_frf_clk:Clock, eb_hi_k_exa_h:U6, ec_en_exa_h:U1, ehi_ea_en_exa_h:U1, ehi_eb_en_exa_h:U1, elo_ea_en_exa_h:U1, elo_eb_en_exa_h:U1, fa_en_exa_h:U1, fb_en_exa_h:U1, fc_dtps_exa_h:U1, fc_en_exa_h:U1, neg_fmaop_exa_h:U1, opa_byp_frfa_h:vpu_defs_pkg.VPU_DATA_S_SZ_T, opa_frf_clk:Clock, opb_byp_frfa_h:vpu_defs_pkg.VPU_DATA_S_SZ_T, opb_frf_clk:Clock, opc_byp_frfa_h:vpu_defs_pkg.VPU_DATA_S_SZ_T, opc_frf_clk:Clock, sa1_nr2_frcpfxp_exa_h:U1, sa_hi_en_exa_h:U1, sa_lo_en_exa_h:U1, sa_zap_exa_l:U1, sb_hi_en_exa_h:U1, sb_lo_en_exa_h:U1, sb_zap_exa_l:U1, sc_en_exa_h:U1, sel_eainmux_exa_h:U2, sel_ealo_ph_exa_h:U1, sel_ebin_hi_exa_h:U2, sel_eblo_ph_exa_h:U1, sel_ec5b_exa_h:U2, sel_ec5bdet_exa_h:U1, sel_ecin_exa_h:U2, sel_f10_exa_h:U1, sel_f11_exa_h:U1, sel_g1sk16_exa_h:U1, sel_g1sk24_exa_h:U1, sel_g1sk2_exa_h:U1, sel_g1sk8_exa_h:U1, sel_opafmt_exa_h:U2, sel_opbfmt_exa_h:U2, sel_opcfmt_exa_h:U2, sel_opcgfx_exa_h:U2, sel_sc_exa_h:U2, sel_sign_sinp2_exa_h:U1, sel_snorm_exa_h:U1, sel_transfa_exa_h:U2, sel_transfb_exa_h:U2, sel_xexpfrac_exa_h:U1, sel_xopc_exa_h:U2, trans_frf_clk:Clock, trans_mask_ra_h:vpu_defs_pkg.TRANS_MASK_SIZE_T, trans_op2_exa_l:U1, xrom_c1c0k_ra_h:vpu_defs_pkg.TRANS_C0_MAX_SIZE_T, xrom_c2_ra_h:vpu_defs_pkg.TRANS_C2_MAX_SIZE_T) -> (ea_hi_all1_f0a_h:U1@[], ea_hi_f0a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T@[], ea_hi_zero_f0a_l:U1@[], ea_lo_all1_f0a_h:U1@[], ea_lo_f0a_h:vpu_defs_pkg.TXFMA_EXP_PH_SZ_T@[], ea_lo_zero_f0a_l:U1@[], eb_eql_125_f0a_h:U1@[], eb_eql_126_f0a_h:U1@[], eb_eql_127_f0a_h:U1@[], eb_hi_all1_f0a_h:U1@[], eb_hi_f0a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T@[], eb_hi_zero_f0a_l:U1@[], eb_lo_all1_f0a_h:U1@[], eb_lo_f0a_h:vpu_defs_pkg.TXFMA_EXP_PH_SZ_T@[], eb_lo_zero_f0a_l:U1@[], ec_all1_f0a_h:U1@[], ec_f0a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T@[], ec_zero_f0a_l:U1@[], fa_f0a_h:vpu_defs_pkg.VPU_DATA_S_SZ_T@[], faph_hi_b0_f0a_h:U1@[], faph_hi_zero_f0a_l:U1@[], faph_lo_b0_f0a_h:U1@[], faph_lo_zero_f0a_l:U1@[], faps_b0_f0a_h:U1@[], faps_zero_f0a_l:U1@[], fb_f0a_h:vpu_defs_pkg.VPU_DATA_S_SZ_T@[], fbph_hi_b0_f0a_h:U1@[], fbph_hi_zero_f0a_l:U1@[], fbph_lo_b0_f0a_h:U1@[], fbph_lo_zero_f0a_l:U1@[], fbps_b0_f0a_h:U1@[], fbps_zero_f0a_l:U1@[], fc_31_f0a_h:U1@[], fc_f0a_h:vpu_defs_pkg.VPU_DATA_S_SZ_T@[], fcf10_b0_f0a_h:U1@[], fcf10_zero_f0a_l:U1@[], fcf11_b0_f0a_h:U1@[], fcf11_zero_f0a_l:U1@[], fcn10_one_30_22_f0a_h:U1@[], fcn16_one_30_16_f0a_h:U1@[], fcn24_one_30_8_f0a_h:U1@[], fcn8_one_30_24_f0a_h:U1@[], fcnorm16_eq_1_f0a_h:U1@[], fcnorm8_eq_1_f0a_h:U1@[], fcnorm_30_f0a_h:U1@[], fcnorm_zero_29_8_f0a_h:U1@[], fcph_b0_f0a_h:U1@[], fcph_zero_f0a_l:U1@[], fcps_b0_f0a_h:U1@[], fcps_zero_f0a_h:U1@[], sa_hi_f0a_h:U1@[], sa_lo_f0a_h:U1@[], sb_hi_f0a_h:U1@[], sb_lo_f0a_h:U1@[], sc_f0a_h:U1@[]) {
+  // Operand registers (bypassed read-port data) and transcendental ROM outputs, per clock domain.
+  reg opa_f0a_h:U32:[clock_pin=opa_frf_clk]
+  reg opb_f0a_h:U32:[clock_pin=opb_frf_clk]
+  reg opc_f0a_h:U32:[clock_pin=opc_frf_clk]
+  reg xrom_c1c0k_f0a_h:U32:[clock_pin=trans_frf_clk]
+  reg xrom_c2_f0a_h:U17:[clock_pin=trans_frf_clk]
+  reg trans_mask_f0a_h:U7:[clock_pin=trans_frf_clk]
+  // Control registers: exa-stage selects/enables delayed into f0.
+  reg sel_ec5bdet_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg eb_hi_k_f0a_h:U6:[clock_pin=ctrl_frf_clk]
+  reg sel_ebin_hi_f0a_h:U2:[clock_pin=ctrl_frf_clk]
+  reg sel_eainmux_f0a_h:U2:[clock_pin=ctrl_frf_clk]
+  reg sel_ec5b_f0a_h:U2:[clock_pin=ctrl_frf_clk]
+  reg sel_ecin_f0a_h:U2:[clock_pin=ctrl_frf_clk]
+  reg sel_sc_f0a_h:U2:[clock_pin=ctrl_frf_clk]
+  reg sel_opcgfx_f0a_h:U2:[clock_pin=ctrl_frf_clk]
+  reg sel_xopc_f0a_h:U2:[clock_pin=ctrl_frf_clk]
+  reg sel_opcfmt_f0a_h:U2:[clock_pin=ctrl_frf_clk]
+  reg sel_transfa_f0a_h:U2:[clock_pin=ctrl_frf_clk]
+  reg sel_transfb_f0a_h:U2:[clock_pin=ctrl_frf_clk]
+  reg sel_opafmt_f0a_h:U2:[clock_pin=ctrl_frf_clk]
+  reg sel_opbfmt_f0a_h:U2:[clock_pin=ctrl_frf_clk]
+  reg sel_eblo_ph_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg elo_eb_en_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg ehi_eb_en_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg elo_ea_en_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg fa_en_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg fb_en_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg fc_en_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg sel_ealo_ph_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg sa_hi_en_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg sa_lo_en_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg sb_hi_en_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg sb_lo_en_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg sc_en_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg ehi_ea_en_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg ec_en_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg neg_fmaop_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg trans_op2_f0a_l:U1:[clock_pin=ctrl_frf_clk]
+  reg sa1_nr2_frcpfxp_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg sel_sign_sinp2_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg sa_zap_f0a_l:U1:[clock_pin=ctrl_frf_clk]
+  reg sb_zap_f0a_l:U1:[clock_pin=ctrl_frf_clk]
+  reg sel_f10_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg sel_f11_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg fc_dtps_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg sel_snorm_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg sel_g1sk2_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg sel_g1sk8_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg sel_g1sk16_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg sel_g1sk24_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+  reg sel_xexpfrac_f0a_h:U1:[clock_pin=ctrl_frf_clk]
+
+  opa_f0a_h = opa_byp_frfa_h
+  opb_f0a_h = opb_byp_frfa_h
+  opc_f0a_h = opc_byp_frfa_h
+  xrom_c1c0k_f0a_h = xrom_c1c0k_ra_h
+  xrom_c2_f0a_h = xrom_c2_ra_h
+  trans_mask_f0a_h = trans_mask_ra_h
+  eb_hi_k_f0a_h = eb_hi_k_exa_h
+  sel_eblo_ph_f0a_h = sel_eblo_ph_exa_h
+  sel_ebin_hi_f0a_h = sel_ebin_hi_exa_h
+  elo_eb_en_f0a_h = elo_eb_en_exa_h
+  ehi_eb_en_f0a_h = ehi_eb_en_exa_h
+  elo_ea_en_f0a_h = elo_ea_en_exa_h
+  fa_en_f0a_h = fa_en_exa_h
+  fb_en_f0a_h = fb_en_exa_h
+  fc_en_f0a_h = fc_en_exa_h
+  sel_ealo_ph_f0a_h = sel_ealo_ph_exa_h
+  sel_eainmux_f0a_h = sel_eainmux_exa_h
+  sel_ec5b_f0a_h = sel_ec5b_exa_h
+  sel_ecin_f0a_h = sel_ecin_exa_h
+  sel_ec5bdet_f0a_h = sel_ec5bdet_exa_h
+  sa_hi_en_f0a_h = sa_hi_en_exa_h
+  sa_lo_en_f0a_h = sa_lo_en_exa_h
+  sb_hi_en_f0a_h = sb_hi_en_exa_h
+  sb_lo_en_f0a_h = sb_lo_en_exa_h
+  sc_en_f0a_h = sc_en_exa_h
+  ehi_ea_en_f0a_h = ehi_ea_en_exa_h
+  ec_en_f0a_h = ec_en_exa_h
+  neg_fmaop_f0a_h = neg_fmaop_exa_h
+  trans_op2_f0a_l = trans_op2_exa_l
+  sa1_nr2_frcpfxp_f0a_h = sa1_nr2_frcpfxp_exa_h
+  sel_sc_f0a_h = sel_sc_exa_h
+  sel_sign_sinp2_f0a_h = sel_sign_sinp2_exa_h
+  sa_zap_f0a_l = sa_zap_exa_l
+  sb_zap_f0a_l = sb_zap_exa_l
+  sel_f10_f0a_h = sel_f10_exa_h
+  sel_f11_f0a_h = sel_f11_exa_h
+  sel_opcgfx_f0a_h = sel_opcgfx_exa_h
+  fc_dtps_f0a_h = fc_dtps_exa_h
+  sel_xopc_f0a_h = sel_xopc_exa_h
+  sel_opcfmt_f0a_h = sel_opcfmt_exa_h
+  sel_snorm_f0a_h = sel_snorm_exa_h
+  sel_g1sk2_f0a_h = sel_g1sk2_exa_h
+  sel_g1sk8_f0a_h = sel_g1sk8_exa_h
+  sel_g1sk16_f0a_h = sel_g1sk16_exa_h
+  sel_g1sk24_f0a_h = sel_g1sk24_exa_h
+  sel_xexpfrac_f0a_h = sel_xexpfrac_exa_h
+  sel_transfa_f0a_h = sel_transfa_exa_h
+  sel_transfb_f0a_h = sel_transfb_exa_h
+  sel_opafmt_f0a_h = sel_opafmt_exa_h
+  sel_opbfmt_f0a_h = sel_opbfmt_exa_h
+
+  const opa = opa_f0a_h
+  const opb = opb_f0a_h
+  const opc = opc_f0a_h
+
+  // Exponent-nonzero flags ("not denormal", active low): ps = 8-bit exponent, ph = 5-bit.
+  const opa_ps_den_l:U1 = U1(opa#[23..<31] != 0)
+  const opa_ph_hi_den_l:U1 = U1(opa#[26..<31] != 0)
+  const opa_ph_lo_den_l:U1 = U1(opa#[10..<15] != 0)
+  const opb_ps_den_l:U1 = U1(opb#[23..<31] != 0)
+  const opb_ph_hi_den_l:U1 = U1(opb#[26..<31] != 0)
+  const opb_ph_lo_den_l:U1 = U1(opb#[10..<15] != 0)
+  const opc_ps_den_l:U1 = U1(opc#[23..<31] != 0)
+  const opc_ph_den_l:U1 = U1(opc#[10..<15] != 0)
+
+  // ---- operand A: exponents ----
+  const ea_raw_hi:U8 = if sel_eainmux_f0a_h == 0 { 0x81 }
+    elif sel_eainmux_f0a_h == 1 { opa#[23..<31] }
+    elif sel_eainmux_f0a_h == 2 { 0x85 }
+    else { opa#[26..<31] }
+  const ea_hi:U8 = if ehi_ea_en_f0a_h != 0 { ea_raw_hi } else { 0 }
+  const ea_lo_ph:U5 = if sel_ealo_ph_f0a_h != 0 { opa#[10..<15] } else { 0 }
+  const ea_lo:U5 = if elo_ea_en_f0a_h != 0 { ea_lo_ph } else { 0 }
+
+  // ---- operand A: fraction word ----
+  const transfa:U32 = if sel_transfa_f0a_h == 0 { xrom_c2_f0a_h << 15 }
+    elif sel_transfa_f0a_h == 1 { (1 << 30) | (opa#[0..<25] << 5) }
+    elif sel_transfa_f0a_h == 2 { (1 << 31) | ((if sel_xexpfrac_f0a_h != 0 { 31 } else { 0 }) << 26) }
+    else { (1 << 31) | (opa#[0..<24] << 7) }
+  const opa_int32_nr2frcp:U32 = if sa1_nr2_frcpfxp_f0a_h == 0 { opa } else { opa#[2..<32] }
+  const fa_raw:U32 = if sel_opafmt_f0a_h == 0 {
+    opa_int32_nr2frcp
+  } elif sel_opafmt_f0a_h == 1 {
+    mant<HID=31, N=23, POS=8>(frac=opa#[0..<23], nz=opa_ps_den_l)
+  } elif sel_opafmt_f0a_h == 2 {
+    mant<HID=31, N=10, POS=21>(frac=opa#[16..<26], nz=opa_ph_hi_den_l) | mant<HID=11, N=10, POS=1>(frac=opa#[0..<10], nz=opa_ph_lo_den_l)
+  } else {
+    transfa
+  }
+
+  // ---- operand B: exponents ----
+  const eb_raw_hi:U8 = if sel_ebin_hi_f0a_h == 0 { (eb_hi_k_f0a_h#[5] << 7) | eb_hi_k_f0a_h#[0..<5] }
+    elif sel_ebin_hi_f0a_h == 1 { opb#[23..<31] }
+    elif sel_ebin_hi_f0a_h == 2 { opb#[26..<31] }
+    else { opb#[24..<32] }
+  const eb_hi:U8 = if ehi_eb_en_f0a_h != 0 { eb_raw_hi } else { 0 }
+  const eb_lo_ph:U5 = if sel_eblo_ph_f0a_h != 0 { opb#[10..<15] } else { 0 }
+  const eb_lo:U5 = if elo_eb_en_f0a_h != 0 { eb_lo_ph } else { 0 }
+
+  // ---- operand B: graphics constant, transcendental fraction word ----
+  // gfxk_mpnd[15] = ~snorm, [14] = 1, [13:8] = ~sk2, [7:6] = ~(sk2 | sk8), [5:0] = sk16 | sk24
+  const gfxk_15:U1 = ~sel_snorm_f0a_h
+  const gfxk_14:U1 = 1
+  const gfxk_13_8:U6 = if sel_g1sk2_f0a_h == 0 { 0x3f } else { 0 }
+  const gfxk_7_6:U2 = if sel_g1sk2_f0a_h == 0 and sel_g1sk8_f0a_h == 0 { 3 } else { 0 }
+  const gfxk_5_0:U6 = if sel_g1sk16_f0a_h != 0 or sel_g1sk24_f0a_h != 0 { 0x3f } else { 0 }
+  const gfxk_mpnd:U16 = (gfxk_5_0, gfxk_7_6, gfxk_13_8, gfxk_14, gfxk_15)#[..]
+  const trans_opbmasked:U7 = opb#[16..<23] & trans_mask_f0a_h
+  const transfb:U27 = if sel_transfb_f0a_h == 0 { (trans_opbmasked << 17) | (opb#[0..<16] << 1) }
+    elif sel_transfb_f0a_h == 1 { (gfxk_mpnd << 8) | (if sel_g1sk24_f0a_h != 0 { 0xff } else { 0 }) }
+    elif sel_transfb_f0a_h == 2 { opb#[0..<23] << 2 }
+    else { 0x14abbce }
+  const opb_int32_nr2frcp:U32 = if sa1_nr2_frcpfxp_f0a_h == 0 { opb } else { opb#[0..<30] }
+  const fb_raw:U32 = if sel_opbfmt_f0a_h == 0 {
+    opb_int32_nr2frcp
+  } elif sel_opbfmt_f0a_h == 1 {
+    mant<HID=29, N=23, POS=6>(frac=opb#[0..<23], nz=opb_ps_den_l)
+  } elif sel_opbfmt_f0a_h == 2 {
+    mant<HID=29, N=10, POS=19>(frac=opb#[16..<26], nz=opb_ph_hi_den_l) | mant<HID=11, N=10, POS=1>(frac=opb#[0..<10], nz=opb_ph_lo_den_l)
+  } else {
+    transfb << 5
+  }
+
+  // ---- operand C ----
+  const sc_raw:U1 = if sel_sc_f0a_h == 0 { neg_fmaop_f0a_h ^ opc#[31] }
+    elif sel_sc_f0a_h == 1 { opc#[7] }
+    elif sel_sc_f0a_h == 2 { opc#[15] }
+    else { 0 }
+  const ec5b:U5 = if sel_ec5b_f0a_h == 0 { opc#[10..<15] }
+    elif sel_ec5b_f0a_h == 1 { opc#[6..<11] }
+    elif sel_ec5b_f0a_h == 2 { opc#[5..<10] }
+    else { 0 }
+  const ec_raw_hi:U8 = if sel_ecin_f0a_h == 0 { 0 } elif sel_ecin_f0a_h == 1 { opc#[23..<31] } elif sel_ecin_f0a_h == 2 { 0x81 } else { ec5b }
+  const ec:U8 = if ec_en_f0a_h != 0 { ec_raw_hi } else { 0 }
+  const opc_gfx:U16 = if sel_opcgfx_f0a_h == 0 { opc#[0..<16] }
+    elif sel_opcgfx_f0a_h == 1 { opc#[0..<10] << 6 }
+    elif sel_opcgfx_f0a_h == 2 { opc#[0..<8] << 8 }
+    else { opc#[0..<2] << 14 }
+  const opcf10f11_expz_l:U1 = (sel_f11_f0a_h & opc#[10]) | (sel_f10_f0a_h & opc#[5]) | U1(opc#[6..<10] != 0)
+  const opc_un23_ps31:U1 = if fc_dtps_f0a_h == 0 { opc#[23] } else { opc_ps_den_l }
+  const f10f11fracraw:U6 = if sel_f11_f0a_h == 0 { opc#[0..<5] << 1 } else { opc#[0..<6] }
+  const f10f11frac:U6 = if opcf10f11_expz_l != 0 { f10f11fracraw } else { 0 }
+  const opc_frac_ps:U23 = if opc_ps_den_l != 0 or fc_dtps_f0a_h == 0 { opc#[0..<23] } else { 0 }
+  const transfc:U32 = if sel_xopc_f0a_h == 0 { xrom_c1c0k_f0a_h }
+    elif sel_xopc_f0a_h == 1 { (opcf10f11_expz_l << 31) | (f10f11frac << 25) }
+    elif sel_xopc_f0a_h == 2 { opc#[0..<31] << 1 }
+    else { (opc_un23_ps31 << 31) | (opc_frac_ps << 8) }
+  const fc_raw:U32 = if sel_opcfmt_f0a_h == 0 { opc }
+    elif sel_opcfmt_f0a_h == 1 { opc_gfx << 16 }
+    elif sel_opcfmt_f0a_h == 2 { transfc }
+    else { mant<HID=31, N=10, POS=21>(frac=opc#[0..<10], nz=opc_ph_den_l) }
+  const fa:U32 = if fa_en_f0a_h != 0 { fa_raw } else { 0 }
+  const fb:U32 = if fb_en_f0a_h != 0 { fb_raw } else { 0 }
+  const fc:U32 = if fc_en_f0a_h != 0 { fc_raw } else { 0 }
+
+  // ---- results ----
+  sa_hi_f0a_h = (neg_fmaop_f0a_h ^ opa#[31]) & trans_op2_f0a_l & sa_zap_f0a_l & sa_hi_en_f0a_h
+  sa_lo_f0a_h = opa#[15] & sa_lo_en_f0a_h
+  sb_hi_f0a_h = (((sa1_nr2_frcpfxp_f0a_h ^ opb#[31]) & sb_zap_f0a_l) | sel_sign_sinp2_f0a_h) & sb_hi_en_f0a_h
+  sb_lo_f0a_h = opb#[15] & sb_lo_en_f0a_h
+  sc_f0a_h = sc_raw & sc_en_f0a_h
+  ea_hi_f0a_h = ea_hi
+  ea_lo_f0a_h = ea_lo
+  eb_hi_f0a_h = eb_hi
+  eb_lo_f0a_h = eb_lo
+  ec_f0a_h = ec
+  fa_f0a_h = fa
+  fb_f0a_h = fb
+  fc_f0a_h = fc
+
+  // ---- exponent / fraction classification ----
+  ea_hi_zero_f0a_l = U1(ea_hi != 0)
+  ea_hi_all1_f0a_h = exp_all1(e=ea_hi, force_hi=sel_ealo_ph_f0a_h)
+  ea_lo_zero_f0a_l = U1(ea_lo != 0)
+  ea_lo_all1_f0a_h = U1(ea_lo == 31)
+  eb_hi_zero_f0a_l = U1(eb_hi != 0)
+  eb_hi_all1_f0a_h = exp_all1(e=eb_hi, force_hi=sel_eblo_ph_f0a_h)
+  eb_lo_zero_f0a_l = U1(eb_lo != 0)
+  eb_lo_all1_f0a_h = U1(eb_lo == 31)
+  ec_zero_f0a_l = U1(ec != 0)
+  ec_all1_f0a_h = exp_all1(e=ec, force_hi=sel_ec5bdet_f0a_h)
+  fcf10_zero_f0a_l = U1(opc#[0..<4] != 0)
+  eb_eql_127_f0a_h = U1(opb#[23..<31] == 0xfe)
+  eb_eql_126_f0a_h = U1(opb#[23..<31] == 0xfd)
+  eb_eql_125_f0a_h = U1(opb#[23..<31] == 0x7d)
+  fcf11_zero_f0a_l = U1(opc#[0..<5] != 0)
+  fcps_zero_f0a_h = U1(opc#[0..<22] == 0)
+  fcph_zero_f0a_l = U1(opc#[0..<9] != 0)
+  fcnorm_zero_29_8_f0a_h = U1(fc#[8..<30] == 0)
+  fcnorm16_eq_1_f0a_h = U1(fc#[17..<31] == 0) & fc#[16]
+  fcnorm8_eq_1_f0a_h = U1(fc#[25..<31] == 0) & fc#[24]
+  fcn8_one_30_24_f0a_h = U1(fc#[24..<31] == 0x7f)
+  fcn10_one_30_22_f0a_h = U1(fc#[22..<31] == 0x1ff)
+  fcn16_one_30_16_f0a_h = U1(fc#[16..<31] == 0x7fff)
+  fcn24_one_30_8_f0a_h = U1(fc#[8..<31] == 0x7fffff)
+  faps_zero_f0a_l = U1(opa#[0..<22] != 0)
+  fbps_zero_f0a_l = U1(opb#[0..<22] != 0)
+  faph_hi_zero_f0a_l = U1(opa#[16..<25] != 0)
+  fbph_hi_zero_f0a_l = U1(opb#[16..<25] != 0)
+  faph_lo_zero_f0a_l = U1(opa#[0..<9] != 0)
+  fbph_lo_zero_f0a_l = U1(opb#[0..<9] != 0)
+  faph_lo_b0_f0a_h = opa#[9]
+  fbph_lo_b0_f0a_h = opb#[9]
+  faps_b0_f0a_h = opa#[22]
+  fbps_b0_f0a_h = opb#[22]
+  fc_31_f0a_h = fc#[31]
+  fcnorm_30_f0a_h = fc#[30]
+  faph_hi_b0_f0a_h = opa#[25]
+  fbph_hi_b0_f0a_h = opb#[25]
+  fcph_b0_f0a_h = opc#[9]
+  fcf11_b0_f0a_h = opc#[5]
+  fcf10_b0_f0a_h = opc#[4]
+  fcps_b0_f0a_h = opc#[22]
+}

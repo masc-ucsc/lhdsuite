@@ -1,0 +1,246 @@
+const prim_phase_pair_lo_hi = import("prim_phase_pair_lo_hi.prim_phase_pair_lo_hi")
+const minion_pkg = import("minion_pkg")
+
+// True for the multiply family of ALU functions (mul/mulh/mulhu/mulhsu).
+comb is_mul_family(fn) -> (r:Bool) {
+  r = fn == minion_pkg.AluMul or fn == minion_pkg.AluMulh or fn == minion_pkg.AluMulhu or fn == minion_pkg.AluMulhsu
+}
+
+// Radix-4 Booth encoding of a 3-bit multiplier window, as {negate, 2x, 1x}.
+comb booth_encode(window) -> (sel:U3) {
+  sel = if window == 1 or window == 2 {
+    0ub001 // +1
+  } elif window == 3 {
+    0ub011 // +2
+  } elif window == 4 {
+    0ub110 // -2
+  } elif window == 5 or window == 6 {
+    0ub100 // -1
+  } else {
+    0ub000 // +0
+  }
+}
+
+// Booth select for one partial product, as the datapath wants it: forced to
+// +0 unless a multiply is running, and inverted (the select latches are
+// active-low).
+comb booth_select(active, window) -> (sel:U3) {
+  const enc:U3 = booth_encode(window)
+  const gated:U3 = if active { enc } else { 0 }
+  sel = ~gated
+}
+
+// Control for the multiplier/divider (intpipe_mul_div_dp): Booth selects, the
+// loop counter, the divide state machine, datapath clock enables, adder input
+// selects and response steering. The datapath is a latch-based two-phase
+// pipeline: names ending in 1p/2p are phase-1/phase-2 values (the low and high
+// output of a prim_phase_pair_lo_hi), 1d/2d the value being captured by that
+// phase, and 1q/2q a held (state) value. The latch structure follows the
+// original design 1:1.
+pub mod intpipe_mul_div_ctl::[timecheck=false](clock:Clock, ex_dw_2p:U1, ex_op1_msb_2p:U1, ex_op2_msb_2p:U1, kill:U1, md_div_by_zero_1p:U1, md_mplr_2d:U8, md_nxt_quot_1q:U1, md_rem_sgn_1d:U1, md_zero_rem_1d:U1, req_dest:(fp:U1, addr:U5, thread_id:U1), req_fn:U5, req_fn_early:U5, req_valid_early:U1, reset:U1, resp_ready:U1) -> (debug_loop_cnt_1p_o:U7@[], debug_loop_cnt_2p_o:U7@[], debug_mul_op_1p_o:U1@[], debug_mul_op_2p_o:U1@[], debug_start_mul_1p_o:U1@[], debug_start_mul_2p_o:U1@[], mdctl_acc_v1_sl_1d:(e1:U1, e0:U1)@[], mdctl_acc_v2_sl_1d:(e1:U1, e0:U1)@[], mdctl_add_ain_sl_1p:U1@[], mdctl_add_bin_sl_1p:U2@[], mdctl_besl_0_1p:U3@[], mdctl_besl_1_1p:U3@[], mdctl_besl_2_1p:U3@[], mdctl_besl_3_1p:U3@[], mdctl_clken_acc_v1_1p:U1@[], mdctl_clken_acc_v1_2p:U1@[], mdctl_clken_acc_v2_1p:U1@[], mdctl_clken_acc_v2_2p:U1@[], mdctl_clken_mpcnd_1d:U1@[], mdctl_clken_mul_ph1_2d:U1@[], mdctl_clken_muldvsr_ph2_1d:U1@[], mdctl_div_cin_1p:U1@[], mdctl_dvsr_sgn_1p:U1@[], mdctl_dw_1q:U1@[], mdctl_dw_2q:U1@[], mdctl_fc_zr_acc_1p:U1@[], mdctl_fnl_mul_cyc_1p:U1@[], mdctl_fnl_pp_1p:U1@[], mdctl_resp_sl_2p:(e1:U1, e0:U1)@[], mdctl_se_zero_1p:U1@[], mdctl_start_div_2p:U1@[], mdctl_start_op_2p:U1@[], op1_sgnd_2p:U1@[], op2_sgnd_2p:U1@[], req_ready:U1@[], resp_dest:(fp:U1, addr:U5, thread_id:U1)@[], resp_valid:U1@[], resp_valid_early:U1@[]) {
+  // Plain flops (no reset).
+  reg resp_dest_q:U7 = nil
+  reg muldiv_fn_2q:U5 = nil
+  reg md_op1_sgn_2q:U1 = nil
+  // The only reset flop: a response is pending.
+  reg resp_valid_2q:U1:[reset_pin=reset] = 0
+
+  // Low-phase latches (transparent while the clock is low), selects for the datapath.
+  reg mdctl_besl_0_1p:U3:[enable=clock, enable_high=false, latch=true] = nil
+  reg mdctl_besl_1_1p:U3:[enable=clock, enable_high=false, latch=true] = nil
+  reg mdctl_besl_2_1p:U3:[enable=clock, enable_high=false, latch=true] = nil
+  reg mdctl_besl_3_1p:U3:[enable=clock, enable_high=false, latch=true] = nil
+  reg mdctl_add_ain_sl_1p:U1:[enable=clock, enable_high=false, latch=true] = nil
+  reg mdctl_add_bin_sl_1p:U2:[enable=clock, enable_high=false, latch=true] = nil
+  reg mdctl_se_zero_1p:U1:[enable=clock, enable_high=false, latch=true] = nil
+  reg mdctl_fnl_mul_cyc_1p:U1:[enable=clock, enable_high=false, latch=true] = nil
+  reg mdctl_fc_zr_acc_1p:U1:[enable=clock, enable_high=false, latch=true] = nil
+  reg mdctl_div_cin_1p:U1:[enable=clock, enable_high=false, latch=true] = nil
+  // Divide state: each holds its value across one clock phase pair (low latch
+  // feeding the high one and back).
+  reg zero_rem_1q:U1:[enable=clock, enable_high=false, latch=true] = nil
+  reg zero_rem_2q:U1:[enable=clock, latch=true] = nil
+  reg final_zero_rem_q_internal:U1:[enable=clock, enable_high=false, latch=true] = nil
+  reg final_zero_rem_2q:U1:[enable=clock, latch=true] = nil
+  reg rq_rem_adj_1q:U1:[enable=clock, enable_high=false, latch=true] = nil
+  reg rq_quot_cr_1q:U1:[enable=clock, enable_high=false, latch=true] = nil
+  reg rem_sgn_2p:U1:[enable=clock, latch=true] = nil
+  reg div_by_zero_2p:U1:[enable=clock, latch=true] = nil
+
+  // Values read before their phase pair is instantiated (the pairs form
+  // loops through themselves).
+  wire loop_cnt_2p:U7 = nil
+  wire mul_op_2p:Bool = nil
+  wire div_op_2p:Bool = nil
+  wire rem_adj_ph_2p:Bool = nil
+  wire quot_adj_ph_2p:Bool = nil
+  wire md_op2_sgn_2q:Bool = nil
+  wire mdctl_dw_2q:U1 = nil
+
+  // ---- Start of an operation: decided in the ID stage, used one cycle later.
+  const id_new_mul = req_valid_early == 1 and is_mul_family(req_fn_early)
+  const id_new_div = req_valid_early == 1 and not is_mul_family(req_fn_early)
+  const u_start_mul_pair = prim_phase_pair_lo_hi<Width=1>(clk_i=clock, reset_i=reset, lo_en_i=1, hi_en_i=1, d_i=U1(id_new_mul))
+  const u_start_div_pair = prim_phase_pair_lo_hi<Width=1>(clk_i=clock, reset_i=reset, lo_en_i=1, hi_en_i=1, d_i=U1(id_new_div))
+  const start_mul_1p = u_start_mul_pair.q_lo_o == 1
+  const start_div_1p = u_start_div_pair.q_lo_o == 1
+  const start_mul_2p = u_start_mul_pair.q_hi_o == 1
+  const start_div_2p = u_start_div_pair.q_hi_o == 1
+  const start_op_2p = start_mul_2p or start_div_2p
+
+  // Operand signedness by function (EX stage).
+  const op1_signed = req_fn == minion_pkg.AluDiv or req_fn == minion_pkg.AluRem or req_fn == minion_pkg.AluMulh or req_fn == minion_pkg.AluMulhsu
+  const op2_signed = req_fn == minion_pkg.AluDiv or req_fn == minion_pkg.AluRem or req_fn == minion_pkg.AluMulh
+  op1_sgnd_2p = U1(op1_signed)
+  op2_sgnd_2p = U1(op2_signed)
+
+  // ---- Loop counter: loaded at the start of an op, counts down to 0, and is
+  // cleared by reset or an early out (kill, or the short multiply path).
+  const early_out_2d = kill == 1 or (muldiv_fn_2q == minion_pkg.AluMul and loop_cnt_2p == 2)
+  const init_cnt_2p:U7 = if start_div_2p { if ex_dw_2p == 1 { 65 } else { 33 } } elif ex_dw_2p == 1 { 8 } else { 4 }
+  mut loop_cnt_next:U7 = loop_cnt_2p
+  if reset == 1 or early_out_2d {
+    loop_cnt_next = 0
+  } elif start_op_2p {
+    loop_cnt_next = init_cnt_2p
+  } elif loop_cnt_2p != 0 {
+    wrap loop_cnt_next = loop_cnt_2p - 1
+  }
+  const u_loop_cnt_pair = prim_phase_pair_lo_hi<Width=7>(clk_i=clock, reset_i=reset, lo_en_i=1, hi_en_i=1, d_i=loop_cnt_next)
+  loop_cnt_2p = u_loop_cnt_pair.q_hi_o
+  const loop_cnt_1p = u_loop_cnt_pair.q_lo_o
+
+  // Double-word flag of the op in flight.
+  const dw_next:U1 = if reset == 1 { 0 } elif start_op_2p { ex_dw_2p } else { mdctl_dw_2q }
+  const u_mdctl_dw_pair = prim_phase_pair_lo_hi<Width=1>(clk_i=clock, reset_i=reset, lo_en_i=1, hi_en_i=1, d_i=dw_next)
+  mdctl_dw_2q = u_mdctl_dw_pair.q_hi_o
+  mdctl_dw_1q = u_mdctl_dw_pair.q_lo_o
+  mdctl_start_div_2p = U1(start_div_2p)
+
+  // Function and destination of the op in flight.
+  if start_op_2p {
+    muldiv_fn_2q = req_fn
+    resp_dest_q = (req_dest.thread_id, req_dest.addr, req_dest.fp)#[..]
+  }
+  resp_dest.thread_id = resp_dest_q#[0]
+  resp_dest.addr = resp_dest_q#[1..<6]
+  resp_dest.fp = resp_dest_q#[6]
+
+  // ---- Multiply: Booth selects for the four partial products. The first
+  // window also takes the previous multiplier byte's top bit (zero on the
+  // first cycle).
+  const u_mul_lo_lsb_pair = prim_phase_pair_lo_hi<Width=1>(clk_i=clock, reset_i=reset, lo_en_i=1, hi_en_i=1, d_i=md_mplr_2d#[7])
+  const mplr_1p_7 = u_mul_lo_lsb_pair.q_lo_o == 1
+  const mul_lo_lsb_2p = u_mul_lo_lsb_pair.q_hi_o
+  const mul_active = start_mul_2p or mul_op_2p
+  const lsb_in:U1 = U1(not start_mul_2p and mul_lo_lsb_2p == 1)
+  const window0:U3 = (lsb_in, md_mplr_2d#[0..<2])#[..]
+  mdctl_besl_0_1p = booth_select(active=mul_active, window=window0)
+  mdctl_besl_1_1p = booth_select(active=mul_active, window=md_mplr_2d#[1..<4])
+  mdctl_besl_2_1p = booth_select(active=mul_active, window=md_mplr_2d#[3..<6])
+  mdctl_besl_3_1p = booth_select(active=mul_active, window=md_mplr_2d#[5..<8])
+
+  const u_mul_op_pair = prim_phase_pair_lo_hi<Width=1>(clk_i=clock, reset_i=reset, lo_en_i=1, hi_en_i=1, d_i=U1(start_mul_2p or (mul_op_2p and loop_cnt_2p != 0)))
+  mul_op_2p = u_mul_op_pair.q_hi_o == 1
+  const mul_op_1p = u_mul_op_pair.q_lo_o == 1
+
+  // ---- Divide: in flight, then a remainder-adjust phase, then a quotient-adjust phase.
+  const u_div_op_pair = prim_phase_pair_lo_hi<Width=1>(clk_i=clock, reset_i=reset, lo_en_i=1, hi_en_i=1, d_i=U1(start_div_2p or (not early_out_2d and div_op_2p and (loop_cnt_2p != 0 or rem_adj_ph_2p or quot_adj_ph_2p))))
+  div_op_2p = u_div_op_pair.q_hi_o == 1
+  const div_op_1p = u_div_op_pair.q_lo_o == 1
+  const u_rem_adj_ph_pair = prim_phase_pair_lo_hi<Width=1>(clk_i=clock, reset_i=reset, lo_en_i=1, hi_en_i=1, d_i=U1(not early_out_2d and div_op_2p and loop_cnt_2p == 1))
+  rem_adj_ph_2p = u_rem_adj_ph_pair.q_hi_o == 1
+  const rem_adj_ph_1p = u_rem_adj_ph_pair.q_lo_o == 1
+  const u_quot_adj_ph_pair = prim_phase_pair_lo_hi<Width=1>(clk_i=clock, reset_i=reset, lo_en_i=1, hi_en_i=1, d_i=U1(not early_out_2d and rem_adj_ph_2p))
+  quot_adj_ph_2p = u_quot_adj_ph_pair.q_hi_o == 1
+  const quot_adj_ph_1p = u_quot_adj_ph_pair.q_lo_o == 1
+
+  // Zero-remainder tracking (an exactly-zero remainder needs no sign adjustment).
+  const nxt_zero_rem_1d = (zero_rem_1q == 1 or md_zero_rem_1d == 1) and md_nxt_quot_1q == 0
+  zero_rem_2q = if loop_cnt_1p#[1..<7] != 0 { U1(nxt_zero_rem_1d) } else { zero_rem_1q }
+  zero_rem_1q = if reset == 1 or start_div_2p or early_out_2d { 0 } else { zero_rem_2q }
+  final_zero_rem_2q = if loop_cnt_1p == 1 { md_zero_rem_1d } else { final_zero_rem_q_internal }
+  final_zero_rem_q_internal = if reset == 1 or early_out_2d { 0 } else { final_zero_rem_2q }
+  rem_sgn_2p = md_rem_sgn_1d
+  div_by_zero_2p = md_div_by_zero_1p
+
+  // ---- Operand signs. Captured at the start of an op, held while it runs.
+  const md_op1_sgn_2d = if start_op_2p { ex_op1_msb_2p == 1 and op1_signed } else { (div_op_2p or mul_op_2p) and md_op1_sgn_2q == 1 }
+  const md_op2_sgn_2d = if start_op_2p { ex_op2_msb_2p == 1 and op2_signed } else { (div_op_2p or mul_op_2p) and md_op2_sgn_2q }
+  md_op1_sgn_2q = U1(md_op1_sgn_2d)
+  const u_md_op2_sgn_pair = prim_phase_pair_lo_hi<Width=1>(clk_i=clock, reset_i=reset, lo_en_i=1, hi_en_i=1, d_i=U1(md_op2_sgn_2d))
+  md_op2_sgn_2q = u_md_op2_sgn_pair.q_hi_o == 1
+  const md_op2_sgn_1q = u_md_op2_sgn_pair.q_lo_o == 1
+  const dvnd_sgn_2p = md_op1_sgn_2q == 1
+  const dvsr_sgn_2p = md_op2_sgn_2q
+  mdctl_dvsr_sgn_1p = U1(md_op2_sgn_1q)
+
+  // Remainder / quotient fix-ups for signed divides.
+  const rem_neg_2p = rem_sgn_2p == 1
+  const final_zero_2q = final_zero_rem_2q == 1
+  const zero_rem_any = zero_rem_2q == 1 or final_zero_2q
+  const rq_rem_adj_2d = (not dvnd_sgn_2p and rem_neg_2p) or (dvnd_sgn_2p and not rem_neg_2p and not final_zero_2q) or (dvnd_sgn_2p and zero_rem_2q == 1 and not final_zero_2q)
+  const rq_quot_cr_2d = (dvsr_sgn_2p and not dvnd_sgn_2p) or (not dvsr_sgn_2p and dvnd_sgn_2p and not zero_rem_any) or (dvsr_sgn_2p and dvnd_sgn_2p and zero_rem_any)
+  rq_rem_adj_1q = U1(rq_rem_adj_2d)
+  rq_quot_cr_1q = U1(rq_quot_cr_2d)
+
+  // ---- Datapath controls.
+  mdctl_start_op_2p = U1(start_op_2p)
+  mdctl_clken_mpcnd_1d = U1(start_mul_1p)
+  mdctl_clken_muldvsr_ph2_1d = U1(start_div_1p or start_mul_1p or mul_op_1p)
+  mdctl_clken_mul_ph1_2d = U1(start_mul_2p or (mul_op_2p and loop_cnt_2p#[1..<7] != 0))
+  // Zero the partial-product accumulators on the first multiply cycle and during divides.
+  mdctl_fc_zr_acc_1p = U1(not (start_mul_2p or div_op_2p))
+
+  // acc_v1 select (3,2: final divide cycle, remainder adjust, final multiply;
+  // 1: sum vector during multiply; 0: next remainder in the divide loop).
+  const fnl_mul_cyc_1p = mul_op_1p and loop_cnt_1p == 0
+  mdctl_acc_v1_sl_1d.e1 = U1((div_op_1p and loop_cnt_1p == 1) or rem_adj_ph_1p or fnl_mul_cyc_1p)
+  mdctl_acc_v1_sl_1d.e0 = U1(mul_op_1p and loop_cnt_1p != 0)
+  // The acc_v1 latch pair is phase 1 followed by phase 2: enable for each phase.
+  mdctl_clken_acc_v1_2p = U1((div_op_2p and loop_cnt_2p == 1 and rq_rem_adj_2d) or start_mul_2p or (mul_op_2p and loop_cnt_2p != 0) or start_div_2p or (div_op_2p and loop_cnt_2p#[1..<7] != 0))
+  mdctl_clken_acc_v1_1p = U1((rem_adj_ph_1p and rq_rem_adj_1q == 1) or (mul_op_1p and loop_cnt_1p != 0) or fnl_mul_cyc_1p or (div_op_1p and loop_cnt_1p != 0))
+
+  // acc_v2 select (3,2: quotient adjust; 1: carry vector during multiply;
+  // 0: divide loop, shifting the dividend msb out and the quotient in).
+  mdctl_acc_v2_sl_1d.e1 = U1(quot_adj_ph_1p)
+  mdctl_acc_v2_sl_1d.e0 = U1(mul_op_1p and loop_cnt_1p != 0)
+  mdctl_clken_acc_v2_2p = U1((rem_adj_ph_2p and rq_quot_cr_2d and div_by_zero_2p == 0) or start_mul_2p or (mul_op_2p and loop_cnt_2p != 0) or start_div_2p or (div_op_2p and loop_cnt_2p#[1..<7] != 0))
+  mdctl_clken_acc_v2_1p = U1((quot_adj_ph_1p and rq_quot_cr_1q == 1) or start_div_1p or (mul_op_1p and (loop_cnt_1p#[1..<7] != 0 or loop_cnt_1p == 1)) or (div_op_1p and loop_cnt_1p != 0))
+
+  // Adder A input: divide loop and remainder adjust, or the final multiply cycle.
+  const add_ain_sl_2d = (mul_op_2p and loop_cnt_2p == 1) or (div_op_2p and loop_cnt_2p != 0)
+  mdctl_add_ain_sl_1p = U1(add_ain_sl_2d)
+  // Adder B input: 3 = ~divisor (subtract during the divide loop), 2 = divisor
+  // (add during the loop and remainder adjust), 1 = quotient/acc for the final
+  // multiply sum, 0 = zero.
+  const div_loop_2p = div_op_2p and loop_cnt_2p != 0
+  const div_sub_dvsr_2d = (start_div_2p and (not md_op1_sgn_2d) != md_op2_sgn_2d) or (div_loop_2p and (not rem_neg_2p) != md_op2_sgn_2d)
+  const add_bin_sl_hi:U1 = U1(start_div_2p or div_loop_2p)
+  const add_bin_sl_lo:U1 = U1(div_sub_dvsr_2d or rem_adj_ph_2p or (mul_op_2p and loop_cnt_2p == 1))
+  mdctl_add_bin_sl_1p = (add_bin_sl_lo, add_bin_sl_hi)#[..]
+  mdctl_se_zero_1p = U1(not add_ain_sl_2d and start_div_2p and md_op1_sgn_2d)
+  // Divide carry-in: set for the subtractions above and for a quotient correction.
+  mdctl_div_cin_1p = U1((rem_adj_ph_2p and rq_quot_cr_2d) or div_sub_dvsr_2d)
+
+  // Final partial product: last multiply cycle with a negative multiplier.
+  mdctl_fnl_pp_1p = U1(mul_op_1p and loop_cnt_1p == 1 and mplr_1p_7 and not md_op2_sgn_1q)
+  mdctl_fnl_mul_cyc_1p = U1(mul_op_2p and loop_cnt_2p == 1)
+
+  // ---- Response.
+  const resp_valid_early_next = (mul_op_2p and (if muldiv_fn_2q == minion_pkg.AluMul { loop_cnt_2p == 2 } else { loop_cnt_2p == 1 })) or rem_adj_ph_2p or (resp_valid_2q == 1 and resp_ready == 0)
+  resp_valid_2q = U1(resp_valid_early_next)
+  resp_valid_early = U1(resp_valid_early_next)
+  resp_valid = resp_valid_2q
+  req_ready = U1(not (mul_op_2p or div_op_2p) and resp_valid_2q == 0)
+  // Result select: [1] picks the multiply result, [0] the quotient.
+  mdctl_resp_sl_2p.e1 = U1(muldiv_fn_2q == minion_pkg.AluMul)
+  mdctl_resp_sl_2p.e0 = U1(muldiv_fn_2q == minion_pkg.AluDiv or muldiv_fn_2q == minion_pkg.AluDivu)
+
+  debug_start_mul_1p_o = U1(start_mul_1p)
+  debug_start_mul_2p_o = U1(start_mul_2p)
+  debug_mul_op_1p_o = U1(mul_op_1p)
+  debug_mul_op_2p_o = U1(mul_op_2p)
+  debug_loop_cnt_1p_o = loop_cnt_1p
+  debug_loop_cnt_2p_o = loop_cnt_2p
+}

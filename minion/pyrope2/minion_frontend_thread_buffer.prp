@@ -1,0 +1,340 @@
+// Per-thread fetch engine of the frontend (verilog: minion_frontend_thread_buffer).
+// Generates fetch pcs, runs the F0..F5 icache request pipe, stores each 256-bit
+// response in one of two instruction buffers (F6 write), and reads instructions
+// out of the buffers 16 bits at a time through the RVC expander (F6 read / F7).
+// Everything but the buffer-empty/miss/inflight state lives on a gated clock.
+// ThreadId is the thread this definition serves (here 0); it is reported in the icache requests and is fixed
+// by the default, never overridden at an instantiation. minion_frontend_thread_buffer_p1 is the same body with the other id.
+// They stay two named definitions, not one generic instantiated with <ThreadId=N>: the Verilog reference has two
+// modules, per-def LEC pairs definitions by name, and a hash-named specialization is left unpaired and breaks the
+// prim_rf_1r1w_diff_preview proof (livehd_bugs/L0r3_01, L1r2_01).
+const minion_frontend_rvc_expander = import("minion_frontend_rvc_expander.minion_frontend_rvc_expander")
+const prim_clk_gate = import("prim_clk_gate.prim_clk_gate")
+const prim_rf_1r1w_diff_preview = import("prim_rf_1r1w_diff_preview.prim_rf_1r1w_diff_preview")
+const minion_pkg = import("minion_pkg")
+
+comptime const NBUF = 2 // instruction buffers per thread
+comptime const WORDS = 8 // 32-bit words in one 256-bit fetch block
+comptime const BLK_LSB = 5 // pc bits below this address a halfword inside a fetch block
+comptime const EBREAK = 0x100073
+
+// Words of a fetch block written when a fill starts at word offset pc[4:2]: that word and every later one.
+comb word_enable(pc:U49) -> (en:U8) {
+  en = (0xff << pc#[2..<5])#[0..<8]
+}
+
+pub mod minion_frontend_thread_buffer<ThreadId=0>::[timecheck=false](chicken_bit_i:U1, clk_i:Clock, debug_ffb_en_i:U4, debug_ffb_exec_i:U1, debug_ffb_wdata_i:U64, dft_i:(scanmode:U1, scan_reset_n:U1, sram_clk_override:U1, ram_rei:U1, ram_wei:U1), f0_core_req_i:(pc:U49, speculative:U1, debug_info:(halt:U1, resume:U1)), f0_core_req_valid_i:U1, f0_disable_thread_i:U1, f0_enable_thread_i:U1, f0_icache_req_ready_i:U1, f0_reset_vector_i:minion_pkg.VaSizeExt_T, f0_thread_enabled_i:U1, f1_icache_req_ready_i:U1, f5_icache_resp_miss_i:U1, f6_icache_resp_i:(data:U256, page_fault:U1, access_fault:U1, cacheable:U1, bus_err:U1, ecc_err:U1), f6_icache_resp_miss_i:U1, f6_icache_resp_valid_i:U1, f7_icache_fill_done_i:U1, f7_inst_ready_i:U1, in_debug_mode_i:U1, io_halt_i:U1, reset_debug_i:U1, rst_ni:U1, vm_status_i:(prv:U2, mprv:U1, mpp:U2, sum:U1, mxr:U1, debug:U1)) -> (debug_o:(core_req_valid:U1, core_req_pc:U49, f0_pc:U49, f0_pc_next:U49, f0_pc_update:U1, clock_enable:U1, gated_clk_ticks:U4, buffer_empty:U2, buffer_pc0:U49, buffer_pc1:U49, req_buffer:U1, f6_req_buffer:U1, f6_buffer_id:U1, f7_buffer_id:U1, f6_buffer_ptr:U5, f6_buffer_ptr_next:U5, f7_buffer_ptr:U5, icache_inflight:U1, miss_pending:U1, f1_req_valid:U1, f5_req_valid:U1, f6_req_valid:U1, f6_buffer_wr:U1, f6_valid:U1, f6_stall:U1, f7_valid:U1, f7_stall:U1)@[], f0_icache_req_o:(thread_id:U1, vm_status:(prv:U2, mprv:U1, mpp:U2, sum:U1, mxr:U1, debug:U1), addr:U49)@[], f0_icache_req_valid_o:U1@[], f7_inst_data_o:(pc:U49, inst_bits:U32, page_fault0:U1, access_fault0:U1, page_fault1:U1, access_fault1:U1, replay:U1, bus_err:U1, ecc_err:U1)@[], f7_inst_rvc_o:U1@[], f7_inst_valid_o:U1@[]) {
+  // ---- always-on clock domain (clk_i) ----
+  // buffer_empty[i]: instruction buffer i holds no unread instructions
+  reg buffer_empty:U2:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 3
+  reg f0_miss_pending:Bool:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  reg icache_inflight:Bool:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+
+  // ---- gated clock domain: runs only while the thread has work (see clock_enable) ----
+  wire clock_gated:Clock = nil
+  reg buffer_pc:[NBUF]U49:[clock_pin=clock_gated, ordering="old"] = nil
+  reg buffer_page_fault:U2:[clock_pin=clock_gated] = nil
+  reg buffer_access_fault:U2:[clock_pin=clock_gated] = nil
+  reg buffer_cacheable:U2:[clock_pin=clock_gated] = nil
+  reg buffer_ecc_err:U2:[clock_pin=clock_gated] = nil
+  reg buffer_l2_err:U2:[clock_pin=clock_gated] = nil
+  reg f0_pc:U49:[clock_pin=clock_gated] = nil
+  // fetch pipeline F1..F6: request valid bit and the buffer the request fills
+  reg f1_req_valid:Bool:[async=true, clock_pin=clock_gated, negreset=true, reset_pin=rst_ni] = false
+  reg f2_req_valid:Bool:[async=true, clock_pin=clock_gated, negreset=true, reset_pin=rst_ni] = false
+  reg f3_req_valid:Bool:[async=true, clock_pin=clock_gated, negreset=true, reset_pin=rst_ni] = false
+  reg f4_req_valid:Bool:[async=true, clock_pin=clock_gated, negreset=true, reset_pin=rst_ni] = false
+  reg f5_req_valid:Bool:[async=true, clock_pin=clock_gated, negreset=true, reset_pin=rst_ni] = false
+  reg f6_req_valid:Bool:[async=true, clock_pin=clock_gated, negreset=true, reset_pin=rst_ni] = false
+  reg f1_req_buffer:U1:[clock_pin=clock_gated] = nil
+  reg f2_req_buffer:U1:[clock_pin=clock_gated] = nil
+  reg f3_req_buffer:U1:[clock_pin=clock_gated] = nil
+  reg f4_req_buffer:U1:[clock_pin=clock_gated] = nil
+  reg f5_req_buffer:U1:[clock_pin=clock_gated] = nil
+  reg f6_req_buffer:U1:[clock_pin=clock_gated] = nil
+  reg f1_icache_req_kill_f1:Bool:[clock_pin=clock_gated] = nil
+  // F6 read pointer {buffer id, halfword position} and the F7 output stage
+  reg f6_buffer_ptr:U5:[async=true, clock_pin=clock_gated, negreset=true, reset_pin=rst_ni] = 0
+  reg f7_valid:Bool:[async=true, clock_pin=clock_gated, negreset=true, reset_pin=rst_ni] = false
+  reg f7_buffer_ptr:U5:[clock_pin=clock_gated] = nil
+  reg f7_inst_bits:U32:[clock_pin=clock_gated] = nil
+  reg f7_inst_rvc:Bool:[clock_pin=clock_gated] = nil
+  reg f7_split:Bool:[clock_pin=clock_gated] = nil
+  reg f7_inst_pc_msb:U44:[clock_pin=clock_gated] = nil
+  // debug program fetch buffer (pfb) control
+  reg using_pfb_reg:Bool:[async=true, clock_pin=clock_gated, negreset=true, reset_pin=rst_ni] = false
+  reg debug_ffb_en_2:U4:[async=true, clock_pin=clock_gated, negreset=true, reset_pin=rst_ni] = 0
+  reg debug_ffb_exec_2:Bool:[async=true, clock_pin=clock_gated, negreset=true, reset_pin=rst_ni] = false
+  reg debug_mode_start_ff:Bool:[clock_pin=clock_gated] = nil
+  reg reset_debug_ff:Bool:[clock_pin=clock_gated] = nil
+  reg debug_gated_clk_ticks_q:U4:[async=true, clock_pin=clock_gated, negreset=true, reset_pin=rst_ni] = 0
+
+  const core_req:Bool = f0_core_req_valid_i == 1 // mispredict/redirect from the core: flushes the fetch pipe
+  const io_halt:Bool = io_halt_i == 1 // a halt must still answer the pipe, so requests are consumed without the icache
+
+  // ---- debug program fetch buffer ----
+  // A debug halt switches both buffers over to the program fetch buffer that the debug APB fills; a resume switches back.
+  const debug_mode_start:Bool = f0_core_req_i.debug_info.halt == 1 and core_req
+  const debug_mode_end:Bool = f0_core_req_i.debug_info.resume == 1 and core_req
+  const using_pfb_next:Bool = if debug_mode_start { true } elif debug_mode_end { false } else { using_pfb_reg }
+  const using_pfb:Bool = using_pfb_reg or using_pfb_next
+  // the cycle after a halt starts, F7 is flushed and every buffer is reported empty
+  const dbg_clear_f7:Bool = debug_mode_start_ff
+  const reset_prog_buffer:Bool = (in_debug_mode_i == 1 and reset_debug_ff) or debug_mode_start_ff
+  reset_debug_ff = reset_debug_i == 1
+  debug_mode_start_ff = debug_mode_start
+  if debug_mode_start or debug_mode_end {
+    using_pfb_reg = using_pfb_next
+  }
+
+  const ffb_update_read_pointer:Bool = debug_ffb_exec_i == 1
+  if reset_debug_i == 1 {
+    debug_ffb_en_2 = 0
+    debug_ffb_exec_2 = false
+  } elif debug_ffb_en_2 != 0 or debug_ffb_en_i != 0 or debug_ffb_exec_2 or ffb_update_read_pointer {
+    debug_ffb_en_2 = debug_ffb_en_i
+    debug_ffb_exec_2 = ffb_update_read_pointer
+  }
+
+  // ---- F6 write side: icache response into the buffers ----
+  const f6_buffer_wr:Bool = f6_req_valid and not core_req and ((f6_icache_resp_valid_i == 1 and f6_icache_resp_miss_i == 0) or io_halt)
+  const f6_req_resp_valid:Bool = f6_req_valid and not core_req and (f6_icache_resp_valid_i == 1 or io_halt)
+  mut f6_buffer_en:U2 = 0 // buffer i gets the fetched words
+  mut f6_fault_en:U2 = 0 // buffer i records the response's fault bits
+  for i in 0..<NBUF {
+    f6_buffer_en#[i] = U1(f6_buffer_wr and f6_req_buffer == i)
+    f6_fault_en#[i] = U1(f6_req_resp_valid and f6_req_buffer == i)
+  }
+
+  // Word write enables are previewed one phase early (wr_1p_next) for the latch array.
+  mut f6_buffer_wr_1p_next:U8 = if f5_req_valid and not core_req and f5_icache_resp_miss_i == 0 {
+    word_enable(buffer_pc[f5_req_buffer])
+  } else {
+    0
+  }
+  mut f6_buffer_wren:U8 = 0
+  mut f6_write_ad:U1 = f6_req_buffer
+  if using_pfb {
+    f6_buffer_wr_1p_next = if debug_mode_start or reset_debug_i == 1 { 0xff } else { debug_ffb_en_i }
+    f6_buffer_wren = debug_ffb_en_2
+    if in_debug_mode_i == 1 or reset_prog_buffer {
+      f6_write_ad = 0
+    }
+    if reset_prog_buffer {
+      f6_buffer_wren = 0xf
+    }
+  } elif f6_buffer_wr {
+    f6_buffer_wren = word_enable(buffer_pc[f6_req_buffer])
+  }
+
+  // Block data comes from the icache, or from the debug APB while the pfb is in use.
+  mut f6_wr_data:U256 = f6_icache_resp_i.data
+  if using_pfb {
+    f6_wr_data#[0..<64] = debug_ffb_wdata_i
+    f6_wr_data#[64..<96] = debug_ffb_wdata_i#[0..<32]
+    f6_wr_data#[96..<128] = debug_ffb_wdata_i#[0..<32]
+    if reset_prog_buffer {
+      // fill with ebreak so the halt is implicit; unused words only get lsbs=11 (not compressed) to avoid X propagation
+      for w in 0..<5 {
+        f6_wr_data#[(32*w)..+32] = EBREAK
+      }
+      for w in 5..<WORDS {
+        f6_wr_data#[(32*w)..+2] = 3
+      }
+    }
+  }
+
+  // 2 x 256-bit instruction buffers: latch storage with the write preview on the gated clock
+  const u_inst_data = prim_rf_1r1w_diff_preview::[name=u_inst_data](preview_clk_i=clock_gated, rf_clk_i=clk_i, wr_data_en_1p_next_i=f6_buffer_wr_1p_next, rd_addr_i=f6_buffer_ptr, wr_data_i=f6_wr_data, wr_addr_i=f6_write_ad, wr_en_i=f6_buffer_wren)
+
+  // ---- F6 read side: next instruction out of the buffers (or bypassed from the icache response) ----
+  const f6_buffer_id = f6_buffer_ptr#[4]
+  const f6_buffer_pos = f6_buffer_ptr#[0..<4]
+  const f6_cur_empty:Bool = buffer_empty#[f6_buffer_id] == 1
+  // io_halt forces a non-compressed instruction
+  const f6_low_bits:U2 = if f6_cur_empty { (f6_icache_resp_i.data >> (f6_buffer_pos*16))#[0..<2] } else { u_inst_data#[0..<2] }
+  const f6_inst_rvc:Bool = not io_halt and f6_low_bits != 3
+
+  // Pointer advance: one halfword for RVC, two otherwise; first fill jumps to the fetched pc.
+  mut f6_buffer_ptr_next:U5 = 0
+  if buffer_empty == 3 and f5_req_valid {
+    f6_buffer_ptr_next = (buffer_pc[f5_req_buffer]#[1..<5], f5_req_buffer)#[..]
+  } else {
+    wrap f6_buffer_ptr_next = f6_buffer_ptr + (if f6_inst_rvc { 1 } else { 2 })
+  }
+  const f6_buffer_id_next = f6_buffer_ptr_next#[4]
+  const f6_next_empty:Bool = buffer_empty#[f6_buffer_id_next] == 1
+  // a non-compressed instruction at the last halfword spans two buffers
+  const f6_split:Bool = not f6_inst_rvc and f6_buffer_pos == 15
+
+  mut f6_fetched = false
+  mut f6_inst_bits:U32 = u_inst_data
+  if not f6_split {
+    if not f6_cur_empty {
+      f6_fetched = true
+    } elif f6_buffer_wr {
+      f6_fetched = true
+      f6_inst_bits = (f6_icache_resp_i.data >> (f6_buffer_pos*16))#[0..<32]
+    }
+  } else {
+    if not f6_cur_empty and not f6_next_empty {
+      f6_fetched = true
+    } elif not f6_cur_empty and f6_buffer_wr {
+      f6_fetched = true
+      f6_inst_bits#[16..<32] = f6_icache_resp_i.data#[0..<16]
+    }
+  }
+  const f6_valid:Bool = f6_fetched and not dbg_clear_f7
+  const f6_last_from_buffer:Bool = f6_buffer_id_next != f6_buffer_id
+
+  const u_rvc_exp = minion_frontend_rvc_expander::[name=u_rvc_exp](in_bits=f6_inst_bits)
+
+  // ---- F7: output stage ----
+  const f7_stall:Bool = f7_inst_ready_i == 0
+  const f6_stall:Bool = f7_valid and f7_stall
+  const f6_advance:Bool = f6_valid and not f6_stall
+  const f7_buffer_id = f7_buffer_ptr#[4]
+  const f7_buffer_pos = f7_buffer_ptr#[0..<4]
+
+  f7_valid = if core_req or dbg_clear_f7 { false } elif f6_valid { true } elif f7_inst_ready_i == 1 { false } else { f7_valid }
+  if f6_advance {
+    f7_inst_bits = u_rvc_exp
+    f7_inst_rvc = f6_inst_rvc
+    f7_buffer_ptr = f6_buffer_ptr
+    f7_split = f6_split
+    f7_inst_pc_msb = buffer_pc[f6_buffer_id]#[BLK_LSB..<49]
+  }
+  if (buffer_empty == 3 and f5_req_valid) or f6_advance or ffb_update_read_pointer {
+    f6_buffer_ptr = if ffb_update_read_pointer { 0 } else { f6_buffer_ptr_next }
+  }
+
+  // Faults are reported per buffer; an instruction split over two buffers reports both. The pfb never faults.
+  const f7_report:Bool = not using_pfb
+  const f7_two_buffers:Bool = not f7_inst_rvc and f7_split
+  f7_inst_data_o.pc = (f7_inst_pc_msb << BLK_LSB) | (f7_buffer_pos << 1)
+  f7_inst_data_o.inst_bits = f7_inst_bits
+  f7_inst_data_o.page_fault0 = U1(buffer_page_fault#[f7_buffer_id] == 1 and f7_report)
+  f7_inst_data_o.access_fault0 = U1(buffer_access_fault#[f7_buffer_id] == 1 and f7_report)
+  f7_inst_data_o.page_fault1 = U1(f7_two_buffers and buffer_page_fault#[f6_buffer_id] == 1 and f7_report)
+  f7_inst_data_o.access_fault1 = U1(f7_two_buffers and buffer_access_fault#[f6_buffer_id] == 1 and f7_report)
+  f7_inst_data_o.bus_err = U1((if f7_two_buffers { buffer_l2_err != 0 } else { buffer_l2_err#[f7_buffer_id] == 1 }) and f7_report)
+  f7_inst_data_o.ecc_err = U1((if f7_two_buffers { buffer_ecc_err != 0 } else { buffer_ecc_err#[f7_buffer_id] == 1 }) and f7_report)
+  // replay a speculative instruction fetched from a non-cacheable buffer
+  f7_inst_data_o.replay = U1(buffer_cacheable#[f7_buffer_id] == 0 and f0_core_req_i.speculative == 1 and f7_report)
+  f7_inst_valid_o = U1(f7_valid and not dbg_clear_f7)
+  f7_inst_rvc_o = U1(f7_inst_rvc)
+
+  // ---- buffer occupancy ----
+  mut f6_clear_buffer:U2 = 0 // buffer i was just fully consumed
+  mut buffer_empty_next:U2 = buffer_empty
+  const resp_faulted:Bool = f6_icache_resp_i.page_fault == 1 or f6_icache_resp_i.access_fault == 1 or f6_icache_resp_i.ecc_err == 1 or f6_icache_resp_i.bus_err == 1
+  for i in 0..<NBUF {
+    const clear:Bool = f6_last_from_buffer and f6_advance and f6_buffer_id == i
+    f6_clear_buffer#[i] = U1(clear)
+    if clear {
+      buffer_empty_next#[i] = 1
+    } elif f6_buffer_en#[i] == 1 {
+      buffer_empty_next#[i] = 0
+    } elif f6_fault_en#[i] == 1 and resp_faulted {
+      // a fault still fills the buffer so the fault reaches the pipe
+      buffer_empty_next#[i] = 0
+    } elif core_req or f0_disable_thread_i == 1 {
+      buffer_empty_next#[i] = 1
+    }
+  }
+  if debug_mode_start_ff {
+    buffer_empty_next = 3
+  }
+  // while the pfb is being written buffer 0 reads as empty; executing it marks both buffers full
+  if debug_ffb_exec_2 {
+    buffer_empty_next = 0
+  } elif debug_ffb_en_i != 0 {
+    buffer_empty_next = 1
+  }
+  buffer_empty = buffer_empty_next
+
+  // ---- F0: request buffer selection and request issue ----
+  mut f0_req_buffer:U1 = 0 // last buffer that is empty (or about to be) wins
+  for i in 0..<NBUF {
+    if buffer_empty#[i] == 1 or (f6_clear_buffer#[i] == 1 and f6_buffer_en#[i] == 0) {
+      f0_req_buffer = i
+    }
+  }
+  const f0_new_inst_req:Bool = f0_thread_enabled_i == 1 and f0_enable_thread_i == 0 and not (f0_miss_pending and f7_icache_fill_done_i == 0) and not core_req and not f1_req_valid and not f2_req_valid and not f3_req_valid and not f4_req_valid and not f5_req_valid and not f6_req_valid and (buffer_empty != 0 or f6_clear_buffer != 0) and rst_ni == 1 and not using_pfb
+  const f0_icache_req_valid:Bool = f0_new_inst_req and not io_halt
+  const f0_icache_req_acc:Bool = (f0_icache_req_valid and f0_icache_req_ready_i == 1) or (f0_new_inst_req and io_halt)
+  f0_icache_req_valid_o = U1(f0_icache_req_valid)
+
+  // per buffer: response fault/cacheable bits (faults are suppressed while halting) and the pc it was fetched from
+  for i in 0..<NBUF {
+    if f6_fault_en#[i] == 1 {
+      buffer_page_fault#[i] = U1(f6_icache_resp_i.page_fault == 1 and not io_halt)
+      buffer_access_fault#[i] = U1(f6_icache_resp_i.access_fault == 1 and not io_halt)
+      buffer_l2_err#[i] = U1(f6_icache_resp_i.bus_err == 1 and not io_halt)
+      buffer_ecc_err#[i] = U1(f6_icache_resp_i.ecc_err == 1 and not io_halt)
+    }
+    if f6_buffer_en#[i] == 1 {
+      buffer_cacheable#[i] = f6_icache_resp_i.cacheable
+    }
+    if f0_icache_req_acc and f0_req_buffer == i {
+      buffer_pc[i] = f0_pc
+    }
+  }
+
+  // next fetch pc: reset vector, else the block after the one just written, else the core's redirect (highest priority)
+  mut f0_pc_next:U49 = f0_reset_vector_i
+  if f6_buffer_wr {
+    const next_block:U44 = (buffer_pc[f6_req_buffer]#[BLK_LSB..<49] + 1)#[0..<44]
+    f0_pc_next = next_block << BLK_LSB
+  }
+  if core_req {
+    f0_pc_next = f0_core_req_i.pc
+  }
+  const f0_pc_update:Bool = rst_ni == 0 or f0_enable_thread_i == 1 or f6_buffer_wr or core_req
+  if f0_pc_update {
+    f0_pc = f0_pc_next
+  }
+
+  // a missed response parks fetching until the fill completes
+  f0_miss_pending = if core_req or f0_disable_thread_i == 1 or f7_icache_fill_done_i == 1 or io_halt { false }
+    elif f6_req_valid and f6_icache_resp_miss_i == 1 { true }
+    else { f0_miss_pending }
+
+  // ---- fetch pipeline F1..F6 ----
+  const f0_icache_req_kill_f1:Bool = (f1_req_valid and core_req) or f1_icache_req_kill_f1
+  if f1_icache_req_ready_i == 1 {
+    f1_req_valid = f0_icache_req_acc
+    f1_req_buffer = f0_req_buffer
+  }
+  f1_icache_req_kill_f1 = if f1_icache_req_ready_i == 1 { false } else { f0_icache_req_kill_f1 }
+  // F2..F6 only advance while the core does not redirect
+  f2_req_valid = f1_req_valid and f1_icache_req_ready_i == 1 and not f0_icache_req_kill_f1
+  f3_req_valid = f2_req_valid and not core_req
+  f4_req_valid = f3_req_valid and not core_req
+  f5_req_valid = f4_req_valid and not core_req
+  f6_req_valid = f5_req_valid and not core_req
+  f2_req_buffer = f1_req_buffer
+  f3_req_buffer = f2_req_buffer
+  f4_req_buffer = f3_req_buffer
+  f5_req_buffer = f4_req_buffer
+  f6_req_buffer = f5_req_buffer
+
+  // ---- clock gating: the gated clock stays on while the thread has anything in flight ----
+  icache_inflight = if f0_icache_req_valid { true } elif core_req or f0_icache_req_kill_f1 or f6_req_valid { false } else { icache_inflight }
+  const clock_enable:Bool = core_req or f0_enable_thread_i == 1 or f0_icache_req_acc or icache_inflight or (f0_thread_enabled_i == 1 and not f0_miss_pending and buffer_empty != 0) or f6_advance or (f7_valid and not f7_stall) or rst_ni == 0 or reset_debug_i == 1 or in_debug_mode_i == 1 or io_halt or chicken_bit_i == 1
+  const u_clk_gate = prim_clk_gate(clk_i=clk_i, en_i=U1(clock_enable), dft_i=(scanmode=dft_i.scanmode))
+  clock_gated = u_clk_gate
+  // debug-only observation of gated-domain activity
+  wrap debug_gated_clk_ticks_q = debug_gated_clk_ticks_q + 1
+
+  // ---- outputs ----
+  f0_icache_req_o.thread_id = ThreadId#[0]
+  f0_icache_req_o.vm_status.prv = vm_status_i.prv
+  f0_icache_req_o.vm_status.mprv = vm_status_i.mprv
+  f0_icache_req_o.vm_status.mpp = vm_status_i.mpp
+  f0_icache_req_o.vm_status.sum = vm_status_i.sum
+  f0_icache_req_o.vm_status.mxr = vm_status_i.mxr
+  f0_icache_req_o.vm_status.debug = vm_status_i.debug
+  f0_icache_req_o.addr = f0_pc
+  debug_o = (core_req_valid=f0_core_req_valid_i, core_req_pc=f0_core_req_i.pc, f0_pc=f0_pc, f0_pc_next=f0_pc_next, f0_pc_update=U1(f0_pc_update), clock_enable=U1(clock_enable), gated_clk_ticks=debug_gated_clk_ticks_q, buffer_empty=buffer_empty, buffer_pc0=buffer_pc[0], buffer_pc1=buffer_pc[1], req_buffer=f0_req_buffer, f6_req_buffer=f6_req_buffer, f6_buffer_id=f6_buffer_id, f7_buffer_id=f7_buffer_id, f6_buffer_ptr=f6_buffer_ptr, f6_buffer_ptr_next=f6_buffer_ptr_next, f7_buffer_ptr=f7_buffer_ptr, icache_inflight=U1(icache_inflight), miss_pending=U1(f0_miss_pending), f1_req_valid=U1(f1_req_valid), f5_req_valid=U1(f5_req_valid), f6_req_valid=U1(f6_req_valid), f6_buffer_wr=U1(f6_buffer_wr), f6_valid=U1(f6_valid), f6_stall=U1(f6_stall), f7_valid=U1(f7_valid), f7_stall=U1(f7_stall))
+}

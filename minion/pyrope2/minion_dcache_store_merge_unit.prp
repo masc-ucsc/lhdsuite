@@ -1,0 +1,39 @@
+const minion_dcache_pkg = import("minion_dcache_pkg")
+
+// Dcache store merge: builds the byte write mask for the access type (a
+// partial-store type uses ps_mask_i, one bit per 4-byte lane), shifts it by the
+// byte offset addr_i (the lo/hi enables gate the two 32-byte halves of the
+// 64-byte window), rotates the store data to the same offset, and replaces
+// only the enabled bytes of orig_data_i.
+pub comb minion_dcache_store_merge_unit(addr_i:U5, enable_hi_i:U1, enable_lo_i:U1, orig_data_i:minion_dcache_pkg.DcacheDataSize_T, ps_mask_i:U8, store_data_i:minion_dcache_pkg.DcacheDataSize_T, typ_i:U4) -> (merge_out_o:minion_dcache_pkg.DcacheDataSize_T) {
+  comptime const BYTES = minion_dcache_pkg.DcacheDataSize/8
+  comptime const PS_LANE_BYTES = BYTES/ps_mask_i.[bits]
+
+  // Write mask of the access itself, before the byte-offset shift.
+  mut wmask_orig:U32 = 0
+  if typ_i == minion_dcache_pkg.DcTypePs {
+    for i in 0..<ps_mask_i.[bits] {
+      wmask_orig#[i*PS_LANE_BYTES..+PS_LANE_BYTES] = if ps_mask_i#[i] == 1 { 0xf } else { 0 }
+    }
+  } elif typ_i == minion_dcache_pkg.DcTypeB or typ_i == minion_dcache_pkg.DcTypeBu or typ_i == minion_dcache_pkg.DcTypePsGs8 {
+    wmask_orig = 0x1
+  } elif typ_i == minion_dcache_pkg.DcTypeH or typ_i == minion_dcache_pkg.DcTypeHu or typ_i == minion_dcache_pkg.DcTypePsGs16 {
+    wmask_orig = 0x3
+  } elif typ_i == minion_dcache_pkg.DcTypeW or typ_i == minion_dcache_pkg.DcTypeWu or typ_i == minion_dcache_pkg.DcTypePsBr or typ_i == minion_dcache_pkg.DcTypePsGs32 {
+    wmask_orig = 0xf
+  } else {
+    wmask_orig = 0xff
+  }
+
+  const mask_lo:U32 = if enable_lo_i == 1 { wmask_orig } else { 0 }
+  const mask_hi:U32 = if enable_hi_i == 1 { wmask_orig } else { 0 }
+  const mask_window:U64 = (mask_lo, mask_hi)#[..]
+  const wmask_byte:U32 = (mask_window << addr_i)#[32..<64]
+
+  const store_twice:U512 = (store_data_i, store_data_i)#[..]
+  const store_aligned:U256 = (store_twice << (addr_i*8))#[256..<512]
+
+  for i in 0..<BYTES {
+    merge_out_o#[i*8..+8] = if wmask_byte#[i] == 1 { store_aligned#[i*8..+8] } else { orig_data_i#[i*8..+8] }
+  }
+}

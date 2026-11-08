@@ -1,0 +1,450 @@
+// Data-cache replay queue (verilog: minion_dcache_replay_queue).
+//
+// Parks up to Size requests that could not finish in S2 (miss pending, address
+// conflict, uncached load in flight, VPU RF busy) and replays them one at a
+// time. Per entry it keeps
+//   * a payload split over two parallel-read register files: u_replayq_push
+//     (command/destination fields, written once at push) and u_replayq_rearm
+//     (address/alignment fields, rewritten on a rearm of the same entry),
+//   * a ready-info record (pending, store, age, replay reason, ...), and
+//   * a row of the conflict matrix (older entries it must wait for).
+// Free slots are claimed speculatively: alloc_req_pre_i takes one a few cycles
+// before the push, and the s0..s3 flags give it back if the push never comes.
+// Replay grants the ready entry that wins the LRU-style priority matrix
+// (prio_bits_q: a set bit [i][j], j < i, means i beats j; a freshly pushed
+// entry becomes the lowest priority). The conflict and arbitration state is
+// only clocked while the queue is busy.
+// The unused request fields (addr_msb_err, set, data, ...) stay in req_data_i
+// because the dcache top passes the whole S2 request bundle.
+const prim_rf_1r1w_par_preview = import("prim_rf_1r1w_par_preview.prim_rf_1r1w_par_preview")
+const prim_rf_1r1w_par_preview_p1 = import("prim_rf_1r1w_par_preview_p1.prim_rf_1r1w_par_preview_p1")
+const minion_pkg = import("minion_pkg")
+const minion_dcache_pkg = import("minion_dcache_pkg")
+
+comptime const Size = 8
+cassert(Size == (1 << minion_dcache_pkg.DcacheReplayqAddrWidth), "queue depth must match the package's replay-queue address width")
+comptime const CountW = std.clog2(Size) + 1
+comptime const AgeCmpW = minion_dcache_pkg.DcacheReplayqAgeCmpWidth
+comptime const AgeEraBit = minion_dcache_pkg.DcacheReplayqAgeEraBit
+comptime const MhFiles = minion_dcache_pkg.DcacheMhFileSize
+comptime const ConflictLsb = minion_dcache_pkg.DcacheReplayqAddrConflictLsb
+comptime const ConflictW = 10
+comptime const HalfFullThreshold = 4
+// A request address is [VaSize:0]; bits [VaSize:LineBits] are the cache-line number.
+comptime const LineBits = 5
+comptime const AddrW = minion_dcache_pkg.VaSize + 1
+comptime const LineNumW = AddrW - LineBits
+comptime const DestW = 7
+
+// Payload word of u_replayq_push, LSB first: mem_global, vm_sel, gsc32_idx, cache_op, buf_id, buf_alloc,
+// ps_mask, gsc_cnt, typ, cmd, dest (thread_id, addr, fp).
+comptime const PushW = 76
+comptime const PushDestLsb = PushW - DestW
+comptime const PushCmdLsb = 64
+comptime const PushTypLsb = 60
+comptime const PushGscCntLsb = 57
+comptime const PushPsMaskLsb = 49
+comptime const PushBufAllocBit = 48
+comptime const PushBufIdLsb = 45
+comptime const PushCacheOpBit = 44
+comptime const PushGsc32Lsb = 4
+comptime const PushVmSelLsb = 1
+// Payload word of u_replayq_rearm, LSB first: uc_load_2nd, cacheable, misaligned_2nd, misaligned, phys, addr.
+comptime const RearmW = 54
+comptime const RearmAddrLsb = 5
+comptime const RearmPhysBit = 4
+comptime const RearmMisalignedBit = 3
+comptime const RearmMisaligned2ndBit = 2
+comptime const RearmCacheableBit = 1
+comptime const RearmUcLoad2ndBit = 0
+
+// dcache_replay_conf_t packed as {vpu_rf_write, miss_alloc, miss_accepted[1:0], miss_assigned[1:0]}.
+comptime const ReasonVpuRfWriteBit = 5
+comptime const ReasonMissAllocBit = 4
+comptime const ReasonAcceptedLsb = 2
+comptime const ReasonAssignedLsb = 0
+
+comb cmd_is_amo(cmd:U5) -> (r:Bool) {
+  r = cmd in (minion_dcache_pkg.DcCmdXaSwap, minion_dcache_pkg.DcCmdXaAdd, minion_dcache_pkg.DcCmdXaXor, minion_dcache_pkg.DcCmdXaOr, minion_dcache_pkg.DcCmdXaAnd, minion_dcache_pkg.DcCmdXaMin, minion_dcache_pkg.DcCmdXaMax, minion_dcache_pkg.DcCmdXaMinu, minion_dcache_pkg.DcCmdXaMaxu, minion_dcache_pkg.DcCmdXaCmpswp, minion_dcache_pkg.DcCmdXaMinPs, minion_dcache_pkg.DcCmdXaMaxPs)
+}
+
+comb cmd_is_write(cmd:U5) -> (r:Bool) {
+  r = cmd == minion_dcache_pkg.DcCmdXwr or cmd == minion_dcache_pkg.DcCmdXsc or cmd_is_amo(cmd) or cmd == minion_dcache_pkg.DcCmdSc32 or cmd == minion_dcache_pkg.DcCmdXwrb
+}
+
+comb cmd_is_read(cmd:U5) -> (r:Bool) {
+  r = cmd == minion_dcache_pkg.DcCmdXrd or cmd == minion_dcache_pkg.DcCmdXlr or cmd == minion_dcache_pkg.DcCmdXsc or cmd_is_amo(cmd) or cmd == minion_dcache_pkg.DcCmdG32 or cmd == minion_dcache_pkg.DcCmdXrdb
+}
+
+// Ages are an era bit plus a wrapping counter: within one era a smaller counter
+// is older, across eras the order flips.
+comb entry_is_older(entry1:U5, entry2:U5) -> (r:Bool) {
+  const cmp = entry1#[0..<AgeCmpW] < entry2#[0..<AgeCmpW]
+  r = if entry1#[AgeEraBit] == entry2#[AgeEraBit] { cmp } else { not cmp }
+}
+
+pub mod minion_dcache_replay_queue::[timecheck=false](alloc_gsc_i:U1, alloc_req_pre_i:U1, alloc_req_val_i:U1, cacheable_i:U1, clk_i:Clock, dealloc_entry_i:minion_dcache_pkg.DcacheReplayqAddrWidth_T, dealloc_i:U1, misaligned_1st_i:U1, miss_available_i:minion_dcache_pkg.DcacheMhFileSize_T, miss_fill_error_i:minion_dcache_pkg.DcacheMhFileSize_T, miss_fill_ok_i:U1, push_req_i:U1, push_req_prev_i:U1, rearm_entry_i:minion_dcache_pkg.DcacheReplayqAddrWidth_T, rearm_i:U1, rearm_prev_i:U1, replay_grant_i:U1, req_buf_alloc_i:U1, req_buf_entry_i:minion_dcache_pkg.DcacheBufferIdxWidth_T, req_conf_type_i:(vpu_rf_write:U1, miss_alloc:U1, miss_accepted:U2, miss_assigned:U2), req_data_i:(addr:U49, addr_msb_err:U1, set:U4, phys:U1, misaligned:U1, misaligned_2nd:U1, dest:(fp:U1, addr:U5, thread_id:U1), cmd:U5, typ:U4, gsc_cnt:U3, ps_mask:U8, data:U256, replay:U1, replay_entry:U3, replay_age:U5, cache_op:U1, buf_alloc:U1, buf_id:U3, cacheable:U1, chunk_read:U4, uc_load_2nd:U1, uc_load_ok:U1, miss_fill_ok:U1, gsc32_idx:U40, vm_sel:U3, mem_global:U1), rst_ni:U1, uc_load_1st_i:U1, uc_load_fill_i:U1, uc_load_fill_id_i:minion_dcache_pkg.DcacheBufferIdxWidth_T, uc_load_fill_ok_i:U1, uc_load_ok_i:U1, vpu_rf_in_use_i:U1) -> (empty_o:minion_pkg.NrThreads_T@[], fp_sb_dealloc_o:minion_pkg.NrThreads_T@[], full_o:U1@[], half_full_o:U1@[], int_sb_dealloc_o:minion_pkg.NrThreads_T@[], replay_age_o:minion_dcache_pkg.DcacheReplayqAgeWidth_T@[], replay_bid_o:U1@[], replay_entry_o:minion_dcache_pkg.DcacheReplayqAddrWidth_T@[], replay_miss_ok_o:U1@[], replay_req_o:(addr:U49, dest:(fp:U1, addr:U5, thread_id:U1), cmd:U5, typ:U4, gsc_cnt:U3, ps_mask:U8, phys:U1, buf_alloc:U1, buf_id:U3, cache_op:U1, misaligned:U1, misaligned_2nd:U1, cacheable:U1, uc_load_2nd:U1, gsc32_idx:U40, vm_sel:U3, mem_global:U1)@[], replay_uc_ok_o:U1@[], replay_valid_o:U1@[], rq_conflict_o:U1@[], rq_conflict_to_co_o:U1@[], scoreboard_o:(valid:U8, dest:U56)@[]) {
+  // Slot allocation pipeline: a slot is claimed by alloc_req_pre_i and the s0..s3 flags
+  // track it until the push lands (or hands the slot back).
+  reg s0_alloc_req_pre_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s1_alloc_req_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s2_alloc_req_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s3_alloc_req_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s0_alloc_gsc_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s1_alloc_gsc_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s2_alloc_gsc_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg entry_count_available_q:Unsigned(bits=CountW):[negreset=true, reset_pin=rst_ni] = Size
+  reg entry_mask_available_q:Unsigned(bits=Size):[negreset=true, reset_pin=rst_ni] = (1 << Size) - 1
+  reg alloc_req_pre_applied_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg age_id_mask_available_q:Unsigned(bits=Size*2):[negreset=true, reset_pin=rst_ni] = (1 << (Size*2)) - 1
+  reg push_age_q:minion_dcache_pkg.DcacheReplayqAgeWidth_T:[negreset=true, reset_pin=rst_ni] = 0
+  // Replay arbitration state; only clocked while the queue is busy (arb_clk_en).
+  reg empty_o:minion_pkg.NrThreads_T:[negreset=true, reset_pin=rst_ni] = (1 << minion_pkg.NrThreads) - 1
+  reg replay_valid_o:U1:[negreset=true, reset_pin=rst_ni] = 0
+  reg replay_valid_prev_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg replay_entry_o:minion_dcache_pkg.DcacheReplayqAddrWidth_T = nil
+  reg replay_entry_prev_q:minion_dcache_pkg.DcacheReplayqAddrWidth_T = nil
+  reg push_req_spec_q:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg fp_sb_dealloc_o:minion_pkg.NrThreads_T:[negreset=true, reset_pin=rst_ni] = 0
+  reg int_sb_dealloc_o:minion_pkg.NrThreads_T:[negreset=true, reset_pin=rst_ni] = 0
+  reg prio_bits_q:[Size]Unsigned(bits=Size):[negreset=true, ordering="old", reset_pin=rst_ni] = 0
+  reg rq_conflict_matrix_q:[Size]Unsigned(bits=Size):[ordering="old"] = nil
+  // Ready-info record of each entry, one array per field. The dotted names are the
+  // reference design's flattened state names; keeping them lets equivalence checking pair the arrays.
+  reg `replayq_ready_info_q.pending`:[Size]Bool:[ordering="old"] = nil
+  reg `replayq_ready_info_q.store`:[Size]Bool:[ordering="old"] = nil
+  reg `replayq_ready_info_q.age`:[Size]minion_dcache_pkg.DcacheReplayqAgeWidth_T:[ordering="old"] = nil
+  reg `replayq_ready_info_q.reason`:[Size]U6:[ordering="old"] = nil
+  reg `replayq_ready_info_q.wait_uc_load`:[Size]Bool:[ordering="old"] = nil
+  reg `replayq_ready_info_q.uc_load_ok`:[Size]Bool:[ordering="old"] = nil
+  reg `replayq_ready_info_q.miss_fill_ok`:[Size]Bool:[ordering="old"] = nil
+  // Replay entry of the uncached load that owns each fill buffer.
+  reg uc_load_id_q:[minion_dcache_pkg.DcacheBufferSize]minion_dcache_pkg.DcacheReplayqAddrWidth_T:[ordering="old"] = nil
+
+  const push_req:Bool = push_req_i == 1
+  const rearm:Bool = rearm_i == 1
+  const dealloc:Bool = dealloc_i == 1
+  const replay_grant:Bool = replay_grant_i == 1
+  const alloc_req_pre:Bool = alloc_req_pre_i == 1
+  const is_replay:Bool = req_data_i.replay == 1
+  const s0_alloc_req:Bool = s0_alloc_req_pre_q and alloc_req_val_i == 1
+  const req_is_write:Bool = cmd_is_write(cmd=req_data_i.cmd)
+
+  // ---- slot bookkeeping --------------------------------------------------------------
+  // The push needs a free slot and a free age id; in-flight allocations still count against the age ids.
+  mut age_check:Unsigned(bits=AgeCmpW) = 0
+  wrap age_check = push_age_q#[0..<AgeCmpW] + U1(s0_alloc_req) + U1(s1_alloc_req_q) + U1(s2_alloc_req_q) + U1(s3_alloc_req_q)
+  const age_id_free:Bool = age_id_mask_available_q#[age_check] == 1
+  full_o = U1(entry_count_available_q == 0 or not age_id_free)
+  half_full_o = U1(entry_count_available_q <= HalfFullThreshold or not age_id_free)
+
+  // A new entry takes the highest free slot above 0 (slot 0 only when none is); a rearm reuses its own.
+  mut push_entry:minion_dcache_pkg.DcacheReplayqAddrWidth_T = 0
+  for i in 1..<Size {
+    if entry_mask_available_q#[i] == 1 {
+      push_entry = i
+    }
+  }
+  if is_replay {
+    push_entry = rearm_entry_i
+  }
+
+  const pre_applied:Bool = alloc_req_pre and entry_count_available_q != 0
+  mut entry_count_available_d:Unsigned(bits=CountW) = entry_count_available_q
+  if pre_applied {
+    wrap entry_count_available_d -= 1
+  }
+  if alloc_req_pre_applied_q and not s0_alloc_req {
+    wrap entry_count_available_d += 1
+  }
+  if s2_alloc_req_q and not s2_alloc_gsc_q and not push_req {
+    wrap entry_count_available_d += 1
+  }
+  if s3_alloc_req_q and not push_req {
+    wrap entry_count_available_d += 1
+  }
+  if s2_alloc_req_q and not s2_alloc_gsc_q and s3_alloc_req_q and push_req {
+    wrap entry_count_available_d += 1
+  }
+  if dealloc {
+    wrap entry_count_available_d += 1
+  }
+
+  mut entry_mask_available_d:Unsigned(bits=Size) = entry_mask_available_q
+  if push_req {
+    entry_mask_available_d#[push_entry] = 0
+  }
+  if dealloc {
+    entry_mask_available_d#[dealloc_entry_i] = 1
+  }
+
+  mut age_id_mask_available_d:Unsigned(bits=Size*2) = age_id_mask_available_q
+  if push_req {
+    age_id_mask_available_d#[push_age_q#[0..<AgeCmpW]] = 0
+  }
+  if dealloc {
+    age_id_mask_available_d#[req_data_i.replay_age#[0..<AgeCmpW]] = 1
+  }
+
+  const alloc_clk_en:Bool = rst_ni == 0 or alloc_req_pre or s0_alloc_req_pre_q or s1_alloc_req_q or s2_alloc_req_q or s3_alloc_req_q or dealloc or push_req
+
+  // ---- payload register files ------------------------------------------------------------
+  const push_word:U76 = (req_data_i.mem_global, req_data_i.vm_sel, req_data_i.gsc32_idx, req_data_i.cache_op, req_buf_entry_i, req_buf_alloc_i, req_data_i.ps_mask, req_data_i.gsc_cnt, req_data_i.typ, req_data_i.cmd, req_data_i.dest.thread_id, req_data_i.dest.addr, req_data_i.dest.fp)#[..]
+
+  // The rearm record is the request's address/alignment fields; a misaligned access
+  // is replayed once more for its second half, the next cache line.
+  mut rearm_addr:U49 = req_data_i.addr
+  mut rearm_misaligned:U1 = req_data_i.misaligned
+  mut rearm_misaligned_2nd:U1 = req_data_i.misaligned_2nd
+  mut rearm_uc_load_2nd:U1 = req_data_i.uc_load_2nd
+  if misaligned_1st_i == 1 {
+    rearm_misaligned = 0
+    rearm_misaligned_2nd = 1
+    rearm_addr#[LineBits..<AddrW] = (req_data_i.addr#[LineBits..<AddrW] + 1)#[0..<LineNumW]
+  }
+  if uc_load_1st_i == 1 {
+    rearm_uc_load_2nd = 1
+  }
+  const rearm_word:U54 = (rearm_uc_load_2nd, cacheable_i, rearm_misaligned_2nd, rearm_misaligned, req_data_i.phys, rearm_addr)#[..]
+
+  const u_replayq_push = prim_rf_1r1w_par_preview(preview_clk_i=clk_i, rf_clk_i=clk_i, wr_data_en_1p_next_i=push_req_prev_i, wr_data_i=push_word, wr_addr_i=push_entry, wr_en_i=push_req_i)
+  const u_replayq_rearm = prim_rf_1r1w_par_preview_p1(preview_clk_i=clk_i, rf_clk_i=clk_i, wr_data_en_1p_next_i=push_req_prev_i | rearm_prev_i, wr_data_i=rearm_word, wr_addr_i=push_entry, wr_en_i=push_req_i | rearm_i)
+
+  mut push_rows:[Size]U76 = 0
+  mut rearm_rows:[Size]U54 = 0
+  for i in 0..<Size {
+    push_rows[i] = u_replayq_push#[(i*PushW)..<((i + 1)*PushW)]
+    rearm_rows[i] = u_replayq_rearm#[(i*RearmW)..<((i + 1)*RearmW)]
+  }
+
+  // ---- replay arbitration ----------------------------------------------------------------
+  mut entry_ready:Unsigned(bits=Size) = 0
+  for i in 0..<Size {
+    const reason = `replayq_ready_info_q.reason`[i]
+    entry_ready#[i] = U1(`replayq_ready_info_q.pending`[i] and entry_mask_available_q#[i] == 0 and rq_conflict_matrix_q[i] == 0 and not `replayq_ready_info_q.wait_uc_load`[i] and reason#[ReasonMissAllocBit] == 0 and reason#[ReasonAssignedLsb..<ReasonAcceptedLsb] == 0 and reason#[ReasonVpuRfWriteBit] == 0)
+  }
+
+  // Entry i wins when it is ready and beats every other ready entry.
+  mut replay_entry_d:minion_dcache_pkg.DcacheReplayqAddrWidth_T = 0
+  for i in 0..<Size {
+    mut wins = entry_ready#[i] == 1
+    for j in 0..<i {
+      wins = wins and (entry_ready#[j] == 0 or prio_bits_q[i]#[j] == 1)
+    }
+    for j in (i + 1)..<Size {
+      wins = wins and (entry_ready#[j] == 0 or prio_bits_q[j]#[i] == 0)
+    }
+    if wins {
+      replay_entry_d = i
+    }
+  }
+
+  // A pushed entry becomes the lowest priority: it loses to every older one.
+  mut prio_bits_d:[Size]Unsigned(bits=Size) = prio_bits_q
+  for i in 0..<Size {
+    mut row = prio_bits_q[i]
+    for j in 0..<i {
+      row#[j] = if push_req and push_entry == i { 0 } elif push_req and push_entry == j { 1 } else { prio_bits_q[i]#[j] }
+    }
+    prio_bits_d[i] = row
+  }
+
+  replay_bid_o = U1(entry_ready != 0)
+  const replay_push = push_rows[replay_entry_o]
+  const replay_rearm = rearm_rows[replay_entry_o]
+  replay_req_o = (addr=replay_rearm#[RearmAddrLsb..<RearmW], buf_alloc=replay_push#[PushBufAllocBit], buf_id=replay_push#[PushBufIdLsb..<PushBufAllocBit], cache_op=replay_push#[PushCacheOpBit], cacheable=replay_rearm#[RearmCacheableBit], cmd=replay_push#[PushCmdLsb..<PushDestLsb], dest=(addr=replay_push#[(PushDestLsb + 1)..<(PushW - 1)], fp=replay_push#[PushW - 1], thread_id=replay_push#[PushDestLsb]), gsc32_idx=replay_push#[PushGsc32Lsb..<PushCacheOpBit], gsc_cnt=replay_push#[PushGscCntLsb..<PushTypLsb], mem_global=replay_push#[0], misaligned=replay_rearm#[RearmMisalignedBit], misaligned_2nd=replay_rearm#[RearmMisaligned2ndBit], phys=replay_rearm#[RearmPhysBit], ps_mask=replay_push#[PushPsMaskLsb..<PushGscCntLsb], typ=replay_push#[PushTypLsb..<PushCmdLsb], uc_load_2nd=replay_rearm#[RearmUcLoad2ndBit], vm_sel=replay_push#[PushVmSelLsb..<PushGsc32Lsb])
+  replay_age_o = `replayq_ready_info_q.age`[replay_entry_o]
+  const replay_uc_ok:Bool = `replayq_ready_info_q.uc_load_ok`[replay_entry_o]
+  const replay_miss_ok:Bool = `replayq_ready_info_q.miss_fill_ok`[replay_entry_o]
+  replay_uc_ok_o = U1(replay_uc_ok)
+  replay_miss_ok_o = U1(replay_miss_ok)
+
+  // ---- address conflicts of the S2 request against the queued entries ------------------------
+  mut rq_to_s2_conflict:Unsigned(bits=Size) = 0
+  mut s2_to_rq_conflict:Unsigned(bits=Size) = 0
+  mut rq_conflict = false
+  mut rq_conflict_to_co = false
+  for i in 0..<Size {
+    const rearm_row = rearm_rows[i]
+    const row_misaligned = rearm_row#[RearmMisalignedBit] == 1
+    const row_misaligned_2nd = rearm_row#[RearmMisaligned2ndBit] == 1
+    const row_cacheable = rearm_row#[RearmCacheableBit] == 1
+    const older = not is_replay or entry_is_older(entry1=`replayq_ready_info_q.age`[i], entry2=req_data_i.replay_age)
+    const pending = entry_mask_available_q#[i] == 0 and `replayq_ready_info_q.pending`[i]
+    if pending or (replay_valid_o == 1 and replay_entry_o == i) or (replay_valid_prev_q and replay_entry_prev_q == i) {
+      if req_is_write or `replayq_ready_info_q.store`[i] {
+        if req_data_i.addr#[ConflictLsb..<(ConflictLsb + ConflictW)] == rearm_row#[(RearmAddrLsb + ConflictLsb)..<(RearmAddrLsb + ConflictLsb + ConflictW)] or req_data_i.misaligned == 1 or row_misaligned or row_misaligned_2nd or not row_cacheable {
+          if older {
+            rq_to_s2_conflict#[i] = U1(pending)
+            rq_conflict = true
+          } else {
+            s2_to_rq_conflict#[i] = 1
+          }
+        }
+      }
+      rq_conflict_to_co = rq_conflict_to_co or row_misaligned_2nd
+    }
+  }
+  rq_conflict_o = U1(rq_conflict)
+  rq_conflict_to_co_o = U1(rq_conflict_to_co)
+
+  // A (re)armed entry gets its own row and column; a granted entry stops blocking the others.
+  mut rq_conflict_matrix_d:[Size]Unsigned(bits=Size) = rq_conflict_matrix_q
+  for i in 0..<Size {
+    mut row = rq_conflict_matrix_q[i]
+    if push_req or rearm {
+      if push_entry == i {
+        row = rq_to_s2_conflict
+      }
+      row#[push_entry] = s2_to_rq_conflict#[i]
+    }
+    if replay_grant {
+      row#[replay_entry_d] = 0
+    }
+    row#[i] = 0
+    rq_conflict_matrix_d[i] = row
+  }
+
+  // ---- ready-info update -----------------------------------------------------------------
+  mut ready_pending_d:[Size]Bool = `replayq_ready_info_q.pending`
+  mut ready_store_d:[Size]Bool = `replayq_ready_info_q.store`
+  mut ready_age_d:[Size]minion_dcache_pkg.DcacheReplayqAgeWidth_T = `replayq_ready_info_q.age`
+  mut ready_reason_d:[Size]U6 = `replayq_ready_info_q.reason`
+  mut ready_wait_uc_load_d:[Size]Bool = `replayq_ready_info_q.wait_uc_load`
+  mut ready_uc_load_ok_d:[Size]Bool = `replayq_ready_info_q.uc_load_ok`
+  mut ready_miss_fill_ok_d:[Size]Bool = `replayq_ready_info_q.miss_fill_ok`
+  // A miss handler going free releases the entries waiting for it (or for any handler);
+  // a fill error voids miss_fill_ok of the entries it had accepted; the VPU RF going idle
+  // clears vpu_rf_write.
+  for j in 0..<Size {
+    mut reason = `replayq_ready_info_q.reason`[j]
+    mut miss_fill_ok = `replayq_ready_info_q.miss_fill_ok`[j]
+    for i in 0..<MhFiles {
+      if miss_available_i#[i] == 1 {
+        if reason#[ReasonAssignedLsb + i] == 1 or reason#[ReasonAssignedLsb..<ReasonAcceptedLsb] == 0 {
+          reason#[ReasonMissAllocBit] = 0
+        }
+        reason#[ReasonAssignedLsb + i] = 0
+      }
+    }
+    for i in 0..<MhFiles {
+      if miss_fill_error_i#[i] == 1 and reason#[ReasonAcceptedLsb + i] == 1 {
+        miss_fill_ok = false
+      }
+    }
+    if vpu_rf_in_use_i == 0 {
+      reason#[ReasonVpuRfWriteBit] = 0
+    }
+    ready_reason_d[j] = reason
+    ready_miss_fill_ok_d[j] = miss_fill_ok
+  }
+
+  if uc_load_fill_i == 1 {
+    ready_wait_uc_load_d[uc_load_id_q[uc_load_fill_id_i]] = false
+    ready_uc_load_ok_d[uc_load_id_q[uc_load_fill_id_i]] = uc_load_fill_ok_i == 1
+  }
+
+  mut push_age_d:minion_dcache_pkg.DcacheReplayqAgeWidth_T = push_age_q
+  if push_req {
+    ready_store_d[push_entry] = req_is_write
+    ready_age_d[push_entry] = push_age_q
+    wrap push_age_d = push_age_q + 1
+  }
+
+  if push_req or rearm {
+    ready_pending_d[push_entry] = true
+    ready_reason_d[push_entry] = (req_conf_type_i.miss_assigned, req_conf_type_i.miss_accepted, req_conf_type_i.miss_alloc, req_conf_type_i.vpu_rf_write)#[..]
+    ready_wait_uc_load_d[push_entry] = uc_load_1st_i == 1
+    ready_uc_load_ok_d[push_entry] = uc_load_ok_i == 1
+    ready_miss_fill_ok_d[push_entry] = miss_fill_ok_i == 1
+  }
+
+  if replay_grant {
+    ready_pending_d[replay_entry_d] = false
+  }
+
+  mut uc_load_id_d:[minion_dcache_pkg.DcacheBufferSize]minion_dcache_pkg.DcacheReplayqAddrWidth_T = uc_load_id_q
+  if push_req and req_buf_alloc_i == 1 {
+    uc_load_id_d[req_buf_entry_i] = push_entry
+  }
+
+  // ---- thread occupancy, scoreboard and deallocation ---------------------------------------
+  mut empty_d:minion_pkg.NrThreads_T = 0
+  for t in 0..<minion_pkg.NrThreads {
+    mut all_free = not (push_req and req_data_i.dest.thread_id == t)
+    for j in 0..<Size {
+      all_free = all_free and (entry_mask_available_q#[j] == 1 or push_rows[j]#[PushDestLsb] != t)
+    }
+    empty_d#[t] = U1(all_free)
+  }
+
+  mut scoreboard_valid:Unsigned(bits=Size) = 0
+  mut scoreboard_dest:Unsigned(bits=Size*DestW) = 0
+  for i in 0..<Size {
+    scoreboard_valid#[i] = U1(entry_mask_available_q#[i] == 0 and cmd_is_read(cmd=push_rows[i]#[PushCmdLsb..<PushDestLsb]))
+    scoreboard_dest#[(i*DestW)..<((i + 1)*DestW)] = push_rows[i]#[PushDestLsb..<PushW]
+  }
+  scoreboard_o = (dest=scoreboard_dest, valid=scoreboard_valid)
+
+  const dealloc_dest = push_rows[dealloc_entry_i]#[PushDestLsb..<PushW]
+  mut fp_sb_dealloc_d:minion_pkg.NrThreads_T = 0
+  mut int_sb_dealloc_d:minion_pkg.NrThreads_T = 0
+  for t in 0..<minion_pkg.NrThreads {
+    fp_sb_dealloc_d#[t] = U1(dealloc and dealloc_dest#[DestW - 1] == 1 and dealloc_dest#[0] == t)
+    int_sb_dealloc_d#[t] = U1(dealloc and dealloc_dest#[DestW - 1] == 0 and dealloc_dest#[0] == t)
+  }
+
+  // ---- register updates --------------------------------------------------------------------
+  // The arbitration state is clocked only while the queue is busy; the unreset entries still
+  // load during reset.
+  const arb_clk_en:Bool = rst_ni == 0 or empty_o != (1 << minion_pkg.NrThreads) - 1 or push_req_spec_q or replay_valid_o == 1 or replay_valid_prev_q
+
+  if alloc_clk_en {
+    s0_alloc_req_pre_q = alloc_req_pre
+    s1_alloc_req_q = s0_alloc_req
+    s2_alloc_req_q = s1_alloc_req_q
+    s3_alloc_req_q = s2_alloc_req_q and s2_alloc_gsc_q
+    s0_alloc_gsc_q = alloc_gsc_i == 1
+    s1_alloc_gsc_q = s0_alloc_gsc_q
+    s2_alloc_gsc_q = s1_alloc_gsc_q
+    entry_count_available_q = entry_count_available_d
+    entry_mask_available_q = entry_mask_available_d
+    age_id_mask_available_q = age_id_mask_available_d
+    alloc_req_pre_applied_q = pre_applied
+  }
+
+  if arb_clk_en {
+    replay_valid_o = replay_grant_i
+    replay_valid_prev_q = replay_valid_o == 1
+    push_age_q = push_age_d
+    empty_o = empty_d
+    replay_entry_o = replay_entry_d
+    replay_entry_prev_q = replay_entry_o
+    for i in 0..<Size {
+      `replayq_ready_info_q.pending`[i] = ready_pending_d[i]
+      `replayq_ready_info_q.store`[i] = ready_store_d[i]
+      `replayq_ready_info_q.age`[i] = ready_age_d[i]
+      `replayq_ready_info_q.reason`[i] = ready_reason_d[i]
+      `replayq_ready_info_q.wait_uc_load`[i] = ready_wait_uc_load_d[i]
+      `replayq_ready_info_q.uc_load_ok`[i] = ready_uc_load_ok_d[i]
+      `replayq_ready_info_q.miss_fill_ok`[i] = ready_miss_fill_ok_d[i]
+    }
+    for i in 0..<minion_dcache_pkg.DcacheBufferSize {
+      uc_load_id_q[i] = uc_load_id_d[i]
+    }
+  }
+
+  push_req_spec_q = push_req_prev_i == 1
+  fp_sb_dealloc_o = fp_sb_dealloc_d
+  int_sb_dealloc_o = int_sb_dealloc_d
+  if push_req {
+    for i in 0..<Size {
+      prio_bits_q[i] = prio_bits_d[i]
+    }
+  }
+  if push_req or rearm or replay_grant {
+    for i in 0..<Size {
+      rq_conflict_matrix_q[i] = rq_conflict_matrix_d[i]
+    }
+  }
+}

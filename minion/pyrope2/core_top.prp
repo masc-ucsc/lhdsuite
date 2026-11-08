@@ -1,0 +1,385 @@
+// core_top: the Minion core. It wires the front end, the integer pipeline, the data cache and
+// the debug APB slave together and owns the glue between them:
+//  - per-thread debug bookkeeping (halt requests that survive a reset, "have reset" flags),
+//  - the trace-encoder staging registers (one retire per cycle),
+//  - the registered APB transport that steers the shared APB port to the dcache or debug slave.
+// Only the full configuration (all generics 1) is supported; the children are elaborated for it.
+const intpipe_top = import("intpipe_top.intpipe_top")
+const minion_dcache_top = import("minion_dcache_top.minion_dcache_top")
+const minion_debug_apb_slv = import("minion_debug_apb_slv.minion_debug_apb_slv")
+const minion_frontend = import("minion_frontend.minion_frontend")
+const minion_pkg = import("minion_pkg")
+
+pub mod core_top<UseMmi=1, DebugApbEn=1, DebugMonEn=1, TraceEn=1, VpuEn=1>::[timecheck=false](apb_paddr_i:minion_pkg.MinDmApbAddrWidth_T, apb_penable_i:U1, apb_psel_i:U1, apb_pwdata_i:minion_pkg.BpamShireApbDataWidth_T, apb_pwrite_i:U1, chicken_bit_dcache_i:U1, chicken_bit_frontend_i:U1, chicken_bit_intpipe_i:U1, clk_i:Clock, dc_ptw_req_ready_i:U1, debug_in_i:(halt:U2, resume:U2, resethalt:U2, ackhavereset:U2), dft_i:(scanmode:U1, scan_reset_n:U1, sram_clk_override:U1, ram_rei:U1, ram_wei:U1), enabled_i:(e1:U1, e0:U1), esr_bypass_dcache_i:U1, esr_features_i:(disable_lock_unlock:U1, disable_multithreading:U1, trap_on_u_scp:U1, trap_on_u_cacheops:U1, trap_on_ml:U1, trap_on_gfx:U1), esr_shire_coop_mode_i:U1, ex_vpu_ctrl_i:(tointm:U1, illegal_rm:U1, ps_mask:U8, gsc_fs:U32), f2_vpu_ctrl_i:(fma:U1, store_data:U256, scatter_data:U32, tointm:U1), f3_vpu_ctrl_i:(fma:U1, tointm:U1), flb_neigh_resp_data_i:U1, flb_neigh_resp_valid_i:U1, icache_fill_done_i:U1, icache_req_ready_i:U1, icache_resp_i:(data:U256, page_fault:U1, access_fault:U1, cacheable:U1, bus_err:U1, ecc_err:U1), icache_resp_miss_i:U1, icache_resp_valid_i:U1, id_vpu_ctrl_i:(m0ren:U1, mallren:U1, mren1:U1, mren2:U1, wen:U1, ren1:U1, ren2:U1, ren3:U1, rend:U1, is_trans:U1, trans_busy:U1, id_trans_insert:U1, scoreboard:(fp_valid:U14, fp_dest:U98, toint_valid:U4, toint_dest:U28, mask_valid:U4, mask_dest:U16), tfma_enabled:U1, tfma_wrrf_enabled:U1, tquant_enabled:U1, reduce_enabled:U1, fflags_stall:U1, fromint:U1), interrupts_i:(mieco:U2, mtip:U2, msip:U2, meip:U2, seip:U2, fcc:U4, ipi_with_pc:U2, ipi_pc:U47), io_events_vpu_i:minion_pkg.CsrNrEventsVpu_T, ioshire_i:U1, l2_dcache_evict_req_ready_i:minion_pkg.DcacheL2EvictReqPorts_T, l2_dcache_miss_req_ready_i:minion_pkg.DcacheL2MissReqPorts_T, l2_dcache_resp_i:(id:U8, dest:U1, wdata:U1, opcode:U2, data:U256, size:U3, qwen:U4), l2_dcache_resp_valid_i:U1, mem_ctrl_override_i:minion_pkg.MinionMemCtrlBits_T, mprot_i:(enable_secure_memory:U1, dram_size:U2, disable_osbox_access:U1, disable_pcie_access:U1, io_access_mode:U2), pmu_read_data_i:U128, ptw_dc_resp_data_i:(canceled_req:U1, access_fault:U1, rsvd_for_hw:U8, ppn:U44, rsvd_for_sw:U2, d:U1, a:U1, g:U1, u:U1, x:U1, w:U1, r:U1, v:U1), ptw_dc_resp_valid_i:U1, reset_vector_i:minion_pkg.VaSize_T, rst_c_ni:U1, rst_d_ni:U1, rst_w_ni:U1, shire_id_i:minion_pkg.NumShireIdsBits_T, shire_min_id_i:minion_pkg.MinPerSBits_T, te_enable_i:U1, te_thread_sel_i:U1, vmspagesize_i:U2, vpu_dcache_ctl_i:(scp_req:(read_en:U1, way:U2, addr:U10, size64:U1, size256:U1, bid:U1), tenb_credit:U1, tenb_credit_entry:U2, tfma_enabled:U1, reduce_wait:U1, tfma_rf_write:U1), wb_vpu_ctrl_i:(fma:U1, toint_data:U64, mova_mx:U1, fcsr_flags_valid:U1, fcsr_flags:U6, thread_id:U1, tointm:U1)) -> (apb_prdata_o:minion_pkg.BpamShireApbDataWidth_T@[], apb_pready_o:U1@[], apb_pslverr_o:U1@[], dc_ptw_req_data_o:(satp_mode:U4, satp_ppn:U28, prv:U2, addr:U36)@[], dc_ptw_req_valid_o:U1@[], dcache_vpu_scp_data_o:minion_pkg.VpuDataSz_T@[], dcache_vpu_scp_res_o:(fill_is_tenb_early:U1, fill_is_tenb:U1, tenb_flush:U1, tenb_line:U4)@[], dcache_vpu_tenb_data_o:minion_pkg.VpuDataSz_T@[], debug_out_o:(halted:U2, running:U2, have_reset:U2, busy:U2, exception:U2, error:U2)@[], ex_vpu_req_o:(gscing:U1, gsc_src:U3, kill:U1, fromint_data:U64, thread_id:U1)@[], f0_vpu_ctrl_o:(tensorfma_start:U1, tensorfma_ctrl:(is_conv:U1, padding3:U6, cols_b:U2, rows_a:U4, cols_a:U4, start_a:U4, padding2:U19, to_vrf:U1, u_b:U1, u_a:U1, ten_b:U1, padding1:U2, scp_b:U6, padding0:U2, scp_a:U6, mode:U3, first_pass:U1), tensorfma_conv_bits_ready:U1, tensorfma_conv_bits:U16, reduce_start:U1, tensorstore_start:U1, reduce_ctrl:U64, tensorquant_start:U1, tensorquant_ctrl:(padding2:U2, start_reg:U5, cols:U2, rows:U4, scp_src:U6, padding:U5, trans:U40), pending_scoreboard_t0:U1)@[], flb_neigh_req_data_o:minion_pkg.CsrFlBarrierSize_T@[], flb_neigh_req_valid_o:U1@[], icache_flush_data_o:U1@[], icache_req_o:(thread_id:U1, vm_status:(prv:U2, mprv:U1, mpp:U2, sum:U1, mxr:U1, debug:U1), addr:U49)@[], icache_req_valid_o:U1@[], id_vpu_decoder_sigs_o:(cmd:U7, txfma:U1, shsw:U1, rom:U1, scatter:U1, cvt:U1, trans:U1, gcvt:U1, fromintf:U1, tointm:U1, tointf:U1, maskop:U1, ldst:U1, m0ren:U1, mallren:U1, mren1:U1, mren2:U1, wen:U1, ren1:U1, ren2:U1, ren3:U1, rend:U1, swap12:U1, swap23:U1, swap13:U1, vector:U1, dtype:U4, fromint:U1, toint:U1, fma:U1, fms:U1, add:U1, sub:U1, mul:U1, round:U1, wflags:U1)@[], id_vpu_req_o:(valid:U1, thread_id:U1, fcsr_rm:U3, inst_bits:U32)@[], intpipe_debug_monitor_o:(id_thread_id:U1, id_pc:U49, id_valid:U1, id_valid_qual:U1, id_inst_replay:U1, id_take_pc:U1, id_csr_interrupt:U1, excl_mode_stall:U1, ex_valid_qual:U1, tag_valid_qual:U1, mem_valid_qual:U1, wb_valid:U1, gsc_reg_gsc_cnt:U3, tag_take_pc:U1, ipi_with_pc:U2, wb_take_pc:U1, id_xcpt:U1, wb_xcpt:U1, id_stall_fp2int:U1, ex_gsc_busy:U1, csr_fe_stall:U1, id_ctrl_stall_csr:U1, id_ctrl_stall_dcache:U1, id_do_fence:U1, id_ctrl_stall_trans:U1, id_ctrl_stall_div:U1, id_int_sboard_hazard:U1, id_ctrl_stall_hazard_vpu:U1, id_ctrl_stall_hazard:U1)@[], l2_dcache_evict_req_o:(id:U5, source:U1, wdata:U1, opcode:U5, address:U40, data:U256, size:U3, qwen:U4, subopcode:U7)@[], l2_dcache_evict_req_valid_o:minion_pkg.DcacheL2EvictReqPorts_T@[], l2_dcache_miss_req_o:(id:U5, source:U1, wdata:U1, opcode:U5, address:U40, data:U20, size:U3, qwen:U4, subopcode:U7)@[], l2_dcache_miss_req_valid_o:minion_pkg.DcacheL2MissReqPorts_T@[], l2_dcache_resp_ready_o:U1@[], matp_info_o:(mode:U4, ppn:U28)@[], mem_vpu_kill_o:U1@[], pmu_count_up_o:minion_pkg.PmuMinionCountersNum_T@[], pmu_neigh_event_sel_o:minion_pkg.PmuNeighEventCntSelBits_T@[], pmu_read_sel_o:U8@[], pmu_write_data_o:minion_pkg.XregSize_T@[], pmu_write_en_o:minion_pkg.PmuTotalCountersNum_T@[], satp_info_o:(mode:U4, ppn:U28)@[], sm_data_debug_signals_co_o:U512@[], sm_data_debug_signals_col2_o:U512@[], sm_data_debug_signals_dc_o:U512@[], sm_data_debug_signals_mh_o:U1024@[], sm_data_debug_signals_tl0_o:U512@[], sm_data_debug_signals_tl1_o:U512@[], sm_data_debug_signals_ts_o:U512@[], sm_filter_debug_signals_co_o:U200@[], sm_filter_debug_signals_col2_o:U200@[], sm_filter_debug_signals_dc_o:U200@[], sm_filter_debug_signals_mh_o:U400@[], sm_filter_debug_signals_tl0_o:U200@[], sm_filter_debug_signals_tl1_o:U200@[], sm_filter_debug_signals_ts_o:U200@[], sm_match_debug_signals_co_o:U64@[], sm_match_debug_signals_col2_o:U64@[], sm_match_debug_signals_dc_o:U64@[], sm_match_debug_signals_mh_o:U128@[], sm_match_debug_signals_tl0_o:U64@[], sm_match_debug_signals_tl1_o:U64@[], sm_match_debug_signals_ts_o:U64@[], tag_vpu_kill_o:U1@[], tlb_invalidate_o:U1@[], trace_encoder_o:(instr_valid:U1, instr_bus:U32, instr_addr:U49, instr_context:U1, exception:U1, exception_cause:U5, interrupt:U1, exception_trap_value:U49, privilege_level:U2, status_flags:U1, cpu_halted:U1, min_reset:U1)@[], vpu_reduce_ctrl_o:(send_reg:U1, exec_op:U1, nothing:U1)@[], wb_dcache_vpu_resp_o:(thread_id:U1, gdst:U3, typ:U4, addr:U5, data:U256, ps_mask:U8)@[], wb_dcache_vpu_resp_valid_o:U1@[], wb_vpu_kill_o:U1@[]) {
+  cassert(UseMmi == 1 and DebugApbEn == 1 and DebugMonEn == 1 and TraceEn == 1 and VpuEn == 1, "only the all-enabled configuration is supported")
+  comptime const NT = minion_pkg.NrThreads
+  comptime const APB_SEL_BIT = minion_pkg.MinDmApbAddrWidth - 1
+
+  // ---- Resets (the ports are active low) -------------------------------------------------
+  const reset_c = rst_c_ni == 0
+  const reset_w = rst_w_ni == 0
+  const reset_d = rst_d_ni == 0
+  const any_reset = reset_c or reset_d or reset_w
+
+  const enabled:U2 = U2((enabled_i.e1 << 1) | enabled_i.e0)
+
+  // ---- Intpipe outputs that the earlier-instantiated blocks consume -------------------------
+  wire in_debug_mode:U2 = nil
+  wire ddata0_wdata:U64 = nil
+  wire update_ddata0:U2 = nil
+  wire vm_status:U16 = nil
+  wire fe_req_valid:U2 = nil
+  wire fe_req:U104 = nil
+  wire fe_stall:U2 = nil
+  wire fe_resp_ready:U1 = nil
+  // Dcache outputs the intpipe consumes. The dcache is instantiated after the intpipe (it takes the
+  // intpipe's bundles directly), so they are forward nets, one per leaf.
+  wire dc_ready:U1 = nil
+  wire dc_mem_resp_int_valid:U1 = nil
+  wire dc_wb_resp_valid:U1 = nil
+  wire dc_sb_int_dealloc:U2 = nil
+  wire dc_sb_fp_dealloc:U2 = nil
+  wire dc_ordered:U2 = nil
+  wire dc_idle:U1 = nil
+  wire dc_replay_next:U1 = nil
+  wire dc_flush_pipeline:U1 = nil
+  wire dc_bp_valid:U1 = nil
+  wire dc_bus_error:U2 = nil
+  wire dc_bus_error_addr:U80 = nil
+  wire dc_l2_resp_valid:U1 = nil
+  wire dc_l2_resp_ready:U1 = nil
+  wire dc_tensor_load_err:U3 = nil
+  wire dc_cache_ops_err:U4 = nil
+  wire dc_tensor_reduce_err:U1 = nil
+  wire dc_ctrl_resp_cache_op_ready:U1 = nil
+  wire dc_ctrl_resp_cache_op_busy_changed:U2 = nil
+  wire dc_ctrl_resp_cache_op_complete_l1:U4 = nil
+  wire dc_ctrl_resp_cache_op_complete_l2:U4 = nil
+  wire dc_ctrl_resp_tl_ready_0:U1 = nil
+  wire dc_ctrl_resp_tl_ready_1:U1 = nil
+  wire dc_ctrl_resp_ts_ready:U1 = nil
+  wire dc_ctrl_resp_tl_complete_0:U2 = nil
+  wire dc_ctrl_resp_reduce_ready:U1 = nil
+  wire dc_ctrl_resp_tex_send_ready:U1 = nil
+  wire dc_ctrl_resp_gsc_progress_save:U2 = nil
+  wire dc_ctrl_resp_gsc_progress:U3 = nil
+  wire dc_wb_resp_dest_fp:U1 = nil
+  wire dc_wb_resp_dest_addr:U5 = nil
+  wire dc_wb_resp_dest_thread_id:U1 = nil
+  wire dc_wb_resp_typ:U4 = nil
+  wire dc_wb_resp_gsc_cnt:U3 = nil
+  wire dc_wb_resp_ps_mask:U8 = nil
+  wire dc_wb_resp_data:U256 = nil
+  wire dc_wb_resp_addr:U49 = nil
+  wire dc_scoreboard_valid:U8 = nil
+  wire dc_scoreboard_dest:U56 = nil
+  wire dc_xcpt_pf_ld:U1 = nil
+  wire dc_xcpt_pf_st:U1 = nil
+  wire dc_xcpt_mf_ld:U1 = nil
+  wire dc_xcpt_mf_st:U1 = nil
+  wire dc_xcpt_af_ld:U1 = nil
+  wire dc_xcpt_af_st:U1 = nil
+  wire dc_xcpt_ps_ld:U1 = nil
+  wire dc_xcpt_ps_st:U1 = nil
+  wire dc_bp_thread_id:U1 = nil
+  wire dc_bp_address:U49 = nil
+  wire dc_bp_cmd:U3 = nil
+  wire dc_l2_resp_id:U8 = nil
+  wire dc_l2_resp_dest:U1 = nil
+  wire dc_l2_resp_wdata:U1 = nil
+  wire dc_l2_resp_opcode:U2 = nil
+  wire dc_l2_resp_data:U256 = nil
+  wire dc_l2_resp_size:U3 = nil
+  wire dc_l2_resp_qwen:U4 = nil
+  wire dc_debug_csr_signals_tl0:U3 = nil
+  wire dc_debug_csr_signals_tl1:U3 = nil
+  wire dc_debug_csr_signals_ts:U4 = nil
+  wire dc_debug_csr_signals_cou:U4 = nil
+  wire dc_debug_csr_signals_coul2:U3 = nil
+  wire dc_debug_csr_signals_txsnd:U2 = nil
+  wire dc_debug_csr_signals_mh0:U4 = nil
+  wire dc_debug_csr_signals_mh1:U4 = nil
+
+  // ---- Per-thread debug state -----------------------------------------------------------------
+  const halted:U2 = in_debug_mode & enabled
+  // A new reset release (either reset) is the "minion out of reset" event the debug module watches.
+  reg reset_c_ff_q:Bool = nil
+  reg reset_w_ff_q:Bool = nil
+  reset_c_ff_q = reset_c
+  reset_w_ff_q = reset_w
+  const minion_out_reset = (reset_c_ff_q and not reset_c) or (reset_w_ff_q and not reset_w)
+
+  const ack_have_reset:U2 = debug_in_i.ackhavereset & enabled
+  reg debug_out_have_reset_q:U2:[async=true, negreset=true, reset_pin=rst_c_ni] = 0
+  reg pending_halt_q:U2:[async=true, negreset=true, reset_pin=rst_c_ni] = 0
+  mut have_reset:U2 = 0
+  mut pending_halt:U2 = 0
+  for i in 0..<NT {
+    const thread_halt_reset = minion_out_reset and debug_in_i.resethalt#[i] == 1
+    const thread_halted = halted#[i] == 1
+    // a reset-time halt request stays pending until the thread has actually halted
+    const pending_halt_d = thread_halt_reset and not thread_halted
+    pending_halt#[i] = U1(pending_halt_q#[i] == 1 or pending_halt_d)
+    have_reset#[i] = U1(ack_have_reset#[i] == 0 and minion_out_reset)
+    if have_reset#[i] == 1 or ack_have_reset#[i] == 1 {
+      debug_out_have_reset_q#[i] = have_reset#[i]
+    }
+    if thread_halt_reset or thread_halted {
+      pending_halt_q#[i] = U1(pending_halt_d)
+    }
+  }
+  const halt_core:U2 = (debug_in_i.halt | pending_halt) & enabled
+  const resume_core:U2 = debug_in_i.resume & enabled
+
+  // ---- Debug APB transport ---------------------------------------------------------------------
+  // paddr#[APB_SEL_BIT] picks the target; each side registers its own copy of the request and the
+  // response is muxed back by the registered target select.
+  const apb_target_dcache = apb_paddr_i#[APB_SEL_BIT] == minion_pkg.MinionDebugApbAddrDcache
+  const apb_target_debug = apb_paddr_i#[APB_SEL_BIT] == minion_pkg.MinionDebugApbAddrDebug
+  const apb_psel = apb_psel_i == 1
+  const apb_penable = apb_penable_i == 1
+
+  reg dcache_apb_psel_q:Bool:[async=true, negreset=true, reset_pin=rst_w_ni] = false
+  reg dcache_apb_penable_q:Bool:[async=true, negreset=true, reset_pin=rst_w_ni] = false
+  reg debug_apb_psel_q:Bool:[async=true, negreset=true, reset_pin=rst_w_ni] = false
+  reg debug_apb_penable_q:Bool:[async=true, negreset=true, reset_pin=rst_w_ni] = false
+  reg dcache_apb_pwrite_q:U1 = nil
+  reg dcache_apb_paddr_q:minion_pkg.DcacheDbgAddrBits_T = nil
+  reg debug_apb_pwrite_q:U1 = nil
+  reg debug_apb_paddr_q:minion_pkg.MinRegApbAddrWidth_T = nil
+  reg apb_target_debug_reg_q:Bool = nil
+  reg apb_pwdata_reg_q:minion_pkg.BpamShireApbDataWidth_T = nil
+
+  const dcache_apb_en = apb_psel or dcache_apb_psel_q
+  const debug_apb_en = apb_psel or debug_apb_psel_q
+  if dcache_apb_en {
+    dcache_apb_psel_q = apb_psel and apb_target_dcache
+    dcache_apb_penable_q = apb_penable and apb_target_dcache
+    dcache_apb_pwrite_q = apb_pwrite_i
+    dcache_apb_paddr_q = apb_paddr_i#[0..<minion_pkg.DcacheDbgAddrBits]
+  }
+  if debug_apb_en {
+    debug_apb_psel_q = apb_psel and apb_target_debug
+    debug_apb_penable_q = apb_penable and apb_target_debug
+    debug_apb_pwrite_q = apb_pwrite_i
+    debug_apb_paddr_q = apb_paddr_i#[0..<minion_pkg.MinRegApbAddrWidth]
+    apb_target_debug_reg_q = apb_target_debug
+  }
+  if apb_psel {
+    apb_pwdata_reg_q = apb_pwdata_i
+  }
+
+  // Debug APB slave (rst_d domain): program-buffer and ddata0 access for the debug module
+  const gen_debug_apb_transport_u_debug_apb_slv = minion_debug_apb_slv(clk_i=clk_i, rst_ni=rst_d_ni, apb_paddr_i=debug_apb_paddr_q, apb_pwrite_i=debug_apb_pwrite_q, apb_psel_i=U1(debug_apb_psel_q), apb_penable_i=U1(debug_apb_penable_q), apb_pwdata_i=apb_pwdata_reg_q, csr_wdata_i=ddata0_wdata, update_ddata0_i=update_ddata0, in_debug_mode_i=halted)
+  const read_ddata0 = gen_debug_apb_transport_u_debug_apb_slv.read_ddata0_o
+  const debug_ex_program_buffer = gen_debug_apb_transport_u_debug_apb_slv.ex_program_buffer_o
+
+  // ---- Front end ---------------------------------------------------------------------------------
+  const u_frontend = minion_frontend(clk_i=clk_i, rst_ni=rst_w_ni, reset_debug_i=U1(reset_d), chicken_bit_i=chicken_bit_frontend_i, dft_i=dft_i, f0_thread_enabled_i=enabled, f0_reset_vector_i=reset_vector_i, vm_status_i=vm_status, f1_icache_req_ready_i=icache_req_ready_i, f5_icache_resp_valid_i=icache_resp_valid_i, f5_icache_resp_miss_i=icache_resp_miss_i, f5_icache_resp_i=icache_resp_i, f6_icache_fill_done_i=icache_fill_done_i, f0_core_req_valid_i=fe_req_valid, f0_core_req_i=fe_req, id_core_stall_i=fe_stall, id_inst_ready_i=fe_resp_ready, debug_ffb_wdata_i=gen_debug_apb_transport_u_debug_apb_slv.ffb_wdata_o, debug_ffb_en_i=gen_debug_apb_transport_u_debug_apb_slv.ffb_en_o, debug_ffb_thread_sel_i=gen_debug_apb_transport_u_debug_apb_slv.ffb_thread_sel_o, debug_ffb_exec_i=debug_ex_program_buffer, halt_i=halt_core, halted_i=halted)
+
+  // ---- Integer pipeline ----------------------------------------------------------------------------
+  // The vector unit sees the dcache events above its own ones.
+  wire io_events_dcache:U12 = nil
+  const io_events_dcache_vpu:U23 = (io_events_dcache, io_events_vpu_i)#[..]
+
+  const u_intpipe = intpipe_top(clk_i=clk_i, rst_ni=rst_c_ni, rst_w_ni=rst_w_ni, rst_d_ni=rst_d_ni, te_enable=te_enable_i, dft__reset_byp=dft_i.scanmode, dft__reset=U1(dft_i.scan_reset_n == 0), interrupts=interrupts_i, shire_id=shire_id_i, shire_min_id=shire_min_id_i, chicken_bit_intpipe=chicken_bit_intpipe_i, id_fe_resp_valid=u_frontend.id_inst_valid_o, id_fe_resp_thread_id=u_frontend.id_inst_thread_id_o, id_fe_resp=u_frontend.id_inst_data_o, id_ctrl=u_frontend.id_intpipe_ctrl_o, id_frontend_vpu_ctrl.m0ren=u_frontend.id_vpu_core_ctrl_o.m0ren, id_frontend_vpu_ctrl.mallren=u_frontend.id_vpu_core_ctrl_o.mallren, id_frontend_vpu_ctrl.mren1=u_frontend.id_vpu_core_ctrl_o.mren1, id_frontend_vpu_ctrl.mren2=u_frontend.id_vpu_core_ctrl_o.mren2, id_frontend_vpu_ctrl.wen=u_frontend.id_vpu_core_ctrl_o.wen, id_frontend_vpu_ctrl.ren1=u_frontend.id_vpu_core_ctrl_o.ren1, id_frontend_vpu_ctrl.ren2=u_frontend.id_vpu_core_ctrl_o.ren2, id_frontend_vpu_ctrl.ren3=u_frontend.id_vpu_core_ctrl_o.ren3, id_frontend_vpu_ctrl.rend=u_frontend.id_vpu_core_ctrl_o.rend, id_frontend_vpu_ctrl.is_trans=u_frontend.id_vpu_core_ctrl_o.is_trans, id_frontend_vpu_ctrl.trans_busy=u_frontend.id_vpu_core_ctrl_o.trans_busy, id_frontend_vpu_ctrl.id_trans_insert=u_frontend.id_vpu_core_ctrl_o.id_trans_insert, id_frontend_vpu_ctrl.scoreboard.fp_valid=u_frontend.id_vpu_core_ctrl_o.scoreboard.fp_valid, id_frontend_vpu_ctrl.scoreboard.fp_dest=u_frontend.id_vpu_core_ctrl_o.scoreboard.fp_dest, id_frontend_vpu_ctrl.scoreboard.toint_valid=u_frontend.id_vpu_core_ctrl_o.scoreboard.toint_valid, id_frontend_vpu_ctrl.scoreboard.toint_dest=u_frontend.id_vpu_core_ctrl_o.scoreboard.toint_dest, id_frontend_vpu_ctrl.scoreboard.mask_valid=u_frontend.id_vpu_core_ctrl_o.scoreboard.mask_valid, id_frontend_vpu_ctrl.scoreboard.mask_dest=u_frontend.id_vpu_core_ctrl_o.scoreboard.mask_dest, id_frontend_vpu_ctrl.tfma_enabled=u_frontend.id_vpu_core_ctrl_o.tfma_enabled, id_frontend_vpu_ctrl.tfma_wrrf_enabled=u_frontend.id_vpu_core_ctrl_o.tfma_wrrf_enabled, id_frontend_vpu_ctrl.tquant_enabled=u_frontend.id_vpu_core_ctrl_o.tquant_enabled, id_frontend_vpu_ctrl.reduce_enabled=u_frontend.id_vpu_core_ctrl_o.reduce_enabled, id_frontend_vpu_ctrl.fflags_stall=u_frontend.id_vpu_core_ctrl_o.fflags_stall, id_frontend_vpu_ctrl.fromint=u_frontend.id_vpu_core_ctrl_o.fromint, id_dcache_ready=dc_ready, mem_dcache_resp_int_valid=dc_mem_resp_int_valid, wb_dcache_resp_valid=dc_wb_resp_valid, id_dcache_sb_int_dealloc=dc_sb_int_dealloc, id_dcache_sb_fp_dealloc=dc_sb_fp_dealloc, id_dcache_ordered=dc_ordered, id_dcache_idle=dc_idle, tag_dcache_replay_next=dc_replay_next, mem_dcache_flush_pipeline=dc_flush_pipeline, tag_dcache_bp_valid=dc_bp_valid, dcache_bus_error=dc_bus_error, dcache_bus_error_addr=dc_bus_error_addr, l2_resp_valid=dc_l2_resp_valid, l2_resp_ready=dc_l2_resp_ready, tensor_load_err_flags=dc_tensor_load_err, cache_ops_err_flags=dc_cache_ops_err, tensor_reduce_err_flags=dc_tensor_reduce_err, io_events_dcache_vpu=io_events_dcache_vpu, id_vpu_ctrl=id_vpu_ctrl_i, ex_vpu_ctrl=ex_vpu_ctrl_i, tag_vpu_ctrl=f2_vpu_ctrl_i, mem_vpu_ctrl=f3_vpu_ctrl_i, wb_vpu_ctrl=wb_vpu_ctrl_i, vpu_tfma_tenb_working=vpu_dcache_ctl_i.tfma_enabled, thread0_enable=enabled_i.e0, thread1_enable=enabled_i.e1, flb_neigh_resp_valid=flb_neigh_resp_valid_i, flb_neigh_resp_data=flb_neigh_resp_data_i, te_thread_sel=te_thread_sel_i, read_ddata0=read_ddata0, debug_ex_program_buffer=debug_ex_program_buffer, halt=halt_core, resume=resume_core, esr_shire_coop_mode=esr_shire_coop_mode_i, esr_features=esr_features_i, pmu_read_data=pmu_read_data_i, dcache_ctrl_resp.cache_op_ready=dc_ctrl_resp_cache_op_ready, dcache_ctrl_resp.cache_op_busy_changed=dc_ctrl_resp_cache_op_busy_changed, dcache_ctrl_resp.cache_op_complete_l1=dc_ctrl_resp_cache_op_complete_l1, dcache_ctrl_resp.cache_op_complete_l2=dc_ctrl_resp_cache_op_complete_l2, dcache_ctrl_resp.tl_ready_0=dc_ctrl_resp_tl_ready_0, dcache_ctrl_resp.tl_ready_1=dc_ctrl_resp_tl_ready_1, dcache_ctrl_resp.ts_ready=dc_ctrl_resp_ts_ready, dcache_ctrl_resp.tl_complete_0=dc_ctrl_resp_tl_complete_0, dcache_ctrl_resp.reduce_ready=dc_ctrl_resp_reduce_ready, dcache_ctrl_resp.tex_send_ready=dc_ctrl_resp_tex_send_ready, dcache_ctrl_resp.gsc_progress_save=dc_ctrl_resp_gsc_progress_save, dcache_ctrl_resp.gsc_progress=dc_ctrl_resp_gsc_progress, wb_dcache_resp.dest.fp=dc_wb_resp_dest_fp, wb_dcache_resp.dest.addr=dc_wb_resp_dest_addr, wb_dcache_resp.dest.thread_id=dc_wb_resp_dest_thread_id, wb_dcache_resp.typ=dc_wb_resp_typ, wb_dcache_resp.gsc_cnt=dc_wb_resp_gsc_cnt, wb_dcache_resp.ps_mask=dc_wb_resp_ps_mask, wb_dcache_resp.data=dc_wb_resp_data, wb_dcache_resp.addr=dc_wb_resp_addr, id_dcache_scoreboard.valid=dc_scoreboard_valid, id_dcache_scoreboard.dest=dc_scoreboard_dest, tag_dcache_xcpt.pf_ld=dc_xcpt_pf_ld, tag_dcache_xcpt.pf_st=dc_xcpt_pf_st, tag_dcache_xcpt.mf_ld=dc_xcpt_mf_ld, tag_dcache_xcpt.mf_st=dc_xcpt_mf_st, tag_dcache_xcpt.af_ld=dc_xcpt_af_ld, tag_dcache_xcpt.af_st=dc_xcpt_af_st, tag_dcache_xcpt.ps_ld=dc_xcpt_ps_ld, tag_dcache_xcpt.ps_st=dc_xcpt_ps_st, tag_dcache_bp.thread_id=dc_bp_thread_id, tag_dcache_bp.address=dc_bp_address, tag_dcache_bp.cmd=dc_bp_cmd, l2_resp.id=dc_l2_resp_id, l2_resp.dest=dc_l2_resp_dest, l2_resp.wdata=dc_l2_resp_wdata, l2_resp.opcode=dc_l2_resp_opcode, l2_resp.data=dc_l2_resp_data, l2_resp.size=dc_l2_resp_size, l2_resp.qwen=dc_l2_resp_qwen, dcache_debug_signals.csr_signals_tl0=dc_debug_csr_signals_tl0, dcache_debug_signals.csr_signals_tl1=dc_debug_csr_signals_tl1, dcache_debug_signals.csr_signals_ts=dc_debug_csr_signals_ts, dcache_debug_signals.csr_signals_cou=dc_debug_csr_signals_cou, dcache_debug_signals.csr_signals_coul2=dc_debug_csr_signals_coul2, dcache_debug_signals.csr_signals_txsnd=dc_debug_csr_signals_txsnd, dcache_debug_signals.csr_signals_mh0=dc_debug_csr_signals_mh0, dcache_debug_signals.csr_signals_mh1=dc_debug_csr_signals_mh1)
+
+  reg debug_out_error_q:U2 = nil
+  const debug_busy = u_intpipe.debug_busy
+  debug_out_error_q = if any_reset { debug_busy } else { 0 }
+
+  // Close the loops: the intpipe outputs the front end, APB slave and dcache already consumed
+  in_debug_mode = u_intpipe.in_debug_mode
+  ddata0_wdata = u_intpipe.ddata0_wdata
+  update_ddata0 = u_intpipe.update_ddata0
+  vm_status = u_intpipe.vm_status
+  fe_req_valid = u_intpipe.id_fe_req_valid
+  fe_req = u_intpipe.id_fe_req
+  fe_stall = U2((u_intpipe.id_fe_stall.e1 << 1) | u_intpipe.id_fe_stall.e0)
+  fe_resp_ready = u_intpipe.id_fe_resp_ready
+
+  // ---- Data cache ----------------------------------------------------------------------------------
+  const u_dcache = minion_dcache_top(clk_i=clk_i, rst_ni=rst_w_ni, shire_id_i=shire_id_i, shire_min_id_i=shire_min_id_i, ioshire_i=ioshire_i, chicken_bit_dcache_i=chicken_bit_dcache_i, core_ctrl_i.tensorload_ctrl.use_tmask=u_intpipe.dcache_ctrl.tensorload_ctrl.use_tmask, core_ctrl_i.tensorload_ctrl.use_coop=u_intpipe.dcache_ctrl.tensorload_ctrl.use_coop, core_ctrl_i.tensorload_ctrl.transform=u_intpipe.dcache_ctrl.tensorload_ctrl.transform, core_ctrl_i.tensorload_ctrl.scp_dest=u_intpipe.dcache_ctrl.tensorload_ctrl.scp_dest, core_ctrl_i.tensorload_ctrl.tl_sel=u_intpipe.dcache_ctrl.tensorload_ctrl.tl_sel, core_ctrl_i.tensorload_ctrl.addr=u_intpipe.dcache_ctrl.tensorload_ctrl.addr, core_ctrl_i.tensorload_ctrl.offset=u_intpipe.dcache_ctrl.tensorload_ctrl.offset, core_ctrl_i.tensorload_ctrl.num_lines=u_intpipe.dcache_ctrl.tensorload_ctrl.num_lines, core_ctrl_i.tensorcoop_ctrl.neigh_mask=u_intpipe.dcache_ctrl.tensorcoop_ctrl.neigh_mask, core_ctrl_i.tensorcoop_ctrl.minion_mask=u_intpipe.dcache_ctrl.tensorcoop_ctrl.minion_mask, core_ctrl_i.tensorcoop_ctrl.padding=u_intpipe.dcache_ctrl.tensorcoop_ctrl.padding, core_ctrl_i.tensorcoop_ctrl.id=u_intpipe.dcache_ctrl.tensorcoop_ctrl.id, core_ctrl_i.tensorload_stride=u_intpipe.dcache_ctrl.tensorload_stride, core_ctrl_i.tensorload_start=u_intpipe.dcache_ctrl.tensorload_start, core_ctrl_i.tensorload_restart_b=u_intpipe.dcache_ctrl.tensorload_restart_b, core_ctrl_i.tensorload_tmask_ready=u_intpipe.dcache_ctrl.tensorload_tmask_ready, core_ctrl_i.tensorload_tmask_bits=u_intpipe.dcache_ctrl.tensorload_tmask_bits, core_ctrl_i.cache_op_valid=u_intpipe.dcache_ctrl.cache_op_valid, core_ctrl_i.cache_op_req.cmd=u_intpipe.dcache_ctrl.cache_op_req.cmd, core_ctrl_i.cache_op_req.start_level=u_intpipe.dcache_ctrl.cache_op_req.start_level, core_ctrl_i.cache_op_req.dest_level=u_intpipe.dcache_ctrl.cache_op_req.dest_level, core_ctrl_i.cache_op_req.count=u_intpipe.dcache_ctrl.cache_op_req.count, core_ctrl_i.cache_op_req.addr=u_intpipe.dcache_ctrl.cache_op_req.addr, core_ctrl_i.cache_op_req.way=u_intpipe.dcache_ctrl.cache_op_req.way, core_ctrl_i.cache_op_req.stride=u_intpipe.dcache_ctrl.cache_op_req.stride, core_ctrl_i.cache_op_req.thread_id=u_intpipe.dcache_ctrl.cache_op_req.thread_id, core_ctrl_i.cache_op_req.use_tmask=u_intpipe.dcache_ctrl.cache_op_req.use_tmask, core_ctrl_i.cache_op_req.tmask_ready=u_intpipe.dcache_ctrl.cache_op_req.tmask_ready, core_ctrl_i.cache_op_req.tmask_bits=u_intpipe.dcache_ctrl.cache_op_req.tmask_bits, core_ctrl_i.cache_op_req.l2_scp_dest=u_intpipe.dcache_ctrl.cache_op_req.l2_scp_dest, core_ctrl_i.cache_op_req.l2_scp_fill=u_intpipe.dcache_ctrl.cache_op_req.l2_scp_fill, core_ctrl_i.cache_op_req_next.cmd=u_intpipe.dcache_ctrl.cache_op_req_next.cmd, core_ctrl_i.cache_op_req_next.start_level=u_intpipe.dcache_ctrl.cache_op_req_next.start_level, core_ctrl_i.cache_op_req_next.dest_level=u_intpipe.dcache_ctrl.cache_op_req_next.dest_level, core_ctrl_i.msg_port_wr_way=u_intpipe.dcache_ctrl.msg_port_wr_way, core_ctrl_i.msg_port_wr_addr=u_intpipe.dcache_ctrl.msg_port_wr_addr, core_ctrl_i.msg_port_wr_en=u_intpipe.dcache_ctrl.msg_port_wr_en, core_ctrl_i.reduce_start=u_intpipe.dcache_ctrl.reduce_start, core_ctrl_i.tensorstore_start=u_intpipe.dcache_ctrl.tensorstore_start, core_ctrl_i.reduce_tensorstore_ctrl=u_intpipe.dcache_ctrl.reduce_tensorstore_ctrl, core_ctrl_i.tensorstore_stride=u_intpipe.dcache_ctrl.tensorstore_stride, core_ctrl_i.tex_send_valid=u_intpipe.dcache_ctrl.tex_send_valid, core_ctrl_i.tex_send_ctrl.port_id=u_intpipe.dcache_ctrl.tex_send_ctrl.port_id, core_ctrl_i.tex_send_ctrl.size=u_intpipe.dcache_ctrl.tex_send_ctrl.size, core_ctrl_i.tex_send_ctrl.way=u_intpipe.dcache_ctrl.tex_send_ctrl.way, core_ctrl_i.tex_send_ctrl.set=u_intpipe.dcache_ctrl.tex_send_ctrl.set, core_ctrl_i.tex_send_ctrl.port_en=u_intpipe.dcache_ctrl.tex_send_ctrl.port_en, core_ctrl_i.tex_send_ctrl.thread_id=u_intpipe.dcache_ctrl.tex_send_ctrl.thread_id, core_ctrl_i.cache_ctrl.cacheop_max=u_intpipe.dcache_ctrl.cache_ctrl.cacheop_max, core_ctrl_i.cache_ctrl.padding=u_intpipe.dcache_ctrl.cache_ctrl.padding, core_ctrl_i.cache_ctrl.cacheop_reprate=u_intpipe.dcache_ctrl.cache_ctrl.cacheop_reprate, core_ctrl_i.cache_ctrl.scpenable=u_intpipe.dcache_ctrl.cache_ctrl.scpenable, core_ctrl_i.cache_ctrl.d1split=u_intpipe.dcache_ctrl.cache_ctrl.d1split, core_ctrl_i.thread_id=u_intpipe.dcache_ctrl.thread_id, id_core_alloc_rq_pre_i=u_intpipe.id_dcache_alloc_rq_pre, s0_core_alloc_rq_val_i=u_intpipe.ex_dcache_alloc_rq_val, id_core_gsc_i=u_intpipe.id_dcache_gsc, s0_core_req_valid_i=u_intpipe.ex_dcache_req_valid, s0_core_gsc_i=u_intpipe.ex_dcache_gsc, s0_core_req_i.addr=u_intpipe.ex_dcache_req.addr, s0_core_req_i.addr_msb_err=u_intpipe.ex_dcache_req.addr_msb_err, s0_core_req_i.dest.fp=u_intpipe.ex_dcache_req.dest.fp, s0_core_req_i.dest.addr=u_intpipe.ex_dcache_req.dest.addr, s0_core_req_i.dest.thread_id=u_intpipe.ex_dcache_req.dest.thread_id, s0_core_req_i.cmd=u_intpipe.ex_dcache_req.cmd, s0_core_req_i.typ=u_intpipe.ex_dcache_req.typ, s0_core_req_i.gsc_cnt=u_intpipe.ex_dcache_req.gsc_cnt, s0_core_req_i.ps_mask=u_intpipe.ex_dcache_req.ps_mask, s0_core_req_i.phys=u_intpipe.ex_dcache_req.phys, s0_core_req_i.gsc32_idx=u_intpipe.ex_dcache_req.gsc32_idx, s0_core_req_i.mem_global=u_intpipe.ex_dcache_req.mem_global, s1_core_kill_i=u_intpipe.tag_dcache_kill, s1_core_store_data_i=u_intpipe.tag_dcache_store_data, s1_mprot_i=mprot_i, s2_core_kill_i=u_intpipe.mem_dcache_kill, s3_core_x31_i=u_intpipe.wb_dcache_x31, s1_vpu_ctrl_i=vpu_dcache_ctl_i, s3_invalidate_lr_i=u_intpipe.wb_dcache_invalidate_lr, wb_dcache_fp_toint_i=u_intpipe.wb_dcache_fp_toint, vmspagesize_i=vmspagesize_i, bypass_dcache_i=esr_bypass_dcache_i, mem_ctrl_override_i=(const e0=mem_ctrl_override_i#[0], const e1=mem_ctrl_override_i#[1]), satp_info_i=u_intpipe.satp_info, matp_info_i=u_intpipe.matp_info, satp_info_en_i=u_intpipe.satp_info_en, matp_info_en_i=u_intpipe.matp_info_en, vm_status_i=u_intpipe.vm_status, tlb_invalidate_i=u_intpipe.tlb_invalidate, ptw_req_ready_i=dc_ptw_req_ready_i, ptw_resp_data_i=ptw_dc_resp_data_i, ptw_resp_valid_i=ptw_dc_resp_valid_i, l2_evict_req_ready_i=(const e0=l2_dcache_evict_req_ready_i#[0], const e1=l2_dcache_evict_req_ready_i#[1]), l2_miss_req_ready_i=(const e0=l2_dcache_miss_req_ready_i#[0], const e1=l2_dcache_miss_req_ready_i#[1], const e2=l2_dcache_miss_req_ready_i#[2]), l2_resp_valid_i=l2_dcache_resp_valid_i, l2_resp_i=l2_dcache_resp_i, apb_paddr_i=dcache_apb_paddr_q, apb_pwrite_i=dcache_apb_pwrite_q, apb_psel_i=U1(dcache_apb_psel_q), apb_penable_i=U1(dcache_apb_penable_q), apb_pwdata_i=apb_pwdata_reg_q)
+  // Close the loops: the dcache outputs the intpipe consumed
+  dc_ready = u_dcache.id_core_ready_o
+  dc_mem_resp_int_valid = u_dcache.s2_core_resp_int_valid_o
+  dc_wb_resp_valid = u_dcache.s3_core_resp_valid_o
+  dc_sb_int_dealloc = u_dcache.id_core_sb_int_dealloc_o
+  dc_sb_fp_dealloc = u_dcache.id_core_sb_fp_dealloc_o
+  dc_ordered = u_dcache.s3_ordered_o
+  dc_idle = u_dcache.dcache_idle_excl_mode_o
+  dc_replay_next = u_dcache.s1_core_replay_next_o
+  dc_flush_pipeline = u_dcache.s2_core_flush_pipeline_o
+  dc_bp_valid = u_dcache.s1_bp_conf_valid_o
+  dc_bus_error = u_dcache.bus_err_o
+  dc_bus_error_addr = u_dcache.bus_err_addr_o
+  dc_l2_resp_valid = u_dcache.l2_resp_valid_int_o
+  dc_l2_resp_ready = u_dcache.l2_resp_ready_int_o
+  dc_tensor_load_err = u_dcache.tensor_load_err_flags_o
+  dc_cache_ops_err = u_dcache.cache_ops_err_flags_o
+  dc_tensor_reduce_err = u_dcache.tensor_reduce_err_flags_o
+  dc_ctrl_resp_cache_op_ready = u_dcache.core_ctrl_resp_o.cache_op_ready
+  dc_ctrl_resp_cache_op_busy_changed = u_dcache.core_ctrl_resp_o.cache_op_busy_changed
+  dc_ctrl_resp_cache_op_complete_l1 = u_dcache.core_ctrl_resp_o.cache_op_complete_l1
+  dc_ctrl_resp_cache_op_complete_l2 = u_dcache.core_ctrl_resp_o.cache_op_complete_l2
+  dc_ctrl_resp_tl_ready_0 = u_dcache.core_ctrl_resp_o.tl_ready_0
+  dc_ctrl_resp_tl_ready_1 = u_dcache.core_ctrl_resp_o.tl_ready_1
+  dc_ctrl_resp_ts_ready = u_dcache.core_ctrl_resp_o.ts_ready
+  dc_ctrl_resp_tl_complete_0 = u_dcache.core_ctrl_resp_o.tl_complete_0
+  dc_ctrl_resp_reduce_ready = u_dcache.core_ctrl_resp_o.reduce_ready
+  dc_ctrl_resp_tex_send_ready = u_dcache.core_ctrl_resp_o.tex_send_ready
+  dc_ctrl_resp_gsc_progress_save = u_dcache.core_ctrl_resp_o.gsc_progress_save
+  dc_ctrl_resp_gsc_progress = u_dcache.core_ctrl_resp_o.gsc_progress
+  dc_wb_resp_dest_fp = u_dcache.s3_core_resp_o.dest.fp
+  dc_wb_resp_dest_addr = u_dcache.s3_core_resp_o.dest.addr
+  dc_wb_resp_dest_thread_id = u_dcache.s3_core_resp_o.dest.thread_id
+  dc_wb_resp_typ = u_dcache.s3_core_resp_o.typ
+  dc_wb_resp_gsc_cnt = u_dcache.s3_core_resp_o.gsc_cnt
+  dc_wb_resp_ps_mask = u_dcache.s3_core_resp_o.ps_mask
+  dc_wb_resp_data = u_dcache.s3_core_resp_o.data
+  dc_wb_resp_addr = u_dcache.s3_core_resp_o.addr
+  dc_scoreboard_valid = u_dcache.id_core_scoreboard_o.valid
+  dc_scoreboard_dest = u_dcache.id_core_scoreboard_o.dest
+  dc_xcpt_pf_ld = u_dcache.s1_core_xcpt_o.pf_ld
+  dc_xcpt_pf_st = u_dcache.s1_core_xcpt_o.pf_st
+  dc_xcpt_mf_ld = u_dcache.s1_core_xcpt_o.mf_ld
+  dc_xcpt_mf_st = u_dcache.s1_core_xcpt_o.mf_st
+  dc_xcpt_af_ld = u_dcache.s1_core_xcpt_o.af_ld
+  dc_xcpt_af_st = u_dcache.s1_core_xcpt_o.af_st
+  dc_xcpt_ps_ld = u_dcache.s1_core_xcpt_o.ps_ld
+  dc_xcpt_ps_st = u_dcache.s1_core_xcpt_o.ps_st
+  dc_bp_thread_id = u_dcache.s1_bp_conf_o.thread_id
+  dc_bp_address = u_dcache.s1_bp_conf_o.address
+  dc_bp_cmd = u_dcache.s1_bp_conf_o.cmd
+  dc_l2_resp_id = u_dcache.l2_resp_int_o.id
+  dc_l2_resp_dest = u_dcache.l2_resp_int_o.dest
+  dc_l2_resp_wdata = u_dcache.l2_resp_int_o.wdata
+  dc_l2_resp_opcode = u_dcache.l2_resp_int_o.opcode
+  dc_l2_resp_data = u_dcache.l2_resp_int_o.data
+  dc_l2_resp_size = u_dcache.l2_resp_int_o.size
+  dc_l2_resp_qwen = u_dcache.l2_resp_int_o.qwen
+  dc_debug_csr_signals_tl0 = u_dcache.csr_debug_sigs_o.csr_signals_tl0
+  dc_debug_csr_signals_tl1 = u_dcache.csr_debug_sigs_o.csr_signals_tl1
+  dc_debug_csr_signals_ts = u_dcache.csr_debug_sigs_o.csr_signals_ts
+  dc_debug_csr_signals_cou = u_dcache.csr_debug_sigs_o.csr_signals_cou
+  dc_debug_csr_signals_coul2 = u_dcache.csr_debug_sigs_o.csr_signals_coul2
+  dc_debug_csr_signals_txsnd = u_dcache.csr_debug_sigs_o.csr_signals_txsnd
+  dc_debug_csr_signals_mh0 = u_dcache.csr_debug_sigs_o.csr_signals_mh0
+  dc_debug_csr_signals_mh1 = u_dcache.csr_debug_sigs_o.csr_signals_mh1
+  io_events_dcache = u_dcache.io_events_o
+
+  // ---- Trace encoder staging (one retire per cycle, enabled by te_enable_i) ----------------------
+  reg te_instr_valid_reg_q:U1:[async=true, negreset=true, reset_pin=rst_w_ni] = 0
+  reg te_instr_bus_reg_q:U32:[async=true, negreset=true, reset_pin=rst_w_ni] = 0
+  reg te_instr_addr_reg_q:U49:[async=true, negreset=true, reset_pin=rst_w_ni] = 0
+  reg te_instr_context_reg_q:U1:[async=true, negreset=true, reset_pin=rst_w_ni] = 0
+  reg te_exception_reg_q:U1:[async=true, negreset=true, reset_pin=rst_w_ni] = 0
+  reg te_exception_cause_reg_q:U5:[async=true, negreset=true, reset_pin=rst_w_ni] = 0
+  reg te_interrupt_reg_q:U1:[async=true, negreset=true, reset_pin=rst_w_ni] = 0
+  reg te_exception_trap_value_reg_q:U49:[async=true, negreset=true, reset_pin=rst_w_ni] = 0
+  reg te_privilege_level_reg_q:U2:[async=true, negreset=true, reset_pin=rst_w_ni] = 0
+  reg te_cpu_halted_reg_q:U1:[async=true, negreset=true, reset_pin=rst_w_ni] = 0
+  if te_enable_i == 1 {
+    const retire_thread_is_sel = u_intpipe.wb_thread_id == te_thread_sel_i
+    te_instr_valid_reg_q = U1(u_intpipe.wb_valid == 1 and retire_thread_is_sel)
+    te_instr_bus_reg_q = u_intpipe.TE_wb_reg_inst
+    te_instr_addr_reg_q = u_intpipe.wb_reg_pc
+    te_instr_context_reg_q = u_intpipe.TE_wb_reg_context
+    te_exception_reg_q = U1(u_intpipe.TE_exception == 1 and retire_thread_is_sel)
+    te_exception_cause_reg_q = u_intpipe.TE_wb_reg_cause_ie.cause
+    te_interrupt_reg_q = u_intpipe.TE_wb_reg_cause_ie.interrupt_x
+    te_exception_trap_value_reg_q = u_intpipe.TE_tval
+    te_privilege_level_reg_q = u_intpipe.TE_prv
+    te_cpu_halted_reg_q = halted#[te_thread_sel_i]
+  }
+
+  // ---- Outputs ---------------------------------------------------------------------------------------
+  l2_dcache_evict_req_valid_o = u_dcache.l2_evict_req_valid_o
+  l2_dcache_evict_req_o = u_dcache.l2_evict_req_o
+  l2_dcache_miss_req_valid_o = u_dcache.l2_miss_req_valid_o
+  l2_dcache_miss_req_o = u_dcache.l2_miss_req_o
+  l2_dcache_resp_ready_o = u_dcache.l2_resp_ready_o
+
+  icache_req_valid_o = u_frontend.f1_icache_req_valid_o
+  icache_req_o = u_frontend.f1_icache_req_o
+  icache_flush_data_o = u_intpipe.icache_invalidate
+  satp_info_o = u_intpipe.satp_info
+  matp_info_o = u_intpipe.matp_info
+  tlb_invalidate_o = u_intpipe.tlb_invalidate
+
+  dc_ptw_req_data_o = u_dcache.ptw_req_data_o
+  dc_ptw_req_valid_o = u_dcache.ptw_req_valid_o
+
+  id_vpu_req_o = u_intpipe.id_vpu_req
+  id_vpu_decoder_sigs_o = u_frontend.id_vpu_decoder_sigs_o
+  ex_vpu_req_o = u_intpipe.ex_vpu_req
+  tag_vpu_kill_o = u_intpipe.tag_vpu_kill
+  mem_vpu_kill_o = u_intpipe.mem_vpu_kill
+  wb_vpu_kill_o = u_intpipe.wb_vpu_kill
+  f0_vpu_ctrl_o = u_intpipe.vpu_ctrl
+  wb_dcache_vpu_resp_valid_o = u_intpipe.wb_vpu_dcache_resp_valid
+  wb_dcache_vpu_resp_o = u_intpipe.wb_vpu_dcache_resp
+  dcache_vpu_scp_res_o = u_dcache.s3_vpu_scp_resp_o
+  dcache_vpu_scp_data_o = u_dcache.s3_vpu_scp_data_o
+  dcache_vpu_tenb_data_o = u_dcache.s3_vpu_tenb_data_o
+  vpu_reduce_ctrl_o = u_dcache.vpu_reduce_ctrl_o
+
+  intpipe_debug_monitor_o = u_intpipe.debug_monitor_out
+
+  flb_neigh_req_valid_o = u_intpipe.flb_neigh_req_valid
+  flb_neigh_req_data_o = u_intpipe.flb_neigh_req_data
+
+  trace_encoder_o.instr_valid = te_instr_valid_reg_q
+  trace_encoder_o.instr_bus = te_instr_bus_reg_q
+  trace_encoder_o.instr_addr = te_instr_addr_reg_q
+  trace_encoder_o.instr_context = te_instr_context_reg_q
+  trace_encoder_o.exception = te_exception_reg_q
+  trace_encoder_o.exception_cause = te_exception_cause_reg_q
+  trace_encoder_o.interrupt = te_interrupt_reg_q
+  trace_encoder_o.exception_trap_value = te_exception_trap_value_reg_q
+  trace_encoder_o.privilege_level = te_privilege_level_reg_q
+  trace_encoder_o.status_flags = 0
+  trace_encoder_o.cpu_halted = te_cpu_halted_reg_q
+  trace_encoder_o.min_reset = U1(any_reset)
+
+  // Debug status: running = enabled, not in debug mode, not just out of reset, and not in reset.
+  debug_out_o.halted = halted
+  debug_out_o.running = ~in_debug_mode & ~have_reset & enabled & (if reset_w or reset_c { 0 } else { 3 })
+  debug_out_o.have_reset = debug_out_have_reset_q
+  debug_out_o.busy = debug_busy
+  debug_out_o.exception = u_intpipe.debug_exception
+  debug_out_o.error = debug_out_error_q
+
+  // The shared APB response comes from whichever side the last request targeted.
+  apb_pready_o = if apb_target_debug_reg_q { gen_debug_apb_transport_u_debug_apb_slv.apb_pready_o } else { u_dcache.apb_pready_o }
+  apb_prdata_o = if apb_target_debug_reg_q { gen_debug_apb_transport_u_debug_apb_slv.apb_prdata_o } else { u_dcache.apb_prdata_o }
+  apb_pslverr_o = if apb_target_debug_reg_q { gen_debug_apb_transport_u_debug_apb_slv.apb_pslverr_o } else { u_dcache.apb_pslverr_o }
+
+  pmu_count_up_o = u_intpipe.pmu_count_up
+  pmu_read_sel_o = u_intpipe.pmu_read_sel
+  pmu_write_en_o = u_intpipe.pmu_write_en
+  pmu_write_data_o = u_intpipe.pmu_write_data
+  pmu_neigh_event_sel_o = u_intpipe.pmu_neigh_event_sel
+
+  sm_match_debug_signals_tl0_o = u_dcache.sm_match_debug_signals_tl0_o
+  sm_filter_debug_signals_tl0_o = u_dcache.sm_filter_debug_signals_tl0_o
+  sm_data_debug_signals_tl0_o = u_dcache.sm_data_debug_signals_tl0_o
+  sm_match_debug_signals_tl1_o = u_dcache.sm_match_debug_signals_tl1_o
+  sm_filter_debug_signals_tl1_o = u_dcache.sm_filter_debug_signals_tl1_o
+  sm_data_debug_signals_tl1_o = u_dcache.sm_data_debug_signals_tl1_o
+  sm_match_debug_signals_ts_o = u_dcache.sm_match_debug_signals_ts_o
+  sm_filter_debug_signals_ts_o = u_dcache.sm_filter_debug_signals_ts_o
+  sm_data_debug_signals_ts_o = u_dcache.sm_data_debug_signals_ts_o
+  sm_match_debug_signals_co_o = u_dcache.sm_match_debug_signals_co_o
+  sm_filter_debug_signals_co_o = u_dcache.sm_filter_debug_signals_co_o
+  sm_data_debug_signals_co_o = u_dcache.sm_data_debug_signals_co_o
+  sm_match_debug_signals_col2_o = u_dcache.sm_match_debug_signals_col2_o
+  sm_filter_debug_signals_col2_o = u_dcache.sm_filter_debug_signals_col2_o
+  sm_data_debug_signals_col2_o = u_dcache.sm_data_debug_signals_col2_o
+  sm_match_debug_signals_mh_o = u_dcache.sm_match_debug_signals_mh_o
+  sm_filter_debug_signals_mh_o = u_dcache.sm_filter_debug_signals_mh_o
+  sm_data_debug_signals_mh_o = u_dcache.sm_data_debug_signals_mh_o
+  sm_match_debug_signals_dc_o = u_dcache.sm_match_debug_signals_dc_o
+  sm_filter_debug_signals_dc_o = u_dcache.sm_filter_debug_signals_dc_o
+  sm_data_debug_signals_dc_o = u_dcache.sm_data_debug_signals_dc_o
+}

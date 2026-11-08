@@ -1,0 +1,63 @@
+// Normalization-shift control for stage f4: the shift amount (fixed per command or the
+// leading-x-detect count) and the negate/clear/elxd-use controls.
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+pub comb txfma_c4::[timecheck=false](cmd_f4a_h:vpu_defs_pkg.VPU_FCMD_SZ_T, eff_sub1_f4a_h:U1, eff_sub2_f4a_h:U1, elxd_f4a_h:vpu_defs_pkg.TXFMA_LXD_PS_SZ_T, op_dtype_f4a_h:vpu_defs_pkg.VPU_DTYPE_SZ_T, ph_comb_stiky_f4a_h:U1, s_res_f4a_h:U1, sc_f4a_h:U1, sigs_f4a_h:(e18:U1, e17:U1, e16:U1, e15:U1, e14:U1, e13:U1, e12:U1, e11:U1, e10:U1, e9:U1, e8:U1, e7:U1, e6:U1, e5:U1, e4:U1, e3:U1, e2:U1, e1:U1, e0:U1), sin_res_shf_idx_f4a_h:U3) -> (clear16frnd_nshin_f4a_l:U1, clearphps_en_f4a_h:U1, elxd_add_in2_mux_sel_f4a_h:U1, enc_nsamt_f4a_h:vpu_defs_pkg.TXFMA_NORM_SHF_AMNT_SZ_T, neg_norm_a3_f4a_h:U1, neg_norm_na3_f4a_h:U1, ph_ps_clear_f4a_l:U1, use_elxd_f4a_h:U1) {
+  const cmd = cmd_f4a_h
+  const is_int = op_dtype_f4a_h == vpu_defs_pkg.VPU_DTYPE_INT
+  const is_f32 = op_dtype_f4a_h == vpu_defs_pkg.VPU_DTYPE_F32
+  const is_f16_f32 = op_dtype_f4a_h == vpu_defs_pkg.VPU_DTYPE_F16_F32
+  const frac_op = cmd == vpu_defs_pkg.VPU_TRANS_EXP_FRAC
+  const cvt_to_f32 = cmd in (vpu_defs_pkg.VPU_FCMD_CVT_INTF32, vpu_defs_pkg.VPU_FCMD_CVT_UINTF32, vpu_defs_pkg.VPU_FCMD_CVT_RASTF32)
+  const sin_op = cmd == vpu_defs_pkg.VPU_TRANS_SIN_P1 or cmd == vpu_defs_pkg.VPU_TRANS_SIN_P2
+
+  // Normalization shift amount: INT-path transcendental commands use a fixed amount
+  // (SIN picks from a small table), otherwise the leading-x-detect count (elxd) is used.
+  mut sin_amt:U7 = 0
+  match sin_res_shf_idx_f4a_h {
+    == 0 {
+      sin_amt = 0x7e
+    }
+    == 1 {
+      sin_amt = 0
+    }
+    == 2 {
+      sin_amt = 1
+    }
+    == 3 {
+      sin_amt = 3
+    }
+    == 4 {
+      sin_amt = 4
+    }
+    == 5 {
+      sin_amt = 5
+    }
+    else {
+    }
+  }
+  const fixed_amt:U7 = if cmd == vpu_defs_pkg.VPU_TRANS_RCP_FMA2 {
+    (vpu_defs_pkg.TXFMA_A0 - vpu_defs_pkg.TXFMA_B5)#[0..<32]#[0..<7]
+  } elif cmd == vpu_defs_pkg.VPU_TRANS_RSQRT_FMA2 {
+    (vpu_defs_pkg.TXFMA_A0 - vpu_defs_pkg.TXFMA_B4)#[0..<32]#[0..<7]
+  } elif cmd == vpu_defs_pkg.VPU_TRANS_LOG_FMA2 {
+    0x7e
+  } elif cmd == vpu_defs_pkg.VPU_TRANS_EXP_FMA2 {
+    (vpu_defs_pkg.TXFMA_A0 - vpu_defs_pkg.TXFMA_B1)#[0..<32]#[0..<7]
+  } elif sin_op {
+    sin_amt
+  } else {
+    0
+  }
+  const sel_fixed = is_int and (cmd in (vpu_defs_pkg.VPU_TRANS_RCP_FMA2, vpu_defs_pkg.VPU_TRANS_RSQRT_FMA2, vpu_defs_pkg.VPU_TRANS_LOG_FMA2, vpu_defs_pkg.VPU_TRANS_EXP_FMA2) or sin_op)
+  const sel_elxd = (not is_f32 and sigs_f4a_h.e9 != 0) or (is_int and sigs_f4a_h.e8 != 0) or ((is_f32 or is_f16_f32) and not ((sigs_f4a_h.e8 != 0 and cmd != vpu_defs_pkg.VPU_FCMD_FROUND) or sigs_f4a_h.e15 != 0 or cmd == vpu_defs_pkg.VPU_TRANS_LOG_RR or frac_op))
+  enc_nsamt_f4a_h = if sel_fixed { fixed_amt } elif sel_elxd { elxd_f4a_h } else { 0 }
+
+  neg_norm_a3_f4a_h = U1(eff_sub1_f4a_h != 0 or eff_sub2_f4a_h != 0 or cmd == vpu_defs_pkg.VPU_TRANS_LOG_MUL)
+  neg_norm_na3_f4a_h = U1((s_res_f4a_h != 0 and sigs_f4a_h.e15 != 0) or (cmd == vpu_defs_pkg.VPU_TRANS_SIN_P1 and is_int) or (sc_f4a_h != 0 and (cvt_to_f32 or frac_op)))
+  clearphps_en_f4a_h = U1(is_f16_f32 and ph_comb_stiky_f4a_h != 0)
+  clear16frnd_nshin_f4a_l = U1(cmd != vpu_defs_pkg.VPU_FCMD_FROUND)
+  ph_ps_clear_f4a_l = U1(not is_f16_f32)
+  elxd_add_in2_mux_sel_f4a_h = U1(cmd != vpu_defs_pkg.VPU_FCMD_CVT_F32INT and cmd != vpu_defs_pkg.VPU_FCMD_CVT_F32UINT and sigs_f4a_h.e7 == 0 and cmd != vpu_defs_pkg.VPU_FCMD_CVT_F32RAST and cvt_to_f32)
+  use_elxd_f4a_h = U1((is_f32 and not (sigs_f4a_h.e8 != 0 or sigs_f4a_h.e15 != 0 or frac_op)) or cmd in (vpu_defs_pkg.VPU_FCMD_CVT_F32INT, vpu_defs_pkg.VPU_FCMD_CVT_F32UINT, vpu_defs_pkg.VPU_FCMD_CVT_F32RAST) or is_f16_f32)
+}

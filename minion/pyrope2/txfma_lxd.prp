@@ -1,0 +1,33 @@
+// Leading-zero anticipator (LZA) for the sum/difference of in1_i and in2_i:
+// predicts, without waiting for the carry chain, how many leading positions
+// the result will normalize away. g/p/k are the per-bit generate / propagate /
+// kill terms of the operands; sub_op_i stands in for the propagate term above
+// the top bit. indicator bit i flags a possible leading one at position i, and
+// the highest flagged position gives the count (relative to the default
+// InWidth - AftA0BitsNum, with the low OutWidth bits returned).
+pub comb txfma_lxd<InWidth=52, AftA0BitsNum=4, OutWidth=7>(in1_i:Unsigned(bits=InWidth), in2_i:Unsigned(bits=InWidth), sub_op_i:U1) -> (lxd_o:Unsigned(bits=OutWidth)) {
+  comptime const DefaultCount = InWidth - AftA0BitsNum
+  const g:Unsigned(bits=InWidth) = in1_i & in2_i
+  const p:Unsigned(bits=InWidth) = in1_i ^ in2_i
+  const k:Unsigned(bits=InWidth) = (~in1_i) & (~in2_i)
+
+  mut indicator:Unsigned(bits=InWidth) = 0
+  indicator#[0] = 1
+  for i in 1..<InWidth {
+    const p_above:U1 = if i + 1 < InWidth { p#[i + 1] } else { sub_op_i }
+    const gen_not_prev_kill:U1 = g#[i] & (k#[i - 1] ^ 1)
+    const kill_not_prev_gen:U1 = k#[i] & (g#[i - 1] ^ 1)
+    const kill_not_prev_kill:U1 = k#[i] & (k#[i - 1] ^ 1)
+    const gen_not_prev_gen:U1 = g#[i] & (g#[i - 1] ^ 1)
+    indicator#[i] = (p_above & (gen_not_prev_kill | kill_not_prev_gen)) | ((p_above ^ 1) & (kill_not_prev_kill | gen_not_prev_gen))
+  }
+
+  // The highest flagged position wins.
+  mut count_val:U32 = DefaultCount
+  for i in 1..<InWidth {
+    if indicator#[i] != 0 {
+      count_val = (DefaultCount - i)#[0..<32]
+    }
+  }
+  lxd_o = count_val#[0..<OutWidth]
+}

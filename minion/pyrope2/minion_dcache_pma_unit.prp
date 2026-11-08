@@ -1,0 +1,75 @@
+const minion_dcache_pkg = import("minion_dcache_pkg")
+
+// Physical memory attribute (PMA) check of the dcache S1 stage.
+// Classifies a physical address into its memory region and returns
+//  - cacheable:    the access may be served from / allocate in the dcache
+//  - access_fault: the region is reserved, or the privilege / secure-memory /
+//                  ioshire rules deny this kind of access to the region
+// (vm_status_i.sum/mxr/debug are carried for interface compatibility only.)
+pub comb minion_dcache_pma_unit::[timecheck=false](af_skip_i:U1, ioshire_i:U1, mprot_i:(enable_secure_memory:U1, dram_size:U2, disable_osbox_access:U1, disable_pcie_access:U1, io_access_mode:U2), req_data_i:(paddr:U40, typ:U4, amo:U1, write:U1, mem_global:U1, ts_tl_co:U1), valid_addr_i:U1, vm_status_i:(prv:U2, mprv:U1, mpp:U2, sum:U1, mxr:U1, debug:U1)) -> (resp_data_o:(access_fault:U1, cacheable:U1)) {
+  comptime const DramBit = minion_dcache_pkg.PaSize - 1 // paddr[39]: DRAM space
+
+  const paddr = req_data_i.paddr
+  const ioshire = ioshire_i != 0
+  const amo = req_data_i.amo != 0
+  const write = req_data_i.write != 0
+  const ts_tl_co = req_data_i.ts_tl_co != 0
+  const secure = mprot_i.enable_secure_memory != 0
+  const osbox_disabled = mprot_i.disable_osbox_access != 0
+
+  // Effective privilege: MPP when MPRV is set (loads/stores as the previous mode).
+  const prv:U2 = if vm_status_i.mprv != 0 { vm_status_i.mpp } else { vm_status_i.prv }
+  const is_m = prv == minion_dcache_pkg.PrvM
+  const is_s = prv == minion_dcache_pkg.PrvS
+  const is_u = prv == minion_dcache_pkg.PrvU
+
+  // Address map (paddr[39:30] selects the 1GB region; see minion_dcache_pkg).
+  const io_space = paddr#[30..<40] == 0
+  const sp_space = paddr#[30..<40] == 1
+  const sp_cacheable = sp_space and (paddr#[17..<30] == 0 or paddr#[20..<30] == 4) // ROM or SRAM
+  const sp_sram_code = sp_space and paddr#[19..<30] == 8
+  const sp_sram_data = sp_space and paddr#[19..<30] == 9
+  const scratchpad = paddr#[31..<40] == 1
+  const esr_space = paddr#[32..<40] == 1
+  const reserved = paddr#[38..<40] == 0 and paddr#[33..<38] != 0
+  const pcie_space = paddr#[38..<40] == 1
+  const is_dram = paddr#[DramBit] == 1
+  const dram_cacheable = is_dram and paddr#[38] == 0
+  const dram_uncacheable = is_dram and paddr#[38] == 1
+  const dram_mbox = is_dram and paddr#[23..<38] == 0
+  const dram_mcode = dram_mbox and paddr#[21..<23] == 0
+  const dram_mdata = dram_mbox and paddr#[21..<23] != 0
+  const dram_sbox = is_dram and paddr#[26..<38] == 0
+  const dram_scode = dram_sbox and paddr#[23..<26] == 1
+  const dram_sdata = dram_sbox and paddr#[24..<26] != 0
+  const dram_osbox = is_dram and paddr#[32..<38] == 0 and paddr#[26..<32] != 0
+
+  // Beyond the configured DRAM size (8G/16G/24G/32G) is reserved.
+  const beyond_dram = match mprot_i.dram_size {
+    == minion_dcache_pkg.MprotDramSize8G { paddr#[33..<38] != 0 }
+    == minion_dcache_pkg.MprotDramSize16G { paddr#[34..<38] != 0 }
+    == minion_dcache_pkg.MprotDramSize24G { paddr#[33..<38] == 3 or paddr#[35..<38] != 0 }
+    == minion_dcache_pkg.MprotDramSize32G { paddr#[35..<38] != 0 }
+  }
+  const dram_reserved = is_dram and paddr#[32..<38] != 0 and beyond_dram
+
+  // What each kind of access is permitted to touch.
+  const io_permitted = not amo and not ts_tl_co and mprot_i.io_access_mode <= prv and mprot_i.io_access_mode != minion_dcache_pkg.MprotIoAccessModeF
+  const sp_sram_code_permitted = if write { is_m } else { not is_u }
+  const sp_sram_data_permitted = not is_u
+  const sp_permitted = not amo and (not ts_tl_co or sp_cacheable) and (sp_sram_code_permitted or not sp_sram_code) and (sp_sram_data_permitted or not sp_sram_data) and ioshire
+  const scp_permitted = not amo or req_data_i.mem_global != 0
+  const esr_permitted = not amo and not ts_tl_co and req_data_i.typ == minion_dcache_pkg.DcTypeD and paddr#[0..<3] == 0 and paddr#[30..<32] <= prv and (ioshire or paddr#[30..<32] != 2)
+  const pcie_permitted = not amo and not ts_tl_co and (ioshire or mprot_i.disable_pcie_access == 0)
+  const mcode_permitted = ioshire or (is_m and not (write and secure))
+  const mdata_permitted = ioshire or is_m
+  const osbox_permitted = ioshire or not osbox_disabled
+  const scode_permitted = if secure { ioshire or is_m or (is_s and not write) } else { osbox_permitted }
+  const sdata_permitted = if secure { ioshire or not is_u } else { osbox_permitted }
+
+  const cacheable = not amo and (dram_cacheable or scratchpad or sp_cacheable)
+  const fault = valid_addr_i != 0 and af_skip_i == 0 and ((io_space and not io_permitted) or (sp_space and not sp_permitted) or (scratchpad and not scp_permitted) or (esr_space and not esr_permitted) or reserved or (pcie_space and not pcie_permitted) or (dram_mcode and not mcode_permitted) or (dram_mdata and not mdata_permitted) or (dram_scode and not scode_permitted) or (dram_sdata and not sdata_permitted) or (dram_osbox and not osbox_permitted) or (dram_uncacheable and not ioshire) or dram_reserved)
+
+  resp_data_o.access_fault = U1(fault)
+  resp_data_o.cacheable = U1(cacheable)
+}

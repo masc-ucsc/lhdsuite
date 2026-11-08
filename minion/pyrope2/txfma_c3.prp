@@ -1,0 +1,194 @@
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+// TXFMA control stage c3 (verilog: txfma_c3): fa-vs-fc compare, min/max and int-min/max operand
+// select, special-result (inf/nan) gating and the result sign. Purely combinational; the
+// compare terms that depend on the late prodsum_a2 were moved here from c2 for timing.
+pub comb txfma_c3::[timecheck=false](a_is_qnan_hi_f3a_h:U1, a_is_snan_hi_f3a_h:U1, c_inf_f3a_h:U1, c_is_qnan_f3a_h:U1, c_is_snan_f3a_h:U1, cmd_f3a_h:vpu_defs_pkg.VPU_FCMD_SZ_T, comp_op_f3a_h:U1, e_sticky1_f3a_h:U1, ec_f3a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T, ec_zero_f3a_h:U1, ediff1_0_f3a_h:U1, ediff1_f3a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T, ediff2_f3a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T, eff_sign1_f3a_h:U1, eff_sub1_f3a_h:U1, eff_sub2_f3a_h:U1, eprod_hi_zero_f3a_h:U1, eprod_lo_zero_f3a_h:U1, fa_eq_fc_comp_sign_hi_res_f3a_h:U1, fa_ge_fc_comp_sign_hi_res_f3a_h:U1, fc_sel_f3a_h:U1, flags_en_f3a_h:U1, fround_rbit_f3a_h:U1, int_minmax_mux_sel_fc_f3a_h:U1, minmax_op_f3a_h:U1, op_dtype_f3a_h:vpu_defs_pkg.VPU_DTYPE_SZ_T, opd3_mux_sel_f3a_h:vpu_defs_pkg.TXFMA_EDIFF_OPD_SEL_SZ_T, prod_inf_hi_f3a_h:U1, prod_inf_lo_f3a_h:U1, prod_sign_hi_f3a_h:U1, prod_sign_lo_f3a_h:U1, prodsum_a2_f3a_h:U1, res_inf_f3a_h:U1, res_qnan_f3a_h:U1, res_snan_f3a_h:U1, rm_f3a_h:vpu_defs_pkg.TXFMA_RM_SZ_T, sc_f3a_h:U1, sigs_f3a_h:vpu_defs_pkg.TXFMA_SIGS_SZ_T, sin_align1_neg_f3a_h:U1, sin_align2_neg_f3a_h:U1, sin_check_fc_sign_f3a_h:U1, sin_eff_sub1_f3a_h:U1, spec_res_en_f3a_h:U1, trans_log_rr_neg_f3a_h:U1) -> (cmp_invalid_f3a_h:U1, comp_res_sel_f3a_h:U1, eff_sub1_out_f3a_h:U1, fa_eq_fc_res_check_hi_f3a_h:U1, fma_subopc3_f3a_h:U1, fround_stky2l_f3a_h:U1, imxc_sel_f3a_h:U2, int_minmax_mux_sel_a_f3a_h:U1, int_minmax_mux_sel_c_f3a_h:U1, res_inf_out_f3a_h:U1, res_neg_inf_out_f3a_h:U1, res_qnan_out_f3a_h:U1, res_snan_out_f3a_h:U1, s_res_check_cadd_a3_f3a_h:U1, s_res_f3a_h:U1) {
+  const sig_fma = sigs_f3a_h#[vpu_defs_pkg.TXFMA_FMA] == 1
+  const sig_fms = sigs_f3a_h#[vpu_defs_pkg.TXFMA_FMS] == 1
+  const sig_sub = sigs_f3a_h#[vpu_defs_pkg.TXFMA_SUB] == 1
+  const sig_mul = sigs_f3a_h#[vpu_defs_pkg.TXFMA_MUL] == 1
+  const sig_cvt = sigs_f3a_h#[vpu_defs_pkg.TXFMA_CVT] == 1
+  const sig_sgcvt = sigs_f3a_h#[vpu_defs_pkg.TXFMA_SGCVT] == 1
+  const sig_f32_fx = sigs_f3a_h#[vpu_defs_pkg.TXFMA_F32_FX] == 1
+  const sig_fx_f32 = sigs_f3a_h#[vpu_defs_pkg.TXFMA_FX_F32] == 1
+  const sig_f32_norm = sigs_f3a_h#[vpu_defs_pkg.TXFMA_F32_NORM] == 1
+  const sig_trans2 = sigs_f3a_h#[vpu_defs_pkg.TXFMA_TRANS2] == 1
+
+  const cmd = cmd_f3a_h
+  const is_f16_f32 = op_dtype_f3a_h == vpu_defs_pkg.VPU_DTYPE_F16_F32
+  const eff_sub1 = eff_sub1_f3a_h == 1
+  const eff_sub2 = eff_sub2_f3a_h == 1
+  const sc = sc_f3a_h == 1
+  const prod_sign_hi = prod_sign_hi_f3a_h == 1
+  const prod_sign_lo = prod_sign_lo_f3a_h == 1
+  const eprod_hi_zero = eprod_hi_zero_f3a_h == 1
+  const ec_zero = ec_zero_f3a_h == 1
+  const c_inf = c_inf_f3a_h == 1
+  const a_nan_hi = a_is_qnan_hi_f3a_h == 1 or a_is_snan_hi_f3a_h == 1
+  const c_nan = c_is_qnan_f3a_h == 1 or c_is_snan_f3a_h == 1
+  const comp_op = comp_op_f3a_h == 1
+  const minmax_op = minmax_op_f3a_h == 1
+  const sub_or_fms = sig_sub or sig_fms
+  const exp_frac = cmd == vpu_defs_pkg.VPU_TRANS_EXP_FRAC
+  const sin_transform = cmd == vpu_defs_pkg.VPU_TRANS_SIN_TRANSFORM
+
+  // fa (opa) vs fc (opc) exponent relations; ediff = eprod - ec as a signed 10-bit value
+  const ediff1 = ediff1_f3a_h#sext[0..=9]
+  const ediff2 = ediff2_f3a_h#sext[0..=9]
+  const eprod_ge_ec = ediff1 < 0
+  const eprod_lt_ec = ediff1 > 0
+  const eprod_lte_ec_2 = ediff2 >= 0
+  const ediff1_is_0 = ediff1 == 0
+  const ediff_hi_is_1 = ediff1 == 1 or ediff1 == -1 // |ediff1| == 1
+  const ec_hi_gte_127 = ec_f3a_h >= 0x7f
+
+  // Special results are gated by spec_res_en.
+  const res_inf_mux = spec_res_en_f3a_h == 1 and res_inf_f3a_h == 1
+  const res_qnan_mux = spec_res_en_f3a_h == 1 and res_qnan_f3a_h == 1
+  const res_snan_mux = spec_res_en_f3a_h == 1 and res_snan_f3a_h == 1
+  const any_nan = a_is_qnan_hi_f3a_h == 1 or c_is_qnan_f3a_h == 1 or res_snan_mux
+
+  // fa >= fc by exponent, by fraction (late prodsum_a2) and the combined result
+  const fa_ge_fc_comp_exp_hi = (not prod_sign_hi and eprod_ge_ec and not eprod_hi_zero) or (prod_sign_hi and not (eprod_ge_ec and not eprod_hi_zero) and ediff1_0_f3a_h == 0)
+  const fa_ge_fc_f32_frac_hi = (not prod_sign_hi and prodsum_a2_f3a_h == 0) or (prod_sign_hi and prodsum_a2_f3a_h == 1) or (eprod_hi_zero and not ec_zero)
+  const fa_ge_fc_res_sel_hi = fa_ge_fc_comp_sign_hi_res_f3a_h == 1 or (fa_eq_fc_comp_sign_hi_res_f3a_h == 1 and fa_ge_fc_comp_exp_hi) or (fa_eq_fc_comp_sign_hi_res_f3a_h == 1 and ediff1_0_f3a_h == 1 and fa_ge_fc_f32_frac_hi)
+
+  // min/max selector: true picks fa (max: fa >= fc; min: fa < fc), with a NaN operand
+  // deferring to the other one.
+  mut minmax_res_sel = false
+  if cmd == vpu_defs_pkg.VPU_FCMD_MAX {
+    minmax_res_sel = (fa_ge_fc_res_sel_hi and not a_nan_hi) or c_nan
+  }
+  if cmd == vpu_defs_pkg.VPU_FCMD_MIN {
+    minmax_res_sel = (not fa_ge_fc_res_sel_hi and not a_nan_hi) or c_nan
+  }
+
+  // Operand select of the integer/min-max result mux
+  mut int_minmax_mux_sel:U4 = vpu_defs_pkg.TXFMA_INT_MINMAX_SEL_PH
+  if op_dtype_f3a_h == vpu_defs_pkg.VPU_DTYPE_INT and cmd != vpu_defs_pkg.VPU_FCMD_CVT_F32INT and cmd != vpu_defs_pkg.VPU_FCMD_CVT_F32RAST {
+    if cmd == vpu_defs_pkg.VPU_FCMD_MULL or cmd == vpu_defs_pkg.VPU_FCMD_NR1_FRCPFXP {
+      int_minmax_mux_sel = vpu_defs_pkg.TXFMA_INT_MINMAX_SEL_PL
+    }
+  }
+  if minmax_op {
+    int_minmax_mux_sel = if minmax_res_sel { vpu_defs_pkg.TXFMA_INT_MINMAX_SEL_A } else { vpu_defs_pkg.TXFMA_INT_MINMAX_SEL_C }
+  }
+  if cmd == vpu_defs_pkg.VPU_TRANS_LOG_RR {
+    int_minmax_mux_sel = vpu_defs_pkg.TXFMA_INT_MINMAX_SEL_S
+  }
+  // sin: fa is selected when in the first quartile
+  if sin_transform and int_minmax_mux_sel_fc_f3a_h == 1 {
+    int_minmax_mux_sel = vpu_defs_pkg.TXFMA_INT_MINMAX_SEL_C
+  }
+  if fc_sel_f3a_h == 1 {
+    int_minmax_mux_sel = vpu_defs_pkg.TXFMA_INT_MINMAX_SEL_C
+  }
+  if sig_fx_f32 {
+    int_minmax_mux_sel = vpu_defs_pkg.TXFMA_INT_MINMAX_SEL_A
+  }
+  if sig_f32_fx {
+    int_minmax_mux_sel = vpu_defs_pkg.TXFMA_INT_MINMAX_SEL_C
+  }
+  imxc_sel_f3a_h#[1] = U1(int_minmax_mux_sel == vpu_defs_pkg.TXFMA_INT_MINMAX_SEL_PL or int_minmax_mux_sel == vpu_defs_pkg.TXFMA_INT_MINMAX_SEL_PH or int_minmax_mux_sel == vpu_defs_pkg.TXFMA_INT_MINMAX_SEL_S)
+  imxc_sel_f3a_h#[0] = U1(int_minmax_mux_sel == vpu_defs_pkg.TXFMA_INT_MINMAX_SEL_C or int_minmax_mux_sel == vpu_defs_pkg.TXFMA_INT_MINMAX_SEL_PH or int_minmax_mux_sel == vpu_defs_pkg.TXFMA_INT_MINMAX_SEL_S)
+  int_minmax_mux_sel_a_f3a_h = U1(int_minmax_mux_sel == vpu_defs_pkg.TXFMA_INT_MINMAX_SEL_A)
+  int_minmax_mux_sel_c_f3a_h = U1(int_minmax_mux_sel == vpu_defs_pkg.TXFMA_INT_MINMAX_SEL_C)
+
+  // Result sign (applies to FP only; for INT the msb is the sign). The first matching class wins.
+  mut s_res = false
+  mut s_res_check_cadd_a3 = false
+  if sig_mul and not is_f16_f32 {
+    s_res = prod_sign_hi
+    if cmd == vpu_defs_pkg.VPU_TRANS_LOG_MUL {
+      s_res = not ec_hi_gte_127 or (res_inf_f3a_h == 1 and ec_zero)
+    }
+  } elif cmd == vpu_defs_pkg.VPU_FCMD_MIN or cmd == vpu_defs_pkg.VPU_FCMD_MAX {
+    s_res = (minmax_res_sel and prod_sign_hi) or (not minmax_res_sel and sc)
+  } elif sig_cvt or cmd == vpu_defs_pkg.VPU_FCMD_FFRC or cmd == vpu_defs_pkg.VPU_FCMD_FFRC_SIN {
+    s_res = if cmd == vpu_defs_pkg.VPU_FCMD_CVT_INTF32 or cmd == vpu_defs_pkg.VPU_FCMD_CVT_RASTF32 { sc } else { sc and cmd != vpu_defs_pkg.VPU_FCMD_CVT_F32UINT }
+  } elif sig_sgcvt {
+    s_res = if sig_f32_norm or op_dtype_f3a_h == vpu_defs_pkg.VPU_DTYPE_F16 { sc } else { prod_sign_hi }
+  } elif sig_trans2 {
+    s_res = if cmd == vpu_defs_pkg.VPU_TRANS_EXP_FMA2 { false } else { prod_sign_hi }
+  } elif exp_frac {
+    s_res = sc
+  } elif cmd == vpu_defs_pkg.VPU_TRANS_SIN_P2 {
+    s_res = false
+  } elif sin_transform {
+    s_res = if sin_check_fc_sign_f3a_h == 1 { sin_align1_neg_f3a_h == 1 } else { sin_align2_neg_f3a_h == 1 }
+    if fc_sel_f3a_h == 1 {
+      s_res = sc
+    }
+  } elif is_f16_f32 {
+    // tensor
+    match opd3_mux_sel_f3a_h {
+      == vpu_defs_pkg.TXFMA_SEL_PH {
+        s_res = prod_sign_hi
+      }
+      == vpu_defs_pkg.TXFMA_SEL_PL {
+        s_res = prod_sign_lo
+      }
+      == vpu_defs_pkg.TXFMA_SEL_C {
+        s_res = sc
+      }
+      else {
+      }
+    }
+    if res_inf_mux and prod_inf_hi_f3a_h == 1 {
+      s_res = prod_sign_hi
+    } elif res_inf_mux and prod_inf_lo_f3a_h == 1 {
+      s_res = prod_sign_lo
+    } elif res_inf_mux and c_inf {
+      s_res = sc
+    } else {
+      // the comb adder A3 bit decides in an effective sub
+      s_res_check_cadd_a3 = eff_sub1 or eff_sub2
+      if eprod_hi_zero and eprod_lo_zero_f3a_h == 1 and not (not ec_zero and sig_fma) and (eff_sub1 or eff_sub2) {
+        s_res = rm_f3a_h == vpu_defs_pkg.RDN
+      }
+    }
+  } elif eff_sub1 {
+    // PS, effective sub
+    if eprod_ge_ec and not eprod_hi_zero {
+      s_res = if res_inf_mux and c_inf { sc != sub_or_fms } else { prod_sign_hi }
+    } elif eprod_hi_zero and ec_zero {
+      s_res = rm_f3a_h == vpu_defs_pkg.RDN
+    } elif ec_zero {
+      s_res = prod_sign_hi
+    } elif (eprod_lt_ec and not ediff_hi_is_1) or eprod_hi_zero {
+      s_res = if res_inf_mux and prod_inf_hi_f3a_h == 1 { prod_sign_hi } else { sc != sub_or_fms }
+    } elif res_inf_mux {
+      // result is infinity and |ediff| == 1
+      s_res = if prod_inf_hi_f3a_h == 1 { prod_sign_hi } else { sc != sub_or_fms }
+    } else {
+      // ediff == 0: check comb adder A2 bit
+      s_res_check_cadd_a3 = true
+    }
+  } else {
+    s_res = prod_sign_hi
+  }
+  s_res_f3a_h = U1(s_res)
+  s_res_check_cadd_a3_f3a_h = U1(s_res_check_cadd_a3)
+
+  // Special-case results cleared for min/max and compare operations
+  const res_qnan_minmax = minmax_op and a_nan_hi and c_nan
+  const res_snan_minmax = minmax_op and a_is_snan_hi_f3a_h == 1 and c_is_snan_f3a_h == 1
+  const exp_frac_inf = not sc and eprod_lte_ec_2 and exp_frac
+  const exp_frac_neg_inf = ((sc and fa_ge_fc_comp_exp_hi) or (ediff1_is_0 and fa_ge_fc_res_sel_hi)) and exp_frac and flags_en_f3a_h == 0 and not (res_qnan_f3a_h == 1 or res_snan_f3a_h == 1)
+  res_snan_out_f3a_h = U1(not comp_op and not minmax_op and res_snan_mux)
+  res_qnan_out_f3a_h = U1((not comp_op and not minmax_op and res_qnan_mux) or res_qnan_minmax or res_snan_minmax)
+  res_inf_out_f3a_h = U1((not comp_op and not minmax_op and res_inf_mux) or exp_frac_inf)
+  res_neg_inf_out_f3a_h = U1(exp_frac_neg_inf)
+
+  // fa == fc (finished with the mantissa equal check in f4) and compare results
+  fa_eq_fc_res_check_hi_f3a_h = U1(((eprod_hi_zero and ec_zero) or (eff_sign1_f3a_h == 0 and ediff1_is_0)) and not any_nan)
+  // flt/fle: true when fa < fc; always false with a NaN
+  comp_res_sel_f3a_h = U1((not fa_ge_fc_res_sel_hi and (cmd == vpu_defs_pkg.VPU_FCMD_FLT or cmd == vpu_defs_pkg.VPU_FCMD_FLE)) and not any_nan)
+  // compare is invalid if any input is NaN (feq: only for signaling NaNs)
+  cmp_invalid_f3a_h = U1(((cmd == vpu_defs_pkg.VPU_FCMD_FLE or cmd == vpu_defs_pkg.VPU_FCMD_FLT) and (a_nan_hi or c_nan)) or (cmd == vpu_defs_pkg.VPU_FCMD_FEQ and (a_is_snan_hi_f3a_h == 1 or c_is_snan_f3a_h == 1)))
+
+  eff_sub1_out_f3a_h = if sin_transform { sin_eff_sub1_f3a_h } else { eff_sub1_f3a_h }
+  fma_subopc3_f3a_h = if is_f16_f32 { U1(s_res_check_cadd_a3) } else { eff_sub1_f3a_h | trans_log_rr_neg_f3a_h }
+  fround_stky2l_f3a_h = fround_rbit_f3a_h | e_sticky1_f3a_h
+}

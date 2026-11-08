@@ -1,0 +1,65 @@
+const minion_dcache_128x64_1r1w_lram = import("minion_dcache_128x64_1r1w_lram.minion_dcache_128x64_1r1w_lram")
+
+// Dcache data array: four independent 128x64 register-file banks (the L1 data
+// lines striped over banks). Each bank takes its own slice of the packed read
+// and write request buses; the 64-bit bank reads are packed back, bank 0 in the
+// low bits of s2_read_resp_o. The Verilog request arrays put element 0 in the
+// MSBs of the flattened port, so bank b owns request slot BANKS-1-b.
+//
+// Request layout (LSB first): read  = {addr:10, way:2, valid_h, valid_l}
+//                             write = {data:64, addr:10, way:2, valid_h, valid_l}
+// A bank row is addressed by {set:4, addr[5] (half line):1, way:2}; the two
+// 32-bit halves of a bank have separate enables (valid_l/valid_h).
+comptime const BANKS = 4
+comptime const DATA = 64
+comptime const REQ_W = 14 // the control part of a request, same layout for read and write
+comptime const WR_W = DATA + REQ_W
+comptime const ADDR_HI = 5 // addr[5] (half line) and the 4-bit set above it
+comptime const WAY = 10
+comptime const VALID_H = 12
+comptime const VALID_L = 13
+
+// bank row address {set, addr[5], way} of a request
+comb row_addr(req:U14) -> (a:U7) {
+  a = U7((req#[ADDR_HI..<WAY] << 2) | req#[WAY..<VALID_H])
+}
+
+pub mod minion_dcache_data_array::[timecheck=false](clk_i:Clock, ram_cfg_i:(test_en:U1, rm:U4, rme:U1, ra:U2, wa:U2, wpulse:U3, deep_sleep:U1, shut_down:U1), s1_read_req_i:U56, s1_read_valid_i:U1, s3_write_valid_i:U1, s4_write_req_i:U312, s4_write_valid_i:U1) -> (s2_read_resp_o:U256@[]) {
+  mut rd_addr:[BANKS]U7 = nil
+  mut rd_en:[BANKS]U1 = nil
+  mut rd_en_l:[BANKS]U1 = nil
+  mut rd_en_h:[BANKS]U1 = nil
+  mut wr_addr:[BANKS]U7 = nil
+  mut wr_en_l:[BANKS]U1 = nil
+  mut wr_en_h:[BANKS]U1 = nil
+  mut wr_data:[BANKS]U64 = nil
+
+  for b in 0..<BANKS {
+    const rd = s1_read_req_i#[((BANKS - 1 - b)*REQ_W)..<((BANKS - b)*REQ_W)]
+    const wr = s4_write_req_i#[((BANKS - 1 - b)*WR_W)..<((BANKS - b)*WR_W)]
+    const wr_req = wr#[DATA..<WR_W]
+
+    rd_addr[b] = row_addr(rd)
+    rd_en_l[b] = U1(s1_read_valid_i != 0 and rd#[VALID_L] != 0)
+    rd_en_h[b] = U1(s1_read_valid_i != 0 and rd#[VALID_H] != 0)
+    rd_en[b] = U1(s1_read_valid_i != 0 and (rd#[VALID_L] != 0 or rd#[VALID_H] != 0))
+
+    wr_addr[b] = row_addr(wr_req)
+    wr_en_l[b] = U1(s4_write_valid_i != 0 and wr_req#[VALID_L] != 0)
+    wr_en_h[b] = U1(s4_write_valid_i != 0 and wr_req#[VALID_H] != 0)
+    wr_data[b] = wr#[0..<DATA]
+  }
+
+  // The banks are instantiated one by one (not in a loop) so that their names,
+  // gen_lram_block_<b>_u_lram, stay those of the Verilog generate scopes for
+  // LEC state pairing. The lram's per-half read enables are active-low "blocks".
+  mut gen_lram_block_0_u_lram = minion_dcache_128x64_1r1w_lram::[name=gen_lram_block_0_u_lram](clk_i=clk_i, rd_addr_i=rd_addr[0], wr_addr_i=wr_addr[0], rd_enable_i=rd_en[0], rd_enablelob_i=~rd_en_l[0], rd_enablehib_i=~rd_en_h[0], wr_enablehi_i=wr_en_h[0], wr_enablehi_pre_i=s3_write_valid_i, wr_enablelo_i=wr_en_l[0], wr_enablelo_pre_i=s3_write_valid_i, wr_data_i=wr_data[0])
+  mut gen_lram_block_1_u_lram = minion_dcache_128x64_1r1w_lram::[name=gen_lram_block_1_u_lram](clk_i=clk_i, rd_addr_i=rd_addr[1], wr_addr_i=wr_addr[1], rd_enable_i=rd_en[1], rd_enablelob_i=~rd_en_l[1], rd_enablehib_i=~rd_en_h[1], wr_enablehi_i=wr_en_h[1], wr_enablehi_pre_i=s3_write_valid_i, wr_enablelo_i=wr_en_l[1], wr_enablelo_pre_i=s3_write_valid_i, wr_data_i=wr_data[1])
+  mut gen_lram_block_2_u_lram = minion_dcache_128x64_1r1w_lram::[name=gen_lram_block_2_u_lram](clk_i=clk_i, rd_addr_i=rd_addr[2], wr_addr_i=wr_addr[2], rd_enable_i=rd_en[2], rd_enablelob_i=~rd_en_l[2], rd_enablehib_i=~rd_en_h[2], wr_enablehi_i=wr_en_h[2], wr_enablehi_pre_i=s3_write_valid_i, wr_enablelo_i=wr_en_l[2], wr_enablelo_pre_i=s3_write_valid_i, wr_data_i=wr_data[2])
+  mut gen_lram_block_3_u_lram = minion_dcache_128x64_1r1w_lram::[name=gen_lram_block_3_u_lram](clk_i=clk_i, rd_addr_i=rd_addr[3], wr_addr_i=wr_addr[3], rd_enable_i=rd_en[3], rd_enablelob_i=~rd_en_l[3], rd_enablehib_i=~rd_en_h[3], wr_enablehi_i=wr_en_h[3], wr_enablehi_pre_i=s3_write_valid_i, wr_enablelo_i=wr_en_l[3], wr_enablelo_pre_i=s3_write_valid_i, wr_data_i=wr_data[3])
+
+  s2_read_resp_o#[(0*DATA)..<(1*DATA)] = gen_lram_block_0_u_lram
+  s2_read_resp_o#[(1*DATA)..<(2*DATA)] = gen_lram_block_1_u_lram
+  s2_read_resp_o#[(2*DATA)..<(3*DATA)] = gen_lram_block_2_u_lram
+  s2_read_resp_o#[(3*DATA)..<(4*DATA)] = gen_lram_block_3_u_lram
+}

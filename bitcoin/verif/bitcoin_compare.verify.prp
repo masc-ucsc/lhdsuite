@@ -1,0 +1,31 @@
+// Assert collateral for bitcoin_compare, the proof-of-work target check — a
+// sidecar, so the design file is never touched. Three claims that pin down
+// what the module is FOR rather than restating its body:
+//
+//   * an all-zero digest meets every target, and every digest meets the
+//     all-ones target (the comparison is `<=`, not `<`);
+//   * the digest is read LITTLE-endian: its LAST byte (hash[7:0]) is the
+//     integer's most significant one, so when that byte alone exceeds the
+//     target's top byte the block must be rejected. Drop the byte reversal and
+//     this is the property that fails.
+//
+// Usage:
+//   lhd formal verify bitcoin/pyrope/bitcoin_compare.prp \
+//       bitcoin/verif/bitcoin_compare.verify.prp --top bitcoin_compare
+const cmp = import("bitcoin_compare.bitcoin_compare")
+
+formal bitcoin_compare.zero_digest_meets_any_target {
+  mut acc = cmp
+  assert((acc.hash == 0) implies acc.below, "SHA256d == 0 is <= every target")
+}
+
+formal bitcoin_compare.any_digest_meets_max_target {
+  mut acc = cmp
+  assert((acc.target#&[..] == 1) implies acc.below, "every digest is <= the all-ones target")
+}
+
+formal bitcoin_compare.last_byte_is_most_significant {
+  mut acc = cmp
+  assert((acc.hash#[0..<8] > acc.target#[248..<256]) implies not acc.below,
+         "the digest's last byte is the most significant byte of the little-endian value")
+}

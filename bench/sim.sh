@@ -287,7 +287,7 @@ if [ "$MODE" = incr ]; then
     local drv=$wd/sim/drv.bin
     [ -x "$drv" ] \
       || { echo "FAIL: sim_pass $tag linked no $drv" >&2; return 1; }
-    log_cmd "sim_exec_$tag" "$drv --cycles $CYCLES ${DRV_SETS[*]} --result-json $wd/sim/exec_tests.json"
+    log_cmd "sim_exec_$tag" "$drv --cycles $CYCLES ${DRV_SETS[*]-} --result-json $wd/sim/exec_tests.json"
     SIM_EXEC_RC=0
     CURRENT_STEP=sim_exec_$tag "$drv" --cycles "$CYCLES" ${DRV_SETS[@]+"${DRV_SETS[@]}"} \
       --result-json "$wd/sim/exec_tests.json" >"step_sim_exec_$tag.log" 2>&1 || SIM_EXEC_RC=$?
@@ -440,7 +440,7 @@ fi
 # because sim_run_ms is the real cost of one `lhd sim`.
 : "${SIM_REPS:=3}"
 DRV=SW/sim/drv.bin
-log_cmd sim_exec "$DRV --cycles $CYCLES ${DRV_SETS[*]} --result-json SW/sim/exec_tests.json  (x$SIM_REPS, best)"
+log_cmd sim_exec "$DRV --cycles $CYCLES ${DRV_SETS[*]-} --result-json SW/sim/exec_tests.json  (x$SIM_REPS, best)"
 best_run sim_exec "$SIM_REPS" "$DRV" --cycles "$CYCLES" ${DRV_SETS[@]+"${DRV_SETS[@]}"} \
   --result-json SW/sim/exec_tests.json
 EXEC_MS=$BEST_MS

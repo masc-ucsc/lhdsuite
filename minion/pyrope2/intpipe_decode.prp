@@ -1,0 +1,745 @@
+const pkg = import("minion_pkg")
+
+// Integer-pipe instruction decoder: maps a 32-bit instruction word to its
+// control bundle (minion_control_t). Pure combinational, one row per
+// instruction. Rows are written as calls to small constructors for the common
+// instruction shapes (alu_reg, load, ...) so only what distinguishes an
+// instruction shows. Fields a row does not use stay don't-care (unknown bits),
+// except `legal`, which is only 0 for an undecoded word.
+//
+// The match patterns never overlap, so the order of the rows is irrelevant
+// (`unique if`). EnableExtraTrans selects whether FRSQ_PS/FSIN_PS decode as a
+// float op (1) or as m-code (0).
+
+// Instruction-word fields used by the match masks.
+comptime const OPC = 0x7f // [6:0] opcode
+comptime const F3 = 0x7000 // [14:12] funct3
+comptime const F7 = 0xfe000000 // [31:25] funct7
+comptime const F12 = 0xfff00000 // [31:20] funct12 / immediate
+
+type Ctrl = (legal:U1, mcode:U1, fp:U1, br:U1, jal:U1, jalr:U1, rxs2:U1, rxs1:U1, sel_alu2:U2, sel_alu1:U2, sel_imm:U3, alu_dw:U1, alu_fn:U5, mem:U1, mem_cmd:U5, mem_type:U4, rma:U1, wmd:U1, wmad:U1, wfd:U1, div:U1, wxd:U1, csr:U3, fence:U1, mem_g:U1, gsc:U1, gfx:U1, x31:U1)
+
+// The helpers below take untyped parameters on purpose: that makes each one a
+// template inlined at its call (every argument is a constant), instead of a
+// sub-module whose don't-care outputs the simulator cannot schedule.
+//
+// One decode row. Defaults: no flags, don't-care operand selects/immediate/ALU/memory fields, no CSR op.
+comb row(alu_dw=0ub?, alu_fn=0ub1????, br=false, csr=pkg.CsrN, div=false, fence=false, fp=false, gfx=false, gsc=false, jal=false, jalr=false, legal=true, mcode=false, mem=false, mem_cmd=0ub?????, mem_g=false, mem_type=0ub????, rma=false, rxs1=false, rxs2=false, sel_alu1=0ub??, sel_alu2=0ub??, sel_imm=0ub???, wfd=false, wmad=false, wmd=false, wxd=false, x31=false) -> (c:Ctrl) {
+  c = (legal=U1(legal), mcode=U1(mcode), fp=U1(fp), br=U1(br), jal=U1(jal), jalr=U1(jalr), rxs2=U1(rxs2), rxs1=U1(rxs1), sel_alu2=sel_alu2, sel_alu1=sel_alu1, sel_imm=sel_imm, alu_dw=alu_dw, alu_fn=alu_fn, mem=U1(mem), mem_cmd=mem_cmd, mem_type=mem_type, rma=U1(rma), wmd=U1(wmd), wmad=U1(wmad), wfd=U1(wfd), div=U1(div), wxd=U1(wxd), csr=csr, fence=U1(fence), mem_g=U1(mem_g), gsc=U1(gsc), gfx=U1(gfx), x31=U1(x31))
+}
+
+// Conditional branch: compares rs1 and rs2 with `fn`, target from the SB immediate.
+comb branch(fn) -> (c:Ctrl) {
+  c = row(alu_fn=fn, br=true, rxs1=true, rxs2=true, sel_alu1=pkg.A1Rs1, sel_alu2=pkg.A2Rs2, sel_imm=pkg.ImmSb)
+}
+
+// rd = rs1 `fn` I-immediate.
+comb alu_imm(dw=pkg.Dw64, fn) -> (c:Ctrl) {
+  c = row(alu_dw=dw, alu_fn=fn, rxs1=true, sel_alu1=pkg.A1Rs1, sel_alu2=pkg.A2Imm, sel_imm=pkg.ImmI, wxd=true)
+}
+
+// rd = rs1 `fn` rs2; `div` marks the multiply/divide unit, `gfx` the graphics-extension op.
+comb alu_reg(div=false, dw=pkg.Dw64, fn, gfx=false) -> (c:Ctrl) {
+  c = row(alu_dw=dw, alu_fn=fn, div, gfx, rxs1=true, rxs2=true, sel_alu1=pkg.A1Rs1, sel_alu2=pkg.A2Rs2, wxd=true)
+}
+
+// rd (integer, or FP when `fp`) = mem[rs1 + I-immediate].
+comb load(fp=false, ty) -> (c:Ctrl) {
+  c = row(alu_dw=pkg.Dw64, alu_fn=pkg.AluAdd, fp, mem=true, mem_cmd=pkg.DcCmdXrd, mem_type=ty, rxs1=true, sel_alu1=pkg.A1Rs1, sel_alu2=pkg.A2Imm, sel_imm=pkg.ImmI, wfd=fp, wxd=not fp)
+}
+
+// mem[rs1 + S-immediate] = rs2 (the FP register when `fp`, so no integer rs2 read).
+comb store(fp=false, ty) -> (c:Ctrl) {
+  c = row(alu_dw=pkg.Dw64, alu_fn=pkg.AluAdd, fp, mem=true, mem_cmd=pkg.DcCmdXwr, mem_type=ty, rxs1=true, rxs2=not fp, sel_alu1=pkg.A1Rs1, sel_alu2=pkg.A2Imm, sel_imm=pkg.ImmS)
+}
+
+// CSR read-modify-write with a register operand.
+comb csr_reg(csr) -> (c:Ctrl) {
+  c = row(alu_dw=pkg.Dw64, alu_fn=pkg.AluAdd, csr, rxs1=true, rxs2=true, sel_alu1=pkg.A1Rs1, sel_alu2=pkg.A2Zero, wxd=true)
+}
+
+// CSR read-modify-write with the 5-bit zero-extended immediate.
+comb csr_imm(csr) -> (c:Ctrl) {
+  c = row(alu_dw=pkg.Dw64, alu_fn=pkg.AluAdd, csr, rxs2=true, sel_alu1=pkg.A1Zero, sel_alu2=pkg.A2Imm, sel_imm=pkg.ImmZ, wxd=true)
+}
+
+// Atomic on the packed-single (FP) register file.
+comb fp_amo(cmd, is_global=false) -> (c:Ctrl) {
+  c = row(alu_dw=pkg.Dw64, alu_fn=pkg.AluAdd, fp=true, gsc=true, mem=true, mem_cmd=cmd, mem_g=is_global, mem_type=pkg.DcTypePsGs32, rxs2=true, sel_alu1=pkg.A1Fs1, sel_alu2=pkg.A2Rs2, wfd=true)
+}
+
+// Scalar atomic; `x31` marks compare-and-swap, which also reads x31.
+comb amo(cmd, is_global=false, ty, x31=false) -> (c:Ctrl) {
+  c = row(alu_dw=pkg.Dw64, alu_fn=pkg.AluAdd, mem=true, mem_cmd=cmd, mem_g=is_global, mem_type=ty, rxs1=true, rxs2=true, sel_alu1=pkg.A1Rs1, sel_alu2=pkg.A2Zero, wxd=true, x31)
+}
+
+// Byte/half store through the write-bypass command.
+comb store_sub(is_global=false, ty) -> (c:Ctrl) {
+  c = row(alu_dw=pkg.Dw64, alu_fn=pkg.AluAdd, mem=true, mem_cmd=pkg.DcCmdXwrb, mem_g=is_global, mem_type=ty, rxs1=true, rxs2=true, sel_alu1=pkg.A1Rs1, sel_alu2=pkg.A2Zero, sel_imm=pkg.ImmS)
+}
+
+// Whole-line packed-single load/store (bypass commands) addressed by rs1.
+comb ps_line(cmd, is_global=false) -> (c:Ctrl) {
+  c = row(alu_dw=pkg.Dw64, alu_fn=pkg.AluAdd, fp=true, mem=true, mem_cmd=cmd, mem_g=is_global, mem_type=pkg.DcTypePs, rxs1=true, sel_alu1=pkg.A1Rs1, sel_alu2=pkg.A2Zero, wfd=cmd == pkg.DcCmdXrdb)
+}
+
+// Packed-single gather (loads, wfd) or scatter (stores), per-lane addresses in an FP register.
+comb ps_gather(cmd, is_global=false, is_load, ty) -> (c:Ctrl) {
+  c = row(alu_dw=pkg.Dw64, alu_fn=pkg.AluAdd, fp=true, gsc=true, mem=true, mem_cmd=cmd, mem_g=is_global, mem_type=ty, rxs2=true, sel_alu1=pkg.A1Fs1, sel_alu2=pkg.A2Rs2, wfd=is_load)
+}
+
+// 32-bit-index gather/scatter: base in rs1, index vector in rs2.
+comb ps_g32(cmd, ty) -> (c:Ctrl) {
+  c = row(alu_dw=pkg.Dw64, alu_fn=pkg.AluAdd, fp=true, mem=true, mem_cmd=cmd, mem_type=ty, rxs1=true, rxs2=true, sel_alu1=pkg.A1Zero, sel_alu2=pkg.A2Rs2, wfd=cmd == pkg.DcCmdG32)
+}
+
+// FP/vector-unit op with no scalar operands unless `src_x` (rs1 is an integer register).
+comb fp_op(gfx=false, src_x=false, wfd=false, wmad=false, wmd=false, wxd=false) -> (c:Ctrl) {
+  c = row(fp=true, gfx, rxs1=src_x, sel_alu1=if src_x { pkg.A1Rs1 } else { 0ub?? }, wfd, wmad, wmd, wxd)
+}
+
+pub comb intpipe_decode<EnableExtraTrans=0>(inst_bits:U32) -> (inst_ctrl:Ctrl) {
+  inst_ctrl = unique if (inst_bits & (OPC | F3)) == 0x1063 { // Basic set: BNE
+    branch(fn=pkg.AluSne)
+  } elif (inst_bits & (OPC | F3)) == 0x63 { // BEQ
+    branch(fn=pkg.AluSeq)
+  } elif (inst_bits & (OPC | F3)) == 0x4063 { // BLT
+    branch(fn=pkg.AluSlt)
+  } elif (inst_bits & (OPC | F3)) == 0x6063 { // BLTU
+    branch(fn=pkg.AluSltu)
+  } elif (inst_bits & (OPC | F3)) == 0x5063 { // BGE
+    branch(fn=pkg.AluSge)
+  } elif (inst_bits & (OPC | F3)) == 0x7063 { // BGEU
+    branch(fn=pkg.AluSgeu)
+  } elif (inst_bits & OPC) == 0x6f { // JAL
+    row(alu_dw=pkg.Dw64, alu_fn=pkg.AluAdd, jal=true, sel_alu1=pkg.A1Pc, sel_alu2=pkg.A2Size, sel_imm=pkg.ImmUj, wxd=true)
+  } elif (inst_bits & (OPC | F3)) == 0x67 { // JALR
+    row(alu_dw=pkg.Dw64, alu_fn=pkg.AluAdd, jalr=true, rxs1=true, sel_alu1=pkg.A1Rs1, sel_alu2=pkg.A2Imm, sel_imm=pkg.ImmI, wxd=true)
+  } elif (inst_bits & OPC) == 0x17 { // AUIPC
+    row(alu_dw=pkg.Dw64, alu_fn=pkg.AluAdd, sel_alu1=pkg.A1Pc, sel_alu2=pkg.A2Imm, sel_imm=pkg.ImmU, wxd=true)
+  } elif (inst_bits & (OPC | F3)) == 0x3 { // Loads: LB
+    load(ty=pkg.DcTypeB)
+  } elif (inst_bits & (OPC | F3)) == 0x1003 { // LH
+    load(ty=pkg.DcTypeH)
+  } elif (inst_bits & (OPC | F3)) == 0x2003 { // LW
+    load(ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3)) == 0x4003 { // LBU
+    load(ty=pkg.DcTypeBu)
+  } elif (inst_bits & (OPC | F3)) == 0x5003 { // LHU
+    load(ty=pkg.DcTypeHu)
+  } elif (inst_bits & (OPC | F3)) == 0x23 { // Stores: SB
+    store(ty=pkg.DcTypeB)
+  } elif (inst_bits & (OPC | F3)) == 0x1023 { // SH
+    store(ty=pkg.DcTypeH)
+  } elif (inst_bits & (OPC | F3)) == 0x2023 { // SW
+    store(ty=pkg.DcTypeW)
+  } elif (inst_bits & OPC) == 0x37 { // LUI: LUI
+    row(alu_dw=pkg.Dw64, alu_fn=pkg.AluAdd, sel_alu1=pkg.A1Zero, sel_alu2=pkg.A2Imm, sel_imm=pkg.ImmU, wxd=true)
+  } elif (inst_bits & (OPC | F3)) == 0x13 { // ALU I-type: ADDI
+    alu_imm(fn=pkg.AluAdd)
+  } elif (inst_bits & (OPC | F3)) == 0x2013 { // SLTI
+    alu_imm(fn=pkg.AluSlt)
+  } elif (inst_bits & (OPC | F3)) == 0x3013 { // SLTIU
+    alu_imm(fn=pkg.AluSltu)
+  } elif (inst_bits & (OPC | F3)) == 0x7013 { // ANDI
+    alu_imm(fn=pkg.AluAnd)
+  } elif (inst_bits & (OPC | F3)) == 0x6013 { // ORI
+    alu_imm(fn=pkg.AluOr)
+  } elif (inst_bits & (OPC | F3)) == 0x4013 { // XORI
+    alu_imm(fn=pkg.AluXor)
+  } elif (inst_bits & 0xfc00707f) == 0x1013 { // Shifts I-type: SLLI
+    alu_imm(fn=pkg.AluSl)
+  } elif (inst_bits & 0xfc00707f) == 0x5013 { // SRLI
+    alu_imm(fn=pkg.AluSr)
+  } elif (inst_bits & 0xfc00707f) == 0x40005013 { // SRAI
+    alu_imm(fn=pkg.AluSra)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x33 { // ALU R-type: ADD
+    alu_reg(fn=pkg.AluAdd)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x40000033 { // SUB
+    alu_reg(fn=pkg.AluSub)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2033 { // SLT
+    alu_reg(fn=pkg.AluSlt)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x3033 { // SLTU
+    alu_reg(fn=pkg.AluSltu)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x7033 { // AND
+    alu_reg(fn=pkg.AluAnd)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x6033 { // OR
+    alu_reg(fn=pkg.AluOr)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x4033 { // XOR
+    alu_reg(fn=pkg.AluXor)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x1033 { // SLL
+    alu_reg(fn=pkg.AluSl)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x5033 { // SRL
+    alu_reg(fn=pkg.AluSr)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x40005033 { // SRA
+    alu_reg(fn=pkg.AluSra)
+  } elif (inst_bits & (OPC | F3)) == 0xf { // Misc: FENCE
+    row(fence=true)
+  } elif (inst_bits & 0xffffffff) == 0x73 { // ECALL
+    row(csr=pkg.CsrI)
+  } elif (inst_bits & 0xffffffff) == 0x100073 { // EBREAK
+    row(alu_dw=pkg.Dw64, alu_fn=pkg.AluAdd, csr=pkg.CsrI, sel_alu1=pkg.A1Pc, sel_alu2=pkg.A2Zero)
+  } elif (inst_bits & 0xffffffff) == 0x30200073 { // MRET
+    row(csr=pkg.CsrI)
+  } elif (inst_bits & 0xffffffff) == 0x10500073 { // WFI
+    row(csr=pkg.CsrI)
+  } elif (inst_bits & (OPC | F3)) == 0x1073 { // CSR: CSRRW
+    csr_reg(csr=pkg.CsrW)
+  } elif (inst_bits & (OPC | F3)) == 0x2073 { // CSRRS
+    csr_reg(csr=pkg.CsrS)
+  } elif (inst_bits & (OPC | F3)) == 0x3073 { // CSRRC
+    csr_reg(csr=pkg.CsrC)
+  } elif (inst_bits & (OPC | F3)) == 0x5073 { // CSRRWI
+    csr_imm(csr=pkg.CsrW)
+  } elif (inst_bits & (OPC | F3)) == 0x6073 { // CSRRSI
+    csr_imm(csr=pkg.CsrS)
+  } elif (inst_bits & (OPC | F3)) == 0x7073 { // CSRRCI
+    csr_imm(csr=pkg.CsrC)
+  } elif (inst_bits & 0xffffffff) == 0x10200073 { // Rets: SRET
+    row(csr=pkg.CsrI)
+  } elif (inst_bits & 0xffffffff) == 0x7b200073 { // DRET
+    row(csr=pkg.CsrI)
+  } elif (inst_bits & (OPC | F3)) == 0x3003 { // 64-bit loads/stores: LD
+    load(ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3)) == 0x6003 { // LWU
+    load(ty=pkg.DcTypeWu)
+  } elif (inst_bits & (OPC | F3)) == 0x3023 { // SD
+    store(ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3)) == 0x1b { // 32-bit W-suffix ops: ADDIW
+    alu_imm(dw=pkg.Dw32, fn=pkg.AluAdd)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x101b { // SLLIW
+    alu_imm(dw=pkg.Dw32, fn=pkg.AluSl)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x501b { // SRLIW
+    alu_imm(dw=pkg.Dw32, fn=pkg.AluSr)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x4000501b { // SRAIW
+    alu_imm(dw=pkg.Dw32, fn=pkg.AluSra)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x3b { // ADDW
+    alu_reg(dw=pkg.Dw32, fn=pkg.AluAdd)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x4000003b { // SUBW
+    alu_reg(dw=pkg.Dw32, fn=pkg.AluSub)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x103b { // SLLW
+    alu_reg(dw=pkg.Dw32, fn=pkg.AluSl)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x503b { // SRLW
+    alu_reg(dw=pkg.Dw32, fn=pkg.AluSr)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x4000503b { // SRAW
+    alu_reg(dw=pkg.Dw32, fn=pkg.AluSra)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2000033 { // Mul/Div: MUL
+    alu_reg(div=true, fn=pkg.AluMul)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2001033 { // MULH
+    alu_reg(div=true, fn=pkg.AluMulh)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2003033 { // MULHU
+    alu_reg(div=true, fn=pkg.AluMulhu)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2002033 { // MULHSU
+    alu_reg(div=true, fn=pkg.AluMulhsu)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2004033 { // DIV
+    alu_reg(div=true, fn=pkg.AluDiv)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2005033 { // DIVU
+    alu_reg(div=true, fn=pkg.AluDivu)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2006033 { // REM
+    alu_reg(div=true, fn=pkg.AluRem)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2007033 { // REMU
+    alu_reg(div=true, fn=pkg.AluRemu)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x200003b { // Mul/Div 64b W-suffix: MULW
+    alu_reg(div=true, dw=pkg.Dw32, fn=pkg.AluMul)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x200403b { // DIVW
+    alu_reg(div=true, dw=pkg.Dw32, fn=pkg.AluDiv)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x200503b { // DIVUW
+    alu_reg(div=true, dw=pkg.Dw32, fn=pkg.AluDivu)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x200603b { // REMW
+    alu_reg(div=true, dw=pkg.Dw32, fn=pkg.AluRem)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x200703b { // REMUW
+    alu_reg(div=true, dw=pkg.Dw32, fn=pkg.AluRemu)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x600400b { // FP atomics (local PI): FAMOADDL_PI
+    fp_amo(cmd=pkg.DcCmdXaAdd)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xe00400b { // FAMOSWAPL_PI
+    fp_amo(cmd=pkg.DcCmdXaSwap)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x1600400b { // FAMOANDL_PI
+    fp_amo(cmd=pkg.DcCmdXaAnd)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x1e00400b { // FAMOORL_PI
+    fp_amo(cmd=pkg.DcCmdXaOr)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2600400b { // FAMOXORL_PI
+    fp_amo(cmd=pkg.DcCmdXaXor)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2e00400b { // FAMOMINL_PI
+    fp_amo(cmd=pkg.DcCmdXaMin)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x3600400b { // FAMOMAXL_PI
+    fp_amo(cmd=pkg.DcCmdXaMax)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x3e00400b { // FAMOMINUL_PI
+    fp_amo(cmd=pkg.DcCmdXaMinu)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x4600400b { // FAMOMAXUL_PI
+    fp_amo(cmd=pkg.DcCmdXaMaxu)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2800400b { // FAMOMAXL_PS
+    fp_amo(cmd=pkg.DcCmdXaMaxPs)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x3000400b { // FAMOMINL_PS
+    fp_amo(cmd=pkg.DcCmdXaMinPs)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x8600400b { // FP atomics (global PI): FAMOADDG_PI
+    fp_amo(cmd=pkg.DcCmdXaAdd, is_global=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x8e00400b { // FAMOSWAPG_PI
+    fp_amo(cmd=pkg.DcCmdXaSwap, is_global=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x9600400b { // FAMOANDG_PI
+    fp_amo(cmd=pkg.DcCmdXaAnd, is_global=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x9e00400b { // FAMOORG_PI
+    fp_amo(cmd=pkg.DcCmdXaOr, is_global=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa600400b { // FAMOXORG_PI
+    fp_amo(cmd=pkg.DcCmdXaXor, is_global=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xae00400b { // FAMOMING_PI
+    fp_amo(cmd=pkg.DcCmdXaMin, is_global=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xb600400b { // FAMOMAXG_PI
+    fp_amo(cmd=pkg.DcCmdXaMax, is_global=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xbe00400b { // FAMOMINUG_PI
+    fp_amo(cmd=pkg.DcCmdXaMinu, is_global=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xc600400b { // FAMOMAXUG_PI
+    fp_amo(cmd=pkg.DcCmdXaMaxu, is_global=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa800400b { // FAMOMAXG_PS
+    fp_amo(cmd=pkg.DcCmdXaMaxPs, is_global=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xb000400b { // FAMOMING_PS
+    fp_amo(cmd=pkg.DcCmdXaMinPs, is_global=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x800203b { // Scalar AMO W (local): AMOSWAPL_W
+    amo(cmd=pkg.DcCmdXaSwap, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x203b { // AMOADDL_W
+    amo(cmd=pkg.DcCmdXaAdd, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2000203b { // AMOXORL_W
+    amo(cmd=pkg.DcCmdXaXor, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x6000203b { // AMOANDL_W
+    amo(cmd=pkg.DcCmdXaAnd, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x4000203b { // AMOORL_W
+    amo(cmd=pkg.DcCmdXaOr, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x8000203b { // AMOMINL_W
+    amo(cmd=pkg.DcCmdXaMin, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa000203b { // AMOMAXL_W
+    amo(cmd=pkg.DcCmdXaMax, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xc000203b { // AMOMINUL_W
+    amo(cmd=pkg.DcCmdXaMinu, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xe000203b { // AMOMAXUL_W
+    amo(cmd=pkg.DcCmdXaMaxu, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa00203b { // Scalar AMO W (global): AMOSWAPG_W
+    amo(cmd=pkg.DcCmdXaSwap, is_global=true, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x200203b { // AMOADDG_W
+    amo(cmd=pkg.DcCmdXaAdd, is_global=true, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2200203b { // AMOXORG_W
+    amo(cmd=pkg.DcCmdXaXor, is_global=true, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x6200203b { // AMOANDG_W
+    amo(cmd=pkg.DcCmdXaAnd, is_global=true, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x4200203b { // AMOORG_W
+    amo(cmd=pkg.DcCmdXaOr, is_global=true, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x8200203b { // AMOMING_W
+    amo(cmd=pkg.DcCmdXaMin, is_global=true, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa200203b { // AMOMAXG_W
+    amo(cmd=pkg.DcCmdXaMax, is_global=true, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xc200203b { // AMOMINUG_W
+    amo(cmd=pkg.DcCmdXaMinu, is_global=true, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xe200203b { // AMOMAXUG_W
+    amo(cmd=pkg.DcCmdXaMaxu, is_global=true, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x800303b { // Scalar AMO D (local): AMOSWAPL_D
+    amo(cmd=pkg.DcCmdXaSwap, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x303b { // AMOADDL_D
+    amo(cmd=pkg.DcCmdXaAdd, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2000303b { // AMOXORL_D
+    amo(cmd=pkg.DcCmdXaXor, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x6000303b { // AMOANDL_D
+    amo(cmd=pkg.DcCmdXaAnd, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x4000303b { // AMOORL_D
+    amo(cmd=pkg.DcCmdXaOr, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x8000303b { // AMOMINL_D
+    amo(cmd=pkg.DcCmdXaMin, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa000303b { // AMOMAXL_D
+    amo(cmd=pkg.DcCmdXaMax, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xc000303b { // AMOMINUL_D
+    amo(cmd=pkg.DcCmdXaMinu, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xe000303b { // AMOMAXUL_D
+    amo(cmd=pkg.DcCmdXaMaxu, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa00303b { // Scalar AMO D (global): AMOSWAPG_D
+    amo(cmd=pkg.DcCmdXaSwap, is_global=true, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x200303b { // AMOADDG_D
+    amo(cmd=pkg.DcCmdXaAdd, is_global=true, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2200303b { // AMOXORG_D
+    amo(cmd=pkg.DcCmdXaXor, is_global=true, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x6200303b { // AMOANDG_D
+    amo(cmd=pkg.DcCmdXaAnd, is_global=true, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x4200303b { // AMOORG_D
+    amo(cmd=pkg.DcCmdXaOr, is_global=true, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x8200303b { // AMOMING_D
+    amo(cmd=pkg.DcCmdXaMin, is_global=true, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa200303b { // AMOMAXG_D
+    amo(cmd=pkg.DcCmdXaMax, is_global=true, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xc200303b { // AMOMINUG_D
+    amo(cmd=pkg.DcCmdXaMinu, is_global=true, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xe200303b { // AMOMAXUG_D
+    amo(cmd=pkg.DcCmdXaMaxu, is_global=true, ty=pkg.DcTypeD)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xf000203b { // AMO compare-swap: AMOCMPSWPL_W
+    amo(cmd=pkg.DcCmdXaCmpswp, ty=pkg.DcTypeW, x31=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xf200203b { // AMOCMPSWPG_W
+    amo(cmd=pkg.DcCmdXaCmpswp, is_global=true, ty=pkg.DcTypeW, x31=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xf000303b { // AMOCMPSWPL_D
+    amo(cmd=pkg.DcCmdXaCmpswp, ty=pkg.DcTypeD, x31=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xf200303b { // AMOCMPSWPG_D
+    amo(cmd=pkg.DcCmdXaCmpswp, is_global=true, ty=pkg.DcTypeD, x31=true)
+  } elif (inst_bits & 0xfe007fff) == 0x1000303b { // CUDA byte/half stores: SBL
+    store_sub(ty=pkg.DcTypeB)
+  } elif (inst_bits & 0xfe007fff) == 0x1200303b { // SBG
+    store_sub(is_global=true, ty=pkg.DcTypeB)
+  } elif (inst_bits & 0xfe007fff) == 0x1800303b { // SHL
+    store_sub(ty=pkg.DcTypeH)
+  } elif (inst_bits & 0xfe007fff) == 0x1a00303b { // SHG
+    store_sub(is_global=true, ty=pkg.DcTypeH)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0x1000700b { // CUDA PS load/store/gather/scatter bypass (local, funct3=111): FLWL_PS
+    ps_line(cmd=pkg.DcCmdXrdb)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0x5000700b { // FSWL_PS
+    ps_line(cmd=pkg.DcCmdXwrb)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x8000700b { // FGBL_PS (instr name FGBL_PS)
+    ps_gather(cmd=pkg.DcCmdXrdb, is_load=true, ty=pkg.DcTypePsGs8)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xc000700b { // FSCBL_PS
+    ps_gather(cmd=pkg.DcCmdXwrb, is_load=false, ty=pkg.DcTypePsGs8)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x8800700b { // FGHL_PS
+    ps_gather(cmd=pkg.DcCmdXrdb, is_load=true, ty=pkg.DcTypePsGs16)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xc800700b { // FSCHL_PS
+    ps_gather(cmd=pkg.DcCmdXwrb, is_load=false, ty=pkg.DcTypePsGs16)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x9000700b { // FGWL_PS
+    fp_amo(cmd=pkg.DcCmdXrdb)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xd000700b { // FSCWL_PS
+    ps_gather(cmd=pkg.DcCmdXwrb, is_load=false, ty=pkg.DcTypePsGs32)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0x1200700b { // CUDA PS gather/scatter bypass (global): FLWG_PS
+    ps_line(cmd=pkg.DcCmdXrdb, is_global=true)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0x5200700b { // FSWG_PS
+    ps_line(cmd=pkg.DcCmdXwrb, is_global=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x8200700b { // FGBG_PS
+    ps_gather(cmd=pkg.DcCmdXrdb, is_global=true, is_load=true, ty=pkg.DcTypePsGs8)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xc200700b { // FSCBG_PS
+    ps_gather(cmd=pkg.DcCmdXwrb, is_global=true, is_load=false, ty=pkg.DcTypePsGs8)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x8a00700b { // FGHG_PS
+    ps_gather(cmd=pkg.DcCmdXrdb, is_global=true, is_load=true, ty=pkg.DcTypePsGs16)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xca00700b { // FSCHG_PS
+    ps_gather(cmd=pkg.DcCmdXwrb, is_global=true, is_load=false, ty=pkg.DcTypePsGs16)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x9200700b { // FGWG_PS
+    fp_amo(cmd=pkg.DcCmdXrdb, is_global=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xd200700b { // FSCWG_PS
+    ps_gather(cmd=pkg.DcCmdXwrb, is_global=true, is_load=false, ty=pkg.DcTypePsGs32)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x20000053 { // Float single precision: FSGNJ_S
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x20002053 { // FSGNJX_S
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x20001053 { // FSGNJN_S
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x28000053 { // FMIN_S
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x28001053 { // FMAX_S
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F7)) == 0x53 { // FADD_S
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F7)) == 0x8000053 { // FSUB_S
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F7)) == 0x10000053 { // FMUL_S
+    fp_op(wfd=true)
+  } elif (inst_bits & 0x600007f) == 0x43 { // FMADD_S
+    fp_op(wfd=true)
+  } elif (inst_bits & 0x600007f) == 0x47 { // FMSUB_S
+    fp_op(wfd=true)
+  } elif (inst_bits & 0x600007f) == 0x4f { // FNMADD_S
+    fp_op(wfd=true)
+  } elif (inst_bits & 0x600007f) == 0x4b { // FNMSUB_S
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0xe0001053 { // FCLASS_S
+    fp_op(wxd=true)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0xe0000053 { // FMV_X_S
+    fp_op(wxd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xc0000053 { // FCVT_W_S
+    fp_op(wxd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xc0100053 { // FCVT_WU_S
+    fp_op(wxd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa0002053 { // FEQ_S
+    fp_op(wxd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa0001053 { // FLT_S
+    fp_op(wxd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa0000053 { // FLE_S
+    fp_op(wxd=true)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0xf0000053 { // FMV_S_X
+    fp_op(src_x=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd0000053 { // FCVT_S_W
+    fp_op(src_x=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd0100053 { // FCVT_S_WU
+    fp_op(src_x=true, wfd=true)
+  } elif (inst_bits & (OPC | F3)) == 0x2007 { // FP loads/stores: FLW
+    load(fp=true, ty=pkg.DcTypeWu)
+  } elif (inst_bits & (OPC | F3)) == 0x2027 { // FSW
+    store(fp=true, ty=pkg.DcTypeW)
+  } elif (inst_bits & (OPC | F3)) == 0x5007 { // Moscow / FLQ2 / FSQ2: FLQ2
+    load(fp=true, ty=pkg.DcTypePs)
+  } elif (inst_bits & (OPC | F3)) == 0x5027 { // FSQ2
+    store(fp=true, ty=pkg.DcTypePs)
+  } elif (inst_bits & (OPC | F3)) == 0x200b { // Packed single loads/stores: FLW_PS
+    load(fp=true, ty=pkg.DcTypePs)
+  } elif (inst_bits & (OPC | F3)) == 0x600b { // FSW_PS
+    store(fp=true, ty=pkg.DcTypePs)
+  } elif (inst_bits & (OPC | F3)) == 0xb { // FBC_PS
+    load(fp=true, ty=pkg.DcTypePsBr)
+  } elif (inst_bits & (OPC | F3)) == 0x300b { // FBCX_PS
+    fp_op(src_x=true, wfd=true)
+  } elif (inst_bits & OPC) == 0x1f { // FBCI_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x6000100b { // PS gather/scatter (non-bypass, local): FGW_PS
+    fp_amo(cmd=pkg.DcCmdXrd)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x5000100b { // FGH_PS
+    ps_gather(cmd=pkg.DcCmdXrd, is_load=true, ty=pkg.DcTypePsGs16)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x4800100b { // FGB_PS
+    ps_gather(cmd=pkg.DcCmdXrd, is_load=true, ty=pkg.DcTypePsGs8)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xe000100b { // FSCW_PS
+    ps_gather(cmd=pkg.DcCmdXwr, is_load=false, ty=pkg.DcTypePsGs32)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xd000100b { // FSCH_PS
+    ps_gather(cmd=pkg.DcCmdXwr, is_load=false, ty=pkg.DcTypePsGs16)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xc800100b { // FSCB_PS
+    ps_gather(cmd=pkg.DcCmdXwr, is_load=false, ty=pkg.DcTypePsGs8)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2000100b { // PS G32 gather/scatter: FG32W_PS
+    ps_g32(cmd=pkg.DcCmdG32, ty=pkg.DcTypePsGs32)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x1000100b { // FG32H_PS
+    ps_g32(cmd=pkg.DcCmdG32, ty=pkg.DcTypePsGs16)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x800100b { // FG32B_PS
+    ps_g32(cmd=pkg.DcCmdG32, ty=pkg.DcTypePsGs8)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa000100b { // FSC32W_PS
+    ps_g32(cmd=pkg.DcCmdSc32, ty=pkg.DcTypePsGs32)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x9000100b { // FSC32H_PS
+    ps_g32(cmd=pkg.DcCmdSc32, ty=pkg.DcTypePsGs16)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x8800100b { // FSC32B_PS
+    ps_g32(cmd=pkg.DcCmdSc32, ty=pkg.DcTypePsGs8)
+  } elif (inst_bits & (OPC | F7)) == 0x7b { // PS arithmetic: FADD_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F7)) == 0x800007b { // FSUB_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F7)) == 0x1000007b { // FMUL_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2800007b { // FMIN_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2800107b { // FMAX_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0x5880007b { // FRSQ_PS
+    if EnableExtraTrans != 0 { fp_op(wfd=true) } else { row(mcode=true) }
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0x5870007b { // FRCP_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & 0x600007f) == 0x5b { // FMADD_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & 0x600007f) == 0x200005b { // FMSUB_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & 0x600007f) == 0x400005b { // FNMSUB_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & 0x600007f) == 0x600005b { // FNMADD_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa000207b { // FEQ_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa000107b { // FLT_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa000007b { // FLE_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa000607b { // FEQM_PS
+    fp_op(wmd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa000507b { // FLTM_PS
+    fp_op(wmd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa000407b { // FLEM_PS
+    fp_op(wmd=true)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0xe000107b { // FCLASS_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xc000007b { // FCVT_PW_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xc010007b { // FCVT_PWU_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd000007b { // FCVT_PS_PW
+    fp_op(src_x=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd010007b { // FCVT_PS_PWU
+    fp_op(src_x=true, wfd=true)
+  } elif (inst_bits & 0xff80707f) == 0xe000007b { // FMVZ_X_PS
+    fp_op(wxd=true)
+  } elif (inst_bits & 0xff80707f) == 0xe000207b { // FMVS_X_PS
+    fp_op(wxd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2000007b { // FSGNJ_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2000207b { // FSGNJX_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2000107b { // FSGNJN_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & 0x600707f) == 0x400203f { // FCMOV_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x77 { // FCMOVM_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F7)) == 0xe600007b { // FSWIZZ_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0x5860007b { // FSIN_PS
+    if EnableExtraTrans != 0 { fp_op(wfd=true) } else { row(mcode=true) }
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0x5840007b { // FEXP_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0x5830007b { // FLOG_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x3000007b { // FRCP_FIX_RAST
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0x5820007b { // FFRC_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0x5810007b { // FROUND_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd0a0007b { // PS conversions (gfx=1): FCVT_PS_F16
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd090007b { // FCVT_PS_F11
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd080007b { // FCVT_PS_F10
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd100007b { // FCVT_PS_UN24
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd110007b { // FCVT_PS_UN16
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd120007b { // FCVT_PS_UN10
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd130007b { // FCVT_PS_UN8
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd170007b { // FCVT_PS_UN2
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd190007b { // FCVT_PS_SN16
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd1b0007b { // FCVT_PS_SN8
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd890007b { // FCVT_F16_PS
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd880007b { // FCVT_F11_PS
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd8b0007b { // FCVT_F10_PS
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd900007b { // FCVT_UN24_PS
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd910007b { // FCVT_UN16_PS
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd920007b { // FCVT_UN10_PS
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd930007b { // FCVT_UN8_PS
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd970007b { // FCVT_UN2_PS
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd990007b { // FCVT_SN16_PS
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd9b0007b { // FCVT_SN8_PS
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd020007b { // FCVT_PS_RAST
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xc020007b { // FCVT_RAST_PS
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x6600707b { // Mask operations: MAND
+    fp_op(wmd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x6600607b { // MOR
+    fp_op(wmd=true)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0x6600207b { // MNOT
+    fp_op(wmd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x6600407b { // MXOR
+    fp_op(wmd=true)
+  } elif (inst_bits & 0xfffff07f) == 0xd600007b { // MOVA_X_M
+    row(fp=true, rma=true, wxd=true)
+  } elif (inst_bits & 0xfff07fff) == 0xd600107b { // MOVA_M_X
+    fp_op(src_x=true, wmad=true)
+  } elif (inst_bits & 0xfe000c7f) == 0x5600007b { // MOV_M_X
+    fp_op(src_x=true, wmd=true)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0x5200007b { // MASKPOPC
+    fp_op(wxd=true)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0x5400007b { // MASKPOPCZ
+    fp_op(wxd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x5e00007b { // MASKPOPCR
+    fp_op(gfx=true, wxd=true)
+  } elif (inst_bits & OPC) == 0x5f { // Packed Integer: FBCI_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x600007b { // FADD_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xe00007b { // FSUB_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x1600007b { // FMUL_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x1600107b { // FMULH_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x1600207b { // FMULHU_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2e00007b { // FMIN_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2e00107b { // FMAX_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2e00207b { // FMINU_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x2e00307b { // FMAXU_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x600707b { // FAND_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & 0xfe007c7f) == 0x3e00007b { // FLTM_PI
+    fp_op(wmd=true)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0x600307b { // FSAT8_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0x610307b { // FSATU8_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x600607b { // FOR_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x600207b { // FNOT_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x600407b { // FXOR_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x600107b { // FSLL_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x4e00107b { // FSLLI_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x600507b { // FSRL_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xe00507b { // FSRA_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x4e00507b { // FSRLI_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x4e00707b { // FSRAI_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa600207b { // FEQ_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa600107b { // FLT_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa600307b { // FLTU_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0xa600007b { // FLE_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & 0xfff07c7f) == 0xa600407b { // FSETM_PI
+    fp_op(wmd=true)
+  } elif (inst_bits & 0x600707f) == 0x400003f { // FADDI_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & 0x600707f) == 0x400103f { // FANDI_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0x2600007b { // FPACKREPB_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7 | F12)) == 0x2600107b { // FPACKREPH_PI
+    fp_op(wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x8800007b { // Cube / GFX: CUBEF_PS
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x8800107b { // CUBEFIDX_PS
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x8800207b { // CUBESGNSC_PS
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x8800307b { // CUBESGNTC_PS
+    fp_op(gfx=true, wfd=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x8000603b { // PACKB / BITMIXB: PACKB
+    alu_reg(fn=pkg.AluPackb)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x8000703b { // BITMIXB
+    alu_reg(fn=pkg.AluBitmixb, gfx=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xc0200053 { // M-CODE instructions (mcode=1): FCVT_L_S
+    row(mcode=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xc0300053 { // FCVT_LU_S
+    row(mcode=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd0200053 { // FCVT_S_L
+    row(mcode=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0xd0300053 { // FCVT_S_LU
+    row(mcode=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x1e00007b { // FDIV_PI
+    row(mcode=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x1e00107b { // FDIVU_PI
+    row(mcode=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x1e00307b { // FREMU_PI
+    row(mcode=true)
+  } elif (inst_bits & (OPC | F3 | F7)) == 0x1e00207b { // FREM_PI
+    row(mcode=true)
+  } elif (inst_bits & (OPC | F7)) == 0x18000053 { // FDIV_S
+    row(mcode=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0x58000053 { // FSQRT_S
+    row(mcode=true)
+  } elif (inst_bits & (OPC | F7 | F12)) == 0x5800007b { // FSQRT_PS
+    row(mcode=true)
+  } elif (inst_bits & (OPC | F7)) == 0x1800007b { // FDIV_PS
+    row(mcode=true)
+  } elif (inst_bits & (OPC | F3)) == 0x100f { // FENCE_I
+    row(mcode=true)
+  } elif (inst_bits & 0xfe007fff) == 0x12000073 { // SFENCE_VMA
+    row(mcode=true)
+  } else {
+    row(legal=false)
+  }
+}

@@ -1,0 +1,16 @@
+// Instruction-bit pipeline stage (verilog: intpipe_inst_bits_stage). Each bit
+// of the instruction has its own load enable so that unobserved bits are not
+// clocked: Mask bits are always saved, BrMask bits only for branches/jumps,
+// and every bit is saved when the trace encoder is on or for a CSR
+// instruction. An exception captures the whole word.
+pub mod intpipe_inst_bits_stage<Mask=0xf80, BrMask=0xffffff80>::[timecheck=false](clk_i:Clock, enable_i:U1, in_i:U32, is_br_jal_i:U1, is_csr_i:U1, te_enable_i:U1, xcpt_i:U1) -> (out_o:U32@[]) {
+  reg out_o_q:U32 = nil
+
+  for i in 0..<out_o_q.[bits] {
+    const save_bit = Mask#[i] == 1 or (BrMask#[i] == 1 and is_br_jal_i == 1) or te_enable_i == 1 or is_csr_i == 1
+    if (enable_i == 1 and save_bit) or xcpt_i == 1 {
+      out_o_q#[i] = in_i#[i]
+    }
+  }
+  out_o = out_o_q
+}

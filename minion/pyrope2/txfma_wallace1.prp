@@ -1,0 +1,41 @@
+// Wallace tree, first half: the 16 Booth partial products (33 bits, radix-4 so row i
+// is shifted left by 2*i) are reduced by two levels of 4:2 compressor arrays into two
+// carry/sum pairs, which txfma_wallace2 merges with the last row.
+// mode_i selects the half-precision (F16) layout: the sign-correction bit moves from
+// bit 33 of row 0 to bits 13 (row 0) and 53 (row 10).
+const txfma_4_2_compressor_array = import("txfma_4_2_compressor_array.txfma_4_2_compressor_array")
+const minion_pkg = import("minion_pkg")
+
+pub mod txfma_wallace1::[timecheck=false](mode_i:U1, pp10_i:U33, pp11_i:U33, pp12_i:U33, pp13_i:U33, pp14_i:U33, pp15_i:U33, pp16_i:U33, pp1_i:U33, pp2_i:U33, pp3_i:U33, pp4_i:U33, pp5_i:U33, pp6_i:U33, pp7_i:U33, pp8_i:U33, pp9_i:U33) -> (c21_o:U64@[], c22_o:U64@[], s21_o:U64@[], s22_o:U64@[]) {
+  comptime const ROWS = 16
+  comptime const GROUPS = ROWS/4
+  const pp = (pp1_i, pp2_i, pp3_i, pp4_i, pp5_i, pp6_i, pp7_i, pp8_i, pp9_i, pp10_i, pp11_i, pp12_i, pp13_i, pp14_i, pp15_i, pp16_i)
+
+  mut rows:[ROWS]U64 = 0
+  for i in 0..<ROWS {
+    if i == 0 {
+      rows[i] = (pp[i] | (U1(mode_i == 0) << 33)) | (mode_i << 13)
+    } elif i == 10 {
+      rows[i] = (pp[i] << (2*i)) | (mode_i << 53)
+    } else {
+      rows[i] = pp[i] << (2*i)
+    }
+  }
+
+  // Level 1: four 4:2 arrays over consecutive groups of four rows.
+  mut c1:[GROUPS]U64 = 0
+  mut s1:[GROUPS]U64 = 0
+  for g in 0..<GROUPS {
+    const csa = txfma_4_2_compressor_array(x0_i=rows[4*g], x1_i=rows[4*g + 1], x2_i=rows[4*g + 2], x3_i=rows[4*g + 3])
+    c1[g] = csa.c_o
+    s1[g] = csa.s_o
+  }
+
+  // Level 2: merge groups (1,2) and (3,4). Carry vectors have the weight of the next column.
+  const csa21 = txfma_4_2_compressor_array::[name=u_csa42_21](x0_i=c1[0]#[0..<63] << 1, x1_i=s1[0], x2_i=c1[1]#[0..<63] << 1, x3_i=s1[1])
+  const csa22 = txfma_4_2_compressor_array::[name=u_csa42_22](x0_i=c1[2]#[0..<63] << 1, x1_i=s1[2], x2_i=c1[3]#[0..<63] << 1, x3_i=s1[3])
+  c21_o = csa21.c_o
+  s21_o = csa21.s_o
+  c22_o = csa22.c_o
+  s22_o = csa22.s_o
+}

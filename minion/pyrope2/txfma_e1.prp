@@ -1,0 +1,97 @@
+// Exponent stage 1: product exponents (low F16 / high F32 paths), the trailing-zero
+// sums and the addend-vs-product exponent differences that feed alignment.
+const txfma_csa = import("txfma_csa.txfma_csa")
+const txfma_adder = import("txfma_adder.txfma_adder")
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+// Re-bias a half-precision (5-bit) exponent into the single-precision 8-bit
+// layout {s, ~s, ~s, ~s, e[3:0]}; ext_en=false keeps the three upper bits 0.
+comb ph_exp_to_ps(e:U8, ext_en:Bool) -> (r:U8) {
+  const sign = e#[vpu_defs_pkg.TXFMA_EXP_PH_SZ - 1]
+  const ext:U3 = if sign == 0 and ext_en { 7 } else { 0 }
+  r = (sign << 7) | (ext << 4) | e#[0..<4]
+}
+
+pub mod txfma_e1::[timecheck=false](cmd_f1a_h:vpu_defs_pkg.VPU_FCMD_SZ_T, ea_hi_f1a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T, ea_hi_zero_f1a_h:U1, ea_lo_f1a_h:vpu_defs_pkg.TXFMA_EXP_PH_SZ_T, eb_hi_f1a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T, eb_lo_f1a_h:vpu_defs_pkg.TXFMA_EXP_PH_SZ_T, ec_all1_f1a_h:U1, ec_f1a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T, ec_zero_f1a_h:U1, etrz_fa_hi_ph_f1a_h:U4, etrz_fa_lo_ps_f1a_h:U5, etrz_fb_hi_ph_f1a_h:U4, etrz_fb_lo_ps_f1a_h:U5, fc_zero30_8_f1a_h:U1, op_dtype_f1a_h:vpu_defs_pkg.VPU_DTYPE_SZ_T, sigs_f1a_h:(e18:U1, e17:U1, e16:U1, e15:U1, e14:U1, e13:U1, e12:U1, e11:U1, e10:U1, e9:U1, e8:U1, e7:U1, e6:U1, e5:U1, e4:U1, e3:U1, e2:U1, e1:U1, e0:U1)) -> (ec_out_f1a_h:vpu_defs_pkg.TXFMA_EXP_PS_SZ_T@[], ediff_ec_eph_f1a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T@[], ediff_ec_epl_f1a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T@[], ediff_eph_epl_f1a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T@[], eprod_hi_f1a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T@[], eprod_lo_f1a_h:vpu_defs_pkg.TXFMA_EXP_SEXT_PS_SZ_T@[], etrz_prod_hi_ph_f1a_h:vpu_defs_pkg.TXFMA_ETRZ_PROD_PH_SZ_T@[], etrz_prod_lo_ps_f1a_h:vpu_defs_pkg.TXFMA_ETRZ_PROD_PS_SZ_T@[]) {
+  const cmd = cmd_f1a_h
+  const is_f32 = op_dtype_f1a_h == vpu_defs_pkg.VPU_DTYPE_F32
+  const frac_op = cmd == vpu_defs_pkg.VPU_TRANS_EXP_FRAC
+  const log_mul = cmd == vpu_defs_pkg.VPU_TRANS_LOG_MUL
+  const sin_op = cmd == vpu_defs_pkg.VPU_TRANS_SIN_TRANSFORM
+  const exp_fma2 = cmd == vpu_defs_pkg.VPU_TRANS_EXP_FMA2
+  const rcp_fma2 = cmd == vpu_defs_pkg.VPU_TRANS_RCP_FMA2
+  const rsqrt_fma2 = cmd == vpu_defs_pkg.VPU_TRANS_RSQRT_FMA2
+  const NEG_BIAS = (3 << 8) | vpu_defs_pkg.FLOAT32_NEG_E_BIAS_HEX#[0..<8]
+
+  // ---- Low (F16 half) product exponent: ea_lo + eb_lo - bias ----
+  const ea_lo_ps = if frac_op { 0x86 } else { ph_exp_to_ps(ea_lo_f1a_h, true) }
+  const eb_lo_ps = if frac_op { 0 } else { ph_exp_to_ps(eb_lo_f1a_h, true) }
+  const lo_bias:U10 = if frac_op { 0 } else { NEG_BIAS }
+  const lo_csa = txfma_csa<Bits=10>(a_i=ea_lo_ps, b_i=eb_lo_ps, cin_i=lo_bias)
+  const eprod_lo = txfma_adder<Width=10>(a_i=lo_csa.sum_o, b_i=lo_csa.cout_o#[0..<9] << 1, cin_i=0)
+  const ec_epl = txfma_adder<Width=10>(a_i=ec_f1a_h, b_i=~eprod_lo, cin_i=1)
+
+  // Trailing-zero sums of the two operands
+  const exp_hi_tp = txfma_adder<Width=5>(a_i=etrz_fa_hi_ph_f1a_h, b_i=etrz_fb_hi_ph_f1a_h, cin_i=0)
+  const exp_lo_tp = txfma_adder<Width=6>(a_i=etrz_fa_lo_ps_f1a_h, b_i=etrz_fb_lo_ps_f1a_h, cin_i=0)
+
+  // ---- LOG_MUL: ec selects the +1/-1 correction ----
+  const ec_gt127 = ec_f1a_h >= 0x7f
+  const log_mul_inc_dec:U10 = if ec_gt127 { 1 } elif fc_zero30_8_f1a_h == 0 { 0x3ff } else { 0 }
+  const log_mul_ec:U10 = if ec_gt127 { ec_f1a_h } else { (7 << 7) | ~ec_f1a_h#[0..<7] }
+
+  // ---- High product exponent: operand A ----
+  const ea_hi_ps = if is_f32 { ea_hi_f1a_h } else { ph_exp_to_ps(ea_hi_f1a_h, ea_hi_zero_f1a_h == 0) }
+  const ea_hi_in:U10 = if cmd in (vpu_defs_pkg.VPU_FCMD_CVT_INTF32, vpu_defs_pkg.VPU_FCMD_CVT_UINTF32, vpu_defs_pkg.VPU_FCMD_FROUND) {
+    vpu_defs_pkg.TXFMA_CVT_INTF32_OFFSET#[0..<10]
+  } elif cmd == vpu_defs_pkg.VPU_FCMD_CVT_RASTF32 {
+    vpu_defs_pkg.TXFMA_CVT_FXP1714_F32_OFFSET#[0..<10]
+  } elif rcp_fma2 {
+    vpu_defs_pkg.TXFMA_TRANS_RCP_OFFSET#[0..<10]
+  } elif rsqrt_fma2 {
+    0x3ff
+  } elif exp_fma2 or sin_op {
+    0
+  } elif log_mul {
+    log_mul_ec
+  } else {
+    ea_hi_ps
+  }
+
+  // ---- operand B ----
+  const eb_hi_ps = if is_f32 or sigs_f1a_h.e12 != 0 or rsqrt_fma2 { eb_hi_f1a_h } else { ph_exp_to_ps(eb_hi_f1a_h, true) }
+  const eb_hi_in:U10 = if rcp_fma2 { (3 << 8) | ~eb_hi_f1a_h }
+    elif log_mul { log_mul_inc_dec }
+    elif sin_op { vpu_defs_pkg.FLOAT32_E_BIAS_HEX#[0..<7] }
+    elif exp_fma2 { eb_hi_f1a_h#sext[0..=7]#[0..<10] }
+    else { eb_hi_ps }
+
+  // ---- bias term (cin of the carry-save adder) ----
+  const hi_bias:U10 = if cmd in (vpu_defs_pkg.VPU_FCMD_CVT_INTF32, vpu_defs_pkg.VPU_FCMD_CVT_UINTF32, vpu_defs_pkg.VPU_FCMD_CVT_RASTF32, vpu_defs_pkg.VPU_FCMD_FROUND, vpu_defs_pkg.VPU_FCMD_FFRC, vpu_defs_pkg.VPU_FCMD_FFRC_SIN, vpu_defs_pkg.VPU_TRANS_EXP_FMA2) {
+    vpu_defs_pkg.FLOAT32_E_BIAS_HEX#[0..<7]
+  } elif sigs_f1a_h.e17 != 0 or cmd in (vpu_defs_pkg.VPU_TRANS_SIN_TRANSFORM, vpu_defs_pkg.VPU_TRANS_LOG_MUL, vpu_defs_pkg.VPU_TRANS_EXP_FRAC, vpu_defs_pkg.VPU_FCMD_ADD, vpu_defs_pkg.VPU_FCMD_SUB, vpu_defs_pkg.VPU_FCMD_CVT_F16F32, vpu_defs_pkg.VPU_FCMD_CVT_F10F32, vpu_defs_pkg.VPU_FCMD_CVT_F11F32, vpu_defs_pkg.VPU_FCMD_FLE, vpu_defs_pkg.VPU_FCMD_FLT, vpu_defs_pkg.VPU_FCMD_FEQ, vpu_defs_pkg.VPU_FCMD_MIN, vpu_defs_pkg.VPU_FCMD_MAX) {
+    0
+  } else {
+    NEG_BIAS
+  }
+  const hi_csa = txfma_csa<Bits=10>(a_i=ea_hi_in, b_i=eb_hi_in, cin_i=hi_bias)
+  const eprod_hi = txfma_adder<Width=10>(a_i=hi_csa.sum_o, b_i=hi_csa.cout_o#[0..<9] << 1, cin_i=0)
+
+  // ---- addend exponent as seen by the product-vs-addend difference ----
+  const ec_ps = if ec_all1_f1a_h != 0 { 0xff } else { ph_exp_to_ps(ec_f1a_h, true) }
+  const ec_mux:U8 = if sigs_f1a_h.e15 != 0 { vpu_defs_pkg.TXFMA_NORM_F32_BIAS }
+    elif op_dtype_f1a_h == vpu_defs_pkg.VPU_DTYPE_F32 or op_dtype_f1a_h == vpu_defs_pkg.VPU_DTYPE_F16_F32 { ec_f1a_h }
+    elif ec_zero_f1a_h != 0 { 0 }
+    else { ec_ps }
+  const ec_eph = txfma_adder<Width=10>(a_i=ec_mux, b_i=~eprod_hi, cin_i=1)
+  const eph_epl = txfma_adder<Width=10>(a_i=eprod_hi, b_i=~eprod_lo, cin_i=1)
+
+  etrz_prod_hi_ph_f1a_h = exp_hi_tp
+  etrz_prod_lo_ps_f1a_h = exp_lo_tp
+  ediff_ec_eph_f1a_h = ec_eph
+  ediff_ec_epl_f1a_h = ec_epl
+  ediff_eph_epl_f1a_h = eph_epl
+  eprod_hi_f1a_h = eprod_hi
+  eprod_lo_f1a_h = eprod_lo
+  ec_out_f1a_h = ec_mux
+}

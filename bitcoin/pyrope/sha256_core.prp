@@ -1,0 +1,123 @@
+// SHA-256 / SHA-224 compression core (secworks sha256_core).
+//
+// `init` hashes `block` from the standard IV; `next` continues from the
+// current digest. Each block takes one setup cycle, 64 round cycles and one
+// cycle to fold the working variables into the digest, after which
+// `digest_valid` rises. `mode` selects SHA-256 (true) or SHA-224 (false).
+//
+// The working variables a..h and the digest words H0..H7 are one register
+// each, named as in the Verilog so LEC pairs them one to one. `wv`/`hv` read
+// them as tuples; `wv_nx`/`hv_nx` build their next values in loops.
+const sha256_k_constants = import("sha256_k_constants.sha256_k_constants")
+const sha256_w_mem       = import("sha256_w_mem.sha256_w_mem")
+
+comptime const SHA224_H0  = [0xc1059ed8, 0x367cd507, 0x3070dd17, 0xf70e5939, 0xffc00b31, 0x68581511, 0x64f98fa7, 0xbefa4fa4]
+comptime const SHA256_H0  = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]
+comptime const LAST_ROUND = 63
+
+// Same encoding as the Verilog's CTRL_* localparams.
+enum Ctrl:U2 = (Idle, Rounds, Done)
+
+comb rotr<N>(x:U32) -> (r:U32) {
+  wrap r = (x >> N) | (x << (32 - N))
+}
+
+pub mod sha256_core(
+  block:U512,
+  clk:Clock,
+  init:Bool,
+  mode:Bool,
+  next:Bool,
+  reset_n:Reset,
+) -> (digest:U256@[], digest_valid:Bool@[], ready:Bool@[]) {
+  reg a_reg:U32:[negreset=true] = 0
+  reg b_reg:U32:[negreset=true] = 0
+  reg c_reg:U32:[negreset=true] = 0
+  reg d_reg:U32:[negreset=true] = 0
+  reg e_reg:U32:[negreset=true] = 0
+  reg f_reg:U32:[negreset=true] = 0
+  reg g_reg:U32:[negreset=true] = 0
+  reg h_reg:U32:[negreset=true] = 0
+  // Not a `reg H:[8]U32`: a reg array lowers to a memory, and LEC cannot pair
+  // a memory with the Verilog's eight flops.
+  // prp-style-allow likely-unrolled-loop
+  reg H0_reg:U32:[negreset=true]            = 0
+  reg H1_reg:U32:[negreset=true]            = 0
+  reg H2_reg:U32:[negreset=true]            = 0
+  reg H3_reg:U32:[negreset=true]            = 0
+  reg H4_reg:U32:[negreset=true]            = 0
+  reg H5_reg:U32:[negreset=true]            = 0
+  reg H6_reg:U32:[negreset=true]            = 0
+  reg H7_reg:U32:[negreset=true]            = 0
+  reg t_ctr_reg:U6:[negreset=true]          = 0
+  reg digest_valid_reg:Bool:[negreset=true] = false
+  reg sha256_ctrl_reg:Ctrl:[negreset=true]  = Ctrl.Idle
+
+  const wv = (a_reg, b_reg, c_reg, d_reg, e_reg, f_reg, g_reg, h_reg)
+  const hv = (H0_reg, H1_reg, H2_reg, H3_reg, H4_reg, H5_reg, H6_reg, H7_reg)
+
+  const is_idle = sha256_ctrl_reg == Ctrl.Idle
+  const k       = sha256_k_constants(round=t_ctr_reg)
+  const w       = sha256_w_mem(block, round=t_ctr_reg, init=is_idle and (init or next), next=sha256_ctrl_reg == Ctrl.Rounds)
+
+  // One SHA-256 round (FIPS 180-4 section 6.2.2, step 3).
+  const sum0:U32 = rotr<N=2>(x=a_reg) ^ rotr<N=13>(x=a_reg) ^ rotr<N=22>(x=a_reg)
+  const sum1:U32 = rotr<N=6>(x=e_reg) ^ rotr<N=11>(x=e_reg) ^ rotr<N=25>(x=e_reg)
+  const ch:U32   = (e_reg & f_reg) ^ (~e_reg & g_reg)
+  const maj:U32  = (a_reg & b_reg) ^ (a_reg & c_reg) ^ (b_reg & c_reg)
+  const t1:U32   = (h_reg + sum1 + ch + w + k)#[0..<32]
+  const t2:U32   = (sum0 + maj)#[0..<32]
+
+  ready = is_idle
+  for i in 0..<8 {
+    digest#[((7 - i)*32)..+32] = hv[i]
+  }
+  digest_valid = digest_valid_reg
+
+  // Literal tuples of the registers, so their field names destructure back
+  // onto them at the end (a copy of `wv`/`hv` would be positional only).
+  mut wv_nx = (a_reg, b_reg, c_reg, d_reg, e_reg, f_reg, g_reg, h_reg)
+  mut hv_nx = (H0_reg, H1_reg, H2_reg, H3_reg, H4_reg, H5_reg, H6_reg, H7_reg)
+  match sha256_ctrl_reg {
+    == Ctrl.Idle {
+      // Start from the IV (`init`, which wins over `next`) or from the digest.
+      if init or next {
+        for i in 0..<8 {
+          const iv = if mode { SHA256_H0[i] } else { SHA224_H0[i] }
+          if init {
+            hv_nx[i] = iv
+          }
+          wv_nx[i] = if init { iv } else { hv[i] }
+        }
+        t_ctr_reg        = 0
+        digest_valid_reg = false
+        sha256_ctrl_reg  = Ctrl.Rounds
+      }
+    }
+    == Ctrl.Rounds {
+      // (a, b, ..., h) = (t1 + t2, a, b, c, d + t1, e, f, g)
+      for i in 1..<8 {
+        wv_nx[i] = wv[i - 1]
+      }
+      wv_nx[0] = (t1 + t2)#[0..<32]
+      wv_nx[4] = (d_reg + t1)#[0..<32]
+      wrap t_ctr_reg = t_ctr_reg + 1
+      if t_ctr_reg == LAST_ROUND {
+        sha256_ctrl_reg = Ctrl.Done
+      }
+    }
+    == Ctrl.Done {
+      // Fold the working variables into the digest.
+      for i in 0..<8 {
+        hv_nx[i] = (hv[i] + wv[i])#[0..<32]
+      }
+      digest_valid_reg = true
+      sha256_ctrl_reg  = Ctrl.Idle
+    }
+    else {
+      // Unreachable encoding 3: the Verilog holds every register.
+    }
+  }
+  (a_reg, b_reg, c_reg, d_reg, e_reg, f_reg, g_reg, h_reg)         = wv_nx
+  (H0_reg, H1_reg, H2_reg, H3_reg, H4_reg, H5_reg, H6_reg, H7_reg) = hv_nx
+}

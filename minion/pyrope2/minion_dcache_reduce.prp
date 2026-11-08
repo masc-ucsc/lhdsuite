@@ -1,0 +1,714 @@
+const prim_clk_gate = import("prim_clk_gate.prim_clk_gate")
+const prim_fifo_sync = import("prim_fifo_sync.prim_fifo_sync")
+const minion_pkg = import("minion_pkg")
+const minion_dcache_pkg = import("minion_dcache_pkg")
+
+// Dcache reduce / tensor-store controller of one minion shire.
+//
+// Two jobs share one control FSM (ReduceState):
+//  - reduce: exchange vector registers with a partner minion over the L2 message ports
+//    (SendReady/WaitReady handshake, then SendData or SendReady/WaitData);
+//  - tensor store: stream rows of vector registers (or scratchpad lines) to memory, with
+//    AtransState translating one row address at a time through the S0/S1 dcache pipe.
+// Control state lives on a gated clock (clkgt) that only runs while a request is active,
+// so the state registers hold their values (and are NOT reset) between requests; only the
+// handshake/valid flags carry an asynchronous reset.
+
+enum ReduceState:U4 = (Invalid, WaitTensor, NewReq, SendReady, WaitReady, SendData, WaitData, Drain, StoreData)
+enum AtransState:U3 = (Idle, Loop, S0Req, S1Req, Wait, Flush, Fail, Save)
+
+type L2Req = (id:U5, source:U1, wdata:U1, opcode:U5, address:U40, data:U256, size:U3, qwen:U4, subopcode:U7)
+
+// ESR (message port) address of a partner minion: region | prot bits | shire | agent | hart | port.
+comptime const EsrRegion = 1 << 32
+comptime const EsrProtMsg = 2 << 30
+comptime const EsrPortMsgCommon = 0x800
+comptime const EsrMessageIdShift = 3
+// Memory request opcode written as a bare 5'd2 in the RTL (no name in et_link_req_opcode_e).
+comptime const ReqOpcodeTensorStore:U5 = 2
+// Write-around subopcodes of a tensor-store request: 1, 2 or 4 ways (by `coop`).
+comptime const WriteAround:U7 = 0
+comptime const WriteAround2Way:U7 = 1
+comptime const WriteAround4Way:U7 = 2
+// Reduce operations a receiver can execute.
+comptime const SupportedReduceOps = (0, 2, 3, 4, 6, 7, 8)
+// Scratchpad destination entries: 12 per way, 48 in all (wraps when the scratchpad is on).
+comptime const ScpEntriesPerWay = 12
+comptime const ScpEntries = 48
+// addr_q is a 16B-unit address; this bit of it is VA[VaSize-5], the msb-overflow check.
+comptime const MsbErrBit = minion_dcache_pkg.VaSize - 5 - 4
+comptime const MsgDataMsb = minion_pkg.DcacheReduceMsgDataMsb
+
+pub mod minion_dcache_reduce::[timecheck=false](ba_full_i:U1, ba_read_used_i:U1, chicken_bit_dcache_i:U1, clk_i:Clock, global_min_id_i:minion_pkg.MaxMinionIdBits_T, l2_resp_i:(id:U8, dest:U1, wdata:U1, opcode:U2, data:U256, size:U3, qwen:U4), l2_resp_valid_i:U1, mh_going_to_uc_store_i:U1, re_l2_req_ready_i:U1, reduce_start_i:U1, reduce_tensorstore_ctrl_i:U64, rst_ni:U1, s0_available_i:U1, s1_available_i:U1, s1_ba_data_i:minion_dcache_pkg.DcacheDataSize_T, s1_tlb_fail_i:U1, s1_tlb_wait_i:U1, s1_valid_i:U1, s2_addr_i:U40, s2_ba_written_entry_i:minion_dcache_pkg.DcacheBufferIdxWidth_T, s2_valid_i:U1, scp_ctrl_on_i:U1, tensorstore_start_i:U1, tensorstore_stride_i:U48, thread_id_i:U1, ts_l2_req_ready_i:U1, vm_status_i:U16, vpu_reduce_wait_i:U1) -> (ba_alloc_o:U1@[], ba_entries_required_o:U1@[], ba_read_addr_o:minion_dcache_pkg.DcacheBufferIdxWidth_T@[], ba_read_en_o:U1@[], ba_read_en_spec_o:U1@[], ba_write_needed_o:U1@[], buffer_avail_o:U1@[], bus_err_o:minion_pkg.NrThreads_T@[], csr_debug_signals_o:U4@[], err_flags_o:U4@[], pipe_used_o:U1@[], re_l2_req_o:(id:U5, source:U1, wdata:U1, opcode:U5, address:U40, data:U256, size:U3, qwen:U4, subopcode:U7)@[], re_l2_req_valid_o:U1@[], re_ts_l2_req_inflight_o:U1@[], reduce_ready_o:U1@[], s0_addr_load_o:U1@[], s0_addr_msb_err_o:U1@[], s0_addr_o:U48@[], s0_thread_id_o:U1@[], s1_addr_load_o:U1@[], s1_inst_op_val_o:U1@[], s1_inst_send_val_o:U1@[], s2_inst_op_val_o:U1@[], s2_inst_send_val_o:U1@[], s3_ba_write_addr_o:minion_dcache_pkg.DcacheBufferIdxWidth_T@[], s3_inst_op_val_o:U1@[], s3_inst_send_val_o:U1@[], sm_data_debug_signals_o:minion_dcache_pkg.DcacheDbgSmDataBits_T@[], sm_filter_debug_signals_o:minion_dcache_pkg.DcacheDbgSmFilterBits_T@[], sm_match_debug_signals_o:minion_dcache_pkg.DcacheDbgSmMatchBits_T@[], tensorstore_busy_o:U1@[], ts_col_size_is_128b_o:U1@[], ts_l2_req_o:(id:U5, source:U1, wdata:U1, opcode:U5, address:U40, data:U256, size:U3, qwen:U4, subopcode:U7)@[], ts_l2_req_valid_o:U1@[], ts_op_o:U1@[], ts_scp_read_addr_o:minion_dcache_pkg.DcacheLramAddrWidth_T@[], ts_scp_read_o:U1@[], ts_scp_read_way_o:minion_dcache_pkg.DcacheWayIdxWidth_T@[], ts_start_o:U1@[], vm_status_ts_o:(prv:U2, mprv:U1, mpp:U2, sum:U1, mxr:U1, debug:U1)@[], vpu_ctrl_o:(send_reg:U1, exec_op:U1, nothing:U1)@[], wait_l2_to_ba_resp_o:U1@[]) {
+  // ---- state ----
+  // Gated clock: runs while a request is active (see clk_en); driven by u_clk_gate below.
+  wire clkgt:Clock = nil
+
+  // Request FSM, tensor-store row translation FSM, and the valid pipeline of the VPU sends.
+  reg fsm_state_q:ReduceState:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = ReduceState.Invalid
+  reg atrans_state_q:AtransState:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = AtransState.Idle
+  reg pipe_used_o:U1:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg s0_inst_send_val_q:Bool:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg s1_inst_send_val_o:U1:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg s2_inst_send_val_o:U1:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg s3_inst_send_val_o:U1:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg s2_inst_op_val_o:U1:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg s3_inst_op_val_o:U1:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg s4_send_pending_q:Bool:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg got_ready_msg_q:Bool:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg wait_l2_to_ba_resp_z1_q:Bool:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg l2_req_inflight_q:Bool:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg l2_backoff_q:Bool:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg write_around_cnt_q:U4:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg write_around_throttle_q:Bool:[async=true, clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+
+  // Request context, latched on new_req and held (not reset) afterwards.
+  reg req_info_q:U20:[clock_pin=clkgt] = nil // {partner/level:13, cols/action:3, reduce:1, coop:2, thread:1}
+  reg vm_status_ts_q:U8:[clock_pin=clkgt] = nil
+  reg rate_q:U4:[clock_pin=clkgt] = nil
+  reg ts_is_from_scp_q:Bool:[clock_pin=clkgt] = nil
+  reg operation_q:U4:[clock_pin=clkgt] = nil
+  reg reg_count_q:U8:[clock_pin=clkgt] = nil // reduce: registers left; tensor store: {ov:1, rows:4, cols:3}
+
+  // Tensor-store address / scratchpad walk.
+  reg addr_q:U44:[clock_pin=clkgt] = nil
+  reg addr_msb_err_q:Bool:[clock_pin=clkgt] = nil
+  reg stride_addr_q:U44:[clock_pin=clkgt] = nil
+  reg stride_entry_q:U2:[clock_pin=clkgt] = nil
+  reg scp_entry_q:U6:[clock_pin=clkgt] = nil
+  reg scp_idx_q:Bool:[clock_pin=clkgt] = nil
+  reg tensorstore_count_q:Bool:[clock_pin=clkgt] = nil
+  reg atrans_num_req_q:U5:[clock_pin=clkgt] = nil
+  reg address_count_q:U2:[clock_pin=clkgt] = nil
+  reg address_use_idx_q:Bool:[clock_pin=clkgt] = nil
+  reg rate_counter_q:U6:[clock_pin=clkgt] = nil
+  reg l2_backoff_count_q:U4:[clock_pin=clkgt] = nil
+
+  // Buffer-array bookkeeping.
+  reg ba_available_q:Bool:[clock_pin=clkgt] = nil
+  reg s3_ba_written_entry_q:U3:[clock_pin=clkgt] = nil
+  reg ba_data_send_fifo_data_q:U3:[clock_pin=clkgt] = nil
+
+  // Partner-ready tracking runs on the ungated clock.
+  reg partner_ready_mask_q:U13:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg partner_ready_peer_q:Bool:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  reg new_partner_ready_z1_q:Bool:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  reg err_mem_q:Bool:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  reg partner_ready_idx_q:U5:[clock_pin=clk_i] = nil
+
+  // Fifo outputs are read before the fifos are instantiated (they close loops through the FSM).
+  wire ba_alloc_fifo_val:Bool = nil
+  wire ba_alloc_fifo_rdata:U3 = nil
+  wire ba_op_fifo_valid:Bool = nil
+  wire ba_op_fifo_data:U3 = nil
+  wire ba_op_fifo_full:Bool = nil
+  wire ba_data_send_fifo_valid:Bool = nil
+  wire address_for_l2_ready:Bool = nil
+  wire address_fifo_full:Bool = nil
+  wire addr_phys:U40 = nil
+
+  // ---- inputs as predicates ----
+  const reduce_start = reduce_start_i != 0
+  const tensorstore_start = tensorstore_start_i != 0
+  const l2_resp_valid = l2_resp_valid_i != 0
+  const re_l2_req_ready = re_l2_req_ready_i != 0
+  const ts_l2_req_ready = ts_l2_req_ready_i != 0
+  const s0_available = s0_available_i != 0
+  const s1_available = s1_available_i != 0
+  const s1_tlb_wait = s1_tlb_wait_i != 0
+  const s1_tlb_fail = s1_tlb_fail_i != 0
+  const ba_full = ba_full_i != 0
+  const s2_valid = s2_valid_i != 0
+  const s1_valid = s1_valid_i != 0
+  const ba_read_used = ba_read_used_i != 0
+  const scp_ctrl_on = scp_ctrl_on_i != 0
+  const vpu_reduce_wait = vpu_reduce_wait_i != 0
+  const mh_going_to_uc_store = mh_going_to_uc_store_i != 0
+
+  // reduce_tensorstore_ctrl_i is a union of three layouts (reduce / tensor store / scratchpad
+  // tensor store); a request uses the one its start strobe selects.
+  const ctl_red_action = reduce_tensorstore_ctrl_i#[0..<2]
+  const ctl_red_partner = reduce_tensorstore_ctrl_i#[3..<16]
+  const ctl_red_num_regs = reduce_tensorstore_ctrl_i#[16..<23]
+  const ctl_red_op = reduce_tensorstore_ctrl_i#[24..<28]
+  const ctl_ts_rate = reduce_tensorstore_ctrl_i#[0..<4]
+  const ctl_ts_addr = reduce_tensorstore_ctrl_i#[4..<48]
+  const ctl_ts_scp = reduce_tensorstore_ctrl_i#[48] == 1
+  const ctl_ts_coop = reduce_tensorstore_ctrl_i#[49..<51]
+  const ctl_ts_rows = reduce_tensorstore_ctrl_i#[51..<55]
+  const ctl_ts_cols = reduce_tensorstore_ctrl_i#[55..<57] // columns - 1
+  const ctl_scp_addr = reduce_tensorstore_ctrl_i#[6..<48]
+  const ctl_scp_start_entry = reduce_tensorstore_ctrl_i#[56..<62]
+  const ctl_scp_stride_entry = reduce_tensorstore_ctrl_i#[62..<64]
+
+  // ---- latched request, decoded ----
+  const req_thread_id = req_info_q#[0] == 1
+  const req_coop = req_info_q#[1..<3]
+  const req_reduce = req_info_q#[3] == 1
+  const req_cols = req_info_q#[4..<7] // tensor store: columns per row; reduce: the action
+  const req_action = req_info_q#[4..<6]
+  const req_partner = req_info_q#[7..<20]
+  const req_level = req_info_q#[7..<11] // reduce tree level for automatic pairing
+  const rc_cols = reg_count_q#[0..<3]
+  const rc_rows = reg_count_q#[3..<7]
+
+  // ---- FSM-derived strobes ----
+  const reduce_ready = fsm_state_q == ReduceState.Invalid
+  const new_req = (reduce_start or tensorstore_start) and reduce_ready
+  const new_ts_req = new_req and tensorstore_start
+  const clk_en = not reduce_ready or new_req
+  const address_save = atrans_state_q == AtransState.Save
+  const atrans_en = fsm_state_q == ReduceState.NewReq or atrans_state_q != AtransState.Idle
+  const address_available = address_count_q != 0
+  const wait_data_from_sender = fsm_state_q == ReduceState.WaitData or fsm_state_q == ReduceState.SendReady
+
+  const u_clk_gate = prim_clk_gate(clk_i=clk_i, en_i=U1(clk_en or chicken_bit_dcache_i != 0), dft_i=(scanmode=0))
+  clkgt = u_clk_gate
+
+  // ---- new request: control word latched into the request registers ----
+  const vm_status_ts_d:U8 = if thread_id_i != 0 { vm_status_i#[8..<16] } else { vm_status_i#[0..<8] }
+  const ts_is_from_scp_d = ctl_ts_scp and not reduce_start
+  const ts_cols:U3 = ctl_ts_cols + 1
+  const req_cols_d:U3 = if reduce_start { ctl_red_action } elif ts_is_from_scp_d { 4 } else { ts_cols }
+  const req_coop_d:U2 = if reduce_start or ts_is_from_scp_d { 0 } else { ctl_ts_coop }
+  const req_reduce_d:U1 = U1(reduce_start)
+  const req_info_d:U20 = (thread_id_i, req_coop_d, req_reduce_d, req_cols_d, ctl_red_partner)#[..]
+  const rate_d:U4 = if reduce_start { 0 } else { ctl_ts_rate }
+
+  // Remaining registers / tensor-store rows. Reduce counts registers down; tensor store counts
+  // column pairs down within a row and reloads the row's columns when it reaches 0.
+  mut reg_count_d:U8 = reg_count_q
+  if req_reduce {
+    wrap reg_count_d = reg_count_q - 1
+  } else {
+    mut cols:U3 = 0
+    wrap cols = if rc_cols < 2 { 0 } else { rc_cols - 2 }
+    mut rows:U4 = rc_rows
+    if cols == 0 {
+      cols = req_cols
+      wrap rows = rc_rows - 1
+      if rc_rows == 0 {
+        cols = 0
+        rows = 0
+      }
+    }
+    reg_count_d#[0..<3] = cols
+    reg_count_d#[3..<7] = rows
+  }
+  if new_req {
+    if reduce_start {
+      reg_count_d = ctl_red_num_regs
+    } else {
+      reg_count_d#[0..<3] = if ts_is_from_scp_d { 4 } else { ts_cols }
+      reg_count_d#[3..<7] = ctl_ts_rows
+      reg_count_d#[7] = 0
+    }
+  }
+
+  // Tensor-store address: advances by the stride each time a row is saved.
+  const addr_sum:U44 = (addr_q + stride_addr_q)#[0..<44]
+  mut addr_d:U44 = addr_sum
+  mut addr_msb_err_d = addr_q#[MsbErrBit] == 1 and addr_sum#[MsbErrBit] == 0
+  if new_ts_req {
+    addr_msb_err_d = false
+    addr_d = if ts_is_from_scp_d { ctl_scp_addr << 2 } else { ctl_ts_addr }
+  }
+  const stride_addr_d:U44 = if ts_is_from_scp_d { tensorstore_stride_i#[6..<48] << 2 } else { tensorstore_stride_i#[4..<48] }
+
+  // Scratchpad source: two lines (scp_idx) per entry; entries wrap at 48 when the scratchpad is on.
+  mut scp_entry_d:U6 = scp_entry_q
+  mut scp_idx_d = scp_idx_q
+  mut scp_entry_up = false
+  if new_ts_req and ts_is_from_scp_d {
+    scp_entry_up = true
+    scp_idx_d = false
+    scp_entry_d = ctl_scp_start_entry
+  } elif ts_is_from_scp_q and not req_reduce and s1_inst_send_val_o == 1 {
+    scp_entry_up = true
+    scp_idx_d = not scp_idx_q
+    if scp_idx_q {
+      wrap scp_entry_d = scp_entry_q + stride_entry_q + 1
+    }
+    if scp_ctrl_on and scp_entry_d >= ScpEntries {
+      wrap scp_entry_d = scp_entry_d - ScpEntries
+    }
+  }
+
+  // Scratchpad entry -> (way, set within the way): 12 entries per way, ways wrap after 4.
+  mut scp_set:U6 = scp_entry_q
+  mut scp_block:U3 = 0
+  for j in 1..=5 {
+    if scp_entry_q >= ScpEntriesPerWay*j {
+      wrap scp_set = scp_entry_q - ScpEntriesPerWay*j
+      scp_block = j
+    }
+  }
+
+  // ---- row address translation (atrans) ----
+  mut atrans_num_req_d:U5 = atrans_num_req_q
+  if fsm_state_q == ReduceState.NewReq and not req_reduce {
+    atrans_num_req_d = rc_rows + 1
+  } elif address_save {
+    wrap atrans_num_req_d = atrans_num_req_q - 1
+  }
+
+  // vpu_send_reg_tensor/scp_read_reg are the per-register sends of StoreData; each consumes
+  // one saved row address (address_use), and every second use retires it (address_consume).
+  const vpu_send_reg_reduce = fsm_state_q == ReduceState.SendData and not ba_full and reg_count_q != 0
+  const store_send = fsm_state_q == ReduceState.StoreData and address_available and not ba_full and reg_count_q != 0
+  const vpu_send_reg_tensor = store_send and not ts_is_from_scp_q
+  const scp_read_reg = store_send and ts_is_from_scp_q
+  const vpu_send_reg = vpu_send_reg_reduce or vpu_send_reg_tensor
+  const address_use = (scp_read_reg or vpu_send_reg_tensor) and address_available
+  const address_consume = address_use and address_use_idx_q
+
+  mut address_count_d:U2 = address_count_q
+  if fsm_state_q == ReduceState.NewReq and not req_reduce {
+    address_count_d = 0
+  } elif address_save and not address_consume {
+    wrap address_count_d = address_count_q + 1
+  } elif address_consume and not address_save {
+    wrap address_count_d = address_count_q - 1
+  }
+
+  mut address_use_idx_d = address_use_idx_q
+  if req_cols <= 1 {
+    address_use_idx_d = true
+  } elif not address_available {
+    address_use_idx_d = false
+  } elif address_use {
+    address_use_idx_d = not address_use_idx_q
+  }
+
+  mut atrans_state_d = atrans_state_q
+  mut err_mem_d = false
+  match atrans_state_q {
+    == AtransState.Idle {
+      if fsm_state_q == ReduceState.NewReq and not req_reduce {
+        atrans_state_d = AtransState.Loop
+      }
+    }
+    == AtransState.Loop {
+      atrans_state_d = if atrans_num_req_q != 0 { AtransState.S0Req } else { AtransState.Idle }
+    }
+    == AtransState.S0Req {
+      if s0_available and not address_fifo_full {
+        atrans_state_d = AtransState.S1Req
+      }
+    }
+    == AtransState.S1Req {
+      atrans_state_d = if not s1_available { AtransState.S0Req }
+        elif s1_tlb_fail { AtransState.Flush }
+        elif s1_tlb_wait { AtransState.Wait }
+        else { AtransState.Save }
+    }
+    == AtransState.Wait {
+      if not s1_tlb_wait {
+        atrans_state_d = AtransState.S0Req
+      }
+    }
+    == AtransState.Flush {
+      if not address_available {
+        atrans_state_d = AtransState.Fail
+        err_mem_d = true
+      }
+    }
+    == AtransState.Fail {
+      atrans_state_d = AtransState.Idle
+    }
+    == AtransState.Save {
+      atrans_state_d = if atrans_num_req_d != 0 { AtransState.S0Req } else { AtransState.Loop }
+    }
+  }
+
+  // ---- reduce partner pairing ----
+  // Automatic pairing (action not Send/Recv): at tree level L a minion is the sender when its id
+  // masked to the level equals the distance 2^L, the receiver when it is 0, idle otherwise.
+  const level_distance:U13 = (1 << req_level)#[0..<13]
+  const level_mask:U13 = ((1 << (req_level + 1)#[0..<4])#[0..<13] - 1)#[0..<13]
+  const invert:U1 = ~req_action#[0]
+  const pairing_auto = req_action != minion_pkg.DcacheReduceSend and req_action != minion_pkg.DcacheReduceRecv
+  const masked_id:U13 = global_min_id_i & level_mask
+  mut action:U2 = req_action
+  mut partner_minion:U13 = req_partner
+  mut err_partner_id = false
+  if pairing_auto {
+    if masked_id == level_distance {
+      action = invert
+      wrap partner_minion = global_min_id_i - level_distance
+    } elif masked_id == 0 {
+      action = ~invert
+      wrap partner_minion = global_min_id_i + level_distance
+    } else {
+      action = minion_pkg.DcacheReduceDoNothing
+    }
+  } elif fsm_state_q == ReduceState.NewReq and partner_minion == global_min_id_i and req_reduce {
+    err_partner_id = true
+  }
+  const err_operation = fsm_state_q == ReduceState.NewReq and req_reduce and action == minion_pkg.DcacheReduceRecv and not (operation_q in SupportedReduceOps)
+
+  // Partner-ready messages: a per-level bit mask for automatic pairing, one flag for a fixed peer.
+  const new_partner_ready = l2_resp_valid and l2_resp_i.opcode == minion_pkg.EtLinkRspMsgRcvData and l2_resp_i.id == minion_pkg.EtLinkMinMsgIdReduceReady
+  mut partner_ready_mask_d:U13 = partner_ready_mask_q
+  mut partner_ready_peer_d = partner_ready_peer_q
+  if new_partner_ready_z1_q {
+    if partner_ready_idx_q#[MsgDataMsb] == 0 {
+      partner_ready_mask_d#[partner_ready_idx_q#[0..<4]] = 1
+    } else {
+      partner_ready_peer_d = true
+    }
+  }
+  if got_ready_msg_q {
+    if pairing_auto {
+      partner_ready_mask_d#[req_level] = 0
+    } else {
+      partner_ready_peer_d = false
+    }
+  }
+  const current_partner_ready = if pairing_auto { ((partner_ready_mask_q >> req_level) & 1) == 1 } else { partner_ready_peer_q }
+
+  // ---- L2 message / data requests ----
+  // Address of partner's message port: base | (message id << 3).
+  const reduce_shire:U8 = partner_minion#[7..<13]
+  const reduce_hart:U8 = (U1(req_thread_id), partner_minion#[0..<7])#[..]
+  const reduce_base_address:U40 = EsrRegion | EsrProtMsg | (reduce_shire << 22) | (reduce_hart << 12) | EsrPortMsgCommon
+  const reduce_send_ready_address:U40 = reduce_base_address | (minion_pkg.EtLinkMinMsgIdReduceReady << EsrMessageIdShift)
+  const reduce_send_data_address:U40 = reduce_base_address | (minion_pkg.EtLinkMinMsgIdReduceData << EsrMessageIdShift)
+
+  // The ready message carries the tree level (or the "peer" flag in the top bit).
+  const l2_req_msg_data:U5 = if pairing_auto { req_level } else { 1 << MsgDataMsb }
+
+  // Bandwidth throttles on tensor-store data beats.
+  const rate_limit_allow_req = rate_counter_q == 0
+  const l2_req_valid_block = write_around_throttle_q or not rate_limit_allow_req or l2_backoff_q
+  const s4_send_pending_pre = ba_data_send_fifo_valid
+
+  const re_l2_req_valid_spec = req_reduce or (req_coop == 0 and (s4_send_pending_pre or l2_req_inflight_q or req_cols <= 2))
+  // A data beat read out of the buffer array goes to L2 (re_ for reduce / plain stores, ts_ for coop).
+  const l2_send_ok = s4_send_pending_q and not l2_req_valid_block and not ba_read_used and (req_reduce or address_for_l2_ready) and (not mh_going_to_uc_store or l2_req_inflight_q)
+  const re_l2_req_valid = if l2_send_ok { re_l2_req_valid_spec } elif fsm_state_q == ReduceState.SendReady { ba_available_q } else { false }
+  const ts_l2_req_valid = l2_send_ok and not req_reduce and req_coop != 0
+
+  // Tensor-store beats are aligned to the row size: 16B (1 column), 32B (2) or 64B (4).
+  const ts_subopcode:U7 = if req_coop == 0 { WriteAround } elif req_coop == 1 { WriteAround2Way } else { WriteAround4Way }
+  const ts_address:U40 = if req_cols == 1 { addr_phys#[4..<40] << 4 }
+    elif req_cols == 2 { addr_phys#[5..<40] << 5 }
+    else { addr_phys#[6..<40] << 6 }
+  const ts_size:U3 = if req_cols == 1 { minion_dcache_pkg.EtLinkQWord }
+    elif req_cols == 2 { minion_dcache_pkg.EtLinkHLine }
+    else { minion_dcache_pkg.EtLinkLine }
+  const ts_qwen:U4 = if req_cols == 1 { 1 << addr_phys#[4..<6] } elif req_cols == 2 { 3 << (addr_phys#[5] << 1) } else { 15 }
+  const beat_id:U5 = if re_l2_req_valid { minion_dcache_pkg.EtLinkCoreMissIdReduce }
+    else { minion_dcache_pkg.EtLinkCoreMissIdTensorStoreCoop }
+  const beat_opcode:U5 = if req_reduce { minion_dcache_pkg.EtLinkReqMsgSendData } else { ReqOpcodeTensorStore }
+  const beat_address:U40 = if req_reduce { reduce_send_data_address } else { ts_address }
+  const beat_size:U3 = if req_reduce { minion_dcache_pkg.EtLinkHLine } else { ts_size }
+  const beat_qwen:U4 = if req_reduce { 3 } else { ts_qwen }
+  const beat_subopcode:U7 = if req_reduce { 0 } else { ts_subopcode }
+
+  mut l2_req:L2Req = (address=0, data=0, id=0, opcode=0, qwen=0, size=0, source=0, subopcode=0, wdata=0)
+  if fsm_state_q == ReduceState.SendReady {
+    l2_req = (address=reduce_send_ready_address, data=l2_req_msg_data, id=0, opcode=minion_dcache_pkg.EtLinkReqMsgSendData, qwen=1, size=minion_dcache_pkg.EtLinkByte, source=0, subopcode=0, wdata=1)
+  }
+  if l2_send_ok {
+    l2_req = (address=beat_address, data=s1_ba_data_i, id=beat_id, opcode=beat_opcode, qwen=beat_qwen, size=beat_size, source=0, subopcode=beat_subopcode, wdata=1)
+  }
+
+  // Op fifo: buffer-array entries to run through the VPU (reads take priority over L2 sends).
+  const op_fire = ba_op_fifo_valid and not s1_valid and not ba_read_used
+  const ba_read_en = l2_send_ok or op_fire
+  const ba_read_addr:U3 = if op_fire { ba_op_fifo_data } else { ba_data_send_fifo_data_q }
+  // Speculative read enable (one cycle early, for the buffer array): either source, but never while
+  // the ready message is being sent.
+  const ba_read_spec_ok = (s4_send_pending_q and (re_l2_req_valid_spec or (not req_reduce and req_coop != 0)) and not l2_req_valid_block) or (ba_op_fifo_valid and not s1_valid)
+  const ba_read_en_spec = ba_read_spec_ok and fsm_state_q != ReduceState.SendReady
+
+  const re_l2_fire = re_l2_req_valid and re_l2_req_ready
+  const ts_l2_fire = ts_l2_req_valid and ts_l2_req_ready
+  const s4_send = s4_send_pending_q and (re_l2_fire or ts_l2_fire)
+  const last_packet_row = (req_cols == 1 or req_cols == 2 or (req_cols == 4 and tensorstore_count_q)) and not req_reduce and s4_send
+  const tensorstore_count_d = if new_req or last_packet_row { false } else { not tensorstore_count_q }
+  const load_send_fifo_data = s4_send or (s4_send_pending_pre and not s4_send_pending_q)
+
+  // ---- buffer array allocation / write ----
+  const ba_alloc = vpu_send_reg or scp_read_reg or (wait_data_from_sender and not ba_full and not s2_valid and reg_count_q != 0)
+  const ba_write_needed_rec = ba_alloc and wait_data_from_sender
+  const ba_alloc_fifo_pop = l2_resp_valid and l2_resp_i.opcode == minion_pkg.EtLinkRspMsgRcvData and l2_resp_i.id == minion_pkg.EtLinkMinMsgIdReduceData
+  const pipe_used_pre = vpu_send_reg or scp_read_reg
+  const reg_count_up = new_req or ba_alloc
+
+  mut ba_available_d = ba_available_q
+  if fsm_state_q == ReduceState.NewReq {
+    ba_available_d = false
+  } elif fsm_state_q == ReduceState.SendReady {
+    ba_available_d = not ba_full or ba_alloc_fifo_val
+  }
+
+  // ---- FSM ----
+  const any_packet = s0_inst_send_val_q or s1_inst_send_val_o == 1 or s2_inst_send_val_o == 1 or s3_inst_send_val_o == 1 or s4_send_pending_pre or s4_send_pending_q
+  const reduce_wait_done = reg_count_q == 0 and not ba_alloc_fifo_val and not ba_op_fifo_valid and not op_fire and s2_inst_op_val_o == 0 and s3_inst_op_val_o == 0
+
+  mut fsm_state_d = fsm_state_q
+  match fsm_state_q {
+    == ReduceState.Invalid {
+      if new_req {
+        fsm_state_d = ReduceState.WaitTensor
+      }
+    }
+    == ReduceState.WaitTensor {
+      if not vpu_reduce_wait {
+        fsm_state_d = ReduceState.NewReq
+      }
+    }
+    == ReduceState.NewReq {
+      if not req_reduce {
+        fsm_state_d = ReduceState.StoreData
+      } elif err_partner_id or err_operation or reg_count_q == 0 {
+        fsm_state_d = ReduceState.Invalid
+      } elif action == minion_pkg.DcacheReduceSend {
+        fsm_state_d = ReduceState.WaitReady
+      } elif action == minion_pkg.DcacheReduceRecv {
+        fsm_state_d = ReduceState.SendReady
+      } elif action == minion_pkg.DcacheReduceDoNothing {
+        fsm_state_d = ReduceState.Invalid
+      }
+    }
+    == ReduceState.SendReady {
+      if ba_available_q and re_l2_req_ready {
+        fsm_state_d = ReduceState.WaitData
+      }
+    }
+    == ReduceState.WaitReady {
+      if got_ready_msg_q {
+        fsm_state_d = ReduceState.SendData
+      }
+    }
+    == ReduceState.SendData {
+      if reg_count_q == 0 {
+        fsm_state_d = ReduceState.Drain
+      }
+    }
+    == ReduceState.WaitData {
+      if reduce_wait_done {
+        fsm_state_d = ReduceState.Invalid
+      }
+    }
+    == ReduceState.Drain {
+      if not any_packet {
+        fsm_state_d = ReduceState.Invalid
+      }
+    }
+    == ReduceState.StoreData {
+      if atrans_state_q == AtransState.Fail or (reg_count_q == 0 and req_reduce) {
+        fsm_state_d = ReduceState.Drain
+      }
+    }
+    else {
+      fsm_state_d = fsm_state_q
+    }
+  }
+
+  const got_ready_msg_d = if fsm_state_q == ReduceState.WaitReady and fsm_state_d != ReduceState.WaitReady { false }
+    elif current_partner_ready and fsm_state_q == ReduceState.WaitReady { true }
+    else { got_ready_msg_q }
+
+  const l2_req_inflight_d = if re_l2_fire or ts_l2_fire { not l2_req_inflight_q and l2_req.size > minion_dcache_pkg.EtLinkHLine }
+    else { l2_req_inflight_q }
+
+  // Throttles: a row-rate counter, a backoff counter that trips at 8 outstanding beats, and a
+  // write-around counter of rows sent but not yet acknowledged.
+  mut rate_counter_d:U6 = rate_counter_q
+  if new_req {
+    rate_counter_d = 0
+  } elif last_packet_row {
+    rate_counter_d = rate_q << 2
+  } elif rate_counter_q != 0 {
+    wrap rate_counter_d = rate_counter_q - 1
+  }
+
+  mut l2_backoff_count_d:U4 = l2_backoff_count_q
+  if new_req {
+    l2_backoff_count_d = 0
+  } elif ba_read_en {
+    wrap l2_backoff_count_d = l2_backoff_count_q + 1
+  } elif l2_backoff_q {
+    wrap l2_backoff_count_d = l2_backoff_count_q - 2
+  }
+  mut l2_backoff_d = l2_backoff_q
+  if new_req {
+    l2_backoff_d = false
+  } elif ba_read_en and l2_backoff_count_d == 8 {
+    l2_backoff_d = true
+  } elif l2_backoff_count_d == 0 {
+    l2_backoff_d = false
+  }
+
+  const opcode_is_mine = l2_resp_i.id#[0..<5] == minion_dcache_pkg.EtLinkCoreMissIdReduce or l2_resp_i.id#[0..<5] == minion_dcache_pkg.EtLinkCoreMissIdTensorStoreCoop
+  const write_around_cnt_dec = l2_resp_valid and opcode_is_mine and (l2_resp_i.opcode == minion_pkg.EtLinkRspAck or l2_resp_i.opcode == minion_pkg.EtLinkRspErr)
+  mut write_around_cnt_d:U4 = write_around_cnt_q
+  mut write_around_cnt_up = false
+  if last_packet_row {
+    write_around_cnt_up = true
+    wrap write_around_cnt_d = write_around_cnt_d + 1
+  }
+  if write_around_cnt_dec {
+    write_around_cnt_up = true
+    if write_around_cnt_d != 0 {
+      wrap write_around_cnt_d = write_around_cnt_d - 1
+    }
+  }
+
+  // ---- fifos ----
+  const u_ba_alloc_fifo = prim_fifo_sync<Depth=8, Width=3>(clk_i=clkgt, rst_ni=rst_ni, clr_i=0, wvalid_i=U1(ba_write_needed_rec), wdata_i=s2_ba_written_entry_i, rready_i=U1(ba_alloc_fifo_pop))
+  ba_alloc_fifo_val = Bool(u_ba_alloc_fifo.rvalid_o)
+  ba_alloc_fifo_rdata = u_ba_alloc_fifo.rdata_o
+
+  const u_ba_op_fifo = prim_fifo_sync<Depth=4, Width=3>(clk_i=clkgt, rst_ni=rst_ni, clr_i=0, wvalid_i=U1(ba_alloc_fifo_pop), wdata_i=ba_alloc_fifo_rdata, rready_i=U1(op_fire))
+  ba_op_fifo_valid = Bool(u_ba_op_fifo.rvalid_o)
+  ba_op_fifo_data = u_ba_op_fifo.rdata_o
+  ba_op_fifo_full = Bool(u_ba_op_fifo.full_o)
+
+  const u_ba_data_send_fifo = prim_fifo_sync<Depth=8, Width=3>(clk_i=clkgt, rst_ni=rst_ni, clr_i=0, wvalid_i=s3_inst_send_val_o, wdata_i=s3_ba_written_entry_q, rready_i=U1(load_send_fifo_data and s4_send_pending_pre))
+  ba_data_send_fifo_valid = Bool(u_ba_data_send_fifo.rvalid_o)
+
+  const u_phys_addr_send_fifo = prim_fifo_sync<Depth=2, Width=40>(clk_i=clkgt, rst_ni=rst_ni, clr_i=0, wvalid_i=U1(address_save), wdata_i=s2_addr_i, rready_i=U1(last_packet_row))
+  address_for_l2_ready = Bool(u_phys_addr_send_fifo.rvalid_o)
+  addr_phys = u_phys_addr_send_fifo.rdata_o
+  address_fifo_full = Bool(u_phys_addr_send_fifo.full_o)
+
+  // ---- state updates ----
+  if new_req {
+    vm_status_ts_q = vm_status_ts_d
+    req_info_q = req_info_d
+    rate_q = rate_d
+    ts_is_from_scp_q = ts_is_from_scp_d
+    operation_q = ctl_red_op
+  }
+  if reg_count_up {
+    reg_count_q = reg_count_d
+  }
+  if new_ts_req or address_save {
+    addr_q = addr_d
+    addr_msb_err_q = addr_msb_err_d
+  }
+  if new_ts_req {
+    stride_addr_q = stride_addr_d
+    stride_entry_q = ctl_scp_stride_entry
+  }
+  if scp_entry_up {
+    scp_entry_q = scp_entry_d
+    scp_idx_q = scp_idx_d
+  }
+  if atrans_en {
+    atrans_state_q = atrans_state_d
+    atrans_num_req_q = atrans_num_req_d
+    address_count_q = address_count_d
+    address_use_idx_q = address_use_idx_d
+  }
+  if fsm_state_q == ReduceState.NewReq or fsm_state_q == ReduceState.SendReady {
+    ba_available_q = ba_available_d
+  }
+  if new_req or s4_send {
+    tensorstore_count_q = tensorstore_count_d
+  }
+  rate_counter_q = rate_counter_d
+  l2_backoff_count_q = l2_backoff_count_d
+  if s2_inst_send_val_o == 1 {
+    s3_ba_written_entry_q = s2_ba_written_entry_i
+  }
+  if load_send_fifo_data {
+    ba_data_send_fifo_data_q = u_ba_data_send_fifo.rdata_o
+    s4_send_pending_q = s4_send_pending_pre
+  }
+  if clk_en {
+    fsm_state_q = fsm_state_d
+    s2_inst_op_val_o = U1(op_fire)
+    s3_inst_op_val_o = s2_inst_op_val_o
+    pipe_used_o = U1(pipe_used_pre)
+    s0_inst_send_val_q = pipe_used_o == 1
+    s1_inst_send_val_o = U1(s0_inst_send_val_q)
+    s2_inst_send_val_o = s1_inst_send_val_o
+    s3_inst_send_val_o = s2_inst_send_val_o
+  }
+  l2_req_inflight_q = l2_req_inflight_d
+  got_ready_msg_q = got_ready_msg_d
+  l2_backoff_q = l2_backoff_d
+  if write_around_cnt_up {
+    write_around_cnt_q = write_around_cnt_d
+    write_around_throttle_q = write_around_cnt_d == 8
+  }
+  if wait_l2_to_ba_resp_z1_q or ba_alloc_fifo_val {
+    wait_l2_to_ba_resp_z1_q = ba_alloc_fifo_val
+  }
+  err_mem_q = err_mem_d
+  if got_ready_msg_q or new_partner_ready_z1_q {
+    partner_ready_mask_q = partner_ready_mask_d
+    partner_ready_peer_q = partner_ready_peer_d
+  }
+  if new_partner_ready or new_partner_ready_z1_q {
+    new_partner_ready_z1_q = new_partner_ready
+  }
+  if new_partner_ready {
+    partner_ready_idx_q = l2_resp_i.data#[0..<5]
+  }
+
+  // ---- outputs ----
+  const tensorstore_busy = write_around_cnt_q != 0 or (not reduce_ready and not req_reduce)
+  const resp_is_error = l2_resp_valid and opcode_is_mine and l2_resp_i.opcode == minion_pkg.EtLinkRspErr
+  const ts_col_size_is_128b = not req_reduce and req_cols == 1
+  const ts_scp_read_way:U2 = scp_block#[0..<2]
+  const ts_scp_read_addr:U10 = (scp_set#[0..<4] << 6) | (U1(scp_idx_q) << 5)
+  const vpu_ctrl_exec_op = op_fire
+  const vpu_ctrl_nothing = (fsm_state_q == ReduceState.NewReq and req_reduce and (action == minion_pkg.DcacheReduceDoNothing or err_partner_id or err_operation)) or (fsm_state_q == ReduceState.StoreData and atrans_state_q == AtransState.Fail)
+
+  reduce_ready_o = U1(reduce_ready)
+  tensorstore_busy_o = U1(tensorstore_busy)
+  buffer_avail_o = U1(ba_alloc_fifo_val and wait_l2_to_ba_resp_z1_q and not ba_op_fifo_full)
+  re_l2_req_valid_o = U1(re_l2_req_valid)
+  re_l2_req_o = l2_req
+  ts_l2_req_valid_o = U1(ts_l2_req_valid)
+  ts_l2_req_o = l2_req
+  re_ts_l2_req_inflight_o = U1(l2_req_inflight_q)
+  s1_inst_op_val_o = U1(op_fire)
+  ts_scp_read_o = U1(ts_is_from_scp_q)
+  ts_scp_read_way_o = ts_scp_read_way
+  ts_scp_read_addr_o = ts_scp_read_addr
+  ts_col_size_is_128b_o = U1(ts_col_size_is_128b)
+  s0_addr_load_o = U1(atrans_state_q == AtransState.S0Req and s0_available and not address_fifo_full)
+  s0_addr_o = addr_q << 4
+  s0_addr_msb_err_o = U1(addr_msb_err_q)
+  s0_thread_id_o = U1(req_thread_id)
+  s1_addr_load_o = U1(atrans_state_q == AtransState.S1Req)
+  ba_alloc_o = U1(ba_alloc)
+  ba_write_needed_o = U1(s2_inst_send_val_o == 1 or ba_write_needed_rec)
+  s3_ba_write_addr_o = ba_alloc_fifo_rdata
+  wait_l2_to_ba_resp_o = U1(ba_alloc_fifo_val)
+  ba_entries_required_o = U1(wait_data_from_sender or fsm_state_q == ReduceState.SendData or fsm_state_q == ReduceState.StoreData)
+  ba_read_en_o = U1(ba_read_en)
+  ba_read_en_spec_o = U1(ba_read_en_spec)
+  ba_read_addr_o = ba_read_addr
+  vpu_ctrl_o = (exec_op=U1(vpu_ctrl_exec_op), nothing=U1(vpu_ctrl_nothing), send_reg=U1(vpu_send_reg))
+  vm_status_ts_o = (debug=vm_status_ts_q#[0], mpp=vm_status_ts_q#[3..<5], mprv=vm_status_ts_q#[5], mxr=vm_status_ts_q#[1], prv=vm_status_ts_q#[6..<8], sum=vm_status_ts_q#[2])
+  ts_start_o = U1(reduce_ready and tensorstore_start)
+  ts_op_o = U1((not req_reduce and ts_l2_fire) or re_l2_fire)
+  // err_flags_o: {mem fault per thread (thread 1 in the upper bit), 2 unused co-lock bits}.
+  const mem_fault:U2 = (U1(err_mem_q and not req_thread_id), U1(err_mem_q and req_thread_id))#[..]
+  err_flags_o = mem_fault << 2
+  bus_err_o = (U1(resp_is_error and not req_thread_id), U1(resp_is_error and req_thread_id))#[..]
+  csr_debug_signals_o = fsm_state_q#[0..<4]
+
+  // ---- debug / state-machine monitor buses (lane order: first entry is bit 0) ----
+  const dbg_match:U25 = (U1(ts_is_from_scp_q), U1(ba_read_en), s3_inst_send_val_o, s2_inst_send_val_o, s1_inst_send_val_o, U1(s0_inst_send_val_q), pipe_used_o, U1(pipe_used_pre), U1(op_fire), s2_inst_op_val_o, s3_inst_op_val_o, U1(l2_resp_valid), U1(ts_l2_fire), U1(re_l2_fire), U1(tensorstore_start), U1(tensorstore_busy), U1(reduce_start), U1(reduce_ready), U1(write_around_cnt_up), U1(load_send_fifo_data), U1(s4_send), U1(new_req), U1(new_partner_ready), U1(atrans_en), U1(vpu_reduce_wait))#[..]
+  sm_match_debug_signals_o = dbg_match
+
+  const vpu_ctrl_bits:U3 = (U1(vpu_ctrl_nothing), U1(vpu_ctrl_exec_op), U1(vpu_send_reg))#[..]
+  const dbg_filter:U115 = (U1(ts_is_from_scp_q), req_info_q, fsm_state_q#[0..<4], U1(ba_read_en), s3_inst_send_val_o, s2_inst_send_val_o, s1_inst_send_val_o, U1(s0_inst_send_val_q), pipe_used_o, U1(pipe_used_pre), U1(op_fire), s2_inst_op_val_o, s3_inst_op_val_o, U1(tensorstore_start), U1(tensorstore_busy), U1(reduce_start), U1(reduce_ready), l2_req.qwen, l2_req.size, l2_req.data#[0..<4], l2_req.address, l2_req.subopcode, l2_req.opcode, U1(l2_resp_valid), U1(ts_l2_req_ready), U1(re_l2_req_ready), U1(ts_l2_req_valid), U1(re_l2_req_valid), U1(s4_send), U1(new_req), U1(new_partner_ready), U1(atrans_en), vpu_ctrl_bits, U1(vpu_reduce_wait))#[..]
+  sm_filter_debug_signals_o = dbg_filter
+
+  const dbg_data0:U119 = (ba_read_addr, l2_req.qwen, l2_req.size, l2_req.data#[0..<4], l2_req.address, l2_req.subopcode, l2_req.opcode, U1(scp_idx_q), scp_entry_q, stride_entry_q, stride_addr_q)#[..]
+  const dbg_data1:U126 = (fsm_state_q#[0..<4], reg_count_q, req_info_q, addr_q, U1(address_use_idx_q), address_count_q, atrans_num_req_q, atrans_state_q#[0..<3], U1(l2_req_inflight_q), U1(got_ready_msg_q), partner_ready_mask_q, U1(ts_col_size_is_128b), ts_scp_read_addr, ts_scp_read_way, U1(ts_is_from_scp_q), U1(tensorstore_count_q), U1(s4_send_pending_q), U1(write_around_throttle_q), U1(address_for_l2_ready), U1(address_fifo_full), U1(address_fifo_full), u_ba_alloc_fifo.full_o, U1(ba_alloc_fifo_val), U1(ba_op_fifo_full), U1(ba_op_fifo_valid))#[..]
+  mut dbg_data:U512 = 0
+  dbg_data#[0..<119] = dbg_data0
+  dbg_data#[128..<254] = dbg_data1
+  sm_data_debug_signals_o = dbg_data
+}

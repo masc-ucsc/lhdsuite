@@ -61,6 +61,11 @@ core_benches("cva6")
 # OWN `ifdef FORMAL` spec translated.
 core_benches("picorv32")
 
+# Bitcoin (LogikBench): a SHA256d proof-of-work miner over secworks'
+# sha256_core, vendored verbatim with a suite-written wrapper pinning 4 lanes.
+# Both languages are the same design; pyrope/ is the hand-cleaned loop form.
+core_benches("bitcoin")
+
 # Ibex (lowRISC): a small RV32IMC core, vendored verbatim at one commit, with a
 # suite-written wrapper pinning the parameters. Its verify sidecar is Ibex's
 # OWN IbexDataAddrUnaligned assertion translated.

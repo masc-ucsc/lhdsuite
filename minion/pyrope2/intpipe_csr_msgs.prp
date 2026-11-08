@@ -1,0 +1,292 @@
+const minion_pkg = import("minion_pkg")
+
+// Message-port control and configuration (verilog: intpipe_csr_msgs). Each thread has
+// N_PORTS message ports. A port is configured by a CSR write (config in the clk_wr_i
+// domain: enable, umode, queue size, scratchpad set/way, oob), and owns a circular
+// queue described by a write and a read pointer (one extra "lap" bit tells full
+// from empty). Data arrives from the L2 (l2_resp, the pointers say where it lands in
+// the scratchpad), the core pops it with PGET/PGETNB, and a one-bit "oob" sideband
+// travels in a small per-port FIFO. ENABLE/DISABLE CSR writes (conf_en) flush a
+// port's pointers and its oob FIFO. PGET stalls the thread until data is valid.
+
+comptime const N_THREADS = minion_pkg.NrThreads
+comptime const N_PORTS = 4
+comptime const PORT_BITS = 2
+comptime const N_QUEUES = N_THREADS*N_PORTS // queue q = thread * N_PORTS + port
+comptime const MAX_MSGS_BITS = 4
+cassert(MAX_MSGS_BITS == minion_pkg.CoreMsgPortMaxMsgsSz, "queue pointer width")
+comptime const PTR_BITS = MAX_MSGS_BITS + 1
+// oob FIFO: OOB_DEPTH entries, pointers one bit wider than needed to index them
+comptime const OOB_DEPTH = (1 << MAX_MSGS_BITS) - 1
+comptime const OOB_PTR_BITS = 4
+comptime const SET_BITS = 4
+comptime const LINE_LSB = 6 // scratchpad address of a line starts at scp_set << LINE_LSB
+comptime const ADDR_BITS = minion_pkg.DcacheLramAddrBits
+comptime const MSG_PORT_ID_SIZE = 2
+
+// Layout shared by the config write data and the PORTCTL read data.
+comptime const CFG_ENABLE = 0
+comptime const CFG_OOB = 1
+comptime const CFG_UMODE = 4
+comptime const CFG_LOGSIZE = 5
+comptime const CFG_MAX_MSGS = 8
+comptime const CFG_ONE = 15 // PORTCTL reads this bit as 1
+comptime const CFG_SET = 16
+comptime const CFG_WAY = 24
+
+type MsgPortConf = (umode:U1, logsize:U3, max_msgs:U4, scp_set:U4, scp_way:U2, enable_oob:U1)
+
+// The write data may carry a size the queue does not support: 0/1 round to the
+// smallest and 6/7 to the largest.
+comb legalize_logsize(size:U3) -> (logsize:U3) {
+  logsize = if size <= 1 { minion_pkg.MsgPort32 } elif size >= 6 { minion_pkg.MsgPort256 } else { size }
+}
+
+// A message takes 2^logsize bytes (logsize 2..4 are 32/64/128-byte lines, anything
+// else is treated as the largest, 256).
+comb msg_shift(largest:U3, logsize:U3) -> (shift:U3) {
+  shift = if logsize >= minion_pkg.MsgPort32 and logsize <= minion_pkg.MsgPort128 { logsize } else { largest }
+}
+
+// One queue's oob FIFO state (1-bit entries): a message write pushes its oob bit unless the
+// FIFO is full (the pointers are one bit wider than OOB_DEPTH, so index 15 stores nothing and
+// a pointer that wrapped past the other one reads as full), a read pops, a flush empties
+// it. Only queues with enable_oob use it. The entries (unreset) are not written while the
+// reset is asserted (running = false), unlike the pointers. Returns the entry at the read pointer.
+comb oob_fifo(bit:U1, enable_oob:Bool, flush:Bool, ref mem:Unsigned(bits=OOB_DEPTH), ref rd:Unsigned(bits=OOB_PTR_BITS), rd_up:Bool, running:Bool, ref wr:Unsigned(bits=OOB_PTR_BITS), wr_up:Bool) -> (head:U1) {
+  head = mem#[rd]
+  mut fill:U32 = 0
+  wrap fill = wr - rd
+  const full = fill >= OOB_DEPTH
+  if flush {
+    wr = 0
+    rd = 0
+  } else {
+    if wr_up and not full and enable_oob {
+      if running {
+        mem#[wr] = bit
+      }
+      wrap wr = wr + 1
+    }
+    if rd_up and enable_oob {
+      wrap rd = rd + 1
+    }
+  }
+}
+
+// Queue pointer step: wrap to 0 at max_ptr and flip the lap bit.
+comb inc_wrap_ptr(max_ptr:Unsigned(bits=MAX_MSGS_BITS), ptr:Unsigned(bits=PTR_BITS)) -> (next:Unsigned(bits=PTR_BITS)) {
+  const lsb = ptr#[0..<MAX_MSGS_BITS]
+  const lap = ptr#[MAX_MSGS_BITS]
+  mut next_lsb:Unsigned(bits=MAX_MSGS_BITS) = 0
+  if lsb != max_ptr {
+    wrap next_lsb = lsb + 1
+  }
+  const next_lap = U1(if lsb == max_ptr { lap == 0 } else { lap == 1 })
+  next = (next_lap << MAX_MSGS_BITS) | next_lsb
+}
+
+pub mod intpipe_csr_msgs::[timecheck=false](clk_i:Clock, clk_wr_i:Clock, cpu_mem_porthead_en_any:U1, cpu_mem_portheadnb_en_any:U1, cpu_mem_sen:U8, cpu_wb_sen:U8, l2_resp:(id:U8, dest:U1, wdata:U1, opcode:U2, data:U256, size:U3, qwen:U4), l2_resp_ready:U1, l2_resp_valid:U1, mem_addr:U2, mem_cmd:U3, mem_thread_id:U1, mem_valid_qual:U1, mem_wdata:U4, mpp:U2, req_port_info_port_id:U2, req_port_info_thread_id:U1, rst_ni:U1, wb_thread_id:U1, wb_wdata:minion_pkg.XregSize_T) -> (l2_resp_msg_valid:U1@[], mem_rdata_next:minion_pkg.XregSize_T@[], msg_port_pget_block:U1@[], msg_port_scp_way_reg_next:minion_pkg.DcacheWayBits_T@[], msg_port_stall:U8@[], msg_port_wr_addr_reg_next:minion_pkg.DcacheLramAddrBits_T@[], msg_port_wr_en_reg_next:U1@[], msg_port_xcpt:U1@[], portctl:minion_pkg.XregSize_T@[], req_port_info_enabled:U1@[], req_port_info_reply:(umode:U1, logsize:U3, max_msgs:U4, scp_set:U4, scp_way:U2, enable_oob:U1)@[]) {
+  reg msg_port_pget_block:U1:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg msg_port_xcpt:U1:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg msg_port_stall:Unsigned(bits=N_QUEUES):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg msg_port_pget:U1:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg msg_port_pget_valid:U1:[clock_pin=clk_i] = nil
+  reg msg_port_wb_id:Unsigned(bits=PORT_BITS):[clock_pin=clk_i] = nil
+  // flush request per queue, laid out like cpu_wb_sen: bit port * N_THREADS + thread
+  reg msg_port_conf_en:Unsigned(bits=N_QUEUES):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg msg_port_wr_ptr:Unsigned(bits=N_QUEUES*PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg msg_port_rd_ptr:Unsigned(bits=N_QUEUES*PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  // oob FIFO state per queue (the reference names the replicas _s1.._s7; LEC pairs state by name)
+  reg oob_mem:Unsigned(bits=OOB_DEPTH):[clock_pin=clk_i] = nil
+  // prp-style-allow likely-unrolled-loop
+  reg oob_mem_s1:Unsigned(bits=OOB_DEPTH):[clock_pin=clk_i] = nil
+  reg oob_mem_s2:Unsigned(bits=OOB_DEPTH):[clock_pin=clk_i] = nil
+  reg oob_mem_s3:Unsigned(bits=OOB_DEPTH):[clock_pin=clk_i] = nil
+  reg oob_mem_s4:Unsigned(bits=OOB_DEPTH):[clock_pin=clk_i] = nil
+  reg oob_mem_s5:Unsigned(bits=OOB_DEPTH):[clock_pin=clk_i] = nil
+  reg oob_mem_s6:Unsigned(bits=OOB_DEPTH):[clock_pin=clk_i] = nil
+  reg oob_mem_s7:Unsigned(bits=OOB_DEPTH):[clock_pin=clk_i] = nil
+  reg oob_wr_ptr:Unsigned(bits=OOB_PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  // prp-style-allow likely-unrolled-loop
+  reg oob_wr_ptr_s1:Unsigned(bits=OOB_PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg oob_wr_ptr_s2:Unsigned(bits=OOB_PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg oob_wr_ptr_s3:Unsigned(bits=OOB_PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg oob_wr_ptr_s4:Unsigned(bits=OOB_PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg oob_wr_ptr_s5:Unsigned(bits=OOB_PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg oob_wr_ptr_s6:Unsigned(bits=OOB_PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg oob_wr_ptr_s7:Unsigned(bits=OOB_PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg oob_rd_ptr:Unsigned(bits=OOB_PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  // prp-style-allow likely-unrolled-loop
+  reg oob_rd_ptr_s1:Unsigned(bits=OOB_PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg oob_rd_ptr_s2:Unsigned(bits=OOB_PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg oob_rd_ptr_s3:Unsigned(bits=OOB_PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg oob_rd_ptr_s4:Unsigned(bits=OOB_PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg oob_rd_ptr_s5:Unsigned(bits=OOB_PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg oob_rd_ptr_s6:Unsigned(bits=OOB_PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg oob_rd_ptr_s7:Unsigned(bits=OOB_PTR_BITS):[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  // per-queue config lives in the clk_wr_i domain; "enabled" is cleared by reset
+  reg msg_port_enabled:[N_THREADS]Unsigned(bits=N_PORTS):[clock_pin=clk_wr_i, ordering="old"] = nil
+  reg msg_port_conf:[N_QUEUES]MsgPortConf:[clock_pin=clk_wr_i, ordering="old"] = nil
+
+  // ---- configuration write: a CSR write to a port loads its config word ----
+  for t in 0..<N_THREADS {
+    for p in 0..<N_PORTS {
+      if cpu_wb_sen#[p*N_THREADS + t] == 1 {
+        msg_port_enabled[t]#[p] = wb_wdata#[CFG_ENABLE]
+        msg_port_conf[t*N_PORTS + p].umode = wb_wdata#[CFG_UMODE]
+        msg_port_conf[t*N_PORTS + p].logsize = legalize_logsize(size=wb_wdata#[CFG_LOGSIZE..<(CFG_LOGSIZE + 3)])
+        msg_port_conf[t*N_PORTS + p].max_msgs = wb_wdata#[CFG_MAX_MSGS..<(CFG_MAX_MSGS + 4)]
+        msg_port_conf[t*N_PORTS + p].scp_set = wb_wdata#[CFG_SET..<(CFG_SET + SET_BITS)]
+        msg_port_conf[t*N_PORTS + p].scp_way = wb_wdata#[CFG_WAY..<(CFG_WAY + minion_pkg.DcacheWayBits)]
+        msg_port_conf[t*N_PORTS + p].enable_oob = wb_wdata#[CFG_OOB]
+      }
+    }
+  }
+  if rst_ni == 0 {
+    msg_port_enabled#[0..<(N_THREADS*N_PORTS)] = 0
+  }
+
+  // ---- queue state seen by the core ----
+  mut buffer_valid:Unsigned(bits=N_QUEUES) = 0
+  for q in 0..<N_QUEUES {
+    buffer_valid#[q] = U1(msg_port_wr_ptr#[(q*PTR_BITS)..<((q + 1)*PTR_BITS)] != msg_port_rd_ptr#[(q*PTR_BITS)..<((q + 1)*PTR_BITS)])
+  }
+
+  // ---- L2 message arrival ----
+  const wr_thread = l2_resp.dest
+  const wr_port = (l2_resp.id >> minion_pkg.EtMsgPortIdStart)#[0..<MSG_PORT_ID_SIZE]
+  const wr_q = wr_thread*N_PORTS + wr_port
+  l2_resp_msg_valid = U1(l2_resp_valid == 1 and l2_resp.opcode == minion_pkg.EtLinkRspMsgRcvData and l2_resp.id < minion_pkg.EtLinkMinMsgIdReduceReady)
+  const fill_en = l2_resp_msg_valid == 1 and l2_resp_ready == 1 // one message fills a whole slot
+  const oob_next = l2_resp.id#[minion_pkg.EtMsgValidBit]
+  const wr_ptr = msg_port_wr_ptr#[(wr_q*PTR_BITS)..<((wr_q + 1)*PTR_BITS)]
+  const rd_ptr_wr = msg_port_rd_ptr#[(wr_q*PTR_BITS)..<((wr_q + 1)*PTR_BITS)]
+  // writable unless the queue is full: pointers equal except for the lap bit
+  const wr_en = msg_port_enabled[wr_thread]#[wr_port] == 1 and (wr_ptr ^ rd_ptr_wr) != (1 << MAX_MSGS_BITS)
+  const wr_ptr_next = inc_wrap_ptr(max_ptr=msg_port_conf[wr_q].max_msgs, ptr=wr_ptr)
+
+  // where the message lands in the scratchpad: set base + slot offset (+ half line)
+  mut wr_offset:Unsigned(bits=ADDR_BITS) = 0
+  wrap wr_offset = wr_ptr#[0..<MAX_MSGS_BITS] << msg_shift(largest=6, logsize=msg_port_conf[wr_q].logsize)
+  mut wr_addr:Unsigned(bits=ADDR_BITS) = 0
+  wrap wr_addr = (msg_port_conf[wr_q].scp_set << LINE_LSB) + wr_offset + (U1(fill_en) << 5)
+  msg_port_wr_en_reg_next = U1(wr_en)
+  msg_port_scp_way_reg_next = msg_port_conf[wr_q].scp_way
+  msg_port_wr_addr_reg_next = wr_addr
+
+  // ---- per-queue pointers ----
+  mut flush_q:Unsigned(bits=N_QUEUES) = 0
+  mut rd_up_q:Unsigned(bits=N_QUEUES) = 0
+  mut wr_up_q:Unsigned(bits=N_QUEUES) = 0
+  for t in 0..<N_THREADS {
+    for p in 0..<N_PORTS {
+      const q = t*N_PORTS + p
+      const rd = msg_port_rd_ptr#[(q*PTR_BITS)..<((q + 1)*PTR_BITS)]
+      const wr = msg_port_wr_ptr#[(q*PTR_BITS)..<((q + 1)*PTR_BITS)]
+      const flush = msg_port_conf_en#[p*N_THREADS + t] == 1
+
+      const rd_up = msg_port_stall#[q] == 0 and msg_port_pget == 1 and msg_port_pget_valid == 1 and wb_thread_id == t and msg_port_wb_id == p and buffer_valid#[q] == 1
+      const wr_up = fill_en and wr_en and wr_port == p and wr_thread == t
+      flush_q#[q] = U1(flush)
+      rd_up_q#[q] = U1(rd_up)
+      wr_up_q#[q] = U1(wr_up)
+      if flush {
+        msg_port_rd_ptr#[(q*PTR_BITS)..<((q + 1)*PTR_BITS)] = 0
+        msg_port_wr_ptr#[(q*PTR_BITS)..<((q + 1)*PTR_BITS)] = 0
+      } else {
+        if rd_up {
+          msg_port_rd_ptr#[(q*PTR_BITS)..<((q + 1)*PTR_BITS)] = inc_wrap_ptr(max_ptr=msg_port_conf[q].max_msgs, ptr=rd)
+        }
+        if wr_up {
+          msg_port_wr_ptr#[(q*PTR_BITS)..<((q + 1)*PTR_BITS)] = wr_ptr_next
+        }
+      }
+    }
+  }
+
+  // ---- oob FIFOs, one per queue (each FIFO's state is a separate register, see above) ----
+  const oob_head0 = oob_fifo(mem=ref oob_mem, wr=ref oob_wr_ptr, rd=ref oob_rd_ptr, flush=flush_q#[0] == 1, wr_up=wr_up_q#[0] == 1, rd_up=rd_up_q#[0] == 1, enable_oob=msg_port_conf[0].enable_oob == 1, bit=oob_next, running=rst_ni == 1)
+  // prp-style-allow likely-unrolled-loop
+  const oob_head1 = oob_fifo(mem=ref oob_mem_s1, wr=ref oob_wr_ptr_s1, rd=ref oob_rd_ptr_s1, flush=flush_q#[1] == 1, wr_up=wr_up_q#[1] == 1, rd_up=rd_up_q#[1] == 1, enable_oob=msg_port_conf[1].enable_oob == 1, bit=oob_next, running=rst_ni == 1)
+  const oob_head2 = oob_fifo(mem=ref oob_mem_s2, wr=ref oob_wr_ptr_s2, rd=ref oob_rd_ptr_s2, flush=flush_q#[2] == 1, wr_up=wr_up_q#[2] == 1, rd_up=rd_up_q#[2] == 1, enable_oob=msg_port_conf[2].enable_oob == 1, bit=oob_next, running=rst_ni == 1)
+  const oob_head3 = oob_fifo(mem=ref oob_mem_s3, wr=ref oob_wr_ptr_s3, rd=ref oob_rd_ptr_s3, flush=flush_q#[3] == 1, wr_up=wr_up_q#[3] == 1, rd_up=rd_up_q#[3] == 1, enable_oob=msg_port_conf[3].enable_oob == 1, bit=oob_next, running=rst_ni == 1)
+  const oob_head4 = oob_fifo(mem=ref oob_mem_s4, wr=ref oob_wr_ptr_s4, rd=ref oob_rd_ptr_s4, flush=flush_q#[4] == 1, wr_up=wr_up_q#[4] == 1, rd_up=rd_up_q#[4] == 1, enable_oob=msg_port_conf[4].enable_oob == 1, bit=oob_next, running=rst_ni == 1)
+  const oob_head5 = oob_fifo(mem=ref oob_mem_s5, wr=ref oob_wr_ptr_s5, rd=ref oob_rd_ptr_s5, flush=flush_q#[5] == 1, wr_up=wr_up_q#[5] == 1, rd_up=rd_up_q#[5] == 1, enable_oob=msg_port_conf[5].enable_oob == 1, bit=oob_next, running=rst_ni == 1)
+  const oob_head6 = oob_fifo(mem=ref oob_mem_s6, wr=ref oob_wr_ptr_s6, rd=ref oob_rd_ptr_s6, flush=flush_q#[6] == 1, wr_up=wr_up_q#[6] == 1, rd_up=rd_up_q#[6] == 1, enable_oob=msg_port_conf[6].enable_oob == 1, bit=oob_next, running=rst_ni == 1)
+  const oob_head7 = oob_fifo(mem=ref oob_mem_s7, wr=ref oob_wr_ptr_s7, rd=ref oob_rd_ptr_s7, flush=flush_q#[7] == 1, wr_up=wr_up_q#[7] == 1, rd_up=rd_up_q#[7] == 1, enable_oob=msg_port_conf[7].enable_oob == 1, bit=oob_next, running=rst_ni == 1)
+  const oob_head:Unsigned(bits=N_QUEUES) = (oob_head0, oob_head1, oob_head2, oob_head3, oob_head4, oob_head5, oob_head6, oob_head7)#[..]
+
+  const mem_q = mem_thread_id*N_PORTS + mem_addr // queue addressed by the CSR access
+  const mem_enabled = msg_port_enabled[mem_thread_id]#[mem_addr] == 1
+  const mem_rd_ptr = msg_port_rd_ptr#[(mem_q*PTR_BITS)..<(mem_q*PTR_BITS + MAX_MSGS_BITS)]
+  const heads_en_any = cpu_mem_porthead_en_any == 1 or cpu_mem_portheadnb_en_any == 1
+  const sen_any = cpu_mem_sen != 0
+  const mem_wdata_c:U4 = if mem_cmd == minion_pkg.CsrCmdC { 0 } else { mem_wdata }
+
+  const mem_oob = if msg_port_conf[mem_q].enable_oob == 1 { oob_head#[mem_q] } else { 0 }
+
+  // ---- CSR access: PGET/PGETNB read the next message slot, ENABLE/DISABLE flush ----
+  mut xcpt_next = heads_en_any
+  mut pget_next = false
+  mut pget_valid_next = msg_port_pget_valid
+  mut conf_en_next:Unsigned(bits=N_QUEUES) = if cpu_wb_sen != 0 { 0 } else { msg_port_conf_en }
+  mut rdata_next:minion_pkg.XregSize_T = (1 << minion_pkg.XregSize) - 1
+
+  if mem_wdata_c#[1] == 0 { // PGET (..00), PGETNB (..01)
+    // user mode may only use enabled ports whose config allows it
+    xcpt_next = heads_en_any and ((msg_port_conf[mem_q].umode == 0 and mpp == minion_pkg.PrvU) or not mem_enabled)
+    pget_next = not xcpt_next and heads_en_any
+    pget_valid_next = U1(buffer_valid#[mem_q] == 1)
+    if buffer_valid#[mem_q] == 1 {
+      // slot number in the scratchpad, with the oob bit in bit 0
+      rdata_next = (mem_rd_ptr << msg_shift(largest=5, logsize=msg_port_conf[mem_q].logsize)) | mem_oob
+    }
+  } elif mem_wdata_c == 7 or mem_wdata_c#[0..<3] == 3 { // ENABLE_R (0111), DISABLE (?011)
+    rdata_next = 0
+    if heads_en_any or (sen_any and mpp == minion_pkg.PrvU) {
+      xcpt_next = true
+    } else {
+      conf_en_next = cpu_mem_sen
+      xcpt_next = false
+    }
+  }
+
+  // a PGET stalls its thread until the queue has data; any data clears stalls
+  mut stall_next = msg_port_stall
+  if pget_next {
+    stall_next#[mem_q] = cpu_mem_porthead_en_any
+  }
+
+  msg_port_xcpt = U1(xcpt_next and heads_en_any)
+  msg_port_pget = U1(pget_next and heads_en_any)
+  if heads_en_any {
+    msg_port_pget_valid = pget_valid_next
+  }
+  if msg_port_conf_en != 0 or conf_en_next != 0 {
+    msg_port_conf_en = conf_en_next
+  }
+  msg_port_stall = stall_next & ~buffer_valid
+  msg_port_pget_block = U1(cpu_mem_porthead_en_any == 1 and buffer_valid#[mem_q] == 0)
+  if mem_valid_qual == 1 {
+    msg_port_wb_id = mem_addr
+  }
+  mem_rdata_next = rdata_next
+
+  // ---- port information for the dcache and the CSR file ----
+  const info_q = req_port_info_thread_id*N_PORTS + req_port_info_port_id
+  req_port_info_reply.umode = msg_port_conf[info_q].umode
+  req_port_info_reply.logsize = msg_port_conf[info_q].logsize
+  req_port_info_reply.max_msgs = msg_port_conf[info_q].max_msgs
+  req_port_info_reply.scp_set = msg_port_conf[info_q].scp_set
+  req_port_info_reply.scp_way = msg_port_conf[info_q].scp_way
+  req_port_info_reply.enable_oob = msg_port_conf[info_q].enable_oob
+  req_port_info_enabled = U1(msg_port_enabled[req_port_info_thread_id]#[req_port_info_port_id] == 1)
+
+  // PORTCTL of the port addressed by the writing thread and mem_addr
+  const wb_q = wb_thread_id*N_PORTS + mem_addr
+  const wb_enabled = msg_port_enabled[wb_thread_id]#[mem_addr]
+  mut portctl_word:minion_pkg.XregSize_T = 0
+  wrap portctl_word = wb_enabled | (msg_port_conf[wb_q].enable_oob << CFG_OOB) | (msg_port_conf[wb_q].umode << CFG_UMODE) | (msg_port_conf[wb_q].logsize << CFG_LOGSIZE) | (msg_port_conf[wb_q].max_msgs << CFG_MAX_MSGS) | (1 << CFG_ONE) | (msg_port_conf[wb_q].scp_set << CFG_SET) | (msg_port_conf[wb_q].scp_way << CFG_WAY)
+  portctl = portctl_word
+}

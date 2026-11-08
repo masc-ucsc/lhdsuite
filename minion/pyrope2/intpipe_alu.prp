@@ -1,0 +1,102 @@
+const minion_pkg = import("minion_pkg")
+
+// Integer ALU (verilog: intpipe_alu), pure combinational. ADD/SUB, set-less-than and
+// equality compares, shifts, and/or/xor, plus the PACKB and BITMIXB extensions.
+// fn bit 3 selects subtract (and the signed compare), bits 1:0 modify the compare.
+// dw = 0 selects the 32-bit "W" forms: operands are narrowed where it matters (shifts)
+// and the result is sign-extended from bit 31.
+comptime const XLEN = minion_pkg.XregSize
+comptime const WLEN = 32
+comptime const ALL_ONES = (1 << XLEN) - 1
+comptime const WORD_ONES = (1 << WLEN) - 1
+
+// out[i] = in[XLEN-1-i]; shift left is a shift right of the reversed word
+comb reverse_bits(x:minion_pkg.XregSize_T) -> (y:minion_pkg.XregSize_T) {
+  for i in 0..<XLEN {
+    y#[i] = x#[XLEN - 1 - i]
+  }
+}
+
+pub comb intpipe_alu::[timecheck=false](dw:U1, fn:U5, in1:minion_pkg.XregSize_T, in2:minion_pkg.XregSize_T) -> (adder_out:minion_pkg.XregSize_T, out:minion_pkg.XregSize_T) {
+  const is_sub = fn#[3] == 1
+  const shift_right = fn == minion_pkg.AluSr or fn == minion_pkg.AluSra
+  const word64 = dw == 1
+
+  // ADD/SUB: a - b = a + ~b + 1
+  const in2_inv:minion_pkg.XregSize_T = if is_sub { ~in2 } else { in2 }
+  wrap adder_out = in1 + in2_inv + U1(is_sub)
+  const in1_xor_in2 = in1 ^ in2_inv
+
+  // Compares: equality via the xor; otherwise the sign of the subtraction, or the
+  // operand sign bits when they differ (unsigned: the larger one has bit 63 set)
+  const is_cmp = fn == minion_pkg.AluSeq or fn == minion_pkg.AluSne or fn >= minion_pkg.AluSlt
+  const cmp_inverted = fn#[0] == 1
+  const cmp_unsigned = fn#[1] == 1
+  const cmp_equal = fn#[3] == 0
+  const cmp_raw = if cmp_equal { in1_xor_in2 == 0 }
+    elif in1#[XLEN - 1] == in2#[XLEN - 1] { adder_out#[XLEN - 1] == 1 }
+    elif cmp_unsigned { in2#[XLEN - 1] == 1 }
+    else { in1#[XLEN - 1] == 1 }
+  const cmp_res = cmp_raw != cmp_inverted and is_cmp
+
+  // Shifts: left shifts reuse the right shifter on bit-reversed data. A 32-bit
+  // arithmetic shift (is_sub) replicates bit 31 into the upper half.
+  const shift_in_hi_32:U32 = if is_sub and in1#[WLEN - 1] == 1 { WORD_ONES } else { 0 }
+  const shift_in_hi:U32 = if word64 { in1#[WLEN..<XLEN] } else { shift_in_hi_32 }
+  const shift_in:minion_pkg.XregSize_T = (in1#[0..<WLEN], shift_in_hi)#[..]
+  const shift_amount:U6 = (in2#[0..<5], U1(in2#[5] == 1 and word64))#[..]
+  const shift_in_mux = if shift_right { shift_in } else { reverse_bits(shift_in) }
+  const shift_fill:minion_pkg.XregSize_T = if is_sub and shift_in#[XLEN - 1] == 1 { ALL_ONES } else { 0 }
+  const shift_in_ext:U128 = (shift_in_mux, shift_fill)#[..]
+  const shift_out_ext:minion_pkg.XregSize_T = (shift_in_ext >> shift_amount)#[0..<XLEN]
+  const shift_out:minion_pkg.XregSize_T = if shift_right { shift_out_ext }
+    elif fn == minion_pkg.AluSl { reverse_bits(shift_out_ext) }
+    else { 0 }
+
+  // Logic: xor and or share the xor term, or and and share the and term
+  const log_res:minion_pkg.XregSize_T = (if fn == minion_pkg.AluXor or fn == minion_pkg.AluOr { in1_xor_in2 } else { 0 }) | (if fn == minion_pkg.AluOr or fn == minion_pkg.AluAnd {
+        in1 & in2
+      } else {
+        0
+      })
+
+  // PACKB: low bytes of both operands, in2 above in1
+  const packb_tmp:U16 = (in1#[0..<8], in2#[0..<8])#[..]
+  const packb_res:minion_pkg.XregSize_T = packb_tmp
+
+  // BITMIXB: result bit r takes in2 bit (8 + #ones in in1[0..r)) when in1[r] is set,
+  // and in2 bit (#zeros in in1[0..r)) otherwise (a stable partition of in2's bytes)
+  mut bitmixb_tmp:U16 = 0
+  mut low_sel_bit:U5 = 0
+  mut high_sel_bit:U5 = 8
+  for r in 0..<16 {
+    // (the index goes through a const: a runtime bit-select straight by the loop-carried
+    // counter miscompiles, see livehd_bugs/L1u0_01_loop_wrap_counter)
+    const sel_bit = if in1#[r] == 1 { high_sel_bit } else { low_sel_bit }
+    bitmixb_tmp#[r] = in2#[sel_bit]
+    if in1#[r] == 1 {
+      wrap high_sel_bit += 1
+    } else {
+      wrap low_sel_bit += 1
+    }
+  }
+  const bitmixb_res:minion_pkg.XregSize_T = bitmixb_tmp
+
+  mut result:minion_pkg.XregSize_T = 0
+  if fn == minion_pkg.AluAdd or fn == minion_pkg.AluSub {
+    result = adder_out
+  } elif fn == minion_pkg.AluPackb {
+    result = packb_res
+  } elif fn == minion_pkg.AluBitmixb {
+    result = bitmixb_res
+  } else {
+    result = U64(cmp_res) | log_res | shift_out
+  }
+
+  // W forms sign-extend bit 31
+  if word64 {
+    out = result
+  } else {
+    wrap out = result#sext[0..<WLEN]
+  }
+}

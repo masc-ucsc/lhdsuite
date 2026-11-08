@@ -1,0 +1,2284 @@
+const minion_dcache_buffer_array = import("minion_dcache_buffer_array.minion_dcache_buffer_array")
+const minion_dcache_cache_op_unit = import("minion_dcache_cache_op_unit.minion_dcache_cache_op_unit")
+const minion_dcache_cache_op_unit_l2 = import("minion_dcache_cache_op_unit_l2.minion_dcache_cache_op_unit_l2")
+const minion_dcache_data_array = import("minion_dcache_data_array.minion_dcache_data_array")
+const minion_dcache_lru_array = import("minion_dcache_lru_array.minion_dcache_lru_array")
+const minion_dcache_metadata_array = import("minion_dcache_metadata_array.minion_dcache_metadata_array")
+const minion_dcache_miss_handler_unit = import("minion_dcache_miss_handler_unit.minion_dcache_miss_handler_unit")
+const minion_dcache_pma_unit = import("minion_dcache_pma_unit.minion_dcache_pma_unit")
+const minion_dcache_reduce = import("minion_dcache_reduce.minion_dcache_reduce")
+const minion_dcache_replay_queue = import("minion_dcache_replay_queue.minion_dcache_replay_queue")
+const minion_dcache_scratchpad_ctrl = import("minion_dcache_scratchpad_ctrl.minion_dcache_scratchpad_ctrl")
+const minion_dcache_store_merge_unit = import("minion_dcache_store_merge_unit.minion_dcache_store_merge_unit")
+const minion_dcache_tensor_load = import("minion_dcache_tensor_load.minion_dcache_tensor_load")
+const minion_dcache_tlb_array = import("minion_dcache_tlb_array.minion_dcache_tlb_array")
+const minion_dcache_writeback_unit = import("minion_dcache_writeback_unit.minion_dcache_writeback_unit")
+const prim_arb_lru = import("prim_arb_lru.prim_arb_lru")
+const minion_pkg = import("minion_pkg")
+const minion_dcache_pkg = import("minion_dcache_pkg")
+
+// Data-cache top of the minion core: a 4-stage load/store pipe (s0 request select, s1 tag/TLB/PMA, s2 hit/miss,
+// s3/s4 data array access and store merge) around the metadata, data, LRU, TLB and PMA arrays, plus the engines that
+// also need L2 and pipe access (miss handler, writeback, replay queue, buffer array, L1/L2 cache ops, tensor loads,
+// reduce/tensor store). Texture send is tied off. This file holds the pipeline registers and the L2 request/response
+// plumbing; the arrays and the engines are sub-units.
+
+// Build configuration: the Verilog parameters DebugApbEn/VpuEn (DebugMonEn is unused). They were module generics;
+// LiveHD loses the fields of comb tuple results inside a generic mod (livehd_bugs L3u1_01) and no instance overrides
+// them, so they are file constants.
+comptime const DebugApbEn = 1
+comptime const VpuEn = 1
+
+// Pipeline request (406 bits, field order of the replay-queue request, addr in the top bits).
+type Rq = (addr:U49, addr_msb_err:U1, set:U4, phys:U1, misaligned:U1, misaligned_2nd:U1, dest_fp:U1, dest_addr:U5, dest_thread:U1, cmd:U5, typ:U4, gsc_cnt:U3, ps_mask:U8, data:U256, replay:U1, replay_entry:U3, replay_age:U5, cache_op:U1, buf_alloc:U1, buf_id:U3, cacheable:U1, chunk_read:U4, uc_load_2nd:U1, uc_load_ok:U1, miss_fill_ok:U1, gsc32_idx:U40, vm_sel:U3, mem_global:U1)
+// What the replay queue hands back (it does not store the fields s0 derives).
+type ReplayReq = (addr:U49, dest_fp:U1, dest_addr:U5, dest_thread:U1, cmd:U5, typ:U4, gsc_cnt:U3, ps_mask:U8, phys:U1, buf_alloc:U1, buf_id:U3, cache_op:U1, misaligned:U1, misaligned_2nd:U1, cacheable:U1, uc_load_2nd:U1, gsc32_idx:U40, vm_sel:U3, mem_global:U1)
+type L2Resp = (id:U8, dest:U1, wdata:U1, opcode:U2, data:U256, size:U3, qwen:U4)
+type L2EvictReq = (id:U5, source:U1, wdata:U1, opcode:U5, address:U40, data:U256, size:U3, qwen:U4, subopcode:U7)
+type L2MissReq = (id:U5, source:U1, wdata:U1, opcode:U5, address:U40, data:U20, size:U3, qwen:U4, subopcode:U7)
+type VmStatus = (prv:U2, mprv:U1, mpp:U2, sum:U1, mxr:U1, debug:U1)
+type WbReq = (tag:U33, set:U4, way_en:U4, is_tbox:U1, mem_idx:U1, addr_low:U7)
+type MetaData = (coh_state:U2, tag:U33)
+type MetaWr = (set_idx:U4, way_en:U4, coh_state:U2, tag:U33)
+type BpConf = (thread_id:U1, address:U49, cmd:U3)
+type WbDaReq = (valid_l:U1, valid_h:U1, way:U2, addr:U10)
+type CoreCtrlResp = (cache_op_ready:U1, cache_op_busy_changed:U2, cache_op_complete_l1:U4, cache_op_complete_l2:U4, tl_ready_0:U1, tl_ready_1:U1, ts_ready:U1, tl_complete_0:U2, reduce_ready:U1, tex_send_ready:U1, gsc_progress_save:U2, gsc_progress:U3)
+
+comb rq_unpack(w:U406) -> (r:Rq) {
+  r.mem_global = w#[0]
+  r.vm_sel = w#[1..<4]
+  r.gsc32_idx = w#[4..<44]
+  r.miss_fill_ok = w#[44]
+  r.uc_load_ok = w#[45]
+  r.uc_load_2nd = w#[46]
+  r.chunk_read = w#[47..<51]
+  r.cacheable = w#[51]
+  r.buf_id = w#[52..<55]
+  r.buf_alloc = w#[55]
+  r.cache_op = w#[56]
+  r.replay_age = w#[57..<62]
+  r.replay_entry = w#[62..<65]
+  r.replay = w#[65]
+  r.data = w#[66..<322]
+  r.ps_mask = w#[322..<330]
+  r.gsc_cnt = w#[330..<333]
+  r.typ = w#[333..<337]
+  r.cmd = w#[337..<342]
+  r.dest_thread = w#[342]
+  r.dest_addr = w#[343..<348]
+  r.dest_fp = w#[348]
+  r.misaligned_2nd = w#[349]
+  r.misaligned = w#[350]
+  r.phys = w#[351]
+  r.set = w#[352..<356]
+  r.addr_msb_err = w#[356]
+  r.addr = w#[357..<406]
+}
+
+// Packs a request tuple (typed fields) into the 406-bit word, first field of the list in the lowest bits.
+comb rq_pack(r) -> (w:U406) {
+  const mem_global:U1 = r.mem_global
+  const vm_sel:U3 = r.vm_sel
+  const gsc32_idx:U40 = r.gsc32_idx
+  const miss_fill_ok:U1 = r.miss_fill_ok
+  const uc_load_ok:U1 = r.uc_load_ok
+  const uc_load_2nd:U1 = r.uc_load_2nd
+  const chunk_read:U4 = r.chunk_read
+  const cacheable:U1 = r.cacheable
+  const buf_id:U3 = r.buf_id
+  const buf_alloc:U1 = r.buf_alloc
+  const cache_op:U1 = r.cache_op
+  const replay_age:U5 = r.replay_age
+  const replay_entry:U3 = r.replay_entry
+  const replay:U1 = r.replay
+  const data:U256 = r.data
+  const ps_mask:U8 = r.ps_mask
+  const gsc_cnt:U3 = r.gsc_cnt
+  const typ:U4 = r.typ
+  const cmd:U5 = r.cmd
+  const thread_id:U1 = r.dest_thread
+  const dest_addr:U5 = r.dest_addr
+  const fp:U1 = r.dest_fp
+  const misaligned_2nd:U1 = r.misaligned_2nd
+  const misaligned:U1 = r.misaligned
+  const phys:U1 = r.phys
+  const set:U4 = r.set
+  const addr_msb_err:U1 = r.addr_msb_err
+  const addr:U49 = r.addr
+  w = (mem_global, vm_sel, gsc32_idx, miss_fill_ok, uc_load_ok, uc_load_2nd, chunk_read, cacheable, buf_id, buf_alloc, cache_op, replay_age, replay_entry, replay, data, ps_mask, gsc_cnt, typ, cmd, thread_id, dest_addr, fp, misaligned_2nd, misaligned, phys, set, addr_msb_err, addr)#[..]
+}
+
+// Request fields shown on the debug bus (everything but the set and the data).
+comb rq_dbg(r) -> (w:U95) {
+  const mem_global:U1 = r.mem_global
+  const chunk_read:U4 = r.chunk_read
+  const vm_sel:U3 = r.vm_sel
+  const uc_load_2nd:U1 = r.uc_load_2nd
+  const cacheable:U1 = r.cacheable
+  const buf_id:U3 = r.buf_id
+  const buf_alloc:U1 = r.buf_alloc
+  const misaligned_2nd:U1 = r.misaligned_2nd
+  const misaligned:U1 = r.misaligned
+  const cache_op:U1 = r.cache_op
+  const replay_age:U5 = r.replay_age
+  const replay_entry:U3 = r.replay_entry
+  const replay:U1 = r.replay
+  const ps_mask:U8 = r.ps_mask
+  const gsc32_idx:U40 = r.gsc32_idx
+  const gsc_cnt:U3 = r.gsc_cnt
+  const typ:U4 = r.typ
+  const cmd:U5 = r.cmd
+  const thread_id:U1 = r.dest_thread
+  const dest_addr:U5 = r.dest_addr
+  const fp:U1 = r.dest_fp
+  const phys:U1 = r.phys
+  const addr_msb_err:U1 = r.addr_msb_err
+  w = (mem_global, chunk_read, vm_sel, uc_load_2nd, cacheable, buf_id, buf_alloc, misaligned_2nd, misaligned, cache_op, replay_age, replay_entry, replay, ps_mask, gsc32_idx, gsc_cnt, typ, cmd, thread_id, dest_addr, fp, phys, addr_msb_err)#[..]
+}
+
+// Writeback request as one word (tag in the top bits).
+comb wbreq_pack(r) -> (w:U50) {
+  const tag:U33 = r.tag
+  const set:U4 = r.set
+  const way_en:U4 = r.way_en
+  const is_tbox:U1 = r.is_tbox
+  const mem_idx:U1 = r.mem_idx
+  const addr_low:U7 = r.addr_low
+  w = (addr_low, mem_idx, is_tbox, way_en, set, tag)#[..]
+}
+
+comb vm_unpack(w:U8) -> (v:VmStatus) {
+  v.prv = w#[6..<8]
+  v.mprv = w#[5]
+  v.mpp = w#[3..<5]
+  v.sum = w#[2]
+  v.mxr = w#[1]
+  v.debug = w#[0]
+}
+
+// L2 requests as one word for the arbiters and the pipe registers (id in the top bits).
+comb evict_pack(r) -> (w:U322) {
+  const id:U5 = r.id
+  const source:U1 = r.source
+  const wdata:U1 = r.wdata
+  const opcode:U5 = r.opcode
+  const address:U40 = r.address
+  const data:U256 = r.data
+  const size:U3 = r.size
+  const qwen:U4 = r.qwen
+  const subopcode:U7 = r.subopcode
+  w = (subopcode, qwen, size, data, address, opcode, wdata, source, id)#[..]
+}
+
+comb evict_unpack(w:U322) -> (r:L2EvictReq) {
+  r.subopcode = w#[0..<7]
+  r.qwen = w#[7..<11]
+  r.size = w#[11..<14]
+  r.data = w#[14..<270]
+  r.address = w#[270..<310]
+  r.opcode = w#[310..<315]
+  r.wdata = w#[315]
+  r.source = w#[316]
+  r.id = w#[317..<322]
+}
+
+comb miss_pack(r) -> (w:U86) {
+  const id:U5 = r.id
+  const source:U1 = r.source
+  const wdata:U1 = r.wdata
+  const opcode:U5 = r.opcode
+  const address:U40 = r.address
+  const data:U20 = r.data
+  const size:U3 = r.size
+  const qwen:U4 = r.qwen
+  const subopcode:U7 = r.subopcode
+  w = (subopcode, qwen, size, data, address, opcode, wdata, source, id)#[..]
+}
+
+comb miss_unpack(w:U86) -> (r:L2MissReq) {
+  r.subopcode = w#[0..<7]
+  r.qwen = w#[7..<11]
+  r.size = w#[11..<14]
+  r.data = w#[14..<34]
+  r.address = w#[34..<74]
+  r.opcode = w#[74..<79]
+  r.wdata = w#[79]
+  r.source = w#[80]
+  r.id = w#[81..<86]
+}
+
+// Command and access-type classes.
+comb cmd_is_amo(cmd:U5) -> (r:Bool) {
+  r = cmd == minion_dcache_pkg.DcCmdXaSwap or cmd == minion_dcache_pkg.DcCmdXaAdd or cmd == minion_dcache_pkg.DcCmdXaXor or cmd == minion_dcache_pkg.DcCmdXaOr or cmd == minion_dcache_pkg.DcCmdXaAnd or cmd == minion_dcache_pkg.DcCmdXaMin or cmd == minion_dcache_pkg.DcCmdXaMax or cmd == minion_dcache_pkg.DcCmdXaMinu or cmd == minion_dcache_pkg.DcCmdXaMaxu or cmd == minion_dcache_pkg.DcCmdXaCmpswp or cmd == minion_dcache_pkg.DcCmdXaMinPs or cmd == minion_dcache_pkg.DcCmdXaMaxPs
+}
+
+comb cmd_is_read(cmd:U5) -> (r:Bool) {
+  r = cmd == minion_dcache_pkg.DcCmdXrd or cmd == minion_dcache_pkg.DcCmdXlr or cmd == minion_dcache_pkg.DcCmdXsc or cmd_is_amo(cmd) or cmd == minion_dcache_pkg.DcCmdG32 or cmd == minion_dcache_pkg.DcCmdXrdb
+}
+
+comb cmd_is_store(cmd:U5) -> (r:Bool) {
+  r = cmd == minion_dcache_pkg.DcCmdXwr or cmd == minion_dcache_pkg.DcCmdXsc or cmd_is_amo(cmd) or cmd == minion_dcache_pkg.DcCmdSc32 or cmd == minion_dcache_pkg.DcCmdXwrb
+}
+
+comb cmd_is_prefetch(cmd:U5) -> (r:Bool) {
+  r = cmd == minion_dcache_pkg.DcCmdPfr or cmd == minion_dcache_pkg.DcCmdPfw
+}
+
+comb cmd_is_gsc32(cmd:U5) -> (r:Bool) {
+  r = cmd == minion_dcache_pkg.DcCmdG32 or cmd == minion_dcache_pkg.DcCmdSc32
+}
+
+comb type_is_gsc(typ:U4) -> (r:Bool) {
+  r = typ == minion_dcache_pkg.DcTypePsGs8 or typ == minion_dcache_pkg.DcTypePsGs16 or typ == minion_dcache_pkg.DcTypePsGs32
+}
+
+comb type_is_ps(typ:U4) -> (r:Bool) {
+  r = typ == minion_dcache_pkg.DcTypePs or typ == minion_dcache_pkg.DcTypePsBr or type_is_gsc(typ)
+}
+
+comb type_is_byte(typ:U4) -> (r:Bool) {
+  r = typ == minion_dcache_pkg.DcTypeB or typ == minion_dcache_pkg.DcTypeBu or typ == minion_dcache_pkg.DcTypePsGs8
+}
+
+comb type_is_hword(typ:U4) -> (r:Bool) {
+  r = typ == minion_dcache_pkg.DcTypeH or typ == minion_dcache_pkg.DcTypeHu or typ == minion_dcache_pkg.DcTypePsGs16
+}
+
+comb type_is_word(typ:U4) -> (r:Bool) {
+  r = typ == minion_dcache_pkg.DcTypeW or typ == minion_dcache_pkg.DcTypeWu or typ == minion_dcache_pkg.DcTypePsBr or typ == minion_dcache_pkg.DcTypePsGs32
+}
+
+comb type_is_dword(typ:U4) -> (r:Bool) {
+  r = typ == minion_dcache_pkg.DcTypeD
+}
+
+// Way mask -> way index. Every set bit i contributes i, so a one-hot mask encodes to its index and a multi-hot
+// mask ORs the indices (this is what the RTL's encoder does).
+comb way_encode(ways:U4) -> (enc:U2) {
+  mut e:U2 = 0
+  for i in 1..<4 {
+    if ways#[i] != 0 {
+      e = e | i
+    }
+  }
+  enc = e
+}
+
+// Set index actually used by the cache: a split cache gives each thread half of the sets, scratchpad mode
+// reserves the upper half (thread 0 gets a quarter) for the scratchpad.
+comb set_correct(mode:U2, set:U4, thread_id:U1) -> (r:U4) {
+  const split_set:U4 = if thread_id == 0 { set#[0..<3] } else { (7 << 1) | (set & 1) }
+  const scratch_set:U4 = if thread_id == 0 { (3 << 2) | (set & 1) } else { (7 << 1) | (set & 1) }
+  r = if mode == minion_dcache_pkg.DcacheModeSplit { split_set }
+    elif mode == minion_dcache_pkg.DcacheModeScratchpad { scratch_set }
+    else { set }
+}
+
+// Pseudo-LRU state of a set: 4 ways, bits 4,8,12 (and 9,13,14) hold the tournament tree, one nibble each.
+// Touching (or excluding) way i makes the tree point away from it.
+comb lru_touch(lru:U16, ways:U4) -> (r:U16) {
+  mut t:U16 = lru
+  if ways#[0] != 0 {
+    t#[4] = 1
+    t#[8] = 1
+    t#[12] = 1
+  }
+  if ways#[1] != 0 {
+    t#[4] = 0
+    t#[9] = 1
+    t#[13] = 1
+  }
+  if ways#[2] != 0 {
+    t#[8] = 0
+    t#[9] = 0
+    t#[14] = 1
+  }
+  if ways#[3] != 0 {
+    t#[12] = 0
+    t#[13] = 0
+    t#[14] = 0
+  }
+  r = t
+}
+
+// One-hot victim: the way every tree node on its path points to.
+comb lru_pick(t:U16) -> (v:U4) {
+  v#[0] = (~t#[4]) & (~t#[8]) & (~t#[12])
+  v#[1] = t#[4] & (~t#[9]) & (~t#[13])
+  v#[2] = t#[8] & t#[9] & (~t#[14])
+  v#[3] = t#[12] & t#[13] & t#[14]
+}
+
+pub mod minion_dcache_top::[timecheck=false](apb_paddr_i:minion_pkg.DcacheDbgAddrBits_T, apb_penable_i:U1, apb_psel_i:U1, apb_pwdata_i:minion_pkg.BpamShireApbDataWidth_T, apb_pwrite_i:U1, bypass_dcache_i:U1, chicken_bit_dcache_i:U1, clk_i:Clock, core_ctrl_i:(tensorload_ctrl:(use_tmask:U1, use_coop:U1, transform:U3, scp_dest:U6, tl_sel:U1, addr:U42, offset:U2, num_lines:U4), tensorcoop_ctrl:(neigh_mask:U4, minion_mask:U8, padding:U3, id:U5), tensorload_stride:U48, tensorload_start:U1, tensorload_restart_b:U1, tensorload_tmask_ready:U1, tensorload_tmask_bits:U16, cache_op_valid:U1, cache_op_req:(cmd:U4, start_level:U2, dest_level:U2, count:U4, addr:U48, way:U2, stride:U48, thread_id:U1, use_tmask:U1, tmask_ready:U1, tmask_bits:U16, l2_scp_dest:U17, l2_scp_fill:U1), cache_op_req_next:(cmd:U4, start_level:U2, dest_level:U2), msg_port_wr_way:U2, msg_port_wr_addr:U10, msg_port_wr_en:U1, reduce_start:U1, tensorstore_start:U1, reduce_tensorstore_ctrl:U64, tensorstore_stride:U48, tex_send_valid:U1, tex_send_ctrl:(port_id:U2, size:U3, way:U2, set:U4, port_en:U1, thread_id:U1), cache_ctrl:(cacheop_max:U5, padding:U1, cacheop_reprate:U3, scpenable:U1, d1split:U1), thread_id:U1), id_core_alloc_rq_pre_i:U1, id_core_gsc_i:U1, ioshire_i:U1, l2_evict_req_ready_i:(e1:U1, e0:U1), l2_miss_req_ready_i:(e2:U1, e1:U1, e0:U1), l2_resp_i:(id:U8, dest:U1, wdata:U1, opcode:U2, data:U256, size:U3, qwen:U4), l2_resp_valid_i:U1, matp_info_en_i:U1, matp_info_i:(mode:U4, ppn:U28), mem_ctrl_override_i:(e1:U1, e0:U1), ptw_req_ready_i:U1, ptw_resp_data_i:(canceled_req:U1, access_fault:U1, rsvd_for_hw:U8, ppn:U44, rsvd_for_sw:U2, d:U1, a:U1, g:U1, u:U1, x:U1, w:U1, r:U1, v:U1), ptw_resp_valid_i:U1, rst_ni:U1, s0_core_alloc_rq_val_i:U1, s0_core_gsc_i:U1, s0_core_req_i:(addr:U48, addr_msb_err:U1, dest:(fp:U1, addr:U5, thread_id:U1), cmd:U5, typ:U4, gsc_cnt:U3, ps_mask:U8, phys:U1, gsc32_idx:U40, mem_global:U1), s0_core_req_valid_i:U1, s1_core_kill_i:U1, s1_core_store_data_i:minion_pkg.VpuDataSz_T, s1_mprot_i:(enable_secure_memory:U1, dram_size:U2, disable_osbox_access:U1, disable_pcie_access:U1, io_access_mode:U2), s1_vpu_ctrl_i:(scp_req:(read_en:U1, way:U2, addr:U10, size64:U1, size256:U1, bid:U1), tenb_credit:U1, tenb_credit_entry:U2, tfma_enabled:U1, reduce_wait:U1, tfma_rf_write:U1), s2_core_kill_i:U1, s3_core_x31_i:U64, s3_invalidate_lr_i:U1, satp_info_en_i:U1, satp_info_i:(mode:U4, ppn:U28), shire_id_i:minion_pkg.NumShireIdsBits_T, shire_min_id_i:minion_pkg.MinPerSBits_T, tlb_invalidate_i:U1, vm_status_i:U16, vmspagesize_i:U2, wb_dcache_fp_toint_i:U1) -> (apb_prdata_o:minion_pkg.BpamShireApbDataWidth_T@[], apb_pready_o:U1@[], apb_pslverr_o:U1@[], bus_err_addr_o:U80@[], bus_err_o:minion_pkg.NrThreads_T@[], cache_ops_err_flags_o:U4@[], core_ctrl_resp_o:(cache_op_ready:U1, cache_op_busy_changed:U2, cache_op_complete_l1:U4, cache_op_complete_l2:U4, tl_ready_0:U1, tl_ready_1:U1, ts_ready:U1, tl_complete_0:U2, reduce_ready:U1, tex_send_ready:U1, gsc_progress_save:U2, gsc_progress:U3)@[], csr_debug_sigs_o:(csr_signals_tl0:U3, csr_signals_tl1:U3, csr_signals_ts:U4, csr_signals_cou:U4, csr_signals_coul2:U3, csr_signals_txsnd:U2, csr_signals_mh0:U4, csr_signals_mh1:U4)@[], dcache_idle_excl_mode_o:U1@[], id_core_ready_o:U1@[], id_core_sb_fp_dealloc_o:minion_pkg.NrThreads_T@[], id_core_sb_int_dealloc_o:minion_pkg.NrThreads_T@[], id_core_scoreboard_o:(valid:U8, dest:U56)@[], io_events_o:minion_pkg.CsrNrEventsDcache_T@[], l2_evict_req_o:(id:U5, source:U1, wdata:U1, opcode:U5, address:U40, data:U256, size:U3, qwen:U4, subopcode:U7)@[], l2_evict_req_valid_o:minion_pkg.DcacheL2EvictReqPorts_T@[], l2_miss_req_o:(id:U5, source:U1, wdata:U1, opcode:U5, address:U40, data:U20, size:U3, qwen:U4, subopcode:U7)@[], l2_miss_req_valid_o:minion_pkg.DcacheL2MissReqPorts_T@[], l2_resp_int_o:(id:U8, dest:U1, wdata:U1, opcode:U2, data:U256, size:U3, qwen:U4)@[], l2_resp_ready_int_o:U1@[], l2_resp_ready_o:U1@[], l2_resp_valid_int_o:U1@[], ptw_req_data_o:(satp_mode:U4, satp_ppn:U28, prv:U2, addr:U36)@[], ptw_req_valid_o:U1@[], s1_bp_conf_o:(thread_id:U1, address:U49, cmd:U3)@[], s1_bp_conf_valid_o:U1@[], s1_core_replay_next_o:U1@[], s1_core_xcpt_o:(pf_ld:U1, pf_st:U1, mf_ld:U1, mf_st:U1, af_ld:U1, af_st:U1, ps_ld:U1, ps_st:U1)@[], s2_core_flush_pipeline_o:U1@[], s2_core_resp_int_valid_o:U1@[], s3_core_resp_o:(dest:(fp:U1, addr:U5, thread_id:U1), typ:U4, gsc_cnt:U3, ps_mask:U8, data:U256, addr:U49)@[], s3_core_resp_valid_o:U1@[], s3_ordered_o:minion_pkg.NrThreads_T@[], s3_vpu_scp_data_o:minion_pkg.VpuDataSz_T@[], s3_vpu_scp_resp_o:(fill_is_tenb_early:U1, fill_is_tenb:U1, tenb_flush:U1, tenb_line:U4)@[], s3_vpu_tenb_data_o:minion_pkg.VpuDataSz_T@[], sm_data_debug_signals_co_o:minion_dcache_pkg.DcacheDbgSmDataBits_T@[], sm_data_debug_signals_col2_o:minion_dcache_pkg.DcacheDbgSmDataBits_T@[], sm_data_debug_signals_dc_o:minion_dcache_pkg.DcacheDbgSmDataBits_T@[], sm_data_debug_signals_mh_o:U1024@[], sm_data_debug_signals_tl0_o:minion_dcache_pkg.DcacheDbgSmDataBits_T@[], sm_data_debug_signals_tl1_o:minion_dcache_pkg.DcacheDbgSmDataBits_T@[], sm_data_debug_signals_ts_o:minion_dcache_pkg.DcacheDbgSmDataBits_T@[], sm_filter_debug_signals_co_o:minion_dcache_pkg.DcacheDbgSmFilterBits_T@[], sm_filter_debug_signals_col2_o:minion_dcache_pkg.DcacheDbgSmFilterBits_T@[], sm_filter_debug_signals_dc_o:minion_dcache_pkg.DcacheDbgSmFilterBits_T@[], sm_filter_debug_signals_mh_o:U400@[], sm_filter_debug_signals_tl0_o:minion_dcache_pkg.DcacheDbgSmFilterBits_T@[], sm_filter_debug_signals_tl1_o:minion_dcache_pkg.DcacheDbgSmFilterBits_T@[], sm_filter_debug_signals_ts_o:minion_dcache_pkg.DcacheDbgSmFilterBits_T@[], sm_match_debug_signals_co_o:minion_dcache_pkg.DcacheDbgSmMatchBits_T@[], sm_match_debug_signals_col2_o:minion_dcache_pkg.DcacheDbgSmMatchBits_T@[], sm_match_debug_signals_dc_o:minion_dcache_pkg.DcacheDbgSmMatchBits_T@[], sm_match_debug_signals_mh_o:U128@[], sm_match_debug_signals_tl0_o:minion_dcache_pkg.DcacheDbgSmMatchBits_T@[], sm_match_debug_signals_tl1_o:minion_dcache_pkg.DcacheDbgSmMatchBits_T@[], sm_match_debug_signals_ts_o:minion_dcache_pkg.DcacheDbgSmMatchBits_T@[], tensor_load_err_flags_o:U3@[], tensor_reduce_err_flags_o:U1@[], vpu_reduce_ctrl_o:(send_reg:U1, exec_op:U1, nothing:U1)@[]) {
+  // ---- State: L2 response FIFO and L2 request muxes ----
+  reg l2_evict_mux_data_in:[2]U322:[ordering="old"] = nil
+  reg l2_evict_mux_valid:U2:[negreset=true, reset_pin=rst_ni] = 0
+  reg l2_miss_mux_data_in:[3]U86:[ordering="old"] = nil
+  reg l2_miss_mux_valid:U3:[negreset=true, reset_pin=rst_ni] = 0
+  reg l2_resp_fifo_count_q:U2:[negreset=true, reset_pin=rst_ni] = 0
+  reg l2_resp_fifo_rd_ptr_q:U1:[negreset=true, reset_pin=rst_ni] = 0
+  reg l2_resp_fifo_wr_ptr_q:U1:[negreset=true, reset_pin=rst_ni] = 0
+  reg `l2_resp_fifo_data.id`:[2]U8:[ordering="old"] = nil
+  reg `l2_resp_fifo_data.dest`:[2]U1:[ordering="old"] = nil
+  reg `l2_resp_fifo_data.wdata`:[2]U1:[ordering="old"] = nil
+  reg `l2_resp_fifo_data.opcode`:[2]U2:[ordering="old"] = nil
+  reg `l2_resp_fifo_data.data`:[2]U256:[ordering="old"] = nil
+  reg `l2_resp_fifo_data.size`:[2]U3:[ordering="old"] = nil
+  reg `l2_resp_fifo_data.qwen`:[2]U4:[ordering="old"] = nil
+  reg l2_resp_count_q:U2:[negreset=true, reset_pin=rst_ni] = 0
+  // ---- State: s1 (tag/TLB stage) ----
+  reg s1_wb_da_req:U14 = nil
+  reg s1_req_thread_id:U1 = nil
+  reg s1_req_force_set:Bool = nil
+  reg s1_req_addr:U48 = nil
+  reg s1_req_pre_addr:U406 = nil
+  reg s1_md_read_en:Bool = nil
+  reg s1_da_read_en:Bool = nil
+  reg s1_wb_da_valid:Bool = nil
+  reg s1_bp_conf_valid:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s1_bp_conf_cmd:U3 = nil
+  reg s1_da_read_req:U14 = nil
+  reg s1_da_read_mux_sel_prev:U3 = nil
+  reg s1_clear_progress:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s1_dbg_valid:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s1_valid:Bool:[negreset=true, reset_pin=rst_ni] = false
+  // ---- State: s2 (hit/miss stage) ----
+  reg s2_core_flush_pipeline_o:U1:[negreset=true, reset_pin=rst_ni] = 0
+  reg s2_clear_progress:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s2_save_progress:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s2_tag_match:U4 = nil
+  reg `s2_meta_read.coh_state`:[4]U2:[ordering="old"] = nil
+  reg `s2_meta_read.tag`:[4]U33:[ordering="old"] = nil
+  reg s2_req_addr:U48 = nil
+  reg s2_valid:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s2_req_pre_addr:U406 = nil
+  reg s2_lru_data:U16 = nil
+  reg s2_replace_way_en:U4 = nil
+  reg s2_reg_nack:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s2_nack_vpu_rf_write:Bool = nil
+  reg s2_misaligned:Bool = nil
+  reg s2_misaligned_case_3:Bool = nil
+  reg s2_is_read:Bool = nil
+  reg s2_is_write:Bool = nil
+  reg s2_is_msg:Bool = nil
+  reg s2_is_bypass:Bool = nil
+  reg s2_is_amo:Bool = nil
+  reg s2_has_xcpt_addr:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s2_da_load_data_en:U4 = nil
+  reg s2_gsc32_indices:U40 = nil
+  reg s2_vpu_scp_read_en:U8 = nil
+  reg s2_wb_da_valid:Bool = nil
+  // ---- State: s3 (data access) and s4/s5 (store bypass, array write) ----
+  reg s3_vpu_scp_data_o:U256:[negreset=true, reset_pin=rst_ni] = 0
+  reg s3_vpu_tenb_data_o:U256 = nil
+  reg s3_data:[4]U64:[ordering="old"] = nil
+  reg s3_vpu_scp_resp_tmp___q:U7 = nil
+  reg s3_lrsc_addr:U34 = nil
+  reg s3_lrsc_count:U5:[negreset=true, reset_pin=rst_ni] = 0
+  reg s4_tl1_tenb_ready_reg:Bool = nil
+  reg s4_valid:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s4_req:U406 = nil
+  reg s4_way:U4 = nil
+  reg s4_misaligned_case_3:Bool = nil
+  reg s5_block_addr:U4 = nil
+  reg s5_req:U406 = nil
+  reg s5_valid:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s3_req:U406 = nil
+  reg s3_store_data:U256 = nil
+  reg s3_store_bypass_data:U256 = nil
+  reg s3_way:U4 = nil
+  reg s3_store_bypass:U4 = nil
+  reg s3_valid:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s3_has_data:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s3_is_write:Bool = nil
+  reg s3_misaligned_case_3:Bool = nil
+  reg s3_gsc32_indices:[8]U5:[ordering="old"] = nil
+  // ---- State: debug APB access, breakpoint, scratchpad bookkeeping ----
+  reg dcache_idle_excl_mode_o:U1:[negreset=true, reset_pin=rst_ni] = 0
+  reg io_events_o:U12:[negreset=true, reset_pin=rst_ni] = 0
+  reg bus_err_o:U2:[negreset=true, reset_pin=rst_ni] = 0
+  reg bus_err_addr_o:U80:[negreset=true, reset_pin=rst_ni] = 0
+  reg dcache_idle:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg vpu_scp_bid_1:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg vpu_scp_bid_2:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg dbg_md_read_accept:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg dbg_md_read_valid:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg s0_dbg_valid:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg vpu_scp_return_cycle_1:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg cache_op_busy_changed_z1:U2:[negreset=true, reset_pin=rst_ni] = 0
+  reg cacheop_busy_prev:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg cacheop_l2_busy_prev:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg dcache_cfg_stall_prev:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg dbg_da_read_valid:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg dbg_da_read_accept:Bool:[negreset=true, reset_pin=rst_ni] = false
+  reg dbg_da_write_valid:Bool:[negreset=true, reset_pin=rst_ni] = false
+  // ---- Nets driven further down: sub-unit outputs and late flags ----
+  wire s0_wb_da_req:WbDaReq = nil
+  wire s0_rq_replay:ReplayReq = nil
+  wire s1_co_mw_req:MetaWr = nil
+  wire vm_status_co:VmStatus = nil
+  wire vm_status_l2:VmStatus = nil
+  wire vm_status_tl0:VmStatus = nil
+  wire vm_status_tl1:VmStatus = nil
+  wire s1_mh_mw_req:MetaWr = nil
+  wire vm_status_ts:VmStatus = nil
+  wire s0_co_pf_req:Rq = nil
+  wire wb_l2_evict_valid:Bool = nil
+  wire mh_l2_evict_valid:Bool = nil
+  wire re_l2_evict_valid:Bool = nil
+  wire re_l2_evict_ready:Bool = nil
+  wire ts_l2_evict_valid:Bool = nil
+  wire re_ts_l2_evict_inflight:Bool = nil
+  wire pf_l2_evict_valid:Bool = nil
+  wire mh_l2_miss_valid:Bool = nil
+  wire tl0_l2_miss_valid:Bool = nil
+  wire tl0_l2_miss_valid_no_coop:Bool = nil
+  wire tl1_l2_miss_valid:Bool = nil
+  wire tl1_l2_miss_valid_no_coop:Bool = nil
+  wire dcache_cfg_stall:Bool = nil
+  wire dcache_cfg_clear_all:Bool = nil
+  wire dcache_cfg_clear_low:Bool = nil
+  wire dcache_cfg_mode:U2 = nil
+  wire s3_cfg_da_clear_en:Bool = nil
+  wire s4_cfg_da_clear_val:Bool = nil
+  wire s4_cfg_da_clear_set:U4 = nil
+  wire s4_cfg_da_clear_way:U2 = nil
+  wire s4_cfg_da_clear_idx:U1 = nil
+  wire co_wb_valid:Bool = nil
+  wire mh_wb_valid:Bool = nil
+  wire id_wb_da_bid:Bool = nil
+  wire s0_wb_da_valid:Bool = nil
+  wire wb_ready:Bool = nil
+  wire wb_valid:Bool = nil
+  wire wb_arb_stall:Bool = nil
+  wire id_rq_full:Bool = nil
+  wire id_rq_half_full:Bool = nil
+  wire id_core_pipe_available:Bool = nil
+  wire id_rq_replay_bid:Bool = nil
+  wire id_dbg_bid:Bool = nil
+  wire id_ba_full:Bool = nil
+  wire s0_rq_replay_valid:Bool = nil
+  wire s0_rq_replay_entry:U3 = nil
+  wire s0_rq_replay_age:U5 = nil
+  wire s0_rq_replay_uc_load_ok:Bool = nil
+  wire s0_rq_replay_miss_fill_ok:Bool = nil
+  wire core_cache_op_ready:Bool = nil
+  wire s4_da_write_en:Bool = nil
+  wire s3_da_write_en:Bool = nil
+  wire s0_co_mr_addr:U48 = nil
+  wire s0_co_mr_addr_msb_err:U1 = nil
+  wire s0_co_mr_phys:U1 = nil
+  wire s0_co_mr_force_set:U1 = nil
+  wire s0_co_mr_thread_id:U1 = nil
+  wire s1_co_mr_skip_pma:Bool = nil
+  wire mh_probe_rdy:U2 = nil
+  wire mh_metaw_rdy:U2 = nil
+  wire s2_rq_empty:U2 = nil
+  wire s0_co_mr_valid:Bool = nil
+  wire id_co_mr_bid:Bool = nil
+  wire s1_co_mw_valid:Bool = nil
+  wire s1_co_mw_valid_early:Bool = nil
+  wire s1_co_nack_set_valid:Bool = nil
+  wire s1_co_nack_set_value:U4 = nil
+  wire s1_tlb_wait:Bool = nil
+  wire id_co_pf_bid:Bool = nil
+  wire s0_co_pf_valid:Bool = nil
+  wire cache_op_ready_byp:Bool = nil
+  wire mh_clear_slock_valid:Bool = nil
+  wire mh_clear_slock_set:U4 = nil
+  wire mh_clear_slock_way:U2 = nil
+  wire hlock_state:U64 = nil
+  wire slock_state:U64 = nil
+  wire s3_co_da_clear_en:Bool = nil
+  wire s4_co_da_clear_val:Bool = nil
+  wire s4_co_da_clear_set:U4 = nil
+  wire s4_co_da_clear_way:U2 = nil
+  wire s4_co_da_clear_idx:U1 = nil
+  wire rq_conflict_to_co:Bool = nil
+  wire cache_ops_err_flags_l1:U4 = nil
+  wire cacheop_busy:Bool = nil
+  wire co_l1_th_id_complete:U4 = nil
+  wire core_co_l2_pref_ready:Bool = nil
+  wire tensorstore_busy:Bool = nil
+  wire reduce_ready:Bool = nil
+  wire cacheop_l2_busy:Bool = nil
+  wire co_l2_th_id_complete:U4 = nil
+  wire s0_co_l2_addr_load:Bool = nil
+  wire s0_co_l2_addr:U48 = nil
+  wire s0_co_l2_addr_msb_err:U1 = nil
+  wire s0_co_l2_thread_id:U1 = nil
+  wire s1_co_l2_addr_load:Bool = nil
+  wire cache_ops_err_flags_l2:U2 = nil
+  wire s1_clk_en:Bool = nil
+  wire tl0_working:Bool = nil
+  wire tl1_working:Bool = nil
+  wire tl0_id_complete:U2 = nil
+  wire s0_tl0_addr_load:Bool = nil
+  wire s0_tl0_addr:U48 = nil
+  wire s0_tl0_addr_msb_err:U1 = nil
+  wire s0_tl0_thread_id:U1 = nil
+  wire s1_tl0_addr_load:Bool = nil
+  wire s0_tl1_addr_load:Bool = nil
+  wire s0_tl1_addr:U48 = nil
+  wire s0_tl1_addr_msb_err:U1 = nil
+  wire s0_tl1_thread_id:U1 = nil
+  wire s1_tl1_addr_load:Bool = nil
+  wire s0_tl_addr_load:Bool = nil
+  wire s1_tl_addr_load:Bool = nil
+  wire s4_tl0_load_way:U2 = nil
+  wire s4_tl0_load_addr:U10 = nil
+  wire s4_tl0_load_data:U256 = nil
+  wire s4_tl0_load_valid:U4 = nil
+  wire s3_tl0_load_valid_pre:Bool = nil
+  wire s4_tl0_load_capture:Bool = nil
+  wire s4_tl1_load_addr:U10 = nil
+  wire s4_tl1_tenb_ready:Bool = nil
+  wire tenb_flush:Bool = nil
+  wire tensor_load_err_flags_0:U5 = nil
+  wire tensor_load_err_flags_1:U5 = nil
+  wire s2_mh_req_assigned:U2 = nil
+  wire s2_mh_req_accepted:U2 = nil
+  wire mh_uc_load_bus_error:U2 = nil
+  wire s2_mh_fence_rdy:U2 = nil
+  wire s4_mh_refill_way:U2 = nil
+  wire s4_mh_refill_addr:U10 = nil
+  wire s2_mh_can_accept_uc:Bool = nil
+  wire mh_wait_l2_to_ba_resp:Bool = nil
+  wire s3_mh_ba_wptr:U3 = nil
+  wire s1_mh_force_ba_rptr_qual:Bool = nil
+  wire s1_mh_ba_rptr:U3 = nil
+  wire s1_mh_ba_is_amo:Bool = nil
+  wire mh_idle:Bool = nil
+  wire s1_mh_mw_valid_early:Bool = nil
+  wire s1_mh_mw_valid:Bool = nil
+  wire s2_mh_match_miss_line:Bool = nil
+  wire s1_re_ba_read_addr:U3 = nil
+  wire s2_ba_write_entry:U3 = nil
+  wire s3_re_ba_write_addr:U3 = nil
+  wire s1_reduce_send_inst:Bool = nil
+  wire s1_reduce_op_inst:Bool = nil
+  wire s1_re_ba_read_en:Bool = nil
+  wire s1_re_ba_read_en_spec:Bool = nil
+  wire s1_mh_force_ba_rptr:Bool = nil
+  wire s2_reduce_send_inst:Bool = nil
+  wire s2_reduce_op_inst:Bool = nil
+  wire s2_re_ba_write_needed:Bool = nil
+  wire s3_reduce_send_inst:Bool = nil
+  wire s3_reduce_op_inst:Bool = nil
+  wire re_pipe_used:Bool = nil
+  wire re_ba_alloc:Bool = nil
+  wire re_buffer_avail:Bool = nil
+  wire re_wait_l2_to_ba_resp:Bool = nil
+  wire re_ba_entries_required:Bool = nil
+  wire s1_ba_data:U256 = nil
+  wire ts_scp_read:Bool = nil
+  wire ts_scp_read_way:U2 = nil
+  wire ts_scp_read_addr:U10 = nil
+  wire ts_col_size_is_128b:Bool = nil
+  wire s0_ts_addr_load:Bool = nil
+  wire s0_ts_addr:U48 = nil
+  wire s0_ts_addr_msb_err:U1 = nil
+  wire s0_ts_thread_id:U1 = nil
+  wire s1_ts_addr_load:Bool = nil
+  wire tensor_reduce_err_all_flags:U4 = nil
+  wire l2_resp_ready_int:Bool = nil
+  wire l2_resp_is_for_tensor_0:Bool = nil
+  wire l2_resp_is_for_tensor_1:Bool = nil
+  wire l2_resp_is_for_mh_fill:Bool = nil
+  wire l2_resp_is_for_mh_uc:Bool = nil
+  wire l2_resp_is_for_mh_uc_ok:Bool = nil
+  wire l2_resp_is_reduce_data:Bool = nil
+  wire l2_resp_is_reduce_ready:Bool = nil
+  wire l2_resp_ready_blocked:Bool = nil
+  wire mh_l2_resp_stall:U2 = nil
+  wire l2_fill_slot_avail:Bool = nil
+  wire s3_ba_write_en:Bool = nil
+  wire s2_nack_rq_conflict:Bool = nil
+  wire s2_valid_to_s3:Bool = nil
+  wire s2_lru_data_up:U16 = nil
+  wire s2_lru_update:Bool = nil
+  wire s2_mh_req_ready:Bool = nil
+  wire s1_tlb_flush_pipeline:U2 = nil
+  wire dbg_md_write_en_early:Bool = nil
+  wire dbg_md_write_en:Bool = nil
+  wire l2_resp_is_port_data:Bool = nil
+  wire l2_da_write:Bool = nil
+  wire dbg_da_write_en_early:Bool = nil
+  wire dbg_da_write_en:Bool = nil
+  wire dbg_da_read_en:Bool = nil
+  wire s5_store_bypass_data:U256 = nil
+  wire s5_store_bypass:U4 = nil
+  wire s4_da_write_data:U312 = nil
+  wire wb_l2_evict_word:U322 = nil
+  wire mh_l2_evict_word:U322 = nil
+  wire re_l2_evict_word:U322 = nil
+  wire ts_l2_evict_word:U322 = nil
+  wire pf_l2_evict_word:U322 = nil
+  wire mh_l2_miss_word:U86 = nil
+  wire tl0_l2_miss_word:U86 = nil
+  wire tl1_l2_miss_word:U86 = nil
+  wire co_wb_word:U50 = nil
+  wire mh_wb_word:U50 = nil
+  // Typed views of the registered requests of s2 (its address is kept in its own register) and s3.
+  mut s2_rq = rq_unpack(s2_req_pre_addr)
+  s2_rq.addr = s2_req_addr
+  const s2_req:U406 = rq_pack(s2_rq)
+  const s3_rq = rq_unpack(s3_req)
+
+  // ---- Core control, L2 response FIFO, s0/s1 request views ----------------------------------------
+  // The core asks for a cache mode in {scpenable, d1split}.
+  const core_cache_mode:U2 = (core_ctrl_i.cache_ctrl.d1split, core_ctrl_i.cache_ctrl.scpenable)#[..]
+  // Every mode but Shared halves the set index.
+  const sets_reduced = dcache_cfg_mode != minion_dcache_pkg.DcacheModeShared
+
+  // Two-entry FIFO that decouples the L2 response channel; pointers and count reset to zero.
+  const l2_resp_fifo_full = l2_resp_fifo_count_q == 2
+  const l2_resp_fifo_push = l2_resp_valid_i != 0 and not l2_resp_fifo_full
+  const l2_resp_valid_int = l2_resp_fifo_count_q != 0
+  const l2_resp_fifo_pop = l2_resp_valid_int and l2_resp_ready_int
+  const l2_resp_int:L2Resp = (data=`l2_resp_fifo_data.data`[l2_resp_fifo_rd_ptr_q], dest=`l2_resp_fifo_data.dest`[l2_resp_fifo_rd_ptr_q], id=`l2_resp_fifo_data.id`[l2_resp_fifo_rd_ptr_q], opcode=`l2_resp_fifo_data.opcode`[l2_resp_fifo_rd_ptr_q], qwen=`l2_resp_fifo_data.qwen`[l2_resp_fifo_rd_ptr_q], size=`l2_resp_fifo_data.size`[l2_resp_fifo_rd_ptr_q], wdata=`l2_resp_fifo_data.wdata`[l2_resp_fifo_rd_ptr_q])
+  if l2_resp_fifo_push {
+    `l2_resp_fifo_data.id`[l2_resp_fifo_wr_ptr_q] = l2_resp_i.id
+    `l2_resp_fifo_data.dest`[l2_resp_fifo_wr_ptr_q] = l2_resp_i.dest
+    `l2_resp_fifo_data.wdata`[l2_resp_fifo_wr_ptr_q] = l2_resp_i.wdata
+    `l2_resp_fifo_data.opcode`[l2_resp_fifo_wr_ptr_q] = l2_resp_i.opcode
+    `l2_resp_fifo_data.data`[l2_resp_fifo_wr_ptr_q] = l2_resp_i.data
+    `l2_resp_fifo_data.size`[l2_resp_fifo_wr_ptr_q] = l2_resp_i.size
+    `l2_resp_fifo_data.qwen`[l2_resp_fifo_wr_ptr_q] = l2_resp_i.qwen
+    l2_resp_fifo_wr_ptr_q = ~l2_resp_fifo_wr_ptr_q
+  }
+  if l2_resp_fifo_pop {
+    l2_resp_fifo_rd_ptr_q = ~l2_resp_fifo_rd_ptr_q
+  }
+  mut l2_resp_fifo_count_d:U2 = l2_resp_fifo_count_q
+  if l2_resp_fifo_push and not l2_resp_fifo_pop {
+    wrap l2_resp_fifo_count_d = l2_resp_fifo_count_q + 1
+  } elif l2_resp_fifo_pop and not l2_resp_fifo_push {
+    wrap l2_resp_fifo_count_d = l2_resp_fifo_count_q - 1
+  }
+  l2_resp_fifo_count_q = l2_resp_fifo_count_d
+
+  // A gather/scatter lane request that is not itself the G32/SC32 command.
+  const s0_core_req_is_valid_gsc = s0_core_req_valid_i != 0 and type_is_gsc(s0_core_req_i.typ) and not cmd_is_gsc32(s0_core_req_i.cmd)
+  const s0_valid_to_s1_ordered = s0_core_req_valid_i != 0 or s0_rq_replay_valid
+  const s0_md_read_en = s0_co_mr_valid or s0_rq_replay_valid or s0_core_req_valid_i != 0 or s0_co_pf_valid or (DebugApbEn != 0 and s0_dbg_valid)
+
+  // s1 request: the stored word, the 48-bit address register and the thread bit.
+  mut s1_rq = rq_unpack(s1_req_pre_addr)
+  s1_rq.addr = s1_req_addr
+  s1_rq.dest_thread = s1_req_thread_id
+
+  // Thread-selected status, overridden by the owner of tensor/cache-op/L2 requests.
+  const s1_vm_thread:U8 = if s1_rq.dest_thread == 1 { vm_status_i#[8..<16] } else { vm_status_i#[0..<8] }
+  mut s1_vm_status:VmStatus = vm_unpack(s1_vm_thread)
+  if s1_rq.vm_sel == minion_dcache_pkg.DcacheVmSelL2 {
+    s1_vm_status = vm_status_l2
+  } elif s1_rq.vm_sel == minion_dcache_pkg.DcacheVmSelTs {
+    s1_vm_status = vm_status_ts
+  } elif s1_rq.vm_sel == minion_dcache_pkg.DcacheVmSelTl1 {
+    s1_vm_status = vm_status_tl1
+  } elif s1_rq.vm_sel == minion_dcache_pkg.DcacheVmSelTl0 {
+    s1_vm_status = vm_status_tl0
+  } elif s1_rq.vm_sel == minion_dcache_pkg.DcacheVmSelCo {
+    s1_vm_status = vm_status_co
+  }
+
+  // Breakpoint match request of the s1 access (the extra address bit is the sign-extension of bit VaSize-1).
+  const s1_bp_conf_addr_msb:U1 = (s1_rq.addr_msb_err ^ ((s1_req_addr >> (minion_dcache_pkg.VaSize - 1)) & 1))#[0]
+  const s1_bp_conf:BpConf = (address=(s1_req_addr, s1_bp_conf_addr_msb)#[..], cmd=s1_bp_conf_cmd#[0..<3], thread_id=s1_req_thread_id)
+
+  const s1_valid_to_tlb = s1_valid and (s1_core_kill_i == 0 or s1_rq.replay != 0 or s1_rq.cache_op != 0)
+  const s1_tlb_req_va:U36 = s1_rq.addr#[12..<48]
+
+  // Gather/scatter element addresses: the byte offset inside the 32-byte block, per element size.
+  mut s1_block_offset:U5 = 0
+  if s1_rq.typ == minion_dcache_pkg.DcTypePsGs8 {
+    s1_block_offset = s1_rq.addr#[0..<5]
+  } elif s1_rq.typ == minion_dcache_pkg.DcTypePsGs16 {
+    s1_block_offset = s1_rq.addr#[1..<5] << 1
+  } elif s1_rq.typ == minion_dcache_pkg.DcTypePsGs32 {
+    s1_block_offset = s1_rq.addr#[2..<5] << 2
+  }
+
+  // One 5-bit index per ps_mask lane (item index scaled to bytes, plus the block offset) and the
+  // gather-enable of the data-array bank each lane touches.
+  const s1_gather_valid = s1_valid and cmd_is_gsc32(s1_rq.cmd)
+  mut s1_to_s2_gsc32_indices:U40 = 0
+  mut s1_gather32_en:U4 = 0
+  for i in 0..<8 {
+    if s1_rq.ps_mask#[i] != 0 {
+      mut idx:U5 = 0
+      if s1_rq.typ == minion_dcache_pkg.DcTypePsGs8 {
+        idx = s1_rq.gsc32_idx#[i*5..<(i + 1)*5]
+      } elif s1_rq.typ == minion_dcache_pkg.DcTypePsGs16 {
+        idx = s1_rq.gsc32_idx#[i*4..<(i + 1)*4] << 1
+      } elif s1_rq.typ == minion_dcache_pkg.DcTypePsGs32 {
+        idx = s1_rq.gsc32_idx#[i*3..<(i + 1)*3] << 2
+      }
+      wrap idx = idx + s1_block_offset
+      s1_to_s2_gsc32_indices#[i*5..<(i + 1)*5] = idx
+      s1_gather32_en#[(idx >> minion_dcache_pkg.DcacheBankSelLsb)#[0..<2]] = U1(s1_gather_valid)
+    }
+  }
+
+  // Tag that a way without valid metadata presents (3 set bits that disappear when the sets are reduced).
+  const s1_invalid_way_tag:U3 = if sets_reduced { 0 } else { s1_rq.set#[1..<4] }
+
+  // s3 load path: bypass the freshly stored lane data over the array read data.
+  mut s3_data_bypassed:U256 = 0
+  for i in 0..<4 {
+    s3_data_bypassed#[i*64..<(i + 1)*64] = if s3_store_bypass#[i] != 0 { s3_store_bypass_data#[i*64..<(i + 1)*64] } else { s3_data[i] }
+  }
+  // Rotate so the addressed byte comes first.
+  const s3_data_twice:U512 = (s3_data_bypassed, s3_data_bypassed)#[..]
+  const s3_data_aligned:U256 = (s3_data_twice >> (s3_rq.addr#[0..<5] << 3))#[0..<256]
+
+  // Byte-merge select: whole word, or from the address onward for the second half of a misaligned access.
+  mut s3_data_merge_sel:U32 = 0
+  if s3_rq.uc_load_2nd != 0 or s3_reduce_op_inst {
+    s3_data_merge_sel = 0xffffffff
+  } elif s3_rq.misaligned_2nd != 0 {
+    s3_data_merge_sel = 0xffffffff >> s3_rq.addr#[0..<5]
+  }
+  mut s3_data_merged:U256 = 0
+  for i in 0..<32 {
+    s3_data_merged#[i*8..<(i + 1)*8] = if s3_data_merge_sel#[i] != 0 { s3_store_data#[i*8..<(i + 1)*8] }
+      else { s3_data_aligned#[i*8..<(i + 1)*8] }
+  }
+
+  // Load result extension to 64 bits.
+  const s3_data_extended:U64 = if s3_reduce_op_inst {
+    s3_data_merged#[0..<64]
+  } elif s3_rq.typ == minion_dcache_pkg.DcTypeB or s3_rq.typ == minion_dcache_pkg.DcTypePsGs8 {
+    s3_data_merged#[0..<8]#sext[0..=7]#[0..<64]
+  } elif s3_rq.typ == minion_dcache_pkg.DcTypeH or s3_rq.typ == minion_dcache_pkg.DcTypePsGs16 {
+    s3_data_merged#[0..<16]#sext[0..=15]#[0..<64]
+  } elif s3_rq.typ == minion_dcache_pkg.DcTypeW or s3_rq.typ == minion_dcache_pkg.DcTypePsGs32 {
+    s3_data_merged#[0..<32]#sext[0..=31]#[0..<64]
+  } elif s3_rq.typ == minion_dcache_pkg.DcTypeBu {
+    s3_data_merged#[0..<8]
+  } elif s3_rq.typ == minion_dcache_pkg.DcTypeHu {
+    s3_data_merged#[0..<16]
+  } elif s3_rq.typ == minion_dcache_pkg.DcTypeWu {
+    s3_data_merged#[0..<32]
+  } else {
+    s3_data_merged#[0..<64]
+  }
+  const s3_is_gather32 = s3_rq.cmd == minion_dcache_pkg.DcCmdG32 and s3_valid
+
+  // Gather: element i of the load comes from the byte/half/word the lane index selects.
+  mut s3_data_gather32:U256 = 0
+  for i in 0..<8 {
+    const idx:U5 = s3_gsc32_indices[i]
+    const gs_word:U32 = (s3_data_bypassed >> (idx#[2..<5]*32))#[0..<32]
+    const gs_half:U16 = (s3_data_bypassed >> (idx#[1..<5]*16))#[0..<16]
+    const gs_byte:U8 = (s3_data_bypassed >> (idx*8))#[0..<8]
+    if s3_rq.typ == minion_dcache_pkg.DcTypePsGs8 {
+      s3_data_gather32#[i*32..<(i + 1)*32] = gs_byte#sext[0..=7]#[0..<32]
+    } elif s3_rq.typ == minion_dcache_pkg.DcTypePsGs16 {
+      s3_data_gather32#[i*32..<(i + 1)*32] = gs_half#sext[0..=15]#[0..<32]
+    } elif s3_rq.typ == minion_dcache_pkg.DcTypePsGs32 {
+      s3_data_gather32#[i*32..<(i + 1)*32] = gs_word
+    } else {
+      s3_data_gather32#[i*32..<(i + 1)*32] = 0
+    }
+  }
+  const s3_load_data_mux1:U256 = (s3_data_extended, s3_data_merged#[64..<256])#[..]
+  const s3_load_data:U256 = if s3_is_gather32 { s3_data_gather32 } else { s3_load_data_mux1 }
+
+  // Compare-and-swap stores the x31 operand next to the store data.
+  mut s3_store_amo_ext_data:U256 = s3_store_data
+  if s3_rq.cmd == minion_dcache_pkg.DcCmdXaCmpswp {
+    if type_is_word(s3_rq.typ) {
+      s3_store_amo_ext_data#[64..<96] = s3_core_x31_i#[0..<32]
+    } else {
+      s3_store_amo_ext_data#[64..<128] = s3_core_x31_i#[0..<64]
+    }
+  }
+  // Write data of the buffer array: reduce sends the raw store data, stores the amo-extended one.
+  const s3_ba_write_data:U256 = if s3_reduce_send_inst { s3_store_data }
+    elif s3_is_write { s3_store_amo_ext_data }
+    else { s3_load_data_mux1 }
+
+  // Scatter: stores land in the lane the element index addresses (default: the loaded data passes through).
+  mut s3_scatter32_data:U256 = s3_data_bypassed
+  for i in 0..<8 {
+    if s3_rq.ps_mask#[i] != 0 {
+      const idx:U5 = s3_gsc32_indices[i]
+      const lane_base = (idx >> minion_dcache_pkg.DcacheBankSelLsb)#[0..<2]*0x40
+      if s3_rq.typ == minion_dcache_pkg.DcTypePsGs8 {
+        const at = lane_base + (idx#[0..<3]*8)
+        s3_scatter32_data#[at..+8] = s3_store_data#[i*32..<(i*32 + 8)]
+      } elif s3_rq.typ == minion_dcache_pkg.DcTypePsGs16 {
+        const at = lane_base + (idx#[1..<3]*16)
+        s3_scatter32_data#[at..+16] = s3_store_data#[i*32..<(i*32 + 16)]
+      } elif s3_rq.typ == minion_dcache_pkg.DcTypePsGs32 {
+        const at = lane_base + (idx#[2..<3]*32)
+        s3_scatter32_data#[at..+32] = s3_store_data#[i*32..<(i*32 + 32)]
+      }
+    }
+  }
+
+  // ---- s3: load/store reservation, store merge, hand-off to s4 -----------------------------------
+  const s3_lr = s3_rq.cmd == minion_dcache_pkg.DcCmdXlr
+  const s3_sc = s3_rq.cmd == minion_dcache_pkg.DcCmdXsc
+  const s3_lrsc_valid = s3_lrsc_count != 0
+  const s3_lrsc_addr_match = s3_lrsc_valid and s3_lrsc_addr == s3_rq.addr#[6..<40]
+  const s3_sc_fail = s3_sc and s3_valid and not s3_lrsc_addr_match
+  // The reservation lasts 31 cycles after an LR, is consumed by any following access and is dropped by an invalidate.
+  mut s3_lrsc_count_next:U5 = s3_lrsc_count
+  if s3_lrsc_valid {
+    wrap s3_lrsc_count_next = s3_lrsc_count - 1
+  }
+  if s3_valid {
+    if s3_lr {
+      s3_lrsc_count_next = 31
+    } elif s3_lrsc_valid {
+      s3_lrsc_count_next = 0
+    }
+  }
+  if s3_invalidate_lr_i != 0 {
+    s3_lrsc_count_next = 0
+  }
+  s3_lrsc_count = s3_lrsc_count_next
+  // No reset on the address: hold it while rst_ni is low.
+  if rst_ni != 0 and s3_valid and s3_lr {
+    s3_lrsc_addr = s3_rq.addr#[6..<40]
+  }
+
+  s5_valid = s4_valid
+  vpu_scp_bid_1 = VpuEn != 0 and s1_vpu_ctrl_i.scp_req.bid != 0
+  vpu_scp_bid_2 = vpu_scp_bid_1
+
+  // ---- L2 request output muxes ---------------------------------------------------------------------
+  // Each output port takes the lowest-numbered pipe stage whose request it can accept this cycle
+  // (the select ends on the last lane when nobody fires).
+  const l2_evict_ready:U2 = (l2_evict_req_ready_i.e0, l2_evict_req_ready_i.e1)#[..]
+  mut l2_evict_mux_ready:U2 = 0
+  mut l2_evict_valid_out:U2 = 0
+  mut l2_evict_handshake = false
+  mut l2_evict_mux_select:U1 = 1
+  for i in 0..<2 {
+    if not l2_evict_handshake {
+      const fire = l2_evict_mux_valid#[i] != 0 and l2_evict_ready#[i] != 0
+      l2_evict_valid_out#[i] = U1(fire)
+      l2_evict_mux_ready#[i] = U1(fire)
+      l2_evict_handshake = fire
+      l2_evict_mux_select = i
+    }
+  }
+  const l2_evict_req_mux = evict_unpack(l2_evict_mux_data_in[l2_evict_mux_select])
+
+  const l2_miss_ready:U3 = (l2_miss_req_ready_i.e0, l2_miss_req_ready_i.e1, l2_miss_req_ready_i.e2)#[..]
+  mut l2_miss_mux_ready:U3 = 0
+  mut l2_miss_valid_out:U3 = 0
+  mut l2_miss_handshake = false
+  mut l2_miss_mux_select:U2 = 3
+  for i in 0..<3 {
+    if not l2_miss_handshake {
+      const fire = l2_miss_mux_valid#[i] != 0 and l2_miss_ready#[i] != 0
+      l2_miss_valid_out#[i] = U1(fire)
+      l2_miss_mux_ready#[i] = U1(fire)
+      l2_miss_handshake = fire
+      l2_miss_mux_select = i
+    }
+  }
+  const l2_miss_mux_word:U86 = if l2_miss_mux_select#[0..<2] < 3 { l2_miss_mux_data_in[l2_miss_mux_select#[0..<2]] } else { 0 }
+  const l2_miss_req_mux = miss_unpack(l2_miss_mux_word)
+
+  // A pipe stage can accept a request when it is empty or being drained.
+  const l2_evict_pipe_ready:U2 = l2_evict_mux_ready | ~l2_evict_mux_valid
+  const l2_miss_pipe_ready:U3 = l2_miss_mux_ready | ~l2_miss_mux_valid
+  const ts_l2_evict_ready = l2_evict_pipe_ready#[0] != 0
+  const arb_l2_evict_ready = l2_evict_pipe_ready#[1] != 0
+  const arb_l2_miss_ready = l2_miss_pipe_ready#[2] != 0
+
+  const dbg_md_write_data:MetaData = (coh_state=apb_pwdata_i#[33..<35], tag=apb_pwdata_i#[0..<33])
+  const dbg_da_write_data:U64 = apb_pwdata_i#[0..<64]
+  const dbg_apb_paddr:U9 = apb_paddr_i#[0..<9]
+  const dbg_md_read_addr:U6 = dbg_apb_paddr#[0..<6]
+  const dbg_md_write_addr:U6 = dbg_apb_paddr#[0..<6]
+  const dbg_da_read_addr:U9 = dbg_apb_paddr
+  const dbg_da_write_addr:U9 = dbg_apb_paddr
+
+  // ---- s3 store merge and the word handed to s4 -------------------------------------------------
+  const s3_store_merged:U256 = minion_dcache_store_merge_unit(addr_i=s3_rq.addr#[0..<5], typ_i=s3_rq.typ, ps_mask_i=s3_rq.ps_mask, orig_data_i=s3_data_bypassed, store_data_i=s3_store_data, enable_lo_i=U1(s3_misaligned_case_3 or s3_rq.misaligned_2nd != 0), enable_hi_i=U1(s3_rq.misaligned_2nd == 0))
+  // Gather/scatter stores write all four lanes with the scattered data instead.
+  mut s3_req_to_s4_rq = rq_unpack(s3_req)
+  s3_req_to_s4_rq.data = if s3_rq.cmd == minion_dcache_pkg.DcCmdSc32 { s3_scatter32_data } else { s3_store_merged }
+  const s3_req_to_s4:U406 = rq_pack(s3_req_to_s4_rq)
+
+  s4_valid = s3_valid and not s3_sc_fail and s3_is_write
+  if s3_valid and s3_is_write {
+    s4_req = s3_req_to_s4
+    s4_way = s3_way
+    s4_misaligned_case_3 = s3_misaligned_case_3
+  }
+
+  // ---- s0: request arbitration ------------------------------------------------------------------------
+  // A gather/scatter lane that the mask masks out, an empty packed-single request, and a request of a thread
+  // whose pipeline is being flushed by an s1 TLB miss never enter the pipe.
+  const s0_core_req_valid_killed = (s0_core_req_is_valid_gsc and s0_core_req_i.ps_mask#[s0_core_req_i.gsc_cnt] == 0) or (s0_core_req_valid_i != 0 and type_is_ps(s0_core_req_i.typ) and s0_core_req_i.ps_mask == 0) or s1_tlb_flush_pipeline#[s0_core_req_i.dest.thread_id] != 0
+  const s0_valid_to_s1 = (s0_core_req_valid_i != 0 and not s0_core_req_valid_killed) or s0_rq_replay_valid or s0_co_pf_valid
+  const s0_req_thread_id_ordered:U1 = if s0_core_req_valid_i != 0 { s0_core_req_i.dest.thread_id } else { s0_rq_replay.dest_thread }
+
+  // Idle pipe slots the tensor-load, tensor-store and L2 cache-op engines may use.
+  const s0_available_to_tl = not (s0_valid_to_s1 or s0_md_read_en)
+  const s1_available_to_tl = not (s1_clk_en or s1_ts_addr_load or s1_co_l2_addr_load)
+  const s0_available_to_ts = not (s0_valid_to_s1 or s0_md_read_en or s0_tl_addr_load)
+  const s1_available_to_ts = not (s1_clk_en or s1_tl_addr_load or s1_co_l2_addr_load)
+  const s0_available_to_co_l2 = not (s0_valid_to_s1 or s0_md_read_en or s0_tl_addr_load or s0_ts_addr_load)
+  const s1_available_to_co_l2 = not (s1_clk_en or s1_tl_addr_load or s1_ts_addr_load)
+  const s0_available_to_tl1 = s0_available_to_tl and not s0_tl0_addr_load
+  const s1_available_to_tl0 = s1_available_to_tl and not s1_tl1_addr_load
+  const s1_available_to_tl1 = s1_available_to_tl and not s1_tl0_addr_load
+
+  s0_tl_addr_load = s0_tl0_addr_load or s0_tl1_addr_load
+  s1_tl_addr_load = s1_tl0_addr_load or s1_tl1_addr_load
+  // Tensor-load 0 has priority over tensor-load 1.
+  const s0_tl_addr:U48 = if s0_tl0_addr_load { s0_tl0_addr } else { s0_tl1_addr }
+  const s0_tl_addr_msb_err:U1 = if s0_tl0_addr_load { s0_tl0_addr_msb_err } else { s0_tl1_addr_msb_err }
+  const s0_tl_thread_id:U1 = if s0_tl0_addr_load { s0_tl0_thread_id } else { s0_tl1_thread_id }
+  const s0_tl_vm_sel:U3 = if s0_tl0_addr_load { minion_dcache_pkg.DcacheVmSelTl0 } else { minion_dcache_pkg.DcacheVmSelTl1 }
+  // Any s0 consumer of the request registers.
+  const s0_req_load = s0_valid_to_s1 or s0_md_read_en or s0_tl_addr_load or s0_ts_addr_load or s0_co_l2_addr_load
+
+  // The data array is read for demand accesses only, not for prefetches.
+  const s0_cmd:U5 = if s0_rq_replay_valid { s0_rq_replay.cmd } else { s0_core_req_i.cmd }
+  const s0_da_read_en = s0_valid_to_s1 and not cmd_is_prefetch(s0_cmd)
+  const s0_da_addr:U10 = if s0_rq_replay_valid { s0_rq_replay.addr#[0..<10] } else { s0_core_req_i.addr#[0..<10] }
+  // Request word of each source. Defaults to the replay-queue request; the other sources override fields.
+  mut s0_rq = (mut addr:U49=0, mut addr_msb_err:U1=0, mut buf_alloc:U1=0, mut buf_id:U3=0, mut cache_op:U1=0, mut cacheable:U1=0, mut chunk_read:U4=0, mut cmd:U5=0, mut data:U256=0, mut dest_addr:U5=0, mut dest_fp:U1=0, mut dest_thread:U1=0, mut gsc32_idx:U40=0, mut gsc_cnt:U3=0, mut mem_global:U1=0, mut misaligned:U1=0, mut misaligned_2nd:U1=0, mut miss_fill_ok:U1=0, mut phys:U1=0, mut ps_mask:U8=0, mut replay:U1=0, mut replay_age:U5=0, mut replay_entry:U3=0, mut set:U4=0, mut typ:U4=0, mut uc_load_2nd:U1=0, mut uc_load_ok:U1=0, mut vm_sel:U3=0)
+  // prp-style-allow whole-tuple-copy
+  s0_rq.phys = s0_rq_replay.phys
+  s0_rq.dest_fp = s0_rq_replay.dest_fp
+  s0_rq.dest_addr = s0_rq_replay.dest_addr
+  s0_rq.dest_thread = s0_rq_replay.dest_thread
+  s0_rq.cmd = s0_rq_replay.cmd
+  s0_rq.typ = s0_rq_replay.typ
+  s0_rq.gsc_cnt = s0_rq_replay.gsc_cnt
+  s0_rq.gsc32_idx = s0_rq_replay.gsc32_idx
+  s0_rq.ps_mask = s0_rq_replay.ps_mask
+  s0_rq.replay = 1
+  s0_rq.replay_entry = s0_rq_replay_entry
+  s0_rq.replay_age = s0_rq_replay_age
+  s0_rq.cache_op = s0_rq_replay.cache_op
+  s0_rq.misaligned = s0_rq_replay.misaligned
+  s0_rq.misaligned_2nd = s0_rq_replay.misaligned_2nd
+  s0_rq.buf_alloc = s0_rq_replay.buf_alloc
+  s0_rq.buf_id = s0_rq_replay.buf_id
+  s0_rq.cacheable = s0_rq_replay.cacheable
+  s0_rq.uc_load_2nd = s0_rq_replay.uc_load_2nd
+  s0_rq.uc_load_ok = U1(s0_rq_replay_uc_load_ok)
+  s0_rq.miss_fill_ok = U1(s0_rq_replay_miss_fill_ok)
+  s0_rq.vm_sel = s0_rq_replay.vm_sel
+  s0_rq.mem_global = s0_rq_replay.mem_global
+  mut s0_req_addr:U48 = s0_rq_replay.addr#[0..<48]
+  mut s0_req_force_set = false
+  mut s0_bp_conf_valid = false
+  mut s0_bp_conf_cmd:U3 = s1_bp_conf.cmd
+  if s0_core_req_valid_i != 0 {
+    s0_req_addr = s0_core_req_i.addr
+    // prp-style-allow whole-tuple-copy
+    s0_rq.addr_msb_err = s0_core_req_i.addr_msb_err
+    s0_rq.phys = s0_core_req_i.phys
+    s0_rq.dest_fp = s0_core_req_i.dest.fp
+    s0_rq.dest_addr = s0_core_req_i.dest.addr
+    s0_rq.dest_thread = s0_core_req_i.dest.thread_id
+    s0_rq.cmd = s0_core_req_i.cmd
+    s0_rq.typ = s0_core_req_i.typ
+    s0_rq.gsc_cnt = s0_core_req_i.gsc_cnt
+    s0_rq.ps_mask = s0_core_req_i.ps_mask
+    s0_rq.gsc32_idx = s0_core_req_i.gsc32_idx
+    s0_rq.replay = 0
+    s0_rq.replay_entry = 0
+    s0_rq.replay_age = 0
+    s0_rq.cache_op = 0
+    s0_rq.misaligned = 0
+    s0_rq.misaligned_2nd = 0
+    s0_rq.buf_alloc = 0
+    s0_rq.buf_id = 0
+    s0_rq.cacheable = 1
+    s0_rq.uc_load_2nd = 0
+    s0_rq.uc_load_ok = 0
+    s0_rq.miss_fill_ok = 0
+    s0_rq.vm_sel = minion_dcache_pkg.DcacheVmSelIp
+    s0_rq.mem_global = s0_core_req_i.mem_global
+    s0_bp_conf_valid = not s0_core_req_valid_killed
+    s0_bp_conf_cmd = if cmd_is_amo(s0_core_req_i.cmd) { minion_pkg.DbgBpAmo } elif cmd_is_read(s0_core_req_i.cmd) { minion_pkg.DbgBpLoad } else { minion_pkg.DbgBpStore }
+  } elif s0_co_mr_valid {
+    s0_req_addr = s0_co_mr_addr
+    s0_rq.addr_msb_err = s0_co_mr_addr_msb_err
+    s0_rq.set = s0_co_mr_addr#[6..<10]
+    s0_rq.cmd = minion_dcache_pkg.DcCmdXrd
+    s0_rq.phys = s0_co_mr_phys
+    s0_rq.replay = 0
+    s0_rq.vm_sel = minion_dcache_pkg.DcacheVmSelCo
+    s0_rq.dest_thread = s0_co_mr_thread_id
+    s0_req_force_set = s0_co_mr_force_set != 0
+    s0_bp_conf_cmd = minion_pkg.DbgBpCo
+  } elif DebugApbEn != 0 and s0_dbg_valid {
+    s0_rq.set = dbg_md_read_addr#[0..<4]
+    s0_rq.phys = 1
+    s0_rq.replay = 0
+    s0_req_force_set = true
+  } elif s0_co_pf_valid {
+    s0_req_addr = s0_co_pf_req.addr#[0..<48]
+    // The prefetch request replaces the whole word. A whole-tuple store cannot be merged with the per-field writes of the
+    // other branches by LiveHD (livehd_bugs L3u1_03), so it is copied field by field.
+    // prp-style-allow whole-tuple-copy
+    s0_rq.addr = s0_co_pf_req.addr
+    s0_rq.addr_msb_err = s0_co_pf_req.addr_msb_err
+    s0_rq.set = s0_co_pf_req.set
+    s0_rq.phys = s0_co_pf_req.phys
+    s0_rq.misaligned = s0_co_pf_req.misaligned
+    s0_rq.misaligned_2nd = s0_co_pf_req.misaligned_2nd
+    s0_rq.dest_fp = s0_co_pf_req.dest_fp
+    s0_rq.dest_addr = s0_co_pf_req.dest_addr
+    s0_rq.dest_thread = s0_co_pf_req.dest_thread
+    s0_rq.cmd = s0_co_pf_req.cmd
+    s0_rq.typ = s0_co_pf_req.typ
+    s0_rq.gsc_cnt = s0_co_pf_req.gsc_cnt
+    s0_rq.ps_mask = s0_co_pf_req.ps_mask
+    s0_rq.data = s0_co_pf_req.data
+    s0_rq.replay = s0_co_pf_req.replay
+    s0_rq.replay_entry = s0_co_pf_req.replay_entry
+    s0_rq.replay_age = s0_co_pf_req.replay_age
+    s0_rq.cache_op = s0_co_pf_req.cache_op
+    s0_rq.buf_alloc = s0_co_pf_req.buf_alloc
+    s0_rq.buf_id = s0_co_pf_req.buf_id
+    s0_rq.cacheable = s0_co_pf_req.cacheable
+    s0_rq.chunk_read = s0_co_pf_req.chunk_read
+    s0_rq.uc_load_2nd = s0_co_pf_req.uc_load_2nd
+    s0_rq.uc_load_ok = s0_co_pf_req.uc_load_ok
+    s0_rq.miss_fill_ok = s0_co_pf_req.miss_fill_ok
+    s0_rq.gsc32_idx = s0_co_pf_req.gsc32_idx
+    s0_rq.vm_sel = s0_co_pf_req.vm_sel
+    s0_rq.mem_global = s0_co_pf_req.mem_global
+    s0_bp_conf_valid = true
+    s0_bp_conf_cmd = minion_pkg.DbgBpCo
+  } elif s0_tl_addr_load or s0_ts_addr_load or s0_co_l2_addr_load {
+    // Translate-only requests of the engines: a byte read of the engine's address.
+    s0_rq.cmd = minion_dcache_pkg.DcCmdXrd
+    s0_rq.typ = minion_dcache_pkg.DcTypeB
+    s0_rq.phys = 0
+    s0_rq.dest_fp = 0
+    s0_rq.dest_addr = 0
+    s0_rq.replay = 0
+    s0_bp_conf_valid = true
+    if s0_tl_addr_load {
+      s0_req_addr = s0_tl_addr
+      s0_rq.addr_msb_err = s0_tl_addr_msb_err
+      s0_rq.vm_sel = s0_tl_vm_sel
+      s0_rq.dest_thread = s0_tl_thread_id
+      s0_bp_conf_cmd = minion_pkg.DbgBpTensorLoad
+    } elif s0_ts_addr_load {
+      s0_req_addr = s0_ts_addr
+      s0_rq.addr_msb_err = s0_ts_addr_msb_err
+      s0_rq.vm_sel = minion_dcache_pkg.DcacheVmSelTs
+      s0_rq.dest_thread = s0_ts_thread_id
+      s0_bp_conf_cmd = minion_pkg.DbgBpTensorStore
+    } else {
+      s0_req_addr = s0_co_l2_addr
+      s0_rq.addr_msb_err = s0_co_l2_addr_msb_err
+      s0_rq.vm_sel = minion_dcache_pkg.DcacheVmSelL2
+      s0_rq.dest_thread = s0_co_l2_thread_id
+      s0_bp_conf_cmd = minion_pkg.DbgBpCo
+    }
+  }
+  // Forced sets (cache-op and debug reads) address the array directly, everything else is mode-adjusted.
+  if not s0_req_force_set {
+    s0_rq.set = set_correct(mode=dcache_cfg_mode, set=s0_req_addr#[6..<10], thread_id=s0_rq.dest_thread)
+  }
+
+  // The data-array read set is adjusted for the cache mode with the thread of the final s0 request (the Verilog's
+  // `s0_req.dest.thread_id`; the machine-emitted tree read the not yet assigned request there, i.e. an unknown,
+  // livehd_bugs L3u1_04).
+  const s0_da_set:U4 = set_correct(mode=dcache_cfg_mode, set=s0_da_addr#[6..<10], thread_id=s0_rq.dest_thread)
+  const s0_da_read_addr:U10 = (s0_da_addr#[0..<6], s0_da_set)#[..]
+
+  const s0_req:U406 = rq_pack(s0_rq)
+  s1_valid = s0_valid_to_s1
+  s1_bp_conf_valid = s0_bp_conf_valid
+  if s0_valid_to_s1 or s0_md_read_en {
+    s1_req_pre_addr = s0_req
+    s1_req_force_set = s0_req_force_set
+  }
+  if s0_req_load {
+    s1_req_thread_id = s0_rq.dest_thread
+    s1_req_addr = s0_req_addr
+  }
+  s1_md_read_en = s0_md_read_en
+  s1_da_read_en = s0_da_read_en
+  if s0_md_read_en or s0_da_read_en {
+    s1_da_read_req = s0_da_read_addr
+  }
+  s1_wb_da_valid = s0_wb_da_valid
+  if s0_wb_da_valid {
+    s1_wb_da_req = (s0_wb_da_req.addr, s0_wb_da_req.way, s0_wb_da_req.valid_h, s0_wb_da_req.valid_l)#[..]
+  }
+  s1_bp_conf_cmd = s0_bp_conf_cmd
+
+  // ---- s1: metadata write, TLB, PMA, tag compare, access properties ---------------------------------
+  // Metadata write sources, by priority: cache-op unit, miss handler, debug APB.
+  const dbg_md_write_way_en:U4 = 1 << dbg_md_write_addr#[4..<6]
+  const dbg_md_write_req:MetaWr = (coh_state=dbg_md_write_data.coh_state, set_idx=dbg_md_write_addr#[0..<4], tag=dbg_md_write_data.tag, way_en=dbg_md_write_way_en)
+  mut s1_md_write:MetaWr = dbg_md_write_req
+  if s1_mh_mw_valid {
+    s1_md_write = s1_mh_mw_req
+  }
+  if s1_co_mw_valid {
+    s1_md_write = s1_co_mw_req
+  }
+  const s1_md_write_valid_early = s1_co_mw_valid_early or s1_mh_mw_valid_early or (DebugApbEn != 0 and dbg_md_write_en_early)
+  const s1_md_write_valid = s1_co_mw_valid or s1_mh_mw_valid or (DebugApbEn != 0 and dbg_md_write_en)
+  // prp-style-allow flattened-bundle-arguments
+  const u_metadata_array = minion_dcache_metadata_array::[name=u_metadata_array](clk_i=clk_i, rst_ni=rst_ni, s1_read_set_i=s1_rq.set, s1_write_valid_i=U1(s1_md_write_valid), s1_write_valid_prev_i=U1(s1_md_write_valid_early), `s1_write_req_i.set_idx`=s1_md_write.set_idx, `s1_write_req_i.way_en`=s1_md_write.way_en, `s1_write_req_i.data.coh_state`=s1_md_write.coh_state, `s1_write_req_i.data.tag`=s1_md_write.tag, cfg_clear_all_i=U1(dcache_cfg_clear_all), cfg_clear_low_i=U1(dcache_cfg_clear_low))
+
+  // Command classes of the s1 request.
+  const s1_translate_only_addr_load = s1_tl_addr_load or s1_ts_addr_load or s1_co_l2_addr_load
+  const s1_is_write = cmd_is_store(s1_rq.cmd) and s1_rq.uc_load_2nd == 0 and not s1_translate_only_addr_load and not s1_reduce_op_inst
+  const s1_is_store = (cmd_is_store(s1_rq.cmd) and s1_rq.uc_load_2nd == 0) or s1_ts_addr_load
+  const s1_is_read = cmd_is_read(s1_rq.cmd)
+  const s1_is_amo = cmd_is_amo(s1_rq.cmd) and not s1_translate_only_addr_load
+  const s1_is_read_no_amo = s1_is_read and not s1_is_amo
+  const s1_is_msg = false
+  const s1_is_bypass = (s1_rq.cmd == minion_dcache_pkg.DcCmdXwrb or s1_rq.cmd == minion_dcache_pkg.DcCmdXrdb) and not s1_translate_only_addr_load
+  const s1_is_gsc32 = cmd_is_gsc32(s1_rq.cmd)
+
+  // Translation, PMA check and protection exceptions are skipped for the misaligned second half of a replay.
+  const s1_tlb_req_valid = (s1_valid_to_tlb and (s1_is_read or s1_is_write or cmd_is_prefetch(s1_rq.cmd))) or s1_translate_only_addr_load
+  // prp-style-allow flattened-bundle-arguments
+  const u_tlb_array = minion_dcache_tlb_array::[name=u_tlb_array](clk_i=clk_i, rst_ni=rst_ni, dft_i=(const ram_rei=0, const ram_wei=0, const scan_reset_n=0, const scanmode=0, const sram_clk_override=0), esr_vmspagesize_i=vmspagesize_i, `req_data_i.status.prv`=s1_vm_status.prv, `req_data_i.status.mprv`=s1_vm_status.mprv, `req_data_i.status.mpp`=s1_vm_status.mpp, `req_data_i.status.sum`=s1_vm_status.sum, `req_data_i.status.mxr`=s1_vm_status.mxr, `req_data_i.status.debug`=s1_vm_status.debug, `req_data_i.vpn`=s1_tlb_req_va, `req_data_i.passthrough`=s1_rq.phys, `req_data_i.store`=U1(s1_is_store), `req_data_i.msb_err`=s1_rq.addr_msb_err, req_valid_i=U1(s1_tlb_req_valid), satp_info_i=satp_info_i, matp_info_i=matp_info_i, satp_info_en_i=satp_info_en_i, matp_info_en_i=matp_info_en_i, tlb_invalidate_i=tlb_invalidate_i, ptw_req_ready_i=ptw_req_ready_i, ptw_resp_data_i=ptw_resp_data_i, ptw_resp_valid_i=ptw_resp_valid_i)
+  const s1_phys_addr:U40 = (s1_rq.addr#[0..<12], u_tlb_array.resp_data_o.ppn)#[..]
+  const s1_phys_addr_tag:U33 = (s1_phys_addr >> (minion_dcache_pkg.PaSize - 1 - 32))#[0..<33]
+  const s1_pma_ts_tl_co = s1_translate_only_addr_load or (s1_rq.vm_sel == minion_dcache_pkg.DcacheVmSelCo and (s1_valid or s1_md_read_en))
+  // prp-style-allow flattened-bundle-arguments
+  const u_pma_unit = minion_dcache_pma_unit(ioshire_i=ioshire_i, af_skip_i=U1((s1_rq.replay != 0 and s1_rq.misaligned_2nd == 0 and s1_valid) or s1_co_mr_skip_pma), `req_data_i.paddr`=s1_phys_addr, `req_data_i.typ`=s1_rq.typ, `req_data_i.amo`=U1(s1_is_amo), `req_data_i.write`=U1(s1_is_write), `req_data_i.mem_global`=s1_rq.mem_global, `req_data_i.ts_tl_co`=U1(s1_pma_ts_tl_co), `mprot_i.enable_secure_memory`=s1_mprot_i.enable_secure_memory, `mprot_i.dram_size`=s1_mprot_i.dram_size, `mprot_i.disable_osbox_access`=s1_mprot_i.disable_osbox_access, `mprot_i.disable_pcie_access`=s1_mprot_i.disable_pcie_access, `mprot_i.io_access_mode`=s1_mprot_i.io_access_mode, valid_addr_i=U1(not s1_tlb_wait and u_tlb_array.resp_data_o.xcpt_ld == 0 and u_tlb_array.resp_data_o.xcpt_st == 0), `vm_status_i.prv`=s1_vm_status.prv, `vm_status_i.mprv`=s1_vm_status.mprv, `vm_status_i.mpp`=s1_vm_status.mpp, `vm_status_i.sum`=s1_vm_status.sum, `vm_status_i.mxr`=s1_vm_status.mxr, `vm_status_i.debug`=s1_vm_status.debug)
+  s1_tlb_wait = u_tlb_array.resp_data_o.miss != 0 or u_tlb_array.resp_data_o.fill_pending != 0
+  const s1_tlb_fail = u_tlb_array.resp_data_o.xcpt_ld != 0 or u_tlb_array.resp_data_o.xcpt_st != 0 or u_tlb_array.resp_data_o.access_fault != 0 or u_pma_unit.resp_data_o.access_fault != 0
+  s1_clk_en = s1_md_read_en or s1_da_read_en or s1_reduce_send_inst or s1_reduce_op_inst or s1_wb_da_valid
+  const s1_phys_addr_set:U4 = set_correct(mode=dcache_cfg_mode, set=s1_phys_addr#[6..<10], thread_id=s1_rq.dest_thread)
+
+  // A way hits when its stored tag matches the physical tag and its metadata is valid.
+  mut s1_tag_match:U4 = 0
+  for w in 0..<4 {
+    const way_meta:U35 = u_metadata_array.s1_read_resp_o#[(3 - w)*35..<(4 - w)*35]
+    s1_tag_match#[w] = U1(s1_phys_addr_tag == way_meta#[0..<33] and u_metadata_array.s1_read_resp_valid_o#[w] != 0)
+  }
+  const s1_read_way:U2 = way_encode(s1_tag_match)
+
+  // Access size minus one, in bytes (a packed-single access covers up to the highest enabled lane).
+  mut s1_access_size:U7 = 3
+  if type_is_byte(s1_rq.typ) {
+    s1_access_size = 0
+  } elif type_is_hword(s1_rq.typ) {
+    s1_access_size = 1
+  } elif type_is_word(s1_rq.typ) {
+    s1_access_size = 3
+  } elif type_is_dword(s1_rq.typ) {
+    s1_access_size = 7
+  } elif s1_rq.typ == minion_dcache_pkg.DcTypePs {
+    for i in 0..<8 {
+      if s1_rq.ps_mask#[i] != 0 {
+        s1_access_size = 4*i + 3
+      }
+    }
+  }
+  const s1_access_last_byte:U7 = (s1_rq.addr#[0..<6] + s1_access_size)#[0..<7]
+
+  // Misaligned classes: 1 crosses the 64B line (page-split candidate), 2 and 3 cross the 32B block, 4 spans two banks,
+  // 5 is a plain unaligned access that only faults on uncached memory.
+  const s1_crosses_block = s1_rq.addr#[5] != s1_access_last_byte#[5]
+  mut s1_unaligned = false
+  for k in 1..=5 {
+    if s1_access_size == (1 << k) - 1 and s1_rq.addr#[0..<k] != 0 {
+      s1_unaligned = true
+    }
+  }
+  mut s1_misaligned_case_1 = false
+  mut s1_misaligned_case_2 = false
+  mut s1_misaligned_case_3 = false
+  mut s1_misaligned_case_4 = false
+  mut s1_misaligned_case_5 = false
+  if s1_rq.misaligned_2nd == 0 and not s1_is_msg and not s1_is_gsc32 {
+    if s1_access_last_byte#[6] != 0 {
+      s1_misaligned_case_1 = true
+    } elif s1_crosses_block and s1_rq.typ == minion_dcache_pkg.DcTypePs and s1_rq.addr#[0..<3] != 0 {
+      s1_misaligned_case_2 = true
+    } elif s1_crosses_block {
+      s1_misaligned_case_3 = true
+    } elif (s1_access_size#[0..<4] + s1_rq.addr#[0..<3])#[0..<4] > 7 and s1_rq.typ != minion_dcache_pkg.DcTypePs {
+      s1_misaligned_case_4 = true
+    } elif s1_unaligned {
+      s1_misaligned_case_5 = true
+    }
+  }
+  const s1_req_size_128b = s1_misaligned_case_4 or s1_rq.misaligned_2nd != 0
+  const s1_req_size_256b = s1_rq.typ == minion_dcache_pkg.DcTypePs
+
+  // ---- s1: data-array read request per bank ------------------------------------------------------------
+  // Four 14-bit bank requests {valid_l, valid_h, way:2, addr:10}, bank 0 in the top bits. An access reads the
+  // addressed bank, the next one for a bank-crossing access (the previous bank of lane k), or all of them for 256B.
+  const s1_da_bank:U2 = (s1_da_read_req#[0..<10] >> minion_dcache_pkg.DcacheBankSelLsb)#[0..<2]
+  mut s1_da_read_req_hit:U56 = 0
+  for k in 0..<4 {
+    mut lane:U14 = s1_da_read_req
+    if cmd_is_gsc32(s1_rq.cmd) {
+      lane#[13] = U1(s1_da_read_en and s1_gather32_en#[k] != 0)
+    } else {
+      lane#[13] = U1(s1_da_read_en and (s1_da_bank == k or (s1_da_bank == (k + 3)%4 and s1_req_size_128b) or s1_req_size_256b))
+    }
+    lane#[12] = lane#[13]
+    // Second block of a block-crossing access: fetch the other 32B block of the banks above the first one.
+    if k < s1_da_bank and s1_misaligned_case_3 and s1_valid {
+      lane#[5] = ~lane#[5]
+      lane#[13] = 1
+      lane#[12] = 1
+    }
+    lane#[10..<12] = s1_read_way
+    s1_da_read_req_hit#[(3 - k)*14..<(4 - k)*14] = lane
+  }
+
+  // ---- s1: exceptions ------------------------------------------------------------------------------------
+  // A PMA fault on the second half of a misaligned replay is a bus error instead of an access fault.
+  const s1_pma_access_fault = u_pma_unit.resp_data_o.access_fault != 0 and s1_rq.misaligned_2nd == 0 and s1_valid_to_tlb
+  const s1_pma_bus_err = u_pma_unit.resp_data_o.access_fault != 0 and s1_rq.misaligned_2nd != 0 and s1_valid_to_tlb
+  const s1_translation_fault = s1_pma_access_fault or u_tlb_array.resp_data_o.access_fault != 0
+
+  // Misaligned access to uncached memory (aligned means: naturally aligned, or 32B aligned for packed single).
+  const s1_aligned_ok = type_is_byte(s1_rq.typ) or (type_is_hword(s1_rq.typ) and s1_rq.addr#[0] == 0) or (type_is_word(s1_rq.typ) and s1_rq.addr#[0..<2] == 0) or (type_is_dword(s1_rq.typ) and s1_rq.addr#[0..<3] == 0) or (s1_rq.typ == minion_dcache_pkg.DcTypePs and s1_rq.addr#[0..<5] == 0)
+  const s1_mf_xcpt = not (u_pma_unit.resp_data_o.cacheable != 0 and not s1_is_amo and not s1_is_msg and not s1_is_bypass and bypass_dcache_i == 0) and not s1_aligned_ok
+
+  // An access that crosses the end of a page is a fault when translation is on.
+  mut s1_access_is_page_split = false
+  if s1_misaligned_case_1 {
+    if vmspagesize_i == minion_pkg.tlb_entry_type_4K {
+      s1_access_is_page_split = s1_rq.addr#[6..<12] == 63
+    } elif vmspagesize_i == minion_pkg.tlb_entry_type_2M {
+      s1_access_is_page_split = s1_rq.addr#[6..<21] == 0x7fff
+    } elif vmspagesize_i == minion_pkg.tlb_entry_type_1G {
+      s1_access_is_page_split = s1_rq.addr#[6..<30] == 0xffffff
+    }
+  }
+  const s1_load_like = s1_is_read_no_amo or cmd_is_prefetch(s1_rq.cmd)
+  const s1_not_cache_op = s1_rq.cache_op == 0
+  const s1_xcpt_pf_ld = s1_load_like and u_tlb_array.resp_data_o.xcpt_ld != 0 and s1_not_cache_op
+  const s1_xcpt_pf_st = s1_is_store and u_tlb_array.resp_data_o.xcpt_st != 0 and s1_not_cache_op
+  const s1_xcpt_af_ld = (s1_load_like and s1_translation_fault and s1_not_cache_op) or (s1_is_read_no_amo and s1_mf_xcpt)
+  const s1_xcpt_af_st = (s1_is_store and s1_translation_fault and s1_not_cache_op) or (s1_is_write and s1_mf_xcpt)
+  const s1_xcpt_ps_ld = s1_is_read_no_amo and s1_access_is_page_split and u_tlb_array.vm_enabled_o != 0
+  const s1_xcpt_ps_st = s1_is_write and s1_access_is_page_split and u_tlb_array.vm_enabled_o != 0 and not s1_mf_xcpt
+  // Exception word, one bit per cause, lowest bit ps_st (the order of the s1_core_xcpt_o bundle, reversed).
+  const xcpt_none:U1 = 0
+  const s1_xcpt_raw:U8 = (U1(s1_xcpt_ps_st), U1(s1_xcpt_ps_ld), U1(s1_xcpt_af_st), U1(s1_xcpt_af_ld), xcpt_none, xcpt_none, U1(s1_xcpt_pf_st), U1(s1_xcpt_pf_ld))#[..]
+  const s1_xcpt_walk:U8 = if s1_tlb_wait { 0 } else { s1_xcpt_raw }
+  const s1_xcpt_no_kill:U8 = if s1_valid { s1_xcpt_walk } else { 0 }
+  const s1_xcpt:U8 = if s1_valid and s1_core_kill_i == 0 { s1_xcpt_walk } else { 0 }
+  const s1_has_xcpt_no_kill = s1_xcpt_no_kill != 0
+  const s1_has_xcpt = s1_xcpt != 0
+
+  const s1_valid_masked = s1_valid and (s1_core_kill_i == 0 or s1_rq.replay != 0 or s1_rq.cache_op != 0) and not s1_has_xcpt and not s1_pma_bus_err
+  const s1_valid_to_s2 = s1_valid_masked and u_tlb_array.resp_data_o.miss == 0 and (s1_not_cache_op or not s1_tlb_fail)
+
+  // A TLB miss flushes the thread's younger requests; gather/scatter progress is saved when it interrupts one.
+  mut s1_tlb_flush_pipeline_m:U2 = 0
+  if s1_valid_to_tlb and u_tlb_array.resp_data_o.miss != 0 and s1_rq.vm_sel == minion_dcache_pkg.DcacheVmSelIp {
+    s1_tlb_flush_pipeline_m#[s1_rq.dest_thread] = 1
+  }
+  s1_tlb_flush_pipeline = s1_tlb_flush_pipeline_m
+  const s1_gsc_lane = type_is_gsc(s1_rq.typ) and not cmd_is_gsc32(s1_rq.cmd) and s1_rq.vm_sel == minion_dcache_pkg.DcacheVmSelIp
+  const s1_save_progress = ((s1_valid_to_tlb and u_tlb_array.resp_data_o.miss != 0) or s1_has_xcpt) and s1_gsc_lane
+  const s0_clear_progress = s0_core_req_is_valid_gsc and s0_rq.gsc_cnt == 7
+
+  // ---- s1: nacks and the request handed to s2 ------------------------------------------------------------------
+  const s1_read_to_x0 = s1_is_read and s1_rq.dest_fp == 0 and s1_rq.dest_addr == 0
+  const s1_nack_co_collide = s1_rq.set == s1_co_nack_set_value and s1_co_nack_set_valid
+  const s1_nack_vpu_rf_write = VpuEn != 0 and s1_is_read and s1_rq.dest_fp != 0 and s1_vpu_ctrl_i.tfma_rf_write != 0
+  const s1_reg_nack = (s1_valid_to_s2 and s1_rq.buf_alloc != 0 and (s1_mh_force_ba_rptr or s1_re_ba_read_en_spec)) or (VpuEn != 0 and s1_valid_to_s2 and s1_vpu_ctrl_i.scp_req.read_en != 0 and not s1_is_msg and not s1_is_amo and not s1_is_bypass) or (s1_valid_to_s2 and s1_nack_co_collide and not s1_is_msg and not s1_is_amo and not s1_is_bypass) or (s1_valid_to_s2 and s1_nack_vpu_rf_write)
+
+  // Replay-queue bookkeeping of the request leaving s1.
+  const s1_rq_push = s1_valid_to_s2 and s1_rq.replay == 0
+  const s1_rq_rearm = s1_valid_to_s2 and s1_rq.replay != 0
+
+  const s1_req_addr_to_s2:U48 = if s1_has_xcpt or s1_rq.phys != 0 { s1_rq.addr#[0..<48] } else { s1_phys_addr#[0..<40] }
+  mut s1_req_to_s2_rq = rq_unpack(s1_req_pre_addr)
+  s1_req_to_s2_rq.addr = 0
+  s1_req_to_s2_rq.dest_thread = s1_req_thread_id
+  s1_req_to_s2_rq.phys = U1(s1_rq.phys != 0 or u_tlb_array.resp_data_o.miss == 0)
+  if not s1_req_force_set {
+    s1_req_to_s2_rq.set = set_correct(mode=dcache_cfg_mode, set=s1_req_addr_to_s2#[6..<10], thread_id=s1_rq.dest_thread)
+  }
+  s1_req_to_s2_rq.data = if (s1_rq.replay == 0 or s1_reduce_send_inst) and not s1_reduce_op_inst { s1_core_store_data_i }
+    else { s1_ba_data }
+  s1_req_to_s2_rq.misaligned = U1((s1_misaligned_case_1 or s1_misaligned_case_2 or s1_misaligned_case_3) and s1_rq.misaligned_2nd == 0)
+  s1_req_to_s2_rq.cacheable = U1(u_pma_unit.resp_data_o.cacheable != 0 and not s1_is_amo and not s1_is_msg and not s1_is_bypass and bypass_dcache_i == 0)
+  // chunk_read: which banks the access reads (valid_l or valid_h of each bank request).
+  mut s1_chunk_read:U4 = 0
+  for k in 0..<4 {
+    const bank_req:U14 = s1_da_read_req_hit#[(3 - k)*14..<(4 - k)*14]
+    s1_chunk_read#[k] = U1(bank_req#[13] != 0 or bank_req#[12] != 0)
+  }
+  s1_req_to_s2_rq.chunk_read = s1_chunk_read
+  const s1_req_to_s2:U406 = rq_pack(s1_req_to_s2_rq)
+  // The tag array and the lock state are read with the set that goes to s2.
+  const s1_hlocked_ways:U4 = (hlock_state >> (s1_req_to_s2_rq.set*4))#[0..<4]
+  const s1_slocked_ways:U4 = (slock_state >> (s1_req_to_s2_rq.set*4))#[0..<4]
+
+  // ---- s1: data-array read mux, load enables ----------------------------------------------------------------
+  // Priority: VPU scratchpad read, tensor-store scratchpad read, writeback unit, normal access, debug read;
+  // with no requester the previous selection is held (and the array read is disabled).
+  const s1_vpu_scp_read = VpuEn != 0 and s1_vpu_ctrl_i.scp_req.read_en != 0
+  mut s1_da_read_mux_sel:U3 = s1_da_read_mux_sel_prev
+  mut s1_da_read_en_final = false
+  if s1_vpu_scp_read {
+    s1_da_read_mux_sel = 2
+    s1_da_read_en_final = true
+  } elif VpuEn != 0 and ts_scp_read and s1_reduce_send_inst {
+    s1_da_read_mux_sel = 3
+    s1_da_read_en_final = true
+  } elif s1_wb_da_valid {
+    s1_da_read_mux_sel = 1
+    s1_da_read_en_final = true
+  } elif s1_da_read_en {
+    s1_da_read_mux_sel = 0
+    s1_da_read_en_final = true
+  } elif DebugApbEn != 0 and dbg_da_read_en {
+    s1_da_read_mux_sel = 4
+    s1_da_read_en_final = true
+  }
+  if s1_da_read_en_final {
+    s1_da_read_mux_sel_prev = s1_da_read_mux_sel
+  }
+
+  const bank_valid_both:U2 = 3
+  const dbg_da_read_lane_addr:U10 = dbg_da_read_addr#[0..<7] << 3
+  mut s1_da_read_req_mux:U56 = s1_da_read_req_hit
+  mut dbg_da_read_accept_next = false
+  for k in 0..<4 {
+    if s1_da_read_mux_sel == 1 {
+      s1_da_read_req_mux#[k*14..<(k + 1)*14] = s1_wb_da_req
+    } elif s1_da_read_mux_sel == 3 {
+      s1_da_read_req_mux#[k*14..<(k + 1)*14] = (ts_scp_read_addr#[0..<10], ts_scp_read_way, bank_valid_both)#[..]
+    } elif s1_da_read_mux_sel == 2 {
+      // The scratchpad access covers 256B, 64B (the bank pair of the address) or the one 32B chunk the address names.
+      const scp_bank = (s1_vpu_ctrl_i.scp_req.addr >> minion_dcache_pkg.DcacheBankSelLsb)#[0..<2]
+      const scp_covers = s1_vpu_ctrl_i.scp_req.size256 != 0 or (s1_vpu_ctrl_i.scp_req.size64 != 0 and scp_bank == 3 - k)
+      const scp_valid:U2 = (U1(scp_covers or s1_vpu_ctrl_i.scp_req.addr#[2..<5] == (3 - k)*2 + 1), U1(scp_covers or s1_vpu_ctrl_i.scp_req.addr#[2..<5] == (3 - k)*2))#[..]
+      s1_da_read_req_mux#[k*14..<(k + 1)*14] = (s1_vpu_ctrl_i.scp_req.addr#[0..<10], s1_vpu_ctrl_i.scp_req.way, scp_valid)#[..]
+    } elif s1_da_read_mux_sel == 4 {
+      s1_da_read_req_mux#[k*14..<(k + 1)*14] = (dbg_da_read_lane_addr, dbg_da_read_addr#[7..<9], bank_valid_both)#[..]
+    }
+  }
+  if s1_da_read_mux_sel == 4 {
+    dbg_da_read_accept_next = true
+  }
+  mut s1_da_load_data_en:U4 = 0
+  for k in 0..<4 {
+    s1_da_load_data_en#[k] = U1(s1_da_read_req_mux#[(3 - k)*14 + 13] != 0 or s1_da_read_req_mux#[(3 - k)*14 + 12] != 0)
+  }
+  // 32-bit scratchpad read lanes of the VPU access.
+  mut s1_vpu_scp_read_en:U8 = 0
+  for j in 0..<8 {
+    s1_vpu_scp_read_en#[j] = U1(s1_vpu_scp_read and (s1_vpu_ctrl_i.scp_req.size256 != 0 or (s1_vpu_ctrl_i.scp_req.size64 != 0 and s1_vpu_ctrl_i.scp_req.addr#[3] == (j/2)%2) or s1_vpu_ctrl_i.scp_req.addr#[2..<5] == j))
+  }
+
+  const u_data_array = minion_dcache_data_array::[name=u_data_array](clk_i=clk_i, s1_read_valid_i=U1(s1_da_read_en_final and mem_ctrl_override_i.e0 == 0), s1_read_req_i=s1_da_read_req_mux, s3_write_valid_i=U1(s3_da_write_en), s4_write_valid_i=U1(s4_da_write_en and mem_ctrl_override_i.e1 == 0), s4_write_req_i=s4_da_write_data, ram_cfg_i=(const deep_sleep=0, const ra=0, const rm=0, const rme=0, const shut_down=0, const test_en=0, const wa=0, const wpulse=0))
+  // The LRU write set is the s2 request's set (the Verilog's `s2_req.set`); the machine-emitted tree read the not yet
+  // assigned `s2_req` here, i.e. an unknown (livehd_bugs L3u1_04).
+  const u_lru_array = minion_dcache_lru_array::[name=u_lru_array](clk_i=clk_i, rst_ni=rst_ni, read_set_i=s1_phys_addr_set, write_en_i=U1(s2_lru_update), write_set_i=s2_rq.set, write_data_i=s2_lru_data_up)
+  const s1_lru_data_byp:U16 = if s2_lru_update and s2_rq.set == s1_phys_addr_set { s2_lru_data_up } else { u_lru_array }
+
+  // Victim way: the pseudo-LRU victim among the ways that are neither locked off nor privileged;
+  // if all of those are excluded, the one that ignores only the locked-off ways.
+  const way_dis:U4 = s1_hlocked_ways
+  const way_prio:U4 = s1_slocked_ways
+  const lru_victim_strict:U4 = lru_pick(lru_touch(lru=s1_lru_data_byp, ways=way_dis | way_prio))
+  const lru_victim_loose:U4 = lru_pick(lru_touch(lru=s1_lru_data_byp, ways=way_dis))
+  const dcache_lru_victim:U4 = if ((lru_victim_strict & ~way_dis) & ~way_prio) != 0 { lru_victim_strict } else { lru_victim_loose }
+
+  // ---- s1 -> s2 registers -----------------------------------------------------------------------------------------
+  s2_valid = s1_valid_to_s2
+  if s1_valid {
+    s2_reg_nack = s1_reg_nack
+    s2_has_xcpt_addr = s1_has_xcpt
+  }
+  // No reset on this one: hold it while rst_ni is low.
+  if rst_ni != 0 and s1_valid {
+    s2_nack_vpu_rf_write = s1_nack_vpu_rf_write
+  }
+  s1_clear_progress = s0_clear_progress and not s1_save_progress
+  s2_clear_progress = s1_clear_progress and s1_core_kill_i == 0
+  s2_save_progress = s1_save_progress and s1_core_kill_i == 0 and not s2_save_progress
+  if s1_valid_to_tlb or s2_core_flush_pipeline_o != 0 {
+    s2_core_flush_pipeline_o = U1(s1_tlb_flush_pipeline != 0)
+  }
+  if s1_clk_en {
+    s2_tag_match = s1_tag_match
+    s2_req_pre_addr = s1_req_to_s2
+    s2_lru_data = s1_lru_data_byp
+    s2_misaligned = s1_misaligned_case_1 or s1_misaligned_case_2
+    s2_misaligned_case_3 = s1_misaligned_case_3
+    s2_da_load_data_en = s1_da_load_data_en
+    s2_replace_way_en = dcache_lru_victim
+    s2_is_read = s1_is_read
+    s2_is_write = s1_is_write
+    s2_is_amo = s1_is_amo
+    s2_gsc32_indices = s1_to_s2_gsc32_indices
+  }
+  if s1_clk_en or s1_translate_only_addr_load or s1_has_xcpt_no_kill {
+    s2_req_addr = s1_req_addr_to_s2
+    s2_is_msg = s1_is_msg
+    s2_is_bypass = s1_is_bypass
+  }
+  if s1_vpu_scp_read {
+    s2_vpu_scp_read_en = s1_vpu_scp_read_en
+  }
+  s2_wb_da_valid = s1_wb_da_valid
+  if s1_clk_en {
+    for w in 0..<4 {
+      const way_meta:U35 = u_metadata_array.s1_read_resp_o#[(3 - w)*35..<(4 - w)*35]
+      if u_metadata_array.s1_read_resp_valid_o#[w] != 0 {
+        `s2_meta_read.coh_state`[w] = way_meta#[33..<35]
+        `s2_meta_read.tag`[w] = way_meta#[0..<33]
+      } else {
+        `s2_meta_read.coh_state`[w] = minion_dcache_pkg.StateInvalid
+        `s2_meta_read.tag`[w] = s1_invalid_way_tag
+      }
+    }
+  }
+
+  // ---- s2: tag hit, nacks, miss request -----------------------------------------------------------------------
+  const s2_valid_qual = s2_valid and (s2_core_kill_i == 0 or s2_rq.replay != 0 or s2_rq.cache_op != 0)
+
+  // A hit needs a tag match that is not masked by a message/amo/bypass access (or bypass_dcache_i).
+  const s2_tag_match_qual:U4 = if s2_is_msg or s2_is_amo or s2_is_bypass or bypass_dcache_i != 0 { 0 } else { s2_tag_match }
+  const s2_tag_match_any = s2_tag_match_qual != 0
+  mut s2_way_hit_state:U2 = minion_dcache_pkg.StateInvalid
+  for w in 0..<4 {
+    if s2_tag_match_qual#[w] != 0 {
+      s2_way_hit_state = `s2_meta_read.coh_state`[w]
+    }
+  }
+  // Reads need Shared, writes/LR/prefetch-for-write need Exclusive, and writes need to be Modified already.
+  const s2_write_class = cmd_is_store(s2_rq.cmd) or s2_rq.cmd == minion_dcache_pkg.DcCmdPfw or s2_rq.cmd == minion_dcache_pkg.DcCmdXlr
+  const s2_state_ok = (s2_is_read and s2_way_hit_state >= minion_dcache_pkg.StateShared) or (s2_rq.cmd == minion_dcache_pkg.DcCmdPfr and s2_way_hit_state >= minion_dcache_pkg.StateShared) or (s2_write_class and s2_way_hit_state >= minion_dcache_pkg.StateExclusive)
+  const s2_hit = s2_tag_match_any and s2_state_ok and (not s2_is_write or s2_way_hit_state == minion_dcache_pkg.StateModified)
+  const s2_nack_inflight = s2_hit and s2_mh_match_miss_line
+  const s2_nack_miss = not s2_hit and not s2_mh_req_ready and s2_rq.uc_load_2nd == 0
+  const s2_nack_pre_misaligned_miss = s2_reg_nack or s2_nack_inflight or s2_nack_rq_conflict
+  const s2_nack_pre_misaligned = s2_nack_pre_misaligned_miss or s2_nack_miss
+  const s2_nack_misaligned = not s2_nack_pre_misaligned and s2_misaligned and s2_rq.misaligned_2nd == 0 and s2_hit
+  const s2_nack = s2_nack_pre_misaligned or s2_nack_misaligned
+  const s2_valid_masked = s2_valid_qual and not s2_nack_pre_misaligned
+
+  // Metadata of the way chosen for replacement.
+  mut s2_repl_coh:U2 = 0
+  mut s2_repl_tag:U33 = 0
+  for w in 0..<4 {
+    if s2_replace_way_en#[w] != 0 {
+      s2_repl_coh = `s2_meta_read.coh_state`[w]
+      s2_repl_tag = `s2_meta_read.tag`[w]
+    }
+  }
+  // Request to the miss handler: the matching way on a tag hit, else the victim way.
+  const s2_mh_req_valid_reg = s2_valid_qual and not s2_nack_pre_misaligned_miss and not s2_hit and (cmd_is_prefetch(s2_rq.cmd) or s2_is_read or s2_is_write) and not s2_is_msg and s2_rq.uc_load_2nd == 0 and not (s2_rq.replay != 0 and s2_rq.miss_fill_ok == 0)
+  const s2_mh_req_valid = s2_mh_req_valid_reg or (s2_valid_qual and s2_is_msg and not s2_nack_rq_conflict and s2_rq.uc_load_2nd == 0)
+  const s2_mh_way_en:U4 = if s2_tag_match_any { s2_tag_match_qual } else { s2_replace_way_en }
+  const s2_mh_old_coh:U2 = if s2_tag_match_any { s2_way_hit_state } else { s2_repl_coh }
+  const s2_mh_buf_id:U3 = if s2_rq.replay == 0 { s2_ba_write_entry } else { s2_rq.buf_id }
+
+  // LRU state after touching the way that is filled/hit.
+  s2_lru_data_up = lru_touch(lru=s2_lru_data, ways=s2_mh_way_en)
+  s2_lru_update = s2_valid_masked and (s2_hit or not s2_mh_match_miss_line) and s2_rq.cacheable != 0
+
+  // ---- s1/s2: buffer-array and replay-queue bookkeeping --------------------------------------------------------
+  const id_rq_replay_bid_qual = id_rq_replay_bid and wb_dcache_fp_toint_i == 0 and not (VpuEn != 0 and vpu_scp_bid_2)
+  const s1_ba_rptr:U3 = if s1_mh_force_ba_rptr { s1_mh_ba_rptr } elif s1_re_ba_read_en_spec { s1_re_ba_read_addr } else { s1_rq.buf_id }
+  const s1_reduce_dealloc_req = VpuEn != 0 and ((re_l2_evict_ready and re_l2_evict_valid and s1_re_ba_read_en) or (ts_l2_evict_ready and ts_l2_evict_valid and s1_re_ba_read_en) or (s1_reduce_op_inst and s1_re_ba_read_en))
+  const s2_store_misaligned_rearm = s2_valid_to_s3 and s2_is_write and s2_nack_misaligned
+  // The request leaves the replay queue (or is re-armed) when it was handled in s2 or by a bypass/uncached path.
+  const s2_rq_push_cancel = (s2_valid_to_s3 and not s2_store_misaligned_rearm) or (s2_mh_can_accept_uc and s2_mh_req_valid and s2_is_write and not s2_is_amo) or (cmd_is_prefetch(s2_rq.cmd) and not s2_nack_pre_misaligned) or (s2_is_msg and s2_is_write and not s2_nack_miss and not s2_nack_rq_conflict) or (s2_valid_masked and s2_is_bypass and s2_is_write) or (s2_valid_masked and s2_rq.uc_load_2nd != 0 and s2_rq.uc_load_ok == 0) or (s2_valid_masked and s2_rq.replay != 0 and s2_rq.miss_fill_ok == 0)
+  const s2_rq_push = s2_valid_qual and s2_rq.replay == 0 and not s2_rq_push_cancel
+  const s2_rq_renack = s2_valid_qual and s2_rq.replay != 0 and not s2_rq_push_cancel
+  const s2_rq_dealloc = s2_valid_qual and s2_rq.replay != 0 and s2_rq_push_cancel
+  const s2_conf_miss_accepted:U2 = if s2_nack_vpu_rf_write { 0 } else { s2_mh_req_accepted }
+  const s2_conf_miss_assigned:U2 = if s2_nack_vpu_rf_write { 0 } else { s2_mh_req_assigned }
+  const s2_uc_load_1st = s2_mh_req_valid and s2_is_read and s2_mh_can_accept_uc and s2_rq.uc_load_2nd == 0
+  const s2_uc_load_ok:U1 = if s2_rq.replay != 0 { s2_rq.uc_load_ok } else { 0 }
+  const s2_miss_fill_ok:U1 = if s2_rq.replay != 0 { s2_rq.miss_fill_ok } else { 1 }
+  const s2_ba_nack_needed = s2_is_write
+  const s2_ba_write_needed_core = (s2_valid_qual and s2_rq.replay == 0 and s2_nack and s2_ba_nack_needed) or (s2_valid_qual and s2_rq.replay == 0 and s2_misaligned) or (s2_valid_qual and s2_rq.replay == 0 and s2_is_read and s2_rq.cacheable == 0) or (s2_mh_req_valid and s2_rq.replay == 0 and s2_is_write) or (s2_valid_qual and s2_rq.replay == 0 and s2_is_msg)
+  const s2_ba_write_needed = s2_ba_write_needed_core or s2_re_ba_write_needed
+  const s2_ba_write_en = (s2_valid_qual and s2_rq.replay == 0 and s2_nack and s2_ba_nack_needed) or (s2_valid_qual and s2_nack_misaligned) or (s2_mh_req_valid and s2_rq.replay == 0 and s2_is_write) or (s2_valid_qual and s2_rq.replay == 0 and s2_is_write and s2_is_msg) or s2_reduce_send_inst
+  const s2_ba_dealloc = (s2_valid_to_s3 or (s2_valid_masked and s2_rq.uc_load_2nd != 0) or (s2_valid_masked and s2_rq.replay != 0 and s2_rq.miss_fill_ok == 0)) and not s2_store_misaligned_rearm and s2_rq.buf_alloc != 0
+  const s2_ba_write_replay = s2_rq.replay != 0 and not s2_re_ba_write_needed
+  // Buffer-array writes from the L2 response (uncached load data and reduce data).
+  const s3_ba_write_en_uc = l2_resp_fifo_pop and l2_resp_is_for_mh_uc_ok
+  const s3_ba_write_en_msg = l2_resp_fifo_pop and l2_resp_is_reduce_data
+  const s3_ba_write_en_ext = s3_ba_write_en_uc or s3_ba_write_en_msg
+  const s3_ba_write_entry_ext:U3 = if s3_ba_write_en_uc { s3_mh_ba_wptr } else { s3_re_ba_write_addr }
+  const rq_uc_load_fill = l2_resp_fifo_pop and l2_resp_is_for_mh_uc
+
+  // ---- s2 -> s3 ---------------------------------------------------------------------------------------------------
+  s2_valid_to_s3 = s2_valid_masked and (s2_hit or (s2_rq.uc_load_2nd != 0 and s2_rq.uc_load_ok != 0)) and (s2_is_write or not s2_nack_misaligned)
+  const s2_to_s3_en = (s2_valid_masked and (s2_hit or s2_rq.uc_load_2nd != 0)) or s2_ba_write_en
+  const s2_store_data_en = (s2_valid_masked and s2_hit and s2_is_write) or (s2_valid_masked and s2_rq.uc_load_2nd != 0) or (s2_ba_write_en and s2_is_write) or (s2_valid_masked and s2_hit and s2_is_read and s2_rq.misaligned_2nd != 0) or s2_reduce_send_inst or s2_reduce_op_inst
+
+  // Load data lanes the s3 data registers capture: a hit (or writeback read) of an enabled bank, or the debug read.
+  const s2_data:U256 = u_data_array
+  const s2_load_hit:Bool = (s2_valid_masked and s2_hit) or s2_wb_da_valid
+  mut s2_to_s3_en_load_data:U4 = 0
+  for k in 0..<4 {
+    s2_to_s3_en_load_data#[k] = U1((s2_load_hit and s2_da_load_data_en#[k] != 0) or (dbg_da_read_addr#[0..<2] == k and dbg_da_read_accept))
+  }
+
+  // Store data: shifted onto the addressed bytes (or kept for amo/reduce), or the tensor-store column copy.
+  const s2_store_dup128:U256 = (s2_rq.data#[0..<128], s2_rq.data#[0..<128])#[..]
+  const s2_data_dup128:U256 = (s2_data#[0..<128], s2_data#[0..<128])#[..]
+  mut s2_to_s3_store_data:U256 = s2_rq.data
+  if not s2_reduce_send_inst {
+    if s2_reduce_op_inst {
+      s2_to_s3_store_data = s2_rq.data
+    } elif s2_rq.uc_load_2nd != 0 {
+      s2_to_s3_store_data = s2_rq.data >> (s2_rq.addr#[0..<5] << 3)
+    } elif s2_rq.cacheable == 0 and s2_is_write and not s2_is_msg and not s2_is_amo {
+      s2_to_s3_store_data = (s2_rq.data << (s2_rq.addr#[0..<5] << 3))#[0..<256]
+    } elif s2_is_amo {
+      if type_is_byte(s2_rq.typ) {
+        s2_to_s3_store_data = s2_rq.data#[0..<8]
+      } elif type_is_hword(s2_rq.typ) {
+        s2_to_s3_store_data = s2_rq.data#[0..<16]
+      } elif type_is_word(s2_rq.typ) {
+        s2_to_s3_store_data = s2_rq.data#[0..<32]
+      } elif type_is_dword(s2_rq.typ) {
+        s2_to_s3_store_data = s2_rq.data#[0..<64]
+      }
+    }
+  } elif ts_scp_read {
+    s2_to_s3_store_data = if ts_col_size_is_128b { s2_data_dup128 } else { s2_data }
+  } else {
+    s2_to_s3_store_data = if ts_col_size_is_128b { s2_store_dup128 } else { s2_rq.data }
+  }
+
+  s3_valid = s2_valid_to_s3
+  s3_has_data = s2_valid_to_s3 and s2_is_read and not (s2_rq.dest_fp == 0 and s2_rq.dest_addr == 0)
+  if s2_to_s3_en or s2_has_xcpt_addr {
+    s3_req = s2_req
+  }
+  if s2_to_s3_en {
+    s3_way = s2_tag_match_qual
+    s3_store_bypass = s5_store_bypass
+    s3_misaligned_case_3 = s2_misaligned_case_3
+    s3_is_write = s2_is_write
+    for i in 0..<8 {
+      s3_gsc32_indices[i] = s2_gsc32_indices#[i*5..<(i + 1)*5]
+    }
+  }
+  if s2_store_data_en {
+    s3_store_data = s2_to_s3_store_data
+  }
+  if s2_valid_masked and s2_hit and s5_store_bypass != 0 {
+    s3_store_bypass_data = s5_store_bypass_data
+  }
+  // 32-bit lanes of the VPU scratchpad read data; the register clears on reset.
+  for j in 0..<8 {
+    if VpuEn != 0 and s2_vpu_scp_read_en#[j] != 0 {
+      s3_vpu_scp_data_o#[j*32..<(j + 1)*32] = s2_data#[j*32..<(j + 1)*32]
+    }
+  }
+  for k in 0..<4 {
+    if s2_to_s3_en_load_data#[k] != 0 {
+      s3_data[k] = s2_data#[k*64..<(k + 1)*64]
+    }
+  }
+
+  // Tensor-load 1 returns its data through the VPU scratchpad interface one cycle later.
+  const s3_vpu_scp_resp_fill_early = l2_resp_valid_int and l2_resp_is_for_tensor_1 and s4_tl1_tenb_ready_reg and not l2_resp_ready_blocked
+  s3_vpu_scp_resp_tmp___q#[5] = U1(s3_vpu_scp_resp_fill_early)
+  if VpuEn != 0 and s3_vpu_scp_resp_fill_early {
+    s3_vpu_tenb_data_o = l2_resp_int.data
+    s3_vpu_scp_resp_tmp___q#[0..<4] = s4_tl1_load_addr#[0..<4]
+    vpu_scp_return_cycle_1 = not vpu_scp_return_cycle_1
+  }
+  const tl1_tenb_written = s3_vpu_scp_resp_fill_early and vpu_scp_return_cycle_1
+
+  // ---- s3/s4: data-array writes ---------------------------------------------------------------------------------
+  const s4_tl0_load_ready = l2_fill_slot_avail and not l2_resp_valid_int
+  s3_da_write_en = (s3_valid and s3_is_write) or l2_resp_fifo_count_d != 0 or l2_resp_valid_int or s3_co_da_clear_en or s3_cfg_da_clear_en or s3_tl0_load_valid_pre or (DebugApbEn != 0 and dbg_da_write_en_early)
+  const s4_da_write_en_but_dbg = s4_valid or (l2_resp_valid_int and l2_da_write) or (s4_tl0_load_valid != 0 and s4_tl0_load_ready) or s4_co_da_clear_val or s4_cfg_da_clear_val
+  s4_da_write_en = s4_da_write_en_but_dbg or (DebugApbEn != 0 and dbg_da_write_en and not dbg_da_write_valid)
+
+  // Four 78-bit bank writes {valid_l, valid_h, way:2, addr:10, data:64}, bank 0 in the top bits.
+  // Source priority: the s4 store, a message-port write, an L2 fill, a tensor-load fill, the scratchpad-mode clear,
+  // the cache-op clear, and finally the debug write.
+  const s4_rq = rq_unpack(s4_req)
+  const s4_bank:U2 = s4_rq.addr#[3..<5]
+  mut s4_req_da_write_addr:U40 = 0
+  mut s4_block_addr:U4 = 0
+  for k in 0..<4 {
+    mut lane_addr:U10 = (s4_rq.addr#[0..<6], s4_rq.set)#[..]
+    if k < s4_bank and s4_misaligned_case_3 {
+      lane_addr#[5] = ~lane_addr#[5]
+    }
+    s4_req_da_write_addr#[k*10..<(k + 1)*10] = lane_addr
+    s4_block_addr#[k] = lane_addr#[5]
+  }
+  const s4_sel_msg = not s4_valid and l2_resp_int.opcode == minion_pkg.EtLinkRspMsgRcvData and l2_resp_is_port_data and l2_resp_valid_int
+  const s4_sel_fill = not s4_valid and not s4_sel_msg and l2_resp_valid_int and l2_da_write
+  const s4_sel_tl0 = not s4_valid and not s4_sel_msg and not s4_sel_fill and s4_tl0_load_valid != 0
+  const s4_sel_cfg_clear = not s4_valid and not s4_sel_msg and not s4_sel_fill and s4_tl0_load_valid == 0 and s4_cfg_da_clear_val
+  const s4_sel_co_clear = not s4_valid and not s4_sel_msg and not s4_sel_fill and s4_tl0_load_valid == 0 and not s4_cfg_da_clear_val and s4_co_da_clear_val
+  const s4_cfg_da_clear_rdy = s4_sel_cfg_clear
+  const s4_co_da_clear_rdy = s4_sel_co_clear
+  const s4_way_enc:U2 = way_encode(s4_way)
+  const msg_size = l2_resp_int.size
+  const msg_full_line = msg_size == minion_dcache_pkg.EtLinkLine or msg_size == minion_dcache_pkg.EtLinkHLine
+  mut s4_wr_data:U312 = 0
+  for k in 0..<4 {
+    mut lane_valid:U1 = 0
+    mut lane_valid_h:U1 = 0
+    mut lane_way:U2 = 0
+    mut lane_addr:U10 = 0
+    mut lane_data:U64 = 0
+    if s4_valid {
+      lane_valid = s4_rq.chunk_read#[k]
+      lane_valid_h = lane_valid
+      lane_way = s4_way_enc
+      lane_addr = s4_req_da_write_addr#[k*10..<(k + 1)*10]
+      lane_data = s4_rq.data#[k*64..<(k + 1)*64]
+    } elif s4_sel_msg {
+      // Message-port data: a line, a half line (to the banks the address names) or a double/quad word.
+      lane_valid = U1(msg_full_line or (msg_size == minion_dcache_pkg.EtLinkQWord and core_ctrl_i.msg_port_wr_addr#[4] == k/2) or core_ctrl_i.msg_port_wr_addr#[3..<5] == k)
+      lane_valid_h = lane_valid
+      lane_way = core_ctrl_i.msg_port_wr_way
+      lane_addr = core_ctrl_i.msg_port_wr_addr
+      lane_data = if msg_size == minion_dcache_pkg.EtLinkDWord { l2_resp_int.data#[0..<64] } elif msg_size == minion_dcache_pkg.EtLinkQWord { l2_resp_int.data#[(k%2)*64..<(k%2 + 1)*64] } else { l2_resp_int.data#[k*64..<(k + 1)*64] }
+    } elif s4_sel_fill {
+      lane_valid = 1
+      lane_valid_h = 1
+      lane_way = if l2_resp_is_for_tensor_0 { s4_tl0_load_way } else { s4_mh_refill_way }
+      lane_addr = if l2_resp_is_for_tensor_0 { s4_tl0_load_addr } else { s4_mh_refill_addr }
+      lane_data = l2_resp_int.data#[k*64..<(k + 1)*64]
+    } elif s4_sel_tl0 {
+      lane_valid = s4_tl0_load_valid#[k]
+      lane_valid_h = lane_valid
+      lane_way = s4_tl0_load_way
+      lane_addr = s4_tl0_load_addr
+      lane_data = s4_tl0_load_data#[k*64..<(k + 1)*64]
+    } elif s4_sel_cfg_clear {
+      lane_valid = 1
+      lane_valid_h = 1
+      lane_way = s4_cfg_da_clear_way
+      lane_addr = (s4_cfg_da_clear_set << 6) | (s4_cfg_da_clear_idx << 5)
+    } elif s4_sel_co_clear {
+      lane_valid = 1
+      lane_valid_h = 1
+      lane_way = s4_co_da_clear_way
+      lane_addr = (s4_co_da_clear_set << 6) | (s4_co_da_clear_idx << 5)
+    } else {
+      lane_valid = U1(dbg_da_write_en and dbg_da_write_addr#[0..<2] == k)
+      lane_valid_h = lane_valid
+      lane_way = dbg_da_write_addr#[7..<9]
+      lane_addr = dbg_da_write_addr#[0..<7] << 3
+      lane_data = dbg_da_write_data
+    }
+    s4_wr_data#[(3 - k)*78..<(4 - k)*78] = (lane_data, lane_addr, lane_way, lane_valid_h, lane_valid)#[..]
+  }
+  s4_da_write_data = s4_wr_data
+
+  if s4_valid and s1_valid {
+    s5_req = s4_req
+    s5_block_addr = s4_block_addr
+  }
+
+  // ---- s2: stores in flight that bypass the array ---------------------------------------------------------------
+  // The line the s2 load wants may be written by a younger store still in s3, s4 or s5; those bytes are forwarded,
+  // oldest first so the youngest wins.
+  const s3_rq_to_s4 = rq_unpack(s3_req_to_s4)
+  const s5_rq = rq_unpack(s5_req)
+  const s5_cl_addr_match_s3_s2 = s3_rq.addr#[6..<40] == s2_rq.addr#[6..<40]
+  const s5_cl_addr_match_s4_s2 = s4_rq.addr#[6..<40] == s2_rq.addr#[6..<40]
+  const s5_cl_addr_match_s5_s2 = s5_rq.addr#[6..<40] == s2_rq.addr#[6..<40]
+  // Block bit of the address each bank touches (the second half of a misaligned access toggles it).
+  const s2_bank:U2 = s2_rq.addr#[3..<5]
+  const s3_bank:U2 = s3_rq_to_s4.addr#[3..<5]
+  mut s2_block_addr:U4 = 0
+  mut s3_block_addr:U4 = 0
+  for k in 0..<4 {
+    s2_block_addr#[k] = s2_rq.addr#[5]
+    if k < s2_bank and s2_misaligned_case_3 {
+      s2_block_addr#[k] = ~s2_block_addr#[k]
+    }
+    s3_block_addr#[k] = s3_rq_to_s4.addr#[5]
+    if k < s3_bank and s3_misaligned_case_3 {
+      s3_block_addr#[k] = ~s3_block_addr#[k]
+    }
+  }
+  mut s5_store_bypass_m:U4 = 0
+  mut s5_store_bypass_data_m:U256 = s5_rq.data
+  for k in 0..<4 {
+    if s5_valid and s5_cl_addr_match_s5_s2 and s5_rq.chunk_read#[k] != 0 and s5_block_addr#[k] == s2_block_addr#[k] {
+      s5_store_bypass_m#[k] = 1
+    }
+    if s4_valid and s5_cl_addr_match_s4_s2 and s4_rq.chunk_read#[k] != 0 and s4_block_addr#[k] == s2_block_addr#[k] {
+      s5_store_bypass_m#[k] = 1
+      s5_store_bypass_data_m#[k*64..<(k + 1)*64] = s4_rq.data#[k*64..<(k + 1)*64]
+    }
+    if s3_valid and s3_is_write and not s3_sc_fail and s5_cl_addr_match_s3_s2 and s3_rq.chunk_read#[k] != 0 and s3_block_addr#[k] == s2_block_addr#[k] {
+      s5_store_bypass_m#[k] = 1
+      s5_store_bypass_data_m#[k*64..<(k + 1)*64] = s3_rq_to_s4.data#[k*64..<(k + 1)*64]
+    }
+  }
+  s5_store_bypass = s5_store_bypass_m
+  s5_store_bypass_data = s5_store_bypass_data_m
+
+  // Texture send is not implemented in this core: the sender (verilog minion_dcache_texsend) is a tie-off that
+  // is always idle and ready and never requests the L2 or the writeback unit.
+  const tx_idle = true
+  const tex_send_ready = true
+  const tx_l2_miss_valid = false
+  const tx_l2_miss_word:U86 = 0
+  const tx_wb_valid = false
+  const tx_wb_word:U50 = 0
+
+  // ---- s3: response to the core, ordering, idle ------------------------------------------------------------------
+  mut s3_resp_data:U256 = s3_load_data
+  s3_resp_data#[0] = s3_load_data#[0] | U1(s3_sc_fail)
+  const s3_resp_msb:U1 = s3_rq.addr_msb_err ^ s3_rq.addr#[47]
+  const s3_resp_addr:U49 = (s3_rq.addr#[0..<48], s3_resp_msb)#[..]
+  const s3_resp_typ:U4 = if s3_reduce_op_inst or s3_is_gather32 { minion_dcache_pkg.DcTypePs } else { s3_rq.typ }
+  const s3_resp_ps_mask:U8 = s3_rq.ps_mask | (if s3_reduce_op_inst { 0xff } else { 0 })
+
+  // Per thread: nothing of that thread in flight in s0..s4, its fence is ready and its replay queue empty.
+  mut s3_ordered:U2 = 0
+  for t in 0..<2 {
+    s3_ordered#[t] = U1(not (s0_valid_to_s1_ordered and s0_req_thread_id_ordered == t) and not (s1_valid and s1_rq.dest_thread == t) and not (s2_valid and s2_rq.dest_thread == t) and not (s3_valid and s3_rq.dest_thread == t) and not (s4_valid and s4_rq.dest_thread == t) and s2_mh_fence_rdy#[t] != 0 and s2_rq_empty#[t] != 0 and not dcache_cfg_stall)
+  }
+  const dcache_idle_common = not s0_valid_to_s1_ordered and not s1_valid and not s2_valid and not s3_valid and not s4_valid and s2_rq_empty == 3 and not tl0_working and not cacheop_busy and not cacheop_l2_busy and mh_idle and wb_ready and reduce_ready and tx_idle
+  dcache_idle = dcache_idle_common and not tl1_working
+  dcache_idle_excl_mode_o = U1(dcache_idle_common)
+
+  // ---- s0 pipe-slot arbitration -----------------------------------------------------------------------------------
+  // Requesters in priority order; the core's own gather/scatter, the reduce engine and the cache-op meta read
+  // take the s0 slot before any of them.
+  const id_dbg_nvpu_bid = id_dbg_bid and not vpu_scp_bid_2
+  const id_wb_da_nvpu_bid = id_wb_da_bid and not vpu_scp_bid_2
+  const id_free_of_core = s0_core_gsc_i == 0 and not re_pipe_used and not id_co_mr_bid
+  const id_dbg_grant = id_free_of_core and id_dbg_nvpu_bid
+  const id_wb_da_grant = id_free_of_core and not id_dbg_nvpu_bid and id_wb_da_nvpu_bid
+  const id_rq_replay_grant = id_free_of_core and not id_dbg_nvpu_bid and not id_wb_da_nvpu_bid and id_rq_replay_bid_qual
+  const id_co_pf_grant = id_free_of_core and not id_dbg_nvpu_bid and not id_wb_da_nvpu_bid and not id_rq_replay_bid_qual and id_co_pf_bid
+  id_core_pipe_available = not dcache_cfg_stall and not re_pipe_used and not id_co_mr_bid and not id_dbg_nvpu_bid and not id_wb_da_nvpu_bid and not id_rq_replay_bid_qual and not id_co_pf_bid
+  const id_core_ready = (if re_ba_entries_required { not id_rq_half_full } else { not id_rq_full }) and not id_ba_full and id_core_pipe_available and not re_ba_alloc and not s0_co_pf_valid
+
+  const u_scratchpad_ctrl = minion_dcache_scratchpad_ctrl::[name=u_scratchpad_ctrl](clk_i=clk_i, rst_ni=rst_ni, scratchpad_ctrl_i=core_cache_mode, dcache_idle_i=U1(dcache_idle), da_clear_rdy_i=U1(s4_cfg_da_clear_rdy))
+  dcache_cfg_stall = u_scratchpad_ctrl.dcache_cfg_stall_o != 0
+  dcache_cfg_clear_all = u_scratchpad_ctrl.dcache_cfg_clear_all_o != 0
+  dcache_cfg_clear_low = u_scratchpad_ctrl.dcache_cfg_clear_low_o != 0
+  s3_cfg_da_clear_en = u_scratchpad_ctrl.da_clear_en_o != 0
+  s4_cfg_da_clear_val = u_scratchpad_ctrl.da_clear_val_o != 0
+  s4_cfg_da_clear_set = u_scratchpad_ctrl.da_clear_set_o
+  s4_cfg_da_clear_way = u_scratchpad_ctrl.da_clear_way_o
+  s4_cfg_da_clear_idx = u_scratchpad_ctrl.da_clear_idx_o
+  dcache_cfg_mode = u_scratchpad_ctrl.dcache_cfg_mode_o
+
+  // ---- L2 evict arbitration: writeback, miss-handler, reduce and cache-op-L2 evictions ----------------------------
+  const wb_allow_evict_bid = wb_ready and not wb_valid
+  // The miss-handler evict request carries the buffer-array data.
+  mut mh_evict_word:U322 = mh_l2_evict_word
+  mh_evict_word#[14..<270] = s1_ba_data
+  const l2_evict_arb_bid:U4 = (U1(wb_l2_evict_valid), U1(mh_l2_evict_valid and wb_allow_evict_bid and not re_ts_l2_evict_inflight), U1(re_l2_evict_valid and wb_allow_evict_bid), U1(pf_l2_evict_valid and wb_allow_evict_bid and not re_ts_l2_evict_inflight))#[..]
+  const l2_evict_arb_data_in:U1288 = (wb_l2_evict_word, mh_evict_word, re_l2_evict_word, pf_l2_evict_word)#[..]
+  const u_l2_arb_to_evict = prim_arb_lru<NumClients=4>(clk_i=clk_i, rst_ni=rst_ni, bid_i=l2_evict_arb_bid, stall_i=U1(not arb_l2_evict_ready))
+  const l2_evict_arb_grant = u_l2_arb_to_evict.grant_o
+  const l2_evict_arb_word:U322 = (l2_evict_arb_data_in >> (u_l2_arb_to_evict.winner_o*322))#[0..<322]
+  re_l2_evict_ready = l2_evict_arb_grant#[2] != 0
+  // Two-stage pipe in front of the evict mux: ts (reduce tensor-store) request, and the arbitrated one.
+  const l2_evict_pipe_valid:U2 = (U1(ts_l2_evict_valid), U1(l2_evict_arb_bid != 0))#[..]
+  const l2_evict_pipe_valid_en:U2 = l2_evict_pipe_ready & (l2_evict_mux_valid | l2_evict_pipe_valid)
+  const l2_evict_pipe_data_en:U2 = l2_evict_pipe_ready & l2_evict_pipe_valid
+  for i in 0..<2 {
+    if l2_evict_pipe_valid_en#[i] != 0 {
+      l2_evict_mux_valid#[i] = l2_evict_pipe_valid#[i]
+    }
+  }
+  if l2_evict_pipe_data_en#[0] != 0 {
+    l2_evict_mux_data_in[0] = ts_l2_evict_word
+  }
+  if l2_evict_pipe_data_en#[1] != 0 {
+    l2_evict_mux_data_in[1] = l2_evict_arb_word
+  }
+
+  // ---- L2 miss arbitration: tensor-load 0/1 requests without cooperation, miss handler, texture send --------------
+  const l2_miss_arb_bid:U4 = (U1(tx_l2_miss_valid), U1(mh_l2_miss_valid), U1(tl0_l2_miss_valid_no_coop), U1(tl1_l2_miss_valid_no_coop))#[..]
+  const l2_miss_arb_data_in:U344 = (tx_l2_miss_word, mh_l2_miss_word, tl0_l2_miss_word, tl1_l2_miss_word)#[..]
+  const u_l2_arb_to_miss = prim_arb_lru<NumClients=4>(clk_i=clk_i, rst_ni=rst_ni, bid_i=l2_miss_arb_bid, stall_i=U1(not arb_l2_miss_ready))
+  const l2_miss_arb_grant = u_l2_arb_to_miss.grant_o
+  const l2_miss_arb_word:U86 = (l2_miss_arb_data_in >> (u_l2_arb_to_miss.winner_o*86))#[0..<86]
+  const l2_miss_pipe_valid:U3 = (U1(tl0_l2_miss_valid), U1(tl1_l2_miss_valid), U1(l2_miss_arb_bid != 0))#[..]
+  const l2_miss_pipe_data:[3]U86 = [tl0_l2_miss_word, tl1_l2_miss_word, l2_miss_arb_word]
+  const l2_miss_pipe_valid_en:U3 = l2_miss_pipe_ready & (l2_miss_mux_valid | l2_miss_pipe_valid)
+  const l2_miss_pipe_data_en:U3 = l2_miss_pipe_ready & l2_miss_pipe_valid
+  for i in 0..<3 {
+    if l2_miss_pipe_valid_en#[i] != 0 {
+      l2_miss_mux_valid#[i] = l2_miss_pipe_valid#[i]
+    }
+    if l2_miss_pipe_data_en#[i] != 0 {
+      l2_miss_mux_data_in[i] = l2_miss_pipe_data[i]
+    }
+  }
+
+  // ---- Writeback arbitration: cache-op, texture send and miss handler (miss handler wins) --------------------------
+  const wb_arb_bid:U3 = (U1(co_wb_valid), U1(tx_wb_valid), U1(mh_wb_valid))#[..]
+  mut wb_arb_data_winner:U50 = mh_wb_word
+  mut wb_arb_grant:U3 = 0
+  if not wb_arb_stall {
+    if wb_arb_bid#[2] != 0 {
+      wb_arb_grant = 4
+    } elif wb_arb_bid#[1] != 0 {
+      wb_arb_grant = 2
+      wb_arb_data_winner = tx_wb_word
+    } elif wb_arb_bid#[0] != 0 {
+      wb_arb_grant = 1
+      wb_arb_data_winner = co_wb_word
+    } else {
+      wb_arb_grant = 4
+    }
+  }
+  wb_arb_stall = not wb_ready or re_ts_l2_evict_inflight
+  wb_valid = wb_arb_bid != 0 and not re_ts_l2_evict_inflight
+
+  // ---- L2 response steering ----------------------------------------------------------------------------------------
+  l2_fill_slot_avail = not s4_valid and mh_l2_resp_stall#[l2_resp_int.id#[0]] == 0
+  const l2_resp_id5:U5 = l2_resp_int.id#[0..<5]
+  l2_resp_is_for_tensor_0 = VpuEn != 0 and l2_resp_int.opcode == minion_pkg.EtLinkRspAckData and l2_resp_id5 >= minion_dcache_pkg.EtLinkCoreMissIdTensorLoadExt0 and l2_resp_id5 <= minion_dcache_pkg.EtLinkCoreMissIdTensorLoadExt3
+  l2_resp_is_for_tensor_1 = VpuEn != 0 and l2_resp_int.opcode == minion_pkg.EtLinkRspAckData and l2_resp_id5 >= minion_dcache_pkg.EtLinkCoreMissIdTensorLoadExt4 and l2_resp_id5 <= minion_dcache_pkg.EtLinkCoreMissIdTensorLoadExt7
+  l2_resp_is_for_mh_fill = l2_resp_int.opcode == minion_pkg.EtLinkRspAckData and (l2_resp_id5 == minion_dcache_pkg.EtLinkCoreMissIdMissHandler0 or l2_resp_id5 == minion_dcache_pkg.EtLinkCoreMissIdMissHandler1)
+  const l2_resp_id_is_mh_uc = l2_resp_id5 == minion_dcache_pkg.EtLinkCoreMissIdMissHandlerUcLd0 or l2_resp_id5 == minion_dcache_pkg.EtLinkCoreMissIdMissHandlerUcLd1 or l2_resp_id5 == minion_dcache_pkg.EtLinkCoreMissIdMissHandlerUcSt0 or l2_resp_id5 == minion_dcache_pkg.EtLinkCoreMissIdMissHandlerUcSt1
+  l2_resp_is_for_mh_uc = (l2_resp_int.opcode == minion_pkg.EtLinkRspAckData or l2_resp_int.opcode == minion_pkg.EtLinkRspErr) and l2_resp_id_is_mh_uc
+  l2_resp_is_for_mh_uc_ok = l2_resp_int.opcode == minion_pkg.EtLinkRspAckData and l2_resp_id_is_mh_uc
+  l2_resp_is_reduce_data = VpuEn != 0 and l2_resp_int.opcode == minion_pkg.EtLinkRspMsgRcvData and l2_resp_int.id == minion_pkg.EtLinkMinMsgIdReduceData
+  l2_resp_is_reduce_ready = VpuEn != 0 and l2_resp_int.opcode == minion_pkg.EtLinkRspMsgRcvData and l2_resp_int.id == minion_pkg.EtLinkMinMsgIdReduceReady
+  // Which consumer takes the response decides whether it is accepted this cycle (fill_ready) and whether it also
+  // writes the data array (da_write) or is port data.
+  mut l2_fill_ready = true
+  mut l2_da_write_m = false
+  mut l2_resp_is_port_data_m = false
+  if l2_resp_is_for_mh_fill {
+    l2_fill_ready = l2_fill_slot_avail
+    l2_da_write_m = l2_fill_ready
+  } elif l2_resp_is_reduce_data {
+    l2_fill_ready = not s3_ba_write_en and re_buffer_avail and not l2_resp_ready_blocked
+  } elif l2_resp_is_reduce_ready {
+    l2_fill_ready = not l2_resp_ready_blocked
+  } elif l2_resp_is_for_mh_uc {
+    l2_fill_ready = not s3_ba_write_en
+  } elif l2_resp_int.opcode == minion_pkg.EtLinkRspMsgRcvData {
+    l2_fill_ready = not s4_valid and not l2_resp_ready_blocked
+    l2_da_write_m = l2_fill_ready and core_ctrl_i.msg_port_wr_en != 0
+    l2_resp_is_port_data_m = true
+  } elif l2_resp_is_for_tensor_0 {
+    l2_fill_ready = not s4_valid
+    l2_da_write_m = not s4_tl0_load_capture
+  } elif l2_resp_is_for_tensor_1 {
+    l2_fill_ready = s4_tl1_tenb_ready_reg and not l2_resp_ready_blocked
+  }
+  l2_da_write = l2_da_write_m
+  l2_resp_is_port_data = l2_resp_is_port_data_m
+  l2_resp_ready_blocked = (l2_resp_valid_int and ((l2_resp_int.opcode == minion_pkg.EtLinkRspMsgRcvData and not (l2_resp_is_reduce_data or l2_resp_is_reduce_ready)) or l2_resp_is_for_tensor_1)) and l2_resp_count_q == 0
+  l2_resp_ready_int = l2_fill_ready
+  // Multi-beat responses: a line takes two accepted beats, everything else one.
+  const l2_resp_beats:U2 = if l2_resp_int.size == minion_dcache_pkg.EtLinkLine { 2 } else { 1 }
+  if l2_resp_ready_blocked or (l2_resp_valid_int and l2_resp_ready_int and l2_resp_count_q != 0) {
+    l2_resp_count_q = if l2_resp_count_q == l2_resp_beats { 0 } else { (l2_resp_count_q + 1)#[0..<2] }
+  }
+  // No reset on this register: hold it while rst_ni is low.
+  if rst_ni != 0 and l2_resp_valid_int {
+    s4_tl1_tenb_ready_reg = s4_tl1_tenb_ready
+  }
+
+  // LiveHD binds nested tuple ports and local tuple variables per leaf only (livehd_bugs L2u3_03, L3u1_02), hence the
+  // flattened `port.leaf = value` arguments below.
+  // ---- Writeback unit ----------------------------------------------------------------------------------------------
+  mut s3_data_flat:U256 = 0
+  for k in 0..<4 {
+    s3_data_flat#[k*64..<(k + 1)*64] = s3_data[k]
+  }
+  // prp-style-allow flattened-bundle-arguments
+  const u_writeback_unit = minion_dcache_writeback_unit::[name=u_writeback_unit](clk_i=clk_i, rst_ni=rst_ni, req_valid_i=U1(wb_valid), `req_data_i.tag`=wb_arb_data_winner#[17..<50], `req_data_i.set`=wb_arb_data_winner#[13..<17], `req_data_i.way_en`=wb_arb_data_winner#[9..<13], `req_data_i.is_tbox`=wb_arb_data_winner#[8], `req_data_i.mem_idx`=wb_arb_data_winner#[7], `req_data_i.addr_low`=wb_arb_data_winner#[0..<7], data_req_grant_i=U1(id_wb_da_grant), data_req_nack_i=U1(s1_wb_da_valid and s1_vpu_scp_read), data_resp_i=s3_data_flat, l2_req_ready_i=l2_evict_arb_grant#[0])
+  wb_ready = u_writeback_unit.req_ready_o != 0
+  id_wb_da_bid = u_writeback_unit.data_req_bid_o != 0
+  s0_wb_da_valid = u_writeback_unit.data_req_valid_o != 0
+  s0_wb_da_req = u_writeback_unit.data_req_o
+  wb_l2_evict_valid = u_writeback_unit.l2_req_valid_o != 0
+  wb_l2_evict_word = evict_pack(u_writeback_unit.l2_req_data_o)
+
+  // Way w of the s2 metadata as {coh_state:2, tag:33} at bit 35*w.
+  mut s2_meta_resp:U140 = 0
+  for w in 0..<4 {
+    s2_meta_resp#[w*35..<(w*35 + 33)] = `s2_meta_read.tag`[w]
+    s2_meta_resp#[(w*35 + 33)..<(w*35 + 35)] = `s2_meta_read.coh_state`[w]
+  }
+  // ---- L1 cache-op unit -----------------------------------------------------------------------------------------------
+  // prp-style-allow flattened-bundle-arguments
+  const u_cache_op_unit = minion_dcache_cache_op_unit::[name=u_cache_op_unit](clk_i=clk_i, rst_ni=rst_ni, chicken_bit_dcache_i=chicken_bit_dcache_i, cache_op_valid_i=U1(core_ctrl_i.cache_op_valid != 0 and not dcache_cfg_stall), `cache_op_req_i.cmd`=core_ctrl_i.cache_op_req.cmd, `cache_op_req_i.start_level`=core_ctrl_i.cache_op_req.start_level, `cache_op_req_i.dest_level`=core_ctrl_i.cache_op_req.dest_level, `cache_op_req_i.count`=core_ctrl_i.cache_op_req.count, `cache_op_req_i.addr`=core_ctrl_i.cache_op_req.addr, `cache_op_req_i.way`=core_ctrl_i.cache_op_req.way, `cache_op_req_i.stride`=core_ctrl_i.cache_op_req.stride, `cache_op_req_i.thread_id`=core_ctrl_i.cache_op_req.thread_id, `cache_op_req_i.use_tmask`=core_ctrl_i.cache_op_req.use_tmask, `cache_op_req_i.tmask_ready`=core_ctrl_i.cache_op_req.tmask_ready, `cache_op_req_i.tmask_bits`=core_ctrl_i.cache_op_req.tmask_bits, `cache_op_req_i.l2_scp_dest`=core_ctrl_i.cache_op_req.l2_scp_dest, `cache_op_req_i.l2_scp_fill`=core_ctrl_i.cache_op_req.l2_scp_fill, `cache_op_req_next_i.cmd`=core_ctrl_i.cache_op_req_next.cmd, `cache_op_req_next_i.start_level`=core_ctrl_i.cache_op_req_next.start_level, `cache_op_req_next_i.dest_level`=core_ctrl_i.cache_op_req_next.dest_level, meta_read_grant_i=U1(s0_core_gsc_i == 0 and not re_pipe_used and id_co_mr_bid), meta_read_resp_way_en_i=(const e0=s2_tag_match#[0], const e1=s2_tag_match#[1], const e2=s2_tag_match#[2], const e3=s2_tag_match#[3]), meta_read_resp_i=s2_meta_resp, s1_phys_addr_tag_i=s1_phys_addr_tag, s1_tlb_wait_i=U1(s1_tlb_wait), s1_tlb_fail_i=U1(s1_tlb_fail), meta_write_ready_i=1, writeback_ready_i=wb_arb_grant#[0], writeback_done_i=U1(wb_ready), id_rq_full_i=U1(id_rq_full), id_co_pf_grant_i=U1(id_co_pf_grant), cache_op_ready_byp_i=U1(cache_op_ready_byp), mh_clear_slock_valid_i=U1(mh_clear_slock_valid), mh_clear_slock_set_i=mh_clear_slock_set, mh_clear_slock_way_i=mh_clear_slock_way, da_clear_rdy_i=U1(s4_co_da_clear_rdy), mh_probe_rdy_i=mh_probe_rdy, mh_metaw_rdy_i=mh_metaw_rdy, rq_conflict_i=U1(rq_conflict_to_co), cfg_clear_all_i=U1(dcache_cfg_clear_all), cfg_clear_low_i=U1(dcache_cfg_clear_low), cfg_alloc_scp_i=u_scratchpad_ctrl.dcache_cfg_alloc_scp_o, cfg_cache_mode_i=dcache_cfg_mode, vm_status_i=vm_status_i)
+  cacheop_busy = u_cache_op_unit.busy_o != 0
+  core_cache_op_ready = u_cache_op_unit.cache_op_ready_o != 0
+  co_l1_th_id_complete = u_cache_op_unit.th_id_complete_o
+  id_co_mr_bid = u_cache_op_unit.meta_read_bid_o != 0
+  s0_co_mr_valid = u_cache_op_unit.meta_read_valid_o != 0
+  s0_co_mr_phys = u_cache_op_unit.meta_read_phys_o
+  s0_co_mr_force_set = u_cache_op_unit.meta_read_force_set_o
+  s0_co_mr_thread_id = u_cache_op_unit.meta_read_thread_id_o
+  s1_co_mr_skip_pma = u_cache_op_unit.meta_read_skip_pma_o != 0
+  s0_co_mr_addr = u_cache_op_unit.meta_read_addr_o
+  s0_co_mr_addr_msb_err = u_cache_op_unit.meta_read_addr_msb_err_o
+  s1_co_mw_valid_early = u_cache_op_unit.meta_write_valid_next_o != 0
+  s1_co_mw_valid = u_cache_op_unit.meta_write_valid_o != 0
+  s1_co_mw_req = (coh_state=u_cache_op_unit.meta_write_req_o.data.coh_state, set_idx=u_cache_op_unit.meta_write_req_o.set_idx, tag=u_cache_op_unit.meta_write_req_o.data.tag, way_en=u_cache_op_unit.meta_write_req_o.way_en)
+  s1_co_nack_set_valid = u_cache_op_unit.nack_set_valid_o != 0
+  s1_co_nack_set_value = u_cache_op_unit.nack_set_value_o
+  co_wb_valid = u_cache_op_unit.writeback_valid_o != 0
+  co_wb_word = wbreq_pack(u_cache_op_unit.writeback_req_o)
+  id_co_pf_bid = u_cache_op_unit.id_co_pf_bid_o != 0
+  s0_co_pf_valid = u_cache_op_unit.s0_co_pf_valid_o != 0
+  s0_co_pf_req = (addr=u_cache_op_unit.s0_co_pf_req_o.addr, addr_msb_err=u_cache_op_unit.s0_co_pf_req_o.addr_msb_err, buf_alloc=u_cache_op_unit.s0_co_pf_req_o.buf_alloc, buf_id=u_cache_op_unit.s0_co_pf_req_o.buf_id, cache_op=u_cache_op_unit.s0_co_pf_req_o.cache_op, cacheable=u_cache_op_unit.s0_co_pf_req_o.cacheable, chunk_read=u_cache_op_unit.s0_co_pf_req_o.chunk_read, cmd=u_cache_op_unit.s0_co_pf_req_o.cmd, data=u_cache_op_unit.s0_co_pf_req_o.data, dest_addr=u_cache_op_unit.s0_co_pf_req_o.dest.addr, dest_fp=u_cache_op_unit.s0_co_pf_req_o.dest.fp, dest_thread=u_cache_op_unit.s0_co_pf_req_o.dest.thread_id, gsc32_idx=u_cache_op_unit.s0_co_pf_req_o.gsc32_idx, gsc_cnt=u_cache_op_unit.s0_co_pf_req_o.gsc_cnt, mem_global=u_cache_op_unit.s0_co_pf_req_o.mem_global, misaligned=u_cache_op_unit.s0_co_pf_req_o.misaligned, misaligned_2nd=u_cache_op_unit.s0_co_pf_req_o.misaligned_2nd, miss_fill_ok=u_cache_op_unit.s0_co_pf_req_o.miss_fill_ok, phys=u_cache_op_unit.s0_co_pf_req_o.phys, ps_mask=u_cache_op_unit.s0_co_pf_req_o.ps_mask, replay=u_cache_op_unit.s0_co_pf_req_o.replay, replay_age=u_cache_op_unit.s0_co_pf_req_o.replay_age, replay_entry=u_cache_op_unit.s0_co_pf_req_o.replay_entry, set=u_cache_op_unit.s0_co_pf_req_o.set, typ=u_cache_op_unit.s0_co_pf_req_o.typ, uc_load_2nd=u_cache_op_unit.s0_co_pf_req_o.uc_load_2nd, uc_load_ok=u_cache_op_unit.s0_co_pf_req_o.uc_load_ok, vm_sel=u_cache_op_unit.s0_co_pf_req_o.vm_sel)
+  hlock_state = u_cache_op_unit.hlock_state_o
+  slock_state = u_cache_op_unit.slock_state_o
+  s3_co_da_clear_en = u_cache_op_unit.da_clear_en_o != 0
+  s4_co_da_clear_val = u_cache_op_unit.da_clear_val_o != 0
+  s4_co_da_clear_set = u_cache_op_unit.da_clear_set_o
+  s4_co_da_clear_way = u_cache_op_unit.da_clear_way_o
+  s4_co_da_clear_idx = u_cache_op_unit.da_clear_idx_o
+  vm_status_co = u_cache_op_unit.vm_status_co_o
+  cache_ops_err_flags_l1 = u_cache_op_unit.err_flags_o
+
+  // ---- L2 cache-op unit ---------------------------------------------------------------------------------------------
+  // prp-style-allow flattened-bundle-arguments
+  const u_cache_op_unit_l2 = minion_dcache_cache_op_unit_l2::[name=u_cache_op_unit_l2](clk_i=clk_i, rst_ni=rst_ni, shire_id_i=shire_id_i, cacheop_max_i=core_ctrl_i.cache_ctrl.cacheop_max, cacheop_reprate_i=core_ctrl_i.cache_ctrl.cacheop_reprate, chicken_bit_dcache_i=chicken_bit_dcache_i, l2_resp_valid_i=U1(l2_resp_valid_int and not s3_lrsc_valid), `l2_resp_i.id`=l2_resp_int.id, `l2_resp_i.dest`=l2_resp_int.dest, `l2_resp_i.wdata`=l2_resp_int.wdata, `l2_resp_i.opcode`=l2_resp_int.opcode, `l2_resp_i.data`=l2_resp_int.data, `l2_resp_i.size`=l2_resp_int.size, `l2_resp_i.qwen`=l2_resp_int.qwen, cache_op_valid_i=U1(core_ctrl_i.cache_op_valid != 0 and not dcache_cfg_stall), `cache_op_req_i.cmd`=core_ctrl_i.cache_op_req.cmd, `cache_op_req_i.start_level`=core_ctrl_i.cache_op_req.start_level, `cache_op_req_i.dest_level`=core_ctrl_i.cache_op_req.dest_level, `cache_op_req_i.count`=core_ctrl_i.cache_op_req.count, `cache_op_req_i.addr`=core_ctrl_i.cache_op_req.addr, `cache_op_req_i.way`=core_ctrl_i.cache_op_req.way, `cache_op_req_i.stride`=core_ctrl_i.cache_op_req.stride, `cache_op_req_i.thread_id`=core_ctrl_i.cache_op_req.thread_id, `cache_op_req_i.use_tmask`=core_ctrl_i.cache_op_req.use_tmask, `cache_op_req_i.tmask_ready`=core_ctrl_i.cache_op_req.tmask_ready, `cache_op_req_i.tmask_bits`=core_ctrl_i.cache_op_req.tmask_bits, `cache_op_req_i.l2_scp_dest`=core_ctrl_i.cache_op_req.l2_scp_dest, `cache_op_req_i.l2_scp_fill`=core_ctrl_i.cache_op_req.l2_scp_fill, `cache_op_req_next_i.cmd`=core_ctrl_i.cache_op_req_next.cmd, `cache_op_req_next_i.start_level`=core_ctrl_i.cache_op_req_next.start_level, `cache_op_req_next_i.dest_level`=core_ctrl_i.cache_op_req_next.dest_level, `cache_op_req_byp_i.cmd`=u_cache_op_unit.cache_op_req_byp_o.cmd, `cache_op_req_byp_i.start_level`=u_cache_op_unit.cache_op_req_byp_o.start_level, `cache_op_req_byp_i.dest_level`=u_cache_op_unit.cache_op_req_byp_o.dest_level, `cache_op_req_byp_i.count`=u_cache_op_unit.cache_op_req_byp_o.count, `cache_op_req_byp_i.addr`=u_cache_op_unit.cache_op_req_byp_o.addr, `cache_op_req_byp_i.way`=u_cache_op_unit.cache_op_req_byp_o.way, `cache_op_req_byp_i.stride`=u_cache_op_unit.cache_op_req_byp_o.stride, `cache_op_req_byp_i.thread_id`=u_cache_op_unit.cache_op_req_byp_o.thread_id, `cache_op_req_byp_i.use_tmask`=u_cache_op_unit.cache_op_req_byp_o.use_tmask, `cache_op_req_byp_i.tmask_ready`=u_cache_op_unit.cache_op_req_byp_o.tmask_ready, `cache_op_req_byp_i.tmask_bits`=u_cache_op_unit.cache_op_req_byp_o.tmask_bits, `cache_op_req_byp_i.l2_scp_dest`=u_cache_op_unit.cache_op_req_byp_o.l2_scp_dest, `cache_op_req_byp_i.l2_scp_fill`=u_cache_op_unit.cache_op_req_byp_o.l2_scp_fill, l2_req_ready_i=l2_evict_arb_grant#[3], cache_op_valid_byp_i=u_cache_op_unit.cache_op_valid_byp_o, s0_available_i=U1(s0_available_to_co_l2), s1_available_i=U1(s1_available_to_co_l2), s1_tlb_wait_i=U1(s1_tlb_wait), s1_tlb_fail_i=U1(s1_tlb_fail), s1_tlb_addr_i=u_tlb_array.resp_data_o.ppn, vm_status_i=vm_status_i, `vm_status_co_i.prv`=vm_status_co.prv, `vm_status_co_i.mprv`=vm_status_co.mprv, `vm_status_co_i.mpp`=vm_status_co.mpp, `vm_status_co_i.sum`=vm_status_co.sum, `vm_status_co_i.mxr`=vm_status_co.mxr, `vm_status_co_i.debug`=vm_status_co.debug)
+  cacheop_l2_busy = u_cache_op_unit_l2.busy_o != 0
+  co_l2_th_id_complete = u_cache_op_unit_l2.th_id_complete_o
+  core_co_l2_pref_ready = u_cache_op_unit_l2.cache_op_ready_o != 0
+  pf_l2_evict_valid = u_cache_op_unit_l2.l2_req_valid_o != 0
+  pf_l2_evict_word = evict_pack(u_cache_op_unit_l2.l2_req_data_o)
+  cache_op_ready_byp = u_cache_op_unit_l2.cache_op_ready_byp_o != 0
+  s0_co_l2_addr_load = u_cache_op_unit_l2.s0_addr_load_o != 0
+  s0_co_l2_addr = u_cache_op_unit_l2.s0_addr_o
+  s0_co_l2_addr_msb_err = u_cache_op_unit_l2.s0_addr_msb_err_o
+  s0_co_l2_thread_id = u_cache_op_unit_l2.s0_thread_id_o
+  s1_co_l2_addr_load = u_cache_op_unit_l2.s1_addr_load_o != 0
+  vm_status_l2 = u_cache_op_unit_l2.vm_status_l2_o
+  cache_ops_err_flags_l2 = u_cache_op_unit_l2.err_flags_o
+
+  // ---- Tensor loads 0 and 1 (tensor-load 0 also fills the data array) ---------------------------------------------------
+  const gen_offload_u_tensor_load_0 = minion_dcache_tensor_load<ModuleIdx=0>(clk_i=clk_i, rst_ni=rst_ni, shire_min_id_i=shire_min_id_i, chicken_bit_dcache_i=chicken_bit_dcache_i, tensor_ctrl_i=core_ctrl_i, s0_available_i=U1(s0_available_to_tl), s1_available_i=U1(s1_available_to_tl0), s1_tlb_wait_i=U1(s1_tlb_wait), s1_tlb_fail_i=U1(s1_tlb_fail), s2_addr_i=s2_req_addr#[0..<40], l2_req_ready_coop_i=l2_miss_pipe_ready#[0], l2_req_ready_no_coop_i=l2_miss_arb_grant#[2], l2_resp_valid_i=U1(l2_resp_fifo_pop), l2_resp_i=(const data=l2_resp_int.data, const id=l2_resp_int.id, const opcode=l2_resp_int.opcode), load_ready_i=U1(s4_tl0_load_ready), tfma_enabled_i=0, tenb_tstore_busy_i=0, tenb_credit_i=0, tenb_credit_entry_i=0, tenb_written_i=0, vm_status_i=vm_status_i)
+  tl0_working = gen_offload_u_tensor_load_0.busy_o != 0
+  tl0_id_complete = (gen_offload_u_tensor_load_0.id_complete_o.e0, gen_offload_u_tensor_load_0.id_complete_o.e1)#[..]
+  s0_tl0_addr_load = gen_offload_u_tensor_load_0.s0_addr_load_o != 0
+  s0_tl0_addr = gen_offload_u_tensor_load_0.s0_addr_o
+  s0_tl0_addr_msb_err = gen_offload_u_tensor_load_0.s0_addr_msb_err_o
+  s0_tl0_thread_id = gen_offload_u_tensor_load_0.s0_thread_id_o
+  s1_tl0_addr_load = gen_offload_u_tensor_load_0.s1_addr_load_o != 0
+  tl0_l2_miss_valid = gen_offload_u_tensor_load_0.l2_req_valid_coop_o != 0
+  tl0_l2_miss_valid_no_coop = gen_offload_u_tensor_load_0.l2_req_valid_no_coop_o != 0
+  tl0_l2_miss_word = miss_pack(gen_offload_u_tensor_load_0.l2_req_o)
+  s4_tl0_load_way = gen_offload_u_tensor_load_0.load_way_o
+  s4_tl0_load_addr = gen_offload_u_tensor_load_0.load_addr_o
+  s4_tl0_load_data = gen_offload_u_tensor_load_0.load_data_o
+  s4_tl0_load_valid = gen_offload_u_tensor_load_0.load_valid_o
+  s3_tl0_load_valid_pre = gen_offload_u_tensor_load_0.load_valid_pre_o != 0
+  s4_tl0_load_capture = gen_offload_u_tensor_load_0.load_capture_o != 0
+  vm_status_tl0 = gen_offload_u_tensor_load_0.vm_status_tl_o
+  tensor_load_err_flags_0 = (gen_offload_u_tensor_load_0.err_flags_o.e0, gen_offload_u_tensor_load_0.err_flags_o.e1, gen_offload_u_tensor_load_0.err_flags_o.e2, gen_offload_u_tensor_load_0.err_flags_o.e3, gen_offload_u_tensor_load_0.err_flags_o.e4)#[..]
+
+  const gen_offload_u_tensor_load_1 = minion_dcache_tensor_load<ModuleIdx=1>(clk_i=clk_i, rst_ni=rst_ni, shire_min_id_i=shire_min_id_i, chicken_bit_dcache_i=chicken_bit_dcache_i, tensor_ctrl_i=core_ctrl_i, s0_available_i=U1(s0_available_to_tl1), s1_available_i=U1(s1_available_to_tl1), s1_tlb_wait_i=U1(s1_tlb_wait), s1_tlb_fail_i=U1(s1_tlb_fail), s2_addr_i=s2_req_addr#[0..<40], l2_req_ready_coop_i=l2_miss_pipe_ready#[1], l2_req_ready_no_coop_i=l2_miss_arb_grant#[3], l2_resp_valid_i=U1(l2_resp_fifo_pop), l2_resp_i=(const data=l2_resp_int.data, const id=l2_resp_int.id, const opcode=l2_resp_int.opcode), load_ready_i=0, tfma_enabled_i=s1_vpu_ctrl_i.tfma_enabled, tenb_tstore_busy_i=U1(VpuEn != 0 and (tensorstore_busy or not reduce_ready)), tenb_credit_i=s1_vpu_ctrl_i.tenb_credit, tenb_credit_entry_i=s1_vpu_ctrl_i.tenb_credit_entry, tenb_written_i=U1(tl1_tenb_written), vm_status_i=vm_status_i)
+  tl1_working = gen_offload_u_tensor_load_1.busy_o != 0
+  s0_tl1_addr_load = gen_offload_u_tensor_load_1.s0_addr_load_o != 0
+  s0_tl1_addr = gen_offload_u_tensor_load_1.s0_addr_o
+  s0_tl1_addr_msb_err = gen_offload_u_tensor_load_1.s0_addr_msb_err_o
+  s0_tl1_thread_id = gen_offload_u_tensor_load_1.s0_thread_id_o
+  s1_tl1_addr_load = gen_offload_u_tensor_load_1.s1_addr_load_o != 0
+  tl1_l2_miss_valid = gen_offload_u_tensor_load_1.l2_req_valid_coop_o != 0
+  tl1_l2_miss_valid_no_coop = gen_offload_u_tensor_load_1.l2_req_valid_no_coop_o != 0
+  tl1_l2_miss_word = miss_pack(gen_offload_u_tensor_load_1.l2_req_o)
+  s4_tl1_load_addr = gen_offload_u_tensor_load_1.load_addr_o
+  s4_tl1_tenb_ready = gen_offload_u_tensor_load_1.tenb_ready_o != 0
+  tenb_flush = gen_offload_u_tensor_load_1.tenb_flush_o != 0
+  vm_status_tl1 = gen_offload_u_tensor_load_1.vm_status_tl_o
+  tensor_load_err_flags_1 = (gen_offload_u_tensor_load_1.err_flags_o.e0, gen_offload_u_tensor_load_1.err_flags_o.e1, gen_offload_u_tensor_load_1.err_flags_o.e2, gen_offload_u_tensor_load_1.err_flags_o.e3, gen_offload_u_tensor_load_1.err_flags_o.e4)#[..]
+
+  // ---- Miss handler -----------------------------------------------------------------------------------------------------
+  // prp-style-allow flattened-bundle-arguments
+  const u_miss_handler_unit = minion_dcache_miss_handler_unit::[name=u_miss_handler_unit](clk_i=clk_i, rst_ni=rst_ni, neigh_min_id_i=shire_min_id_i#[0..<3], req_valid_i=U1(s2_mh_req_valid), `req_info_i.addr`=s2_rq.addr#[0..<40], `req_info_i.set`=s2_rq.set, `req_info_i.cmd`=s2_rq.cmd, `req_info_i.typ`=s2_rq.typ, `req_info_i.buf_id`=s2_mh_buf_id, `req_info_i.way_en`=s2_mh_way_en, `req_info_i.tag_match`=U1(s2_tag_match_any), `req_info_i.old_meta.coh_state`=s2_mh_old_coh, `req_info_i.old_meta.tag`=s2_repl_tag, `req_info_i.cacheable`=s2_rq.cacheable, `req_info_i.thread_id`=s2_rq.dest_thread, `req_info_i.mem_g`=s2_rq.mem_global, `req_info_i.is_amo`=U1(s2_is_amo), `req_info_i.is_msg`=U1(s2_is_msg), `req_info_i.is_bypass`=U1(s2_is_bypass), inflight_reduce_i=U1(re_ts_l2_evict_inflight), l2_evict_ready_i=l2_evict_arb_grant#[1], l2_miss_ready_i=l2_miss_arb_grant#[1], l2_resp_valid_i=U1(l2_resp_fifo_pop), `l2_resp_data_i.id`=l2_resp_int.id, `l2_resp_data_i.dest`=l2_resp_int.dest, `l2_resp_data_i.wdata`=l2_resp_int.wdata, `l2_resp_data_i.opcode`=l2_resp_int.opcode, `l2_resp_data_i.data`=l2_resp_int.data, `l2_resp_data_i.size`=l2_resp_int.size, `l2_resp_data_i.qwen`=l2_resp_int.qwen, l2_resp_slot_avail_i=U1(l2_fill_slot_avail), meta_write_ready_i=U1(not s1_co_mw_valid), writeback_ready_i=wb_arb_grant#[2], writeback_done_i=U1(wb_ready))
+  s2_mh_req_ready = u_miss_handler_unit.req_ready_o != 0
+  s2_mh_req_assigned = u_miss_handler_unit.req_assigned_o
+  s2_mh_req_accepted = u_miss_handler_unit.req_accepted_o
+  s2_mh_can_accept_uc = u_miss_handler_unit.can_accept_uc_o != 0
+  mh_wait_l2_to_ba_resp = u_miss_handler_unit.wait_l2_to_ba_resp_o != 0
+  mh_l2_evict_valid = u_miss_handler_unit.l2_evict_valid_o != 0
+  mh_l2_evict_word = evict_pack(u_miss_handler_unit.l2_evict_req_o)
+  mh_l2_miss_valid = u_miss_handler_unit.l2_miss_valid_o != 0
+  mh_l2_miss_word = miss_pack(u_miss_handler_unit.l2_miss_req_o)
+  mh_l2_resp_stall = u_miss_handler_unit.l2_resp_stall_o
+  s4_mh_refill_way = u_miss_handler_unit.refill_way_o
+  s4_mh_refill_addr = u_miss_handler_unit.refill_addr_o
+  s1_mh_mw_valid_early = u_miss_handler_unit.meta_write_valid_next_o != 0
+  s1_mh_mw_valid = u_miss_handler_unit.meta_write_valid_o != 0
+  s1_mh_mw_req = (coh_state=u_miss_handler_unit.meta_write_req_o.data.coh_state, set_idx=u_miss_handler_unit.meta_write_req_o.set_idx, tag=u_miss_handler_unit.meta_write_req_o.data.tag, way_en=u_miss_handler_unit.meta_write_req_o.way_en)
+  mh_wb_valid = u_miss_handler_unit.writeback_valid_o != 0
+  mh_wb_word = wbreq_pack(u_miss_handler_unit.writeback_req_o)
+  s1_mh_force_ba_rptr = u_miss_handler_unit.force_ba_rptr_o != 0
+  s1_mh_force_ba_rptr_qual = u_miss_handler_unit.force_ba_rptr_qual_o != 0
+  s1_mh_ba_rptr = u_miss_handler_unit.ba_rptr_o
+  s1_mh_ba_is_amo = u_miss_handler_unit.ba_is_amo_o != 0
+  s3_mh_ba_wptr = u_miss_handler_unit.ba_wptr_o
+  mh_idle = u_miss_handler_unit.idle_o != 0
+  mh_probe_rdy = u_miss_handler_unit.probe_rdy_o
+  mh_metaw_rdy = u_miss_handler_unit.metaw_rdy_o
+  s2_mh_fence_rdy = u_miss_handler_unit.fence_rdy_o
+  mh_uc_load_bus_error = u_miss_handler_unit.handler_uc_load_bus_error_o
+  s2_mh_match_miss_line = u_miss_handler_unit.match_miss_line_o != 0
+  // A fill that completes a meta write of a locked line releases the lock (the way is the encoded way_en).
+  mh_clear_slock_valid = s1_mh_mw_valid and u_miss_handler_unit.meta_write_clear_slock_o != 0
+  mh_clear_slock_set = s1_mh_mw_req.set_idx
+  mh_clear_slock_way = way_encode(s1_mh_mw_req.way_en)
+
+  // ---- Replay queue -----------------------------------------------------------------------------------------------------
+  // prp-style-allow flattened-bundle-arguments
+  const u_replay_queue = minion_dcache_replay_queue::[name=u_replay_queue](clk_i=clk_i, rst_ni=rst_ni, alloc_req_pre_i=U1(id_core_alloc_rq_pre_i != 0 or id_co_pf_bid), alloc_req_val_i=U1(s0_core_alloc_rq_val_i != 0 or s0_co_pf_valid), alloc_gsc_i=if id_co_pf_bid {
+      0
+    } else {
+      id_core_gsc_i
+    }, push_req_i=U1(s2_rq_push), push_req_prev_i=U1(s1_rq_push), cacheable_i=s2_rq.cacheable, req_buf_alloc_i=U1(s2_ba_write_needed_core), req_buf_entry_i=s2_ba_write_entry, `req_data_i.addr`=s2_rq.addr, `req_data_i.addr_msb_err`=s2_rq.addr_msb_err, `req_data_i.set`=s2_rq.set, `req_data_i.phys`=s2_rq.phys, `req_data_i.misaligned`=s2_rq.misaligned, `req_data_i.misaligned_2nd`=s2_rq.misaligned_2nd, `req_data_i.dest.fp`=s2_rq.dest_fp, `req_data_i.dest.addr`=s2_rq.dest_addr, `req_data_i.dest.thread_id`=s2_rq.dest_thread, `req_data_i.cmd`=s2_rq.cmd, `req_data_i.typ`=s2_rq.typ, `req_data_i.gsc_cnt`=s2_rq.gsc_cnt, `req_data_i.ps_mask`=s2_rq.ps_mask, `req_data_i.data`=s2_rq.data, `req_data_i.replay`=s2_rq.replay, `req_data_i.replay_entry`=s2_rq.replay_entry, `req_data_i.replay_age`=s2_rq.replay_age, `req_data_i.cache_op`=s2_rq.cache_op, `req_data_i.buf_alloc`=s2_rq.buf_alloc, `req_data_i.buf_id`=s2_rq.buf_id, `req_data_i.cacheable`=s2_rq.cacheable, `req_data_i.chunk_read`=s2_rq.chunk_read, `req_data_i.uc_load_2nd`=s2_rq.uc_load_2nd, `req_data_i.uc_load_ok`=s2_rq.uc_load_ok, `req_data_i.miss_fill_ok`=s2_rq.miss_fill_ok, `req_data_i.gsc32_idx`=s2_rq.gsc32_idx, `req_data_i.vm_sel`=s2_rq.vm_sel, `req_data_i.mem_global`=s2_rq.mem_global, `req_conf_type_i.vpu_rf_write`=U1(s2_nack_vpu_rf_write), `req_conf_type_i.miss_alloc`=U1(s2_nack_miss and not s2_nack_vpu_rf_write), `req_conf_type_i.miss_accepted`=s2_conf_miss_accepted, `req_conf_type_i.miss_assigned`=s2_conf_miss_assigned, misaligned_1st_i=U1(s2_nack_misaligned), uc_load_1st_i=U1(s2_uc_load_1st), uc_load_ok_i=s2_uc_load_ok, miss_fill_ok_i=s2_miss_fill_ok, rearm_i=U1(s2_rq_renack), rearm_prev_i=U1(s1_rq_rearm), rearm_entry_i=s2_rq.replay_entry, dealloc_i=U1(s2_rq_dealloc), dealloc_entry_i=s2_rq.replay_entry, miss_available_i=u_miss_handler_unit.handler_ready_o, miss_fill_error_i=u_miss_handler_unit.handler_fill_bus_error_o, uc_load_fill_i=U1(rq_uc_load_fill), uc_load_fill_id_i=s3_mh_ba_wptr, uc_load_fill_ok_i=U1(mh_uc_load_bus_error == 0), vpu_rf_in_use_i=s1_vpu_ctrl_i.tfma_rf_write, replay_grant_i=U1(id_rq_replay_grant))
+  id_rq_full = u_replay_queue.full_o != 0
+  id_rq_half_full = u_replay_queue.half_full_o != 0
+  s2_rq_empty = u_replay_queue.empty_o
+  s2_nack_rq_conflict = u_replay_queue.rq_conflict_o != 0
+  rq_conflict_to_co = u_replay_queue.rq_conflict_to_co_o != 0
+  id_rq_replay_bid = u_replay_queue.replay_bid_o != 0
+  s0_rq_replay_valid = u_replay_queue.replay_valid_o != 0
+  s0_rq_replay = (addr=u_replay_queue.replay_req_o.addr, buf_alloc=u_replay_queue.replay_req_o.buf_alloc, buf_id=u_replay_queue.replay_req_o.buf_id, cache_op=u_replay_queue.replay_req_o.cache_op, cacheable=u_replay_queue.replay_req_o.cacheable, cmd=u_replay_queue.replay_req_o.cmd, dest_addr=u_replay_queue.replay_req_o.dest.addr, dest_fp=u_replay_queue.replay_req_o.dest.fp, dest_thread=u_replay_queue.replay_req_o.dest.thread_id, gsc32_idx=u_replay_queue.replay_req_o.gsc32_idx, gsc_cnt=u_replay_queue.replay_req_o.gsc_cnt, mem_global=u_replay_queue.replay_req_o.mem_global, misaligned=u_replay_queue.replay_req_o.misaligned, misaligned_2nd=u_replay_queue.replay_req_o.misaligned_2nd, phys=u_replay_queue.replay_req_o.phys, ps_mask=u_replay_queue.replay_req_o.ps_mask, typ=u_replay_queue.replay_req_o.typ, uc_load_2nd=u_replay_queue.replay_req_o.uc_load_2nd, vm_sel=u_replay_queue.replay_req_o.vm_sel)
+  s0_rq_replay_entry = u_replay_queue.replay_entry_o
+  s0_rq_replay_age = u_replay_queue.replay_age_o
+  s0_rq_replay_uc_load_ok = u_replay_queue.replay_uc_ok_o != 0
+  s0_rq_replay_miss_fill_ok = u_replay_queue.replay_miss_ok_o != 0
+
+  // ---- Buffer array -----------------------------------------------------------------------------------------------------
+  const u_buffer_array = minion_dcache_buffer_array::[name=u_buffer_array](clk_i=clk_i, rst_ni=rst_ni, alloc_req_pre_i=id_core_alloc_rq_pre_i, alloc_req_val_i=s0_core_alloc_rq_val_i, alloc_gsc_i=id_core_gsc_i, reduce_alloc_req_i=U1(re_ba_alloc), s2_write_needed_core_i=U1(s2_ba_write_needed_core), s2_write_needed_i=U1(s2_ba_write_needed), s2_write_en_i=U1(s2_ba_write_en), s2_write_replay_i=U1(s2_ba_write_replay), s2_write_replay_entry_i=s2_rq.buf_id, s3_write_data_i=s3_ba_write_data, s3_write_en_ext_i=U1(s3_ba_write_en_ext), s2_write_en_ext_prev_i=U1(mh_wait_l2_to_ba_resp or re_wait_l2_to_ba_resp), s3_write_entry_ext_i=s3_ba_write_entry_ext, s3_write_data_ext_i=l2_resp_int.data, s2_dealloc_i=U1(s2_ba_dealloc), s2_dealloc_entry_i=s2_rq.buf_id, s1_dealloc_uc_i=U1(s1_mh_force_ba_rptr_qual and not s1_mh_ba_is_amo), s1_dealloc_uc_entry_i=s1_ba_rptr, reduce_dealloc_req_i=U1(s1_reduce_dealloc_req), reduce_dealloc_entry_i=s1_ba_rptr, s1_read_entry_i=s1_ba_rptr)
+  id_ba_full = u_buffer_array.full_o != 0
+  s2_ba_write_entry = u_buffer_array.s2_write_entry_o
+  s3_ba_write_en = u_buffer_array.s3_write_en_o != 0
+  s1_ba_data = u_buffer_array.s1_read_data_o
+
+  // ---- Reduce / tensor-store engine ---------------------------------------------------------------------------------------
+  // prp-style-allow flattened-bundle-arguments
+  const gen_offload_reduce_u_reduce = minion_dcache_reduce::[name=gen_offload_reduce_u_reduce](clk_i=clk_i, rst_ni=rst_ni, global_min_id_i=(shire_min_id_i#[0..<5], shire_id_i#[0..<8])#[..], chicken_bit_dcache_i=chicken_bit_dcache_i, reduce_start_i=U1(VpuEn != 0 and core_ctrl_i.reduce_start != 0 and not dcache_cfg_stall), tensorstore_start_i=U1(VpuEn != 0 and core_ctrl_i.tensorstore_start != 0 and not dcache_cfg_stall), tensorstore_stride_i=core_ctrl_i.tensorstore_stride, reduce_tensorstore_ctrl_i=core_ctrl_i.reduce_tensorstore_ctrl, thread_id_i=core_ctrl_i.thread_id, l2_resp_valid_i=U1(l2_resp_fifo_pop), `l2_resp_i.id`=l2_resp_int.id, `l2_resp_i.dest`=l2_resp_int.dest, `l2_resp_i.wdata`=l2_resp_int.wdata, `l2_resp_i.opcode`=l2_resp_int.opcode, `l2_resp_i.data`=l2_resp_int.data, `l2_resp_i.size`=l2_resp_int.size, `l2_resp_i.qwen`=l2_resp_int.qwen, re_l2_req_ready_i=U1(re_l2_evict_ready), ts_l2_req_ready_i=U1(ts_l2_evict_ready), s0_available_i=U1(s0_available_to_ts), s1_available_i=U1(s1_available_to_ts), s1_tlb_wait_i=U1(s1_tlb_wait), s1_tlb_fail_i=U1(s1_tlb_fail), s2_addr_i=s2_req_addr#[0..<40], ba_full_i=u_buffer_array.reduce_full_o, s2_valid_i=U1(s2_valid), s2_ba_written_entry_i=s2_ba_write_entry, s1_valid_i=U1(s1_valid), ba_read_used_i=U1(s1_mh_force_ba_rptr), s1_ba_data_i=s1_ba_data, scp_ctrl_on_i=U1(dcache_cfg_mode == minion_dcache_pkg.DcacheModeScratchpad), vpu_reduce_wait_i=s1_vpu_ctrl_i.reduce_wait, vm_status_i=vm_status_i, mh_going_to_uc_store_i=u_miss_handler_unit.going_to_uc_store_o)
+  reduce_ready = gen_offload_reduce_u_reduce.reduce_ready_o != 0
+  tensorstore_busy = gen_offload_reduce_u_reduce.tensorstore_busy_o != 0
+  re_buffer_avail = gen_offload_reduce_u_reduce.buffer_avail_o != 0
+  re_l2_evict_valid = gen_offload_reduce_u_reduce.re_l2_req_valid_o != 0
+  re_l2_evict_word = evict_pack(gen_offload_reduce_u_reduce.re_l2_req_o)
+  ts_l2_evict_valid = gen_offload_reduce_u_reduce.ts_l2_req_valid_o != 0
+  ts_l2_evict_word = evict_pack(gen_offload_reduce_u_reduce.ts_l2_req_o)
+  re_ts_l2_evict_inflight = gen_offload_reduce_u_reduce.re_ts_l2_req_inflight_o != 0
+  re_pipe_used = gen_offload_reduce_u_reduce.pipe_used_o != 0
+  s1_reduce_send_inst = gen_offload_reduce_u_reduce.s1_inst_send_val_o != 0
+  s2_reduce_send_inst = gen_offload_reduce_u_reduce.s2_inst_send_val_o != 0
+  s3_reduce_send_inst = gen_offload_reduce_u_reduce.s3_inst_send_val_o != 0
+  s1_reduce_op_inst = gen_offload_reduce_u_reduce.s1_inst_op_val_o != 0
+  s2_reduce_op_inst = gen_offload_reduce_u_reduce.s2_inst_op_val_o != 0
+  s3_reduce_op_inst = gen_offload_reduce_u_reduce.s3_inst_op_val_o != 0
+  ts_scp_read = gen_offload_reduce_u_reduce.ts_scp_read_o != 0
+  ts_scp_read_way = gen_offload_reduce_u_reduce.ts_scp_read_way_o
+  ts_scp_read_addr = gen_offload_reduce_u_reduce.ts_scp_read_addr_o
+  ts_col_size_is_128b = gen_offload_reduce_u_reduce.ts_col_size_is_128b_o != 0
+  s0_ts_addr_load = gen_offload_reduce_u_reduce.s0_addr_load_o != 0
+  s0_ts_addr = gen_offload_reduce_u_reduce.s0_addr_o
+  s0_ts_addr_msb_err = gen_offload_reduce_u_reduce.s0_addr_msb_err_o
+  s0_ts_thread_id = gen_offload_reduce_u_reduce.s0_thread_id_o
+  s1_ts_addr_load = gen_offload_reduce_u_reduce.s1_addr_load_o != 0
+  re_ba_alloc = gen_offload_reduce_u_reduce.ba_alloc_o != 0
+  s2_re_ba_write_needed = gen_offload_reduce_u_reduce.ba_write_needed_o != 0
+  s3_re_ba_write_addr = gen_offload_reduce_u_reduce.s3_ba_write_addr_o
+  re_wait_l2_to_ba_resp = gen_offload_reduce_u_reduce.wait_l2_to_ba_resp_o != 0
+  re_ba_entries_required = gen_offload_reduce_u_reduce.ba_entries_required_o != 0
+  s1_re_ba_read_en = gen_offload_reduce_u_reduce.ba_read_en_o != 0
+  s1_re_ba_read_en_spec = gen_offload_reduce_u_reduce.ba_read_en_spec_o != 0
+  s1_re_ba_read_addr = gen_offload_reduce_u_reduce.ba_read_addr_o
+  vm_status_ts = gen_offload_reduce_u_reduce.vm_status_ts_o
+  tensor_reduce_err_all_flags = gen_offload_reduce_u_reduce.err_flags_o
+
+  // ---- Debug APB access to the metadata and data arrays --------------------------------------------------------------
+  // The top address bit selects the data array (1) or the metadata (0).
+  const dbg_block_sel_md = apb_paddr_i#[9] == 0
+  const dbg_block_sel_da = apb_paddr_i#[9] == 1
+  const apb_access = apb_psel_i != 0 and apb_penable_i != 0
+  const apb_setup_write = apb_psel_i != 0 and apb_penable_i == 0 and apb_pwrite_i != 0
+  const dbg_md_read_en = apb_access and apb_pwrite_i == 0 and dbg_block_sel_md
+  dbg_da_read_en = apb_access and apb_pwrite_i == 0 and dbg_block_sel_da
+  dbg_md_write_en = apb_access and apb_pwrite_i != 0 and dbg_block_sel_md
+  dbg_da_write_en = apb_access and apb_pwrite_i != 0 and dbg_block_sel_da
+  dbg_md_write_en_early = apb_setup_write and dbg_block_sel_md
+  dbg_da_write_en_early = apb_setup_write and dbg_block_sel_da
+  const dbg_da_read_data:U64 = s3_data[dbg_da_read_addr#[0..<2]]
+  const dbg_md_way:U2 = dbg_md_read_addr#[4..<6]
+  mut dbg_md_read_word:U35 = 0
+  dbg_md_read_word#[0..<33] = `s2_meta_read.tag`[dbg_md_way]
+  dbg_md_read_word#[33..<35] = `s2_meta_read.coh_state`[dbg_md_way]
+  // The data-array read of a debug access takes a few cycles: accepted by the s1 mux, then valid.
+  const dbg_da_read_valid_next = apb_access and dbg_da_read_en and (dbg_da_read_accept or dbg_da_read_valid)
+  if apb_psel_i != 0 {
+    dbg_da_read_accept = dbg_da_read_accept_next
+    dbg_da_read_valid = dbg_da_read_valid_next
+  }
+  id_dbg_bid = dbg_md_read_en and not dbg_md_read_accept
+  if apb_psel_i != 0 or dbg_md_read_accept {
+    dbg_md_read_accept = apb_psel_i != 0 and (id_dbg_grant or dbg_md_read_accept)
+  }
+  if apb_psel_i != 0 {
+    s0_dbg_valid = id_dbg_grant
+  }
+  if dbg_md_read_accept {
+    s1_dbg_valid = s0_dbg_valid
+    dbg_md_read_valid = s1_dbg_valid
+  }
+  const dbg_da_write_valid_next = dbg_da_write_en and (not s4_da_write_en_but_dbg or dbg_da_write_valid)
+  if dbg_da_write_en_early or dbg_da_write_valid or dbg_da_write_en {
+    dbg_da_write_valid = dbg_da_write_valid_next
+  }
+  const dbg_apb_ready = if dbg_block_sel_md {
+    if apb_pwrite_i != 0 { DebugApbEn != 0 and not s1_co_mw_valid and not s1_mh_mw_valid } else { dbg_md_read_valid }
+  } else {
+    if apb_pwrite_i != 0 { dbg_da_write_valid } else { dbg_da_read_valid }
+  }
+
+  // ---- Responses to the core: cache-op/tensor completion, errors, progress -----------------------------------------------
+  // cache_op_busy_changed: a thread's cache op (L1 or L2) or a mode change finished; held one more cycle (z1).
+  mut cache_op_busy_changed:U2 = 0
+  for t in 0..<2 {
+    cache_op_busy_changed#[t] = U1((not cacheop_busy and cacheop_busy_prev and s0_co_mr_thread_id == t) or (not cacheop_l2_busy and cacheop_l2_busy_prev and s0_co_l2_thread_id == t) or (not dcache_cfg_stall and dcache_cfg_stall_prev))
+  }
+  cacheop_busy_prev = cacheop_busy
+  cacheop_l2_busy_prev = cacheop_l2_busy
+  dcache_cfg_stall_prev = dcache_cfg_stall
+  cache_op_busy_changed_z1 = cache_op_busy_changed
+  const cache_op_busy_changed_report:U2 = (if cache_op_busy_changed != 0 { ~cache_op_busy_changed } else { 0 }) | (if cache_op_busy_changed_z1 != 0 {
+        cache_op_busy_changed_z1
+      } else {
+        0
+      })
+  mut gsc_progress_save:U2 = 0
+  gsc_progress_save#[s2_rq.dest_thread] = U1(s2_save_progress or s2_clear_progress)
+  const gsc_progress:U3 = if s2_clear_progress and not s2_save_progress { 0 } else { s2_rq.gsc_cnt }
+  const core_ctrl_resp:CoreCtrlResp = (cache_op_ready=U1((core_co_l2_pref_ready or core_cache_op_ready) and not dcache_cfg_stall), cache_op_busy_changed=cache_op_busy_changed_report, cache_op_complete_l1=co_l1_th_id_complete, cache_op_complete_l2=co_l2_th_id_complete, tl_ready_0=U1(not tl0_working and not dcache_cfg_stall), tl_ready_1=U1(not tl1_working and not dcache_cfg_stall), ts_ready=U1(reduce_ready and not tensorstore_busy and not dcache_cfg_stall), tl_complete_0=tl0_id_complete, reduce_ready=U1(not tensorstore_busy and reduce_ready and not dcache_cfg_stall), tex_send_ready=U1(tex_send_ready and not dcache_cfg_stall), gsc_progress_save=gsc_progress_save, gsc_progress=gsc_progress)
+
+  // Memory-fault bits of the engines are ORed into the L1 cache-op flags {co-lock, mem-fault x2}.
+  const tensor_reduce_mem_err_flag:U2 = tensor_reduce_err_all_flags#[2..<4]
+  const tensor_load_mem_err_flags:U2 = (U1(tensor_load_err_flags_0#[3] != 0 or tensor_load_err_flags_1#[3] != 0), U1(tensor_load_err_flags_0#[4] != 0 or tensor_load_err_flags_1#[4] != 0))#[..]
+  mut cache_ops_err_flags:U4 = cache_ops_err_flags_l1
+  cache_ops_err_flags#[2] = cache_ops_err_flags_l1#[2] | cache_ops_err_flags_l2#[0] | tensor_reduce_mem_err_flag#[0] | tensor_load_mem_err_flags#[0]
+  cache_ops_err_flags#[3] = cache_ops_err_flags_l1#[3] | cache_ops_err_flags_l2#[1] | tensor_reduce_mem_err_flag#[1] | tensor_load_mem_err_flags#[1]
+
+  // ---- Bus errors and event counters --------------------------------------------------------------------------------------
+  mut s1_pma_bus_err_per_thread:U2 = 0
+  s1_pma_bus_err_per_thread#[s1_rq.dest_thread] = U1(s1_pma_bus_err)
+  const bus_err_next:U2 = (((u_cache_op_unit_l2.bus_err_o | u_miss_handler_unit.bus_err_o) | gen_offload_reduce_u_reduce.bus_err_o) | gen_offload_u_tensor_load_0.bus_err_o | gen_offload_u_tensor_load_1.bus_err_o | s1_pma_bus_err_per_thread)#[0..<2]
+  const bus_err_addr_next:U40 = if u_miss_handler_unit.bus_err_o != 0 { u_miss_handler_unit.bus_err_addr_o }
+    else { if s1_pma_bus_err { s1_rq.addr#[0..<40] } else { 0 } }
+  for t in 0..<2 {
+    if bus_err_next#[t] != 0 {
+      bus_err_addr_o#[t*40..<(t + 1)*40] = bus_err_addr_next
+    }
+  }
+  bus_err_o = bus_err_next
+
+  mut io_events_next:U12 = 0
+  io_events_next#[0] = U1(s0_core_req_valid_i != 0 and not s0_core_req_valid_killed and s0_core_req_i.dest.thread_id == 0)
+  io_events_next#[1] = U1(s0_core_req_valid_i != 0 and not s0_core_req_valid_killed and s0_core_req_i.dest.thread_id == 1)
+  io_events_next#[2] = U1(s2_mh_req_valid and s2_rq.cacheable != 0 and s2_rq.dest_thread == 0)
+  io_events_next#[3] = U1(s2_mh_req_valid and s2_rq.cacheable != 0 and s2_rq.dest_thread == 1)
+  io_events_next#[4] = U1((l2_miss_valid_out & l2_miss_ready) != 0)
+  io_events_next#[5] = U1((l2_miss_valid_out & ~l2_miss_ready) != 0 and io_events_next#[4] == 0)
+  io_events_next#[6] = U1((l2_evict_valid_out & l2_evict_ready) != 0)
+  io_events_next#[7] = U1((l2_evict_valid_out & ~l2_evict_ready) != 0 and io_events_next#[6] == 0)
+  io_events_next#[8] = U1(gen_offload_u_tensor_load_0.tl_start_o != 0 or gen_offload_u_tensor_load_1.tl_start_o != 0)
+  io_events_next#[9] = U1(gen_offload_u_tensor_load_0.tl_op_o != 0 or gen_offload_u_tensor_load_1.tl_op_o != 0)
+  io_events_next#[10] = gen_offload_reduce_u_reduce.ts_start_o
+  io_events_next#[11] = gen_offload_reduce_u_reduce.ts_op_o
+  if io_events_next != 0 or io_events_o != 0 {
+    io_events_o = io_events_next
+  }
+
+  // ---- Debug views (breakpoint/trace signals): per-stage request word plus that stage's flags ------------------------------
+  const sm_data_group0:U128 = rq_dbg(s0_rq)
+  const sm_data_group1_word:U112 = (rq_dbg(s1_rq), u_tlb_array.resp_data_o.access_fault, u_tlb_array.resp_data_o.fill_pending, u_tlb_array.resp_data_o.miss, u_tlb_array.resp_data_o.xcpt_st, u_tlb_array.resp_data_o.xcpt_ld, u_pma_unit.resp_data_o.cacheable, u_pma_unit.resp_data_o.access_fault, U1(s1_translate_only_addr_load), s1_tag_match, U1(s1_misaligned_case_1), U1(s1_misaligned_case_2), U1(s1_misaligned_case_3), U1(s1_misaligned_case_4), U1(s1_misaligned_case_5))#[..]
+  const sm_data_group1:U128 = sm_data_group1_word
+  const sm_data_group2_word:U105 = (rq_dbg(s2_rq), U1(s2_nack), U1(s2_nack_misaligned), U1(s2_nack_miss), U1(s2_nack_inflight), U1(s2_hit), s2_tag_match_qual, U1(s2_mh_req_valid))#[..]
+  const sm_data_group2:U128 = sm_data_group2_word
+  const sm_data_group3:U128 = rq_dbg(s3_rq)
+  const sm_data_debug_signals_dc:U512 = (sm_data_group0, sm_data_group1, sm_data_group2, sm_data_group3)#[..]
+  const sm_filter_debug_signals_dc:U160 = (s0_req_addr, s1_rq.addr#[0..<48], s2_rq.addr#[0..<40], U1(s0_valid_to_s1), U1(s0_wb_da_valid), U1(s0_da_read_en), U1(s0_dbg_valid), U1(s0_co_pf_valid), U1(s0_core_req_valid_i != 0), U1(s0_rq_replay_valid), U1(s0_co_mr_valid), U1(s0_tl_addr_load), U1(s0_ts_addr_load), U1(s0_co_l2_addr_load), U1(s1_valid), U1(s1_valid_masked), U1(s1_valid_to_s2), U1(s1_tlb_req_valid), U1(s2_valid), U1(s2_valid_qual), U1(s2_valid_masked), U1(s2_rq_push), U1(s2_rq_renack), U1(s2_rq_dealloc), U1(s2_valid_to_s3), U1(s3_valid), U1(dcache_idle))#[..]
+
+  // ---- Outputs -----------------------------------------------------------------------------------------------------------------
+  core_ctrl_resp_o = core_ctrl_resp
+  id_core_ready_o = U1(id_core_ready)
+  s3_vpu_scp_resp_o = (fill_is_tenb_early=U1(s3_vpu_scp_resp_fill_early), fill_is_tenb=s3_vpu_scp_resp_tmp___q#[5], tenb_flush=U1(tenb_flush), tenb_line=s3_vpu_scp_resp_tmp___q#[0..<4])
+  vpu_reduce_ctrl_o = gen_offload_reduce_u_reduce.vpu_ctrl_o
+  s2_core_resp_int_valid_o = U1(s2_valid_to_s3 and s2_is_read and s2_rq.dest_fp == 0 and s2_rq.dest_addr != 0)
+  s3_core_resp_valid_o = U1(s3_has_data or s3_reduce_op_inst)
+  s3_core_resp_o.dest.fp = U1(s3_rq.dest_fp != 0 or s3_reduce_op_inst)
+  s3_core_resp_o.dest.addr = s3_rq.dest_addr
+  s3_core_resp_o.dest.thread_id = s3_rq.dest_thread
+  s3_core_resp_o.typ = s3_resp_typ
+  s3_core_resp_o.gsc_cnt = s3_rq.gsc_cnt
+  s3_core_resp_o.ps_mask = s3_resp_ps_mask
+  s3_core_resp_o.data = s3_resp_data
+  s3_core_resp_o.addr = s3_resp_addr
+  id_core_scoreboard_o = u_replay_queue.scoreboard_o
+  id_core_sb_fp_dealloc_o = u_replay_queue.fp_sb_dealloc_o
+  id_core_sb_int_dealloc_o = u_replay_queue.int_sb_dealloc_o
+  s1_core_replay_next_o = U1(s1_valid and s1_rq.replay != 0 and s1_is_read and s1_rq.dest_fp == 0 and not s1_read_to_x0)
+  s1_core_xcpt_o = (af_ld=s1_xcpt#[3], af_st=s1_xcpt#[2], mf_ld=s1_xcpt#[5], mf_st=s1_xcpt#[4], pf_ld=s1_xcpt#[7], pf_st=s1_xcpt#[6], ps_ld=s1_xcpt#[1], ps_st=s1_xcpt#[0])
+  s3_ordered_o = s3_ordered
+  ptw_req_data_o = u_tlb_array.ptw_req_data_o
+  ptw_req_valid_o = u_tlb_array.ptw_req_valid_o
+  l2_evict_req_valid_o = l2_evict_valid_out
+  l2_evict_req_o = l2_evict_req_mux
+  l2_miss_req_valid_o = l2_miss_valid_out
+  l2_miss_req_o = l2_miss_req_mux
+  l2_resp_ready_o = U1(not l2_resp_fifo_full)
+  l2_resp_ready_int_o = U1(l2_resp_ready_int)
+  l2_resp_valid_int_o = U1(l2_resp_valid_int)
+  l2_resp_int_o = l2_resp_int
+  s1_bp_conf_o = s1_bp_conf
+  s1_bp_conf_valid_o = U1(s1_bp_conf_valid)
+  tensor_load_err_flags_o = (tensor_load_err_flags_0#[0..<3] | tensor_load_err_flags_1#[0..<3])#[0..<3]
+  cache_ops_err_flags_o = cache_ops_err_flags
+  tensor_reduce_err_flags_o = tensor_reduce_err_all_flags#[0]
+  apb_pready_o = U1(dbg_apb_ready and apb_psel_i != 0)
+  apb_prdata_o = if dbg_block_sel_md { dbg_md_read_word } else { dbg_da_read_data }
+  apb_pslverr_o = 0
+  csr_debug_sigs_o = (csr_signals_cou=u_cache_op_unit.csr_debug_signals_o#[0..<4], csr_signals_coul2=u_cache_op_unit_l2.csr_debug_signals_o#[0..<3], csr_signals_mh0=u_miss_handler_unit.csr_debug_signals_o#[0..<4], csr_signals_mh1=u_miss_handler_unit.csr_debug_signals_o#[4..<8], csr_signals_tl0=gen_offload_u_tensor_load_0.csr_debug_signals_o#[0..<3], csr_signals_tl1=gen_offload_u_tensor_load_1.csr_debug_signals_o#[0..<3], csr_signals_ts=gen_offload_reduce_u_reduce.csr_debug_signals_o#[0..<4], csr_signals_txsnd=0)
+  sm_match_debug_signals_tl0_o = gen_offload_u_tensor_load_0.sm_match_debug_signals_o#[0..<64]
+  sm_filter_debug_signals_tl0_o = gen_offload_u_tensor_load_0.sm_filter_debug_signals_o#[0..<200]
+  sm_data_debug_signals_tl0_o = gen_offload_u_tensor_load_0.sm_data_debug_signals_o#[0..<512]
+  sm_match_debug_signals_tl1_o = gen_offload_u_tensor_load_1.sm_match_debug_signals_o#[0..<64]
+  sm_filter_debug_signals_tl1_o = gen_offload_u_tensor_load_1.sm_filter_debug_signals_o#[0..<200]
+  sm_data_debug_signals_tl1_o = gen_offload_u_tensor_load_1.sm_data_debug_signals_o#[0..<512]
+  sm_match_debug_signals_ts_o = gen_offload_reduce_u_reduce.sm_match_debug_signals_o#[0..<64]
+  sm_filter_debug_signals_ts_o = gen_offload_reduce_u_reduce.sm_filter_debug_signals_o#[0..<200]
+  sm_data_debug_signals_ts_o = gen_offload_reduce_u_reduce.sm_data_debug_signals_o#[0..<512]
+  sm_match_debug_signals_co_o = u_cache_op_unit.sm_match_debug_signals_o#[0..<64]
+  sm_filter_debug_signals_co_o = u_cache_op_unit.sm_filter_debug_signals_o#[0..<200]
+  sm_data_debug_signals_co_o = u_cache_op_unit.sm_data_debug_signals_o#[0..<512]
+  sm_match_debug_signals_col2_o = u_cache_op_unit_l2.sm_match_debug_signals_o#[0..<64]
+  sm_filter_debug_signals_col2_o = u_cache_op_unit_l2.sm_filter_debug_signals_o#[0..<200]
+  sm_data_debug_signals_col2_o = u_cache_op_unit_l2.sm_data_debug_signals_o#[0..<512]
+  sm_match_debug_signals_mh_o = u_miss_handler_unit.sm_match_debug_signals_o#[0..<128]
+  sm_filter_debug_signals_mh_o = u_miss_handler_unit.sm_filter_debug_signals_o#[0..<400]
+  sm_data_debug_signals_mh_o = u_miss_handler_unit.sm_data_debug_signals_o#[0..<1024]
+  sm_match_debug_signals_dc_o = 0
+  sm_filter_debug_signals_dc_o = sm_filter_debug_signals_dc
+  sm_data_debug_signals_dc_o = sm_data_debug_signals_dc
+}

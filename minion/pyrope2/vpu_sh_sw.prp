@@ -1,0 +1,214 @@
+const minion_pkg = import("minion_pkg")
+const vpu_pkg = import("vpu_pkg")
+
+// VPU lane shift/swizzle/integer-op unit. Stage f2 registers the execute-stage
+// operands (valid is reset asynchronously, the operands are unreset and only
+// captured while a valid op is issued); the op is decoded from f2_cmd_q, the
+// result and FP flags are registered again in f3 (again only while valid).
+// Every op has its own enable (valid and cmd match); the enables are mutually
+// exclusive, so the result select is a plain priority chain. Ops in the
+// "gfx" group (swizzle, shifts, compares, logic, cube-map helpers) are merged
+// first, then selected against the remaining ops (add/sub, fsat, fsgnj, mv, fbci).
+pub mod vpu_sh_sw::[timecheck=false](clk_i:Clock, ex_cmd_i:U7, ex_dtype_i:U4, ex_imm_i:U20, ex_in1_i:minion_pkg.VpuDataSSz_T, ex_in2_i:minion_pkg.VpuDataSSz_T, ex_in3_i:minion_pkg.VpuDataSSz_T, ex_in_valid_i:U1, ex_mask_in1_i:U1, f2_swizz_in1_i:minion_pkg.VpuDataSSz_T, f2_swizz_in2_i:minion_pkg.VpuDataSSz_T, f2_swizz_in3_i:minion_pkg.VpuDataSSz_T, lane_id_i:U3, rst_ni:U1) -> (f2_fswizz_rdata_o:minion_pkg.VpuDataSSz_T@[], f3_out_bits_o:(data:U32, exc:U6)@[]) {
+  // bit of the FP flags set by cubeface_idx on an invalid face (Verilog VpuFlagInvalid)
+  comptime const FLAG_INVALID = 4
+  comptime const CUBE_IDX_TABLE = [0, 0x40000000, 0x40800000, vpu_pkg.Float32PosCqnan, 0x3f800000, 0x40400000, 0x40a00000, vpu_pkg.Float32PosCqnan]
+
+  // f2: execute-stage operands
+  reg f2_in_valid_q:U1:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 0
+  reg f2_cmd_q:U7:[clock_pin=clk_i]
+  reg f2_in1_q:U32:[clock_pin=clk_i]
+  reg f2_in2_q:U32:[clock_pin=clk_i]
+  reg f2_in3_q:U32:[clock_pin=clk_i]
+  reg f2_imm_q:U20:[clock_pin=clk_i]
+  reg f2_dtype_q:U4:[clock_pin=clk_i]
+  reg f2_mask_in1_q:U1:[clock_pin=clk_i]
+  f2_in_valid_q = ex_in_valid_i
+  if ex_in_valid_i != 0 {
+    f2_cmd_q = ex_cmd_i
+    f2_in1_q = ex_in1_i
+    f2_in2_q = ex_in2_i
+    f2_in3_q = ex_in3_i
+    f2_imm_q = ex_imm_i
+    f2_dtype_q = ex_dtype_i
+    f2_mask_in1_q = ex_mask_in1_i
+  }
+
+  const valid = f2_in_valid_q != 0
+  const cmd:U7 = f2_cmd_q
+  const in1:U32 = f2_in1_q
+  const in2:U32 = f2_in2_q
+  const in3:U32 = f2_in3_q
+  const imm:U20 = f2_imm_q
+  const sin1 = in1#sext[0..=31]
+  const sin2 = in2#sext[0..=31]
+
+  // shifts: the amount is in2, or imm[4:0] for the immediate forms
+  const sll_en = valid and (cmd == minion_pkg.VpuCmdSll or cmd == minion_pkg.VpuCmdSlli)
+  const sll_amt = if cmd == minion_pkg.VpuCmdSlli { imm#[0..<5] } else { in2 }
+  const sll_out:U32 = (in1 << sll_amt)#[0..<32]
+
+  const srl_sra_en = valid and (cmd == minion_pkg.VpuCmdSrl or cmd == minion_pkg.VpuCmdSra or cmd == minion_pkg.VpuCmdSrli or cmd == minion_pkg.VpuCmdSrai)
+  const srl_sra_amt = if cmd == minion_pkg.VpuCmdSrl or cmd == minion_pkg.VpuCmdSra { in2 } else { imm#[0..<5] }
+  // arithmetic shifts replicate bit 31 (srl/srli shift in a zero)
+  const sra_fill = if cmd == minion_pkg.VpuCmdSra or cmd == minion_pkg.VpuCmdSrai { in1#[31] } else { 0 }
+  const srl_sra_out:U32 = (((sra_fill << 32) | in1)#sext[0..=32] >> srl_sra_amt)#[0..<32]
+
+  // compares produce an all-ones / all-zeros word
+  const equal = in1 == in2
+  const less = if cmd == minion_pkg.VpuCmdFltu { in1 < in2 } else { sin1 < sin2 }
+  const feq_en = valid and cmd == minion_pkg.VpuCmdFeq
+  const flt_en = valid and (cmd == minion_pkg.VpuCmdFlt or cmd == minion_pkg.VpuCmdFltu)
+  const fle_en = valid and cmd == minion_pkg.VpuCmdFle
+  const feq_out:U32 = if equal { 0xffffffff } else { 0 }
+  const flt_out:U32 = if less { 0xffffffff } else { 0 }
+  const fle_out:U32 = if equal or less { 0xffffffff } else { 0 }
+
+  // fbci (integer form): sign-extended 20-bit immediate
+  const fbci_en = valid and cmd == minion_pkg.VpuCmdFbci and f2_dtype_q == minion_pkg.VpuDtypeInt
+  const fbci_out:U32 = imm#sext[0..=19]#[0..<32]
+
+  // min/max, signed or unsigned: keep the operand that wins the compare
+  const min_max_en = valid and (cmd == minion_pkg.VpuCmdMin or cmd == minion_pkg.VpuCmdMax or cmd == minion_pkg.VpuCmdMinu or cmd == minion_pkg.VpuCmdMaxu)
+  const min_max_unsigned = cmd == minion_pkg.VpuCmdMinu or cmd == minion_pkg.VpuCmdMaxu
+  const max_op = cmd == minion_pkg.VpuCmdMax or cmd == minion_pkg.VpuCmdMaxu
+  const in1_greater = if min_max_unsigned { in1 > in2 } else { sin1 > sin2 }
+  const min_max_out:U32 = if in1_greater == max_op { in1 } else { in2 }
+
+  // bitwise logic
+  const and_en = valid and (cmd == minion_pkg.VpuCmdAnd or cmd == minion_pkg.VpuCmdAndi)
+  const and_in2:U32 = if cmd == minion_pkg.VpuCmdAndi { imm#sext[0..=9]#[0..<32] } else { in2 }
+  const and_out:U32 = in1 & and_in2
+  const or_en = valid and cmd == minion_pkg.VpuCmdOr
+  const or_out:U32 = in1 | in2
+  const xor_en = valid and cmd == minion_pkg.VpuCmdXor
+  const xor_out:U32 = in1 ^ in2
+  const not_en = valid and cmd == minion_pkg.VpuCmdNot
+  const not_out:U32 = ~in1
+
+  // conditional moves: fcmov tests the whole word, fcmovm the mask bit
+  const fcmov_en = valid and cmd == minion_pkg.VpuCmdFcmov
+  const fcmov_out:U32 = if in1 == 0 { in3 } else { in2 }
+  const fcmovm_en = valid and cmd == minion_pkg.VpuCmdFcmovm
+  const fcmovm_out:U32 = if f2_mask_in1_q != 0 { in3 } else { in2 }
+
+  // fswizz: imm holds one 2-bit selector per lane (lane_id mod 4). Selector `sel`
+  // picks this lane's own operand (sel == lane) or, in order, the three
+  // neighbouring lanes' operands (neigh[sel] below the lane, neigh[sel - 1] above it).
+  const swizz_en = valid and cmd == minion_pkg.VpuCmdFswizz
+  const lane = lane_id_i#[0..<2]
+  const swizz_sel = (imm >> (lane*2))#[0..<2]
+  const neigh = (f2_swizz_in1_i, f2_swizz_in2_i, f2_swizz_in3_i)
+  mut swizz_out:U32 = in1
+  for l in 0..<4 {
+    for s in 0..<4 {
+      if s != l {
+        if lane == l and swizz_sel == s {
+          swizz_out = neigh[s - (if s > l { 1 } else { 0 })]
+        }
+      }
+    }
+  }
+  const packrepb_en = valid and cmd == minion_pkg.VpuCmdPackrepb
+  const packreph_en = valid and cmd == minion_pkg.VpuCmdPackreph
+
+  const fsetm_en = valid and cmd == minion_pkg.VpuCmdFsetm
+  const fsetm_out:U32 = if in1 == 0 { 0 } else { 1 }
+
+  // cube-map helpers (graphics)
+  const cubeface_en = valid and cmd == minion_pkg.VpuCmdCubeface
+  const cubeface_out:U32 = if in3#[0] == 1 { if in2#[0] == 1 { 0 } else { 1 } } else { if in1#[0] == 1 { 0 } else { 2 } }
+  const cubeface_idx_en = valid and cmd == minion_pkg.VpuCmdCubefaceIdx
+  const cube_sel:U3 = (in1#[0..<2], in2#[31])#[..]
+  const cubeface_idx_out:U32 = CUBE_IDX_TABLE[cube_sel]
+  // faces 3 and 7 (in1[1:0] == 3) are invalid: quiet NaN result and the invalid flag
+  const cubeface_idx_flags:U6 = if in1#[0..<2] == 3 { 1 << FLAG_INVALID } else { 0 }
+  const cubesgnsc_en = valid and cmd == minion_pkg.VpuCmdCubesgnsc
+  const cubesgnsc_sign:U1 = if in1#[0..<3] == 0 or in1#[0..<3] == 5 { 1 } else { 0 }
+  const cubesgnsc_out:U32 = (in2#[0..<31], cubesgnsc_sign)#[..]
+  const cubesgntc_en = valid and cmd == minion_pkg.VpuCmdCubesgntc
+  const cubesgntc_sign:U1 = if in1#[0..<3] != 2 { 1 } else { 0 }
+  const cubesgntc_out:U32 = (in2#[0..<31], cubesgntc_sign)#[..]
+
+  const gfx_en = packrepb_en or cubeface_en or cubeface_idx_en or cubesgnsc_en or cubesgntc_en or packreph_en or fsetm_en or swizz_en or fcmovm_en or fcmov_en or sll_en or srl_sra_en or feq_en or fle_en or flt_en or fbci_en or min_max_en or and_en or or_en or not_en or xor_en
+  const gfx_out:U32 = if packrepb_en { f2_swizz_in1_i }
+    elif cubeface_en { cubeface_out }
+    elif cubeface_idx_en { cubeface_idx_out }
+    elif cubesgnsc_en { cubesgnsc_out }
+    elif cubesgntc_en { cubesgntc_out }
+    elif packreph_en { f2_swizz_in1_i }
+    elif fsetm_en { fsetm_out }
+    elif swizz_en { swizz_out }
+    elif fcmovm_en { fcmovm_out }
+    elif fcmov_en { fcmov_out }
+    elif sll_en { sll_out }
+    elif srl_sra_en { srl_sra_out }
+    elif feq_en { feq_out }
+    elif fle_en { fle_out }
+    elif flt_en { flt_out }
+    elif fbci_en { fbci_out }
+    elif min_max_en { min_max_out }
+    elif and_en { and_out }
+    elif or_en { or_out }
+    elif not_en { not_out }
+    elif xor_en { xor_out }
+    else { 0 }
+
+  // fbci (float form): imm is the upper 20 bits, the low 12 repeat imm[3:0] and
+  // round the last nibble up when imm[3:0] >= 8
+  const fbci_ps_en = valid and cmd == minion_pkg.VpuCmdFbci and f2_dtype_q == minion_pkg.VpuDtypeF32
+  const fbci_low:U4 = imm#[0..<4]
+  mut fbci_low_rnd:U4 = fbci_low
+  if fbci_low >= 8 {
+    wrap fbci_low_rnd = fbci_low + 1
+  }
+  const fbci_low12:U12 = (fbci_low_rnd, fbci_low, fbci_low)#[..]
+  const fbci_ps_out:U32 = (fbci_low12, imm#[0..<20])#[..]
+
+  const mvfx_en = valid and (cmd == minion_pkg.VpuCmdMvsFx or cmd == minion_pkg.VpuCmdMvzFx or cmd == minion_pkg.VpuCmdFbc)
+  const is_mvxf = cmd == minion_pkg.VpuCmdMvXf or cmd == minion_pkg.VpuTransLogFma1 or cmd == minion_pkg.VpuTransLogFma2 or cmd == minion_pkg.VpuTransLogMul
+  const mvxf_en = valid and is_mvxf
+  const mvxf_out:U32 = if cmd == minion_pkg.VpuCmdMvXf { in1 } else { in3 }
+
+  // sign injection: fsgnj copies in2's sign, fsgnjn its complement, fsgnjx xors the signs
+  const fsgnj_en = valid and (cmd == minion_pkg.VpuCmdFsgnj or cmd == minion_pkg.VpuCmdFsgnjn or cmd == minion_pkg.VpuCmdFsgnjx)
+  const fsgnj_sign:U1 = if cmd == minion_pkg.VpuCmdFsgnj { in2#[31] }
+    elif cmd == minion_pkg.VpuCmdFsgnjn { ~in2#[31] }
+    else { in1#[31] ^ in2#[31] }
+  const fsgnj_out:U32 = (in1#[0..<31], fsgnj_sign)#[..]
+
+  // saturate a signed word to int8 / uint8
+  const fsat8_en = valid and cmd == minion_pkg.VpuCmdFsat8
+  const fsat8_out:U32 = if sin1 > 127 { 0x7f } elif sin1 < -128 { 0x80 } else { in1#[0..<8] }
+  const fsatu8_en = valid and cmd == minion_pkg.VpuCmdFsatu8
+  const fsatu8_out:U32 = if sin1 > 255 { 0xff } elif sin1 < 0 { 0 } else { in1#[0..<8] }
+
+  // add / addi / sub (sub = in1 + ~in3 + 1)
+  const add_en = valid and (cmd == minion_pkg.VpuCmdAdd or cmd == minion_pkg.VpuCmdAddi or cmd == minion_pkg.VpuCmdSub)
+  const is_sub = cmd == minion_pkg.VpuCmdSub
+  const add_rhs:U32 = if cmd == minion_pkg.VpuCmdAddi { imm#sext[0..=9]#[0..<32] } elif is_sub { ~in3 } else { in3 }
+  mut add_out:U32 = 0
+  wrap add_out = in1 + add_rhs + U1(is_sub)
+
+  const f2_data:U32 = if gfx_en { gfx_out }
+    elif mvfx_en { in1 }
+    elif fbci_ps_en { fbci_ps_out }
+    elif mvxf_en { mvxf_out }
+    elif fsgnj_en { fsgnj_out }
+    elif fsat8_en { fsat8_out }
+    elif fsatu8_en { fsatu8_out }
+    elif add_en { add_out }
+    else { 0 }
+  const f2_flags:U6 = if cubeface_idx_en { cubeface_idx_flags } else { 0 }
+
+  // f3: registered result, updated only for a valid op
+  reg f3_data_q:U32:[clock_pin=clk_i]
+  reg f3_flags_q:U6:[clock_pin=clk_i]
+  if valid {
+    f3_data_q = f2_data
+    f3_flags_q = f2_flags
+  }
+
+  f2_fswizz_rdata_o = in1
+  f3_out_bits_o = (data=f3_data_q, exc=f3_flags_q)
+}

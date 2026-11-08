@@ -1,0 +1,19 @@
+// Vector-lane tensor-multiply-accumulate slice: tensor-B and tensor-C register files
+// around one tima_top MAC unit on a gated clock; the MAC result is written back to tensor-C.
+const prim_clk_gate = import("prim_clk_gate.prim_clk_gate")
+const tima_top = import("tima_top.tima_top")
+const vpu_tensorb_rf = import("vpu_tensorb_rf.vpu_tensorb_rf")
+const vpu_tensorc_rf = import("vpu_tensorc_rf.vpu_tensorc_rf")
+const minion_pkg = import("minion_pkg")
+const vpu_pkg = import("vpu_pkg")
+
+pub mod vpu_lane_tima::[timecheck=false](clk_i:Clock, f1_tima_mul_en_i:U1, f2_tima_en_i:U1, f2_tima_in3_en_i:U1, f2_tima_zap_opdc_i:U1, te_i:U1, tena_rd_data_i:minion_pkg.VpuDataSSz_T, tenb_rd_addr_i:vpu_pkg.VpuTenbRfAddrW_T, tenb_wr_addr_i:vpu_pkg.VpuTenbRfAddrW_T, tenb_wr_data_i:minion_pkg.VpuDataSSz_T, tenb_wr_en_early_i:U1, tenb_wr_en_i:U1, tenc_rd_addr_i:vpu_pkg.VpuTencAddrW_T, tenc_wr_addr_i:vpu_pkg.VpuTencAddrW_T, tenc_wr_en_early_i:U1, tenc_wr_en_i:U1, tima_clk_en_i:U1, tima_in1_signed_i:U1, tima_in2_signed_i:U1) -> (tenb_out_o:minion_pkg.VpuDataSSz_T@[], tima_out_o:minion_pkg.VpuDataSSz_T@[]) {
+  // tima_out_o is read by the tensor-C regfile write port before u_tima (its driver) is declared.
+  wire tima_out_o:U32 = nil
+  const u_tenb_rf = vpu_tensorb_rf(clk_i=clk_i, rd_addr_i=tenb_rd_addr_i, wr_en_i=tenb_wr_en_i, wr_en_early_i=tenb_wr_en_early_i, wr_addr_i=tenb_wr_addr_i, wr_data_i=tenb_wr_data_i)
+  const u_cgate_tima = prim_clk_gate(clk_i=clk_i, en_i=tima_clk_en_i, `dft_i.scanmode`=0)
+  const u_tenc_rf = vpu_tensorc_rf(clk_i=clk_i, rd_addr_i=tenc_rd_addr_i, wr_en_i=tenc_wr_en_i, wr_en_early_i=tenc_wr_en_early_i, wr_addr_i=tenc_wr_addr_i, wr_data_i=tima_out_o)
+  const u_tima = tima_top(clk_i=u_cgate_tima, f1_mul_en_i=f1_tima_mul_en_i, f1_in1_i=tena_rd_data_i, f1_in2_i=u_tenb_rf, f1_in1_signed_i=tima_in1_signed_i, f1_in2_signed_i=tima_in2_signed_i, f2_in3_i=u_tenc_rf, f2_zap_opd3_i=U1(f2_tima_zap_opdc_i == 0), f2_tima_en_i=f2_tima_en_i, f2_in3_en_i=f2_tima_in3_en_i)
+  tima_out_o = u_tima
+  tenb_out_o = u_tenb_rf
+}

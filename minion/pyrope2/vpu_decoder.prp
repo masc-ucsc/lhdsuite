@@ -1,0 +1,658 @@
+const minion_pkg = import("minion_pkg")
+
+// VPU instruction decoder: maps a 32-bit custom/FP instruction word to the VPU
+// control signals (same table as the Verilog casex). Each row matches
+// (inst & mask) == match and yields {legal, cmd, dtype, control flags}; the rows are
+// mutually exclusive, anything unmatched is illegal (all signals 0, id_vpu_insn 0).
+// FRSQ_PS and FSIN_PS are decoded only when EnableExtraTrans is set, which this
+// decoder does not support (they stay illegal, like the default).
+const pkg = minion_pkg
+
+// entry layout: bit 45 legal, [44:38] cmd, then the control flags (bit 37 down to 0)
+// in vpu_ctrl_sigs_t order, with the 4-bit dtype in [12:9]
+comptime const LEGAL = 1 << 45
+comptime const CMD_LSB = 38
+comptime const DTYPE_LSB = 9
+comptime const F_TXFMA = 1 << 37
+comptime const F_SHSW = 1 << 36
+comptime const F_ROM = 1 << 35
+comptime const F_SCATTER = 1 << 34
+comptime const F_CVT = 1 << 33
+comptime const F_TRANS = 1 << 32
+comptime const F_GCVT = 1 << 31
+comptime const F_FROMINTF = 1 << 30
+comptime const F_TOINTM = 1 << 29
+comptime const F_TOINTF = 1 << 28
+comptime const F_MASKOP = 1 << 27
+comptime const F_LDST = 1 << 26
+comptime const F_M0REN = 1 << 25
+comptime const F_MALLREN = 1 << 24
+comptime const F_MREN1 = 1 << 23
+comptime const F_MREN2 = 1 << 22
+comptime const F_WEN = 1 << 21
+comptime const F_REN1 = 1 << 20
+comptime const F_REN2 = 1 << 19
+comptime const F_REN3 = 1 << 18
+comptime const F_REND = 1 << 17
+comptime const F_SWAP12 = 1 << 16
+comptime const F_SWAP23 = 1 << 15
+comptime const F_SWAP13 = 1 << 14
+comptime const F_VECTOR = 1 << 13
+comptime const F_FROMINT = 1 << 8
+comptime const F_TOINT = 1 << 7
+comptime const F_FMA = 1 << 6
+comptime const F_FMS = 1 << 5
+comptime const F_ADD = 1 << 4
+comptime const F_SUB = 1 << 3
+comptime const F_MUL = 1 << 2
+comptime const F_ROUND = 1 << 1
+comptime const F_WFLAGS = 1 << 0
+
+comb vpu_row(cmd:U7, dtype:U4, flags:U46) -> (r:U46) {
+  r = LEGAL | (cmd << CMD_LSB) | (dtype << DTYPE_LSB) | flags
+}
+
+pub comb vpu_decoder<EnableExtraTrans=0>::[timecheck=false](id_inst:U32) -> (id_sigs:(cmd:U7, txfma:U1, shsw:U1, rom:U1, scatter:U1, cvt:U1, trans:U1, gcvt:U1, fromintf:U1, tointm:U1, tointf:U1, maskop:U1, ldst:U1, m0ren:U1, mallren:U1, mren1:U1, mren2:U1, wen:U1, ren1:U1, ren2:U1, ren3:U1, rend:U1, swap12:U1, swap23:U1, swap13:U1, vector:U1, dtype:U4, fromint:U1, toint:U1, fma:U1, fms:U1, add:U1, sub:U1, mul:U1, round:U1, wflags:U1), id_vpu_insn:U1) {
+  cassert(EnableExtraTrans == 0, "FRSQ_PS/FSIN_PS (EnableExtraTrans) are not supported")
+  mut entry:U46 = 0
+
+  // FP Single
+  if (id_inst & 0x707f) == 0x2007 { // FLW
+    entry = vpu_row(cmd=pkg.VpuCmdX, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_WEN)
+  }
+  if (id_inst & 0x707f) == 0x2027 { // FSW
+    entry = vpu_row(cmd=pkg.VpuCmdMvsFx, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_LDST | F_REN1 | F_REN2 | F_SWAP12)
+  }
+  if (id_inst & 0xfff0707f) == 0xf0000053 { // FMV_S_X
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_WEN | F_FROMINT | F_ROUND)
+  }
+  if (id_inst & 0xfff0007f) == 0xd0000053 { // FCVT_S_W
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF32int, dtype=pkg.VpuDtypeInt, flags=F_TXFMA | F_CVT | F_WEN | F_SWAP13 | F_FROMINT | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0xfff0007f) == 0xd0100053 { // FCVT_S_WU
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF32uint, dtype=pkg.VpuDtypeInt, flags=F_TXFMA | F_CVT | F_WEN | F_SWAP13 | F_FROMINT | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0xfff0707f) == 0xe0000053 { // FMV_X_S
+    entry = vpu_row(cmd=pkg.VpuCmdMvsFx, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_WEN | F_REN1 | F_TOINT | F_ROUND)
+  }
+  if (id_inst & 0xfff0707f) == 0xe0001053 { // FCLASS_S
+    entry = vpu_row(cmd=pkg.VpuCmdClass, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_WEN | F_REN1 | F_SWAP13 | F_TOINT)
+  }
+  if (id_inst & 0xfff0007f) == 0xc0000053 { // FCVT_W_S
+    entry = vpu_row(cmd=pkg.VpuCmdCvtIntf32, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_CVT | F_WEN | F_REN1 | F_SWAP13 | F_TOINT | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0xfff0007f) == 0xc0100053 { // FCVT_WU_S
+    entry = vpu_row(cmd=pkg.VpuCmdCvtUintf32, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_CVT | F_WEN | F_REN1 | F_SWAP13 | F_TOINT | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0xfe00707f) == 0xa0002053 { // FEQ_S
+    entry = vpu_row(cmd=pkg.VpuCmdFeq, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_TOINT | F_WFLAGS)
+  }
+  if (id_inst & 0xfe00707f) == 0xa0001053 { // FLT_S
+    entry = vpu_row(cmd=pkg.VpuCmdFlt, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_TOINT | F_WFLAGS)
+  }
+  if (id_inst & 0xfe00707f) == 0xa0000053 { // FLE_S
+    entry = vpu_row(cmd=pkg.VpuCmdFle, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_TOINT | F_WFLAGS)
+  }
+  if (id_inst & 0xfe00707f) == 0x20000053 { // FSGNJ_S
+    entry = vpu_row(cmd=pkg.VpuCmdFsgnj, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_WEN | F_REN1 | F_REN2)
+  }
+  if (id_inst & 0xfe00707f) == 0x20001053 { // FSGNJN_S
+    entry = vpu_row(cmd=pkg.VpuCmdFsgnjn, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_WEN | F_REN1 | F_REN2)
+  }
+  if (id_inst & 0xfe00707f) == 0x20002053 { // FSGNJX_S
+    entry = vpu_row(cmd=pkg.VpuCmdFsgnjx, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_WEN | F_REN1 | F_REN2)
+  }
+  if (id_inst & 0xfe00707f) == 0x28000053 { // FMIN_S
+    entry = vpu_row(cmd=pkg.VpuCmdMin, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_WFLAGS)
+  }
+  if (id_inst & 0xfe00707f) == 0x28001053 { // FMAX_S
+    entry = vpu_row(cmd=pkg.VpuCmdMax, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_WFLAGS)
+  }
+  if (id_inst & 0xfe00007f) == 0x53 { // FADD_S
+    entry = vpu_row(cmd=pkg.VpuCmdAdd, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_ADD | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0xfe00007f) == 0x8000053 { // FSUB_S
+    entry = vpu_row(cmd=pkg.VpuCmdSub, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_SUB | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0xfe00007f) == 0x10000053 { // FMUL_S
+    entry = vpu_row(cmd=pkg.VpuCmdMul, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_WEN | F_REN1 | F_REN2 | F_MUL | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0x600007f) == 0x43 { // FMADD_S
+    entry = vpu_row(cmd=pkg.VpuCmdMadd, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_WEN | F_REN1 | F_REN2 | F_REN3 | F_FMA | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0x600007f) == 0x47 { // FMSUB_S
+    entry = vpu_row(cmd=pkg.VpuCmdMsub, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_WEN | F_REN1 | F_REN2 | F_REN3 | F_FMS | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0x600007f) == 0x4f { // FNMADD_S
+    entry = vpu_row(cmd=pkg.VpuCmdNmadd, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_WEN | F_REN1 | F_REN2 | F_REN3 | F_FMA | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0x600007f) == 0x4b { // FNMSUB_S
+    entry = vpu_row(cmd=pkg.VpuCmdNmsub, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_WEN | F_REN1 | F_REN2 | F_REN3 | F_FMS | F_ROUND | F_WFLAGS)
+  }
+
+  // Moscow
+  if (id_inst & 0x707f) == 0x5007 { // FLQ2
+    entry = vpu_row(cmd=pkg.VpuCmdX, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_WEN | F_VECTOR)
+  }
+  if (id_inst & 0x707f) == 0x5027 { // FSQ2
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_REN2 | F_SWAP12 | F_VECTOR)
+  }
+
+  // Packed-Single: Load & Store
+  if (id_inst & 0x707f) == 0x200b { // FLW_PS
+    entry = vpu_row(cmd=pkg.VpuCmdX, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_WEN | F_VECTOR)
+  }
+  if (id_inst & 0x707f) == 0x600b { // FSW_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_REN2 | F_SWAP12 | F_VECTOR)
+  }
+
+  // Packed-Single: Broadcast
+  if (id_inst & 0x707f) == 0xb { // FBC_PS
+    entry = vpu_row(cmd=pkg.VpuCmdFbc, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_WEN | F_VECTOR | F_WFLAGS)
+  }
+  if (id_inst & 0x707f) == 0x300b { // FBCX_PS
+    entry = vpu_row(cmd=pkg.VpuCmdFbc, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_M0REN | F_WEN | F_VECTOR | F_FROMINT)
+  }
+  if (id_inst & 0x7f) == 0x1f { // FBCI_PS
+    entry = vpu_row(cmd=pkg.VpuCmdFbci, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_M0REN | F_WEN | F_VECTOR | F_WFLAGS)
+  }
+
+  // Packed-Single: Gather and Scatter
+  if (id_inst & 0xfe00707f) == 0x6000100b { // FGW_PS
+    entry = vpu_row(cmd=pkg.VpuCmdX, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_WEN | F_REN1 | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x5000100b { // FGH_PS
+    entry = vpu_row(cmd=pkg.VpuCmdX, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_WEN | F_REN1 | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x4800100b { // FGB_PS
+    entry = vpu_row(cmd=pkg.VpuCmdX, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_WEN | F_REN1 | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xe000100b { // FSCW_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xd000100b { // FSCH_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xc800100b { // FSCB_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x2000100b { // FG32W_PS
+    entry = vpu_row(cmd=pkg.VpuCmdX, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_WEN | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x1000100b { // FG32H_PS
+    entry = vpu_row(cmd=pkg.VpuCmdX, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_WEN | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x800100b { // FG32B_PS
+    entry = vpu_row(cmd=pkg.VpuCmdX, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_WEN | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xa000100b { // FSC32W_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_REND | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x9000100b { // FSC32H_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_REND | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x8800100b { // FSC32B_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_REND | F_VECTOR)
+  }
+
+  // Packed-Single: Computational
+  if (id_inst & 0xfe00007f) == 0x7b { // FADD_PS
+    entry = vpu_row(cmd=pkg.VpuCmdAdd, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_VECTOR | F_ADD | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0xfe00007f) == 0x800007b { // FSUB_PS
+    entry = vpu_row(cmd=pkg.VpuCmdSub, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_VECTOR | F_SUB | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0xfe00007f) == 0x1000007b { // FMUL_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMul, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR | F_MUL | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0xfe00707f) == 0x2800007b { // FMIN_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMin, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_VECTOR | F_WFLAGS)
+  }
+  if (id_inst & 0xfe00707f) == 0x2800107b { // FMAX_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMax, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_VECTOR | F_WFLAGS)
+  }
+  if (id_inst & 0x600007f) == 0x5b { // FMADD_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMadd, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_REN3 | F_VECTOR | F_FMA | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0x600007f) == 0x200005b { // FMSUB_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMsub, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_REN3 | F_VECTOR | F_FMS | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0x600007f) == 0x400005b { // FNMSUB_PS
+    entry = vpu_row(cmd=pkg.VpuCmdNmsub, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_REN3 | F_VECTOR | F_FMS | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0x600007f) == 0x600005b { // FNMADD_PS
+    entry = vpu_row(cmd=pkg.VpuCmdNmadd, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_REN3 | F_VECTOR | F_FMA | F_ROUND | F_WFLAGS)
+  }
+
+  // Packed-Single: Compare
+  if (id_inst & 0xfe00707f) == 0xa000207b { // FEQ_PS
+    entry = vpu_row(cmd=pkg.VpuCmdFeq, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_TOINTF | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_VECTOR | F_WFLAGS)
+  }
+  if (id_inst & 0xfe00707f) == 0xa000607b { // FEQM_PS
+    entry = vpu_row(cmd=pkg.VpuCmdFeq, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_TOINTM | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_VECTOR | F_WFLAGS)
+  }
+  if (id_inst & 0xfe00707f) == 0xa000107b { // FLT_PS
+    entry = vpu_row(cmd=pkg.VpuCmdFlt, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_TOINTF | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_VECTOR | F_WFLAGS)
+  }
+  if (id_inst & 0xfe00707f) == 0xa000507b { // FLTM_PS
+    entry = vpu_row(cmd=pkg.VpuCmdFlt, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_TOINTM | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_VECTOR | F_WFLAGS)
+  }
+  if (id_inst & 0xfe00707f) == 0xa000007b { // FLE_PS
+    entry = vpu_row(cmd=pkg.VpuCmdFle, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_TOINTF | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_VECTOR | F_WFLAGS)
+  }
+  if (id_inst & 0xfe00707f) == 0xa000407b { // FLEM_PS
+    entry = vpu_row(cmd=pkg.VpuCmdFle, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_TOINTM | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_VECTOR | F_WFLAGS)
+  }
+  if (id_inst & 0xfff0707f) == 0xe000107b { // FCLASS_PS
+    entry = vpu_row(cmd=pkg.VpuCmdClass, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_TOINTF | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_SWAP13 | F_VECTOR)
+  }
+
+  // Packed-Single: Conversion
+  if (id_inst & 0xfff0007f) == 0xc000007b { // FCVT_PW_PS
+    entry = vpu_row(cmd=pkg.VpuCmdCvtIntf32, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_CVT | F_TOINTF | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0xfff0007f) == 0xc010007b { // FCVT_PWU_PS
+    entry = vpu_row(cmd=pkg.VpuCmdCvtUintf32, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_CVT | F_TOINTF | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0xfff0007f) == 0xd000007b { // FCVT_PS_PW
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF32int, dtype=pkg.VpuDtypeInt, flags=F_TXFMA | F_CVT | F_FROMINTF | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0xfff0007f) == 0xd010007b { // FCVT_PS_PWU
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF32uint, dtype=pkg.VpuDtypeInt, flags=F_TXFMA | F_CVT | F_FROMINTF | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0xfff0007f) == 0xd020007b { // FCVT_PS_RAST
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF32rast, dtype=pkg.VpuDtypeInt, flags=F_TXFMA | F_CVT | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR)
+  }
+  if (id_inst & 0xfff0007f) == 0xc020007b { // FCVT_RAST_PS
+    entry = vpu_row(cmd=pkg.VpuCmdCvtRastf32, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_CVT | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR)
+  }
+
+  // Packed-Single: Sign / Move
+  if (id_inst & 0xfe00707f) == 0x2000007b { // FSGNJ_PS
+    entry = vpu_row(cmd=pkg.VpuCmdFsgnj, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_FROMINTF | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x2000107b { // FSGNJN_PS
+    entry = vpu_row(cmd=pkg.VpuCmdFsgnjn, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_FROMINTF | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x2000207b { // FSGNJX_PS
+    entry = vpu_row(cmd=pkg.VpuCmdFsgnjx, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_FROMINTF | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xff80707f) == 0xe000007b { // FMVZ_X_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvzFx, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_WEN | F_REN1 | F_VECTOR | F_TOINT)
+  }
+  if (id_inst & 0xff80707f) == 0xe000207b { // FMVS_X_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvsFx, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_WEN | F_REN1 | F_VECTOR | F_TOINT)
+  }
+  if (id_inst & 0x600707f) == 0x400203f { // FCMOV_PS
+    entry = vpu_row(cmd=pkg.VpuCmdFcmov, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_FROMINTF | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_REN3 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x77 { // FCMOVM_PS
+    entry = vpu_row(cmd=pkg.VpuCmdFcmovm, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_FROMINTF | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_SWAP13 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00007f) == 0xe600007b { // FSWIZZ_PS
+    entry = vpu_row(cmd=pkg.VpuCmdFswizz, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_FROMINTF | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+
+  // Packed-Single: Misc
+  if (id_inst & 0xfff0707f) == 0x5820007b { // FFRC_PS
+    entry = vpu_row(cmd=pkg.VpuCmdFfrc, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR | F_WFLAGS)
+  }
+  if (id_inst & 0xfff0007f) == 0x5810007b { // FROUND_PS
+    entry = vpu_row(cmd=pkg.VpuCmdFround, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_CVT | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR | F_ROUND | F_WFLAGS)
+  }
+
+  // Transcendental
+  if (id_inst & 0xfff0707f) == 0x5870007b { // FRCP_PS
+    entry = vpu_row(cmd=pkg.VpuTransRcpRr, dtype=pkg.VpuDtypeF32, flags=F_ROM | F_M0REN | F_WEN | F_REN1 | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfff0707f) == 0x5830007b { // FLOG_PS
+    entry = vpu_row(cmd=pkg.VpuTransLogRr, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_ROM | F_M0REN | F_WEN | F_REN1 | F_SWAP12 | F_SWAP13 | F_VECTOR)
+  }
+  if (id_inst & 0xfff0707f) == 0x5840007b { // FEXP_PS
+    entry = vpu_row(cmd=pkg.VpuTransExpFrac, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x3000007b { // FRCP_FIX_RAST
+    entry = vpu_row(cmd=pkg.VpuCmdNr1Frcpfxp, dtype=pkg.VpuDtypeInt, flags=F_TXFMA | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR | F_MUL)
+  }
+
+  // Graphics: Upconvert
+  if (id_inst & 0xfff0007f) == 0xd0a0007b { // FCVT_PS_F16
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF32f16, dtype=pkg.VpuDtypeF16, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR | F_WFLAGS)
+  }
+  if (id_inst & 0xfff0007f) == 0xd090007b { // FCVT_PS_F11
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF32f11, dtype=pkg.VpuDtypeF11, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR)
+  }
+  if (id_inst & 0xfff0007f) == 0xd080007b { // FCVT_PS_F10
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF32f10, dtype=pkg.VpuDtypeF10, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR)
+  }
+  if (id_inst & 0xfff0007f) == 0xd100007b { // FCVT_PS_UN24
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF32un24, dtype=pkg.VpuDtypeUn24, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR | F_ROUND)
+  }
+  if (id_inst & 0xfff0007f) == 0xd110007b { // FCVT_PS_UN16
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF32un16, dtype=pkg.VpuDtypeUn16, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR | F_ROUND)
+  }
+  if (id_inst & 0xfff0007f) == 0xd120007b { // FCVT_PS_UN10
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF32un10, dtype=pkg.VpuDtypeUn10, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR | F_ROUND)
+  }
+  if (id_inst & 0xfff0007f) == 0xd130007b { // FCVT_PS_UN8
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF32un8, dtype=pkg.VpuDtypeUn8, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR | F_ROUND)
+  }
+  if (id_inst & 0xfff0007f) == 0xd170007b { // FCVT_PS_UN2
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF32un2, dtype=pkg.VpuDtypeUn2, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR | F_ROUND)
+  }
+  if (id_inst & 0xfff0007f) == 0xd190007b { // FCVT_PS_SN16
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF32sn16, dtype=pkg.VpuDtypeSn16, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR | F_ROUND)
+  }
+  if (id_inst & 0xfff0007f) == 0xd1b0007b { // FCVT_PS_SN8
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF32sn8, dtype=pkg.VpuDtypeSn8, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_SWAP13 | F_VECTOR | F_ROUND)
+  }
+
+  // Graphics: Downconvert
+  if (id_inst & 0xfff0007f) == 0xd890007b { // FCVT_F16_PS
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF16f32, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_VECTOR | F_ROUND | F_WFLAGS)
+  }
+  if (id_inst & 0xfff0007f) == 0xd880007b { // FCVT_F11_PS
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF11f32, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+  if (id_inst & 0xfff0007f) == 0xd8b0007b { // FCVT_F10_PS
+    entry = vpu_row(cmd=pkg.VpuCmdCvtF10f32, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+  if (id_inst & 0xfff0007f) == 0xd900007b { // FCVT_UN24_PS
+    entry = vpu_row(cmd=pkg.VpuCmdCvtUn24f32, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+  if (id_inst & 0xfff0007f) == 0xd910007b { // FCVT_UN16_PS
+    entry = vpu_row(cmd=pkg.VpuCmdCvtUn16f32, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+  if (id_inst & 0xfff0007f) == 0xd920007b { // FCVT_UN10_PS
+    entry = vpu_row(cmd=pkg.VpuCmdCvtUn10f32, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+  if (id_inst & 0xfff0007f) == 0xd930007b { // FCVT_UN8_PS
+    entry = vpu_row(cmd=pkg.VpuCmdCvtUn8f32, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+  if (id_inst & 0xfff0007f) == 0xd970007b { // FCVT_UN2_PS
+    entry = vpu_row(cmd=pkg.VpuCmdCvtUn2f32, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+  if (id_inst & 0xfff0007f) == 0xd990007b { // FCVT_SN16_PS
+    entry = vpu_row(cmd=pkg.VpuCmdCvtSn16f32, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+  if (id_inst & 0xfff0007f) == 0xd9b0007b { // FCVT_SN8_PS
+    entry = vpu_row(cmd=pkg.VpuCmdCvtSn8f32, dtype=pkg.VpuDtypeF32, flags=F_TXFMA | F_GCVT | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+
+  // Packed-Integer (TXFMA): Arithmetic
+  if (id_inst & 0xfe00707f) == 0x1600007b { // FMUL_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMull, dtype=pkg.VpuDtypeInt, flags=F_TXFMA | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR | F_MUL)
+  }
+  if (id_inst & 0xfe00707f) == 0x1600107b { // FMULH_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMulh, dtype=pkg.VpuDtypeInt, flags=F_TXFMA | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR | F_MUL)
+  }
+  if (id_inst & 0xfe00707f) == 0x1600207b { // FMULHU_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMulhu, dtype=pkg.VpuDtypeInt, flags=F_TXFMA | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR | F_MUL)
+  }
+
+  // Packed-Integer (Short): Arithmetic
+  if (id_inst & 0xfe00707f) == 0x600007b { // FADD_PI
+    entry = vpu_row(cmd=pkg.VpuCmdAdd, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_VECTOR | F_ADD)
+  }
+  if (id_inst & 0x600707f) == 0x400003f { // FADDI_PI
+    entry = vpu_row(cmd=pkg.VpuCmdAddi, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_VECTOR | F_ADD)
+  }
+  if (id_inst & 0xfe00707f) == 0xe00007b { // FSUB_PI
+    entry = vpu_row(cmd=pkg.VpuCmdSub, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_SWAP23 | F_VECTOR | F_SUB)
+  }
+  if (id_inst & 0xfe00707f) == 0x2e00007b { // FMIN_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMin, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x2e00107b { // FMAX_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMax, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x2e00207b { // FMINU_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMinu, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x2e00307b { // FMAXU_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMaxu, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+
+  // Packed-Integer (Short): Logic
+  if (id_inst & 0xfe00707f) == 0x600707b { // FAND_PI
+    entry = vpu_row(cmd=pkg.VpuCmdAnd, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x600607b { // FOR_PI
+    entry = vpu_row(cmd=pkg.VpuCmdOr, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x600207b { // FNOT_PI
+    entry = vpu_row(cmd=pkg.VpuCmdNot, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x600407b { // FXOR_PI
+    entry = vpu_row(cmd=pkg.VpuCmdXor, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x600107b { // FSLL_PI
+    entry = vpu_row(cmd=pkg.VpuCmdSll, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x600507b { // FSRL_PI
+    entry = vpu_row(cmd=pkg.VpuCmdSrl, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xe00507b { // FSRA_PI
+    entry = vpu_row(cmd=pkg.VpuCmdSra, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+
+  // Packed-Integer (Short): Compare
+  if (id_inst & 0xfe00707f) == 0xa600207b { // FEQ_PI
+    entry = vpu_row(cmd=pkg.VpuCmdFeq, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xa600107b { // FLT_PI
+    entry = vpu_row(cmd=pkg.VpuCmdFlt, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xa600307b { // FLTU_PI
+    entry = vpu_row(cmd=pkg.VpuCmdFltu, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xa600007b { // FLE_PI
+    entry = vpu_row(cmd=pkg.VpuCmdFle, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xfe007c7f) == 0x3e00007b { // FLTM_PI
+    entry = vpu_row(cmd=pkg.VpuCmdFlt, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_TOINTM | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xfff07c7f) == 0xa600407b { // FSETM_PI
+    entry = vpu_row(cmd=pkg.VpuCmdFsetm, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_TOINTM | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+  if (id_inst & 0xfff0707f) == 0x600307b { // FSAT8_PI
+    entry = vpu_row(cmd=pkg.VpuCmdFsat8, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+  if (id_inst & 0xfff0707f) == 0x610307b { // FSATU8_PI
+    entry = vpu_row(cmd=pkg.VpuCmdFsatu8, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+
+  // Packed-Integer (Short): Immediate
+  if (id_inst & 0x600707f) == 0x400103f { // FANDI_PI
+    entry = vpu_row(cmd=pkg.VpuCmdAndi, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x4e00107b { // FSLLI_PI
+    entry = vpu_row(cmd=pkg.VpuCmdSlli, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+  if (id_inst & 0x7f) == 0x5f { // FBCI_PI
+    entry = vpu_row(cmd=pkg.VpuCmdFbci, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x4e00507b { // FSRLI_PI
+    entry = vpu_row(cmd=pkg.VpuCmdSrli, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x4e00707b { // FSRAI_PI
+    entry = vpu_row(cmd=pkg.VpuCmdSrai, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+
+  // Pack and Replicate
+  if (id_inst & 0xfff0707f) == 0x2600007b { // FPACKREPB_PI
+    entry = vpu_row(cmd=pkg.VpuCmdPackrepb, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_FROMINTF | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+  if (id_inst & 0xfff0707f) == 0x2600107b { // FPACKREPH_PI
+    entry = vpu_row(cmd=pkg.VpuCmdPackreph, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_FROMINTF | F_M0REN | F_WEN | F_REN1 | F_VECTOR)
+  }
+
+  // Cubeface
+  if (id_inst & 0xfe00707f) == 0x8800007b { // CUBEF_PS
+    entry = vpu_row(cmd=pkg.VpuCmdCubeface, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_REN3 | F_REND | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x8800107b { // CUBEFIDX_PS
+    entry = vpu_row(cmd=pkg.VpuCmdCubefaceIdx, dtype=pkg.VpuDtypeInt, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x8800207b { // CUBESGNSC_PS
+    entry = vpu_row(cmd=pkg.VpuCmdCubesgnsc, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x8800307b { // CUBESGNTC_PS
+    entry = vpu_row(cmd=pkg.VpuCmdCubesgntc, dtype=pkg.VpuDtypeF32, flags=F_SHSW | F_M0REN | F_WEN | F_REN1 | F_REN2 | F_VECTOR)
+  }
+
+  // Mask Extension
+  if (id_inst & 0xfe00707f) == 0x6600707b { // MAND
+    entry = vpu_row(cmd=pkg.VpuCmdMand, dtype=pkg.VpuDtypeF32, flags=F_MASKOP | F_MREN1 | F_MREN2 | F_WEN | F_REN1 | F_REN2)
+  }
+  if (id_inst & 0xfe00707f) == 0x6600607b { // MOR
+    entry = vpu_row(cmd=pkg.VpuCmdMor, dtype=pkg.VpuDtypeF32, flags=F_MASKOP | F_MREN1 | F_MREN2 | F_WEN | F_REN1 | F_REN2)
+  }
+  if (id_inst & 0xfe00707f) == 0x6600407b { // MXOR
+    entry = vpu_row(cmd=pkg.VpuCmdMxor, dtype=pkg.VpuDtypeF32, flags=F_MASKOP | F_MREN1 | F_MREN2 | F_WEN | F_REN1 | F_REN2)
+  }
+  if (id_inst & 0xfff0707f) == 0x6600207b { // MNOT
+    entry = vpu_row(cmd=pkg.VpuCmdMnot, dtype=pkg.VpuDtypeF32, flags=F_MASKOP | F_MREN1 | F_WEN | F_REN1)
+  }
+  if (id_inst & 0xfff07fff) == 0xd600107b { // MOVA_M_X
+    entry = vpu_row(cmd=pkg.VpuCmdMovaMX, dtype=pkg.VpuDtypeF32, flags=F_TOINTM | F_MASKOP | F_WEN | F_FROMINT)
+  }
+  if (id_inst & 0xfffff07f) == 0xd600007b { // MOVA_X_M
+    entry = vpu_row(cmd=pkg.VpuCmdMovaXM, dtype=pkg.VpuDtypeF32, flags=F_MASKOP | F_MALLREN | F_WEN | F_REN1 | F_TOINT)
+  }
+  if (id_inst & 0xfe000c7f) == 0x5600007b { // MOV_M_X
+    entry = vpu_row(cmd=pkg.VpuCmdMovMX, dtype=pkg.VpuDtypeF32, flags=F_MASKOP | F_WEN | F_FROMINT)
+  }
+  if (id_inst & 0xfff0707f) == 0x5200007b { // MASKPOPC
+    entry = vpu_row(cmd=pkg.VpuCmdMpopc, dtype=pkg.VpuDtypeF32, flags=F_MASKOP | F_MREN1 | F_WEN | F_REN1 | F_TOINT)
+  }
+  if (id_inst & 0xfff0707f) == 0x5400007b { // MASKPOPCZ
+    entry = vpu_row(cmd=pkg.VpuCmdMpopcz, dtype=pkg.VpuDtypeF32, flags=F_MASKOP | F_MREN1 | F_WEN | F_REN1 | F_TOINT)
+  }
+  if (id_inst & 0xfe00707f) == 0x5e00007b { // MASKPOPCR
+    entry = vpu_row(cmd=pkg.VpuCmdMpocRast, dtype=pkg.VpuDtypeF32, flags=F_MASKOP | F_MREN1 | F_MREN2 | F_WEN | F_REN1 | F_REN2 | F_TOINT)
+  }
+
+  // FP Atomics: Local
+  if (id_inst & 0xfe00707f) == 0x600400b { // FAMOADDL_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xe00400b { // FAMOSWAPL_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x1600400b { // FAMOANDL_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x1e00400b { // FAMOORL_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x2600400b { // FAMOXORL_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x2e00400b { // FAMOMINL_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x3600400b { // FAMOMAXL_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x3e00400b { // FAMOMINUL_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x4600400b { // FAMOMAXUL_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x2800400b { // FAMOMAXL_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x3000400b { // FAMOMINL_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+
+  // FP Atomics: Global
+  if (id_inst & 0xfe00707f) == 0x8600400b { // FAMOADDG_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x8e00400b { // FAMOSWAPG_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x9600400b { // FAMOANDG_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x9e00400b { // FAMOORG_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xa600400b { // FAMOXORG_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xae00400b { // FAMOMING_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xb600400b { // FAMOMAXG_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xbe00400b { // FAMOMINUG_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xc600400b { // FAMOMAXUG_PI
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xa800400b { // FAMOMAXG_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xb000400b { // FAMOMING_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_WEN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+
+  // CUDA Bypass
+  if (id_inst & 0xfff0707f) == 0x1000700b { // FLWL_PS
+    entry = vpu_row(cmd=pkg.VpuCmdX, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_WEN | F_VECTOR)
+  }
+  if (id_inst & 0xfff0707f) == 0x5000700b { // FSWL_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_REND | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x9000700b { // FGWL_PS
+    entry = vpu_row(cmd=pkg.VpuCmdX, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_WEN | F_REN1 | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xd000700b { // FSCWL_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfff0707f) == 0x1200700b { // FLWG_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_WEN | F_VECTOR)
+  }
+  if (id_inst & 0xfff0707f) == 0x5200700b { // FSWG_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_REND | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x9200700b { // FGWG_PS
+    entry = vpu_row(cmd=pkg.VpuCmdX, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_WEN | F_REN1 | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xd200700b { // FSCWG_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x8200700b { // FGBG_PS
+    entry = vpu_row(cmd=pkg.VpuCmdX, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_WEN | F_REN1 | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xc200700b { // FSCBG_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x8800700b { // FGHL_PS
+    entry = vpu_row(cmd=pkg.VpuCmdX, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_WEN | F_REN1 | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xc800700b { // FSCHL_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x8a00700b { // FGHG_PS
+    entry = vpu_row(cmd=pkg.VpuCmdX, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_WEN | F_REN1 | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xca00700b { // FSCHG_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0x8000700b { // FGBL_PS
+    entry = vpu_row(cmd=pkg.VpuCmdX, dtype=pkg.VpuDtypeF32, flags=F_LDST | F_M0REN | F_WEN | F_REN1 | F_SWAP12 | F_VECTOR)
+  }
+  if (id_inst & 0xfe00707f) == 0xc000700b { // FSCBL_PS
+    entry = vpu_row(cmd=pkg.VpuCmdMvXf, dtype=pkg.VpuDtypeF32, flags=F_SCATTER | F_LDST | F_M0REN | F_REN1 | F_REND | F_SWAP12 | F_VECTOR)
+  }
+
+  id_vpu_insn = U1((entry & LEGAL) != 0)
+  id_sigs = (add=U1((entry & F_ADD) != 0), cmd=entry#[CMD_LSB..<45], cvt=U1((entry & F_CVT) != 0), dtype=entry#[DTYPE_LSB..<(DTYPE_LSB + 4)], fma=U1((entry & F_FMA) != 0), fms=U1((entry & F_FMS) != 0), fromint=U1((entry & F_FROMINT) != 0), fromintf=U1((entry & F_FROMINTF) != 0), gcvt=U1((entry & F_GCVT) != 0), ldst=U1((entry & F_LDST) != 0), m0ren=U1((entry & F_M0REN) != 0), mallren=U1((entry & F_MALLREN) != 0), maskop=U1((entry & F_MASKOP) != 0), mren1=U1((entry & F_MREN1) != 0), mren2=U1((entry & F_MREN2) != 0), mul=U1((entry & F_MUL) != 0), ren1=U1((entry & F_REN1) != 0), ren2=U1((entry & F_REN2) != 0), ren3=U1((entry & F_REN3) != 0), rend=U1((entry & F_REND) != 0), rom=U1((entry & F_ROM) != 0), round=U1((entry & F_ROUND) != 0), scatter=U1((entry & F_SCATTER) != 0), shsw=U1((entry & F_SHSW) != 0), sub=U1((entry & F_SUB) != 0), swap12=U1((entry & F_SWAP12) != 0), swap13=U1((entry & F_SWAP13) != 0), swap23=U1((entry & F_SWAP23) != 0), toint=U1((entry & F_TOINT) != 0), tointf=U1((entry & F_TOINTF) != 0), tointm=U1((entry & F_TOINTM) != 0), trans=U1((entry & F_TRANS) != 0), txfma=U1((entry & F_TXFMA) != 0), vector=U1((entry & F_VECTOR) != 0), wen=U1((entry & F_WEN) != 0), wflags=U1((entry & F_WFLAGS) != 0))
+}

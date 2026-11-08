@@ -1,0 +1,185 @@
+// Transcendental coefficient pipeline of the VPU (verilog: trans_top). A reciprocal,
+// log or exp request is decoded at F2 into a ROM id and table index, travels with
+// its valid bit through F3..F5, reads the matching coefficient ROM at F5 and
+// delivers the {exc, mask, taylor, c2, c0} entry at F8. Only the rcp/log/exp ROMs
+// exist in this configuration; rsqrt and sin need EnableExtraTrans=1.
+const trans_exp_rom_case_c0 = import("trans_exp_rom_case_c0.trans_exp_rom_case_c0")
+const trans_exp_rom_case_c1c2 = import("trans_exp_rom_case_c1c2.trans_exp_rom_case_c1c2")
+const trans_log_rom_case_c0 = import("trans_log_rom_case_c0.trans_log_rom_case_c0")
+const trans_log_rom_case_c1c2 = import("trans_log_rom_case_c1c2.trans_log_rom_case_c1c2")
+const trans_rcp_rom_case_c0 = import("trans_rcp_rom_case_c0.trans_rcp_rom_case_c0")
+const trans_rcp_rom_case_c1c2 = import("trans_rcp_rom_case_c1c2.trans_rcp_rom_case_c1c2")
+const vpu_pkg = import("vpu_pkg")
+const minion_pkg = import("minion_pkg")
+
+comptime const SinP1TaylorC0:U32 = 0xc90fdb00
+
+// ROM entry layout: lsb first c0(32), c2(17), taylor, mask(7), exc.
+comb pack_coefs(c0:U32, c2:U17, exc:U1, mask:U7, taylor:U1) -> (bits:U58) {
+  const packed:U58 = (c0, c2, taylor, mask, exc)#[..]
+  bits = packed
+}
+
+pub mod trans_top<EnableExtraTrans=0>::[timecheck=false](clk_i:Clock, ex_in_bits_i:(use_prev_sigs:U1, sigs:(cmd:U7, txfma:U1, shsw:U1, rom:U1, scatter:U1, cvt:U1, trans:U1, gcvt:U1, fromintf:U1, tointm:U1, tointf:U1, maskop:U1, ldst:U1, m0ren:U1, mallren:U1, mren1:U1, mren2:U1, wen:U1, ren1:U1, ren2:U1, ren3:U1, rend:U1, swap12:U1, swap23:U1, swap13:U1, vector:U1, dtype:U4, fromint:U1, toint:U1, fma:U1, fms:U1, add:U1, sub:U1, mul:U1, round:U1, wflags:U1), imm:U20, rm:U3, typ:U2, in1:U32, in2:U32, in3:U32), ex_txfma_exc_i:vpu_pkg.VpuFlagsSz_T, ex_valid_i:U1, rst_ni:U1) -> (f8_rom_response_o:(exc:U1, mask:U7, taylor:U1, c2:U17, c0:U32)@[]) {
+  cassert(EnableExtraTrans == 0, "rsqrt and sin ROMs are only instantiated for EnableExtraTrans=1")
+
+  // valid bit of each stage; the payload registers below load only while their stage is valid
+  reg f2_trans_valid_q:Bool:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  reg f3_trans_valid_q:Bool:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  reg f4_trans_valid_q:Bool:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  reg f5_trans_valid_q:Bool:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  reg f6_trans_valid_q:Bool:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  reg f7_trans_valid_q:Bool:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  reg f2_rom_raddr_q:U32:[clock_pin=clk_i] = nil // the operand; only its exponent/fraction msbs address a ROM
+  reg f2_rom_cmd_q:U7:[clock_pin=clk_i] = nil
+  // sin taylor flag: always 0 without the sin ROMs (kept as state so a stray sin id reaching F5 behaves as in the reference)
+  reg f3_sin_taylor_q:U1:[clock_pin=clk_i] = nil
+  reg f4_sin_taylor_q:U1:[clock_pin=clk_i] = nil
+  reg f5_sin_taylor_q:U1:[clock_pin=clk_i] = nil
+  reg f3_rom_ctrl_q:U12:[clock_pin=clk_i] = nil // packed (index:U8, rom id:U4)
+  reg f4_rom_ctrl_q:U12:[clock_pin=clk_i] = nil
+  reg f5_rom_ctrl_q:U12:[clock_pin=clk_i] = nil
+  // exception flag travelling with the request
+  reg f2_exc_q:U1:[clock_pin=clk_i] = nil
+  reg f3_exc_q:U1:[clock_pin=clk_i] = nil
+  reg f4_exc_q:U1:[clock_pin=clk_i] = nil
+  reg f5_exc_q:U1:[clock_pin=clk_i] = nil
+  reg f6_exc_q:U1:[clock_pin=clk_i] = nil
+  reg f7_exc_q:U1:[clock_pin=clk_i] = nil
+  reg f8_exc_q:U1:[clock_pin=clk_i] = nil
+  // ROM response, packed (c0:U32, c2:U17, taylor, mask:U7, exc) from the lsb
+  reg f6_rom_response_q:U58:[clock_pin=clk_i] = nil
+  reg f7_rom_response_q:U58:[clock_pin=clk_i] = nil
+  reg f8_rom_response_o_q:U58:[clock_pin=clk_i] = nil
+
+  // ---- F2: capture the request ----
+  // the exp reduction raises the txfma exception flags into the request; every other command passes the last F8 flag along
+  const ex_exc_int_d:U1 = if ex_in_bits_i.sigs.cmd == minion_pkg.VpuTransExpRr { U1(ex_txfma_exc_i != 0) } else { f8_exc_q }
+  f2_trans_valid_q = ex_valid_i == 1
+  if ex_valid_i == 1 {
+    f2_rom_raddr_q = ex_in_bits_i.in2
+    f2_rom_cmd_q = ex_in_bits_i.sigs.cmd
+    f2_exc_q = ex_exc_int_d
+  }
+
+  // ---- F2 decode: command -> ROM id and table index (an index field of the operand) ----
+  // rcp indexes with fraction bits [22:16], log with [22:17], exp with [23:18]; other commands select no ROM
+  const rcp_index:U8 = f2_rom_raddr_q#[16..<23]
+  const log_index:U8 = f2_rom_raddr_q#[17..<23]
+  const exp_index:U8 = f2_rom_raddr_q#[18..<24]
+  mut f2_rom_id:U4 = 0
+  mut f2_rom_index:U8 = 0
+  match f2_rom_cmd_q {
+    == minion_pkg.VpuTransRcpRr {
+      f2_rom_id = vpu_pkg.TransRomRcp1Id
+      f2_rom_index = rcp_index
+    }
+    == minion_pkg.VpuTransRcpFma1 {
+      f2_rom_id = vpu_pkg.TransRomRcp2Id
+      f2_rom_index = rcp_index
+    }
+    == minion_pkg.VpuTransLogRr {
+      f2_rom_id = vpu_pkg.TransRomLog1Id
+      f2_rom_index = log_index
+    }
+    == minion_pkg.VpuTransLogFma1 {
+      f2_rom_id = vpu_pkg.TransRomLog2Id
+      f2_rom_index = log_index
+    }
+    == minion_pkg.VpuTransExpRr {
+      f2_rom_id = vpu_pkg.TransRomExp1Id
+      f2_rom_index = exp_index
+    }
+    == minion_pkg.VpuTransExpFma1 {
+      f2_rom_id = vpu_pkg.TransRomExp2Id
+      f2_rom_index = exp_index
+    }
+    else {
+    }
+  }
+
+  // ---- F3..F5: carry the ROM selection ----
+  f3_trans_valid_q = f2_trans_valid_q
+  f4_trans_valid_q = f3_trans_valid_q
+  f5_trans_valid_q = f4_trans_valid_q
+  f6_trans_valid_q = f5_trans_valid_q
+  f7_trans_valid_q = f6_trans_valid_q
+  if f2_trans_valid_q {
+    f3_rom_ctrl_q = (f2_rom_index, f2_rom_id)#[..]
+    f3_exc_q = f2_exc_q
+    f3_sin_taylor_q = 0
+  }
+  if f3_trans_valid_q {
+    f4_rom_ctrl_q = f3_rom_ctrl_q
+    f4_exc_q = f3_exc_q
+    f4_sin_taylor_q = f3_sin_taylor_q
+  }
+  if f4_trans_valid_q {
+    f5_rom_ctrl_q = f4_rom_ctrl_q
+    f5_exc_q = f4_exc_q
+    f5_sin_taylor_q = f4_sin_taylor_q
+  }
+
+  // ---- F5: ROM lookup. A ROM is only addressed while its id is selected (index 0 otherwise); the id picks its entry. ----
+  const f5_rom_id = f5_rom_ctrl_q#[8..<12]
+  const f5_rom_index:U8 = f5_rom_ctrl_q#[0..<8]
+  const rcp1 = trans_rcp_rom_case_c1c2(index_i=if f5_rom_id == vpu_pkg.TransRomRcp1Id { f5_rom_index } else { 0 })
+  const rcp2 = trans_rcp_rom_case_c0(index_i=if f5_rom_id == vpu_pkg.TransRomRcp2Id { f5_rom_index } else { 0 })
+  const log1 = trans_log_rom_case_c1c2(index_i=if f5_rom_id == vpu_pkg.TransRomLog1Id { f5_rom_index } else { 0 })
+  const log2 = trans_log_rom_case_c0(index_i=if f5_rom_id == vpu_pkg.TransRomLog2Id { f5_rom_index } else { 0 })
+  const exp1 = trans_exp_rom_case_c1c2(index_i=if f5_rom_id == vpu_pkg.TransRomExp1Id { f5_rom_index } else { 0 })
+  const exp2 = trans_exp_rom_case_c0(index_i=if f5_rom_id == vpu_pkg.TransRomExp2Id { f5_rom_index } else { 0 })
+  mut f5_rom_response:U58 = 0
+  match f5_rom_id {
+    == vpu_pkg.TransRomRcp1Id {
+      f5_rom_response = pack_coefs(c0=rcp1.data_o.c0, c2=rcp1.data_o.c2, exc=rcp1.data_o.exc, mask=rcp1.data_o.mask, taylor=rcp1.data_o.taylor)
+    }
+    == vpu_pkg.TransRomRcp2Id {
+      f5_rom_response = pack_coefs(c0=rcp2.data_o.c0, c2=rcp2.data_o.c2, exc=rcp2.data_o.exc, mask=rcp2.data_o.mask, taylor=rcp2.data_o.taylor)
+    }
+    == vpu_pkg.TransRomLog1Id {
+      f5_rom_response = pack_coefs(c0=log1.data_o.c0, c2=log1.data_o.c2, exc=log1.data_o.exc, mask=log1.data_o.mask, taylor=log1.data_o.taylor)
+    }
+    == vpu_pkg.TransRomLog2Id {
+      f5_rom_response = pack_coefs(c0=log2.data_o.c0, c2=log2.data_o.c2, exc=log2.data_o.exc, mask=log2.data_o.mask, taylor=log2.data_o.taylor)
+    }
+    == vpu_pkg.TransRomExp1Id {
+      f5_rom_response = pack_coefs(c0=exp1.data_o.c0, c2=exp1.data_o.c2, exc=exp1.data_o.exc, mask=exp1.data_o.mask, taylor=exp1.data_o.taylor)
+    }
+    == vpu_pkg.TransRomExp2Id {
+      // the exp fma stage takes its exception flag from the request, not the table
+      f5_rom_response = pack_coefs(c0=exp2.data_o.c0, c2=exp2.data_o.c2, exc=f5_exc_q, mask=exp2.data_o.mask, taylor=exp2.data_o.taylor)
+    }
+    // rsqrt ids and anything else read as 0; the sin ROMs are not instantiated, so only the taylor flag (and the sin-p1 constant) is left
+    == vpu_pkg.TransRomSin1Id {
+      f5_rom_response = f5_sin_taylor_q << 49
+    }
+    == vpu_pkg.TransRomSin2Id {
+      f5_rom_response = if f5_sin_taylor_q == 1 { (1 << 49) | SinP1TaylorC0 } else { 0 }
+    }
+    == vpu_pkg.TransRomSin3Id {
+      f5_rom_response = f5_sin_taylor_q << 49
+    }
+    else {
+    }
+  }
+
+  // ---- F6..F8: response delivery ----
+  if f5_trans_valid_q {
+    f6_rom_response_q = f5_rom_response
+    f6_exc_q = f5_exc_q
+  }
+  if f6_trans_valid_q {
+    f7_rom_response_q = f6_rom_response_q
+    f7_exc_q = f6_exc_q
+  }
+  if f7_trans_valid_q {
+    f8_rom_response_o_q = f7_rom_response_q
+    f8_exc_q = f7_exc_q
+  }
+  f8_rom_response_o.c0 = f8_rom_response_o_q#[0..<32]
+  f8_rom_response_o.c2 = f8_rom_response_o_q#[32..<49]
+  f8_rom_response_o.taylor = f8_rom_response_o_q#[49]
+  f8_rom_response_o.mask = f8_rom_response_o_q#[50..<57]
+  f8_rom_response_o.exc = f8_rom_response_o_q#[57]
+}

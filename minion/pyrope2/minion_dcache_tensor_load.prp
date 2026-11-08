@@ -1,0 +1,917 @@
+// Tensor-load engine of the Minion D-cache: walks a (possibly masked) strided
+// range of cache lines, requests them from the L2 (cooperative or private
+// reads, up to four in flight) and delivers them to the scratchpad load port.
+// One module serves both tensor-load units of the dcache, selected by ModuleIdx:
+//   0  the interleave/transpose loader (int8/int16 interleave, trp8/16/32
+//      transpose), staging the L2 data in a 16 x 64-bit buffer;
+//   1  the TenB loader: untransformed lines only, no staging buffer, paced by
+//      credits and per-entry "received" flags with the VPU tensor-B buffer.
+// All state runs on a local gated clock (clkgt) with a synchronous reset; the
+// TenB bookkeeping stays on the free-running clock because the VPU credit and
+// write pulses can arrive while the gate is off.
+const prim_clk_gate = import("prim_clk_gate.prim_clk_gate")
+const prim_rf_single_1r1w_par_preview = import("prim_rf_single_1r1w_par_preview.prim_rf_single_1r1w_par_preview")
+const minion_pkg = import("minion_pkg")
+const minion_dcache_pkg = import("minion_dcache_pkg")
+
+// Control bundle shared by every tensor unit of the core (verilog: core_dcache_ctrl);
+// the tensor loader reads only the tensorload_*, tensorcoop_ctrl and thread_id fields.
+type CoreDcacheCtrl = (tensorload_ctrl:(use_tmask:U1, use_coop:U1, transform:U3, scp_dest:U6, tl_sel:U1, addr:U42, offset:U2, num_lines:U4), tensorcoop_ctrl:(neigh_mask:U4, minion_mask:U8, padding:U3, id:U5), tensorload_stride:U48, tensorload_start:U1, tensorload_restart_b:U1, tensorload_tmask_ready:U1, tensorload_tmask_bits:U16, cache_op_valid:U1, cache_op_req:(cmd:U4, start_level:U2, dest_level:U2, count:U4, addr:U48, way:U2, stride:U48, thread_id:U1, use_tmask:U1, tmask_ready:U1, tmask_bits:U16, l2_scp_dest:U17, l2_scp_fill:U1), cache_op_req_next:(cmd:U4, start_level:U2, dest_level:U2), msg_port_wr_way:U2, msg_port_wr_addr:U10, msg_port_wr_en:U1, reduce_start:U1, tensorstore_start:U1, reduce_tensorstore_ctrl:U64, tensorstore_stride:U48, tex_send_valid:U1, tex_send_ctrl:(port_id:U2, size:U3, way:U2, set:U4, port_en:U1, thread_id:U1), cache_ctrl:(cacheop_max:U5, padding:U1, cacheop_reprate:U3, scpenable:U1, d1split:U1), thread_id:U1)
+
+// Loader control FSM. The order matters: states from IntTransFlush up use the
+// shared (transpose) load path.
+enum CtrlState:U3 = (Idle, WaitStart, NoTReq, IntTransFlush, IntReq, IntInt, TraReq, TraTra)
+
+// One in-flight L2 read slot.
+enum XferState:U2 = (WaitReq, L2Req, WaitAck, L2Seq)
+
+comptime const NumXfers = minion_pkg.DcacheTlL2Transfers
+comptime const TmpBlocks = 16
+comptime const TenbEntries = 4
+comptime const ScpWrapLine = 48
+comptime const LoadOffsetBits = 5
+
+// Layout of the cooperative-load descriptor (LSB first): minion mask, sequence id, coop id, neighbour mask.
+comptime const CoopSeqIdLsb = minion_pkg.ShireCoopMinMaskSize
+comptime const CoopIdLsb = CoopSeqIdLsb + minion_pkg.ShireCoopSeqIdSize
+
+// Scratchpad lines are laid out 12 sets per way over four ways; line numbers wrap after 60.
+comb scp_set_way(dest:U6) -> (set:U4, way:U2) {
+  mut base:U6 = 0
+  mut line_way:U2 = 0
+  for k in 1..=5 {
+    if dest >= (12*k) {
+      base = 12*k
+      line_way = k & 3
+    }
+  }
+  wrap set = dest - base
+  way = line_way
+}
+
+pub mod minion_dcache_tensor_load<ModuleIdx=0>::[timecheck=false](chicken_bit_dcache_i:U1, clk_i:Clock, l2_req_ready_coop_i:U1, l2_req_ready_no_coop_i:U1, l2_resp_i:(id:U8, opcode:U2, data:U256), l2_resp_valid_i:U1, load_ready_i:U1, rst_ni:U1, s0_available_i:U1, s1_available_i:U1, s1_tlb_fail_i:U1, s1_tlb_wait_i:U1, s2_addr_i:U40, shire_min_id_i:minion_pkg.MinPerSBits_T, tenb_credit_entry_i:minion_pkg.DcacheTenbBits_T, tenb_credit_i:U1, tenb_tstore_busy_i:U1, tenb_written_i:U1, tensor_ctrl_i:CoreDcacheCtrl, tfma_enabled_i:U1, vm_status_i:U16) -> (bus_err_o:minion_pkg.NrThreads_T@[], busy_o:U1@[], csr_debug_signals_o:minion_pkg.DcacheDbgCsrTlSize_T@[], err_flags_o:(e4:U1, e3:U1, e2:U1, e1:U1, e0:U1)@[], id_complete_o:(e1:U1, e0:U1)@[], l2_req_o:(id:U5, source:U1, wdata:U1, opcode:U5, address:U40, data:U20, size:U3, qwen:U4, subopcode:U7)@[], l2_req_valid_coop_o:U1@[], l2_req_valid_no_coop_o:U1@[], load_addr_o:minion_dcache_pkg.DcacheLramAddrWidth_T@[], load_capture_o:U1@[], load_data_o:U256@[], load_valid_o:minion_dcache_pkg.DcacheLramNumBanks_T@[], load_valid_pre_o:U1@[], load_way_o:minion_dcache_pkg.DcacheWayIdxWidth_T@[], s0_addr_load_o:U1@[], s0_addr_msb_err_o:U1@[], s0_addr_o:U48@[], s0_thread_id_o:U1@[], s1_addr_load_o:U1@[], sm_data_debug_signals_o:minion_dcache_pkg.DcacheDbgSmDataBits_T@[], sm_filter_debug_signals_o:minion_dcache_pkg.DcacheDbgSmFilterBits_T@[], sm_match_debug_signals_o:minion_dcache_pkg.DcacheDbgSmMatchBits_T@[], tenb_flush_o:U1@[], tenb_ready_o:U1@[], tl_op_o:U1@[], tl_start_o:U1@[], vm_status_tl_o:(prv:U2, mprv:U1, mpp:U2, sum:U1, mxr:U1, debug:U1)@[]) {
+  cassert(ModuleIdx == 0 or ModuleIdx == 1, "only the interleave/transpose (0) and TenB (1) loaders exist")
+  comptime const IsTenb = ModuleIdx == 1
+  // L2 miss ids of the four slots are consecutive: TensorLoadExt0..3 for unit 0, Ext4..7 for unit 1.
+  comptime const MissIdBase = if IsTenb { minion_dcache_pkg.EtLinkCoreMissIdTensorLoadExt4 }
+    else { minion_dcache_pkg.EtLinkCoreMissIdTensorLoadExt0 }
+
+  wire clkgt:Clock = nil
+
+  // ---- state: control FSM and the latched command
+  reg ctrl_state_q:CtrlState:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = CtrlState.Idle
+  reg ctrl_state_changed_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg start_pulse_pre_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg save_tmask_pending_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg tensor_ctrl_transform_q:U3:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = minion_pkg.TensorTransNone
+  reg tensor_ctrl_offset_q:U2:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = minion_pkg.tensorload_offset_0
+  reg tensor_ctrl_use_tmask_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg tensor_ctrl_use_coop_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg tensor_ctrl_num_lines_q:U4:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg tensor_ctrl_scp_dest_q:U6:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg tensor_load_stride_q:U42:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg tensor_coop_data_q:U20:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg id_running_q:U1:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg thread_id_q:U1:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg trans_tmask_bits_q:U16:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg vm_status_tl_q:U8:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg tenb_no_extra_credits_cond1_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg tenb_no_extra_credits_cond3_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+
+  // ---- state: shared interleave/transpose sequencing (unit 0 only; stays at reset in unit 1)
+  reg shared_count_q:U4:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg shared_dest_q:U6:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg shared_load_idx_q:U1:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg trans_split_count_q:U3:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg drain_load_capture_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg interleave_clear_valid_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg shared_l2_counter_q:U4:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+
+  // ---- state: errors
+  reg err_transf_flag_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg err_offset_flag_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg err_mem_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg err_mem_sticky_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+
+  // ---- state: address generator towards the TLB
+  reg s0_addr_o:U48:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg s0_addr_msb_err_o:U1:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg count_q:U4:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg tmask_idx_q:U4:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg enabled_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg s1_addr_load_x_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg s2_req_valid_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg waiting_tlb_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg tenb_count_q:U4:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg tenb_idx_last_q:U2:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg request_control_l2_op_idx:U1:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+
+  // ---- state: the four L2 request slots (per-slot fields are packed, slot i in the i-th field)
+  reg l2i_state_q:[NumXfers]XferState:[__store_clock_pin=clkgt, __store_posclk=true, ordering="old"]
+  reg tl_load_way_q:U8:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg tl_load_set_q:U16:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg tl_load_idx_q:U4:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg l2i_group_q:U4:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg l2i_op_idx_q:U4:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg l2i_op_is_coop_q:U4:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg l2i_seq_saved_q:U16:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg l2i_stg_addr_q:U16:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg req_addr_cline_q:U34:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg l2_interface_busy_prev_q:Bool:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = false
+  reg l2i_current_idx_q:U1:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 1
+  reg l2i_seq_idx_q:U1:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg sequence_data_q:U16:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg sequence_count_q:U3:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+  reg tensor_coop_id_prev_q:U5:[clock_pin=clkgt, negreset=true, reset_pin=rst_ni] = 0
+
+  // ---- state: TenB bookkeeping on the free-running clock. Credits and received flags
+  // exist only in unit 1; tfma_* are plain flops (no reset) like in the original.
+  reg tenb_avail_entry_q:U4:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = 15
+  reg tenb_avail_all_q:Bool:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = false
+  reg tenb_credits_q:U3:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = if IsTenb {
+    minion_pkg.DcacheTlTenbCredits
+  } else {
+    0
+  }
+  reg tenb_rcv_entry_q:U4:[async=true, clock_pin=clk_i, negreset=true, reset_pin=rst_ni] = if IsTenb { 15 } else { 0 }
+  reg tfma_started_q:Bool:[clock_pin=clk_i] = nil
+  reg tfma_active_start_q:Bool:[clock_pin=clk_i] = nil
+
+  // ---- inputs as predicates
+  const tensor_ctrl_start:Bool = tensor_ctrl_i.tensorload_start == 1 and tensor_ctrl_i.tensorload_ctrl.tl_sel == ModuleIdx
+  const tensor_ctrl_restart:Bool = IsTenb and tensor_ctrl_i.tensorload_restart_b == 1
+  const tmask_ready:Bool = tensor_ctrl_i.tensorload_tmask_ready == 1
+  const s0_available:Bool = s0_available_i == 1
+  const s1_available:Bool = s1_available_i == 1
+  const s1_tlb_wait:Bool = s1_tlb_wait_i == 1
+  const s1_tlb_fail:Bool = s1_tlb_fail_i == 1
+  const tfma_enabled:Bool = tfma_enabled_i == 1
+
+  // ---- decode of the latched command
+  const trans_none:Bool = tensor_ctrl_transform_q == minion_pkg.TensorTransNone
+  const trans_int8:Bool = tensor_ctrl_transform_q == minion_pkg.TensorTransInt8
+  const trans_int16:Bool = tensor_ctrl_transform_q == minion_pkg.TensorTransInt16
+  const trans_trp8:Bool = tensor_ctrl_transform_q == minion_pkg.TensorTransTrp8
+  const trans_trp16:Bool = tensor_ctrl_transform_q == minion_pkg.TensorTransTrp16
+  const trans_trp32:Bool = tensor_ctrl_transform_q == minion_pkg.TensorTransTrp32
+  const trans_size8:Bool = trans_int8 or trans_trp8
+  const trans_size16:Bool = trans_int16 or trans_trp16
+  // Only transforms 3 and 4 are undefined; every offset is legal, so the offset-error flag is always 0.
+  const trans_size_valid:Bool = trans_none or trans_int8 or trans_int16 or trans_trp8 or trans_trp16 or trans_trp32
+  const trans_offset:U2 = if trans_size8 { tensor_ctrl_offset_q }
+    elif trans_size16 { tensor_ctrl_offset_q & 2 }
+    else { minion_pkg.tensorload_offset_0 }
+  const trans_stride:U48 = tensor_load_stride_q << 6
+
+  const start_pulse:Bool = start_pulse_pre_q and not tensor_ctrl_restart
+  const ctrl_start:Bool = start_pulse and trans_size_valid
+  const ctrl_start_tmask_ready:Bool = ctrl_start and (tmask_ready or not tensor_ctrl_use_tmask_q)
+  const ctrl_start_tmask_wait:Bool = ctrl_start and not tmask_ready and tensor_ctrl_use_tmask_q
+  const ctrl_en:Bool = ctrl_state_q != CtrlState.Idle or start_pulse or tensor_ctrl_restart
+  const busy:Bool = ctrl_state_q != CtrlState.Idle or start_pulse or tensor_ctrl_i.tensorload_restart_b == 1
+  const request_control_start:Bool = ctrl_state_changed_q and (ctrl_state_q == CtrlState.NoTReq or ctrl_state_q == CtrlState.IntReq or ctrl_state_q == CtrlState.TraReq)
+
+  // ---- parameters of the request currently walked, per control state
+  mut request_control_num_lines:U4 = 0
+  mut request_control_use_tmask:Bool = false
+  mut request_control_tmask_bits:U16 = 0
+  const request_control_use_coop:Bool = tensor_ctrl_use_coop_q
+  if ctrl_state_q == CtrlState.IntReq {
+    // interleave: one request per line, masked by the bit of the line being fetched
+    request_control_num_lines = if trans_size8 { 3 } else { 1 }
+    request_control_use_tmask = tensor_ctrl_use_tmask_q
+    request_control_tmask_bits = if trans_tmask_bits_q#[shared_count_q] == 1 { 0xffff } else { 0 }
+  } elif ctrl_state_q == CtrlState.TraReq {
+    request_control_num_lines = if trans_size8 { 7 } elif trans_size16 { 3 } else { 1 }
+  } else {
+    request_control_num_lines = tensor_ctrl_num_lines_q
+    request_control_use_tmask = tensor_ctrl_use_tmask_q
+    request_control_tmask_bits = trans_tmask_bits_q
+  }
+
+  // ---- L2 request slots: state-derived flags (bit i = slot i)
+  mut xfer:[NumXfers]XferState = XferState.WaitReq
+  for i in 0..<NumXfers {
+    xfer[i] = l2i_state_q[i]
+  }
+  mut waiting_for_req:U4 = 0
+  mut requesting_to_l2:U4 = 0
+  mut sequencing_to_l2:U4 = 0
+  for i in 0..<NumXfers {
+    waiting_for_req#[i] = U1(xfer[i] == XferState.WaitReq)
+    requesting_to_l2#[i] = U1(xfer[i] == XferState.L2Req)
+    sequencing_to_l2#[i] = U1(xfer[i] == XferState.L2Seq)
+  }
+  const l2_req_valid:Bool = requesting_to_l2 != 0
+  const l2_seq_wait:Bool = sequencing_to_l2 != 0
+  const l2_interface_busy:Bool = waiting_for_req != 15
+  const l2_req_ready:Bool = if request_control_use_coop { l2_req_ready_coop_i == 1 } else { l2_req_ready_no_coop_i == 1 }
+
+  // Which slot an L2 response belongs to, and what it is.
+  const sel_t:U2 = l2_resp_i.id#[0..<2]
+  const request_control_load_way:U2 = (tl_load_way_q >> (sel_t*2)) & 3
+  const request_control_load_set:U4 = (tl_load_set_q >> (sel_t*4)) & 15
+  const request_control_load_addr:U10 = (request_control_load_set << (LoadOffsetBits + 1)) | (tl_load_idx_q#[sel_t] << LoadOffsetBits)
+  const resp_valid:Bool = l2_resp_valid_i == 1
+  mut accepted_to_l2:U4 = 0
+  mut new_data_chunk:U4 = 0
+  mut received_error:U4 = 0
+  mut received_answer:U4 = 0
+  for i in 0..<NumXfers {
+    const mine:Bool = l2_resp_i.id#[0..<5] == (MissIdBase + i) and resp_valid
+    const waiting_ack:Bool = xfer[i] == XferState.WaitAck
+    accepted_to_l2#[i] = U1(requesting_to_l2#[i] == 1 and l2_req_ready)
+    new_data_chunk#[i] = U1(waiting_ack and (l2_resp_i.opcode == minion_pkg.EtLinkRspAckData or l2_resp_i.opcode == minion_pkg.EtLinkRspAck) and mine)
+    received_error#[i] = U1(waiting_ack and l2_resp_i.opcode == minion_pkg.EtLinkRspErr and mine)
+    received_answer#[i] = U1(waiting_ack and mine)
+  }
+  const l2_resp_is_for_me:Bool = new_data_chunk != 0 or received_error != 0
+
+  // A request group (op idx 0/1) may only start while no other group is in flight in the slots.
+  mut l2i_op_in_idx:U2 = 0
+  for g in 0..<2 {
+    for i in 0..<NumXfers {
+      if l2i_op_idx_q#[i] == g and xfer[i] != XferState.WaitReq {
+        l2i_op_in_idx#[g] = 1
+      }
+    }
+  }
+  const s2_req_ready:Bool = not (l2_req_valid or l2_seq_wait) and waiting_for_req != 0 and (l2i_op_in_idx#[request_control_l2_op_idx] == 0 or l2i_current_idx_q == request_control_l2_op_idx)
+  const s2_fire:Bool = s2_req_valid_q and s2_req_ready
+
+  // At most one new request per cycle, taken by the lowest waiting slot.
+  mut new_l2_req:U4 = 0
+  mut lower_slot_taken:Bool = false
+  for i in 0..<NumXfers {
+    if xfer[i] == XferState.WaitReq and not (l2_req_valid or l2_seq_wait) and s2_fire and not lower_slot_taken {
+      new_l2_req#[i] = 1
+      lower_slot_taken = true
+    }
+  }
+
+  // ---- TenB credit / received-entry gating of address issue (unit 1)
+  const tenb_idx:U2 = tenb_count_q#[0..<2]
+  mut tenb_rcv_ok:Bool = tenb_rcv_entry_q#[tenb_idx] == 1
+  for i in 0..<TenbEntries {
+    if i > tenb_idx_last_q and tenb_idx_last_q >= tenb_idx {
+      tenb_rcv_ok = tenb_rcv_ok and tenb_rcv_entry_q#[i] == 1
+    }
+  }
+  const tenb_credits_ok:Bool = (tenb_credits_q > 0 and tfma_started_q and not tenb_no_extra_credits_cond1_q) or tenb_credits_q > 2 or (tenb_credits_q > 0 and tenb_count_q < 4 and not tenb_no_extra_credits_cond3_q)
+
+  // ---- address generation
+  const request_control_flush:Bool = IsTenb and ctrl_state_q == CtrlState.IntTransFlush
+  const request_control_flush_done:Bool = request_control_flush and not enabled_q and not l2_interface_busy
+  const s0_addr_load_skip_mask:Bool = s0_available and enabled_q and not s1_addr_load_x_q and not s2_req_valid_q and request_control_use_tmask and request_control_tmask_bits#[tmask_idx_q] == 0 and not waiting_tlb_q
+  const s0_addr_load_x:Bool = s0_available and enabled_q and not s1_addr_load_x_q and not s2_req_valid_q and (not request_control_use_tmask or request_control_tmask_bits#[tmask_idx_q] == 1) and not waiting_tlb_q and (not IsTenb or (tenb_credits_ok and tenb_rcv_ok))
+
+  mut enabled_d:Bool = enabled_q
+  mut addr_up:Bool = false
+  mut enabled_req:Bool = false
+  mut err_mem_d:Bool = false
+  mut s0_addr_next:U48 = 0
+  wrap s0_addr_next = s0_addr_o + trans_stride
+  mut s0_addr_msb_err_next:U1 = U1(s0_addr_o#[47] == 1 and s0_addr_next#[47] == 0)
+  mut count_d:U4 = 0
+  wrap count_d = count_q + 1
+  mut tmask_idx_d:U4 = 0
+  wrap tmask_idx_d = tmask_idx_q + 1
+  mut tenb_credits_d = tenb_credits_q
+  mut tenb_rcv_entry_d = tenb_rcv_entry_q
+  mut tenb_count_d = tenb_count_q
+  mut tenb_idx_last_d = tenb_idx_last_q
+  mut tenb_idx_save:Bool = false
+
+  if not enabled_q and tensor_ctrl_start {
+    // capture the start address of a new command
+    s0_addr_next = tensor_ctrl_i.tensorload_ctrl.addr << 6
+    s0_addr_msb_err_next = 0
+    count_d = count_q
+    tmask_idx_d = tmask_idx_q
+    addr_up = true
+  }
+  if not enabled_q and request_control_start {
+    // start walking the lines of the (sub-)request
+    s0_addr_next = s0_addr_o
+    s0_addr_msb_err_next = 0
+    count_d = 0
+    tmask_idx_d = 0
+    addr_up = true
+    enabled_d = true
+    enabled_req = true
+    if IsTenb {
+      tenb_count_d = 0
+    }
+  }
+  if s2_fire or s0_addr_load_skip_mask {
+    addr_up = true
+    if count_q == request_control_num_lines {
+      enabled_d = false
+    }
+  }
+  if IsTenb {
+    if s2_fire {
+      wrap tenb_credits_d = tenb_credits_q - 1
+      tenb_rcv_entry_d#[tenb_idx] = 0
+      wrap tenb_count_d = tenb_count_q + 1
+      tenb_idx_save = true
+    }
+    if tenb_credit_i == 1 {
+      wrap tenb_credits_d = tenb_credits_d + 1
+    }
+    if tenb_written_i == 1 {
+      tenb_rcv_entry_d#[request_control_load_way] = 1
+    }
+  }
+  if enabled_q and s1_addr_load_x_q and s1_tlb_fail {
+    enabled_d = false
+    err_mem_d = true
+  }
+  if request_control_flush {
+    enabled_d = false
+  }
+  if request_control_flush_done {
+    tenb_credits_d = minion_pkg.DcacheTlTenbCredits
+    tenb_rcv_entry_d = 15
+  }
+  if tenb_idx_save {
+    tenb_idx_last_d = tenb_idx
+  }
+
+  const request_control_ending_l2:Bool = (not enabled_q and l2_interface_busy_prev_q and not l2_interface_busy) or (enabled_q and not enabled_d and request_control_tmask_bits == 0 and request_control_use_tmask) or (enabled_q and not enabled_d and s1_addr_load_x_q and s1_tlb_fail)
+  const request_control_ending:Bool = not (enabled_q or enabled_d or l2_req_valid or l2_seq_wait)
+
+  // ---- control FSM
+  mut ctrl_state_d = ctrl_state_q
+  mut shared_count_d:U4 = if IsTenb { 0 } else { shared_count_q }
+  mut shared_dest_d:U6 = if IsTenb { 0 } else { shared_dest_q }
+  mut shared_load_idx_d:U1 = if IsTenb { 0 } else { shared_load_idx_q }
+  mut trans_split_count_d:U3 = if IsTenb { 0 } else { trans_split_count_q }
+  mut drain_load_capture_d:Bool = if IsTenb { false } else { drain_load_capture_q }
+  const err_mem_sticky_d:Bool = if ctrl_state_q == CtrlState.Idle { false } elif err_mem_d { true } else { err_mem_sticky_q }
+
+  const ctrl_start_previous_ready:Bool = ctrl_start and (trans_none or not l2_interface_busy or IsTenb)
+  const ctrl_wait_previous_ready:Bool = if IsTenb {
+    (tenb_avail_all_q and not l2_interface_busy) or tenb_tstore_busy_i == 0 or tfma_enabled
+  } else {
+    trans_none or not l2_interface_busy
+  }
+  const ctrl_start_previous_wait:Bool = ctrl_start and not ctrl_wait_previous_ready
+  const ctrl_wait_tmask_ready:Bool = not save_tmask_pending_q
+
+  if ctrl_state_q == CtrlState.Idle and (ctrl_start_tmask_wait or ctrl_start_previous_wait) {
+    ctrl_state_d = CtrlState.WaitStart
+  } elif (ctrl_state_q == CtrlState.Idle and ctrl_start_tmask_ready and ctrl_start_previous_ready) or (ctrl_state_q == CtrlState.WaitStart and ctrl_wait_tmask_ready and ctrl_wait_previous_ready) {
+    if trans_none {
+      ctrl_state_d = CtrlState.NoTReq
+    } elif (trans_int8 or trans_int16) and not IsTenb {
+      ctrl_state_d = CtrlState.IntTransFlush
+      shared_count_d = 0
+    } elif (trans_trp8 or trans_trp16 or trans_trp32) and not IsTenb {
+      ctrl_state_d = CtrlState.TraReq
+      trans_split_count_d = 0
+    }
+  }
+  if ctrl_state_q == CtrlState.NoTReq and request_control_ending {
+    ctrl_state_d = CtrlState.Idle
+  }
+
+  if IsTenb {
+    if tensor_ctrl_restart {
+      ctrl_state_d = CtrlState.IntTransFlush
+    }
+    if ctrl_state_q == CtrlState.IntTransFlush and request_control_flush_done {
+      ctrl_state_d = CtrlState.Idle
+    }
+  } else {
+    const load_ready:Bool = load_ready_i == 1
+    const trans_nlines = tensor_ctrl_num_lines_q
+    if ctrl_state_q == CtrlState.IntTransFlush {
+      if shared_count_q <= trans_nlines {
+        ctrl_state_d = CtrlState.IntReq
+      }
+      if shared_count_q == 0 {
+        shared_dest_d = tensor_ctrl_scp_dest_q
+      } else {
+        wrap shared_dest_d = shared_dest_q + 1
+      }
+      shared_load_idx_d = 0
+    }
+    if ctrl_state_q == CtrlState.IntReq {
+      if drain_load_capture_q {
+        if not l2_interface_busy {
+          ctrl_state_d = CtrlState.Idle
+          drain_load_capture_d = false
+        }
+      } elif request_control_ending_l2 {
+        if err_mem_sticky_q or err_mem_d {
+          drain_load_capture_d = true
+        } elif not tensor_ctrl_use_tmask_q or trans_tmask_bits_q#[shared_count_q] == 1 {
+          ctrl_state_d = CtrlState.IntInt
+        } elif shared_count_q == trans_nlines {
+          ctrl_state_d = CtrlState.Idle
+        } else {
+          ctrl_state_d = CtrlState.IntTransFlush
+          wrap shared_count_d = shared_count_q + 1
+        }
+      }
+    }
+    if ctrl_state_q == CtrlState.IntInt and load_ready {
+      shared_load_idx_d = ~shared_load_idx_q
+      if shared_load_idx_q == 1 {
+        if shared_count_q == trans_nlines {
+          ctrl_state_d = CtrlState.Idle
+        } else {
+          ctrl_state_d = CtrlState.IntTransFlush
+          wrap shared_count_d = shared_count_q + 1
+        }
+      }
+    }
+    if ctrl_state_q == CtrlState.TraReq {
+      if drain_load_capture_q {
+        if not l2_interface_busy {
+          ctrl_state_d = CtrlState.Idle
+          drain_load_capture_d = false
+        }
+      } elif request_control_ending_l2 {
+        if err_mem_sticky_q or err_mem_d {
+          drain_load_capture_d = true
+        } else {
+          ctrl_state_d = CtrlState.TraTra
+        }
+      }
+      shared_count_d = 0
+      shared_dest_d = tensor_ctrl_scp_dest_q
+      shared_load_idx_d = trans_split_count_q#[2]
+    }
+    if ctrl_state_q == CtrlState.TraTra and load_ready {
+      wrap shared_count_d = shared_count_q + 1
+      wrap shared_dest_d = shared_dest_q + 1
+      if shared_count_q == trans_nlines {
+        // the transpose needs eight passes (trans_split_count 0..7)
+        if trans_split_count_q == 7 {
+          ctrl_state_d = CtrlState.Idle
+        } else {
+          ctrl_state_d = CtrlState.TraReq
+        }
+        wrap trans_split_count_d = trans_split_count_q + 1
+      }
+    }
+    if shared_dest_d >= ScpWrapLine {
+      shared_dest_d = shared_dest_d - ScpWrapLine
+    }
+  }
+
+  const update_l2_operation_id:Bool = (ctrl_state_q == CtrlState.NoTReq and request_control_ending and (not request_control_use_tmask or request_control_tmask_bits != 0)) or (ctrl_state_q == CtrlState.IntReq and request_control_ending_l2 and (not request_control_use_tmask or request_control_tmask_bits != 0)) or (ctrl_state_q == CtrlState.TraReq and request_control_ending_l2) or (ctrl_state_q == CtrlState.IntTransFlush and request_control_ending and IsTenb)
+
+  // ---- scratchpad destination of the line being requested
+  mut l1_scp_dest_ext:U7 = 0
+  l1_scp_dest_ext = tensor_ctrl_scp_dest_q + count_q
+  if l1_scp_dest_ext >= ScpWrapLine {
+    wrap l1_scp_dest_ext = l1_scp_dest_ext - ScpWrapLine
+  }
+  const l1_scp = scp_set_way(dest=l1_scp_dest_ext#[0..<6])
+  const request_control_clear_set:U4 = if IsTenb { count_q } else { l1_scp.set }
+  const request_control_clear_way:U2 = if IsTenb { tenb_idx } else { l1_scp.way }
+
+  // ---- L2 request slots: next state, saved request attributes
+  const seq_slot:U4 = (l2i_seq_idx_q << minion_pkg.ShireCoopSeqIdSize) | sequence_count_q
+  const l2_req_fire:Bool = l2_req_valid and l2_req_ready
+  const sequence_usable:Bool = sequence_data_q#[seq_slot] == 0
+  mut l2i_state_up:U4 = 0
+  mut l2i_next:[NumXfers]XferState = XferState.WaitReq
+  for i in 0..<NumXfers {
+    const state = xfer[i]
+    const up:Bool = state != XferState.WaitReq or enabled_q
+    l2i_state_up#[i] = U1(up)
+    mut next_state:XferState = state
+    if state == XferState.WaitReq and new_l2_req#[i] == 1 {
+      next_state = if request_control_use_coop { XferState.L2Seq } else { XferState.L2Req }
+    }
+    if state == XferState.L2Seq and sequence_usable {
+      next_state = XferState.L2Req
+    }
+    if state == XferState.L2Req and l2_req_ready {
+      next_state = XferState.WaitAck
+    }
+    if (new_data_chunk#[i] == 1 and tl_load_idx_q#[i] == 1) or received_error#[i] == 1 {
+      next_state = XferState.WaitReq
+    }
+    l2i_next[i] = next_state
+
+    if new_l2_req#[i] == 1 {
+      tl_load_way_q#[(2*i)..<(2*i + 2)] = request_control_clear_way
+      tl_load_set_q#[(4*i)..<(4*i + 4)] = request_control_clear_set
+      l2i_group_q#[i] = id_running_q
+      l2i_op_idx_q#[i] = request_control_l2_op_idx
+      l2i_op_is_coop_q#[i] = U1(request_control_use_coop)
+      l2i_stg_addr_q#[(4*i)..<(4*i + 4)] = shared_l2_counter_q
+    }
+    if accepted_to_l2#[i] == 1 {
+      l2i_seq_saved_q#[(4*i)..<(4*i + 4)] = seq_slot
+    }
+    if up {
+      tl_load_idx_q#[i] = if state == XferState.WaitReq { 0 } elif new_data_chunk#[i] == 1 { ~tl_load_idx_q#[i] } else { tl_load_idx_q#[i] }
+    }
+  }
+
+  if rst_ni == 0 {
+    for i in 0..<NumXfers {
+      l2i_state_q[i] = XferState.WaitReq
+    }
+  } else {
+    for i in 0..<NumXfers {
+      if l2i_state_up#[i] == 1 {
+        l2i_state_q[i] = l2i_next[i]
+      }
+    }
+  }
+
+  // The 16 request tags used by a cooperative load: data[tag] is set while a read is outstanding.
+  mut sequence_data_d = sequence_data_q
+  if l2_req_fire and request_control_use_coop {
+    sequence_data_d#[seq_slot] = 1
+  }
+  for i in 0..<NumXfers {
+    if received_answer#[i] == 1 and l2i_op_is_coop_q#[i] == 1 {
+      const saved:U4 = l2i_seq_saved_q#[(4*i)..<(4*i + 4)]
+      sequence_data_d#[saved] = 0
+    }
+  }
+  if (l2_req_fire and request_control_use_coop) or (received_answer & l2i_op_is_coop_q) != 0 {
+    sequence_data_q = sequence_data_d
+  }
+  if (enabled_req or l2_req_fire) and request_control_use_coop {
+    if enabled_req {
+      sequence_count_q = 0
+    } else {
+      wrap sequence_count_q = sequence_count_q + 1
+    }
+  }
+
+  const l2i_current_idx_up:Bool = s2_fire and l2i_op_in_idx#[request_control_l2_op_idx] == 0 and l2i_current_idx_q != request_control_l2_op_idx
+  const tensor_coop_id_curr:U5 = tensor_coop_data_q#[CoopIdLsb..<(CoopIdLsb + minion_pkg.ShireCoopIdSize)]
+  if l2i_current_idx_up {
+    l2i_current_idx_q = request_control_l2_op_idx
+    if tensor_coop_id_curr != tensor_coop_id_prev_q and request_control_use_coop {
+      l2i_seq_idx_q = ~l2i_seq_idx_q
+    }
+    if request_control_use_coop {
+      tensor_coop_id_prev_q = tensor_coop_id_curr
+    }
+  }
+  if new_l2_req != 0 {
+    req_addr_cline_q = s2_addr_i#[6..<40]
+  }
+
+  // ---- request issued to the L2: lowest slot waiting to send
+  mut l2_req_idx:U2 = 0
+  mut slot_found:Bool = false
+  for i in 0..<NumXfers {
+    if requesting_to_l2#[i] == 1 and not slot_found {
+      l2_req_idx = i
+      slot_found = true
+    }
+  }
+  const self_minion_id_mask:U8 = 1 << shire_min_id_i#[0..<3]
+  const coop_data_seq:U20 = tensor_coop_data_q | (sequence_count_q << CoopSeqIdLsb)
+  const l2_req_id:U5 = MissIdBase + l2_req_idx
+  const l2_req_opcode:U5 = if request_control_use_coop { minion_dcache_pkg.EtLinkReqReadCoop } else { minion_dcache_pkg.EtLinkReqRead }
+  const l2_req_address:U40 = req_addr_cline_q << 6
+  const l2_req_data:U20 = if request_control_use_coop { coop_data_seq } else { self_minion_id_mask }
+  l2_req_o.id = l2_req_id
+  l2_req_o.source = 0
+  l2_req_o.wdata = U1(request_control_use_coop)
+  l2_req_o.opcode = l2_req_opcode
+  l2_req_o.address = l2_req_address
+  l2_req_o.data = l2_req_data
+  l2_req_o.size = minion_dcache_pkg.EtLinkLine
+  l2_req_o.qwen = if request_control_use_coop { 1 } else { 0 }
+  l2_req_o.subopcode = 0
+
+  // ---- interleave/transpose staging buffer and load data path (unit 0 only)
+  mut shared_load_data:U256 = 0
+  mut shared_l2_store:U16 = 0
+  const shared_dest_line = scp_set_way(dest=shared_dest_q)
+  if not IsTenb {
+    const rf_write_en_prev = U1(ctrl_state_d == CtrlState.IntReq or ctrl_state_q == CtrlState.TraReq)
+    const stg_addr:U4 = (l2i_stg_addr_q >> (sel_t*4)) & 15
+    const stg_tl_idx:U1 = tl_load_idx_q#[sel_t]
+    const use_p2:Bool = trans_offset#[1] == 1
+    const slot_matches:Bool = use_p2 == (stg_tl_idx == 1)
+    // Which 64-bit staging blocks the arriving response is written to (blocks are written in pairs).
+    if trans_int8 or trans_int16 {
+      for i in 0..<8 step 2 {
+        mut hit:Bool = false
+        if slot_matches and l2_resp_is_for_me {
+          hit = if trans_int8 { stg_addr#[1..=2] == ((i >> 1) & 3) } else { stg_addr#[1] == ((i >> 2) & 1) }
+        }
+        shared_l2_store#[i] = U1(hit)
+        shared_l2_store#[i + 1] = U1(hit)
+      }
+    } else {
+      for i in 0..<16 step 2 {
+        mut hit:Bool = false
+        if trans_trp32 and l2_resp_is_for_me {
+          hit = (stg_addr#[0..=1] | stg_tl_idx) == ((i >> 2) & 3)
+        } elif slot_matches and l2_resp_is_for_me {
+          if trans_trp8 {
+            hit = stg_addr#[1..=3] == ((i >> 1) & 7)
+          } elif trans_trp16 {
+            hit = stg_addr#[1..=2] == ((i >> 2) & 3)
+          }
+        }
+        shared_l2_store#[i] = U1(hit)
+        shared_l2_store#[i + 1] = U1(hit)
+      }
+    }
+
+    // Response data as 64-bit lanes; odd offsets read the upper half of the response.
+    const low_half:Bool = trans_offset#[0] == 0
+    const lane0:U64 = if low_half { l2_resp_i.data#[0..<64] } else { l2_resp_i.data#[128..<192] }
+    const lane1:U64 = if low_half { l2_resp_i.data#[64..<128] } else { l2_resp_i.data#[192..<256] }
+    const lane2:U64 = l2_resp_i.data#[128..<192]
+    const lane3:U64 = l2_resp_i.data#[192..<256]
+    const lanes = [lane0, lane1, lane2, lane3]
+
+    mut tmp_data:[TmpBlocks]U64 = 0
+    for i in 0..<TmpBlocks {
+      const wr_data:U64 = if trans_size8 { lanes[i & 1] } else { lanes[i & 3] }
+      const u_tmp_data = prim_rf_single_1r1w_par_preview(preview_clk_i=clkgt, rf_clk_i=clkgt, wr_data_en_1p_next_i=rf_write_en_prev, wr_data_i=wr_data, wr_en_i=shared_l2_store#[i])
+      tmp_data[i] = u_tmp_data.rd_data_o
+    }
+
+    // Gather the 256-bit line to load: the staging blocks are read as chunks of 1, 2 or 4 bytes
+    // (interleave: fixed byte lane, block picked by the load half; transpose: block by line pair, byte lane by count).
+    mut idx_bufl:U4 = 0
+    mut chunk:U64 = 0
+    if trans_int8 {
+      for i in 0..<32 {
+        idx_bufl = ((i & 3) << 1) + shared_load_idx_q
+        shared_load_data#[(i*8)..<(i*8 + 8)] = tmp_data[idx_bufl]#[((i >> 2)*8)..<((i >> 2)*8 + 8)]
+      }
+    } elif trans_int16 {
+      for i in 0..<32 step 2 {
+        idx_bufl = ((i & 3) << 1) + ((i >> 4) & 1) + (shared_load_idx_q << 1)
+        const byte_lo = ((i >> 2) & 3)*2
+        shared_load_data#[(i*8)..<(i*8 + 16)] = tmp_data[idx_bufl]#[(byte_lo*8)..<(byte_lo*8 + 16)]
+      }
+    } elif trans_trp8 {
+      for i in 0..<32 {
+        wrap idx_bufl = 2*i + shared_count_q#[3]
+        wrap chunk = tmp_data[idx_bufl] >> (shared_count_q#[0..<3]*8)
+        shared_load_data#[(i*8)..<(i*8 + 8)] = chunk#[0..<8]
+      }
+    } elif trans_trp16 {
+      for i in 0..<32 step 2 {
+        wrap idx_bufl = 2*i + shared_count_q#[2..<4]
+        wrap chunk = tmp_data[idx_bufl] >> ((shared_count_q#[0..<2]*2)*8)
+        shared_load_data#[(i*8)..<(i*8 + 16)] = chunk#[0..<16]
+      }
+    } else {
+      for i in 0..<32 step 4 {
+        wrap idx_bufl = 2*i + shared_count_q#[1..<4]
+        wrap chunk = tmp_data[idx_bufl] >> ((shared_count_q#[0]*4)*8)
+        shared_load_data#[(i*8)..<(i*8 + 32)] = chunk#[0..<32]
+      }
+    }
+  }
+
+  const shared_l2_count:Bool = not IsTenb and (ctrl_state_q == CtrlState.IntTransFlush or (ctrl_state_q == CtrlState.IntReq and new_l2_req != 0) or (ctrl_state_q == CtrlState.TraReq and (new_l2_req != 0 or ctrl_state_changed_q)))
+  if shared_l2_count {
+    if ctrl_state_q == CtrlState.IntTransFlush or (ctrl_state_q == CtrlState.TraReq and ctrl_state_changed_q) {
+      shared_l2_counter_q = 0
+    } else {
+      wrap shared_l2_counter_q = shared_l2_counter_q + 2
+    }
+  }
+
+  // ---- load port towards the scratchpad
+  const shared_load_addr:U10 = (shared_dest_line.set << (LoadOffsetBits + 1)) | (shared_load_idx_q << LoadOffsetBits)
+  const use_shared_path:Bool = not IsTenb and ctrl_state_q >= CtrlState.IntTransFlush
+  const load_way:U2 = if use_shared_path { shared_dest_line.way } else { request_control_load_way }
+  const load_addr:U10 = if use_shared_path { shared_load_addr } else { request_control_load_addr }
+  const interleave_load_valid:U4 = if ctrl_state_q == CtrlState.IntInt { 15 } else { 0 }
+  const transpose_valid_single:Bool = ctrl_state_q == CtrlState.TraTra and (trans_tmask_bits_q#[shared_count_q] == 1 or not tensor_ctrl_use_tmask_q)
+  const transpose_valid_mask:U4 = 1 << trans_split_count_q#[0..<2]
+  const transpose_load_valid:U4 = if transpose_valid_single { transpose_valid_mask } else { 0 }
+  const load_valid:U4 = interleave_load_valid | transpose_load_valid
+  load_way_o = load_way
+  load_addr_o = load_addr
+  load_data_o = shared_load_data
+  load_valid_o = load_valid
+  load_valid_pre_o = U1(ctrl_state_d == CtrlState.IntInt or ctrl_state_d == CtrlState.TraTra)
+  load_capture_o = U1(ctrl_state_q == CtrlState.IntReq or ctrl_state_q == CtrlState.TraReq)
+  if not IsTenb {
+    if ctrl_state_q == CtrlState.IntTransFlush or ctrl_state_q == CtrlState.IntReq {
+      interleave_clear_valid_q = ctrl_state_q == CtrlState.IntTransFlush and shared_count_q <= tensor_ctrl_num_lines_q
+    }
+  }
+
+  // ---- TenB availability of the VPU buffer entries (both units)
+  mut tenb_avail_entry_d = tenb_avail_entry_q
+  if tenb_written_i == 1 {
+    tenb_avail_entry_d#[request_control_load_way] = 0
+  }
+  if tenb_credit_i == 1 {
+    tenb_avail_entry_d#[tenb_credit_entry_i] = 1
+  }
+  if request_control_flush_done {
+    tenb_avail_entry_d = 15
+  }
+  tenb_avail_entry_q = tenb_avail_entry_d
+  tenb_avail_all_q = tenb_avail_entry_q == 15
+  if IsTenb {
+    tenb_credits_q = tenb_credits_d
+    tenb_rcv_entry_q = tenb_rcv_entry_d
+  } else {
+    tenb_credits_q = 0
+    tenb_rcv_entry_q = 0
+  }
+  mut tfma_started_d:Bool = tfma_started_q
+  if tensor_ctrl_start {
+    tfma_started_d = false
+  }
+  if tfma_enabled and not tensor_ctrl_start and not tfma_active_start_q {
+    tfma_started_d = true
+  }
+  mut tfma_active_start_d:Bool = tfma_active_start_q
+  if tensor_ctrl_start {
+    tfma_active_start_d = tfma_enabled
+  }
+  if not tfma_enabled {
+    tfma_active_start_d = false
+  }
+  tfma_started_q = tfma_started_d
+  tfma_active_start_q = tfma_active_start_d
+
+  // ---- registered state updates
+  if ctrl_en {
+    ctrl_state_changed_q = ctrl_state_d != ctrl_state_q
+  }
+  ctrl_state_q = ctrl_state_d
+  start_pulse_pre_q = tensor_ctrl_start
+  shared_count_q = shared_count_d
+  shared_dest_q = shared_dest_d
+  shared_load_idx_q = shared_load_idx_d
+  trans_split_count_q = trans_split_count_d
+  drain_load_capture_q = drain_load_capture_d
+  err_transf_flag_q = start_pulse and not trans_size_valid
+  err_offset_flag_q = false
+  err_mem_q = err_mem_d
+  err_mem_sticky_q = err_mem_sticky_d
+
+  // latched command, captured on the start pulse of the unit
+  if tensor_ctrl_start {
+    if IsTenb {
+      tensor_ctrl_offset_q = minion_pkg.tensorload_offset_0
+      tensor_ctrl_transform_q = minion_pkg.TensorTransNone
+      tenb_no_extra_credits_cond1_q = tensor_ctrl_i.tensorload_stride#[1] == 1
+      tenb_no_extra_credits_cond3_q = tensor_ctrl_i.tensorload_stride#[2] == 1
+    } else {
+      tensor_ctrl_use_tmask_q = tensor_ctrl_i.tensorload_ctrl.use_tmask == 1
+      tensor_ctrl_offset_q = tensor_ctrl_i.tensorload_ctrl.offset
+      tensor_ctrl_transform_q = tensor_ctrl_i.tensorload_ctrl.transform
+    }
+    tensor_ctrl_use_coop_q = tensor_ctrl_i.tensorload_ctrl.use_coop == 1
+    tensor_ctrl_num_lines_q = tensor_ctrl_i.tensorload_ctrl.num_lines
+    tensor_ctrl_scp_dest_q = tensor_ctrl_i.tensorload_ctrl.scp_dest
+    tensor_load_stride_q = tensor_ctrl_i.tensorload_stride#[6..<48]
+    id_running_q = tensor_ctrl_i.tensorload_stride#[0]
+    thread_id_q = tensor_ctrl_i.thread_id
+
+    // cooperative descriptor: this minion's id bits OR-ed with the coop controls
+    const minion_id:U3 = shire_min_id_i#[0..<3]
+    const neigh_id:U2 = shire_min_id_i#[3..<5]
+    const self_minion_mask:U8 = 1 << minion_id
+    const own_neigh_mask:U4 = 1 << neigh_id
+    const minion_word:U8 = self_minion_mask | tensor_ctrl_i.tensorcoop_ctrl.minion_mask
+    const seq_word:U3 = 0
+    const id_word:U5 = tensor_ctrl_i.tensorcoop_ctrl.id
+    const neigh_word:U4 = own_neigh_mask | tensor_ctrl_i.tensorcoop_ctrl.neigh_mask
+    tensor_coop_data_q = (minion_word, seq_word, id_word, neigh_word)#[..]
+  }
+
+  const save_tmask_bits:Bool = (ctrl_state_q == CtrlState.Idle and tmask_ready and start_pulse) or (ctrl_state_q == CtrlState.WaitStart and save_tmask_pending_q and tensor_ctrl_use_tmask_q and tmask_ready)
+  if ctrl_state_q == CtrlState.Idle and ctrl_start_tmask_wait {
+    save_tmask_pending_q = true
+  }
+  if save_tmask_bits {
+    save_tmask_pending_q = false
+    trans_tmask_bits_q = tensor_ctrl_i.tensorload_tmask_bits
+  }
+  if start_pulse {
+    vm_status_tl_q = if thread_id_q == 1 { vm_status_i#[8..<16] } else { vm_status_i#[0..<8] }
+  }
+
+  if addr_up {
+    s0_addr_o = s0_addr_next
+    s0_addr_msb_err_o = s0_addr_msb_err_next
+    count_q = count_d
+    tmask_idx_q = tmask_idx_d
+    if IsTenb {
+      tenb_count_q = tenb_count_d
+    }
+  }
+  if IsTenb {
+    tenb_idx_last_q = tenb_idx_last_d
+  }
+  enabled_q = enabled_d
+  s1_addr_load_x_q = s0_addr_load_x and not request_control_flush
+  s2_req_valid_q = (s1_addr_load_x_q and not s1_tlb_wait and not s1_tlb_fail and not request_control_flush) or (s2_req_valid_q and not s2_req_ready and s1_available and not request_control_flush)
+  waiting_tlb_q = (s1_addr_load_x_q or waiting_tlb_q) and s1_tlb_wait
+  l2_interface_busy_prev_q = l2_interface_busy
+  if update_l2_operation_id {
+    request_control_l2_op_idx = ~request_control_l2_op_idx
+  }
+
+  // ---- status outputs
+  mut l2_operates_in_id:U2 = 0
+  mut id_complete:U2 = 0
+  for g in 0..<2 {
+    for i in 0..<NumXfers {
+      if xfer[i] != XferState.WaitReq and l2i_group_q#[i] == g {
+        l2_operates_in_id#[g] = 1
+      }
+    }
+    // the other thread's loads never block a group; this thread's running group also waits for the FSM
+    id_complete#[g] = U1(thread_id_q == 1 or (if id_running_q == g { not busy and l2_operates_in_id#[g] == 0 }
+            else { l2_operates_in_id#[g] == 0 }))
+  }
+  id_complete_o.e1 = id_complete#[1]
+  id_complete_o.e0 = id_complete#[0]
+  busy_o = U1(busy)
+  tl_start_o = U1(start_pulse)
+  tl_op_o = U1(l2_req_fire)
+  s0_addr_load_o = U1(s0_addr_load_x)
+  s0_thread_id_o = thread_id_q
+  s1_addr_load_o = U1(s1_addr_load_x_q)
+  l2_req_valid_coop_o = U1(l2_req_valid and request_control_use_coop)
+  l2_req_valid_no_coop_o = U1(l2_req_valid and not request_control_use_coop)
+  tenb_ready_o = tenb_avail_entry_q#[request_control_load_way]
+  tenb_flush_o = U1(request_control_flush_done)
+  vm_status_tl_o.prv = vm_status_tl_q#[6..<8]
+  vm_status_tl_o.mprv = vm_status_tl_q#[5]
+  vm_status_tl_o.mpp = vm_status_tl_q#[3..<5]
+  vm_status_tl_o.sum = vm_status_tl_q#[2]
+  vm_status_tl_o.mxr = vm_status_tl_q#[1]
+  vm_status_tl_o.debug = vm_status_tl_q#[0]
+
+  // Unlock-line errors cannot occur in this unit; their flag bit stays in the layout.
+  const err_unlock:U1 = 0
+  const err_offset:U1 = U1(err_offset_flag_q)
+  err_flags_o.e0 = err_unlock
+  err_flags_o.e1 = U1(err_transf_flag_q)
+  err_flags_o.e2 = err_offset
+  err_flags_o.e3 = U1(err_mem_q and thread_id_q == 0)
+  err_flags_o.e4 = U1(err_mem_q and thread_id_q == 1)
+  const bus_err:Bool = received_error != 0
+  const bus_err_thread0:U1 = U1(bus_err and thread_id_q == 0)
+  const bus_err_thread1:U1 = U1(bus_err and thread_id_q == 1)
+  bus_err_o = (bus_err_thread0, bus_err_thread1)#[..]
+
+  // ---- debug buses (bit layout of the original; lanes are listed LSB first)
+  const ctrl_state_bits:U3 = ctrl_state_q#[..]
+  csr_debug_signals_o = ctrl_state_bits
+  mut l2i_states:U8 = 0
+  for i in 0..<NumXfers {
+    l2i_states#[(2*i)..<(2*i + 2)] = xfer[i]#[..]
+  }
+  const dbg_start:U1 = U1(tensor_ctrl_start)
+  const dbg_req_start:U1 = U1(request_control_start)
+  const dbg_start_pulse:U1 = U1(start_pulse)
+  const dbg_ctrl_en:U1 = U1(ctrl_en)
+  const dbg_addr_up:U1 = U1(addr_up)
+  const dbg_save_tmask:U1 = U1(save_tmask_bits)
+  const dbg_shared_l2_count:U1 = U1(shared_l2_count)
+  const dbg_l2_req_fire:U1 = U1(l2_req_fire)
+  const dbg_l2_req_valid:U1 = U1(l2_req_valid)
+  const dbg_l2_req_ready:U1 = U1(l2_req_ready)
+  const dbg_interleave_clear:U1 = U1(interleave_clear_valid_q)
+  const dbg_state_changed:U1 = U1(ctrl_state_changed_q)
+  const dbg_s2_valid:U1 = U1(s2_req_valid_q)
+  const dbg_s2_ready:U1 = U1(s2_req_ready)
+  const dbg_s2_fire:U1 = U1(s2_fire)
+  const dbg_s0_load:U1 = U1(s0_addr_load_x)
+  const dbg_s0_available:U1 = U1(s0_available)
+  const dbg_s0_load_avail:U1 = U1(s0_addr_load_x and s0_available)
+  const dbg_tfma_active:U1 = U1(tfma_active_start_q)
+  const dbg_err_transf:U1 = U1(err_transf_flag_q)
+  const dbg_waiting_tlb:U1 = U1(waiting_tlb_q)
+  const dbg_tfma_started:U1 = U1(tfma_started_q)
+  const dbg_use_tmask:U1 = U1(tensor_ctrl_use_tmask_q)
+  const dbg_use_coop:U1 = U1(tensor_ctrl_use_coop_q)
+  const sm_match:U28 = (dbg_start, dbg_req_start, dbg_start_pulse, dbg_ctrl_en, dbg_addr_up, dbg_save_tmask, load_valid, err_offset, dbg_err_transf, err_unlock, dbg_shared_l2_count, dbg_l2_req_fire, dbg_interleave_clear, dbg_state_changed, dbg_s2_fire, dbg_s0_load_avail, dbg_tfma_active, new_l2_req, l2i_state_up)#[..]
+  sm_match_debug_signals_o = sm_match
+  const sm_filter:U101 = (ctrl_state_bits, l2i_states, l2i_group_q, l2i_op_idx_q, dbg_waiting_tlb, l2_req_address, l2_req_opcode, l2_req_id, dbg_start, dbg_req_start, dbg_start_pulse, dbg_ctrl_en, dbg_addr_up, dbg_save_tmask, load_valid, err_offset, dbg_err_transf, err_unlock, dbg_shared_l2_count, dbg_l2_req_ready, dbg_l2_req_valid, dbg_interleave_clear, dbg_state_changed, dbg_s2_ready, dbg_s2_valid, dbg_s0_available, dbg_s0_load, dbg_tfma_active, new_l2_req, l2i_state_up)#[..]
+  sm_filter_debug_signals_o = sm_filter
+  const sm_data0:U105 = (tensor_ctrl_num_lines_q, tensor_ctrl_transform_q, tensor_ctrl_offset_q, tensor_ctrl_scp_dest_q, tensor_coop_data_q, dbg_use_coop, dbg_use_tmask, tensor_load_stride_q, trans_tmask_bits_q, thread_id_q, id_running_q, vm_status_tl_q)#[..]
+  const sm_data1:U118 = (s0_addr_o, l2_req_data, l2_req_address, l2_req_opcode, l2_req_id)#[..]
+  const sm_data2:U118 = (s2_addr_i, dbg_tfma_started, tenb_avail_entry_q, tenb_rcv_entry_q, tenb_credits_q, tl_load_idx_q, tl_load_set_q, tl_load_way_q, load_addr, load_way, trans_split_count_q, shared_load_idx_q, shared_dest_q, shared_count_q, shared_l2_counter_q, tmask_idx_q, count_q)#[..]
+  sm_data_debug_signals_o = sm_data0 | (sm_data1 << minion_dcache_pkg.DcacheDbgSmDataGroupBits) | (sm_data2 << (2*minion_dcache_pkg.DcacheDbgSmDataGroupBits))
+
+  // Clock gate: runs while there is work, an error to report, in reset or on request of the chicken bit.
+  const clkgt_en:Bool = tensor_ctrl_start or busy or id_complete != 3 or rst_ni == 0 or err_transf_flag_q or err_offset_flag_q or err_mem_q
+  const u_clk_gate = prim_clk_gate(clk_i=clk_i, dft_i=(scanmode=0), en_i=U1(clkgt_en or chicken_bit_dcache_i == 1))
+  clkgt = u_clk_gate
+}

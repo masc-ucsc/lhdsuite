@@ -1,0 +1,47 @@
+// Synchronous FIFO with ready/valid handshake and a synchronous clear
+// (verilog: prim_fifo_sync). Writes while full and reads while empty are
+// ignored. Reset is asynchronous, active-low; clr_i flushes in-band.
+pub mod prim_fifo_sync<Width=8, Depth=4>::[timecheck=false](clk_i:Clock, clr_i:U1, rready_i:U1, rst_ni:U1, wdata_i:Unsigned(bits=Width), wvalid_i:U1) -> (wready_o:U1@[], rvalid_o:U1@[], rdata_o:Unsigned(bits=Width)@[], depth_o:Unsigned(bits=std.clog2(Depth + 1))@[], full_o:U1@[], empty_o:U1@[]) {
+  comptime const DepthW = std.clog2(Depth + 1)
+  comptime const PtrW = if Depth > 1 { std.clog2(Depth) } else { 1 }
+
+  reg depth_q:Unsigned(bits=DepthW):[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg wptr_q:Unsigned(bits=PtrW):[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg rptr_q:Unsigned(bits=PtrW):[async=true, negreset=true, reset_pin=rst_ni] = 0
+  reg mem:[Depth]Unsigned(bits=Width):[ordering="old"] = nil
+
+  const full = depth_q == Depth
+  const empty = depth_q == 0
+  const do_write = wvalid_i == 1 and not full
+  const do_read = rready_i == 1 and not empty
+
+  full_o = U1(full)
+  empty_o = U1(empty)
+  wready_o = U1(not full)
+  rvalid_o = U1(not empty)
+  depth_o = depth_q
+
+  if do_write {
+    mem[wptr_q] = wdata_i
+  }
+  rdata_o = mem[rptr_q]
+
+  if clr_i == 1 {
+    depth_q = 0
+    wptr_q = 0
+    rptr_q = 0
+  } else {
+    // simultaneous write and read leave the occupancy unchanged
+    if do_write and not do_read {
+      wrap depth_q += 1
+    } elif do_read and not do_write {
+      wrap depth_q -= 1
+    }
+    if do_write {
+      wrap wptr_q = if wptr_q == Depth - 1 { 0 } else { wptr_q + 1 }
+    }
+    if do_read {
+      wrap rptr_q = if rptr_q == Depth - 1 { 0 } else { rptr_q + 1 }
+    }
+  }
+}

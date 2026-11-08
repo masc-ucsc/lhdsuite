@@ -1,0 +1,81 @@
+// Rounding-control decode for stage f5: the effective rounding mode and the rc_* /
+// compare / result-sign controls derived from the command, dtype and sigs.
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+pub comb txfma_c5::[timecheck=false](cmd_f5a_h:vpu_defs_pkg.VPU_FCMD_SZ_T, comb_add_a3_f5a_h:U1, comp_op_f5a_h:U1, comp_res_sel_f5a_h:U1, ec_zero_f5a_h:U1, ediff1_zap_f5a_h:U1, elxd_f5a_h:vpu_defs_pkg.TXFMA_LXD_PS_SZ_T, etrz50_f5a_h:vpu_defs_pkg.TXFMA_WSPS_ETRZ_SZ_T, fa_eq_fc_res_check_hi_f5a_h:U1, fc_sel_f5a_h:U1, minmax_op_f5a_h:U1, op_dtype_f5a_h:vpu_defs_pkg.VPU_DTYPE_SZ_T, prod_sign_hi_f5a_h:U1, rm_f5a_h:vpu_defs_pkg.FP_RM_BITS_T, s_res_check_cadd_a3_f5a_h:U1, s_res_f5a_h:U1, sigs_f5a_h:(e18:U1, e17:U1, e16:U1, e15:U1, e14:U1, e13:U1, e12:U1, e11:U1, e10:U1, e9:U1, e8:U1, e7:U1, e6:U1, e5:U1, e4:U1, e3:U1, e2:U1, e1:U1, e0:U1), stky2g_f5a_h:U1, trans_log_rr_neg_f5a_h:U1) -> (comp_op_true_f5a_h:U1, e_force_to_zero_f5a_h:U1, en_logrrsel1b_f5a_l:U1, int32_stky2r_f5a_h:U1, mmx_sel_immres_f5a_h:U1, nshcen_sel1b_f5a_h:U1, rc6_ph_f5a_h:U1, rc6_ps_f5a_h:U1, rc_3rmxr_f5a_h:U1, rc_int32_f5a_h:U1, rc_ph_f5a_h:U1, rc_ps_f5a_h:U1, rc_rdn_f5a_h:U1, rc_res_sign_f5a_l:U1, rc_rl01_f5a_h:U1, rc_rmm_f5a_h:U1, rc_rne_f5a_h:U1, rc_rup_f5a_h:U1, rc_transrnd_f5a_h:U1, rc_transrnd_log_fma2_f5a_h:U1, s_res_out_f5a_h:U1, trans2_ps_roundup_r_f5a_h:U1) {
+  const cmd = cmd_f5a_h
+  const is_int = op_dtype_f5a_h == vpu_defs_pkg.VPU_DTYPE_INT
+  const is_f32 = op_dtype_f5a_h == vpu_defs_pkg.VPU_DTYPE_F32
+  const frac_op = cmd == vpu_defs_pkg.VPU_TRANS_EXP_FRAC
+  const log_rr = cmd == vpu_defs_pkg.VPU_TRANS_LOG_RR
+  const cvt_f32rast = cmd == vpu_defs_pkg.VPU_FCMD_CVT_F32RAST
+  const lxd_hi_max = elxd_f5a_h#sext[0..=6] == vpu_defs_pkg.TXFMA_LXD_HI_MAX_VALUE
+
+  // Rounding mode actually used: truncate for compare/min-max/round/fraction ops, nearest-away for e15.
+  const rm_mod = if comp_op_f5a_h != 0 or minmax_op_f5a_h != 0 or cmd == vpu_defs_pkg.VPU_FCMD_FROUND or cmd == vpu_defs_pkg.VPU_FCMD_FFRC or cmd == vpu_defs_pkg.VPU_FCMD_FFRC_SIN {
+    vpu_defs_pkg.RTZ
+  } elif sigs_f5a_h.e15 != 0 {
+    vpu_defs_pkg.RMM
+  } elif cvt_f32rast {
+    vpu_defs_pkg.RNE
+  } else {
+    rm_f5a_h
+  }
+  const rne = rm_mod == vpu_defs_pkg.RNE
+  const rup = rm_mod == vpu_defs_pkg.RUP
+  const rdn = rm_mod == vpu_defs_pkg.RDN
+  const rmm = rm_mod == vpu_defs_pkg.RMM
+  const rtz = rm_mod == vpu_defs_pkg.RTZ
+
+  const rc_ps = not (sigs_f5a_h.e13 != 0 or sigs_f5a_h.e8 != 0 or sigs_f5a_h.e15 != 0 or frac_op or is_int) or (is_int and sigs_f5a_h.e8 != 0) or (not is_f32 and sigs_f5a_h.e14 != 0) or sigs_f5a_h.e17 != 0 or cvt_f32rast
+  const rc_ph = cmd == vpu_defs_pkg.VPU_FCMD_CVT_F16F32
+  const rc_int32 = (is_f32 and (sigs_f5a_h.e8 != 0 or sigs_f5a_h.e15 != 0 or frac_op)) or (sigs_f5a_h.e16 != 0 and cmd != vpu_defs_pkg.VPU_TRANS_LOG_FMA2)
+
+  // Compare: the operands are equal when fa == fc and the trailing-zero count is the full datapath width.
+  const eq = fa_eq_fc_res_check_hi_f5a_h != 0 and etrz50_f5a_h == vpu_defs_pkg.TXFMA_PS_DPATH_SZ
+  const comp_op_true = (cmd == vpu_defs_pkg.VPU_FCMD_FLT and comp_res_sel_f5a_h != 0 and not eq) or (cmd == vpu_defs_pkg.VPU_FCMD_FLE and (comp_res_sel_f5a_h != 0 or eq)) or (cmd == vpu_defs_pkg.VPU_FCMD_FEQ and eq)
+  const mmx_sel_immres = (is_int and (cmd == vpu_defs_pkg.VPU_FCMD_MULL or cmd == vpu_defs_pkg.VPU_FCMD_MULLU or cmd == vpu_defs_pkg.VPU_FCMD_MULH or cmd == vpu_defs_pkg.VPU_FCMD_MULHU or cmd == vpu_defs_pkg.VPU_FCMD_NR1_FRCPFXP)) or minmax_op_f5a_h != 0 or fc_sel_f5a_h != 0 or sigs_f5a_h.e13 != 0 or sigs_f5a_h.e12 != 0
+
+  e_force_to_zero_f5a_h = if cmd == vpu_defs_pkg.VPU_FCMD_FROUND {
+    U1((elxd_f5a_h >= vpu_defs_pkg.TXFMA_CVT_F32INT_OFFSET or ec_zero_f5a_h != 0) and ediff1_zap_f5a_h == 0)
+  } elif comp_op_f5a_h == 0 and minmax_op_f5a_h == 0 and fc_sel_f5a_h == 0 {
+    U1(lxd_hi_max)
+  } else {
+    0
+  }
+
+  // Result sign: compare result, else the add-correction cases, else the input sign.
+  const s_res_out:U1 = if comp_op_f5a_h != 0 {
+    U1(comp_op_true)
+  } elif s_res_check_cadd_a3_f5a_h == 0 {
+    s_res_f5a_h
+  } elif cmd == vpu_defs_pkg.VPU_TRANS_LOG_MUL {
+    comb_add_a3_f5a_h
+  } elif op_dtype_f5a_h == vpu_defs_pkg.VPU_DTYPE_F16_F32 {
+    U1((comb_add_a3_f5a_h ^ s_res_f5a_h) != 0 and not (lxd_hi_max and stky2g_f5a_h == 0))
+  } else {
+    (~comb_add_a3_f5a_h ^ prod_sign_hi_f5a_h) & U1(not lxd_hi_max)
+  }
+
+  rc_ps_f5a_h = U1(rc_ps)
+  rc_ph_f5a_h = U1(rc_ph)
+  rc6_ps_f5a_h = U1(rc_ps)
+  rc6_ph_f5a_h = U1(rc_ph)
+  rc_int32_f5a_h = U1(rc_int32)
+  rc_3rmxr_f5a_h = U1(rup or rdn or rtz)
+  rc_rl01_f5a_h = U1((rdn and s_res_out != 0) or (rup and s_res_out == 0))
+  rc_rmm_f5a_h = U1(rmm)
+  rc_rup_f5a_h = U1(rup)
+  rc_rne_f5a_h = U1(rne)
+  rc_rdn_f5a_h = U1(rdn)
+  rc_res_sign_f5a_l = ~s_res_out
+  rc_transrnd_f5a_h = U1(sigs_f5a_h.e16 != 0 or cmd == vpu_defs_pkg.VPU_FCMD_CVT_RASTF32)
+  rc_transrnd_log_fma2_f5a_h = U1(cmd == vpu_defs_pkg.VPU_TRANS_LOG_FMA2)
+  nshcen_sel1b_f5a_h = U1(not mmx_sel_immres and ((is_int and sigs_f5a_h.e8 != 0) or (not is_int and not (sigs_f5a_h.e8 != 0 or sigs_f5a_h.e15 != 0 or frac_op or log_rr)) or cmd == vpu_defs_pkg.VPU_FCMD_FROUND))
+  en_logrrsel1b_f5a_l = U1(not (not mmx_sel_immres and log_rr and trans_log_rr_neg_f5a_h == 0))
+  int32_stky2r_f5a_h = U1(stky2g_f5a_h != 0 and rc_int32)
+  mmx_sel_immres_f5a_h = U1(mmx_sel_immres)
+  comp_op_true_f5a_h = U1(comp_op_true)
+  trans2_ps_roundup_r_f5a_h = sigs_f5a_h.e17
+  s_res_out_f5a_h = s_res_out
+}

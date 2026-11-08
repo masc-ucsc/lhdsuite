@@ -42,6 +42,7 @@ The tests in verif, should run with both `pyrope/` and `pyrope2/`
 | `minion` | Multithreaded RISC-V core with vector/tensor units, top `minion_top`. |
 | `cva6` | Whole OpenHW CVA6 core in Pyrope, top `cva6`. |
 | `picorv32` | YosysHQ PicoRV32 under the parameter-pinning `picorv32_top` wrapper. |
+| `bitcoin` | LogikBench SHA256d proof-of-work miner (4 lanes of secworks `sha256_core`) under the parameter-pinning `bitcoin_top` wrapper; `pyrope/` is a hand-cleaned loop-based translation. |
 | `ibex` | lowRISC Ibex (RV32IMC) under the parameter-pinning `ibex_suite_top` wrapper. |
 | `matched_filter` | Configurable streaming matched filter, 64 taps by default. |
 | `xs_*` | XiangShan blocks sharing `xiangshan/Backend/`: ALU, ROB, rename table, divider, execution block, and backend. |
@@ -150,6 +151,7 @@ selected LiveHD checkout. Re-run the relevant target to establish its status.
 | Targets | Previously reported limitation |
 | --- | --- |
 | `//bench:picorv32_lec`, `picorv32_lec_bug` | A six-cycle bounded result misses behavior beyond reset and cannot establish equivalence or detect the mutant. |
+| `//bench:bitcoin_compile_pyrope_parallel` | A `comb` whose rolled loop writes bit-slices of a `mut` carry fails `upass.tolg` (`unresolved reference 'le'`) when imported pre-lowered through `ln:`; the same source compiles whole. Reproducer in [bitcoin/README.md](bitcoin/README.md#known-failing). |
 | `//bench:ibex_lec_bug` | Sampling LEC from reset reaches no misaligned load/store within the 120 s budget, so the unaligned-address mutant is not detected (`TIMEOUT-time`). `ibex_lec` passes only as `TESTED-sampled`. |
 | `//bench:minion_lec`, `minion_lec_incremental`, `minion_synth_lec_synth` | Unresolved state, memory, and hierarchical proof obligations. |
 | `//bench:xs_rob_lec_incremental` | RenameBuffer and Rob remain inconclusive in unbounded equivalence; 10 of 12 definitions prove within the configured budget. |

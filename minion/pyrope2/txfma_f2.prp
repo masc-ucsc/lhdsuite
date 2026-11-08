@@ -1,0 +1,47 @@
+// Stage f2 of the TXFMA fraction datapath: the second Wallace level compresses the
+// multiplier partial products, two muxes pick the product adder's operands (the
+// aligned addend fa/fc or the multiplier carry-save pair), the 64-bit product adder
+// runs, and the f3 flops capture sum/fa/fc. The adder-input selects arrive from f1 and
+// are retimed here, in the same clock domain as the f2 datapath.
+const txfma_adder = import("txfma_adder.txfma_adder")
+const txfma_wallace2 = import("txfma_wallace2.txfma_wallace2")
+const vpu_defs_pkg = import("vpu_defs_pkg")
+
+// The 32-bit fa/fc operands enter the 64-bit product-adder datapath at this bit.
+comptime const OPD_SHIFT = 29
+comptime const ALL_ONES:U64 = 0xffffffffffffffff
+
+pub mod txfma_f2::[timecheck=false](booth_fCin_f2a_h:vpu_defs_pkg.VPU_DATA_S_SZ_T, booth_fSxt_f2a_h:vpu_defs_pkg.VPU_DATA_S_SZ_T, booth_fpp17_f2a_h:U33, ctrl_f1_clk:Clock, ctrl_f2_clk:Clock, fa_f2a_h:U32, fc_f2a_h:U32, padd_cin_f1a_h:U1, paddin1_sels_f1a_h:U1, paddin2_selc_f1a_h:U1, paddin2_selfcneg_f1a_h:U1, sel_famask_f1a_h:U1, wallace_fC21_f2a_h:U64, wallace_fC22_f2a_h:U64, wallace_fS21_f2a_h:U64, wallace_fS22_f2a_h:U64) -> (fa_f3a_h:U32@[], fc_f3a_h:U32@[], prodsum_f3a_h:U64@[]) {
+  reg fa_f3a_h:U32:[clock_pin=ctrl_f2_clk]
+  reg fc_f3a_h:U32:[clock_pin=ctrl_f2_clk]
+  reg prodsum_f3a_h:U64:[clock_pin=ctrl_f2_clk]
+  reg paddin1_sels_f2a_h:U1:[clock_pin=ctrl_f1_clk]
+  reg paddin2_selc_f2a_h:U1:[clock_pin=ctrl_f1_clk]
+  reg paddin2_selfcneg_f2a_h:U1:[clock_pin=ctrl_f1_clk]
+  reg padd_cin_f2a_h:U1:[clock_pin=ctrl_f1_clk]
+  reg sel_famask_f2a_h:U1:[clock_pin=ctrl_f1_clk]
+  paddin1_sels_f2a_h = paddin1_sels_f1a_h
+  paddin2_selc_f2a_h = paddin2_selc_f1a_h
+  paddin2_selfcneg_f2a_h = paddin2_selfcneg_f1a_h
+  padd_cin_f2a_h = padd_cin_f1a_h
+  sel_famask_f2a_h = sel_famask_f1a_h
+
+  const wallace2 = txfma_wallace2(sxt_i=booth_fSxt_f2a_h, cin_i=booth_fCin_f2a_h, pp17_i=booth_fpp17_f2a_h, c21_i=wallace_fC21_f2a_h, c22_i=wallace_fC22_f2a_h, s21_i=wallace_fS21_f2a_h, s22_i=wallace_fS22_f2a_h)
+
+  // Adder input 1: the fa operand (sels == 0) or the Wallace sum vector.
+  const fa_ext:U64 = fa_f2a_h << OPD_SHIFT
+  const padd_in1:U64 = if paddin1_sels_f2a_h != 0 { wallace2.s41_o } else { fa_ext }
+
+  // Adder input 2: the fc operand, inverted when subtracting (selfcneg), or the Wallace carry vector shifted up one column.
+  const fc_ext:U64 = fc_f2a_h << OPD_SHIFT
+  const fc_inv:U64 = if paddin2_selfcneg_f2a_h != 0 { ALL_ONES } else { 0 }
+  const padd_in2:U64 = if paddin2_selc_f2a_h != 0 { wallace2.c41_o#[0..<63] << 1 } else { fc_inv ^ fc_ext }
+
+  const prod_adder_64b = txfma_adder<Width=64>(a_i=padd_in2, b_i=padd_in1, cin_i=padd_cin_f2a_h)
+  prodsum_f3a_h = prod_adder_64b
+
+  // sel_famask forces the 23 fraction bits below the hidden bit of fa to ones.
+  const famask:U23 = if sel_famask_f2a_h != 0 { 0x7fffff } else { 0 }
+  fa_f3a_h = fa_f2a_h | (famask << 8)
+  fc_f3a_h = fc_f2a_h
+}
