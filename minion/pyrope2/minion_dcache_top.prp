@@ -821,10 +821,10 @@ pub mod minion_dcache_top::[timecheck=false](apb_paddr_i:minion_pkg.DcacheDbgAdd
 
   // ---- s3: load/store reservation, store merge, hand-off to s4 -----------------------------------
   const s3_lr = s3_rq.cmd == minion_dcache_pkg.DcCmdXlr
-  const s3_sc = s3_rq.cmd == minion_dcache_pkg.DcCmdXsc
+  const s3_sc:Bool = s3_rq.cmd == minion_dcache_pkg.DcCmdXsc
   const s3_lrsc_valid = s3_lrsc_count != 0
-  const s3_lrsc_addr_match = s3_lrsc_valid and s3_lrsc_addr == s3_rq.addr#[6..<40]
-  const s3_sc_fail = s3_sc and s3_valid and not s3_lrsc_addr_match
+  const s3_lrsc_addr_match:Bool = s3_lrsc_valid and s3_lrsc_addr == s3_rq.addr#[6..<40]
+  const s3_sc_fail:Bool = s3_sc and s3_valid and not s3_lrsc_addr_match
   // The reservation lasts 31 cycles after an LR, is consumed by any following access and is dropped by an invalidate.
   mut s3_lrsc_count_next:U5 = s3_lrsc_count
   if s3_lrsc_valid {
@@ -904,9 +904,10 @@ pub mod minion_dcache_top::[timecheck=false](apb_paddr_i:minion_pkg.DcacheDbgAdd
   // ---- s3 store merge and the word handed to s4 -------------------------------------------------
   const s3_store_merged:U256 = minion_dcache_store_merge_unit(addr_i=s3_rq.addr#[0..<5], typ_i=s3_rq.typ, ps_mask_i=s3_rq.ps_mask, orig_data_i=s3_data_bypassed, store_data_i=s3_store_data, enable_lo_i=U1(s3_misaligned_case_3 or s3_rq.misaligned_2nd != 0), enable_hi_i=U1(s3_rq.misaligned_2nd == 0))
   // Gather/scatter stores write all four lanes with the scattered data instead.
-  mut s3_req_to_s4_rq = rq_unpack(s3_req)
-  s3_req_to_s4_rq.data = if s3_rq.cmd == minion_dcache_pkg.DcCmdSc32 { s3_scatter32_data } else { s3_store_merged }
-  const s3_req_to_s4:U406 = rq_pack(s3_req_to_s4_rq)
+  // rq_pack(rq_unpack(w)) == w, so only the data field (bits 66..<322) is replaced.
+  const s3_req_to_s4_data:U256 = if s3_rq.cmd == minion_dcache_pkg.DcCmdSc32 { s3_scatter32_data } else { s3_store_merged }
+  mut s3_req_to_s4:U406 = s3_req
+  s3_req_to_s4#[66..<322] = s3_req_to_s4_data
 
   s4_valid = s3_valid and not s3_sc_fail and s3_is_write
   if s3_valid and s3_is_write {
@@ -1697,9 +1698,9 @@ pub mod minion_dcache_top::[timecheck=false](apb_paddr_i:minion_pkg.DcacheDbgAdd
   // oldest first so the youngest wins.
   const s3_rq_to_s4 = rq_unpack(s3_req_to_s4)
   const s5_rq = rq_unpack(s5_req)
-  const s5_cl_addr_match_s3_s2 = s3_rq.addr#[6..<40] == s2_rq.addr#[6..<40]
-  const s5_cl_addr_match_s4_s2 = s4_rq.addr#[6..<40] == s2_rq.addr#[6..<40]
-  const s5_cl_addr_match_s5_s2 = s5_rq.addr#[6..<40] == s2_rq.addr#[6..<40]
+  const s5_cl_addr_match_s3_s2:Bool = s3_rq.addr#[6..<40] == s2_rq.addr#[6..<40]
+  const s5_cl_addr_match_s4_s2:Bool = s4_rq.addr#[6..<40] == s2_rq.addr#[6..<40]
+  const s5_cl_addr_match_s5_s2:Bool = s5_rq.addr#[6..<40] == s2_rq.addr#[6..<40]
   // Block bit of the address each bank touches (the second half of a misaligned access toggles it).
   const s2_bank:U2 = s2_rq.addr#[3..<5]
   const s3_bank:U2 = s3_rq_to_s4.addr#[3..<5]
