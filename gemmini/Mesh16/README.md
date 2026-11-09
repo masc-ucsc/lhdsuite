@@ -22,9 +22,9 @@ README).
 
 | Module | raw | pyrope2 | How |
 |---|---|---|---|
-| Mesh | 13,323 | 4,713 | `gen_mesh.py`: 256 Tiles in one row/col loop; the rest is the 2,048 scalar registers LEC pairs with the Verilog flops |
+| Mesh | 13,323 | 4,713 | `gen_mesh_packed.py`: 256 Tiles in one row/col loop; the rest is the 2,048 scalar registers LEC pairs with the Verilog flops |
 | Queue1_AccumulatorReadResp | 3,744 | 31 | `gen_small.py` |
-| MeshWithDelays | 3,341 | 2,705 | `gen_mwd.py`; the skew-chain registers keep their emitted names |
+| MeshWithDelays | 3,341 | 2,705 | `gen_mwd_packed.py`; the skew-chain registers keep their emitted names |
 | AlwaysOutTransposer | 1,310 | 278 | `gen_transposer.py` |
 | TwoPortSyncMem | 152 | 16 | `gen_small.py` |
 | AccumulatorMem | 146 | 79 | `gen_small.py` |
@@ -42,8 +42,8 @@ for byte):
 
 ```bash
 python3 gen_small.py      pyrope 16 pyrope2      # Tile, PE_256, queues, memories wrapper, AccumulatorMem, GemminiTPU
-python3 gen_mesh.py       pyrope/Mesh.prp ../pyrope2/Mesh.prp 16 > pyrope2/Mesh.prp
-python3 gen_mwd.py        pyrope/MeshWithDelays.prp 16 > pyrope2/MeshWithDelays.prp
+python3 gen_mesh_packed.py pyrope/Mesh.prp Mesh4_packed.prp 16 > pyrope2/Mesh.prp   # template: git show 6e3136b~1:gemmini/pyrope2/Mesh.prp
+python3 gen_mwd_packed.py  pyrope/MeshWithDelays.prp 16 > pyrope2/MeshWithDelays.prp
 python3 gen_transposer.py 16 pyrope2/AlwaysOutTransposer.prp
 python3 gen_simtop.py     16 sim                 # wrapper, driver, Verilator twin
 ```
@@ -69,3 +69,6 @@ Speed (kaffirlime, 5k cycles, standalone run): lhd sim `pyrope/` 22.9k
 cycles/s, Verilog 37.6k, Verilator 8.1k, and `pyrope2/` **22 cycles/s**. The
 Mesh loop's sim slowdown (case20) keeps growing with the mesh: ~30x at 4x4,
 ~100x at 8x8, ~1000x at 16x16.
+
+Mesh16 keeps packed Mesh ports. The array-port form (`gen_mesh.py`/`gen_mwd.py`, used at 4x4 and
+8x8) gave no sim gain here on lhd 7ab162cd7 (101 vs 118 cycles/s at 5k) and its Mesh LEC timed out at 1 h.
