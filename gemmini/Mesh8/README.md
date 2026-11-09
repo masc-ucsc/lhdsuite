@@ -15,12 +15,12 @@ pass on kaffirlime.
 |---|---|---|
 | `verilog/` | `GemminiTPU.sv` (15 modules) + `GemminiSimTop.sv` (flat-port sim wrapper) | Chisel 6.2.0 emit of `/mada/users/frabieik/gemmini_tpu` with `GEMMINI_MESH=8` (`Top.scala` reads the mesh size from that env var, default 4) |
 | `pyrope/` | raw emit, `lhd compile verilog --top GemminiTPU`, 7,945 lines | PROVEN-full vs the Verilog in 2 s (`mem_64x256` trusted) |
-| `pyrope2/` | 11 modules cleaned, 2,620 lines (-67%) | GemminiTPU top PROVEN-full vs the Verilog in 82 s; each module PROVEN-full vs raw and vs the Verilog |
+| `pyrope2/` | 11 modules cleaned, 2,623 lines (-67%) | GemminiTPU top PROVEN-full vs the Verilog in 186 s (lhd 7ab162cd7); each module PROVEN-full vs raw and vs the Verilog |
 | `sim/` | `gemmini_tb.prp`, `GemminiSimTop.prp`, `gemmini_tb_verilator.cpp` | same checksum from lhd sim (pyrope, pyrope2, Verilog) and Verilator |
 
 | Module | raw | pyrope2 | How |
 |---|---|---|---|
-| Mesh | 3,339 | 1,257 | 64 Tiles in one row/col loop; `gen_mesh.py` (below) from the 4x4 cleanup. The loop is the same as at 4x4; the rest is the 512 scalar registers (declaration + write-back) that LEC needs to pair with the Verilog flops |
+| Mesh | 3,339 | 1,260 | 64 Tiles in one row/col loop; `gen_mesh.py` (below) from the 4x4 cleanup. Ports and per-tile families are arrays (`io_in_a:[8]U8`, one entry per row/column), as in Jose's 4x4 change (6e3136b). The loop is the same as at 4x4; the rest is the 512 scalar registers (declaration + write-back) that LEC needs to pair with the Verilog flops |
 | Queue1_AccumulatorReadResp | 2,376 | 31 | one-entry flow queue rewritten from its semantics |
 | MeshWithDelays | 945 | 785 | `gen_mwd.py` from the 4x4 hand rewrite; skew-chain registers keep their emitted names, and the 45 de-skew registers for valid/last/id of columns 1..6 (nothing reads them) are dropped |
 | AlwaysOutTransposer | 350 | 86 | `gen_transposer.py`: the 64 PE instances declared bottom-right first, so no forward wires; no loop |
@@ -68,3 +68,9 @@ Synthesis (`gemmini8_synth`): 1,458,735 gates, 11.7 mm2.
 The Mesh loop alone makes lhd sim about 100x slower (a standalone run of the
 final tree gives 1.15k cycles/s; the bench number is lower). That is the same
 loop codegen issue as the 4x4 (case20), and it grows with the mesh: ~9x at 4x4.
+
+2026-11-09, lhd 7ab162cd7 (Jose's loop-sim fixes), standalone, 25k cycles, same
+checksum: `pyrope/` 115k cycles/s; `pyrope2/` with packed Mesh ports 13.2k, with
+array Mesh ports 27.6k (~4x slower than raw, from ~100x). At 16x16 the array
+ports did not help (101 vs 118 cycles/s) and the Mesh LEC timed out at 1 h, so
+`Mesh16/` keeps the packed form (`gen_mesh_packed.py`, `gen_mwd_packed.py`).
