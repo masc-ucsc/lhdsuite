@@ -553,16 +553,16 @@ best_run() {
   done
 }
 
-# cpu_count — one bounded budget for native and Verilator host builds.
-# Outer test parallelism is separate; avoid a machine-sized nested pool per test.
+# cpu_count — the job count for native and Verilator host builds: every online
+# CPU of this machine, or exactly 1 with LHD_BENCH_JOBS=1 (the serial reference).
+# No other value is meaningful: a sim target is `exclusive`, so a build either
+# has the machine to itself or is deliberately serial.
 cpu_count() {
-  local available requested=${LHD_BENCH_JOBS:-16}
-  case "$requested" in
-    '' | *[!0-9]* | 0) echo "FAIL: LHD_BENCH_JOBS must be a positive integer" >&2; return 2 ;;
+  case "${LHD_BENCH_JOBS:-}" in
+    '' | auto) getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4 ;;
+    1) echo 1 ;;
+    *) echo "FAIL: LHD_BENCH_JOBS must be 1 or unset (all CPUs of this machine)" >&2; return 2 ;;
   esac
-  available=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
-  [ "$requested" -le "$available" ] || requested=$available
-  echo "$requested"
 }
 
 # find_verilator — set $VERILATOR_BIN, or return non-zero if there is no
@@ -590,37 +590,6 @@ find_verilator() {
     done
   fi
   [ -n "$VERILATOR_BIN" ] && "$VERILATOR_BIN" --version >/dev/null 2>&1
-}
-
-# find_ninja — put a ninja on PATH for `lhd sim`, or return non-zero.
-#
-# `lhd sim` picks its build path by looking for ninja ON PATH, and bazel's test
-# PATH does not carry /opt/homebrew/bin — so `type -P ninja` fails inside the
-# sandbox even on a machine that has ninja installed, and sim_incremental (which
-# NEEDS the ninja path, because only its default target stops at drv.bin without
-# executing it) failed for a host-state reason with no hint that the extension
-# was PATH. Same trap and same fix as find_verilator above; this one also EXPORTS
-# the directory, because the consumer is lhd rather than this script.
-find_ninja() {
-  NINJA_BIN=${NINJA:-}
-  if [ -z "$NINJA_BIN" ]; then
-    NINJA_BIN=$(type -P ninja || true)
-  fi
-  if [ -z "$NINJA_BIN" ]; then
-    local c
-    for c in /opt/homebrew/bin/ninja /usr/local/bin/ninja /usr/bin/ninja; do
-      if [ -x "$c" ]; then
-        NINJA_BIN=$c
-        break
-      fi
-    done
-  fi
-  [ -n "$NINJA_BIN" ] || return 1
-  "$NINJA_BIN" --version >/dev/null 2>&1 || return 1
-  case ":$PATH:" in
-    *":$(dirname "$NINJA_BIN"):"*) ;;
-    *) PATH="$(dirname "$NINJA_BIN"):$PATH"; export PATH ;;
-  esac
 }
 
 # abc_incr_counts RESULT_JSON — echo "hits misses hit_ms miss_ms store_failed"

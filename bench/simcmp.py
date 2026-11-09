@@ -140,7 +140,6 @@ def main():
     sets = shlex.split(cfg.get("sim_sets", ""))
     if not any(s.startswith("sim.tune.profile=") for s in sets):
         sets = ["--set", "sim.tune.profile=off"] + sets
-    ninja = which("ninja", "NINJA")
     vlt = which("verilator", "VERILATOR")
     wanted = args.sims.split(",")
     rows, notes = [], []
@@ -203,14 +202,7 @@ def main():
             rows.append(row)
             continue
         cc = [lhd, "sim", *inputs, "--run-only", "--set", "sim.compile_only=true"]
-        if ninja:
-            cc += ["--set", f"sim.ninja={ninja}"]
-            env_path = os.path.dirname(ninja) + os.pathsep + os.environ["PATH"]
-        else:
-            notes.append(f"{label}: ninja not found; host compile column includes one simulation")
-            env_path = os.environ["PATH"]
-        rc, ms = R.run(f"{label}_cc", [*cc, *sets, "--diag-fmt", "pretty", "--workdir", "SW"], d,
-                       env={**os.environ, "PATH": env_path})
+        rc, ms = R.run(f"{label}_cc", [*cc, *sets, "--diag-fmt", "pretty", "--workdir", "SW"], d)
         row["cc_ms"] = ms
         drv = d / "SW/sim/drv.bin"
         if rc or not drv.exists():

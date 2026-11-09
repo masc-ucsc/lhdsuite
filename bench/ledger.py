@@ -262,7 +262,7 @@ PHASES = {
             "sim_setup{p}_ms", "sim_cc{p}_ms", "sim_rewritten{p}",
             "workdir_bytes{p}",
         ],
-        "scenario": ["sim_warm_equals_cold", "sim_ninja_present"],
+        "scenario": ["sim_warm_equals_cold"],
     },
     "sim_llvm": {
         "target": "{core}_sim_incremental_llvm",
@@ -272,7 +272,7 @@ PHASES = {
             "sim_setup{p}_ms", "sim_cc{p}_ms", "sim_rewritten{p}",
             "workdir_bytes{p}",
         ],
-        "scenario": ["sim_warm_equals_cold", "sim_ninja_present"],
+        "scenario": ["sim_warm_equals_cold"],
     },
     # The outside reference has one clean-build sample rather than an
     # incremental mode sequence.  Keep its front end, host compile/link, and
@@ -1276,8 +1276,7 @@ def section_guardrail(out, data, modes, eps):
 
 # Metrics §3 owns as named columns; they are not repeated in §4.
 GATE_KEYS = ("sim_warm_equals_cold", "compile_warm_equals_cold", "compile_edit_changes_cold", "sim_rewritten", "abc_store_failed",
-             "store_failed", "abc_refused", "refused", "workdir_bytes",
-             "sim_ninja_present")
+             "store_failed", "abc_refused", "refused", "workdir_bytes")
 
 
 def section_gates(out, data):

@@ -211,7 +211,7 @@ done
 #
 # The sim counterpart of synth_incremental. The measured endpoint is a compiled
 # simulator, not an executed simulation: sim_setup_ms is `lhd sim` codegen and
-# sim_cc_ms is Ninja's host C++ compile+link. This keeps the table focused on
+# sim_cc_ms is lhd's host C++ compile+link. This keeps the table focused on
 # incremental build latency and avoids mixing a design-dependent runtime into
 # the edit loop.
 #
@@ -227,10 +227,9 @@ done
 #                         that rebuilds nothing after a real edit is a stale
 #                         cache, not a fast one.
 #
-# Ninja is invoked directly after `--setup-only`: the generated build.ninja is
-# the exact host build `lhd sim --run-only` would perform, but stopping at its
-# default drv.bin target guarantees that no testbench cycles execute INSIDE a
-# timed step.
+# `lhd sim --run-only --set sim.compile_only=true` runs lhd's own incremental
+# host build after `--setup-only` and stops at drv.bin, which guarantees that no
+# testbench cycles execute INSIDE a timed step.
 #
 # EXECUTED, UNTIMED. Every drv.bin this scenario links is then run once,
 # outside the timed steps, because a rebuild that compiles is not a rebuild
@@ -250,14 +249,6 @@ done
 # core whose cold simulation is red for its own reason must show up once, not
 # three times.
 if [ "$MODE" = incr ]; then
-  # find_ninja also PREPENDS its directory to PATH: the lookup that matters is
-  # the one `lhd sim` does, not this one.
-  ninja_path=
-  if find_ninja; then ninja_path=$NINJA_BIN; fi
-  metric sim_ninja_present "$([ -n "$ninja_path" ] && echo 1 || echo 0)" bool
-  [ -n "$ninja_path" ] \
-    || { echo "FAIL: sim_incremental needs ninja to compile without executing drv.bin (not found on PATH nor in the usual install prefixes)" >&2; exit 1; }
-
   # sim_pass TAG [INCREMENTAL] [WORKDIR] — generate, then compile+link drv.bin.
   # It never launches the binary (sim_exec_built does, untimed).
   sim_pass() {
@@ -271,7 +262,7 @@ if [ "$MODE" = incr ]; then
       ${incr_args[@]+"${incr_args[@]}"} || return 1
     # shellcheck disable=SC2086
     run_timed "sim_cc_$tag" lhd sim "${SIM_INPUTS[@]}" --run-only \
-      --set sim.compile_only=true --set "sim.ninja=$ninja_path" \
+      --set sim.compile_only=true \
       $CORE_SIM_SETS --diag-fmt pretty --workdir "$wd" \
       ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
       ${incr_args[@]+"${incr_args[@]}"} || return 1
@@ -409,17 +400,9 @@ fi
 run_timed sim_setup lhd sim "${SIM_INPUTS[@]}" --setup-only \
     --set sim.vcd=false $CORE_SIM_SETS --workdir SW \
   ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"}
-# sim.ninja=false PINS the build path. `lhd sim` uses ninja when it finds one on
-# PATH and its own parallel compile otherwise — great for a developer's warm
-# edit-sim loop, useless here (every target starts from a fresh workdir, so
-# nothing is ever incremental) and bad for a benchmark: sim_cc_ms would then
-# depend on whether the machine happens to have ninja. Bazel's test PATH does
-# not currently carry it, so this only makes today's behaviour explicit and
-# immune to that changing. Not a workaround for a failure — the ninja path is
-# covered by livehd's own lhd_sim_incremental_test.
 # shellcheck disable=SC2086
 run_timed sim_run lhd sim "${SIM_INPUTS[@]}" --run-only --arg "cycles=$CYCLES" \
-  --set sim.ninja=false $CORE_SIM_SETS --diag-fmt pretty --workdir SW \
+  $CORE_SIM_SETS --diag-fmt pretty --workdir SW \
   ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"}
 RUN_MS=$LAST_MS  # compile + simulate; sim_exec below splits it
 
