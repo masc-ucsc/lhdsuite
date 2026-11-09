@@ -12,14 +12,14 @@ RoCC/rocket-chip front end. The non-RISC-V, loop-rich design of the suite.
 |---|---|---|
 | `verilog/` | `GemminiTPU.sv` (15 modules, 4,425 lines) + `GemminiSimTop.sv` (flat-port sim wrapper) | Chisel 6.2.0 emit of the standalone extraction in `/mada/users/frabieik/gemmini_tpu` (`sbt "runMain gemmini.Top"`); rocket-chip/hardfloat/Diplomacy replaced by local stubs |
 | `pyrope/` | 15 modules, `lhd compile verilog --top GemminiTPU` + `manifest.json` (3,865 lines) | PROVEN-full vs the Verilog with `mem_64x128` trusted (see LEC) |
-| `pyrope2/` | 11 modules cleaned, 1,175 lines (-70%) | GemminiTPU top PROVEN-full vs the Verilog in 8 s; each module PROVEN-full vs the previous step and vs the Verilog |
+| `pyrope2/` | 11 modules cleaned, 1,177 lines (-70%) | GemminiTPU top PROVEN-full vs the Verilog in 8 s (4.6 s on lhd 7ab162cd7 after Jose's array-port Mesh); each module PROVEN-full vs the previous step and vs the Verilog |
 | `sim/` | `gemmini_tb.prp`, `GemminiSimTop.prp`, `gemmini_tb_verilator.cpp` | same checksum from lhd sim (pyrope, pyrope2, Verilog) and Verilator |
 | `Mesh8/` | the same core regenerated with an 8x8 mesh | see `Mesh8/README.md` |
 
 | Module | raw | pyrope2 | How |
 |---|---|---|---|
 | Queue1_AccumulatorReadResp | 1,692 | 31 | one-entry flow queue rewritten from its semantics |
-| Mesh | 843 | 394 | 16 Tiles in one row/col loop; the rest is the scalar registers LEC pairs with the Verilog flops |
+| Mesh | 843 | 396 | 16 Tiles in one row/col loop; the rest is the scalar registers LEC pairs with the Verilog flops. Ports and per-tile families are arrays (`io_in_a:[4]U8`, one entry per row/column; Jose, 6e3136b), so the loop indexes entries instead of slicing packed vectors |
 | MeshWithDelays | 371 | 305 | hand rewrite, no loop (skew-chain registers keep their emitted names) |
 | AccumulatorMem | 146 | 79 | named the pipelined-write fields and hazards |
 | PE_16 | 134 | 44 | one rounding shift inlined (a `comb` helper here cost 18% sim) |
@@ -34,9 +34,18 @@ Left raw: the memories (`mem_64x128`, `ram_6x7`), PE and MacUnit (already
 small).
 
 Simulation: the bench runs 25k cycles (`sum=6362616511205422611`); the
-standalone check is 200k cycles (`sum=8485392126227624009`). The `Mesh` loop
-makes lhd sim of `pyrope2/` about 9x slower than `pyrope/` (case20, a loop
-codegen issue reported to Jose; it grows to ~100x at 8x8).
+standalone check is 200k cycles (`sum=8485392126227624009`). On lhd c53e1728c
+the `Mesh` loop made lhd sim of `pyrope2/` about 9-16x slower than `pyrope/`
+(case20, a loop codegen issue reported to Jose; ~100x at 8x8, ~1000x at 16x16).
+
+Jose's loop-sim fixes (livehd 7ab162cd7, 2026-11-07) plus the array-port Mesh
+close most of it (standalone, kaffirlime, same checksums):
+
+| Size | `pyrope/` | `pyrope2/` on c53e1728c | `pyrope2/` on 7ab162cd7 |
+|---|---|---|---|
+| 4x4, 200k cycles | 524k | 32.6k | 376k (array ports) |
+| 8x8, 25k cycles | 115k | 1.1k | 13.2k packed ports, 27.6k array ports |
+| 16x16, 5k cycles | 23k | 38 | 118 packed ports (array ports: 101, Mesh LEC timeout) |
 
 ## Bench results (2026-11-06, lhd c53e1728c, kaffirlime)
 
