@@ -803,13 +803,11 @@ CORES = {
         # so lhd sim matches the 2-state Verilator.
         "sim_sets": "--set sim.unknown_zero=true",
         # Identical from lhd sim on the .prp tree, lhd sim on the Verilog and
-        # Verilator at 25k and 500k cycles (register `_r` renamed, see below). Do NOT
-        # re-pin from one side's output.
-        # KNOWN FAIL until lhd fixes jose_repro case11: a register named `_r`
-        # (RocketCore.scala:1117) collides with the `_r` parameter of the
-        # generated dump_state()/load_state(), so the sim driver does not
-        # compile. rocket/pyrope2 renames it (r_), so rocket_sim_pyrope2 runs;
-        # rocket_sim_pyrope (raw emit) and rocket_sim_verilog still carry `_r`.
+        # Verilator at 25k and 500k cycles. Do NOT re-pin from one side's output.
+        # A register named `_r` (RocketCore.scala:1117) used to collide with the
+        # `_r` parameter of the generated dump_state()/load_state() (jose_repro
+        # case11); livehd 70b85abfe fixed it, so the raw tree and the Verilog
+        # simulate too (rocket/pyrope2 still names it r_).
         "sim_expect": "sum=4760450083537923318",
         "verilator_tb": "rocket_tb_verilator.cpp",
         "verilator_flags": "",
