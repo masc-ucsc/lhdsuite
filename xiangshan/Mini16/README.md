@@ -79,6 +79,7 @@ modules are ranked in `pyro_scratch/xs_mini16/style_rest/RANKING.txt`.
 |---|---|
 | case12 | big reg-array loop folds (VTypeBuffer, RenameBuffer) time out vs the Verilog |
 | case16 | RenameTable difftest chain (520 ports x 32 entries): every loop form times out; RenameTable_1/_2 folds are built and wait on this |
+| case25 | DecodeUnitComp pyroE (17 one-hot decode folds, 31,911 -> 29,820 lines): a new loop between existing ones renumbers `__loopN`, so the later loops stop pairing and LEC times out (also case2). Built as single-fold steps `pyroE1..17` in scratch, waiting on the fix |
 | case17 | SSIT 1024-entry debug state: loop fold times out. Alternative: delete the dead debug state (owner decision) |
 
 ## Not done
