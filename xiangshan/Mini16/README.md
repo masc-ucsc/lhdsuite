@@ -24,7 +24,7 @@ Verilog before it was committed (one commit per step).
 |---|---|---|---|
 | RenameBuffer | 46,249 | 3,892 | pyroB-G: allocate matrix, entry write, diff-commit pointers and slots, commit/walk lane reads -> loops |
 | DecodeUnitComp | 44,158 | 31,911 | pyroA-D |
-| Rob | 37,828 | 3,460 | pyroA-BG (59 commits): entry next state, debug blocks, commit/deq lanes, difftest lanes, writeback decode, enqueue matrix -> loops; dead presets and temps removed |
+| Rob | 37,828 | 3,458 | pyroA-BH (60 commits): entry next state, debug blocks, commit/deq lanes, difftest lanes, writeback decode, enqueue matrix -> loops; dead presets and temps removed; pyroBH bounds array indices for the new lhd address rule |
 | Dispatch | 34,261 | 14,151 | pyroA-I |
 | Rename | 16,644 | 12,816 | pyroA |
 | LFST | 13,819 | 11,143 | pyroA (robIdx write loop) |

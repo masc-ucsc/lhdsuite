@@ -555,10 +555,9 @@ pub mod Rob::[timecheck=false](`clock`:Clock, `reset`:U1, io_hartId:U6, io_redir
   const nfIdxPk:U40 = (`io_writeback_0_0.bits`#[0x1bd..<0x1c2]#[0..<4] << 0) | (`io_writeback_9_0.bits`#[0xbf..<0xc4]#[0..<4] << 4) | (`io_writeback_10_0.bits`#[0xbf..<0xc4]#[0..<4] << 8) | (`io_writeback_11_0.bits`#[0xbf..<0xc4]#[0..<4] << 12) | (`io_writeback_12_0.bits`#[0xbf..<0xc4]#[0..<4] << 16) | (`io_writeback_13_0.bits`#[0xbf..<0xc4]#[0..<4] << 20) | (`io_writeback_20_0.bits`#[0xf7..<0xfc]#[0..<4] << 24) | (`io_writeback_21_0.bits`#[0xf7..<0xfc]#[0..<4] << 28) | (`io_writeback_22_0.bits`#[0x1e8..<0x1ed]#[0..<4] << 32) | (`io_writeback_23_0.bits`#[0x1e8..<0x1ed]#[0..<4] << 36)
   const nfVldPk:U10 = (`io_writeback_0_0.valid` << 0) | (`io_writeback_9_0.valid` << 1) | (`io_writeback_10_0.valid` << 2) | (`io_writeback_11_0.valid` << 3) | (`io_writeback_12_0.valid` << 4) | (`io_writeback_13_0.valid` << 5) | (`io_writeback_20_0.valid` << 6) | (`io_writeback_21_0.valid` << 7) | (`io_writeback_22_0.valid` << 8) | (`io_writeback_23_0.valid` << 9)
   mut wbHit:[352]U1 = 0
-  for p in 0..<22 {
-    for e in 0..<16 {
-      wbHit[(p*16)+e] = wbVldPk#[p] & U1(wbIdxPk#[(p*4)..<((p*4)+4)] == e)
-    }
+  for i in 0..<352 {
+    // writeback port i/16 hits ROB entry i%16
+    wbHit[i] = wbVldPk#[i >> 4] & U1(wbIdxPk#[((i >> 4)*4)..<(((i >> 4)*4)+4)] == (i & 15))
   }
   // pyroAQ: vector writeback ports 22/23 robIdx one-hot (q = port-22)
   mut vwbEq:[32]U1 = 0
@@ -2866,17 +2865,17 @@ pub mod Rob::[timecheck=false](`clock`:Clock, `reset`:U1, io_hartId:U6, io_redir
     robDeqGroup[l] = w#[61..<62] | (((w#[0x40..<0x41] | w#[62..<63]) & 1) << 1) | (robDeqGroup[l]#[2..<58] << 2) | (w#[0..<8] << 58) | (w#[8..<14] << 0x42) | (w#[37..<48] << 0x48) | (w#[14..<15] << 0x53) | (w#[63..<0x40] << 0x54) | (w#[0x40..<0x41] << 0x55) | (w#[51..<55] << 0x56) | (w#[55..<59] << 0x5a) | (w#[59..<61] << 0x5e) | (w#[30..<31] << 0x60) | (wb66 << 0x61) | (wb66 << 0x62) | (w#[48..<49] << 0x63) | (w#[49..<50] << 0x64) | (w#[50..<51] << 0x65) | (w#[29..<30] << 0x66) | (w#[31..<36] << 0x67) | (w#[62..<63] << 0x6c) | (w#[0x41..<0x42] << 0x6d) | (w#[22..<29] << 0x6e) | (noRflags << 0x75) | (wb36 << 0x76) | (wb36 << 0x77)
   }
   if not (`reset` != 0) {
-    mut lsEq:[240]U1 = 0
-    mut lsHit:[720]U1 = 0
+    mut lsEq:[256]U1 = 0   // 240 used; power-of-two size so `& 255` bounds the index for lhd (case26)
+    mut lsHit:[1024]U1 = 0   // 720 used; power-of-two size so `& 1023` bounds the index for lhd (case26)
     for p in 0..<5 {
       const port = io_debug_ls_0__w1#[(p*0x62)..<((p*0x62)+0x62)]
       for e in 0..<16 {
         for f in 0..<3 {
-          lsEq[(((p*3)+f)*16)+e] = U1(port#[(f*4)..<((f*4)+4)] == e)
+          lsEq[((((p*3)+f)*16)+e) & 255] = U1(port#[(f*4)..<((f*4)+4)] == e)
         }
         for v in 0..<9 {
           const f = if v < 4 { 0 } elif v < 7 { 1 } else { 2 }
-          lsHit[(((p*9)+v)*16)+e] = port#[0x59+v] & lsEq[(((p*3)+f)*16)+e]
+          lsHit[((((p*9)+v)*16)+e) & 1023] = port#[0x59+v] & lsEq[((((p*3)+f)*16)+e) & 255]
         }
       }
     }
@@ -2920,10 +2919,9 @@ pub mod Rob::[timecheck=false](`clock`:Clock, `reset`:U1, io_hartId:U6, io_redir
     _GEN_5792 = _b2i_11422
     // pyroAL: lsInfo per-entry event bits: entry e sees event v from port 0 or 1, or keeps it when not re-enqueued
     mut lsNext:[144]U1 = 0
-    for v in 0..<9 {
-      for e in 0..<16 {
-        lsNext[(v*16)+e] = lsHit[(v*16)+e] | lsHit[((9+v)*16)+e] | lsKeep[(e*9)+8-v]
-      }
+    for i in 0..<144 {
+      // event v = i/16 for entry e = i%16
+      lsNext[i] = lsHit[i] | lsHit[i+144] | lsKeep[((i & 15)*9)+8-(i >> 4)]
     }
     _GEN_5969 = ((debug_lsInfo << 0x56) >> ((io_debug_ls_0__w1#[0..<0x1ea]#[0x62..<0xc4]#[0..<4] * 0x56) + 0x56))#[0..<0x56]
     _debug_lsInfo_replayCnt_T_2 = (_GEN_5969#[0..<0x40] + 1)#[0..<0x40]
@@ -2982,14 +2980,14 @@ pub mod Rob::[timecheck=false](`clock`:Clock, `reset`:U1, io_hartId:U6, io_redir
       tdAlloc[e] = a
     }
     // pyroAN: io_lsTopdownInfo port p, half h (0..<55, 55..<0x6e): idx field [51..<55] == e, and its valid bit [50]
-    mut tdEq:[96]U1 = 0
-    mut tdHit:[96]U1 = 0
+    mut tdEq:[128]U1 = 0
+    mut tdHit:[128]U1 = 0
     for p in 0..<3 {
       for h in 0..<2 {
         const half = io_lsTopdownInfo_0__w1#[((p*0x6e)+(h*55))..<((p*0x6e)+(h*55)+55)]
         for e in 0..<16 {
-          tdEq[(((p*2)+h)*16)+e] = U1(half#[51..<55] == e)
-          tdHit[(((p*2)+h)*16)+e] = half#[50] & U1(half#[51..<55] == e)
+          tdEq[((((p*2)+h)*16)+e) & 127] = U1(half#[51..<55] == e)
+          tdHit[((((p*2)+h)*16)+e) & 127] = half#[50] & U1(half#[51..<55] == e)
         }
       }
     }
@@ -3012,24 +3010,24 @@ pub mod Rob::[timecheck=false](`clock`:Clock, `reset`:U1, io_hartId:U6, io_redir
   // block-fold (lsTopdown): 16 copies of a 37-statement block, one per entry
   for i in 0..<16 {
       mut _GEN_7038:U1 = if canEnqueue__w1#[7..<8] != 0 { (~(pairHit[63-i])#[0]) & (tdB0Kept[15-i]) & 1 } else { (~(enqHit[111-i])#[0]) & (tdB0Kept[15-i]) & 1 }
-      mut _GEN_7039:U1 = if (io_lsTopdownInfo_0__w1#[0..<0x6e]#[0..<55]#[1..<2] & (tdEq[15-i]) & 1) != 0 { io_lsTopdownInfo_0__w1#[0..<0x6e]#[0..<55] & 1 } else { _GEN_7038 & 1 }
-      mut _GEN_7040:U1 = if (io_lsTopdownInfo_0__w1#[0x6e..<0xdc]#[0..<55]#[1..<2] & (tdEq[47-i]) & 1) != 0 { io_lsTopdownInfo_0__w1#[0x6e..<0xdc]#[0..<55] & 1 } else { _GEN_7039 & 1 }
-      mut _GEN_7041:U1 = if (io_lsTopdownInfo_0__w1#[0xdc..<0x14a]#[0..<55]#[1..<2] & (tdEq[79-i]) & 1) != 0 { io_lsTopdownInfo_0__w1#[0xdc..<0x14a]#[0..<55] & 1 } else { _GEN_7040 & 1 }
+      mut _GEN_7039:U1 = if (io_lsTopdownInfo_0__w1#[0..<0x6e]#[0..<55]#[1..<2] & (tdEq[(15-i) & 127]) & 1) != 0 { io_lsTopdownInfo_0__w1#[0..<0x6e]#[0..<55] & 1 } else { _GEN_7038 & 1 }
+      mut _GEN_7040:U1 = if (io_lsTopdownInfo_0__w1#[0x6e..<0xdc]#[0..<55]#[1..<2] & (tdEq[(47-i) & 127]) & 1) != 0 { io_lsTopdownInfo_0__w1#[0x6e..<0xdc]#[0..<55] & 1 } else { _GEN_7039 & 1 }
+      mut _GEN_7041:U1 = if (io_lsTopdownInfo_0__w1#[0xdc..<0x14a]#[0..<55]#[1..<2] & (tdEq[(79-i) & 127]) & 1) != 0 { io_lsTopdownInfo_0__w1#[0xdc..<0x14a]#[0..<55] & 1 } else { _GEN_7040 & 1 }
       mut _GEN_7042:U48 = if (tdAlloc[15-i]) != 0 { 0 } else { debug_lsTopdownInfo#[(1650+(i*-110))..<(1760+(i*-110))]#[0..<55]#[2..<50] }
-      mut _GEN_7043:U48 = if (tdHit[15-i]) != 0 { io_lsTopdownInfo_0__w1#[0..<0x6e]#[0..<55]#[2..<50] } else { _GEN_7042#[0..<48] }
-      mut _GEN_7044:U48 = if (io_lsTopdownInfo_0__w1#[0x6e..<0xdc]#[0..<55]#[50..<51] & (tdEq[47-i]) & 1) != 0 { io_lsTopdownInfo_0__w1#[0x6e..<0xdc]#[0..<55]#[2..<50] } else { _GEN_7043#[0..<48] }
-      mut _GEN_7045:U48 = if (tdHit[79-i]) != 0 { io_lsTopdownInfo_0__w1#[0xdc..<0x14a]#[0..<55]#[2..<50] } else { _GEN_7044#[0..<48] }
-      mut _GEN_7046:U1 = if io_lsTopdownInfo_0__w1#[0x6e..<0xdc]#[0..<55]#[50..<51] != 0 { ((((tdEq[47-i]) | (tdHit[15-i])) & 1) | (tdB50Kept[15-i])) & 1 } else { ((tdHit[15-i]) | (tdB50Kept[15-i])) & 1 }
+      mut _GEN_7043:U48 = if (tdHit[(15-i) & 127]) != 0 { io_lsTopdownInfo_0__w1#[0..<0x6e]#[0..<55]#[2..<50] } else { _GEN_7042#[0..<48] }
+      mut _GEN_7044:U48 = if (io_lsTopdownInfo_0__w1#[0x6e..<0xdc]#[0..<55]#[50..<51] & (tdEq[(47-i) & 127]) & 1) != 0 { io_lsTopdownInfo_0__w1#[0x6e..<0xdc]#[0..<55]#[2..<50] } else { _GEN_7043#[0..<48] }
+      mut _GEN_7045:U48 = if (tdHit[(79-i) & 127]) != 0 { io_lsTopdownInfo_0__w1#[0xdc..<0x14a]#[0..<55]#[2..<50] } else { _GEN_7044#[0..<48] }
+      mut _GEN_7046:U1 = if io_lsTopdownInfo_0__w1#[0x6e..<0xdc]#[0..<55]#[50..<51] != 0 { ((((tdEq[(47-i) & 127]) | (tdHit[(15-i) & 127])) & 1) | (tdB50Kept[15-i])) & 1 } else { ((tdHit[(15-i) & 127]) | (tdB50Kept[15-i])) & 1 }
       mut _GEN_7047:U4 = if (tdAlloc[15-i]) != 0 { 0 } else { debug_lsTopdownInfo#[(1650+(i*-110))..<(1760+(i*-110))]#[0..<55]#[51..<55] }
       mut _GEN_7048:U1 = if canEnqueue__w1#[7..<8] != 0 { (~(pairHit[63-i])#[0]) & (tdB1Kept[15-i]) & 1 } else { (~(enqHit[111-i])#[0]) & (tdB1Kept[15-i]) & 1 }
-      mut _GEN_7049:U55 = _GEN_7041 | (_GEN_7048 << 1) | (_GEN_7045 << 2) | ((((tdHit[79-i]) | _GEN_7046) & 1) << 50) | (_GEN_7047 << 51)
+      mut _GEN_7049:U55 = _GEN_7041 | (_GEN_7048 << 1) | (_GEN_7045 << 2) | ((((tdHit[(79-i) & 127]) | _GEN_7046) & 1) << 50) | (_GEN_7047 << 51)
       mut _GEN_7050:U50 = if (tdAlloc[15-i]) != 0 { 0 } else { debug_lsTopdownInfo#[(1650+(i*-110))..<(1760+(i*-110))]#[55..<0x6e]#[0..<50] }
-      mut _GEN_7051:U50 = if (tdHit[31-i]) != 0 { io_lsTopdownInfo_0__w1#[0..<0x6e]#[55..<0x6e]#[0..<50] } else { _GEN_7050#[0..<50] }
-      mut _GEN_7052:U50 = if (io_lsTopdownInfo_0__w1#[0x6e..<0xdc]#[55..<0x6e]#[50..<51] & (tdEq[63-i]) & 1) != 0 { io_lsTopdownInfo_0__w1#[0x6e..<0xdc]#[55..<0x6e]#[0..<50] } else { _GEN_7051#[0..<50] }
-      mut _GEN_7053:U50 = if (tdHit[95-i]) != 0 { io_lsTopdownInfo_0__w1#[0xdc..<0x14a]#[55..<0x6e]#[0..<50] } else { _GEN_7052#[0..<50] }
-      mut _GEN_7054:U1 = if io_lsTopdownInfo_0__w1#[0x6e..<0xdc]#[55..<0x6e]#[50..<51] != 0 { ((((tdEq[63-i]) | (tdHit[31-i])) & 1) | (tdB105Kept[15-i])) & 1 } else { ((tdHit[31-i]) | (tdB105Kept[15-i])) & 1 }
+      mut _GEN_7051:U50 = if (tdHit[(31-i) & 127]) != 0 { io_lsTopdownInfo_0__w1#[0..<0x6e]#[55..<0x6e]#[0..<50] } else { _GEN_7050#[0..<50] }
+      mut _GEN_7052:U50 = if (io_lsTopdownInfo_0__w1#[0x6e..<0xdc]#[55..<0x6e]#[50..<51] & (tdEq[(63-i) & 127]) & 1) != 0 { io_lsTopdownInfo_0__w1#[0x6e..<0xdc]#[55..<0x6e]#[0..<50] } else { _GEN_7051#[0..<50] }
+      mut _GEN_7053:U50 = if (tdHit[(95-i) & 127]) != 0 { io_lsTopdownInfo_0__w1#[0xdc..<0x14a]#[55..<0x6e]#[0..<50] } else { _GEN_7052#[0..<50] }
+      mut _GEN_7054:U1 = if io_lsTopdownInfo_0__w1#[0x6e..<0xdc]#[55..<0x6e]#[50..<51] != 0 { ((((tdEq[(63-i) & 127]) | (tdHit[(31-i) & 127])) & 1) | (tdB105Kept[15-i])) & 1 } else { ((tdHit[(31-i) & 127]) | (tdB105Kept[15-i])) & 1 }
       mut _GEN_7055:U4 = if (tdAlloc[15-i]) != 0 { 0 } else { debug_lsTopdownInfo#[(1650+(i*-110))..<(1760+(i*-110))]#[55..<0x6e]#[51..<55] }
-      mut _GEN_7056:U55 = _GEN_7053 | ((((tdHit[95-i]) | _GEN_7054) & 1) << 50) | (_GEN_7055 << 51)
+      mut _GEN_7056:U55 = _GEN_7053 | ((((tdHit[(95-i) & 127]) | _GEN_7054) & 1) << 50) | (_GEN_7055 << 51)
       debug_lsTopdownInfo#[(1650+(i*-110))..<(1760+(i*-110))] = (_GEN_7049 | (_GEN_7056 << 55))#[0..<0x6e]
   }
   }
