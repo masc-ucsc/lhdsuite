@@ -52,6 +52,7 @@ Verilog before it was committed (one commit per step).
 | BusyTable_3 | 991 | 501 | pyroA |
 | StdFreeList | 985 | 348 | pyroA-B |
 | StdFreeList_2 | 779 | 349 | pyroA-B |
+| DataModule_BackendPC_8entry | 591 | 14 | pyroA: rewritten from the Chisel intent; 16 read ports with write bypass as one loop, 1 write port |
 | VecExceptionGen | 521 | 171 | pyroA: rewritten from the Chisel intent; each instruction list is one loop over its keys, three small helpers (notAlign, regPow, nfToLmul) |
 
 Still raw: RenameTable, RenameTable_1..4, RenameTableWrapper, the
