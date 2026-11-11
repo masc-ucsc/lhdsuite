@@ -54,6 +54,7 @@ Verilog before it was committed (one commit per step).
 | StdFreeList_2 | 779 | 349 | pyroA-B |
 | DataModule_BackendPC_8entry | 591 | 14 | pyroA: rewritten from the Chisel intent; 16 read ports with write bypass as one loop, 1 write port |
 | VecExceptionGen | 521 | 171 | pyroA: rewritten from the Chisel intent; each instruction list is one loop over its keys, three small helpers (notAlign, regPow, nfToLmul) |
+| Trace | 506 | 56 | pyroA: rewritten from the Chisel intent; stage-1 registers kept by name, the 5 -> 8-bit iretire widening for TraceBuffer is one loop |
 
 Still raw: RenameTable, RenameTable_1..4, RenameTableWrapper, the
 SnapshotGenerator/DelayReg/indexedLSUopTable children. The other CtrlBlock
