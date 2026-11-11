@@ -7,11 +7,14 @@ port counts match the full XiangShan. It is the XiangShan point of the
 Rocket -> BOOM -> XiangShan loop-cleanup ladder; the target cone is `CtrlBlock`
 (decode, rename, dispatch, ROB).
 
-## Layout and status (2026-11-09)
+## Layout and status (2026-11-11)
 
 | Where | Contents |
 |---|---|
-| `pyrope2/` | 66 `.prp` files: 23 cleaned modules plus the raw children they instantiate |
+| `verilog/` | the CtrlBlock cone of the Verilog below (88 `.sv` + `filelist.f`) |
+| `pyrope/` | that cone emitted by `lhd compile verilog --top CtrlBlock` (raw, 88 `.prp` + `manifest.json`) |
+| `pyrope2/` | the same tree with the cleaned modules swapped in (90 `.prp`: FusionDecoder adds FusionMatch and FusionLaneOut) |
+| `sim/` | `xs_mini16_tb.prp` and its Verilator twin `xs_mini16_tb_verilator.cpp` (see Simulation) |
 | Verilog | `XiangShan/build/rtl_mini16_lhd/` (2,009 `.sv`; `build/mini16.sh` on kaffirlime, then two hand patches: `until` -> `untilv`, `ifdef DUMMY` around the DiffExt instance in the 21 `DummyDPICWrapper_*.sv`) |
 | Scratch | `/mada/users/frabieik/pyro_scratch/xs_mini16/<Module>/{base,pyroA,...,ref_sv,work}`, one fold script per step (`rob_fold_*.py`, `rb_fold_*.py`, ...) |
 
@@ -81,9 +84,40 @@ modules are ranked in `pyro_scratch/xs_mini16/style_rest/RANKING.txt`.
 | case12 | big reg-array loop folds (VTypeBuffer, RenameBuffer) time out vs the Verilog |
 | case16 | RenameTable difftest chain (520 ports x 32 entries): every loop form times out; RenameTable_1/_2 folds are built and wait on this |
 | case25 | DecodeUnitComp pyroE (17 one-hot decode folds, 31,911 -> 29,820 lines): a new loop between existing ones renumbers `__loopN`, so the later loops stop pairing and LEC times out (also case2). Built as single-fold steps `pyroE1..17` in scratch, waiting on the fix |
+| case28 | lhd sim rejects a false (bit-level acyclic) cycle through loop arrays: Rob pyroN packs each ROB entry's fields into one `[8]U67` word, and one field (`valid`) feeds another (`fflags`). So `pyrope2/` does not simulate; LEC is fine |
 | case17 | SSIT 1024-entry debug state: loop fold times out. Alternative: delete the dead debug state (owner decision) |
+
+## Simulation
+
+`sim/xs_mini16_tb.prp` drives `CtrlBlock` as a throughput benchmark and a
+cross-language checksum oracle, not functional coverage. Each cycle the
+frontend offers 8 random ADDI/ADD instructions; the issue queues and the LSQ
+accept; writeback ports 1-4 sweep the ROB indices (4 per cycle), so the ROB
+keeps retiring (~1.5 instructions per cycle). The frontend `trigger` field
+must be 15 (TriggerAction.None): 0 means "breakpoint exception", which turns
+every uop into an exception that never reaches an issue queue.
+
+Needs `--set sim.unknown_zero=true --set sim.init_zero=true` (reset-free
+state reaches the outputs; Verilator zero-fills). With those, the same
+checksum comes from lhd sim on `pyrope/`, lhd sim on the Verilog (`lg:`) and
+Verilator, at 2, 5, 50, 1,000 and 20,000 cycles:
+
+    xs_mini16: cycles=1000 sum=1660443741802788855
+
+Measured on kaffirlime (lhd 5cba85788, 16 jobs, 2026-11-10):
+
+| | lhd sim `pyrope/` | lhd sim Verilog | Verilator |
+|---|---|---|---|
+| build | 1,311 s setup (`inou.cgen.sim` 1,057 s) + 74 s C++ | 179 s compile + 877 s setup | 300 s |
+| 20,000 cycles | 23.7 s | 22.2 s | 27.4 s |
+
+After a testbench-only edit, replaying the workdir (`cd w/sim && lhd sim`)
+took 308 s instead of 1,385 s.
+
+Not a bench core yet: each lhd sim leg costs 15-22 min of codegen (xs_rob's
+sim was disabled at 5 min), and `pyrope2/` is blocked by case28.
 
 ## Not done
 
-- No sim driver for Mini16, and it is not in the bench.
+- Mini16 is not in the bench (see Simulation).
 - DecodeUnitComp (31,911 lines) still has large repeated blocks.

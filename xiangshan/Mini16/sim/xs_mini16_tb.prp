@@ -1,0 +1,147 @@
+// Free-running simulation driver for XiangShan Mini16 (MinimalRob16Config) `CtrlBlock`:
+// decode, rename, dispatch and the 16-entry ROB.
+//
+// Like the other XiangShan drivers this is a THROUGHPUT benchmark plus a cross-language oracle: the
+// raw Pyrope tree, the cleaned pyrope2 tree, an lg: library read from the Verilog and the Verilator
+// twin (xs_mini16_tb_verilator.cpp) must print the SAME checksum. It is not functional coverage.
+//
+// Stimulus: every cycle the frontend offers 8 instructions, each an ADDI or ADD built from LFSR
+// bits (random rd/rs1/rs2/imm), so decode, rename, dispatch and the ROB all do real work. `trigger`
+// must be 15 (TriggerAction.None): its zero value means "raise a breakpoint exception", which makes
+// every uop an exception that never reaches an issue queue. The issue queues and the LSQ accept,
+// and four integer writeback ports sweep the ROB indices (4 per cycle), so every entry is marked
+// done within 4 cycles and the ROB keeps retiring (~1.5 IPC) instead of filling and stalling.
+const ctrl = import("lg:CtrlBlock")
+
+test ctrl.free_run(cycles:U32 = 1000) {
+  mut acc = ctrl
+
+  mut lfsr:U64 = 0x123456789abcdef
+  mut sum:U64  = 0
+  mut obs:U64  = 0
+  mut i0:U32   = 0
+  mut i1:U32   = 0
+  mut wbp:U5   = 0
+
+  tick cycles {
+    acc.reset = clock < 4
+
+    acc.io_fromTop_hartId = 0
+
+    // ADDI rd,rs1,imm (opcode 0x13) when the selector bit is 0, else ADD rd,rs1,rs2 (0x33).
+    // Fields: rd = lfsr[0..4], rs1 = lfsr[5..9], imm/rs2 = lfsr[10..21].
+    i0 = (lfsr#[10..=21] << 20) | (lfsr#[5..=9] << 15) | (lfsr#[0..=4] << 7) | 0x13
+    i1 = (lfsr#[32..=36] << 20) | (lfsr#[37..=41] << 15) | (lfsr#[42..=46] << 7) | 0x33
+
+    acc.io_frontend_cfVec_0_valid = 1
+    acc.io_frontend_cfVec_1_valid = 1
+    acc.io_frontend_cfVec_2_valid = 1
+    acc.io_frontend_cfVec_3_valid = 1
+    acc.io_frontend_cfVec_4_valid = 1
+    acc.io_frontend_cfVec_5_valid = 1
+    acc.io_frontend_cfVec_6_valid = 1
+    acc.io_frontend_cfVec_7_valid = 1
+    acc.io_frontend_cfVec_0_bits.trigger = 15
+    acc.io_frontend_cfVec_1_bits.trigger = 15
+    acc.io_frontend_cfVec_2_bits.trigger = 15
+    acc.io_frontend_cfVec_3_bits.trigger = 15
+    acc.io_frontend_cfVec_4_bits.trigger = 15
+    acc.io_frontend_cfVec_5_bits.trigger = 15
+    acc.io_frontend_cfVec_6_bits.trigger = 15
+    acc.io_frontend_cfVec_7_bits.trigger = 15
+    acc.io_frontend_cfVec_0_bits.instr = if lfsr#[48] == 0 { i0 } else { i1 }
+    acc.io_frontend_cfVec_1_bits.instr = if lfsr#[49] == 0 { i0 } else { i1 }
+    acc.io_frontend_cfVec_2_bits.instr = if lfsr#[50] == 0 { i0 } else { i1 }
+    acc.io_frontend_cfVec_3_bits.instr = if lfsr#[51] == 0 { i0 } else { i1 }
+    acc.io_frontend_cfVec_4_bits.instr = if lfsr#[52] == 0 { i0 } else { i1 }
+    acc.io_frontend_cfVec_5_bits.instr = if lfsr#[53] == 0 { i0 } else { i1 }
+    acc.io_frontend_cfVec_6_bits.instr = if lfsr#[54] == 0 { i0 } else { i1 }
+    acc.io_frontend_cfVec_7_bits.instr = if lfsr#[55] == 0 { i0 } else { i1 }
+
+    acc.io_toIssueBlock_intUops_0_ready  = 1
+    acc.io_toIssueBlock_intUops_1_ready  = 1
+    acc.io_toIssueBlock_intUops_2_ready  = 1
+    acc.io_toIssueBlock_intUops_3_ready  = 1
+    acc.io_toIssueBlock_intUops_4_ready  = 1
+    acc.io_toIssueBlock_intUops_5_ready  = 1
+    acc.io_toIssueBlock_intUops_6_ready  = 1
+    acc.io_toIssueBlock_intUops_7_ready  = 1
+    acc.io_toIssueBlock_intUops_8_ready  = 1
+    acc.io_toIssueBlock_intUops_9_ready  = 1
+    acc.io_toIssueBlock_intUops_10_ready = 1
+    acc.io_toIssueBlock_intUops_11_ready = 1
+    acc.io_toIssueBlock_intUops_12_ready = 1
+    acc.io_toIssueBlock_intUops_13_ready = 1
+    acc.io_toIssueBlock_intUops_14_ready = 1
+    acc.io_toIssueBlock_intUops_15_ready = 1
+    acc.io_toIssueBlock_intUops_16_ready = 1
+    acc.io_toIssueBlock_intUops_17_ready = 1
+    acc.io_toIssueBlock_intUops_18_ready = 1
+    acc.io_toIssueBlock_intUops_19_ready = 1
+    acc.io_toIssueBlock_intUops_20_ready = 1
+    acc.io_toIssueBlock_intUops_21_ready = 1
+    acc.io_toIssueBlock_fpUops_0_ready = 1
+    acc.io_toIssueBlock_fpUops_1_ready = 1
+    acc.io_toIssueBlock_fpUops_2_ready = 1
+    acc.io_toIssueBlock_fpUops_3_ready = 1
+    acc.io_toIssueBlock_fpUops_4_ready = 1
+    acc.io_toIssueBlock_fpUops_5_ready = 1
+    acc.io_toIssueBlock_fpUops_6_ready = 1
+    acc.io_toIssueBlock_fpUops_7_ready = 1
+    acc.io_toIssueBlock_vfUops_0_ready = 1
+    acc.io_toIssueBlock_vfUops_1_ready = 1
+    acc.io_toIssueBlock_vfUops_2_ready = 1
+    acc.io_toIssueBlock_vfUops_3_ready = 1
+    acc.io_toIssueBlock_vfUops_4_ready = 1
+    acc.io_toIssueBlock_vfUops_5_ready = 1
+    acc.io_toIssueBlock_vfUops_6_ready = 1
+    acc.io_toIssueBlock_vfUops_7_ready = 1
+    acc.io_toMem_lsqEnqIO_canAccept = 1
+
+    // Writeback sweep: ports 1-4 report ROB indices wbp..wbp+3 ({flag, value}), wbp += 4 each cycle.
+    acc.io_fromWB_wbData_1_valid = 1
+    acc.io_fromWB_wbData_1_bits_robIdx.value = (wbp + 0)#[0..=3]
+    acc.io_fromWB_wbData_1_bits_robIdx.flag  = wbp#[4]
+    acc.io_fromWB_wbData_2_valid = 1
+    acc.io_fromWB_wbData_2_bits_robIdx.value = (wbp + 1)#[0..=3]
+    acc.io_fromWB_wbData_2_bits_robIdx.flag  = wbp#[4]
+    acc.io_fromWB_wbData_3_valid = 1
+    acc.io_fromWB_wbData_3_bits_robIdx.value = (wbp + 2)#[0..=3]
+    acc.io_fromWB_wbData_3_bits_robIdx.flag  = wbp#[4]
+    acc.io_fromWB_wbData_4_valid = 1
+    acc.io_fromWB_wbData_4_bits_robIdx.value = (wbp + 3)#[0..=3]
+    acc.io_fromWB_wbData_4_bits_robIdx.flag  = wbp#[4]
+
+    step
+
+    obs = acc.io_frontend_canAccept
+    wrap obs = obs | (acc.io_frontend_cfVec_0_ready << 1)
+    wrap obs = obs | (acc.io_frontend_cfVec_7_ready << 2)
+    wrap obs = obs | (acc.io_frontend_backendEmpty << 3)
+    wrap obs = obs | (acc.io_toIssueBlock_intUops_0_valid << 4)
+    wrap obs = obs | (acc.io_toIssueBlock_intUops_1_valid << 5)
+    wrap obs = obs | (acc.io_toIssueBlock_intUops_2_valid << 6)
+    wrap obs = obs | (acc.io_toIssueBlock_intUops_3_valid << 7)
+    wrap obs = obs | (acc.io_toIssueBlock_intUops_4_valid << 8)
+    wrap obs = obs | (acc.io_toIssueBlock_intUops_5_valid << 9)
+    wrap obs = obs | (acc.io_toIssueBlock_intUops_6_valid << 10)
+    wrap obs = obs | (acc.io_toIssueBlock_intUops_7_valid << 11)
+    wrap obs = obs | (acc.io_robio_lsq_lcommit << 12)
+    wrap obs = obs | (acc.io_robio_lsq_scommit << 16)
+    wrap obs = obs | (acc.io_toMem_lsqEnqIO_needAlloc << 20)
+    wrap obs = obs | (acc.io_robio_csr_perfinfo.retiredInstr << 36)
+    wrap obs = obs | (acc.io_error << 44)
+
+    // Masked to 63 bits so the printed checksum is unambiguously positive.
+    wrap sum = ((sum * 31) + obs) & 0x7fffffffffffffff
+
+    wrap wbp = wbp + 4
+
+    // xorshift64, right shift spelled as a bit slice (see xiangshan/Backend/sim/xs_rob_tb.prp for why)
+    wrap lfsr = lfsr ^ (lfsr << 13)
+    wrap lfsr = lfsr ^ lfsr#[7..=63]
+    wrap lfsr = lfsr ^ (lfsr << 17)
+  }
+
+  puts("xs_mini16: cycles={cycles} sum={sum}")
+}
