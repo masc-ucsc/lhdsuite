@@ -349,10 +349,10 @@ CORES = {
         # sha256_core instances). Both languages are the SAME design, so every
         # cross-language scenario is real.
         "pkg": "//bitcoin",
-        # bitcoin/pyrope/ is itself the hand-cleaned, loop-based translation
-        # (the user-facing tree for this core), not a raw emission; there is
-        # no second tree.
-        "pyrope2": False,
+        # bitcoin/pyrope/ is the hand-cleaned, loop-based translation, one
+        # file per Verilog module. bitcoin/pyrope2/ is the Pyrope target
+        # proper: the same top, reworked to be efficient (bitcoin/README.md).
+        "pyrope2": True,
         "top": "bitcoin_top",
         # One mining lane. NOT bitcoin_compare: a compare bug reaches the top
         # only when the first double hash completes (~200 cycles), far past

@@ -32,6 +32,21 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# pyrope2/ is the Pyrope target proper: the same design and the same top, reworked to be efficient
+# and Pyrope friendly rather than a module-by-module image of the Verilog (README.md says what
+# differs and how it was checked). See //bench:bitcoin_sim_pyrope2.
+filegroup(
+    name = "pyrope2",
+    srcs = glob(["pyrope2/*.prp"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "pyrope2_top",
+    srcs = ["pyrope2/bitcoin_top.prp"],
+    visibility = ["//visibility:public"],
+)
+
 # bitcoin_mine_tb.prp mines the genesis block and then a stream of easy-target
 # work items; the C++ twin runs the same schedule under Verilator.
 filegroup(

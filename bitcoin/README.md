@@ -57,6 +57,7 @@ S. Nakamoto's 2009 Bitcoin genesis block.
 | --- | --- |
 | `verilog/` | the vendored RTL, the wrapper, and `filelist.f` (slang `-F`) |
 | `pyrope/` | hand-cleaned Pyrope translation, one file per Verilog module |
+| `pyrope2/` | the Pyrope target: same top and ports, reworked where it simulates better (see below) |
 | `sim/bitcoin_mine_tb.prp` | timed `lhd sim` benchmark (genesis block + mining stream) |
 | `sim/bitcoin_mine_tb_verilator.cpp` | its Verilator twin, with a software SHA256d oracle |
 | `verif/bitcoin_engine.verify.prp` | lane-protocol sidecar (the CORES `unit`, `verify_bound` 4) |
@@ -92,6 +93,26 @@ sorts ports by name and puts long port lists one per line):
   with the lowest-index arbitration folded into the loop.
 - FSM states are enums with the Verilog's encodings. Control signals are
   `Bool`; only `bitcoin_top`'s ports stay `U1`, as in the Verilog.
+
+### `pyrope2/`: the Pyrope target
+
+`pyrope/` follows the Verilog module by module. `pyrope2/` is the same design with the same top and
+the same ports on every module, free to be written the way that simulates well. So far one module
+differs:
+
+- `bitcoin_compare`: no 256-bit value is built. The little-endian integer's word `j` is digest word
+  `j` (H0 first) with its four bytes swapped, so the eight words are compared most significant
+  first, each read straight out of `hash` and `target`. `pyrope/` reverses the 32 bytes into a
+  256-bit `le` first (one lane write per trip) and then compares 256 bits.
+
+Checks (lhd at `../livehd`, 2026-11-10): `pyrope2/bitcoin_compare.prp` vs `verilog/bitcoin_compare.v`
+with `formal.effort=proof` is `PROVEN-full`; the `bitcoin_compare` sidecar proves on it as on
+`pyrope/`; `bitcoin_mine_tb` prints the same line (genesis nonce, job count, checksum) for both
+trees.
+
+Still wide in both trees, and the next candidates: the digest (`sha256_core.digest`, `h1`,
+`hash_reg`: eight words carried as one `U256`) and the blocks (`block_a`, `block_b`, `core_block`:
+sixteen words as one `U512`, re-sliced by `sha256_w_mem`).
 
 ### Equivalence status (lhd at `../livehd`, 2026-11-07)
 

@@ -1,0 +1,71 @@
+// Double SHA-256 of an 80-byte block header, sequencing one sha256_core
+// through three compressions: init(block_a) -> next(block_b) -> init(pad(H1)).
+// `done` pulses for one cycle when `hash` holds SHA256(SHA256(header)).
+const sha256_core = import("sha256_core.sha256_core")
+
+enum State:U3 = (Idle, WaitA, WaitB, InitC, WaitC)
+
+pub mod bitcoin_sha256d(block_a:U512, block_b:U512, clk:Clock, reset_n:Reset, start:Bool) -> (done:Bool@[], hash:U256@[]) {
+  reg core_init:Bool:[negreset=true]  = false
+  reg core_next:Bool:[negreset=true]  = false
+  reg core_block:U512:[negreset=true] = 0
+  reg dv_d:Bool:[negreset=true]       = false
+  reg h1:U256:[negreset=true]         = 0
+  reg state:State:[negreset=true]     = State.Idle
+  reg hash_reg:U256:[negreset=true]   = 0
+  reg done_reg:Bool:[negreset=true]   = false
+
+  const u_core = sha256_core(init=core_init, next=core_next, mode=true, block=core_block)
+
+  // The rising edge of digest_valid marks a compression that just finished.
+  const dv_rise = u_core.digest_valid and not dv_d
+  // Second-hash block: H1, then the SHA padding (0x80, zeros, length = 256).
+  const block_c:U512 = (h1 << 256) | (0x80 << 248) | 256
+
+  done = done_reg
+  hash = hash_reg
+
+  dv_d      = u_core.digest_valid
+  core_init = false
+  core_next = false
+  done_reg  = false
+  match state {
+    == State.Idle {
+      if start and u_core.ready {
+        core_block = block_a
+        core_init  = true
+        state      = State.WaitA
+      }
+    }
+    == State.WaitA {
+      if dv_rise {
+        core_block = block_b
+        core_next  = true
+        state      = State.WaitB
+      }
+    }
+    == State.WaitB {
+      if dv_rise {
+        h1    = u_core.digest
+        state = State.InitC
+      }
+    }
+    == State.InitC {
+      if u_core.ready {
+        core_block = block_c
+        core_init  = true
+        state      = State.WaitC
+      }
+    }
+    == State.WaitC {
+      if dv_rise {
+        hash_reg = u_core.digest
+        done_reg = true
+        state    = State.Idle
+      }
+    }
+    else {
+      state = State.Idle
+    }
+  }
+}

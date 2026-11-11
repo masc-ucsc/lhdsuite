@@ -1,0 +1,22 @@
+// Proof-of-work target check: Bitcoin reads the SHA256d digest as a
+// little-endian 256-bit integer, so the digest's bytes are reversed before
+// the unsigned `<=` against the difficulty target.
+//
+// Word by word, most significant word of the little-endian value first: its
+// word j is digest word j (H0 first) with the four bytes swapped. Nothing
+// 256 bits wide is built or shifted.
+pub comb bitcoin_compare(hash:U256, target:U256) -> (below:Bool) {
+  mut lt = false
+  mut eq = true
+  for k in 0..<8 {
+    const j      = 7 - k
+    const h:U32  = hash#[(7 - j)*32..+32]
+    const t:U32  = target#[j*32..+32]
+    const le:U32 = (h#[0..<8] << 24) | (h#[8..<16] << 16) | (h#[16..<24] << 8) | h#[24..<32]
+    if eq and le != t {
+      lt = le < t
+      eq = false
+    }
+  }
+  below = lt or eq
+}
