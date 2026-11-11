@@ -32,6 +32,7 @@ Verilog before it was committed (one commit per step).
 | Rename | 16,644 | 12,816 | pyroA |
 | LFST | 13,819 | 11,143 | pyroA (robIdx write loop) |
 | DecodeStage | 7,612 | 4,575 | pyroA |
+| PipeGroupConnect | 6,909 | 309 | pyroA: rewritten from the Chisel intent; the 8-lane valid/accept logic is one loop (~70 lines); the 8 uops stay packed (`dataVec:[8]U516`, as in the Verilog, so state pairs) through generated pack/unpack mods |
 | BusyTable_2 | 5,425 | 1,391 | pyroA-B |
 | VTypeBuffer | 5,213 | 879 | pyroA-H |
 | BusyTable | 4,730 | 982 | pyroA-B |
