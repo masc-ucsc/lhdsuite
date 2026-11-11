@@ -362,11 +362,39 @@ if [ "$MODE" = incr ]; then
   # look like it on disk.
   sim_exec_same comment full
 
+  # The real edit must touch exactly ONE source file, or the pass cannot say
+  # what is incremental and what simply changed everywhere.
+  src_sums() { (cd tree && find . -maxdepth 1 -name '*.prp' -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256); }
+  src_sums >src_before.txt
   core_variant bug1 tree || exit 1
+  src_sums >src_after.txt
+  edited_files=$({ diff src_before.txt src_after.txt || true; } | sed -n 's/^> [0-9a-f]*  //p' | wc -l | tr -d ' ')
+  metric sim_edit_source_files "$edited_files" files
+  [ "$edited_files" -eq 1 ] \
+    || { echo "FAIL: the incremental edit changed $edited_files source files; it must change exactly 1" >&2; exit 1; }
   touch marker
   sim_pass edit || exit 1
   rewritten=$(generated_newer marker)
   metric sim_rewritten_edit "$(echo "$rewritten" | wc -w | tr -d ' ')" files
+  # What was rewritten, by kind: the edited unit's own sources are expected;
+  # color kernels/plans of the module that inlines it are the fused hierarchy;
+  # anything else is the part of the tree that changed for no visible reason.
+  generated_total=$(find SW/sim -maxdepth 1 -type f \( -name '*.hpp' -o -name '*.cpp' -o -name '*.llvm.o' -o -name '*.iface.json' \) | wc -l | tr -d ' ')
+  n_color=0; n_tune=0; n_unit=0; n_other=0
+  for f in $rewritten; do
+    case "$f" in
+    *.color-* | *.llvm.o) n_color=$((n_color + 1)) ;;
+    *.tune*.cpp) n_tune=$((n_tune + 1)) ;;
+    *.iface.json) n_other=$((n_other + 1)) ;;
+    *.cpp | *.hpp) n_unit=$((n_unit + 1)) ;;
+    *) n_other=$((n_other + 1)) ;;
+    esac
+  done
+  metric sim_generated_total "$generated_total" files
+  metric sim_rewritten_edit_unit "$n_unit" files
+  metric sim_rewritten_edit_color "$n_color" files
+  metric sim_rewritten_edit_tune "$n_tune" files
+  echo "NOTE: 1 source file edited; rewrote $(echo "$rewritten" | wc -w | tr -d ' ') of $generated_total generated files (unit sources $n_unit, color kernels/plans $n_color, tune $n_tune, other $n_other)" >&2
   [ -n "$rewritten" ] \
     || { echo "FAIL: a real one-line edit rewrote NO generated file — stale cache" >&2; exit 1; }
 
