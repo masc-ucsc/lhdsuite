@@ -47,6 +47,7 @@ Verilog before it was committed (one commit per step).
 | RegCacheTagTable | 1,111 | 126 | pyroA: rewritten from the Chisel intent; wakeup -> write port, cancel and read-port logic are loops, `loadShouldCancel` is a small comb; the two RegCacheTagModule children are unchanged |
 | VlBusyTable | 1,310 | 194 | pyroA: rewritten from the Chisel intent; one loop builds the per-preg update, one flop per preg kept by name (a `[32]U1` reg array came back REFUTED with the state unpaired); dead perf counters and loadDependency (vl has no load cancel) dropped |
 | DataModule__64entry | 1,188 | 42 | pyroA |
+| TraceBuffer | 1,029 | 62 | pyroA: rewritten from the Chisel intent; need-PC / iretire-fold lane loop, enqueue loop into the 8-entry ring, 3-block dequeue loop |
 | StdFreeList_3 | 1,008 | 348 | pyroA-B |
 | BusyTable_3 | 991 | 501 | pyroA |
 | StdFreeList | 985 | 348 | pyroA-B |
