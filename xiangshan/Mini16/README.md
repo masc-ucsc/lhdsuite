@@ -44,6 +44,7 @@ Verilog before it was committed (one commit per step).
 | DataModule__64entry_16 | 2,832 | 41 | pyroA-C |
 | MEFreeList | 1,703 | 284 | pyroA-B |
 | RegCacheTagModule_1 | 1,364 | 471 | pyroA |
+| RegCacheTagTable | 1,111 | 126 | pyroA: rewritten from the Chisel intent; wakeup -> write port, cancel and read-port logic are loops, `loadShouldCancel` is a small comb; the two RegCacheTagModule children are unchanged |
 | VlBusyTable | 1,310 | 194 | pyroA: rewritten from the Chisel intent; one loop builds the per-preg update, one flop per preg kept by name (a `[32]U1` reg array came back REFUTED with the state unpaired); dead perf counters and loadDependency (vl has no load cancel) dropped |
 | DataModule__64entry | 1,188 | 42 | pyroA |
 | StdFreeList_3 | 1,008 | 348 | pyroA-B |
@@ -52,8 +53,7 @@ Verilog before it was committed (one commit per step).
 | StdFreeList_2 | 779 | 349 | pyroA-B |
 | VecExceptionGen | 521 | 171 | pyroA: rewritten from the Chisel intent; each instruction list is one loop over its keys, three small helpers (notAlign, regPow, nfToLmul) |
 
-Still raw: RenameTable, RenameTable_1..4, RenameTableWrapper,
-RegCacheTagTable, the
+Still raw: RenameTable, RenameTable_1..4, RenameTableWrapper, the
 SnapshotGenerator/DelayReg/indexedLSUopTable children. The other CtrlBlock
 modules are ranked in `pyro_scratch/xs_mini16/style_rest/RANKING.txt`.
 
