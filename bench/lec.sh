@@ -196,6 +196,10 @@ bug)
   #    block record (owner ruling 2026-10-14). If the top then stays undecided,
   #    lhd reports the top's own TIMEOUT-* (exit 0, already failed above by
   #    run_expect_fail), and the bug was NOT caught at the design level.
+  #    Exception (2026-11-12): a refuted block with every other def proved and an
+  #    in-context confirmation that did not settle within formal.lec.confirm_timeout
+  #    makes the top REFUTED-cex itself (`lec[hier]: BLOCK REFUTATION`), with the
+  #    block's boundary witness and no top-level trace.
   #  - any REFUTED-* is not enough: REFUTED-<why> (exit 7) is lhd failing to
   #    answer, which an injected bug must not be able to hide behind. Only
   #    REFUTED-cex with exit 10 is a counterexample.
