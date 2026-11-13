@@ -5,7 +5,7 @@
 // Upstream defaults to NENGINES = 128 (~1.3M cells), a synthesis-size point:
 // 128 SHA-256 cores make every simulated cycle 128x the work and every compile
 // or LEC scenario 128x the graph, for no additional coverage — the lanes are
-// identical instances differing only in their nonce offset. Four lanes keep
+// identical instances differing only in their nonce offset. Sixteen lanes keep
 // the multi-lane arbitration (lowest index wins) and the interleaved nonce
 // stride real while the benchmark stays in the size class of the other cores.
 module bitcoin_top (
@@ -20,7 +20,7 @@ module bitcoin_top (
    output wire         busy
    );
 
-   bitcoin #(.NENGINES(4)) u_miner
+   bitcoin #(.NENGINES(16)) u_miner
      (.clk          (clk),
       .reset_n      (reset_n),
       .start        (start),

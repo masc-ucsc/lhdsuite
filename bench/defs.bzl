@@ -382,10 +382,10 @@ CORES = {
         # 4349 work items. The sum is identical from lhd sim on pyrope/, lhd sim
         # on the Verilog and Verilator. Do NOT re-pin from one side's output.
         "sim_tb": "bitcoin_mine_tb.prp",
-        "sim_cycles": 4000000,
+        "sim_cycles": 1000000,
         "sim_tb_unit": "bitcoin_top",
         "sim_marker": "bitcoin mine:",
-        "sim_expect": "genesis=497822588 at cycle 412 jobs=4349 longest=5945 nonces=5321654734756578181 of 4000000 sum=5631022400016222101",
+        "sim_expect": "genesis=497822588 at cycle 412 jobs=3079 longest=1640 nonces=8409215600443998670 of 1000000 sum=1369807120553657179",
         "sim_top_tb": "",
         "sim_prog_tb": "",
         "sim_prog_tb_unit": "",
@@ -393,7 +393,7 @@ CORES = {
         "lec_trust": "",
         "verilator_tb": "bitcoin_mine_tb_verilator.cpp",
         "verilator_flags": "",
-        "verilator_cycles": 4000000,
+        "verilator_cycles": 1000000,
     },
     "ibex": {
         "pkg": "//ibex",
@@ -768,6 +768,19 @@ CORES = {
         # in CORES rather than as a module special case in bench/synth.sh.
         "color_max_ge": 8000,
         "synth_only": True,
+        "slow": True,
+    },
+    "xs_mini16": {
+        # MinimalRob16Config CtrlBlock only: decode, rename, dispatch and ROB.
+        # Use the shared synthesis policy (native memories, including RFs).
+        # No sim_tb until the documented simulation issues are resolved.
+        "pkg": "//xiangshan/Mini16",
+        "top": "CtrlBlock",
+        "unit": "CtrlBlock",
+        "v_flags": "--single-unit",
+        "color_algs": ["synth"],
+        "synth_only": True,
+        "pyrope2": True,
         "slow": True,
     },
     # rocket-chip TinyConfig, scoped to RocketTile (core + L1 I/D caches + PTW,

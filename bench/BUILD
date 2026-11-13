@@ -62,7 +62,7 @@ core_benches("cva6")
 core_benches("picorv32")
 
 # Bitcoin (LogikBench): a SHA256d proof-of-work miner over secworks'
-# sha256_core, vendored verbatim with a suite-written wrapper pinning 4 lanes.
+# sha256_core, vendored verbatim with a suite-written wrapper pinning 16 lanes.
 # Both languages are the same design; pyrope/ is the hand-cleaned loop form.
 core_benches("bitcoin")
 
@@ -86,6 +86,9 @@ core_benches("xs_renametable")
 core_benches("xs_div")
 core_benches("xs_exu")
 core_benches("xs_backend")
+
+# MinimalRob16Config CtrlBlock cone; simulation is not enabled (see its README).
+core_benches("xs_mini16")
 core_benches("matched_filter")
 
 # rocket-chip TinyConfig, RocketTile cone (see the CORES entry for why not the

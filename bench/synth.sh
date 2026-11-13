@@ -10,7 +10,8 @@
 #     -> opentimer over one in-memory design, one --workdir, one Liberty):
 #
 #       lhd synth <core>/pyrope/<top>.prp --top <top> --workdir W \
-#           --emit-dir lg:net_<label> --result-json r_<label>.json --stats
+#           --emit-dir lg:net_<label> --result-json r_<label>.json --stats \
+#           --set abc.memory=false
 #
 #     The per-step numbers (compile / color / abc / sta) come from lhd's own
 #     `phases` account of the run, and the reuse counters from the envelope's
@@ -26,7 +27,8 @@
 #
 #       lhd compile <top>.prp --top <top> --emit-dir lg:L --workdir cw
 #       lhd pass color flat --top <top>.<top> lg:L --workdir W
-#       lhd pass abc --top <top>.<top> lg:L --emit-dir lg:net --workdir W
+#       lhd pass abc --top <top>.<top> lg:L --emit-dir lg:net --workdir W \
+#           --set abc.memory=false
 #       lhd pass opentimer --top <top>.<top> lg:net $LIB --workdir OT
 #
 #   MODE=cold  runs each of this core's colorings ($CORE_COLOR_ALGS) and
@@ -73,7 +75,10 @@ LIB="$LHD_TECH_DIR/sky130_fd_sc_hd__tt_025C_1v80.lib"
 # applied uniformly across targets without editing LiveHD defaults between
 # measurements. The reduction step is timed separately as <alg>_reduce_ms (the
 # manual flow only: `lhd synth` has no reduce step, by design).
-ABC_ARGS=()
+# Keep SRAMs and register files native for every core and scenario. Gate/area
+# totals cover mapped standard cells, excluding these memory blocks. Do not
+# bit-blast a cache merely because its port count has no macro realization.
+ABC_ARGS=(--set abc.memory=false)
 [ -z "${BENCH_ABC_ADDER:-}" ] || ABC_ARGS+=(--set "abc.adder=$BENCH_ABC_ADDER")
 [ -z "${BENCH_ABC_BLOCK_SIZE:-}" ] || ABC_ARGS+=(--set "abc.block_size=$BENCH_ABC_BLOCK_SIZE")
 [ -z "${BENCH_ABC_DELAY:-}" ] || ABC_ARGS+=(--set "abc.delay=$BENCH_ABC_DELAY")

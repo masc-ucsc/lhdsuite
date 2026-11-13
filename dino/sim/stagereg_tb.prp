@@ -1,6 +1,5 @@
 // Standalone capture check for the default 97-bit StageReg specialization.
-// The old fetch tuple is now passed as its packed bit vector. Field slices keep
-// checks within 64 bits while covering all 97 bits, including the high instruction.
+// The fetch tuple ports are driven and read field by field (instruction, pc, isValid).
 const sreg = import("StageReg.StageReg")
 
 test sreg.hello(cycles:U20 = 1000) {
@@ -12,15 +11,16 @@ test sreg.hello(cycles:U20 = 1000) {
   mut got_pc = 0
   mut got_isvalid = 0
   tick cycles {
-    acc.reset = clock < 2
+    acc.reset = U1(clock < 2)
     acc.io_flush = 0
     acc.io_valid = 1
-    acc.io_in = stimulus_pc << pc_lo
+    acc.io_in.instruction = 0
+    acc.io_in.pc = stimulus_pc
+    acc.io_in.isValid = 0
     step
-    // LiveHD test bit selectors currently require literal bounds (see cleanup_issues.md).
-    got_instruction = acc.io_data#[65 ..= 96]
-    got_pc = acc.io_data#[1 ..= 64]
-    got_isvalid = acc.io_data#[0]
+    got_instruction = acc.io_data.instruction
+    got_pc = acc.io_data.pc
+    got_isvalid = acc.io_data.isValid
   }
   assert(got_instruction == 0 and got_pc == stimulus_pc and got_isvalid == 0,
          "StageReg latched the driven value after reset")

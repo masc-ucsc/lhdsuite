@@ -1,6 +1,6 @@
 # XiangShan MinimalRob16Config (Mini16), scoped to the CtrlBlock cone (88 modules):
 # verilog/ = the cone of the Chisel emit, pyrope/ = its lhd emit, pyrope2/ = the cleaned tree
-# (cleaned modules + the raw rest). Not a bench core yet: see README.md, "Simulation".
+# (cleaned modules + the raw rest). Bench core xs_mini16; simulation is not enabled.
 
 filegroup(
     name = "verilog",

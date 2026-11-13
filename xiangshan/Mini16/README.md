@@ -121,10 +121,34 @@ Measured on kaffirlime (lhd 5cba85788, 16 jobs, 2026-11-10):
 After a testbench-only edit, replaying the workdir (`cd w/sim && lhd sim`)
 took 308 s instead of 1,385 s.
 
-Not a bench core yet: each lhd sim leg costs 15-22 min of codegen (xs_rob's
-sim was disabled at 5 min), and `pyrope2/` is blocked by case28.
+Simulation is not enabled in the bench: each lhd sim leg costs 15-22 min of
+codegen (xs_rob's sim was disabled at 5 min), and `pyrope2/` is blocked by case28.
+
+## Synthesis benchmarks
+
+`xs_mini16` uses the shared benchmark scripts and Sky130 HD mapping:
+
+```bash
+bazel test //bench:xs_mini16_synth --override_module=livehd=../livehd
+bazel test //bench:xs_mini16_synth_incremental --override_module=livehd=../livehd
+```
+
+The measured design is `CtrlBlock`, not a whole XiangShan CPU. As for all
+suite cores, `--set abc.memory=false` keeps memories and register files native;
+gate counts and standard-cell area exclude those blocks. No SRAM macro is
+selected or characterized by this setting. The targets also collect STA;
+placement is disabled. Compile and LEC scenarios are available under the same
+`xs_mini16` prefix; simulation remains disabled as described above.
+
+Synthesis-only measurement on 2026-11-12, using the local LiveHD binary
+(checkout HEAD `1d7f7f15e`), raw `pyrope/`, and
+`sky130_fd_sc_hd__tt_025C_1v80.lib`: **2,102,419 mapped cells**,
+**14,568,830.006 µm²** standard-cell area, 352 regions, 230.5 s.
+This run disabled both placement and STA and kept memories native
+(`abc.memory=false`); the area excludes memory blocks and is not a die-area
+estimate. Existing scalar registers and fixed-index register arrays still
+contribute to the mapped logic.
 
 ## Not done
 
-- Mini16 is not in the bench (see Simulation).
 - DecodeUnitComp (31,911 lines) still has large repeated blocks.

@@ -3,7 +3,7 @@
 # verilog/ holds the four LogikBench bitcoin*.v files and the three secworks
 # sha256_* files they instantiate, all vendored VERBATIM (see README.md for the
 # sources and LICENSE / LICENSE.sha256 for their licenses); bitcoin_top.v is
-# the one hand-written file, a wrapper pinning NENGINES = 4.
+# the one hand-written file, a wrapper pinning NENGINES = 16.
 #
 # pyrope/ is NOT a raw emission: it is the hand-cleaned, loop-based translation
 # of the same design (README.md says how it was checked against the Verilog).

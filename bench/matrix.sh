@@ -560,6 +560,7 @@ fi
 # keeps every step attributable — the compile tier's reuse shows up as the
 # front-end phases collapsing on the incremental row, the abc tier's as the
 # `abc_*` counters, so neither cache hides behind the other.
+# As in synth.sh, keep memories native; their storage is outside cell totals.
 if [[ " $PHASES " == *" synth "* ]]; then
   if [ -z "${LHD_TECH_DIR:-}" ]; then
     echo "  [$CORE synth] SKIPPED: no sky130 from ciel and no LHD_TECH_DIR" >&2
@@ -571,7 +572,8 @@ if [[ " $PHASES " == *" synth "* ]]; then
       group_begin
       step synth "$mode" "sy_${mode}.json" -- "$LHD" synth "tree/$TOP.prp" \
         --top "$TOP" --workdir "$wd" --emit-dir "lg:net_$mode" \
-        --result-json "sy_${mode}.json" ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} "$@"
+        --result-json "sy_${mode}.json" ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} "$@" \
+        --set abc.memory=false
       group_end synth "$mode" "$(abc_extra "sy_${mode}.json")"
     }
     rm -rf sw_full net_full

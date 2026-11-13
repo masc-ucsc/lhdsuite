@@ -3,10 +3,10 @@
 A SHA256d proof-of-work miner: given an 80-byte block header, a difficulty
 target and a base nonce, `NENGINES` lanes search interleaved nonces for one
 whose double-SHA256 digest, read as a little-endian integer, is at or below
-the target. The suite pins `NENGINES = 4` (`verilog/bitcoin_top.v`).
+the target. The suite pins `NENGINES = 16` (`verilog/bitcoin_top.v`).
 
 ```
-bitcoin_top            suite wrapper: NENGINES = 4
+bitcoin_top            suite wrapper: NENGINES = 16
 +- bitcoin             split the header into two SHA-256 blocks, NENGINES lanes,
    |                   lowest-index lane reports its golden nonce
    +- bitcoin_engine       one lane: step the nonce, run SHA256d, compare
@@ -114,12 +114,22 @@ Still wide in both trees, and the next candidates: the digest (`sha256_core.dige
 `hash_reg`: eight words carried as one `U256`) and the blocks (`block_a`, `block_b`, `core_block`:
 sixteen words as one `U512`, re-sliced by `sha256_w_mem`).
 
-### Equivalence status (lhd at `../livehd`, 2026-11-07)
+### Equivalence status (lhd at `../livehd`, 2026-11-07, measured with 4 lanes)
+
+The suite moved from 4 to 16 lanes on 2026-11-12. The rows below predate that and were not
+re-measured, except as noted here (bench defaults, `formal.effort=test`, 120 s LEC budget):
+
+- `//bench:bitcoin_lec` still passes (`TESTED-sampled(2056)`, 18 s).
+- `//bench:bitcoin_lec_bug` now FAILS: the sampler reaches no verdict inside the 120 s budget
+  (`TIMEOUT-time`, 0 vectors). By hand with `formal.timeout=600` it does find the bug,
+  `REFUTED-cex`, after 141 s (a 3.8M-node term, 126 s solving). At 4 lanes the same bug refuted
+  inside the budget. This is a LiveHD sampler scale gap, not a suite fault.
+- The lane map in the unrolled-LEC recipe is widened to 16 lanes but unchecked.
 
 | Check | Verdict |
 | --- | --- |
 | `sha256_core` cleaned vs Verilog | `PROVEN-full` |
-| `bitcoin_top` cleaned vs Verilog, compiled with `--set compile.unroll=true` and the 20-pair lane map below | `PROVEN-full` (3 s) |
+| `bitcoin_top` cleaned vs Verilog, compiled with `--set compile.unroll=true` and the 80-pair lane map below | `PROVEN-full` (3 s) |
 | `bitcoin_top` cleaned vs Verilog, default compile, `formal.effort=proof` | `PROVEN-bounded(6)` |
 | `//bench:bitcoin_lec` (default effort) | `TESTED-sampled` (passes; not a proof) |
 | `//bench:bitcoin_lec_bug` (bug1: `busy` drops in ST_WAIT) | `REFUTED-cex` |
@@ -143,7 +153,7 @@ lanes `lane__liN`, plus an explicit map:
 ```bash
 lhd compile verilog --top bitcoin_top --emit-dir lg:ref.lg -- -F verilog/filelist.f -DSYNTHESIS
 lhd compile pyrope/bitcoin_top.prp --top bitcoin_top --emit-dir lg:impl.lg --set compile.unroll=true
-M=; for g in 0 1 2 3; do for r in nonce d_start state found_reg golden_reg; do
+M=; for g in $(seq 0 15); do for r in nonce d_start state found_reg golden_reg; do
   M="$M,u_miner.lane_${g}_u_eng.$r=u_miner.lane__li$g.$r"; done; done
 lhd lec --impl lg:impl.lg --ref lg:ref.lg --top bitcoin_top \
     --set formal.effort=proof --set "formal.lec.match=${M#,}"
@@ -154,13 +164,13 @@ lhd lec --impl lg:impl.lg --ref lg:ref.lg --top bitcoin_top \
 `sim/bitcoin_mine_tb.prp` runs a stream of work items. Each item holds reset
 for 2 cycles, pulses `start`, and mines until `found`:
 
-1. Work item 0 is the real genesis block at its real difficulty, seeded 5
-   nonces below the winner. Lane 1 finds `0x1dac2b7c` (497822588) at cycle
-   412. This checks SHA256d, the little-endian compare and the arbitration
+1. Work item 0 is the real genesis block at its real difficulty, seeded 21
+   nonces below the winner (one lane stride of 16 plus 5). Lane 5 finds
+   `0x1dac2b7c` (497822588) on its second trial, at cycle 412. This checks SHA256d, the little-endian compare and the arbitration
    against a value computed outside the suite.
 2. Each later item XORs the work-item number into the header timestamp (bits
    [95:64], the way miners roll ntime) and mines against an easy target (top
-   four bits zero, a 1-in-16 hit per trial).
+   four bits zero, a 1-in-16 hit per trial, so about 64% of 16-lane rounds hit).
 
 Every cycle folds `found`, `busy` and `golden_nonce` into
 `sum = (sum * 31 + obs) & (2^63 - 1)`. Every register has a reset, so no
@@ -169,23 +179,27 @@ same values. It also recomputes every work item's expected golden nonce with
 a software SHA256d (the first round with a hit, lowest lane within it) and
 fails on any mismatch.
 
-At the benchmark's 4M cycles (4349 work items) all three simulators print
+At the benchmark's 1M cycles (3079 work items) all three simulators print
 the same line:
 
 ```
-bitcoin mine: genesis=497822588 at cycle 412 jobs=4349 longest=5945 nonces=5321654734756578181 of 4000000 sum=5631022400016222101
+bitcoin mine: genesis=497822588 at cycle 412 jobs=3079 longest=1640 nonces=8409215600443998670 of 1000000 sum=1369807120553657179
 ```
 
-`sim_exec_ms` from `bazel test //bench:bitcoin` at the 4M cycles (best of 3,
-lhd at livehd 64f318177, 2026-11-07, quiet box):
+`sim_exec_ms` from `bazel test //bench:bitcoin_sim_*` at 1M cycles with 16 lanes (single run,
+2026-11-12; the 4M-cycle, 4-lane figures this replaces were 1559 / 618 / 575 ms):
 
-| Simulator, 4M cycles | `sim_exec_ms` | host C++ |
+| Simulator, 1M cycles, 16 lanes | `sim_exec_ms` | host C++ |
 | --- | --- | --- |
-| `lhd sim` on `pyrope/` (`bitcoin_sim_pyrope`) | 1559 | 3144 |
-| `lhd sim` on the Verilog (`bitcoin_sim_verilog`) | 618 | 2868 |
-| Verilator 5.054 (`bitcoin_sim_verilator`) | 575 | 1348 |
+| `lhd sim` on `pyrope/` (`bitcoin_sim_pyrope`) | 1453 | 2433 |
+| `lhd sim` on `pyrope2/` (`bitcoin_sim_pyrope2`) | 1486 | 2980 |
+| `lhd sim` on the Verilog (`bitcoin_sim_verilog`) | 1379 | 3585 |
+| Verilator 5.054 (`bitcoin_sim_verilator`) | 258 | 1360 |
 
-Standalone best-of-7 at 4M cycles: 1.33 s for `pyrope/`, against 1.80 s for
+The paragraph below was measured with 4 lanes at 4M cycles and is kept as history of what moved
+the `pyrope/` tree.
+
+Standalone best-of-7 at 4M cycles (4 lanes): 1.33 s for `pyrope/`, against 1.80 s for
 the same tree with upstream's asynchronous reset. The cleaned tree is about
 2.5x slower than the Verilog of the same design; at 1M cycles it takes
 335 ms, the raw emission 234 ms. Each of these alone made `pyrope/` faster

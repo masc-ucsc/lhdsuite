@@ -14,7 +14,7 @@
 
 namespace {
 
-constexpr int kLanes = 4;  // NENGINES pinned by verilog/bitcoin_top.v
+constexpr int kLanes = 16;  // NENGINES pinned by verilog/bitcoin_top.v
 
 // --- software SHA-256 (FIPS 180-4), only what SHA256d of a header needs ----
 constexpr uint32_t kK[64] = {
@@ -142,7 +142,7 @@ int main(int argc, char **argv) {
     std::memcpy(hdr, genesis, 80);
     if (job == 0) {
       target = genesis_target;
-      base = 0x1dac2b7c - 5;
+      base = 0x1dac2b7c - 21;
     } else {
       // header bits [95:64] = bytes 68..71 (the timestamp), XOR the job number
       for (int j = 0; j < 4; ++j) hdr[68 + j] ^= uint8_t(job >> (24 - 8 * j));
