@@ -9,7 +9,7 @@
 
 filegroup(
     name = "verilog",
-    srcs = glob(["verilog/*.sv", "verilog/*.v", "verilog/vsrc/*.v"]) + ["verilog/filelist.f"],
+    srcs = glob(["verilog/*.sv", "verilog/*.v", "verilog/vsrc/*.v"], allow_empty = True) + ["verilog/filelist.f"],
     visibility = ["//visibility:public"],
 )
 

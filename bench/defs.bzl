@@ -82,6 +82,10 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             would fuse the whole core into one region, make a localized
 #             semantic edit incapable of demonstrating mixed cache hit/miss,
 #             or leave one color outside the suite's per-color time envelope.
+#   color_max_gate  optional `color.synth.max_gate` (predicted generic-AIG size
+#             per color; the soft bound the default coarse synth partition
+#             cuts at). Same purposes as color_max_ge; needed where max_ge
+#             cannot split the partition (picorv32).
 #   sim_tb    asserted, timed sim benchmark. sim_cycles is its explicit cycle
 #             count. sim_top_tb / sim_prog_tb are additional whole-top
 #             correctness drivers ("" = none). sim_top_cycles /
@@ -314,6 +318,13 @@ CORES = {
         # $initstate, and upstream's own synthesis flows define it away too.
         "v_flags": "-Dassert(assert_expr)=",
         "color_algs": ["synth"],
+        # Since livehd's soft color bound (99057b7e5/aca84561f, 2026-11) the
+        # default cut leaves picorv32_top as ONE 8131-GE ABC region plus a
+        # 20-GE one, so the bug1 edit changes every mapped region and the
+        # incremental gate ("real edit keeps a hit") has nothing to show.
+        # `color.synth.max_ge` does not split it (the partition also holds the
+        # unmapped register file); `max_gate` does: 2000 -> ~30 regions.
+        "color_max_gate": 2000,
         # A real RISC-V program with the testbench acting as the CPU's memory,
         # checked architecturally through the program's own store (`stored=30`).
         # Both sim targets were red for a long time (the missing write strobe,
@@ -1110,6 +1121,7 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_SEQ_UNIT": cfg.get("seq_unit", ""),
             "CORE_COLOR_ALGS": " ".join(cfg["color_algs"]),
             "BENCH_COLOR_MAX_GE": str(cfg.get("color_max_ge", "")),
+            "BENCH_COLOR_MAX_GATE": str(cfg.get("color_max_gate", "")),
             "CORE_SYNTH_ONLY": "1" if synth_only else "",
             # Per-color limits are 16 GiB / 15 minutes. A partitioned scenario
             # maps many colors across full/cold/warm/edit, so its six-hour
