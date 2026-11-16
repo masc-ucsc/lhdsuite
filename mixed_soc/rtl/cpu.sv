@@ -36,7 +36,7 @@ module mixed_cpu import mixed_packet::*; #(
     else begin selected.ch=A; selected.opcode=aop; selected.param=ap; selected.size=asz; selected.tl_source=asrc;
       selected.addr=aa; selected.mask=am; selected.data=ad; selected.corrupt=ac;
       if(acc_address(aa)) begin
-        selected.target=5'(ACC + ((aa-ACC_BASE)>>11));
+        selected.target=5'(ACC);
         if(!IS_BOOM && aa[2]) begin selected.data=ad<<32; selected.mask=am<<4; end
       end
     end
@@ -74,7 +74,7 @@ module mixed_cpu import mixed_packet::*; #(
       .auto_buffer_out_d_valid(rxv && rx.ch==D),.auto_buffer_out_d_ready(dr),.auto_buffer_out_d_bits_opcode(rx.opcode),
       .auto_buffer_out_d_bits_param(rx.param[1:0]),.auto_buffer_out_d_bits_size(rx.size),.auto_buffer_out_d_bits_source(rx.tl_source[0]),
       .auto_buffer_out_d_bits_sink(rx.sink[0]),.auto_buffer_out_d_bits_denied(rx.denied),
-      .auto_buffer_out_d_bits_data(rx.origin>=5'(ACC) && rx.origin<5'(ACC+3) && rx.addr[2] ? rx.data[63:32] : rx.data[31:0]),.auto_buffer_out_d_bits_corrupt(rx.corrupt));
+      .auto_buffer_out_d_bits_data(rx.origin==5'(ACC) && rx.addr[2] ? rx.data[63:32] : rx.data[31:0]),.auto_buffer_out_d_bits_corrupt(rx.corrupt));
     assign ac=0; // This Rocket master has no A.corrupt port.
   end
 endmodule

@@ -16,19 +16,47 @@ STATE = '''  mut hindex:U64 = 0
   mut boot:U64 = 0
   mut landed:U64 = 0
   mut finished:U64 = 0
+  mut mdata:U64 = 0
+  mut adata:U64 = 0
   mut sum:U64 = 0
 '''
 BODY = '''    dut.reset = clock < 8
     dut.core_enable = 0
-    if hindex == 8 { dut.core_enable = 0xffff }
+    if hindex >= 8 { dut.core_enable = 0xffff }
     dut.host_req_valid = 0
-    if clock >= 8 and hindex < 8 and hwaiting == 0 { dut.host_req_valid = 1 }
-    dut.host_req_addr = 0x18100 + (2048 * (hindex % 3)) + (8 * hindex)
-    dut.host_req_data = finish(id=2 * hindex) | (finish(id=(2 * hindex) + 1) << 32)
-    dut.host_req_meta = (3 << 19) | (255 << 2)
+    if clock >= 8 and hindex < 120 and hwaiting == 0 { dut.host_req_valid = 1 }
+    // Host operations 0-7 write the eight Gemmini pointer pairs into accumulator row 60, away from the rows the mesh results fill from row 0. Operations 8-119 drive the TPU
+    // while the CPUs run: CTL, REQ, sixteen A/B/D row pushes, then STATUS, the eight result words, four accumulator rows.
+    mut haddr:U64 = 0x18f00 + (8 * hindex)
+    mut hdata:U64 = finish(id=2 * hindex) | (finish(id=(2 * hindex) + 1) << 32)
+    mut hop:U64 = 0
+    mut mi:U64 = 0
+    if hindex >= 8 { mi = hindex - 8 }
+    const mix:U64 = (mi * 2654435761) & 0xffffffff
+    if hindex >= 8 {
+      hdata = mix | (mix << 32)
+      haddr = 0x19000 + (8 * ((mi + 4) % 6))
+      if mi == 0 {
+        haddr = 0x19038
+        hdata = 1
+      }
+      if mi == 1 {
+        haddr = 0x19030
+        hdata = 0x4006
+      }
+      if mi >= 98 {
+        hop = 4
+        haddr = 0x19040
+      }
+      if mi >= 99 and mi < 107 { haddr = 0x19080 + (8 * (mi - 99)) }
+      if mi >= 107 and mi < 111 { haddr = 0x18000 + (64 * (mi - 107)) }
+    }
+    dut.host_req_addr = haddr
+    dut.host_req_data = hdata
+    dut.host_req_meta = (hop << 23) | (3 << 19) | (255 << 2)
     dut.host_rsp_ready = 1
     dut.mem_req_ready = 0
-    if left == 0 and hindex == 8 { dut.mem_req_ready = 1 }
+    if left == 0 and hindex >= 8 { dut.mem_req_ready = 1 }
     dut.mem_rsp_valid = 0
     if left != 0 { dut.mem_rsp_valid = 1 }
     mut width:U64 = 4
@@ -45,7 +73,12 @@ BODY = '''    dut.reset = clock < 8
     if dut.host_req_fire != 0 { hwaiting = 1 }
     if dut.host_rsp_fire != 0 {
       assert(bits(v=dut.seen_host_meta, lo=0, n=1) == 0)
-      assert(bits(v=dut.seen_host_meta, lo=35, n=5) == (16 + (hindex % 3)))
+      assert(bits(v=dut.seen_host_meta, lo=35, n=5) == 16)
+      assert(bits(v=dut.seen_host_meta, lo=23, n=4) == (hop / 4))
+      if hop == 4 { wrap mdata = ((mdata * 31) + bits(v=dut.seen_host_data, lo=0, n=32) + bits(v=dut.seen_host_data, lo=32, n=32)) & 0x7fffffffffffffff }
+      if hop == 4 and mi >= 107 and mi < 111 { wrap adata = ((adata * 31) + bits(v=dut.seen_host_data, lo=0, n=32) + bits(v=dut.seen_host_data, lo=32, n=32)) & 0x7fffffffffffffff }
+      wrap sum = ((sum * 31) + bits(v=dut.seen_host_data, lo=0, n=32)) & 0x7fffffffffffffff
+      wrap sum = ((sum * 31) + bits(v=dut.seen_host_data, lo=32, n=32)) & 0x7fffffffffffffff
       hwaiting = 0
       hindex += 1
       obs = 1
@@ -68,7 +101,7 @@ BODY = '''    dut.reset = clock < 8
       if channel == 0 {
         assert(saved_op == 4 or saved_op == 6)
         assert(saved_size <= 6)
-        assert(saved_addr < 0x18000 or saved_addr >= 0x19800)
+        assert(saved_addr < 0x18000 or saved_addr >= 0x1a000)
         left = 1
         // Size beats using the requester's bus width.
         if saved_id >= 12 { left = (1 << saved_size) / 8 }
@@ -95,18 +128,18 @@ BODY = '''    dut.reset = clock < 8
     }
     wrap sum = ((sum * 31) + obs) & 0x7fffffffffffffff
 '''
-END = '''  assert(hindex == 8)
+END = '''  assert(hindex == 120)
   assert(boot == 0xffff)
   assert(landed == 0x5009)
   assert(finished == 0x5009)
-  if cycles == 12000 { assert(sum == 2618389655497334948) }
-  if cycles == 36000 { assert(sum == 1865501407077597348) }
-  puts("mixed_soc: cycles={cycles} active={finished} sum={sum}")
+  // The accumulator rows the host reads back were written by the mesh results, not by the host: not all zero.
+  assert(adata != 0)
+  puts("mixed_soc: cycles={cycles} active={finished} sum={sum} mesh={mdata} acc={adata}")
 '''
 
 
 def cpp(src):
-    src = re.sub(r'puts\([^\n]*', 'std::printf("mixed_soc: cycles=%llu active=%llu sum=%llu\\\\n", (unsigned long long)cycles, (unsigned long long)finished, (unsigned long long)sum);', src)
+    src = re.sub(r'puts\([^\n]*', 'std::printf("mixed_soc: cycles=%llu active=%llu sum=%llu mesh=%llu acc=%llu\\\\n", (unsigned long long)cycles, (unsigned long long)finished, (unsigned long long)sum, (unsigned long long)mdata, (unsigned long long)adata);', src)
     src = re.sub(r'(mut|const) (\w+):U64', lambda m: ('const ' if m[1]=='const' else '')+'uint64_t '+m[2], src)
     src = re.sub(r'\b(?:id|v|lo|n|addr)=', '', src)  # named call arguments only (assignments use spaces)
     src = src.replace('v#[0..=63]', 'v').replace('meta#[0..=39]', '(meta & 0xffffffffffULL)')
@@ -161,7 +194,7 @@ def instruction_words():
     const imm{k}:U64 = land{k} - ent{k}
     mut word{k}:U64 = 0x13
     if pc{k} == ent{k} {{ word{k} = (((imm{k} >> 20) & 1) << 31) | (((imm{k} >> 1) & 1023) << 21) | (((imm{k} >> 11) & 1) << 20) | (((imm{k} >> 12) & 255) << 12) | 0x6f }}
-    const pointer{k}:U64 = 0x18100 + (2048 * ((saved_id / 2) % 3)) + (4 * saved_id)
+    const pointer{k}:U64 = 0x18f00 + (4 * saved_id)
     if pc{k} == land{k} {{ word{k} = ((pointer{k} + 0x800) & 0xfffff000) | 0xb7 }}
     if pc{k} == (land{k} + 4) {{ word{k} = ((pointer{k} & 4095) << 20) | 0xa103 }}
     if pc{k} == (land{k} + 8) {{ word{k} = 0x10067 }}
@@ -181,7 +214,7 @@ def main():
     body = inline_calls(body)
     end = END
     banner = '// Generated by mixed_soc/scripts/gen_sim.py. Regenerate both twins together.\n'
-    prp = banner + '// Four CPUs start together after host writes eight Gemmini pointer pairs.\nconst top = import("lg:MixedSocTop")\n\n'
+    prp = banner + '// Four CPUs start together after the host writes eight Gemmini pointer pairs; the host then drives the mesh of the 16x16 TPU.\nconst top = import("lg:MixedSocTop")\n\n'
     prp += '\ntest top.concurrent(cycles:U32 = 36000) {\n  mut dut = top\n' + STATE + '  tick cycles {\n' + body + '  }\n' + END + '}\n'
     (HERE/'sim/mixed_soc_tb.prp').write_text(prp)
     cxx = banner + '#include <cstdint>\n#include <cstdio>\n#include <cstdlib>\n#include <cstring>\n#ifdef NDEBUG\n#undef NDEBUG\n#endif\n#include <cassert>\n#include "VMixedSocTop.h"\n#include "verilated.h"\n'

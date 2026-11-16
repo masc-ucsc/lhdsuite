@@ -1,6 +1,6 @@
-"""Physical tile assignments used by both fp_plan and the compiled RTL."""
-COLS, ROWS = 5, 4
-TILES = tuple([f"Rocket{i}" for i in range(12)] + [f"BOOM{i}" for i in range(4)] + [f"Gemmini{i}" for i in range(3)] + ["Host"])
+"""Physical tile assignments used by both fp_plan and the compiled RTL: 12 Rocket, 4 BOOM, one 16x16 Gemmini and the host on a 6x3 mesh."""
+COLS, ROWS = 6, 3
+TILES = tuple([f"Rocket{i}" for i in range(12)] + [f"BOOM{i}" for i in range(4)] + [f"Gemmini{i}" for i in range(1)] + ["Host"])
 assert len(TILES) == COLS * ROWS
 GEMMINIS = tuple(i for i, name in enumerate(TILES) if name.startswith("Gemmini"))
 GEMMINI, HOST = GEMMINIS[0], TILES.index("Host")

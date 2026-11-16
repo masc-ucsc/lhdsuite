@@ -15,8 +15,11 @@ from generate_rtl import HERE, stage
 DEFAULT_CYCLES = 36000
 # Pin only after both independent simulators agree. Other lengths still run
 # all architectural assertions, and compare mode checks their entire signatures.
-ORACLES = {12000: 2618389655497334948, 36000: 1865501407077597348}
-LINE = re.compile(r'(?:^|puts:)mixed_soc: cycles=(\d+) active=(\d+) sum=(\d+)$', re.M)
+# The single-16x16-Gemmini glue is NOT pinned yet: Verilator was unavailable when it was written, so the C++ twin is unrun.
+# `lhd sim` printed sum=1691795345967856877 (12000 cycles) and sum=6893873800832869613 (36000), with mesh=8367253803954778821
+# and acc=264290809912224 for both. Pin them in ORACLES once `run_sim.py compare` shows Verilator printing the same line.
+ORACLES = {}
+LINE = re.compile(r'(?:^|puts:)mixed_soc: cycles=(\d+) active=(\d+) sum=(\d+) mesh=(\d+) acc=(\d+)$', re.M)
 
 
 def host_metrics(label, report):
@@ -64,7 +67,11 @@ def signature(output, cycles):
     matches = LINE.findall(output)
     if len(matches) != 1:
         raise SystemExit('missing or repeated mixed_soc data verdict')
-    count, active, checksum = map(int, matches[0])
+    count, active, checksum, mesh, acc = map(int, matches[0])
+    if mesh == 0:
+        raise SystemExit('the host read nothing back from the Gemmini mesh registers')
+    if acc == 0:
+        raise SystemExit('the accumulator rows the mesh results were written to read back as zero')
     if count != cycles or active != 0x5009:
         raise SystemExit('wrong cycle count or active CPU mask')
     if cycles in ORACLES and checksum != ORACLES[cycles]:

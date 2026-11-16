@@ -29,19 +29,47 @@ int main(int argc, char **argv) {
   uint64_t boot = 0;
   uint64_t landed = 0;
   uint64_t finished = 0;
+  uint64_t mdata = 0;
+  uint64_t adata = 0;
   uint64_t sum = 0;
   for(uint64_t cycle=0;cycle<cycles;++cycle) {
     dut->reset = cycle < 8;
     dut->core_enable = 0;
-    if (hindex == 8) { dut->core_enable = 0xffff; }
+    if (hindex >= 8) { dut->core_enable = 0xffff; }
     dut->host_req_valid = 0;
-    if (cycle >= 8 && hindex < 8 && hwaiting == 0) { dut->host_req_valid = 1; }
-    dut->host_req_addr = 0x18100 + (2048 * (hindex % 3)) + (8 * hindex);
-    dut->host_req_data = (0x11000 + (128 * (15 - (2 * hindex)))) | ((0x11000 + (128 * (15 - ((2 * hindex) + 1)))) << 32);
-    dut->host_req_meta = (3 << 19) | (255 << 2);
+    if (cycle >= 8 && hindex < 120 && hwaiting == 0) { dut->host_req_valid = 1; }
+    // Host operations 0-7 write the eight Gemmini pointer pairs into accumulator row 60, away from the rows the mesh results fill from row 0. Operations 8-119 drive the TPU
+    // while the CPUs run: CTL, REQ, sixteen A/B/D row pushes, then STATUS, the eight result words, four accumulator rows.
+    uint64_t haddr = 0x18f00 + (8 * hindex);
+    uint64_t hdata = (0x11000 + (128 * (15 - (2 * hindex)))) | ((0x11000 + (128 * (15 - ((2 * hindex) + 1)))) << 32);
+    uint64_t hop = 0;
+    uint64_t mi = 0;
+    if (hindex >= 8) { mi = hindex - 8; }
+    const uint64_t mix = (mi * 2654435761) & 0xffffffff;
+    if (hindex >= 8) {
+      hdata = mix | (mix << 32);
+      haddr = 0x19000 + (8 * ((mi + 4) % 6));
+      if (mi == 0) {
+        haddr = 0x19038;
+        hdata = 1;
+      }
+      if (mi == 1) {
+        haddr = 0x19030;
+        hdata = 0x4006;
+      }
+      if (mi >= 98) {
+        hop = 4;
+        haddr = 0x19040;
+      }
+      if (mi >= 99 && mi < 107) { haddr = 0x19080 + (8 * (mi - 99)); }
+      if (mi >= 107 && mi < 111) { haddr = 0x18000 + (64 * (mi - 107)); }
+    }
+    dut->host_req_addr = haddr;
+    dut->host_req_data = hdata;
+    dut->host_req_meta = (hop << 23) | (3 << 19) | (255 << 2);
     dut->host_rsp_ready = 1;
     dut->mem_req_ready = 0;
-    if (left == 0 && hindex == 8) { dut->mem_req_ready = 1; }
+    if (left == 0 && hindex >= 8) { dut->mem_req_ready = 1; }
     dut->mem_rsp_valid = 0;
     if (left != 0) { dut->mem_rsp_valid = 1; }
     uint64_t width = 4;
@@ -54,7 +82,7 @@ int main(int argc, char **argv) {
     const uint64_t imm0 = land0 - ent0;
     uint64_t word0 = 0x13;
     if (pc0 == ent0) { word0 = (((imm0 >> 20) & 1) << 31) | (((imm0 >> 1) & 1023) << 21) | (((imm0 >> 11) & 1) << 20) | (((imm0 >> 12) & 255) << 12) | 0x6f; }
-    const uint64_t pointer0 = 0x18100 + (2048 * ((saved_id / 2) % 3)) + (4 * saved_id);
+    const uint64_t pointer0 = 0x18f00 + (4 * saved_id);
     if (pc0 == land0) { word0 = ((pointer0 + 0x800) & 0xfffff000) | 0xb7; }
     if (pc0 == (land0 + 4)) { word0 = ((pointer0 & 4095) << 20) | 0xa103; }
     if (pc0 == (land0 + 8)) { word0 = 0x10067; }
@@ -72,7 +100,7 @@ int main(int argc, char **argv) {
     const uint64_t imm1 = land1 - ent1;
     uint64_t word1 = 0x13;
     if (pc1 == ent1) { word1 = (((imm1 >> 20) & 1) << 31) | (((imm1 >> 1) & 1023) << 21) | (((imm1 >> 11) & 1) << 20) | (((imm1 >> 12) & 255) << 12) | 0x6f; }
-    const uint64_t pointer1 = 0x18100 + (2048 * ((saved_id / 2) % 3)) + (4 * saved_id);
+    const uint64_t pointer1 = 0x18f00 + (4 * saved_id);
     if (pc1 == land1) { word1 = ((pointer1 + 0x800) & 0xfffff000) | 0xb7; }
     if (pc1 == (land1 + 4)) { word1 = ((pointer1 & 4095) << 20) | 0xa103; }
     if (pc1 == (land1 + 8)) { word1 = 0x10067; }
@@ -94,7 +122,12 @@ int main(int argc, char **argv) {
     if (dut->host_req_fire != 0) { hwaiting = 1; }
     if (dut->host_rsp_fire != 0) {
       assert((((dut->seen_host_meta) >> 0) & 1) == 0);
-      assert((((dut->seen_host_meta) >> 35) & 31) == (16 + (hindex % 3)));
+      assert((((dut->seen_host_meta) >> 35) & 31) == 16);
+      assert((((dut->seen_host_meta) >> 23) & 15) == (hop / 4));
+      if (hop == 4) { mdata = ((mdata * 31) + (((dut->seen_host_data) >> 0) & 4294967295) + (((dut->seen_host_data) >> 32) & 4294967295)) & 0x7fffffffffffffff; }
+      if (hop == 4 && mi >= 107 && mi < 111) { adata = ((adata * 31) + (((dut->seen_host_data) >> 0) & 4294967295) + (((dut->seen_host_data) >> 32) & 4294967295)) & 0x7fffffffffffffff; }
+      sum = ((sum * 31) + (((dut->seen_host_data) >> 0) & 4294967295)) & 0x7fffffffffffffff;
+      sum = ((sum * 31) + (((dut->seen_host_data) >> 32) & 4294967295)) & 0x7fffffffffffffff;
       hwaiting = 0;
       hindex += 1;
       obs = 1;
@@ -117,7 +150,7 @@ int main(int argc, char **argv) {
       if (channel == 0) {
         assert(saved_op == 4 || saved_op == 6);
         assert(saved_size <= 6);
-        assert(saved_addr < 0x18000 || saved_addr >= 0x19800);
+        assert(saved_addr < 0x18000 || saved_addr >= 0x1a000);
         left = 1;
         // Size beats using the requester's bus width.
         if (saved_id >= 12) { left = (1 << saved_size) / 8; }
@@ -144,12 +177,12 @@ int main(int argc, char **argv) {
     }
     sum = ((sum * 31) + obs) & 0x7fffffffffffffff;
   }
-  assert(hindex == 8);
+  assert(hindex == 120);
   assert(boot == 0xffff);
   assert(landed == 0x5009);
   assert(finished == 0x5009);
-  if (cycles == 12000) { assert(sum == 2618389655497334948); }
-  if (cycles == 36000) { assert(sum == 1865501407077597348); }
-  std::printf("mixed_soc: cycles=%llu active=%llu sum=%llu\n", (unsigned long long)cycles, (unsigned long long)finished, (unsigned long long)sum);
+  // The accumulator rows the host reads back were written by the mesh results, not by the host: not all zero.
+  assert(adata != 0);
+  std::printf("mixed_soc: cycles=%llu active=%llu sum=%llu mesh=%llu acc=%llu\n", (unsigned long long)cycles, (unsigned long long)finished, (unsigned long long)sum, (unsigned long long)mdata, (unsigned long long)adata);
   dut->final(); delete dut;
 }

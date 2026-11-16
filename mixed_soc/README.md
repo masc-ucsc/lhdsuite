@@ -1,10 +1,14 @@
 # Mixed Rocket / BOOM / Gemmini SoC
 
-The design instantiates **12 Rocket tiles, four BOOM tiles, and three 8×8 Gemmini
-accelerators** on a shared **5×4 mesh**, with one external gateway. The checked-in
+The design instantiates **12 Rocket tiles, four BOOM tiles, and one full 16×16 Gemmini
+accelerator** on a shared **6×3 mesh**, with one external gateway. The checked-in
 [Pyrope glue](pyrope/MixedSocTop.prp) imports the existing
-[Rocket](../rocket/pyrope/RocketTile.prp), [BOOM](../boom/pyrope/BoomTile.prp), and
-[Gemmini](../gemmini/Mesh8/pyrope/GemminiTPU.prp) trees. There are no copied CPU
+[Rocket](../rocket/pyrope2/RocketTile.prp), [BOOM](../boom/pyrope2/BoomTile.prp), and
+[Gemmini](../gemmini/Mesh16/pyrope2/GemminiTPU.prp) trees: the maintained `pyrope2/`
+version of each core, which is the source for `lhd sim`, `lhd synth` and the floorplan.
+The cores' original Verilog (`rocket/verilog`, `boom/verilog`, `gemmini/Mesh16/verilog`)
+is only staged for the Verilator comparison. The checksums of the `pyrope/` and
+`pyrope2/` closures are identical (cycle-exact; checked at 12,000 cycles). There are no copied CPU
 or accelerator implementations in this package. Custom adapters bridge their
 TileLink ports and Gemmini accumulator interfaces to the shared request/response
 network. All instances remain in the design when only a subset is enabled.
@@ -30,29 +34,40 @@ compiler parallelism. The targets run exclusively to keep benchmark timing usefu
 
 The two [drivers](sim/mixed_soc_tb.prp) share a generated schedule
 ([C++ twin](sim/mixed_soc_tb_verilator.cpp), [generator](scripts/gen_sim.py)). The host
-first writes eight pairs of distinct branch destinations into the three real
-Gemmini accumulator memories through the mesh. Then **Rocket0, Rocket3, BOOM0,
+first writes eight pairs of distinct branch destinations into row 60 of the real
+Gemmini accumulator memory through the mesh. Then **Rocket0, Rocket3, BOOM0,
 and BOOM2 perform the connectivity test** (working mask `0x5009`). All 16 CPUs
 leave reset together after the preload (`core_enable=0xffff`); the other 12
 execute `park: wfi; j park` with interrupts held low. They remain ordinary
 clocked instances and are not held in reset.
-Each active CPU fetches its own tiny program, loads its pointer from Gemmini0
-or Gemmini1, and branches to its unique destination. Assertions require all four
+Each active CPU fetches its own tiny program, loads its pointer from the Gemmini
+accumulator, and branches to its unique destination. Assertions require all four
 landing/destination fetches, require reset-vector fetches from all 16 CPUs, and catch
 incorrect packet origins, routing, and addresses. The fixed run continues for
-**36,000 cycles**, including the CPUs' final self loops. Gemmini's MAC array is
-instantiated but this test exercises its accumulator, not matrix multiplication.
+**36,000 cycles**, including the CPUs' final self loops. While the CPUs run, the host
+also drives the **16×16 systolic mesh** through the window's registers (below): it
+enables automatic write-back, pushes a 16-row request with sixteen A/B/D row pushes,
+then reads STATUS, the eight words of a mesh result and four accumulator rows the mesh
+filled. The mesh is therefore live logic in both simulation and synthesis: the earlier
+glue tied the mesh inputs to zero, so synthesis removed the whole mesh. The drivers
+fold the host's reads of the mesh into `mesh=` and the accumulator rows into `acc=`;
+both must be nonzero. The mesh and accumulator results depend on the TPU computing,
+so a dropped mesh, a stale read path or a lost write-back fails the run.
 
 Both drivers fold observed transfers on every cycle with
-`sum = (sum * 31 + obs) & (2^63 - 1)` and require the independently matched
-checksum **1865501407077597348**. Zero-filled unknown/uninitialized state matches
+`sum = (sum * 31 + obs) & (2^63 - 1)`. **The checksum is not pinned for this glue yet:** the
+single-Gemmini rewrite was done on a host without Verilator, so the C++ twin has not run.
+`lhd sim` prints `sum=1691795345967856877` at 12,000 cycles and `sum=6893873800832869613` at
+36,000, both with `mesh=8367253803954778821 acc=264290809912224`; `ORACLES` in
+[run_sim.py](scripts/run_sim.py) stays empty until `run_sim.py compare` shows Verilator
+printing the same line. Zero-filled unknown/uninitialized state matches
 Verilator's two-state power-on behavior. Registered transfer observations at the
 flat boundary let both drivers read below `step` without confusing post-edge
 ready/valid with the beat just consumed.
 
-Measured on the development host: about **2.5 s for LiveHD** and **7.2 s for
-Verilator**, excluding generation and host compilation. Both execute the same
-36,000 cycles. `CMD` lines record commands; `METRIC sim_setup_ms`, `sim_cc_ms`,
+Measured on the development host: about **2.4 s for LiveHD** (36,000 cycles, 15k
+cycles/s with the live 16×16 mesh; Verilator not re-measured), excluding generation
+and host compilation. `CMD` lines record commands; `METRIC sim_setup_ms`, `sim_cc_ms`,
 `sim_exec_ms`, `verilator_cc_ms`, and `verilator_exec_ms` separate the costs.
 To retain logs, reuse a build, compare another length, or run both directly:
 
@@ -62,7 +77,7 @@ python3 mixed_soc/scripts/run_sim.py compare --lhd ../livehd/bazel-bin/lhd/lhd \
 ```
 
 `--cycles N` changes both simulators together; default-count runs require the
-pinned checksum, and compare mode requires equality at every length. This runner
+pinned checksum (none yet, see above), and compare mode requires equality at every length. This runner
 keeps imported package directories intact instead of flattening them into a
 standalone core's scratch tree; the `//bench:` targets use this runner and keep the usual benchmark names.
 
@@ -103,17 +118,27 @@ python3 mixed_soc/scripts/simulate.py system --work /tmp/mixed-connectivity
 bazel test //mixed_soc:topology_test //mixed_soc:mesh_sim //mixed_soc:system_sim
 ```
 
-These older, untimed Verilator tests cover all 400 ordered endpoint pairs and
-20-way gateway contention, and all 16 CPUs branching through Gemmini pointers.
-They also check accumulator lanes, byte masks, response stalls, and denied host
-accesses. Their explicit targets need Verilator installed.
+These older, untimed Verilator tests cover all 324 ordered endpoint pairs and
+18-way gateway contention, and all 16 CPUs branching through Gemmini pointers.
+They also check the eight accumulator lanes, byte masks, response stalls, CTL
+read-back, read-only and write-only registers, and denied host accesses. Their explicit targets need Verilator installed.
 
 The gateway exposes `mem_req`/`mem_rsp` for external memory and
 `host_req`/`host_rsp` for MMIO. The network tags packets with the physical tile
-ID; the vendored CPUs' one-bit hart ID cannot identify all 16 copies. Gemmini0,
-Gemmini1, and Gemmini2 occupy successive 2 KiB accumulator windows at `0x18000`,
-`0x18800`, and `0x19000`. Each maps a real 64×256-bit memory with 64-bit lane
-selection and byte enables. Other CPU memory traffic goes to the gateway.
+ID; the vendored CPUs' one-bit hart ID cannot identify all 16 copies. The single
+Gemmini (tile 16) owns the 8 KiB window `0x18000..0x19fff` ([acc.sv](rtl/acc.sv)):
+
+| Offset | Contents |
+| --- | --- |
+| `0x0000..0x0fff` | the real 64×512-bit accumulator, 64 rows of 64 bytes, eight 64-bit lanes per row, byte-masked puts and gets |
+| `0x1000..0x1028` | A, B, D staging: the put of the high word pushes `{hi, lo}` (16 int8 or int32 lanes) to the mesh port |
+| `0x1030` REQ | put: mesh request (tag, dataflow, propagate, shift, transposes, total rows, flush) |
+| `0x1038` CTL | put/get: `[0]` write every mesh result into the accumulator at the next row, `[1]` accumulate, `[2]` restart the row counter |
+| `0x1040` STATUS | get: result waiting, its tag, rows and last flag, a lost-result flag, the next automatic row |
+| `0x1080..0x10b8` | the waiting mesh result, eight 64-bit words; reading the last frees it |
+
+Automatic write-back lands one cycle after the result, from the held copy, so the
+TPU's inputs never depend on its outputs. Other CPU memory traffic goes to the gateway.
 The request and response lanes each admit one packet at a time with registered
 XY hops and round-robin injection. This is a connectivity fixture, not a
 coherent shared-memory manager.
@@ -124,11 +149,12 @@ coherent shared-memory manager.
 | --- | ---: | ---: | ---: | ---: |
 | Rocket | 12 | 5,000,000 | 160 | 6 |
 | BOOM | 4 | 18,000,000 | 600 | 16 |
-| Gemmini PE | 192 (three accelerators) | 1,000,000 | 32 | 1 |
-| Fabric router | 20 | 12,000 | 1 | 0 |
+| Gemmini PE | 256 (one 16×16 accelerator) | 1,000,000 | 32 | 1 |
+| Fabric router | 18 | 12,000 | 1 | 0 |
 
-Total: 324,240,000 modeled logic cells, 10,484 colors, 328 SRAMs. Populations
-are capacity-test parameters. Each SRAM is one physical object. The generator
+Total: 388,216,000 modeled logic cells, 12,530 colors, 392 SRAMs. Populations
+are capacity-test parameters (the real 16×16 Gemmini is about 6M gates plus SRAMs; the
+modeled 1M cells per PE deliberately overstates it). Each SRAM is one physical object. The generator
 allocates one object per color or SRAM, records crossing nets, and gives the
 gateway four named terminals on the block's right edge. The terminal positions
 are in DBU. The gateway's home chunk can sit inside the floorplan: its boundary
@@ -151,7 +177,7 @@ It also reports crossing-net count and the sum of Manhattan distances between
 connected chunk centers, a placement-quality proxy before routing. Per-chunk
 estimated bytes use LiveHD's cold downstream model and do not certify
 that actual detailed placement fits that budget. No downstream cell placement, timing analysis or routing
-of the modeled 324M-cell workload is run.
+of the modeled 388M-cell workload is run.
 
 For just the portable input, run `python3 mixed_soc/scripts/floorplan.py --graph soc.json`.
 `bazel test //mixed_soc:topology_test` checks populations and reachability without

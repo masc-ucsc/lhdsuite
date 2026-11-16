@@ -7,6 +7,10 @@ from pathlib import Path
 from topology import GEMMINIS, HOST, HOST_PINS, TILES, links
 
 
+PE_COLUMNS = 16  # the 16x16 systolic mesh of gemmini/Mesh16
+PES = PE_COLUMNS * PE_COLUMNS
+
+
 def machine():
     objects, nets = [], []
 
@@ -39,17 +43,17 @@ def machine():
             link(nodes[-1], routers[tile])
     for acc in GEMMINIS:
         pe = []
-        for i in range(64):
+        for i in range(PES):
             inst = f"soc.{TILES[acc]}.pe{i}"
             nodes = [obj(inst, "GemminiPE", f"c{j:02}", 31250) for j in range(32)]
             for a, b in zip(nodes, nodes[1:]):
                 link(a, b)
             link(nodes[-1], obj(inst, "GemminiPE", "scratch", 1, True))
             pe.append(nodes[0])
-            if i % 8:
+            if i % PE_COLUMNS:
                 link(pe[i - 1], pe[i])
-            if i >= 8:
-                link(pe[i - 8], pe[i])
+            if i >= PE_COLUMNS:
+                link(pe[i - PE_COLUMNS], pe[i])
         link(routers[acc], pe[0])
         link(pe[-1], routers[acc])
     return [{"class": "livehd.placement.color_graph", "design": "mixed_soc", "id": "top", "schema_version": 1,
@@ -71,7 +75,7 @@ def validate_graph(graph):
         seen.update(neighbors)
         pending.extend(neighbors)
     assert len(seen) == len(objects), "disconnected shared machine"
-    for module, copies in (("Rocket", 12), ("BOOM", 4), ("GemminiPE", 64 * len(GEMMINIS)), ("mesh_router", len(TILES))):
+    for module, copies in (("Rocket", 12), ("BOOM", 4), ("GemminiPE", PES * len(GEMMINIS)), ("mesh_router", len(TILES))):
         assert len({o["instance"] for o in objects if o["module"] == module}) == copies
     # All 16 CPUs and all accelerators attach directly to the same fabric.
     attachments = {peer.split(".")[1] for o in objects if o["module"] == "mesh_router"
@@ -81,8 +85,8 @@ def validate_graph(graph):
     for tile, name in enumerate(TILES):
         peers = {p.split(".")[1] for p in adjacency[f"soc.noc.r{tile}.switch"] if not p.startswith("soc.noc.")}
         assert peers == (set() if tile == HOST else {name}), (tile, peers)
-    assert sum(o["cells"] for o in objects if not o["macro"]) == 132000000 + 64000000 * len(GEMMINIS) + 12000 * len(TILES)
-    assert sum(o["macro"] for o in objects) == 136 + 64 * len(GEMMINIS)
+    assert sum(o["cells"] for o in objects if not o["macro"]) == 132000000 + 1000000 * PES * len(GEMMINIS) + 12000 * len(TILES)
+    assert sum(o["macro"] for o in objects) == 136 + PES * len(GEMMINIS)
 
 
 def validate_plan(graph, plan, budget_bytes):

@@ -12,9 +12,9 @@ module mixed_soc import mixed_packet::*; import mixed_layout::*; (
   mixed_mesh responses(.clock,.reset,.txv(sv),.txr(sr),.tx(s),.rxv(sov),.rxr(sor),.rx(so));
   for(genvar i=0;i<N;i++) begin: tile
     if(i==HOST) begin
-      // The host initiator addresses the accumulator window; bad accesses
+      // The host initiator addresses the Gemmini window; bad accesses
       // get a denied response. CPU reply destinations are explicitly tagged.
-      always_comb begin q[i]=host_req; q[i].target=acc_address(host_req.addr) ? 5'(ACC + ((host_req.addr-ACC_BASE)>>11)) : 5'(ACC); end
+      always_comb begin q[i]=host_req; q[i].target=5'(ACC); end
       assign qv[i]=host_req_valid; assign host_req_ready=qr[i];
       assign host_rsp_valid=sov[i]; assign host_rsp=so[i]; assign sor[i]=host_rsp_ready;
       assign mem_req_valid=qov[i]; assign mem_req=qo[i]; assign qor[i]=mem_req_ready;

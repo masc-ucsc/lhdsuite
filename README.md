@@ -45,7 +45,7 @@ The tests in verif, should run with both `pyrope/` and `pyrope2/`
 | `bitcoin` | LogikBench SHA256d proof-of-work miner (16 lanes of secworks `sha256_core`) under the parameter-pinning `bitcoin_top` wrapper; `pyrope/` is a hand-cleaned loop-based translation. |
 | `ibex` | lowRISC Ibex (RV32IMC) under the parameter-pinning `ibex_suite_top` wrapper. |
 | `matched_filter` | Configurable streaming matched filter, 64 taps by default. |
-| [`mixed_soc`](mixed_soc/README.md) | Shared SoC: 12 Rockets, four BOOMs and three 8×8 Gemmini accelerators on a 5×4 mesh. Imported Pyrope designs with custom glue and matched Pyrope/Verilator concurrent-core simulation (36,000 cycles; other CPUs park with WFI); also a 324M-cell modeled floorplan. |
+| [`mixed_soc`](mixed_soc/README.md) | Shared SoC: 12 Rockets, four BOOMs and one full 16×16 Gemmini on a 6×3 mesh. Imported Pyrope designs with custom glue and matched Pyrope/Verilator concurrent-core simulation (36,000 cycles; other CPUs park with WFI); also a 388M-cell modeled floorplan. |
 | `xs_*` | XiangShan blocks sharing `xiangshan/Backend/`: ALU, ROB, rename table, divider, execution block, and backend. |
 
 CVA6's local `verilog/` contains only a cache tag-comparator cone. Its

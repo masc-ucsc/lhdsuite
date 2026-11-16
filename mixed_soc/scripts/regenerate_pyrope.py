@@ -29,9 +29,10 @@ def main():
                 or path.stem in ('MixedSocTop', 'GemminiSimTop')):
             continue
         source = path.read_text()
-        for name, family in [('RocketTile', 'rocket'), ('BoomTile', 'boom'), ('GemminiTPU', 'gemmini/Mesh8')]:
+        # The imported cores come from their maintained pyrope2/ trees (the same top modules and ports as pyrope/).
+        for name, family in [('RocketTile', 'rocket'), ('BoomTile', 'boom'), ('GemminiTPU', 'gemmini/Mesh16')]:
             source = source.replace(f'import("{name}.{name}")',
-                                    f'import("../../{family}/pyrope/{name}.{name}")')
+                                    f'import("../../{family}/pyrope2/{name}.{name}")')
         (destination/path.name).write_text(source)
     (destination/'mixed_mesh.prp').write_text(generate())
 

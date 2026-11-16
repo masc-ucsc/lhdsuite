@@ -18,7 +18,7 @@ sh_test(
         args = [mode],
         data = ["scripts/generate_rtl.py", "scripts/simulate.py", "scripts/topology.py", "sim/" + mode + "_tb.sv"] +
                glob(["rtl/*.sv"]) +
-               (["//rocket:verilog", "//boom:verilog", "//gemmini/Mesh8:verilog"] if mode == "system" else []),
+               (["//rocket:verilog", "//boom:verilog", "//gemmini/Mesh16:verilog"] if mode == "system" else []),
         tags = ["manual", "requires-verilator"],
     )
     for mode in ["mesh", "system"]
@@ -28,7 +28,7 @@ sh_test(
 # tree would break the explicit cross-package imports and duplicate the CPUs.
 filegroup(
     name = "pyrope",
-    srcs = glob(["pyrope/*.prp"]) + ["//rocket:pyrope", "//boom:pyrope", "//gemmini/Mesh8:pyrope"],
+    srcs = glob(["pyrope/*.prp"]) + ["//rocket:pyrope2", "//boom:pyrope2", "//gemmini/Mesh16:pyrope2"],
     visibility = ["//visibility:public"],
 )
 filegroup(
@@ -38,7 +38,7 @@ filegroup(
 )
 filegroup(
     name = "verilog",
-    srcs = glob(["rtl/*.sv"]) + ["//rocket:verilog", "//boom:verilog", "//gemmini/Mesh8:verilog"],
+    srcs = glob(["rtl/*.sv"]) + ["//rocket:verilog", "//boom:verilog", "//gemmini/Mesh16:verilog"],
     visibility = ["//visibility:public"],
 )
 filegroup(

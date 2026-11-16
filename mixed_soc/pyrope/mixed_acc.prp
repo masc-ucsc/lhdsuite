@@ -2,12 +2,31 @@ const GemminiSimTop = import("GemminiSimTop.GemminiSimTop")
 const mixed_packet = import("mixed_packet")
 
 pub mod mixed_acc::[timecheck=false](`clock`:Clock, `reset`:U1, rxv:U1, rx:(origin:U5, target:U5, ch:U3, opcode:U4, size:U4, param:U3, tl_source:U3, sink:U3, addr:U32, mask:U8, data:U64, corrupt:U1, denied:U1), txr:U1) -> (rxr:U1@[], txv:U1@[], tx:(origin:U5, target:U5, ch:U3, opcode:U4, size:U4, param:U3, tl_source:U3, sink:U3, addr:U32, mask:U8, data:U64, corrupt:U1, denied:U1)@[]) {
-  mut _b2i_15 = 0
-  mut _mux_14:S32 = 0
-  mut _mux_16:U2 = 0
+  mut _b2i_34 = 0
+  mut _b2i_40 = 0
+  mut _b2i_42 = 0
+  mut _mux_35:U1 = 0
+  mut _mux_39:S32 = 0
+  mut _mux_41:U2 = 0
   reg state:U2:[initial=0, reset_pin=`reset`, async=false]
   reg answer:U136
-  mut rd_data:U256 = 0sb?
+  reg held:[8]U64:[ordering="old", __store_clock_pin=`clock`, __store_posclk=true]
+  reg a_lo:U64
+  reg b_lo:U64
+  reg d_lo:U64
+  reg ctl:U2:[initial=0, reset_pin=`reset`, async=false]
+  reg auto_pend:U1:[initial=0, reset_pin=`reset`, async=false]
+  reg auto_row:U6:[initial=0, reset_pin=`reset`, async=false]
+  reg full:U1:[initial=0, reset_pin=`reset`, async=false]
+  reg full_tag:U1
+  reg full_last:U1
+  reg full_lost:U1:[initial=0, reset_pin=`reset`, async=false]
+  reg full_rows:U5
+  mut resp_word:U512 = 0sb?
+  mut wr_word:U512 = 0sb?
+  mut rd_data:U512 = 0sb?
+  mut target_ready:U1 = 0
+  mut reg_rdata:U64 = 0
   wire `tx__bpr.origin`:U5 = nil
   wire `tx__bpr.target`:U5 = nil
   wire `tx__bpr.ch`:U3 = nil
@@ -21,12 +40,23 @@ pub mod mixed_acc::[timecheck=false](`clock`:Clock, `reset`:U1, rxv:U1, rx:(orig
   wire `tx__bpr.data`:U64 = nil
   wire `tx__bpr.corrupt`:U1 = nil
   wire `tx__bpr.denied`:U1 = nil
+  wire resp_word__wnet:U512 = nil
+  target_ready = 0ub?
+  reg_rdata = 0sb?
+  const offset__w1 = (rx.addr - mixed_packet.ACC_BASE)#[0..<32]
+  const in_acc__w1 = U1(offset__w1 < 0x1000)
+  const sel__w1 = offset__w1#[3..<8]
   const get__w1 = U1(rx.opcode == 4)
   const put__w1 = U1((rx.opcode == 0) or (rx.opcode == 1))
-  const _addr_3__w1 = rx.addr
-  mut _b2i_7 = if (rx.ch == mixed_packet.A) and (U1((_addr_3__w1 >= mixed_packet.ACC_BASE) and (_addr_3__w1 < (mixed_packet.ACC_BASE + 0x1800)#[0..<32])) != 0) and (rx.corrupt == 0) and (rx.size <= 3) and ((rx.addr & ((1 << rx.size)#[0..<32] - 1)#[0..<32])#[0..<32] == 0) and ((get__w1 != 0) or (put__w1 != 0)) { 1 } else { 0 }
-  const cmd_ok__w1 = _b2i_7
-  mut _b2i_8 = if state == 2 { 1 } else { 0 }
+  mut _mux_7:U1 = if put__w1 != 0 { U1(sel__w1 < 8) & 1 } else { U1((sel__w1 == 7) or (sel__w1 == 8) or ((sel__w1 >= 16) and (sel__w1 < 24))) & 1 }
+  mut _b2i_8 = if (U1(offset__w1#[8..<32] == 16) != 0) and (rx.size == 3) and (_mux_7 != 0) { 1 } else { 0 }
+  const _addr_9__w1 = rx.addr
+  mut _b2i_13 = if (rx.ch == mixed_packet.A) and (U1((_addr_9__w1 >= mixed_packet.ACC_BASE) and (_addr_9__w1 < (mixed_packet.ACC_BASE + mixed_packet.ACC_SIZE))) != 0) and (rx.corrupt == 0) and (rx.size <= 3) and ((rx.addr & ((1 << rx.size)#[0..<32] - 1)#[0..<32])#[0..<32] == 0) and ((get__w1 != 0) or (put__w1 != 0)) and ((in_acc__w1 != 0) or (_b2i_8 != 0)) { 1 } else { 0 }
+  const cmd_ok__w1 = _b2i_13
+  const auto_wr__w1 = auto_pend
+  mut _b2i_14 = if (state == 0) and (rxv != 0) and (cmd_ok__w1 != 0) { 1 } else { 0 }
+  const cmd_req__w1 = _b2i_14
+  mut _b2i_15 = if state == 2 { 1 } else { 0 }
   mut `tx__bpo.origin` = answer#[0x83..<0x88]
   mut `tx__bpo.target` = answer#[0x7e..<0x83]
   mut `tx__bpo.ch` = answer#[0x7b..<0x7e]
@@ -40,20 +70,90 @@ pub mod mixed_acc::[timecheck=false](`clock`:Clock, `reset`:U1, rxv:U1, rx:(orig
   mut `tx__bpo.data` = answer#[2..<0x42]
   mut `tx__bpo.corrupt` = answer#[1..<2]
   mut `tx__bpo.denied` = answer & 1
-  mut _b2i_9 = if (state == 0) and (rxv != 0) and (cmd_ok__w1 != 0) and (put__w1 != 0) { 1 } else { 0 }
-  mut _b2i_10 = if (state == 0) and (rxv != 0) and (cmd_ok__w1 != 0) and (get__w1 != 0) { 1 } else { 0 }
-  mut _b2i_11 = if state == 1 { 1 } else { 0 }
-  mut gemmini = GemminiSimTop::[name=gemmini](`clock` = `clock`, `reset` = `reset`, a_valid = 0, a_bits = 0, b_valid = 0, b_bits = 0, d_valid = 0, d_bits = 0, req_valid = 0, req_tag_id = 0, req_dataflow = 0, req_propagate = 0, req_shift = 0, req_a_transpose = 0, req_bd_transpose = 0, req_total_rows = 0, req_flush = 0, wr_valid = _b2i_9, wr_addr = rx.addr#[5..<11], wr_data_0 = rx.data, wr_data_1 = rx.data, wr_data_2 = rx.data, wr_data_3 = rx.data, wr_acc = 0, wr_mask = (rx.mask#[0..<8] << (8 * rx.addr#[3..<5]))#[0..<32], rd_valid = _b2i_10, rd_scale = 0, rd_addr = rx.addr#[5..<11], rd_act = 0, rd_full = 1, rd_fromDMA = 1, rd_resp_ready = _b2i_11)
-  rd_data#[0xc0..<0x100] = gemmini.rd_data_0
-  mut rd_data__w1:U256 = rd_data
-  rd_data__w1#[0x80..<0xc0] = gemmini.rd_data_1
-  mut rd_data__w2:U256 = rd_data__w1
-  rd_data__w2#[0x40..<0x80] = gemmini.rd_data_2
-  mut rd_data__w3:U256 = rd_data__w2
-  rd_data__w3#[0..<0x40] = gemmini.rd_data_3
-  mut _mux_12:U1 = if get__w1 != 0 { gemmini.rd_req_ready & 1 } else { gemmini.wr_ready & 1 }
-  mut _b2i_13 = if (state == 0) and ((cmd_ok__w1 == 0) or (_mux_12 != 0)) { 1 } else { 0 }
-  const rxr__w1 = _b2i_13
+  reg_rdata = 0
+  if sel__w1 == 7 {
+    reg_rdata = ctl#[0..<2]
+  } else {
+    reg_rdata = if sel__w1 == 8 { (auto_row#[0..<6] << 9) | ((full_lost & 1) << 8) | ((full_last & 1) << 7) | (full_rows#[0..<5] << 2) | ((full_tag & 1) << 1) | (full & 1) } else { held[sel__w1#[0..<3]] }
+  }
+  mut _mux_16:U64 = if auto_wr__w1 != 0 { held[0] } else { rx.data#[0..<0x40] }
+  wr_word#[0x1c0..<0x200] = _mux_16
+  mut _mux_17:U64 = if auto_wr__w1 != 0 { held[1] } else { rx.data#[0..<0x40] }
+  mut wr_word__w1:U512 = wr_word
+  wr_word__w1#[0x180..<0x1c0] = _mux_17
+  mut _mux_18:U64 = if auto_wr__w1 != 0 { held[2] } else { rx.data#[0..<0x40] }
+  mut wr_word__w2:U512 = wr_word__w1
+  wr_word__w2#[0x140..<0x180] = _mux_18
+  mut _mux_19:U64 = if auto_wr__w1 != 0 { held[3] } else { rx.data#[0..<0x40] }
+  mut wr_word__w3:U512 = wr_word__w2
+  wr_word__w3#[0x100..<0x140] = _mux_19
+  mut _mux_20:U64 = if auto_wr__w1 != 0 { held[4] } else { rx.data#[0..<0x40] }
+  mut wr_word__w4:U512 = wr_word__w3
+  wr_word__w4#[0xc0..<0x100] = _mux_20
+  mut _mux_21:U64 = if auto_wr__w1 != 0 { held[5] } else { rx.data#[0..<0x40] }
+  mut wr_word__w5:U512 = wr_word__w4
+  wr_word__w5#[0x80..<0xc0] = _mux_21
+  mut _mux_22:U64 = if auto_wr__w1 != 0 { held[6] } else { rx.data#[0..<0x40] }
+  mut wr_word__w6:U512 = wr_word__w5
+  wr_word__w6#[0x40..<0x80] = _mux_22
+  mut _mux_23:U64 = if auto_wr__w1 != 0 { held[7] } else { rx.data#[0..<0x40] }
+  mut wr_word__w7:U512 = wr_word__w6
+  wr_word__w7#[0..<0x40] = _mux_23
+  mut _b2i_24 = if (cmd_req__w1 != 0) and (put__w1 != 0) and (in_acc__w1 == 0) and (sel__w1 == 1) { 1 } else { 0 }
+  mut _b2i_25 = if (cmd_req__w1 != 0) and (put__w1 != 0) and (in_acc__w1 == 0) and (sel__w1 == 3) { 1 } else { 0 }
+  mut _b2i_26 = if (cmd_req__w1 != 0) and (put__w1 != 0) and (in_acc__w1 == 0) and (sel__w1 == 5) { 1 } else { 0 }
+  mut _b2i_27 = if (cmd_req__w1 != 0) and (put__w1 != 0) and (in_acc__w1 == 0) and (sel__w1 == 6) { 1 } else { 0 }
+  mut _b2i_28 = if (auto_wr__w1 != 0) or ((cmd_req__w1 != 0) and (put__w1 != 0) and (in_acc__w1 != 0)) { 1 } else { 0 }
+  mut _mux_29:U6 = if auto_wr__w1 != 0 { auto_row#[0..<6] } else { rx.addr#[6..<12] }
+  mut _b2i_30 = if (auto_wr__w1 != 0) and (ctl#[1..<2] != 0) { 1 } else { 0 }
+  mut _mux_31:U64 = if auto_wr__w1 != 0 { 0xffffffffffffffff } else { (rx.mask << (8 * rx.addr#[3..<6]))#[0..<0x40] }
+  mut _b2i_32 = if (cmd_req__w1 != 0) and (get__w1 != 0) and (in_acc__w1 != 0) { 1 } else { 0 }
+  mut _b2i_33 = if state == 1 { 1 } else { 0 }
+  mut gemmini = GemminiSimTop::[name=gemmini](`clock` = `clock`, `reset` = `reset`, a_valid = _b2i_24, a_bits_0 = a_lo, a_bits_1 = rx.data, b_valid = _b2i_25, b_bits_0 = b_lo, b_bits_1 = rx.data, d_valid = _b2i_26, d_bits_0 = d_lo, d_bits_1 = rx.data, req_valid = _b2i_27, req_tag_id = rx.data & 1, req_dataflow = rx.data#[1..<2], req_propagate = rx.data#[2..<3], req_shift = rx.data#[3..<8], req_a_transpose = rx.data#[8..<9], req_bd_transpose = rx.data#[9..<10], req_total_rows = rx.data#[10..<15], req_flush = rx.data#[15..<17], wr_valid = _b2i_28, wr_addr = _mux_29, wr_data_0 = wr_word__w7#[0x1c0..<0x200], wr_data_1 = wr_word__w7#[0x180..<0x1c0], wr_data_2 = wr_word__w7#[0x140..<0x180], wr_data_3 = wr_word__w7#[0x100..<0x140], wr_data_4 = wr_word__w7#[0xc0..<0x100], wr_data_5 = wr_word__w7#[0x80..<0xc0], wr_data_6 = wr_word__w7#[0x40..<0x80], wr_data_7 = wr_word__w7#[0..<0x40], wr_acc = _b2i_30, wr_mask = _mux_31, rd_valid = _b2i_32, rd_scale = 0, rd_addr = rx.addr#[6..<12], rd_act = 0, rd_full = 1, rd_fromDMA = 1, rd_resp_ready = _b2i_33)
+  resp_word#[0x1c0..<0x200] = gemmini.resp_data_0
+  mut resp_word__w1:U512 = resp_word
+  resp_word__w1#[0x180..<0x1c0] = gemmini.resp_data_1
+  mut resp_word__w2:U512 = resp_word__w1
+  resp_word__w2#[0x140..<0x180] = gemmini.resp_data_2
+  mut resp_word__w3:U512 = resp_word__w2
+  resp_word__w3#[0x100..<0x140] = gemmini.resp_data_3
+  mut resp_word__w4:U512 = resp_word__w3
+  resp_word__w4#[0xc0..<0x100] = gemmini.resp_data_4
+  mut resp_word__w5:U512 = resp_word__w4
+  resp_word__w5#[0x80..<0xc0] = gemmini.resp_data_5
+  mut resp_word__w6:U512 = resp_word__w5
+  resp_word__w6#[0x40..<0x80] = gemmini.resp_data_6
+  mut resp_word__w7:U512 = resp_word__w6
+  resp_word__w7#[0..<0x40] = gemmini.resp_data_7
+  rd_data#[0x1c0..<0x200] = gemmini.rd_data_0
+  mut rd_data__w1:U512 = rd_data
+  rd_data__w1#[0x180..<0x1c0] = gemmini.rd_data_1
+  mut rd_data__w2:U512 = rd_data__w1
+  rd_data__w2#[0x140..<0x180] = gemmini.rd_data_2
+  mut rd_data__w3:U512 = rd_data__w2
+  rd_data__w3#[0x100..<0x140] = gemmini.rd_data_3
+  mut rd_data__w4:U512 = rd_data__w3
+  rd_data__w4#[0xc0..<0x100] = gemmini.rd_data_4
+  mut rd_data__w5:U512 = rd_data__w4
+  rd_data__w5#[0x80..<0xc0] = gemmini.rd_data_5
+  mut rd_data__w6:U512 = rd_data__w5
+  rd_data__w6#[0x40..<0x80] = gemmini.rd_data_6
+  mut rd_data__w7:U512 = rd_data__w6
+  rd_data__w7#[0..<0x40] = gemmini.rd_data_7
+  target_ready = 1
+  if in_acc__w1 != 0 {
+    _b2i_34 = if (gemmini.wr_ready != 0) and (auto_wr__w1 == 0) { 1 } else { 0 }
+    _mux_35 = if get__w1 != 0 { gemmini.rd_req_ready & 1 } else { _b2i_34 & 1 }
+    target_ready = _mux_35
+  } elif put__w1 != 0 {
+    target_ready = unique if sel__w1 == 1 { gemmini.a_ready } elif sel__w1 == 3 { gemmini.b_ready } elif sel__w1 == 5 { gemmini.d_ready } elif sel__w1 == 6 { gemmini.req_ready } else { 1 }
+  }
+  mut _b2i_36 = if (state == 0) and ((cmd_ok__w1 == 0) or (target_ready != 0)) { 1 } else { 0 }
+  const rxr__w1 = _b2i_36
+  mut _b2i_37 = if (cmd_req__w1 != 0) and (rxr__w1 != 0) { 1 } else { 0 }
+  const fire__w1 = _b2i_37
+  mut _b2i_38 = if (fire__w1 != 0) and (get__w1 != 0) and (in_acc__w1 == 0) { 1 } else { 0 }
+  const reg_get__w1 = _b2i_38
   if not (`reset` != 0) {
     match state {
       == 0 {
@@ -62,19 +162,22 @@ pub mod mixed_acc::[timecheck=false](`clock`:Clock, `reset`:U1, rxv:U1, rx:(orig
           answer#[0x7b..<0x7e] = mixed_packet.D#[0..<3]
           answer#[0x7e..<0x83] = rx.origin#[0..<5]
           answer#[0x6d..<0x70] = rx.tl_source#[0..<3]
-          _mux_14 = if get__w1 != 0 { 1 } else { 0 }
-          answer#[0x77..<0x7b] = _mux_14#[0..<4]
+          _mux_39 = if get__w1 != 0 { 1 } else { 0 }
+          answer#[0x77..<0x7b] = _mux_39#[0..<4]
           answer#[0x73..<0x77] = rx.size#[0..<4]
           answer#[0x4a..<0x6a] = rx.addr#[0..<32]
-          _b2i_15 = if cmd_ok__w1 == 0 { 1 } else { 0 }
-          answer#[0..<1] = _b2i_15 & 1
-          _mux_16 = if (cmd_ok__w1 != 0) and (get__w1 != 0) { 1 } else { 2 }
-          state = _mux_16
+          _b2i_40 = if cmd_ok__w1 == 0 { 1 } else { 0 }
+          answer#[0..<1] = _b2i_40 & 1
+          if (cmd_ok__w1 != 0) and (get__w1 != 0) and (in_acc__w1 == 0) {
+            answer#[2..<0x42] = reg_rdata#[0..<0x40]
+          }
+          _mux_41 = if (cmd_ok__w1 != 0) and (get__w1 != 0) and (in_acc__w1 != 0) { 1 } else { 2 }
+          state = _mux_41
         }
       }
       == 1 {
         if gemmini.rd_resp_valid != 0 {
-          answer#[2..<0x42] = ((rd_data__w3 << 0x40) >> (((3 - answer#[0x4a..<0x6a]#[3..<5]) * 0x40)#[0..<10] + 0x40))#[0..<0x40]
+          answer#[2..<0x42] = ((rd_data__w7 << 0x40) >> (((7 - answer#[0x4a..<0x6a]#[3..<6]) * 0x40)#[0..<11] + 0x40))#[0..<0x40]
           state = 2
         }
       }
@@ -87,46 +190,97 @@ pub mod mixed_acc::[timecheck=false](`clock`:Clock, `reset`:U1, rxv:U1, rx:(orig
         state = 0
       }
     }
+    if (fire__w1 != 0) and (put__w1 != 0) and (in_acc__w1 == 0) {
+      match sel__w1 {
+        == 0 {
+          a_lo = rx.data
+        }
+        == 2 {
+          b_lo = rx.data
+        }
+        == 4 {
+          d_lo = rx.data
+        }
+        == 7 {
+          ctl = rx.data#[0..<2]
+          if rx.data#[2..<3] != 0 {
+            auto_row = 0
+            full_lost = 0
+          }
+        }
+        else {
+        }
+      }
+    }
+    _b2i_42 = if ((ctl & 1) != 0) and (gemmini.resp_valid != 0) { 1 } else { 0 }
+    auto_pend = _b2i_42
+    if auto_wr__w1 != 0 {
+      if gemmini.wr_ready != 0 {
+        auto_row = (auto_row + 1)#[0..<6]
+      } else {
+        full_lost = 1
+      }
+    }
+    if gemmini.resp_valid != 0 {
+      held[0] = resp_word__wnet#[0x1c0..<0x200]
+      held[1] = resp_word__wnet#[0x180..<0x1c0]
+      held[2] = resp_word__wnet#[0x140..<0x180]
+      held[3] = resp_word__wnet#[0x100..<0x140]
+      held[4] = resp_word__wnet#[0xc0..<0x100]
+      held[5] = resp_word__wnet#[0x80..<0xc0]
+      held[6] = resp_word__wnet#[0x40..<0x80]
+      held[7] = resp_word__wnet#[0..<0x40]
+      full_tag = gemmini.resp_tag_id
+      full_last = gemmini.resp_last
+      full_rows = gemmini.resp_total_rows
+      full = 1
+      if (full != 0) and (not ((reg_get__w1 != 0) and (sel__w1 == 23))) {
+        full_lost = 1
+      }
+    } elif (reg_get__w1 != 0) and (sel__w1 == 23) {
+      full = 0
+    }
   }
-  const t149 = `tx__bpo.origin`
-  `tx__bpr.origin` = t149
-  tx.origin = t149
-  const t150 = `tx__bpo.target`
-  `tx__bpr.target` = t150
-  tx.target = t150
-  const t151 = `tx__bpo.ch`
-  `tx__bpr.ch` = t151
-  tx.ch = t151
-  const t152 = `tx__bpo.opcode`
-  `tx__bpr.opcode` = t152
-  tx.opcode = t152
-  const t153 = `tx__bpo.size`
-  `tx__bpr.size` = t153
-  tx.size = t153
-  const t154 = `tx__bpo.param`
-  `tx__bpr.param` = t154
-  tx.param = t154
-  const t155 = `tx__bpo.tl_source`
-  `tx__bpr.tl_source` = t155
-  tx.tl_source = t155
-  const t156 = `tx__bpo.sink`
-  `tx__bpr.sink` = t156
-  tx.sink = t156
-  const t157 = `tx__bpo.addr`
-  `tx__bpr.addr` = t157
-  tx.addr = t157
-  const t158 = `tx__bpo.mask`
-  `tx__bpr.mask` = t158
-  tx.mask = t158
-  const t159 = `tx__bpo.data`
-  `tx__bpr.data` = t159
-  tx.data = t159
-  const t160 = `tx__bpo.corrupt`
-  `tx__bpr.corrupt` = t160
-  tx.corrupt = t160
-  const t161 = `tx__bpo.denied`
-  `tx__bpr.denied` = t161
-  tx.denied = t161
+  resp_word__wnet = resp_word__w7
+  const t368 = `tx__bpo.origin`
+  `tx__bpr.origin` = t368
+  tx.origin = t368
+  const t369 = `tx__bpo.target`
+  `tx__bpr.target` = t369
+  tx.target = t369
+  const t370 = `tx__bpo.ch`
+  `tx__bpr.ch` = t370
+  tx.ch = t370
+  const t371 = `tx__bpo.opcode`
+  `tx__bpr.opcode` = t371
+  tx.opcode = t371
+  const t372 = `tx__bpo.size`
+  `tx__bpr.size` = t372
+  tx.size = t372
+  const t373 = `tx__bpo.param`
+  `tx__bpr.param` = t373
+  tx.param = t373
+  const t374 = `tx__bpo.tl_source`
+  `tx__bpr.tl_source` = t374
+  tx.tl_source = t374
+  const t375 = `tx__bpo.sink`
+  `tx__bpr.sink` = t375
+  tx.sink = t375
+  const t376 = `tx__bpo.addr`
+  `tx__bpr.addr` = t376
+  tx.addr = t376
+  const t377 = `tx__bpo.mask`
+  `tx__bpr.mask` = t377
+  tx.mask = t377
+  const t378 = `tx__bpo.data`
+  `tx__bpr.data` = t378
+  tx.data = t378
+  const t379 = `tx__bpo.corrupt`
+  `tx__bpr.corrupt` = t379
+  tx.corrupt = t379
+  const t380 = `tx__bpo.denied`
+  `tx__bpr.denied` = t380
+  tx.denied = t380
   rxr = rxr__w1
-  txv = _b2i_8
+  txv = _b2i_15
 }

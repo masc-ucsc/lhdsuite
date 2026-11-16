@@ -15,7 +15,7 @@ module mixed_system_tb;
   function automatic logic [31:0] instruction(int addr, int id);
     int imm, ptr;
     imm=landing(id)-entry(id);
-    ptr=ACC_BASE+2048*((id/2)%3)+'h100+4*id;
+    ptr=ACC_BASE+'hf00+4*id; // accumulator row 60: the mesh results fill rows from 0
     if(addr==entry(id)) return {imm[20],imm[10:1],imm[11],imm[19:12],5'b0,7'h6f}; // jal x0, landing
     if(addr==landing(id)) return ((32'(ptr)+32'h800) & 32'hfffff000) | 32'h000000b7; // lui x1, ACC_BASE[31:12]
     if(addr==landing(id)+4) return (32'(ptr & 'hfff)<<20) | 32'h0000a103; // lw x2, offset(x1)
@@ -92,7 +92,7 @@ module mixed_system_tb;
       @(posedge clock);
       if(!host_rsp_valid || host_rsp!==held) $fatal(1,"host response changed while stalled");
     end
-    if(held.origin!=5'(acc_address(addr) ? ACC+((addr-ACC_BASE)>>11) : ACC) || held.target!=5'(HOST) || held.ch!=D || held.tl_source!=host_req.tl_source ||
+    if(held.origin!=5'(ACC) || held.target!=5'(HOST) || held.ch!=D || held.tl_source!=host_req.tl_source ||
        held.size!=3 || held.denied!=denied || held.corrupt || held.opcode!=(op==4 ? 1 : 0) ||
        (op==4 && !denied && held.data!==expected)) $fatal(1,"bad MMIO at %h got %h expected %h flags=%b",addr,held.data,expected,held.denied);
     @(negedge clock); host_rsp_ready=1;
@@ -102,14 +102,23 @@ module mixed_system_tb;
     host_req='0; host_req_valid=0; host_rsp_ready=0;
     repeat(8) @(negedge clock); reset=0;
     for(int i=0;i<16;i+=2)
-      mmio(0,ACC_BASE+2048*((i/2)%3)+'h100+4*i,{finish_pc(i+1),finish_pc(i)},0,8'hff,0);
+      mmio(0,ACC_BASE+'hf00+4*i,{finish_pc(i+1),finish_pc(i)},0,8'hff,0);
     vectors_ready=1;
-    // Distinct words across all four lanes and two rows. Read after all writes to catch aliases.
+    // Distinct words across all eight lanes of one 64-byte row. Read after all writes to catch aliases.
     for(int i=0;i<8;i++) mmio(0, ACC_BASE+8*i, 64'hd0c0_b0a0_7654_3210 ^ (64'h0101_0101_0101_0101*i),0,8'hff,0);
     for(int i=7;i>=0;i--) mmio(4, ACC_BASE+8*i, 0, 64'hd0c0_b0a0_7654_3210 ^ (64'h0101_0101_0101_0101*i),8'hff,0);
     mmio(1,ACC_BASE,64'hffee_ddcc_bbaa_9988,0,8'h05,0);
     mmio(4,ACC_BASE,0,64'hd0c0_b0a0_76aa_3288,8'hff,0);
-    mmio(4,ACC_BASE+3*2048,0,0,8'hff,1); // outside the accumulator window
+    // Register window: CTL reads back what was written (accumulate bit only, so no mesh result is written), STATUS and the
+    // staging registers have the wrong direction, and the first byte past the window is denied.
+    mmio(0,ACC_BASE+'h1038,64'h2,0,8'hff,0);
+    mmio(4,ACC_BASE+'h1038,0,64'h2,8'hff,0);
+    mmio(0,ACC_BASE+'h1038,64'h0,0,8'hff,0);
+    mmio(4,ACC_BASE+'h1040,0,0,8'hff,0);  // STATUS: nothing ran, no result waits, row counter at 0
+    mmio(0,ACC_BASE+'h1040,0,0,8'hff,1);  // STATUS is read-only
+    mmio(4,ACC_BASE+'h1000,0,0,8'hff,1);  // A_LO is write-only
+    mmio(0,ACC_BASE+'h1048,0,0,8'hff,1);  // no register there
+    mmio(4,ACC_BASE+ACC_SIZE,0,0,8'hff,1); // outside the Gemmini window
     mmio_done=1;
   end
 endmodule

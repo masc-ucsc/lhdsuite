@@ -37,7 +37,7 @@ def stage(out, cores=True):
     files = [rtl/"packet.sv", out/"layout.sv", rtl/"router.sv", rtl/"mesh.sv"]
     if cores:
         libraries = []
-        for family in ("rocket", "boom", "gemmini/Mesh8"):
+        for family in ("rocket", "boom", "gemmini/Mesh16"):
             lib = HERE.parent / family / "verilog"
             sources = [lib/f.strip() for f in (lib/"filelist.f").read_text().splitlines() if f.strip() and not f.startswith("#")]
             src = "\n".join(f.read_text() for f in sources)

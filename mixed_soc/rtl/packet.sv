@@ -12,7 +12,9 @@ package mixed_packet;
     logic corrupt, denied;
   } packet_t;
   localparam logic [31:0] ACC_BASE = 32'h0001_8000;
+  // The window: 64 accumulator rows of 64 bytes (0x0000..0x0fff), then the mesh registers (0x1000..0x10ff, see acc.sv).
+  localparam logic [31:0] ACC_SIZE = 32'h0000_2000;
   function automatic bit acc_address(input logic [31:0] addr);
-    return addr >= ACC_BASE && addr < ACC_BASE + 3*2048;
+    return addr >= ACC_BASE && addr < ACC_BASE + ACC_SIZE;
   endfunction
 endpackage
