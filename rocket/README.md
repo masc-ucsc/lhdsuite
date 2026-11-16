@@ -135,10 +135,13 @@ extracted 2026-08-29.
 
 ### Importing Rocket alongside BOOM
 
-`pyrope/rocket_*.prp` qualifies ten filenames whose unqualified stems also
-exist in BOOM (`PTW`, `ICache`, and others). Their public functions and hardware
-are unchanged. This lets `mixed_soc/pyrope/` import both original trees directly
-without LiveHD resolving two unrelated definitions under one source-unit name.
-After regenerating the Rocket tree, run `python3 rocket/qualify_pyrope.py` from
-the suite root before checking equivalence. The script changes only filenames
-and import paths; `pyrope2/` remains a separate tree.
+`pyrope/rocket_*.prp` and `pyrope2/rocket_*.prp` qualify ten filenames whose
+unqualified stems also exist in BOOM (`PTW`, `ICache`, and others). Their public
+functions and hardware are unchanged. This lets `mixed_soc/pyrope/` import both
+maintained trees (`rocket/pyrope2` and `boom/pyrope2`) without LiveHD resolving two
+unrelated definitions under one source-unit name; `mixed_soc` imports `pyrope2/`
+wherever it exists. After regenerating `pyrope/`, or adding a file to `pyrope2/`
+whose stem BOOM also has, run `python3 rocket/qualify_pyrope.py [pyrope|pyrope2]`
+from the suite root (default: both) before checking equivalence. The script changes
+only filenames and import paths; a hierarchical proof pairing `pyrope2/PTW.prp`
+must now name `pyrope2/rocket_PTW.prp`.
