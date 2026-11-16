@@ -132,3 +132,13 @@ extracted 2026-08-29.
    modules have no loop findings.
 3. A verify sidecar.
 4. Unblock the whole-SoC Pyrope emission (clock-as-data, case4 above).
+
+### Importing Rocket alongside BOOM
+
+`pyrope/rocket_*.prp` qualifies ten filenames whose unqualified stems also
+exist in BOOM (`PTW`, `ICache`, and others). Their public functions and hardware
+are unchanged. This lets `mixed_soc/pyrope/` import both original trees directly
+without LiveHD resolving two unrelated definitions under one source-unit name.
+After regenerating the Rocket tree, run `python3 rocket/qualify_pyrope.py` from
+the suite root before checking equivalence. The script changes only filenames
+and import paths; `pyrope2/` remains a separate tree.

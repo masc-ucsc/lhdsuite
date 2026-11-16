@@ -21,6 +21,7 @@
 
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load(":defs.bzl", "core_benches")
+load("//mixed_soc:defs.bzl", "mixed_soc_benches")
 
 # Consumed by //xiangshan/Backend's stub genrule: it derives the DiffExt* DPI
 # sink models from the DummyDPICWrapper_* sources instead of checking 20
@@ -132,3 +133,6 @@ test_suite(
         ":minion_sim_verilog",
     ],
 )
+
+# This composite retains imported packages instead of flattening core sources.
+mixed_soc_benches()

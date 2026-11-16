@@ -15,8 +15,9 @@ import sys
 import time
 from pathlib import Path
 
-# Keep in sync with the CORES table in bench/defs.bzl.
-CORES = ("dino", "cva6", "minion", "xs_rob", "xs_alu", "xs_div", "xs_exu", "xs_backend")
+# Keep in sync with the CORES table in bench/defs.bzl and composite sim targets.
+CORES = ("dino", "cva6", "minion", "xs_rob", "xs_alu", "xs_div", "xs_exu", "xs_backend", "mixed_soc")
+SIM_ONLY_CORES = ("mixed_soc",)
 SYNTH_ONLY_CORES = ("xs_rob", "xs_alu", "xs_div", "xs_exu", "xs_backend")
 PYROPE_ONLY_CORES = ("cva6",)
 FLAT_CORES = ("minion",)
@@ -134,6 +135,25 @@ def report_core(root: Path, core: str) -> list:
     G = rep.tgt
 
     print(f"\n{'─' * 72}\n{core}\n{'─' * 72}")
+
+    if core in SIM_ONLY_CORES:
+        rows = [("sim_pyrope", G("sim_pyrope")), ("sim_verilator", G("sim_verilator"))]
+        rep.head("sim benchmark throughput", *(r for _, r in rows))
+        print(f"   {'':14} {'setup':>9} {'c++':>9} {'sim':>9} {'cycles':>9} {'cycles/s':>10}")
+        for name, result in rows:
+            if result is None:
+                continue
+            metrics = result[3]
+            if metrics.get("verilator_present") == 0:
+                print(f"   {name:14} SKIPPED — not installed")
+                continue
+            print(f"   {name:14} {fmt(metrics.get('sim_setup_ms'), 'ms'):>9}"
+                  f" {fmt(metrics.get('sim_cc_ms'), 'ms'):>9}"
+                  f" {fmt(metrics.get('sim_exec_ms'), 'ms'):>9}"
+                  f" {fmt(metrics.get('sim_cycles')):>9}"
+                  f" {fmt(metrics.get('sim_cycles_per_s')):>10}")
+        rep.cmds(*rows)
+        return rep.missing
 
     # ---- compile ----------------------------------------------------------
     cv = None if core in PYROPE_ONLY_CORES else G("compile_verilog")

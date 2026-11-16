@@ -1,0 +1,161 @@
+# Mixed Rocket / BOOM / Gemmini SoC
+
+The design instantiates **12 Rocket tiles, four BOOM tiles, and three 8×8 Gemmini
+accelerators** on a shared **5×4 mesh**, with one external gateway. The checked-in
+[Pyrope glue](pyrope/MixedSocTop.prp) imports the existing
+[Rocket](../rocket/pyrope/RocketTile.prp), [BOOM](../boom/pyrope/BoomTile.prp), and
+[Gemmini](../gemmini/Mesh8/pyrope/GemminiTPU.prp) trees. There are no copied CPU
+or accelerator implementations in this package. Custom adapters bridge their
+TileLink ports and Gemmini accumulator interfaces to the shared request/response
+network. All instances remain in the design when only a subset is enabled.
+
+The `scripts/` directory holds the simulation runners, source generators,
+shared topology, and floorplan generator/validator. Simulation drivers stay in
+`sim/`, and design glue stays in `pyrope/` and `rtl/`.
+
+### Matched Pyrope and Verilator simulation
+
+```sh
+bazel test //bench:mixed_soc_sim_pyrope
+bazel test //bench:mixed_soc_sim_verilator
+# Both, or equivalently //mixed_soc:sim_test:
+bazel test //bench:mixed_soc
+bazel run //bench:show -- --core mixed_soc
+```
+
+LiveHD is built from the suite's source dependency, as for other cores. Verilator
+is optional: its target reports `METRIC verilator_present 0` and skips when absent.
+Use `VERILATOR` to select an installed executable and `LHD_BENCH_JOBS` to bound
+compiler parallelism. The targets run exclusively to keep benchmark timing useful.
+
+The two [drivers](sim/mixed_soc_tb.prp) share a generated schedule
+([C++ twin](sim/mixed_soc_tb_verilator.cpp), [generator](scripts/gen_sim.py)). The host
+first writes eight pairs of distinct branch destinations into the three real
+Gemmini accumulator memories through the mesh. Then **Rocket0, Rocket3, BOOM0,
+and BOOM2 perform the connectivity test** (working mask `0x5009`). All 16 CPUs
+leave reset together after the preload (`core_enable=0xffff`); the other 12
+execute `park: wfi; j park` with interrupts held low. They remain ordinary
+clocked instances and are not held in reset.
+Each active CPU fetches its own tiny program, loads its pointer from Gemmini0
+or Gemmini1, and branches to its unique destination. Assertions require all four
+landing/destination fetches, require reset-vector fetches from all 16 CPUs, and catch
+incorrect packet origins, routing, and addresses. The fixed run continues for
+**36,000 cycles**, including the CPUs' final self loops. Gemmini's MAC array is
+instantiated but this test exercises its accumulator, not matrix multiplication.
+
+Both drivers fold observed transfers on every cycle with
+`sum = (sum * 31 + obs) & (2^63 - 1)` and require the independently matched
+checksum **1865501407077597348**. Zero-filled unknown/uninitialized state matches
+Verilator's two-state power-on behavior. Registered transfer observations at the
+flat boundary let both drivers read below `step` without confusing post-edge
+ready/valid with the beat just consumed.
+
+Measured on the development host: about **2.5 s for LiveHD** and **7.2 s for
+Verilator**, excluding generation and host compilation. Both execute the same
+36,000 cycles. `CMD` lines record commands; `METRIC sim_setup_ms`, `sim_cc_ms`,
+`sim_exec_ms`, `verilator_cc_ms`, and `verilator_exec_ms` separate the costs.
+To retain logs, reuse a build, compare another length, or run both directly:
+
+```sh
+python3 mixed_soc/scripts/run_sim.py compare --lhd ../livehd/bazel-bin/lhd/lhd \
+  --work /tmp/mixed-soc-sim -j 8
+```
+
+`--cycles N` changes both simulators together; default-count runs require the
+pinned checksum, and compare mode requires equality at every length. This runner
+keeps imported package directories intact instead of flattening them into a
+standalone core's scratch tree; the `//bench:` targets use this runner and keep the usual benchmark names.
+
+To collect **host** user-space instructions, CPU cycles, and IPC, append
+`--host-perf` to the direct comparison command. Only the simulator executables
+are profiled; generation and compilation stay outside the counter interval.
+`sim_exec_host_instructions`, `sim_exec_host_cycles`, `sim_exec_host_ipc` and the
+corresponding `verilator_exec_host_*` metrics come from a grouped
+`perf stat -e '{cycles:u,instructions:u}'` measurement. The raw CSVs remain in
+`--work`. This optional mode includes perf launcher overhead in its wall time;
+the counters cover the child simulator, including initialization and teardown.
+It requires access to Linux performance counters; the runner fails explicitly
+before building when access is denied. The development host currently has
+`perf_event_paranoid=3`, so no host instruction-count or IPC result is available
+from this session. Wall times above were measured without perf.
+
+The [SystemVerilog glue](rtl/soc.sv) implements the same network and ports.
+`scripts/generate_rtl.py` assembles a temporary Verilator input from the original vendor
+files, qualifying conflicting Chisel module names only in that build directory.
+No vendor RTL is checked in here. To regenerate Pyrope glue deliberately:
+
+```sh
+python3 mixed_soc/scripts/regenerate_pyrope.py --lhd ../livehd/bazel-bin/lhd/lhd \
+  --work /tmp/mixed-soc-regenerate
+python3 mixed_soc/scripts/gen_sim.py
+```
+
+The recipe retains only glue, imports the existing core trees, and generates the
+Pyrope XY mesh from [topology.py](scripts/topology.py). Re-run the matched simulation
+after regeneration. Rocket's colliding filenames are qualified by
+[`rocket/qualify_pyrope.py`](../rocket/qualify_pyrope.py).
+
+### Additional connectivity regressions
+
+```sh
+python3 mixed_soc/scripts/simulate.py mesh --work /tmp/mixed-connectivity
+python3 mixed_soc/scripts/simulate.py system --work /tmp/mixed-connectivity
+bazel test //mixed_soc:topology_test //mixed_soc:mesh_sim //mixed_soc:system_sim
+```
+
+These older, untimed Verilator tests cover all 400 ordered endpoint pairs and
+20-way gateway contention, and all 16 CPUs branching through Gemmini pointers.
+They also check accumulator lanes, byte masks, response stalls, and denied host
+accesses. Their explicit targets need Verilator installed.
+
+The gateway exposes `mem_req`/`mem_rsp` for external memory and
+`host_req`/`host_rsp` for MMIO. The network tags packets with the physical tile
+ID; the vendored CPUs' one-bit hart ID cannot identify all 16 copies. Gemmini0,
+Gemmini1, and Gemmini2 occupy successive 2 KiB accumulator windows at `0x18000`,
+`0x18800`, and `0x19000`. Each maps a real 64×256-bit memory with 64-bit lane
+selection and byte enables. Other CPU memory traffic goes to the gateway.
+The request and response lanes each admit one packet at a time with registered
+XY hops and round-robin injection. This is a connectivity fixture, not a
+coherent shared-memory manager.
+
+### Floorplan
+
+| Family | Instances | Modeled logic cells per instance | Colors per instance | SRAMs per instance |
+| --- | ---: | ---: | ---: | ---: |
+| Rocket | 12 | 5,000,000 | 160 | 6 |
+| BOOM | 4 | 18,000,000 | 600 | 16 |
+| Gemmini PE | 192 (three accelerators) | 1,000,000 | 32 | 1 |
+| Fabric router | 20 | 12,000 | 1 | 0 |
+
+Total: 324,240,000 modeled logic cells, 10,484 colors, 328 SRAMs. Populations
+are capacity-test parameters. Each SRAM is one physical object. The generator
+allocates one object per color or SRAM, records crossing nets, and gives the
+gateway four named terminals on the block's right edge. The terminal positions
+are in DBU. The gateway's home chunk can sit inside the floorplan: its boundary
+contact and the external pin are reported separately in `sweep.json`.
+
+Build the planner in the LiveHD checkout you want to measure:
+
+```sh
+# In LiveHD:
+bazel build -c opt //pass/place:fp_plan_summary
+# In lhdsuite, set PLANNER to that built binary:
+python3 mixed_soc/scripts/floorplan.py --planner "$PLANNER" --out mixed_soc_runs
+```
+
+The runner starts a fresh process for each of 1, 2, 4, 8 and 16 decimal GB,
+validates the saved plans, and writes `sweep.json`, the five metadata bundles,
+and `color_graph.json`. The reported load and plan times exclude export; peak RSS is
+reported both through planning and after export. These are planner measurements.
+It also reports crossing-net count and the sum of Manhattan distances between
+connected chunk centers, a placement-quality proxy before routing. Per-chunk
+estimated bytes use LiveHD's cold downstream model and do not certify
+that actual detailed placement fits that budget. No downstream cell placement, timing analysis or routing
+of the modeled 324M-cell workload is run.
+
+For just the portable input, run `python3 mixed_soc/scripts/floorplan.py --graph soc.json`.
+`bazel test //mixed_soc:topology_test` checks populations and reachability without
+requiring a new LiveHD binary. The full sweep additionally checks every object's
+unique home, budget, exact tiling without overlap, repeated module partitions,
+and that increasing the budget never increases the number of chunks.
+

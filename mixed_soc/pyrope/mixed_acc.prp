@@ -1,0 +1,132 @@
+const GemminiSimTop = import("GemminiSimTop.GemminiSimTop")
+const mixed_packet = import("mixed_packet")
+
+pub mod mixed_acc::[timecheck=false](`clock`:Clock, `reset`:U1, rxv:U1, rx:(origin:U5, target:U5, ch:U3, opcode:U4, size:U4, param:U3, tl_source:U3, sink:U3, addr:U32, mask:U8, data:U64, corrupt:U1, denied:U1), txr:U1) -> (rxr:U1@[], txv:U1@[], tx:(origin:U5, target:U5, ch:U3, opcode:U4, size:U4, param:U3, tl_source:U3, sink:U3, addr:U32, mask:U8, data:U64, corrupt:U1, denied:U1)@[]) {
+  mut _b2i_15 = 0
+  mut _mux_14:S32 = 0
+  mut _mux_16:U2 = 0
+  reg state:U2:[initial=0, reset_pin=`reset`, async=false]
+  reg answer:U136
+  mut rd_data:U256 = 0sb?
+  wire `tx__bpr.origin`:U5 = nil
+  wire `tx__bpr.target`:U5 = nil
+  wire `tx__bpr.ch`:U3 = nil
+  wire `tx__bpr.opcode`:U4 = nil
+  wire `tx__bpr.size`:U4 = nil
+  wire `tx__bpr.param`:U3 = nil
+  wire `tx__bpr.tl_source`:U3 = nil
+  wire `tx__bpr.sink`:U3 = nil
+  wire `tx__bpr.addr`:U32 = nil
+  wire `tx__bpr.mask`:U8 = nil
+  wire `tx__bpr.data`:U64 = nil
+  wire `tx__bpr.corrupt`:U1 = nil
+  wire `tx__bpr.denied`:U1 = nil
+  const get__w1 = U1(rx.opcode == 4)
+  const put__w1 = U1((rx.opcode == 0) or (rx.opcode == 1))
+  const _addr_3__w1 = rx.addr
+  mut _b2i_7 = if (rx.ch == mixed_packet.A) and (U1((_addr_3__w1 >= mixed_packet.ACC_BASE) and (_addr_3__w1 < (mixed_packet.ACC_BASE + 0x1800)#[0..<32])) != 0) and (rx.corrupt == 0) and (rx.size <= 3) and ((rx.addr & ((1 << rx.size)#[0..<32] - 1)#[0..<32])#[0..<32] == 0) and ((get__w1 != 0) or (put__w1 != 0)) { 1 } else { 0 }
+  const cmd_ok__w1 = _b2i_7
+  mut _b2i_8 = if state == 2 { 1 } else { 0 }
+  mut `tx__bpo.origin` = answer#[0x83..<0x88]
+  mut `tx__bpo.target` = answer#[0x7e..<0x83]
+  mut `tx__bpo.ch` = answer#[0x7b..<0x7e]
+  mut `tx__bpo.opcode` = answer#[0x77..<0x7b]
+  mut `tx__bpo.size` = answer#[0x73..<0x77]
+  mut `tx__bpo.param` = answer#[0x70..<0x73]
+  mut `tx__bpo.tl_source` = answer#[0x6d..<0x70]
+  mut `tx__bpo.sink` = answer#[0x6a..<0x6d]
+  mut `tx__bpo.addr` = answer#[0x4a..<0x6a]
+  mut `tx__bpo.mask` = answer#[0x42..<0x4a]
+  mut `tx__bpo.data` = answer#[2..<0x42]
+  mut `tx__bpo.corrupt` = answer#[1..<2]
+  mut `tx__bpo.denied` = answer & 1
+  mut _b2i_9 = if (state == 0) and (rxv != 0) and (cmd_ok__w1 != 0) and (put__w1 != 0) { 1 } else { 0 }
+  mut _b2i_10 = if (state == 0) and (rxv != 0) and (cmd_ok__w1 != 0) and (get__w1 != 0) { 1 } else { 0 }
+  mut _b2i_11 = if state == 1 { 1 } else { 0 }
+  mut gemmini = GemminiSimTop::[name=gemmini](`clock` = `clock`, `reset` = `reset`, a_valid = 0, a_bits = 0, b_valid = 0, b_bits = 0, d_valid = 0, d_bits = 0, req_valid = 0, req_tag_id = 0, req_dataflow = 0, req_propagate = 0, req_shift = 0, req_a_transpose = 0, req_bd_transpose = 0, req_total_rows = 0, req_flush = 0, wr_valid = _b2i_9, wr_addr = rx.addr#[5..<11], wr_data_0 = rx.data, wr_data_1 = rx.data, wr_data_2 = rx.data, wr_data_3 = rx.data, wr_acc = 0, wr_mask = (rx.mask#[0..<8] << (8 * rx.addr#[3..<5]))#[0..<32], rd_valid = _b2i_10, rd_scale = 0, rd_addr = rx.addr#[5..<11], rd_act = 0, rd_full = 1, rd_fromDMA = 1, rd_resp_ready = _b2i_11)
+  rd_data#[0xc0..<0x100] = gemmini.rd_data_0
+  mut rd_data__w1:U256 = rd_data
+  rd_data__w1#[0x80..<0xc0] = gemmini.rd_data_1
+  mut rd_data__w2:U256 = rd_data__w1
+  rd_data__w2#[0x40..<0x80] = gemmini.rd_data_2
+  mut rd_data__w3:U256 = rd_data__w2
+  rd_data__w3#[0..<0x40] = gemmini.rd_data_3
+  mut _mux_12:U1 = if get__w1 != 0 { gemmini.rd_req_ready & 1 } else { gemmini.wr_ready & 1 }
+  mut _b2i_13 = if (state == 0) and ((cmd_ok__w1 == 0) or (_mux_12 != 0)) { 1 } else { 0 }
+  const rxr__w1 = _b2i_13
+  if not (`reset` != 0) {
+    match state {
+      == 0 {
+        if (rxv != 0) and (rxr__w1 != 0) {
+          answer = 0
+          answer#[0x7b..<0x7e] = mixed_packet.D#[0..<3]
+          answer#[0x7e..<0x83] = rx.origin#[0..<5]
+          answer#[0x6d..<0x70] = rx.tl_source#[0..<3]
+          _mux_14 = if get__w1 != 0 { 1 } else { 0 }
+          answer#[0x77..<0x7b] = _mux_14#[0..<4]
+          answer#[0x73..<0x77] = rx.size#[0..<4]
+          answer#[0x4a..<0x6a] = rx.addr#[0..<32]
+          _b2i_15 = if cmd_ok__w1 == 0 { 1 } else { 0 }
+          answer#[0..<1] = _b2i_15 & 1
+          _mux_16 = if (cmd_ok__w1 != 0) and (get__w1 != 0) { 1 } else { 2 }
+          state = _mux_16
+        }
+      }
+      == 1 {
+        if gemmini.rd_resp_valid != 0 {
+          answer#[2..<0x42] = ((rd_data__w3 << 0x40) >> (((3 - answer#[0x4a..<0x6a]#[3..<5]) * 0x40)#[0..<10] + 0x40))#[0..<0x40]
+          state = 2
+        }
+      }
+      == 2 {
+        if txr != 0 {
+          state = 0
+        }
+      }
+      else {
+        state = 0
+      }
+    }
+  }
+  const t149 = `tx__bpo.origin`
+  `tx__bpr.origin` = t149
+  tx.origin = t149
+  const t150 = `tx__bpo.target`
+  `tx__bpr.target` = t150
+  tx.target = t150
+  const t151 = `tx__bpo.ch`
+  `tx__bpr.ch` = t151
+  tx.ch = t151
+  const t152 = `tx__bpo.opcode`
+  `tx__bpr.opcode` = t152
+  tx.opcode = t152
+  const t153 = `tx__bpo.size`
+  `tx__bpr.size` = t153
+  tx.size = t153
+  const t154 = `tx__bpo.param`
+  `tx__bpr.param` = t154
+  tx.param = t154
+  const t155 = `tx__bpo.tl_source`
+  `tx__bpr.tl_source` = t155
+  tx.tl_source = t155
+  const t156 = `tx__bpo.sink`
+  `tx__bpr.sink` = t156
+  tx.sink = t156
+  const t157 = `tx__bpo.addr`
+  `tx__bpr.addr` = t157
+  tx.addr = t157
+  const t158 = `tx__bpo.mask`
+  `tx__bpr.mask` = t158
+  tx.mask = t158
+  const t159 = `tx__bpo.data`
+  `tx__bpr.data` = t159
+  tx.data = t159
+  const t160 = `tx__bpo.corrupt`
+  `tx__bpr.corrupt` = t160
+  tx.corrupt = t160
+  const t161 = `tx__bpo.denied`
+  `tx__bpr.denied` = t161
+  tx.denied = t161
+  rxr = rxr__w1
+  txv = _b2i_8
+}
