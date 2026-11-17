@@ -192,7 +192,11 @@ sanitize_args() {
 }
 lhd() {
   printf 'CMD %s: lhd %s\n' "${CURRENT_STEP:--}" "$(sanitize_args "$@")" >&3
-  "$LHD_BIN" "$@"
+  # The per-color `PROGRESS pass.abc` heartbeat is a `-d pass.abc` log (lhd prints nothing but
+  # errors/warnings by default); run_timed forwards it to the console unless BENCH_PROGRESS=0.
+  local dbg=()
+  [ "${BENCH_PROGRESS:-1}" = 0 ] || dbg=(-d pass.abc)
+  "$LHD_BIN" ${dbg[@]+"${dbg[@]}"} "$@"
 }
 # vlt — the same wrapper for verilator (bench/sim_verilator.sh). Named `vlt`,
 # not `verilator`, so that find_verilator's PATH lookup cannot resolve to this

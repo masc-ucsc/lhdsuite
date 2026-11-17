@@ -573,7 +573,7 @@ if [[ " $PHASES " == *" synth "* ]]; then
       step synth "$mode" "sy_${mode}.json" -- "$LHD" synth "tree/$TOP.prp" \
         --top "$TOP" --workdir "$wd" --emit-dir "lg:net_$mode" \
         --result-json "sy_${mode}.json" ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} "$@" \
-        --set abc.memory=false
+        --set synth.memory=macro
       group_end synth "$mode" "$(abc_extra "sy_${mode}.json")"
     }
     rm -rf sw_full net_full

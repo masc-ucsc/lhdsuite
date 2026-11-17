@@ -107,7 +107,7 @@ Run one synthesis job at a time.
 | `lec`, `lec_bug`, `lec_incremental` | Cross-language equivalence, injected-bug detection, and proof-cache reuse (the cache gate applies only under a proof `LEC_EFFORT`; sampled presets never cache). |
 | `verify`, `verify_bug`, `verify_temporal`, `verify_incremental` | Formal sidecar properties, mutant refutation, sequential properties, and reuse where supported. |
 
-All synthesis scenarios and `bench/matrix.sh` pass `--set abc.memory=false`:
+All synthesis scenarios and `bench/matrix.sh` pass `--set synth.memory=macro`:
 memories, including register files, stay native rather than expanding into
 flops and logic. Reported gate counts and standard-cell area exclude those
 memory blocks; the QoR report's `memories` table records their dimensions and

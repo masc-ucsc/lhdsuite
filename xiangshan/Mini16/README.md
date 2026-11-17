@@ -134,7 +134,7 @@ bazel test //bench:xs_mini16_synth_incremental --override_module=livehd=../liveh
 ```
 
 The measured design is `CtrlBlock`, not a whole XiangShan CPU. As for all
-suite cores, `--set abc.memory=false` keeps memories and register files native;
+suite cores, `--set synth.memory=macro` keeps memories and register files native;
 gate counts and standard-cell area exclude those blocks. No SRAM macro is
 selected or characterized by this setting. The targets also collect STA;
 placement is disabled. Compile and LEC scenarios are available under the same
@@ -145,7 +145,7 @@ Synthesis-only measurement on 2026-11-12, using the local LiveHD binary
 `sky130_fd_sc_hd__tt_025C_1v80.lib`: **2,102,419 mapped cells**,
 **14,568,830.006 µm²** standard-cell area, 352 regions, 230.5 s.
 This run disabled both placement and STA and kept memories native
-(`abc.memory=false`); the area excludes memory blocks and is not a die-area
+(`synth.memory=macro`); the area excludes memory blocks and is not a die-area
 estimate. Existing scalar registers and fixed-index register arrays still
 contribute to the mapped logic.
 

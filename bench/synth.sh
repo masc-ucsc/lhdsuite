@@ -11,7 +11,7 @@
 #
 #       lhd synth <core>/pyrope/<top>.prp --top <top> --workdir W \
 #           --emit-dir lg:net_<label> --result-json r_<label>.json --stats \
-#           --set abc.memory=false
+#           --set synth.memory=macro
 #
 #     The per-step numbers (compile / color / abc / sta) come from lhd's own
 #     `phases` account of the run, and the reuse counters from the envelope's
@@ -28,7 +28,7 @@
 #       lhd compile <top>.prp --top <top> --emit-dir lg:L --workdir cw
 #       lhd pass color flat --top <top>.<top> lg:L --workdir W
 #       lhd pass abc --top <top>.<top> lg:L --emit-dir lg:net --workdir W \
-#           --set abc.memory=false
+#           --set synth.memory=macro
 #       lhd pass opentimer --top <top>.<top> lg:net $LIB --workdir OT
 #
 #   MODE=cold  runs each of this core's colorings ($CORE_COLOR_ALGS) and
@@ -78,18 +78,13 @@ LIB="$LHD_TECH_DIR/sky130_fd_sc_hd__tt_025C_1v80.lib"
 # Keep SRAMs and register files native for every core and scenario. Gate/area
 # totals cover mapped standard cells, excluding these memory blocks. Do not
 # bit-blast a cache merely because its port count has no macro realization.
-ABC_ARGS=(--set abc.memory=false)
+ABC_ARGS=(--set synth.memory=macro)
 [ -z "${BENCH_ABC_ADDER:-}" ] || ABC_ARGS+=(--set "abc.adder=$BENCH_ABC_ADDER")
 [ -z "${BENCH_ABC_BLOCK_SIZE:-}" ] || ABC_ARGS+=(--set "abc.block_size=$BENCH_ABC_BLOCK_SIZE")
 [ -z "${BENCH_ABC_DELAY:-}" ] || ABC_ARGS+=(--set "abc.delay=$BENCH_ABC_DELAY")
 [ -z "${BENCH_ABC_LOAD:-}" ] || ABC_ARGS+=(--set "abc.load=$BENCH_ABC_LOAD")
 [ -z "${BENCH_ABC_FLOW:-}" ] || ABC_ARGS+=(--set "abc.flow=$BENCH_ABC_FLOW")
 [ -z "${BENCH_ABC_CACHE:-}" ] || ABC_ARGS+=(--set "lhd.incremental=$BENCH_ABC_CACHE")
-# The suite's shared soft resource envelope. pass.abc refuses a projected
-# oversize region early; GNU time checks the actual process-tree peak after the
-# run. This is intentionally uniform across cores.
-ABC_ARGS+=(--set "abc.memory_budget_mb=${BENCH_ABC_MEMORY_BUDGET_MB:-16384}")
-ABC_ARGS+=(--set "abc.time_budget_ms=${BENCH_ABC_TIME_BUDGET_MS:-900000}")
 ABC_ARGS+=(--set "abc.verbose=${BENCH_ABC_VERBOSE:-true}")
 COLOR_ARGS=()
 [ -z "${BENCH_COLOR_CTRL_CONES:-}" ] || COLOR_ARGS+=(--set "color.synth.ctrl_cones=$BENCH_COLOR_CTRL_CONES")
