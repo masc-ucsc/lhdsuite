@@ -284,6 +284,8 @@ def main():
     p.add_argument("--timeout", type=int, default=6 * 3600)
     p.add_argument("--lhd-set", action="append", default=[], help="extra lhd --set k=v")
     p.add_argument("--force", action="store_true")
+    p.add_argument("--lhd-only", action="store_true",
+                   help="re-run only lhd (and its STA) on cores whose Yosys side already finished in --out")
     p.add_argument("--resta", action="store_true",
                    help="re-run only lhd netlist normalization and both STAs on finished cores (no synthesis)")
     a = p.parse_args()
@@ -319,6 +321,12 @@ def main():
         sdc = pkg / cfg["sdc"]
         core = dict(name=name, top=cfg["top"], v_flags=cfg.get("v_flags", ""), filelist=str(fl),
                     vdir=str(fl.parent), dir=d, sdc=sdc, period=clock_period(sdc))
+        if (d / "result.json").exists() and a.lhd_only:
+            prior = json.loads((d / "result.json").read_text())
+            if prior.get("yosys", {}).get("rc") == 0 and prior.get("sta_yosys", {}).get("rc") == 0:
+                core["prior"] = prior
+                todo.append(core)
+                continue
         if (d / "result.json").exists() and not a.force:
             r = json.loads((d / "result.json").read_text())
             if a.resta:
@@ -336,12 +344,19 @@ def main():
     write_summary(a, results)
 
     def one(core):
-        with concurrent.futures.ThreadPoolExecutor(2) as ex:
-            fy = ex.submit(run_yosys, core, lib, core["period"], a)
-            fl = ex.submit(run_lhd, core, lib, core["sdc"], a)
-            y, l = fy.result(), fl.result()
+        prior = core.pop("prior", None)
+        if prior:  # --lhd-only: keep the finished Yosys side, re-run only lhd
+            y, l = prior["yosys"], run_lhd(core, lib, core["sdc"], a)
+        else:
+            with concurrent.futures.ThreadPoolExecutor(2) as ex:
+                fy = ex.submit(run_yosys, core, lib, core["period"], a)
+                fl = ex.submit(run_lhd, core, lib, core["sdc"], a)
+                y, l = fy.result(), fl.result()
         r = dict(core=core["name"], top=core["top"], period_ps=core["period"], sdc=str(core["sdc"]), yosys=y, lhd=l)
         for side, s in (("yosys", y), ("lhd", l)):
+            if side == "yosys" and prior:
+                r["sta_yosys"] = prior["sta_yosys"]
+                continue
             r["sta_" + side] = run_sta(core, side, s["netlist"], lib, core["sdc"], a) if s["netlist"] else dict(rc=None)
         (core["dir"] / "result.json").write_text(json.dumps(r, indent=1, sort_keys=True))
         results[core["name"]] = r
