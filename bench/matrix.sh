@@ -153,7 +153,7 @@ SIM_ARGS=(); DRV_SETS=(); LEC_ARGS=()
 SIM_ARGS=($SIM_SETS)
 for kv in $SIM_SETS; do
   # Only the keys drv.bin reads itself; it rejects the generation-time ones.
-  case "$kv" in lhd.seed=* | sim.init_zero=* | compile.unknown_zero=*) DRV_SETS+=(--set "$kv") ;; esac
+  case "$kv" in lhd.seed=* | sim.init_zero=*) DRV_SETS+=(--set "$kv") ;; esac
 done
 [ -n "$LEC_TRUST" ] && LEC_ARGS=(--set "formal.lec.trust=$LEC_TRUST")
 

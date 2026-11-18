@@ -95,7 +95,7 @@ def simulate(args, work):
         run('sim_setup', common + ['--setup-only'], work)
         run('sim_cc', common + ['--run-only', '--set', 'sim.compile_only=true'], work)
         output = run('sim_exec', [work/'lhd/sim/drv.bin', '--cycles', args.cycles,
-                     '--set', 'compile.unknown_zero=true', '--set', 'sim.init_zero=true'], work, True, args.host_perf)
+                     '--set', 'sim.init_zero=true'], work, True, args.host_perf)
         signatures.append(signature(output, args.cycles))
         print(f'METRIC sim_cycles_per_s {args.cycles * 1000 // max(1, run.last_ms)} cycles/s')
     if args.mode in ('verilator', 'compare'):
