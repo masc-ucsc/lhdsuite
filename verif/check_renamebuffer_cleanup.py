@@ -127,7 +127,7 @@ def main():
         return ok
 
     ok = run("sim", ["sim", sources / "compare.prp", "--arg", f"cycles={args.cycles}",
-                     "--set", "sim.unknown_zero=true", "--set", "sim.init_zero=true",
+                     "--set", "compile.unknown_zero=true", "--set", "sim.init_zero=true",
                      ])
     if args.lec:
         rtl = ROOT / "xiangshan/Backend/verilog"

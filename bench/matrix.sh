@@ -138,11 +138,11 @@ gemmini | gemmini8)
   if [ "$CORE" = gemmini ]; then
     # ~165k cycles/s in this flow (slop): 200k measured 1.2 s on kaffirlime.
     SIM_CYCLES=1000; DEFAULT_PERF_CYCLES=200000
-    SIM_SETS="--set sim.unknown_zero=true"; LEC_TRUST=mem_64x128
+    SIM_SETS="--set compile.unknown_zero=true"; LEC_TRUST=mem_64x128
   else
     # ~39k cycles/s in this flow (slop): 25k measured 0.64 s on kaffirlime.
     SIM_CYCLES=1000; DEFAULT_PERF_CYCLES=25000; PKG_SUB=gemmini/Mesh8
-    SIM_SETS="--set sim.unknown_zero=true --set sim.init_zero=true"; LEC_TRUST=mem_64x256
+    SIM_SETS="--set compile.unknown_zero=true --set sim.init_zero=true"; LEC_TRUST=mem_64x256
   fi ;;
 *)
   echo "FAIL: unknown core '$CORE' (add it to the case in bench/matrix.sh)" >&2; exit 2 ;;
@@ -153,7 +153,7 @@ SIM_ARGS=(); DRV_SETS=(); LEC_ARGS=()
 SIM_ARGS=($SIM_SETS)
 for kv in $SIM_SETS; do
   # Only the keys drv.bin reads itself; it rejects the generation-time ones.
-  case "$kv" in lhd.seed=* | sim.init_zero=* | sim.unknown_zero=*) DRV_SETS+=(--set "$kv") ;; esac
+  case "$kv" in lhd.seed=* | sim.init_zero=* | compile.unknown_zero=*) DRV_SETS+=(--set "$kv") ;; esac
 done
 [ -n "$LEC_TRUST" ] && LEC_ARGS=(--set "formal.lec.trust=$LEC_TRUST")
 

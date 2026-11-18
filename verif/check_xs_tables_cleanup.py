@@ -435,7 +435,7 @@ def main():
                 passed = run(name + "/sim_" + side, [
                     "sim", ROOT / "xiangshan/Backend" / side / (name + ".prp"),
                     sources / f"trace_{side}.prp", "--arg", f"cycles={args.cycles}",
-                    "--set", "sim.unknown_zero=true", "--set", "sim.init_zero=true",
+                    "--set", "compile.unknown_zero=true", "--set", "sim.init_zero=true",
                      "--diag-fmt", "pretty",
                 ])
                 simulated = simulated and passed
@@ -457,7 +457,7 @@ def main():
                         "--arg",
                         f"cycles={args.cycles}",
                         "--set",
-                        "sim.unknown_zero=true",
+                        "compile.unknown_zero=true",
                         "--set",
                         "sim.init_zero=true",
 

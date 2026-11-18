@@ -94,6 +94,10 @@ COLOR_ARGS=()
 # unit from max_ge (which is synthesis GE and shapes the synth/pipe size
 # window), so both can be set in one run without one overriding the other.
 [ -z "${BENCH_COLOR_MAX_GATE:-}" ] || COLOR_ARGS+=(--set "color.synth.max_gate=$BENCH_COLOR_MAX_GATE")
+# synth.partition: the region granularity of `lhd synth` (see defs.bzl synth_partition).
+# `lhd synth` only: the manual `lhd pass color` flow has no such option.
+SYNTH_PART_ARGS=()
+[ -z "${BENCH_SYNTH_PARTITION:-}" ] || SYNTH_PART_ARGS+=(--set "synth.partition=$BENCH_SYNTH_PARTITION")
 # cones phase 2: false|pair|all -- merge a register's color FORWARD across its Q
 # after the backward overlap merge has taken its share of the budget.
 [ -z "${BENCH_COLOR_FORWARD:-}" ] || COLOR_ARGS+=(--set "color.synth.forward=$BENCH_COLOR_FORWARD")
@@ -197,7 +201,7 @@ synth_oneshot() {
   local rc=0
   lhd_timed_rss "${label}_synth" synth "$src/$CORE_TOP.prp" ${stubs[@]+"${stubs[@]}"} --top "$CORE_TOP" \
     --workdir "$wd" --emit-dir "lg:net_$label" --result-json "r_$label.json" --stats \
-    ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} ${COLOR_ARGS[@]+"${COLOR_ARGS[@]}"} ${ABC_ARGS[@]+"${ABC_ARGS[@]}"} \
+    ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} ${COLOR_ARGS[@]+"${COLOR_ARGS[@]}"} ${SYNTH_PART_ARGS[@]+"${SYNTH_PART_ARGS[@]}"} ${ABC_ARGS[@]+"${ABC_ARGS[@]}"} \
     ${incr_args[@]+"${incr_args[@]}"} || rc=$?
   # A failed STA still completed compile/color/ABC. Keep those phase timers in
   # the ledger so a red full row is diagnosable rather than one opaque

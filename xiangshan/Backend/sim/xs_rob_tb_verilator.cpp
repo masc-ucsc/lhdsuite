@@ -17,7 +17,7 @@
 // io_enq_canAccept. Verilator is 2-state and zero-fills them; `lhd sim` draws
 // each unknown bit from the run's seeded PRNG, so its checksum moved with
 // `--seed`. That is why xs_rob's CORES entry carries
-// `sim_sets: --set sim.unknown_zero=true` — with it the three simulators agree
+// `sim_sets: --set compile.unknown_zero=true` — with it the three simulators agree
 // exactly. Nothing to do on this side: zero-fill is already what Verilator does.
 //
 // THE STIMULUS SCHEDULE. `Rob` declares `clock` and `reset`, so the Pyrope

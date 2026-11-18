@@ -43,12 +43,12 @@ each one run with N=4 reproduces the 4x4 `gemmini/pyrope2/` file byte for byte:
 
 ## Simulation
 
-Run `drv.bin` with `--init-zero --set sim.unknown_zero=true`. The 8x8 has
+Run `drv.bin` with `--init-zero --set compile.unknown_zero=true`. The 8x8 has
 registers with no initializer whose power-on bits reach the outputs. Without
 `--init-zero` the checksum changes with `--seed`, and passing the flags only to
 `lhd sim --setup-only/--run-only` does not carry them into a later bare
 `drv.bin` run. In the bench, `bench/sim.sh` forwards `lhd.seed`,
-`sim.init_zero` and `sim.unknown_zero` from the core's `sim_sets` to the timed
+`sim.init_zero` and `compile.unknown_zero` from the core's `sim_sets` to the timed
 `drv.bin` run, and `gemmini8` sets both `init_zero` and `unknown_zero`.
 
 25k cycles: `sum=3185508839202413007` from Verilator, lhd sim on `pyrope/`,

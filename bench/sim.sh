@@ -195,7 +195,7 @@ case " ${CORE_SIM_SETS:-} " in
 esac
 
 # Run-time keys the generated drv.bin reads itself (`drv.bin --help`: lhd.seed,
-# sim.init_zero, sim.unknown_zero). `lhd sim --run-only` hands them to the binary
+# sim.init_zero, compile.unknown_zero). `lhd sim --run-only` hands them to the binary
 # it runs, so the gated sim_run sees them; every bare drv.bin re-run below must
 # get them too, or it simulates a DIFFERENT power-on state than the run the gate
 # checked. Measured on gemmini/Mesh8 (state with no initializer reaching the
@@ -204,7 +204,7 @@ esac
 # generation-time ones (sim.tune.backend, lhd.jobs, ...).
 DRV_SETS=()
 for kv in ${CORE_SIM_SETS:-}; do
-  case "$kv" in lhd.seed=* | sim.init_zero=* | sim.unknown_zero=*) DRV_SETS+=(--set "$kv") ;; esac
+  case "$kv" in lhd.seed=* | sim.init_zero=* | compile.unknown_zero=*) DRV_SETS+=(--set "$kv") ;; esac
 done
 
 # ---- MODE=incr: full plus the three-pass rebuild over ONE workdir ------------

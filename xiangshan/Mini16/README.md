@@ -104,7 +104,7 @@ keeps retiring (~1.5 instructions per cycle). The frontend `trigger` field
 must be 15 (TriggerAction.None): 0 means "breakpoint exception", which turns
 every uop into an exception that never reaches an issue queue.
 
-Needs `--set sim.unknown_zero=true --set sim.init_zero=true` (reset-free
+Needs `--set compile.unknown_zero=true --set sim.init_zero=true` (reset-free
 state reaches the outputs; Verilator zero-fills). With those, the same
 checksum comes from lhd sim on `pyrope/`, lhd sim on the Verilog (`lg:`) and
 Verilator, at 2, 5, 50, 1,000 and 20,000 cycles:

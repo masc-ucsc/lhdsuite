@@ -189,7 +189,7 @@ Every core shares one shape (`<core>/` = `dino/`, `minion/` or `cva6/`):
   depend on unreset state the two therefore disagree for a legitimate reason,
   and the disagreement is NOT a codegen bug to chase. `xs_rob` is the case in
   this suite (three plain `always @(posedge clock)` flops reaching
-  `io_enq_isEmpty`), and it carries `sim_sets: --set sim.unknown_zero=true` — the
+  `io_enq_isEmpty`), and it carries `sim_sets: --set compile.unknown_zero=true` — the
   knob is `unknown_zero`, NOT `init_zero`: the latter covers state with no
   initializer, and these flops reach the simulator carrying an unknown one, so
   `init_zero` changed nothing. Zeroing them is also what makes lhd's throughput

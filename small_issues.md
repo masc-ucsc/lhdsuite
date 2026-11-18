@@ -281,13 +281,13 @@ that asymmetry.
 
 | spelling | result |
 | --- | --- |
-| `--set sim.unknown_zero=true` | ACCEPTED but INERT — still REFUTED, and the emitted `check_ref.v` still carries `\io_deq.valid = (2'sb0?)` |
+| `--set compile.unknown_zero=true` | ACCEPTED but INERT — still REFUTED, and the emitted `check_ref.v` still carries `\io_deq.valid = (2'sb0?)` |
 | `--set formal.unknown_zero=true` | rejected, exit 2 (unknown option) |
 | `--set cgen.unknown_zero=true` | rejected, exit 2 |
 
 `unknown_zero` is registered only in the sim/cgen namespace
 (`inou/cgen/inou_cgen.cpp`, routed via `lhd/lhd_kernel_common.cpp` as
-`sim.unknown_zero`) and never reaches the `inou.cgen.verilog` emission that
+`compile.unknown_zero`) and never reaches the `inou.cgen.verilog` emission that
 `formal.solver=lgyosys` uses for its two sides. So step one is wiring it there
 (or adding `formal.unknown_zero`) — after which this experiment is a re-run of
 the sweep with one extra flag.

@@ -86,6 +86,10 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             per color; the soft bound the default coarse synth partition
 #             cuts at). Same purposes as color_max_ge; needed where max_ge
 #             cannot split the partition (picorv32).
+#   synth_partition  optional `synth.partition` (coarse|fine|mapper). The default
+#             coarse partition maps picorv32_top as ONE ABC region whatever
+#             color.synth.max_* says, so `fine` is what gives its incremental
+#             scenarios independent regions.
 #   sim_tb    asserted, timed sim benchmark. sim_cycles is its explicit cycle
 #             count. sim_top_tb / sim_prog_tb are additional whole-top
 #             correctness drivers ("" = none). sim_top_cycles /
@@ -124,7 +128,7 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             (both the timed benchmark and the correctness drivers), space
 #             separated, each already spelled `--set k=v`. "" = none. Two uses:
 #             a driver whose contract needs a knob the shared script cannot
-#             infer (xs_rob's sim.unknown_zero=true), and a pinned
+#             infer (xs_rob's compile.unknown_zero=true), and a pinned
 #             `sim.tune.*` speed vector (xs_renametable). Every target runs in
 #             a fresh workdir, so lhd's sim.tune learning loop can never
 #             converge here; a measured vector is pinned by hand instead.
@@ -325,6 +329,7 @@ CORES = {
         # `color.synth.max_ge` does not split it (the partition also holds the
         # unmapped register file); `max_gate` does: 2000 -> ~30 regions.
         "color_max_gate": 2000,
+        "synth_partition": "fine",
         # A real RISC-V program with the testbench acting as the CPU's memory,
         # checked architecturally through the program's own store (`stored=30`).
         # Both sim targets were red for a long time (the missing write strobe,
@@ -589,7 +594,7 @@ CORES = {
         # io_enq_isEmpty/canAccept. `lhd sim` draws an unknown bit from the run's
         # seeded PRNG, so the checksum moved with `--seed` (0xC0FFEE ->
         # 4607111980261556205, seed 1 -> …805, seed 2 -> …800) while Verilator,
-        # which is 2-state, zero-fills. `sim.unknown_zero=true` makes lhd fill
+        # which is 2-state, zero-fills. `compile.unknown_zero=true` makes lhd fill
         # the same way, and the three simulators then agree exactly.
         #
         # It is the FAIR setting for this comparison, not a thumb on the scale:
@@ -600,7 +605,7 @@ CORES = {
         # from 6.1k to 15.2k cycles/s with them zeroed. `sim.init_zero` does NOT
         # help: it covers state with no initializer, and these flops reach the
         # simulator carrying an unknown one.
-        "sim_sets": "--set sim.unknown_zero=true",
+        "sim_sets": "--set compile.unknown_zero=true",
         # Verified identical from ALL THREE simulators at sim_cycles under that
         # fill: the .prp tree, `lhd compile verilog --top Rob`, and Verilator on
         # the same .sv. Do NOT re-pin this from one side's output.
@@ -825,7 +830,7 @@ CORES = {
         "sim_marker": "rocket:",
         # Reset-free flops reach the outputs (as in xs_rob): zero-fill unknowns
         # so lhd sim matches the 2-state Verilator.
-        "sim_sets": "--set sim.unknown_zero=true",
+        "sim_sets": "--set compile.unknown_zero=true",
         # Identical from lhd sim on the .prp tree, lhd sim on the Verilog and
         # Verilator at 25k and 500k cycles. Do NOT re-pin from one side's output.
         # A register named `_r` (RocketCore.scala:1117) used to collide with the
@@ -863,7 +868,7 @@ CORES = {
         "sim_cycles": 100000,
         "sim_tb_unit": "BoomTile",
         "sim_marker": "boom:",
-        "sim_sets": "--set sim.unknown_zero=true",
+        "sim_sets": "--set compile.unknown_zero=true",
         # Identical from lhd sim on the raw .prp tree and Verilator at 25k and
         # 100k cycles. Do NOT re-pin from one side's output.
         "sim_expect": "sum=5908588184295336531",
@@ -901,7 +906,7 @@ CORES = {
         "sim_cycles": 25000,
         "sim_tb_unit": "GemminiSimTop",
         "sim_marker": "gemmini:",
-        "sim_sets": "--set sim.unknown_zero=true",
+        "sim_sets": "--set compile.unknown_zero=true",
         # Identical from lhd sim on the .prp tree, lhd sim on the Verilog and
         # Verilator at 25k cycles. Do NOT re-pin from one side's output.
         "sim_expect": "sum=6362616511205422611",
@@ -933,7 +938,7 @@ CORES = {
         "sim_cycles": 25000,
         "sim_tb_unit": "GemminiSimTop",
         "sim_marker": "gemmini8:",
-        "sim_sets": "--set sim.unknown_zero=true --set sim.init_zero=true",
+        "sim_sets": "--set compile.unknown_zero=true --set sim.init_zero=true",
         # Identical from lhd sim on pyrope/ and pyrope2/, lhd sim on the Verilog
         # and Verilator at 25k cycles. Do NOT re-pin from one side's output.
         "sim_expect": "sum=3185508839202413007",
@@ -967,7 +972,7 @@ CORES = {
         "sim_cycles": 2000,
         "sim_tb_unit": "GemminiSimTop",
         "sim_marker": "gemmini16:",
-        "sim_sets": "--set sim.unknown_zero=true --set sim.init_zero=true",
+        "sim_sets": "--set compile.unknown_zero=true --set sim.init_zero=true",
         # Identical from lhd sim on pyrope/ and pyrope2/, lhd sim on the Verilog and
         # Verilator at 2k cycles (and at 5k: sum=4616705506188618455). Do NOT re-pin
         # from one side's output.
@@ -1122,6 +1127,7 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_COLOR_ALGS": " ".join(cfg["color_algs"]),
             "BENCH_COLOR_MAX_GE": str(cfg.get("color_max_ge", "")),
             "BENCH_COLOR_MAX_GATE": str(cfg.get("color_max_gate", "")),
+            "BENCH_SYNTH_PARTITION": cfg.get("synth_partition", ""),
             "CORE_SYNTH_ONLY": "1" if synth_only else "",
             # Per-color limits are 16 GiB / 15 minutes. A partitioned scenario
             # maps many colors across full/cold/warm/edit, so its six-hour
