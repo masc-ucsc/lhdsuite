@@ -126,6 +126,24 @@ bazel test //verif:v2v_dino     # Verilog -> Pyrope -> Verilog, then LEC
 
 These correctness tests also run under `//...`.
 
+## Yosys+ABC QoR comparison
+
+`bench/yosys_compare.py` synthesizes each core's Verilog with both `lhd synth`
+and a Yosys+ABC recipe modeled on ORFS's asap7 flow (yosys-slang front end,
+`synth -flatten`, the asap7 adder and latch maps, `dfflibmap`, ABC with ORFS's
+`abc_speed.script`, `-D` from the SDC clock, ORFS's dont_use list). Both runs
+use the same asap7 Liberty and the core's SDC. Both netlists are then timed by
+one OpenSTA script inside `openroad`: ideal clocks, no wire load, no placement.
+It reports setup slack/TNS, cell count, sequential cells and Liberty area.
+Inferred memories become flops on both sides (`synth.memory=flops`), unlike
+the bench's `synth.memory=macro`, which has no Yosys equivalent. lhd's
+Verilog netlist writes constant wiring as `always_comb`, so the script first
+folds that wiring structurally with Yosys (no remapping or merging). A netlist that still
+holds generic logic after that is reported as not timed. The run is outside
+bazel and resumable; `--resta` re-times finished cores without resynthesizing.
+cva6 is skipped because its `verilog/` is only a cone. Tool paths are explicit
+arguments (see the script's docstring).
+
 ## Incremental checks
 
 Incremental flows share a work directory across a cold run, an unchanged or
