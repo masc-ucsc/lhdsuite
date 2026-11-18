@@ -180,7 +180,12 @@ def run_lhd(core, lib, sdc, a):
     shutil.rmtree(vdir, ignore_errors=True)
     cmd = [a.lhd, "synth", "--top", core["top"], "--workdir", str(d / "lhd_work"),
            "--emit-dir", "verilog:%s/" % vdir, "--result-json", str(d / "lhd.json"), "--stats",
-           "--set", "synth.memory=flops", "--set", "synth.liberty=%s" % lib, "--set", "synth.sdc=%s" % sdc]
+           "--set", "synth.memory=flops", "--set", "synth.liberty=%s" % lib, "--set", "synth.sdc=%s" % sdc,
+           # Comparison contract, like synth.memory=flops: Yosys maps a resetless register's power-on `initial`
+           # value to a plain DFF and drops it (asap7 has no init pin). lhd's default keeps such a register as a
+           # native flop (LEC-exact), which is not a Liberty cell, so the netlist could not be timed at all
+           # (xs_renametable, xs_mini16: 5 `dff-init-kept-native` flops each).
+           "--set", "synth.drop_init=true"]
     cmd += a.lhd_set_args
     cmd += ["--", "-F", core["filelist"], "-DSYNTHESIS"] + core["v_flags"].split()
     env = dict(os.environ)
