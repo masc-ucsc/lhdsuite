@@ -34,9 +34,11 @@ bazel run //bench:show -- --core minion                # ...one core only
   checkout: `bazel test //... --override_module=livehd=../livehd`.
 - Builds default to `-c opt` (benchmark numbers from a debug lhd are
   unrealistic); use `--config=debug` only when debugging lhd itself.
-- Synthesis targets resolve the newest installed and enabled sky130 PDK through
-  `ciel`, then export `LHD_TECH_DIR` for LiveHD. Missing or mismatched PDKs fail
-  with instructions (see README setup).
+- Synthesis targets map to asap7: `tech/asap7/asap7-rvt-ff.lib.gz`, decompressed
+  per test by `require_tech_dir` (bench/common.sh) and passed as
+  `--set synth.liberty=`; each core's `<core>/synth/*.sdc` (the `sdc` field in
+  bench/defs.bzl) is passed as `--set synth.sdc=`. SDC numbers are in ps (the
+  Liberty's time unit; set_units has no effect).
 
 ## Layout
 

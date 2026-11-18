@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Coloring + ABC tech-map (sky130) + OpenTimer STA of the design under test, at
+# Coloring + ABC tech-map (asap7, tech/asap7) + STA of the design under test, at
 # $CORE_TOP (the whole design). Everything here runs with the default
 # hier=true; what separates the two colorings is how many distinct
 # colors/partitions they create:
@@ -11,7 +11,8 @@
 #
 #       lhd synth <core>/pyrope/<top>.prp --top <top> --workdir W \
 #           --emit-dir lg:net_<label> --result-json r_<label>.json --stats \
-#           --set synth.memory=macro
+#           --set synth.memory=macro --set synth.liberty=$TECH_LIB \
+#           --set synth.sdc=<core>/synth/<core sdc>
 #
 #     The per-step numbers (compile / color / abc / sta) come from lhd's own
 #     `phases` account of the run, and the reuse counters from the envelope's
@@ -28,8 +29,8 @@
 #       lhd compile <top>.prp --top <top> --emit-dir lg:L --workdir cw
 #       lhd pass color flat --top <top>.<top> lg:L --workdir W
 #       lhd pass abc --top <top>.<top> lg:L --emit-dir lg:net --workdir W \
-#           --set synth.memory=macro
-#       lhd pass opentimer --top <top>.<top> lg:net $LIB --workdir OT
+#           --set synth.memory=macro --set synth.liberty=$TECH_LIB
+#       lhd pass opentimer --top <top>.<top> lg:net $TECH_LIB [<core sdc>] --workdir OT
 #
 #   MODE=cold  runs each of this core's colorings ($CORE_COLOR_ALGS) and
 #              reports timing + QoR for each — METRICs:
@@ -55,7 +56,7 @@
 #              netlist directly against the compiled design:
 #                lhd pass liberty gensim $LIB --emit-dir lg:models
 #                lhd lec --impl lg:netlist --ref lg:design --lib lg:models
-#              (--lib supplies behavioral models for the mapped sky130 cells;
+#              (--lib supplies behavioral models for the mapped asap7 cells;
 #              without it they are opaque boxes and the comparison checks
 #              nothing about them. For lec_synth the design side is the
 #              one-shot's own compiled library, W/synth/lg.)
@@ -68,7 +69,16 @@ printf '{"pdk_version":"%s","target":"%s"}\n' \
   "$PDK_VERSION" "${TEST_TARGET:-$CORE}" >"$OUT_DIR/run_metadata.json"
 
 TOP=$CORE_TOP.$CORE_TOP
-LIB="$LHD_TECH_DIR/sky130_fd_sc_hd__tt_025C_1v80.lib"
+# The library (asap7, tech/asap7) and the core's timing constraints (CORE_SDC, `sdc` in bench/defs.bzl: the clock, IO
+# delays and the reset false paths, in ps). Both are passed explicitly: lhd's own default library is sky130.
+LIB="$TECH_LIB"
+SDC=""
+if [ -n "${CORE_SDC:-}" ]; then
+  SDC=$(rloc "$CORE_SDC")
+  [ -f "$SDC" ] || { echo "FAIL: CORE_SDC $CORE_SDC does not resolve to a file" >&2; exit 1; }
+fi
+SYNTH_SDC_ARGS=()
+[ -z "$SDC" ] || SYNTH_SDC_ARGS=(--set "synth.sdc=$SDC")
 
 # Experiment-only synthesis knobs. Bazel tests can set BENCH_ABC_*=...,
 # BENCH_COLOR_SYNTH_ALG=pipe|synth|cones, or BENCH_COLOR_REDUCE=1 so one candidate is
@@ -78,7 +88,7 @@ LIB="$LHD_TECH_DIR/sky130_fd_sc_hd__tt_025C_1v80.lib"
 # Keep SRAMs and register files native for every core and scenario. Gate/area
 # totals cover mapped standard cells, excluding these memory blocks. Do not
 # bit-blast a cache merely because its port count has no macro realization.
-ABC_ARGS=(--set synth.memory=macro)
+ABC_ARGS=(--set synth.memory=macro --set "synth.liberty=$LIB")
 [ -z "${BENCH_ABC_ADDER:-}" ] || ABC_ARGS+=(--set "abc.adder=$BENCH_ABC_ADDER")
 [ -z "${BENCH_ABC_BLOCK_SIZE:-}" ] || ABC_ARGS+=(--set "abc.block_size=$BENCH_ABC_BLOCK_SIZE")
 [ -z "${BENCH_ABC_DELAY:-}" ] || ABC_ARGS+=(--set "abc.delay=$BENCH_ABC_DELAY")
@@ -202,7 +212,7 @@ synth_oneshot() {
   lhd_timed_rss "${label}_synth" synth "$src/$CORE_TOP.prp" ${stubs[@]+"${stubs[@]}"} --top "$CORE_TOP" \
     --workdir "$wd" --emit-dir "lg:net_$label" --result-json "r_$label.json" --stats \
     ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} ${COLOR_ARGS[@]+"${COLOR_ARGS[@]}"} ${SYNTH_PART_ARGS[@]+"${SYNTH_PART_ARGS[@]}"} ${ABC_ARGS[@]+"${ABC_ARGS[@]}"} \
-    ${incr_args[@]+"${incr_args[@]}"} || rc=$?
+    ${SYNTH_SDC_ARGS[@]+"${SYNTH_SDC_ARGS[@]}"} ${incr_args[@]+"${incr_args[@]}"} || rc=$?
   # A failed STA still completed compile/color/ABC. Keep those phase timers in
   # the ledger so a red full row is diagnosable rather than one opaque
   # time-to-failure number.
@@ -265,7 +275,7 @@ synth_pass() {
     --emit-dir "lg:net_$1" --workdir "$4" --result-json "r_$1.json" ${ABC_ARGS[@]+"${ABC_ARGS[@]}"}
   cp "$4/qor.json" "$OUT_DIR/${1}_qor.json"
   cp "step_${1}_abc.log" "$OUT_DIR/${1}_abc.log"
-  run_timed "${1}_sta" lhd pass opentimer --top "$TOP" "lg:net_$1" "$LIB" --workdir "OT_$1"
+  run_timed "${1}_sta" lhd pass opentimer --top "$TOP" "lg:net_$1" "$LIB" ${SDC:+"$SDC"} --workdir "OT_$1"
   report_sta "$1" "OT_$1/timing.json"
   report_abc "$1" "r_$1.json" "step_${1}_abc.log"
   QOR_JSON="$4/qor.json"

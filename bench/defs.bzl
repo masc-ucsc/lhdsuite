@@ -170,6 +170,8 @@ CORES = {
         "pkg": "//dino",
         "pyrope2": True,
         "top": "PipelinedDualIssueCPU",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/constraint.sdc",
         "unit": "ALU",
         # The pipeline stage register: load / hold / flush / reset are all
         # "one cycle after", so its whole contract is a `past` property.
@@ -242,6 +244,8 @@ CORES = {
         # would benchmark a different, trivial design. Omit those legs until a
         # whole-core Verilog tree can be staged.
         "top": "cva6",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/constraint.sdc",
         # The local Verilog collateral is only the parameter-pinned tag_cmp
         # cone. The generator verification must name that real Verilog top;
         # synthesis/simulation continue to use the whole generated Pyrope core.
@@ -291,6 +295,8 @@ CORES = {
         # Both languages are the SAME design here (unlike cva6), so every
         # cross-language scenario is real.
         "top": "picorv32_top",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/constraint.sdc",
         # The CPU itself carries the sidecar and the variants. It is the only
         # module in the top's cone besides the wrapper.
         "unit": "picorv32",
@@ -370,6 +376,8 @@ CORES = {
         # proper: the same top, reworked to be efficient (bitcoin/README.md).
         "pyrope2": True,
         "top": "bitcoin_top",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/constraint.sdc",
         # One mining lane. NOT bitcoin_compare: a compare bug reaches the top
         # only when the first double hash completes (~200 cycles), far past
         # the from-reset LEC window, so lec_bug could never catch it (measured:
@@ -418,6 +426,8 @@ CORES = {
         # ibex_suite_top pins ibex_top's parameters and ties off everything but
         # the instruction and data buses. Both languages are the same design.
         "top": "ibex_suite_top",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/constraint.sdc",
         # The load-store unit carries Ibex's own IbexDataAddrUnaligned assert.
         "unit": "ibex_load_store_unit",
         # No sequential sidecar: Ibex's sequential bus lemmas (LSUHold in
@@ -466,6 +476,8 @@ CORES = {
         # The optional filegroups are placeholders; no maintained tree exists.
         "pyrope2": False,
         "top": "minion_top",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/constraint.sdc",
         "unit": "txfma_adder",
         # No sequential sidecar yet. vpu_trans or a dcache handshake would be
         # the natural target — both are stateful and already in the top's cone.
@@ -568,6 +580,8 @@ CORES = {
         "synth_memory_mb": 49152,
         "pkg": "//xiangshan/Backend",
         "top": "Rob",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/Rob.sdc",
         "unit": "Rob",
         "v_flags": "--single-unit",
         "color_algs": ["synth"],
@@ -629,6 +643,8 @@ CORES = {
         "pkg": "//matched_filter",
         "pyrope2": True,
         "top": "matched_filter",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/constraint.sdc",
         # `tap` sits under the top (64 instances) and its reference load is the
         # bug1 site: tests/bug1/tap.prp corrupts each loaded byte, which the
         # verify sidecar REFUTES and whole-design LEC catches.
@@ -673,6 +689,8 @@ CORES = {
     "xs_alu": {
         "pkg": "//xiangshan/Backend",
         "top": "Alu",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/Alu.sdc",
         "unit": "Alu",
         "v_flags": "--single-unit",
         "color_algs": ["synth"],
@@ -704,6 +722,8 @@ CORES = {
     "xs_renametable": {
         "pkg": "//xiangshan/Backend",
         "top": "RenameTableWrapper",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/RenameTableWrapper.sdc",
         "unit": "RenameTableWrapper",
         # RenameTableWrapper is pure structure: 87 `io_… = …` lines and NOT ONE
         # of them ends in `& 1`, so the shared top-file anchor finds no site and
@@ -755,6 +775,8 @@ CORES = {
     "xs_div": {
         "pkg": "//xiangshan/Backend",
         "top": "DivUnit",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/DivUnit.sdc",
         "unit": "DivUnit",
         "v_flags": "--single-unit",
         "color_algs": ["synth"],
@@ -763,6 +785,8 @@ CORES = {
     "xs_exu": {
         "pkg": "//xiangshan/Backend",
         "top": "ExuBlock",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/ExuBlock.sdc",
         "unit": "ExuBlock",
         "v_flags": "--single-unit",
         "color_algs": ["synth"],
@@ -773,6 +797,8 @@ CORES = {
         "synth_memory_mb": 98304,
         "pkg": "//xiangshan/Backend",
         "top": "Backend",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/Backend.sdc",
         "unit": "Backend",
         "incremental_edit_unit": "DelayN_6",
         "v_flags": "--single-unit",
@@ -792,6 +818,8 @@ CORES = {
         # No sim_tb until the documented simulation issues are resolved.
         "pkg": "//xiangshan/Mini16",
         "top": "CtrlBlock",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/constraint.sdc",
         "unit": "CtrlBlock",
         "v_flags": "--single-unit",
         "color_algs": ["synth"],
@@ -809,6 +837,8 @@ CORES = {
     "rocket": {
         "pkg": "//rocket",
         "top": "RocketTile",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/constraint.sdc",
         "unit": "RocketTile",
         # RocketTile has no `io_x = … & 1` line for the generic bug1 anchor;
         # flip the ALU result instead (a real behaviour change in the core).
@@ -847,6 +877,8 @@ CORES = {
         # I/D caches + PTW, the cone of the firtool emit (see boom/BUILD).
         "pkg": "//boom",
         "top": "BoomTile",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/constraint.sdc",
         "unit": "BoomTile",
         # BoomTile has no `io_x = ... & 1` line for the generic bug1 anchor;
         # flip an ALU result instead (a real behaviour change in the core).
@@ -883,6 +915,8 @@ CORES = {
         # mesh as 16 Tile instances, which pyrope2 is meant to fold into loops.
         "pkg": "//gemmini",
         "top": "GemminiTPU",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/constraint.sdc",
         "unit": "GemminiTPU",
         # One MAC's output inverted: a real arithmetic change in all 16 PEs.
         "incremental_edit_unit": "MacUnit",
@@ -921,6 +955,8 @@ CORES = {
         # do not (3140 lines, -60%).
         "pkg": "//gemmini/Mesh8",
         "top": "GemminiTPU",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/constraint.sdc",
         "unit": "GemminiTPU",
         "incremental_edit_unit": "MacUnit",
         "v_flags": "",
@@ -952,6 +988,8 @@ CORES = {
         # same generators as the 8x8 (pyro_scratch/gemmini8/gen/).
         "pkg": "//gemmini/Mesh16",
         "top": "GemminiTPU",
+        # Timing constraints (clock, IO delays, reset false paths; ps, for the asap7 library in tech/asap7).
+        "sdc": "synth/constraint.sdc",
         "unit": "GemminiTPU",
         "incremental_edit_unit": "MacUnit",
         "v_flags": "",
@@ -1080,6 +1118,12 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
     ]
     if cfg.get("pyrope2", False):
         data.extend([pkg + ":pyrope2", pkg + ":pyrope2_top"])
+    # Synthesis maps to and times with asap7 (tech/asap7) under the core's SDC (`sdc`, relative to the package).
+    sdc = cfg.get("sdc", "")
+    if script == "synth.sh":
+        data.append("//tech/asap7:asap7-rvt-ff.lib.gz")
+        if sdc:
+            data.append("%s:%s" % (pkg, sdc))
     if not synth_only:
         data.extend([
             pkg + ":tests",
@@ -1107,6 +1151,8 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
         data = data,
         env = {
             "LHD": "$(rlocationpath @livehd//lhd:lhd)",
+            "TECH_LIB_GZ": "$(rlocationpath //tech/asap7:asap7-rvt-ff.lib.gz)" if script == "synth.sh" else "",
+            "CORE_SDC": "$(rlocationpath %s:%s)" % (pkg, sdc) if script == "synth.sh" and sdc else "",
             "CORE": core,
             "CORE_V_FLIST": "$(rlocationpath %s:verilog_filelist)" % pkg,
             # MODE=pyrope2 reads the cleaned tree: the scripts derive every

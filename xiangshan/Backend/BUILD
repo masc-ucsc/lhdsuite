@@ -84,3 +84,6 @@ filegroup(
 # was not created". If a regenerated snapshot ever imports DiffExt cells again,
 # run bench/gen_stubs.py <pyrope_dir> <out_dir> and point CORE_P_STUB_TOP (and
 # bench/matrix.sh's XS_STUB_DIR) at its output.
+
+# The timing constraints of the synthesis benchmarks (bench/defs.bzl `sdc`).
+exports_files(glob(["synth/*.sdc"]), visibility = ["//visibility:public"])

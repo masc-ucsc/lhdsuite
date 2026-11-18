@@ -63,19 +63,15 @@ selects Bazel. LiveHD and its C++ dependencies are built from source.
 `--override_module=livehd=/path/to/livehd` (e.g. `=../livehd`).
 Builds default to `-c opt`; use `-c dbg` for compiler debugging.
 
-Synthesis requires sky130 installed and enabled through
-[ciel](https://github.com/fossi-foundation/ciel):
-
-```bash
-pip install ciel
-ciel ls-remote --pdk-family sky130
-ciel enable --pdk-family sky130 <version>
-```
-
-The harness requires the newest installed sky130 version to be enabled and
-records its hash. It resolves the Liberty directory through `ciel`, replacing
-any inherited `LHD_TECH_DIR`; ambiguous or mismatched versions fail with a
-diagnostic.
+Synthesis maps to and times with asap7 (RVT, FF corner): the merged Liberty in
+[tech/asap7](tech/asap7/README.md), checked in gzipped, so no PDK install is
+needed. The harness decompresses it into the test's work dir, passes it to
+`lhd` explicitly (`synth.liberty`), and records `asap7-rvt-ff-<sha256 prefix>`
+as the PDK version. Each core's timing constraints live next to its sources in
+`<core>/synth/*.sdc` (the `sdc` field in `bench/defs.bzl`): a 1 GHz clock
+(numbers are in ps, the Liberty's unit), 20% IO delays, and the reset as a false
+path (cut at the reset ports and, where the design has one, at the reset
+synchronizer).
 
 Verilator is optional. Install it for the comparison scenarios; set
 `VERILATOR` to override discovery. These scenarios skip when it is absent.
@@ -100,7 +96,7 @@ Run one synthesis job at a time.
 | `compile_verilog`, `compile_pyrope`, `compile_pyrope2` | Front-end compilation and throughput. `compile_pyrope2` (cores with a maintained `pyrope2/` tree: dino, picorv32, matched_filter) runs the same flow over that tree. |
 | `compile_pyrope_parallel` | Separate compilation through an import-aware generated Makefile. |
 | `compile_incremental` | Compilation across cold, comment-only, and semantic edits. |
-| `synth`, `synth_incremental` | Mapping time, reuse, gate count, area, and timing with sky130. Minion also runs a flat-mapping comparison. |
+| `synth`, `synth_incremental` | Mapping time, reuse, gate count, area, and timing with asap7 under the core's SDC. Minion also runs a flat-mapping comparison. |
 | `synth_lec_synth`, `synth_lec_flat` | Synthesized netlist equivalence, including reuse after a comment edit; flat is Minion-only. |
 | `sim_verilog`, `sim_pyrope`, `sim_pyrope2`, `sim_verilator` | Simulation with checked output values; host compilation and execution are timed separately. `sim_pyrope2` is `sim_pyrope` over `<core>/pyrope2` with the same driver, gates and cycle count. The `lhd sim` legs run lhd's default backend (LLVM since livehd 98a7e7c44; `METRIC sim_backend_llvm` records which). |
 | `sim_incremental`, `sim_incremental_llvm` | Simulator build reuse across edits, pinned to the C++ (`slop`) and LLVM backends respectively. Only the builds are timed; each rebuilt driver is then executed once and must behave exactly like a caches-off build of the same tree (cold, comment-only, and the one-module edit against a from-scratch build of the edited tree). |

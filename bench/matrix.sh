@@ -165,17 +165,24 @@ P_DIR=$PKG_DIR/pyrope
 V_DIR=$PKG_DIR/verilog
 SIM_DIR=$PKG_DIR/sim
 
-# ---- PDK, resolved the same way bench/common.sh does ------------------------
-PDK_VERSION=${PDK_VERSION:-}
-if [ -z "${LHD_TECH_DIR:-}" ] || [ -z "$PDK_VERSION" ]; then
-  if command -v ciel >/dev/null 2>&1; then
-    _v=$(ciel output --pdk-family sky130 2>/dev/null || true)
-    if [ -n "$_v" ]; then
-      LHD_TECH_DIR="$HOME/.ciel/ciel/sky130/versions/$_v/sky130A/libs.ref/sky130_fd_sc_hd/lib/"
-      PDK_VERSION=$_v
-    fi
+# ---- PDK: the asap7 Liberty in tech/asap7, as bench/common.sh resolves it ----
+# (decompressed once into this run's work dir; PDK_VERSION = asap7-rvt-ff-<sha256 prefix>). The synth rows also give
+# lhd the core's SDC (<pkg>/synth/<top>.sdc, else <pkg>/synth/constraint.sdc): clock, IO delays, reset false paths.
+TECH_LIB=""
+_gz=$ROOT/tech/asap7/asap7-rvt-ff.lib.gz
+if [ -f "$_gz" ]; then
+  LHD_TECH_DIR=${WORK:-${TMPDIR:-/tmp}}/tech_asap7
+  TECH_LIB=$LHD_TECH_DIR/asap7-rvt-ff.lib
+  if [ ! -s "$TECH_LIB" ]; then
+    mkdir -p "$LHD_TECH_DIR" && gzip -dc "$_gz" >"$TECH_LIB.tmp" && mv "$TECH_LIB.tmp" "$TECH_LIB" || TECH_LIB=""
   fi
+  _sum=$(shasum -a 256 "$_gz" 2>/dev/null || sha256sum "$_gz")
+  PDK_VERSION="asap7-rvt-ff-${_sum:0:16}"
 fi
+CORE_SDC=""
+for _f in "$PKG_DIR/synth/$TOP.sdc" "$PKG_DIR/synth/constraint.sdc"; do
+  if [ -f "$_f" ]; then CORE_SDC=$_f; break; fi
+done
 export LHD_TECH_DIR PDK_VERSION
 
 # The I3 guardrail is only a guardrail if its measurement clears the noise
@@ -562,8 +569,8 @@ fi
 # `abc_*` counters, so neither cache hides behind the other.
 # As in synth.sh, keep memories native; their storage is outside cell totals.
 if [[ " $PHASES " == *" synth "* ]]; then
-  if [ -z "${LHD_TECH_DIR:-}" ]; then
-    echo "  [$CORE synth] SKIPPED: no sky130 from ciel and no LHD_TECH_DIR" >&2
+  if [ -z "$TECH_LIB" ]; then
+    echo "  [$CORE synth] SKIPPED: no asap7 Liberty ($ROOT/tech/asap7)" >&2
   else
     prep_tree
     synth_group() {  # MODE WORKDIR [EXTRA_SETS...]
@@ -573,7 +580,7 @@ if [[ " $PHASES " == *" synth "* ]]; then
       step synth "$mode" "sy_${mode}.json" -- "$LHD" synth "tree/$TOP.prp" \
         --top "$TOP" --workdir "$wd" --emit-dir "lg:net_$mode" \
         --result-json "sy_${mode}.json" ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} "$@" \
-        --set synth.memory=macro
+        --set synth.memory=macro --set "synth.liberty=$TECH_LIB" ${CORE_SDC:+--set "synth.sdc=$CORE_SDC"}
       group_end synth "$mode" "$(abc_extra "sy_${mode}.json")"
     }
     rm -rf sw_full net_full

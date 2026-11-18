@@ -72,3 +72,6 @@ filegroup(
     srcs = glob(["tests/**"]),
     visibility = ["//visibility:public"],
 )
+
+# The timing constraints of the synthesis benchmarks (bench/defs.bzl `sdc`).
+exports_files(glob(["synth/*.sdc"]), visibility = ["//visibility:public"])

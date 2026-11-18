@@ -874,136 +874,37 @@ PY
 }
 
 require_tech_dir() {
-  # Resolve the PDK from ciel every time.  In particular, do not trust an
-  # inherited LHD_TECH_DIR: it can silently pin a benchmark to an older
-  # library after `ciel enable` moves on.
-  # ciel is host state like verilator (find_verilator): bazel's sanitized test
-  # PATH does not carry /opt/homebrew/bin or pip's user bin, so probe the usual
-  # install prefixes before giving up.
-  if ! command -v ciel >/dev/null 2>&1; then
-    local prefix
-    for prefix in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" "$HOME/Library/Python/3.9/bin"; do
-      if [ -x "$prefix/ciel" ]; then
-        PATH="$prefix:$PATH"
-        break
-      fi
-    done
-  fi
-  command -v ciel >/dev/null 2>&1 || {
-    echo "FAIL: synthesis benchmarks require 'ciel' on PATH (see README.md)" >&2
-    return 1
-  }
-
-  local installed_json hashes count enabled latest rendered dates lib root
-  installed_json=$(ciel ls --pdk-family sky130) || {
-    echo "FAIL: could not enumerate installed sky130 versions with ciel" >&2
-    return 1
-  }
-  # ("\n", not "\\n": inside the single quotes python must see a real newline
-  # escape — the doubled form joined two installed hashes into ONE line, so a
-  # two-version install looked like a single bogus version.)
-  hashes=$(python3 -c 'import json,sys; print("\n".join(json.loads(sys.stdin.read())))' <<<"$installed_json") || {
-    echo "FAIL: ciel returned an invalid installed-version list: $installed_json" >&2
-    return 1
-  }
-  count=$(printf '%s\n' "$hashes" | grep -c . || true)
-  [ "$count" -gt 0 ] || {
-    echo "FAIL: ciel has no installed sky130 version (see README.md)" >&2
-    return 1
-  }
-
-  enabled=$(ciel output --pdk-family sky130) || {
-    echo "FAIL: ciel has no enabled sky130 version" >&2
-    return 1
-  }
-
-  if [ "$count" -eq 1 ]; then
-    # One installed version is newest regardless of whether ciel can obtain
-    # release-date metadata (offline machines commonly cannot).
-    latest=$hashes
+  # The synthesis benchmarks map to and time with asap7 (RVT, FF corner), the merged Liberty in tech/asap7 (see its
+  # README.md), stored gzipped because lhd reads plain Liberty only. Decompress it once per test into the work dir.
+  # Do not trust an inherited LHD_TECH_DIR: it could silently pin a benchmark to another library.
+  # Sets TECH_LIB (the .lib every synthesis command is given explicitly, `--set synth.liberty=$TECH_LIB`),
+  # LHD_TECH_DIR (its directory) and PDK_VERSION (`asap7-rvt-ff-<sha256 prefix of the .gz>`, recorded by the ledger).
+  local gz
+  if [ -n "${TECH_LIB_GZ:-}" ]; then
+    gz=$(rloc "$TECH_LIB_GZ")
   else
-    # `ciel ls` deliberately emits dates only to a tty.  Give it a small pty
-    # and parse the rendered YYYY.MM.DD values; this is portable across the
-    # GNU/BSD variants of the external `script` utility.
-    #
-    # The read loop polls with select() and reaps the child with WNOHANG: on
-    # macOS a blocking read() of the pty master does NOT fail with EIO once
-    # the child has exited (Linux does), it blocks forever -- which is exactly
-    # what every synth target did the first time two sky130 versions were
-    # installed on a Mac.
-    rendered=$(python3 - <<'PY'
-import os, pty, select, sys, time
-pid, fd = pty.fork()
-if pid == 0:
-    os.execvp("ciel", ["ciel", "ls", "--pdk-family", "sky130"])
-chunks = []
-status = None
-deadline = time.monotonic() + 120.0
-while time.monotonic() < deadline:
-    if status is None:
-        wpid, st = os.waitpid(pid, os.WNOHANG)
-        if wpid == pid:
-            status = st
-    ready, _, _ = select.select([fd], [], [], 0.2)
-    if ready:
-        try:
-            data = os.read(fd, 65536)
-        except OSError:
-            data = b""
-        if data:
-            chunks.append(data)
-            continue
-        if status is not None:
-            break  # EOF after the child exited: fully drained
-        time.sleep(0.05)  # readable-but-empty while the child lives: a pty hiccup, not EOF
-        continue
-    if status is not None:
-        break  # child gone and nothing left to drain
-if status is None:
-    os.kill(pid, 9)
-    _, status = os.waitpid(pid, 0)
-os.close(fd)
-sys.stdout.buffer.write(b"".join(chunks))
-raise SystemExit(os.waitstatus_to_exitcode(status))
-PY
-    ) || {
-      echo "FAIL: could not obtain dated sky130 version list from ciel" >&2
-      return 1
-    }
-    dates=$(python3 -c '
-import re,sys
-# single backslashes: this is a single-quoted bash string, so python sees
-# exactly what is written here (\\s would be a literal backslash + s)
-s=re.sub(r"\x1b\[[0-9;]*m", "", sys.stdin.read())
-for h,d in re.findall(r"([0-9a-f]{7,64})\s+\((\d{4}\.\d{2}\.\d{2})\)", s):
-    print(d, h)
-' <<<"$rendered")
-    [ "$(printf '%s\n' "$dates" | grep -c . || true)" -eq "$count" ] || {
-      echo "FAIL: ciel listed $count sky130 versions but did not provide all release dates; cannot choose the newest safely" >&2
-      printf '%s\n' "$rendered" >&2
-      return 1
-    }
-    latest=$(printf '%s\n' "$dates" | sort -r | head -1 | awk '{print $2}')
+    gz="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tech/asap7/asap7-rvt-ff.lib.gz"
   fi
-
-  [ "$latest" = "$enabled" ] || {
-    echo "FAIL: newest installed sky130 version ($latest) differs from ciel-enabled version ($enabled)" >&2
-    echo "      run 'ciel enable --pdk-family sky130 $latest' or remove the unintended version" >&2
+  [ -f "$gz" ] || {
+    echo "FAIL: synthesis benchmarks need the asap7 Liberty ($gz, tech/asap7/README.md)" >&2
     return 1
   }
-
-  root=$(ciel path --pdk-family sky130 "$latest") || {
-    echo "FAIL: ciel could not resolve sky130 version $latest" >&2
+  local sum
+  sum=$(shasum -a 256 "$gz" 2>/dev/null || sha256sum "$gz") || {
+    echo "FAIL: cannot hash $gz" >&2
     return 1
   }
-  LHD_TECH_DIR="$root/sky130A/libs.ref/sky130_fd_sc_hd/lib"
-  lib="$LHD_TECH_DIR/sky130_fd_sc_hd__tt_025C_1v80.lib"
-  [ -f "$lib" ] || {
-    echo "FAIL: ciel sky130 version $latest does not contain $lib" >&2
-    return 1
-  }
-  PDK_VERSION=$latest
-  export LHD_TECH_DIR PDK_VERSION
+  LHD_TECH_DIR="${WORK:-${TMPDIR:-/tmp}}/tech_asap7"
+  TECH_LIB="$LHD_TECH_DIR/asap7-rvt-ff.lib"
+  if [ ! -s "$TECH_LIB" ]; then
+    mkdir -p "$LHD_TECH_DIR"
+    gzip -dc "$gz" >"$TECH_LIB.tmp" && mv "$TECH_LIB.tmp" "$TECH_LIB" || {
+      echo "FAIL: cannot decompress $gz" >&2
+      return 1
+    }
+  fi
+  PDK_VERSION="asap7-rvt-ff-${sum:0:16}"
+  export LHD_TECH_DIR PDK_VERSION TECH_LIB
 }
 
 # copy_core_pyrope DEST — writable copy of the Pyrope tree for the
