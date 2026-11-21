@@ -51,18 +51,18 @@ run([a.lhd, 'compile', '--top', 'cva6', '--emit-dir', f'pyrope:{a.work}/tree', '
 # Use the writer output directly: no checked-in Pyrope or post-generation fixes.
 assert (a.work/'tree/cva6.prp').is_file(), 'generation did not emit the whole-core top'
 tb = a.suite/'cva6/sim/cva6_prog_tb.prp'
-common = ['--set', 'sim.tune.profile=off', '--set', 'sim.vcd=false', '--arg', f'cycles={a.cycles}']
+common = ['--set', 'sim.vcd=false', '--arg', f'cycles={a.cycles}']
 
 def lhd_run(name, source, work, incremental=True, allow_failure=False):
     cmd = [a.lhd, 'sim', source, tb, '--workdir', work, '--set', f'lhd.incremental={str(incremental).lower()}', *common]
     _, setup = run([*cmd, '--setup-only'], name+'-setup')
-    out, host = run([*cmd, '--run-only'], name+'-host-and-run', allow_failure)
+    out, gated = run([*cmd, '--run-only'], name+'-run-only', allow_failure)
     samples = []
     for i in range(3):
-        out, row = run([work/'sim/drv.bin', '--cycles', str(a.cycles)], name+f'-exec-{i}', allow_failure)
+        out, row = run([a.lhd.with_name('lhd_simrt'), work/'sim', f'+cycles={a.cycles}', '--no-checkpoint'], name+f'-exec-{i}', allow_failure)
         samples.append((row['exit_code'], out))
     assert samples[0] == samples[1] == samples[2], name+' is nondeterministic'
-    return samples[0], setup, host
+    return samples[0], setup, gated
 
 expected = 'x2=100 -x3=100 marker=1445, retired=43443, done at cycle 738'
 baseline = None

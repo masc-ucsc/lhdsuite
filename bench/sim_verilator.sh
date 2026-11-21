@@ -32,7 +32,7 @@
 # lint, plus the core's `verilator_flags`), not tuned for the benchmark.
 #
 # TWO RUNS, and why. The matched run uses $CORE_SIM_CYCLES — the exact count
-# the lhd targets use — so sim_exec_ms and sim_cycles_per_s_with_cc line up
+# the lhd targets use — so sim_exec_ms and sim_cycles_per_s_with_build line up
 # row for row. But it is far too short to MEASURE verilator with: dino at
 # 20k cycles takes ~7 ms, i.e. mostly process startup. So a second, long run at
 # $CORE_VERILATOR_CYCLES reports the throughput number
@@ -99,6 +99,8 @@ run_timed sim_setup vlt --cc --exe --Mdir "$VOBJ" --top-module "$CORE_TOP" \
   -Wno-fatal $CORE_VERILATOR_FLAGS -DSYNTHESIS -I"$CORE_V_DIR" \
   -F "$CORE_V_DIR/filelist.f" "$VTB"
 
+SETUP_MS=$LAST_MS
+
 # --- 2. host C++ compile + link ----------------------------------------------
 JOBS=$(cpu_count)
 # Verilator's generated makefile assigns CXX, overriding an environment-only
@@ -132,6 +134,7 @@ rate sim_cycles_per_s "$CYCLES" "$EXEC_MS" "cycles/s"
 # Everything a cold `verilate + build + simulate` costs, the counterpart of the
 # lhd row's sim_run_ms (host compile + simulation) at the same cycle count.
 rate sim_cycles_per_s_with_cc "$CYCLES" "$((CC_MS + EXEC_MS))" "cycles/s"
+rate sim_cycles_per_s_with_build "$CYCLES" "$((SETUP_MS + CC_MS + EXEC_MS))" "cycles/s"
 
 # --- 3b. long run: the throughput number --------------------------------------
 # Skipped when the core's verilator_cycles EQUALS its sim_cycles, which is how

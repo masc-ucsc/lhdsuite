@@ -80,7 +80,7 @@ def main():
             wd = work / ('shared' if mode == 'incremental' else label + '-fresh')
             result_path = work / (label + '-' + mode + '.json')
             command = [lhd, 'sim', src / 'picorv32_top.prp', src / 'tb.prp', '--workdir', wd,
-                       '--arg', 'cycles=2000', '--set', 'sim.tune.profile=off', '--set', 'sim.vcd=false',
+                       '--arg', 'cycles=2000', '--set', 'sim.vcd=false',
                        '--diag-fmt', 'pretty', '--result-json', result_path]
             if mode == 'fresh':
                 command += ['--set', 'lhd.incremental=false']

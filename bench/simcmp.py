@@ -6,10 +6,7 @@ suite tree next to it, so it can be run with a frozen copy of lhd while the
 livehd checkout is being rebuilt. Use it through bench/simcmp.sh.
 
 What is measured, per simulator:
-  build   setup (driver generation / verilation) and host C++ compile+link,
-          timed separately exactly as bench/sim.sh and bench/sim_verilator.sh do
-          (`lhd sim --setup-only` / `--run-only --set sim.compile_only=true`;
-          `verilator --cc --exe` / `make`).
+  build   native setup for LiveHD, verilation and host C++ compilation for Verilator
   rate    the HONEST cycles/s: a two-point fit t(N) = startup + N/rate over two
           cycle counts, best-of-REPS each. One `execve` of the built binary is
           timed, and process startup (~16-19 ms here) is ~12% of dino's 500k run
@@ -21,8 +18,7 @@ What is measured, per simulator:
 Fairness rules inherited from the bench: no VCD anywhere, the same Verilog
 source (-F filelist -DSYNTHESIS + the core's v_flags) for `lhd sim` Verilog and
 Verilator, the same driver stimulus (the Verilator .cpp is a twin of the
-Pyrope testbench), and `sim.tune.profile=off` so the lhd leg measures a pinned
-tune vector.
+Pyrope testbench).
 """
 import argparse
 import json
@@ -138,22 +134,29 @@ def main():
     marker = cfg.get("sim_marker", "")
     unit = cfg.get("sim_tb_unit") or cfg["top"]
     sets = shlex.split(cfg.get("sim_sets", ""))
-    if not any(s.startswith("sim.tune.profile=") for s in sets):
-        sets = ["--set", "sim.tune.profile=off"] + sets
     vlt = which("verilator", "VERILATOR")
     wanted = args.sims.split(",")
     rows, notes = [], []
     print(f"core={args.core} top={cfg['top']} unit={unit} N1={n1} N2={n2} reps={args.reps} work={work}", flush=True)
     print(f"lhd={lhd}", flush=True)
 
-    # sim.init_zero configures only the run inside `lhd sim`; a re-run drv.bin
-    # needs the runtime switch (see bench/sim.sh EXEC_ARGS). Verilator ignores it.
-    init_zero = ["--init-zero"] if "sim.init_zero=true" in sets else []
-
     def exec_fit(label, binary, cwd, rows_entry):
-        extra = init_zero if label != "verilator" else []
-        rc1, t1, o1 = R.best(f"{label}_exec_n1", [binary, "--cycles", n1, *extra], cwd, args.reps)
-        rc2, t2, o2 = R.best(f"{label}_exec_n2", [binary, "--cycles", n2, *extra], cwd, args.reps)
+        def command(cycles):
+            if label == "verilator":
+                return [binary, "--cycles", cycles]
+            run = [binary, cwd / "SW/sim", f"+cycles={cycles}", "--no-checkpoint"]
+            for key in sets:
+                if key == "sim.init_zero=true":
+                    run.append("--init-zero")
+                elif key == "compile.unknown_zero=true":
+                    run.extend(["--set", "sim.unknown_zero=true"])
+                elif key.startswith("sim.warn_undefined="):
+                    run.extend(["--set", key])
+                elif key.startswith("lhd.seed="):
+                    run.extend(["--seed", key.split("=", 1)[1]])
+            return run
+        rc1, t1, o1 = R.best(f"{label}_exec_n1", command(n1), cwd, args.reps)
+        rc2, t2, o2 = R.best(f"{label}_exec_n2", command(n2), cwd, args.reps)
         rows_entry["exit"] = rc1 or rc2
         rows_entry["marker"] = marker_line(o1, marker)
         rows_entry["t_n1_ms"], rows_entry["t_n2_ms"] = t1, t2
@@ -201,15 +204,7 @@ def main():
             notes.append(f"{label}: lhd sim --setup-only failed (see {label}_setup.log)")
             rows.append(row)
             continue
-        cc = [lhd, "sim", *inputs, "--run-only", "--set", "sim.compile_only=true"]
-        rc, ms = R.run(f"{label}_cc", [*cc, *sets, "--diag-fmt", "pretty", "--workdir", "SW"], d)
-        row["cc_ms"] = ms
-        drv = d / "SW/sim/drv.bin"
-        if rc or not drv.exists():
-            notes.append(f"{label}: host build failed (see {label}_cc.log)")
-            rows.append(row)
-            continue
-        exec_fit(label, drv, d, row)
+        exec_fit(label, Path(lhd).with_name("lhd_simrt"), d, row)
         rows.append(row)
         print(f"  {label}: done", flush=True)
 

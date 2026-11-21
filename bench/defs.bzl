@@ -126,13 +126,9 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 #             would otherwise go green). "" = marker gate only.
 #   sim_sets  extra `--set k=v` flags for THIS core's `lhd sim` invocations
 #             (both the timed benchmark and the correctness drivers), space
-#             separated, each already spelled `--set k=v`. "" = none. Two uses:
-#             a driver whose contract needs a knob the shared script cannot
-#             infer (xs_rob's compile.unknown_zero=true), and a pinned
-#             `sim.tune.*` speed vector (xs_renametable). Every target runs in
-#             a fresh workdir, so lhd's sim.tune learning loop can never
-#             converge here; a measured vector is pinned by hand instead.
-#             Minion needs neither: its architectural state is initialized by
+#             separated, each already spelled `--set k=v`. "" = none. This includes a driver's required settings,
+#             such as xs_rob's compile.unknown_zero=true.
+#             Minion needs no override: its architectural state is initialized by
 #             its boot ROM and its control bookkeeping resets in hardware, so
 #             it runs correctly with randomized startup.
 #   lec_trust  comma-separated module-def names the LEC scenarios ASSUME
@@ -745,22 +741,12 @@ CORES = {
         # checksum recorded from Verilator and reproduced by `lhd sim`.
         "sim_cycles": 200000,
         "sim_tb_unit": "RenameTableWrapper",
-        # Per-benchmark tuning of livehd's idle-module gating. The driver only
-        # exercises read ports, so the rename tables idle and gating them pays,
-        # but only with dirty tracking on (fences exist to be skipped; without
-        # dirty gating they are pure cost). Instructions for 60k cycles, then
-        # default (dirty off) -> both: pyrope2 20.3G -> 12.1G
-        # (sim.tune.fence=0 alone 33.5G), verilog 114G -> 20.4G, pyrope 116G
-        # -> 18.6G; Verilator 19.8G. Measured 2026-09-18, mascm1, under the
-        # pre-rename spellings sim.color_dirty=true / sim.fence_ratio=0. lhd's
-        # default became dirty on / fence 16 on 2026-09-19; fence=0 (L2) is
-        # still the pinned vector here (pyrope2: ~1.4x fewer instructions than L1).
         # sim.init_zero: the fp rename table's read path holds reset-free state that
         # reaches io_fpReadPorts_0_0_data on cycle 0 (inside reset). `lhd sim`
         # powers it on from its seeded PRNG and Verilator zero-fills, so the
         # per-cycle checksum disagreed at cycle 0 only (measured 2026-11-03;
         # identical with --init-zero at 1, 3 and 4000 cycles).
-        "sim_sets": "--set sim.tune.dirty=on --set sim.tune.fence=0 --set sim.init_zero=true",
+        "sim_sets": "--set sim.init_zero=true",
         "sim_marker": "xs_renametable:",
         # Verified identical from ALL THREE simulators at sim_cycles, which is
         # what makes it safe to pin: the .prp tree, `lhd compile verilog --top
@@ -920,6 +906,7 @@ CORES = {
         "unit": "GemminiTPU",
         # One MAC's output inverted: a real arithmetic change in all 16 PEs.
         "incremental_edit_unit": "MacUnit",
+        "sim_edit_sample": ("acc.tpu.mesh.mesh.u_loop_0__li0.u_loop_0__li0.mesh.tile_0_0.c2", 64),
         "v_flags": "",
         "color_algs": ["synth"],
         "synth_only": True,
@@ -959,6 +946,7 @@ CORES = {
         "sdc": "synth/constraint.sdc",
         "unit": "GemminiTPU",
         "incremental_edit_unit": "MacUnit",
+        "sim_edit_sample": ("acc.tpu.mesh.mesh.pipe_b_1[0]", 64),
         "v_flags": "",
         "color_algs": ["synth"],
         "synth_only": True,
@@ -969,7 +957,7 @@ CORES = {
         # knob: the 8x8 has state with no initializer whose power-on bits reach
         # the outputs, so without it the checksum moves with --seed and does
         # not match Verilator (which zero-fills). sim.sh forwards both keys to
-        # its drv.bin re-runs.
+        # its native runtime re-runs.
         "sim_tb": "gemmini_tb.prp",
         "sim_cycles": 25000,
         "sim_tb_unit": "GemminiSimTop",
@@ -992,6 +980,7 @@ CORES = {
         "sdc": "synth/constraint.sdc",
         "unit": "GemminiTPU",
         "incremental_edit_unit": "MacUnit",
+        "sim_edit_sample": ("acc.tpu.mesh.mesh.pipe_b_1[0]", 32),
         "v_flags": "",
         "color_algs": ["synth"],
         "synth_only": True,
@@ -1059,15 +1048,9 @@ _SCENARIOS = [
     # The cleaned tree under the same driver, gates and cycle count. Generated
     # only for cores with the `pyrope2` knob (see core_benches).
     ("sim_pyrope2", "sim.sh", "pyrope2", "long", "", "sim_tb"),
-    # The sim counterpart of synth_incremental: four compiled-driver builds
-    # over one workdir and emit dir, reporting setup/codegen and host C++
-    # compile+link separately. No TIMED step executes the driver; each built
-    # drv.bin is then run once, untimed, and held to ONE contract, incremental
-    # == non-incremental: cold and the comment-only rebuild must behave exactly
-    # like the caches-off build, the one-module edit exactly like a from-scratch
-    # build of the edited tree. (Absolute correctness stays sim_pyrope's gate.)
+    # Time native setup and compare every incremental image with a fresh build.
     ("sim_incremental", "sim.sh", "incr", "eternal", "", "sim_tb"),
-    ("sim_incremental_llvm", "sim.sh", "incr", "eternal", "", "sim_tb"),
+    ("sim_incremental_pyrope2", "sim.sh", "incr", "eternal", "", "sim_edit_sample"),
     # The same benchmark under Verilator, for cores carrying a C++ twin of
     # their sim_tb: how `lhd sim` compares against the reference simulator on
     # compile time AND on cycles/s. Held to the same output gates, so it is
@@ -1103,6 +1086,7 @@ _SCENARIOS = [
 
 def _lhd_bench(name, core, cfg, script, mode, timeout):
     pkg = cfg["pkg"]
+    sample = cfg["sim_edit_sample"] if name.endswith("_sim_incremental_pyrope2") else ("", 0)
     synth_only = cfg.get("synth_only", False)
     data = [
         "common.sh",
@@ -1157,7 +1141,7 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_V_FLIST": "$(rlocationpath %s:verilog_filelist)" % pkg,
             # MODE=pyrope2 reads the cleaned tree: the scripts derive every
             # source path from CORE_P_TOP's directory.
-            "CORE_P_TOP": "$(rlocationpath %s:%s)" % (pkg, "pyrope2_top" if mode == "pyrope2" else "pyrope_top"),
+            "CORE_P_TOP": "$(rlocationpath %s:%s)" % (pkg, "pyrope2_top" if name.endswith("_pyrope2") else "pyrope_top"),
             # Current generated Pyrope makes the DummyDPICWrapper_* bodies
             # empty, matching the synthesis-side SV without DiffExt stubs.
             "CORE_P_STUB_TOP": "",
@@ -1165,6 +1149,8 @@ def _lhd_bench(name, core, cfg, script, mode, timeout):
             "CORE_V_FLAGS": cfg["v_flags"],
             "CORE_UNIT": cfg["unit"],
             "CORE_INCR_EDIT_UNIT": cfg.get("incremental_edit_unit", ""),
+            "CORE_SIM_EDIT_SIGNAL": sample[0],
+            "CORE_SIM_EDIT_CYCLE": str(sample[1]),
             "CORE_INCR_VARIANT": cfg.get("incremental_variant", ""),
             "CORE_GENERATED_VARIANTS": "1" if cfg.get("generated_variants", False) else "",
             "CORE_VARIANT_BUG_FIND": cfg.get("variant_bug_find", ""),
@@ -1245,7 +1231,7 @@ def core_benches(core):
             "compile_pyrope2",
             "sim_pyrope2",
             "sim_incremental",
-            "sim_incremental_llvm",
+            "sim_incremental_pyrope2",
             "lec_incremental",
             # ...and the Verilator comparison, for the same reason: it is
             # decided by needs_cfg="verilator_tb" below, so a synth-only core
@@ -1261,20 +1247,10 @@ def core_benches(core):
         if needs_cfg and not cfg.get(needs_cfg, ""):
             continue  # e.g. no sim_verilator on a core with no verilator_tb
         name = "%s_%s" % (core, suffix)
-        scenario_cfg = cfg
-
-        # The two incremental-sim scenarios are the SAME flow on the two
-        # backends, so each pins its own: an unset sim.tune.backend became
-        # llvm in livehd 98a7e7c44 (it was slop), and leaving `sim_incremental`
-        # on the default would turn it into a second copy of
-        # `sim_incremental_llvm` and drop slop's reuse coverage. The timed
-        # sim_* legs keep lhd's default (sim.sh records which one ran).
-        if suffix in ("sim_incremental", "sim_incremental_llvm"):
-            backend = "llvm" if suffix == "sim_incremental_llvm" else "slop"
-            scenario_cfg = dict(cfg)
-            scenario_cfg["sim_sets"] = (cfg.get("sim_sets", "") +
-                                         " --set sim.tune.backend=" + backend).strip()
-        _lhd_bench(name, core, scenario_cfg, script, mode, timeout)
+        _lhd_bench(name, core, cfg, script, mode, timeout)
+        if suffix == "sim_incremental":
+            # Existing commands can still address the original LLVM target.
+            native.test_suite(name = name + "_llvm", tests = [":" + name], visibility = ["//visibility:public"])
         names.append(":" + name)
 
     # `bazel test //bench:<core>` — every scenario for this core only.

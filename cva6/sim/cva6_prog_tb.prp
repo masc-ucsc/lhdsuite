@@ -137,9 +137,9 @@ test cva6.prog(cycles:U20 = 50000) {
     // instruction, so a coprocessor that declines everything is the
     // environment that cannot stall the core.
     acc.cvxif_resp_i.compressed_ready        = 1
-    acc.cvxif_resp_i.compressed_resp_accept  = 0
+    acc.cvxif_resp_i.compressed_resp.accept  = 0
     acc.cvxif_resp_i.issue_ready             = 1
-    acc.cvxif_resp_i.issue_resp_accept       = 0
+    acc.cvxif_resp_i.issue_resp.accept       = 0
     acc.cvxif_resp_i.register_ready          = 1
     acc.cvxif_resp_i.result_valid            = 0
 
@@ -157,16 +157,16 @@ test cva6.prog(cycles:U20 = 50000) {
     }
     acc.noc_resp_i.ar_ready = U1(r_beats == 0)
     acc.noc_resp_i.r_valid  = U1(r_beats != 0)
-    acc.noc_resp_i.r_id     = r_id     // echo: the R channel is demuxed by id
-    acc.noc_resp_i.r_data   = beat
-    acc.noc_resp_i.r_resp   = 0
-    acc.noc_resp_i.r_last   = U1(r_beats == 1)
+    acc.noc_resp_i.r.id     = r_id     // echo: the R channel is demuxed by id
+    acc.noc_resp_i.r.data   = beat
+    acc.noc_resp_i.r.resp   = 0
+    acc.noc_resp_i.r.last   = U1(r_beats == 1)
 
     acc.noc_resp_i.aw_ready = 1
     acc.noc_resp_i.w_ready  = 1
     acc.noc_resp_i.b_valid  = U1(b_pend != 0)
-    acc.noc_resp_i.b_id     = aw_id
-    acc.noc_resp_i.b_resp   = 0
+    acc.noc_resp_i.b.id     = aw_id
+    acc.noc_resp_i.b.resp   = 0
 
     step
 
@@ -175,9 +175,9 @@ test cva6.prog(cycles:U20 = 50000) {
     // last cycle's state, so accepting here is the registered-slave handshake.
     if r_beats == 0 {
       if acc.noc_req_o.ar_valid != 0 {
-        r_beats = acc.noc_req_o.ar_len + 1
-        r_addr  = acc.noc_req_o.ar_addr
-        r_id    = acc.noc_req_o.ar_id
+        r_beats = acc.noc_req_o.ar.len + 1
+        r_addr  = acc.noc_req_o.ar.addr
+        r_id    = acc.noc_req_o.ar.id
       }
     } elif acc.noc_req_o.r_ready != 0 {
       r_beats = r_beats - 1
@@ -187,11 +187,11 @@ test cva6.prog(cycles:U20 = 50000) {
     // AW/W/B. A burst's beats walk `w_addr` forward; `sd` uses a full strobe,
     // so the whole 64-bit beat is the stored value.
     if acc.noc_req_o.aw_valid != 0 {
-      w_addr = acc.noc_req_o.aw_addr
-      aw_id  = acc.noc_req_o.aw_id
+      w_addr = acc.noc_req_o.aw.addr
+      aw_id  = acc.noc_req_o.aw.id
     }
     if acc.noc_req_o.w_valid != 0 {
-      mut wd = acc.noc_req_o.w_data
+      mut wd = acc.noc_req_o.w.data
       if w_addr == 0x10000000 {
         st0 = wd
         got = got | 1
@@ -203,7 +203,7 @@ test cva6.prog(cycles:U20 = 50000) {
         got = got | 4
       }
       w_addr = w_addr + 8
-      if acc.noc_req_o.w_last != 0 {
+      if acc.noc_req_o.w.last != 0 {
         b_pend = 1
       }
     }
@@ -213,9 +213,9 @@ test cva6.prog(cycles:U20 = 50000) {
 
     // Retirement straight from the RVFI probes: `commit_ack` is one bit per
     // commit port, so its popcount is this cycle's retire count.
-    mut ack = acc.rvfi_probes_o.instr_commit_ack
+    mut ack = acc.rvfi_probes_o.instr.commit_ack
     retired = retired + (ack & 1) + ((ack >> 1) & 1)
-    if acc.rvfi_probes_o.instr_ex_commit_valid != 0 {
+    if acc.rvfi_probes_o.instr.ex_commit_valid != 0 {
       nexc = nexc + 1
     }
     if done_cycle == 0 and got == 7 {

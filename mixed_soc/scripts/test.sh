@@ -6,14 +6,14 @@ export PYTHONPATH=$scripts
 mode=${1:?simulation mode or topology required}
 case "$mode" in
   topology)
-    exec python3 -P "$scripts/floorplan.py"
+    exec python3 -m floorplan
     ;;
   mesh | system)
-    exec python3 -P "$scripts/simulate.py" "$mode" --work "${TEST_TMPDIR:?}/connectivity" -j "${LHD_BENCH_JOBS:-4}"
+    exec python3 -m simulate "$mode" --work "${TEST_TMPDIR:?}/connectivity" -j "${LHD_BENCH_JOBS:-4}"
     ;;
   pyrope | verilator)
     lhd=$rf/${2:?LiveHD runfile required}
-    exec python3 -P "$scripts/run_sim.py" "$mode" --lhd "$lhd" --work "${TEST_TMPDIR:?}/mixed_sim"
+    exec python3 -m run_sim "$mode" --lhd "$lhd" --work "${TEST_TMPDIR:?}/mixed_sim"
     ;;
   *)
     echo "unknown mixed_soc test mode: $mode" >&2

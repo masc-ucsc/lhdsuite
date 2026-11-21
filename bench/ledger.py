@@ -206,7 +206,7 @@ METRIC_ORDER = (
     "hits", "misses", "redone_ms", "refused", "store_failed",
     "sim_setup_ms", "sim_cc_ms", "sim_run_ms", "sim_exec_ms",
     "sim_cycles", "sim_perf_cycles",
-    "sim_cycles_per_s", "sim_cycles_per_s_with_cc", "sim_rewritten",
+    "sim_cycles_per_s", "sim_cycles_per_s_with_cc", "sim_cycles_per_s_with_build", "sim_rewritten",
     "workdir_bytes",
     "compile_ms", "color_ms", "abc_ms", "sta_ms",
     "regions", "gates", "area", "max_delay", "sta_delay",
@@ -286,7 +286,7 @@ PHASES = {
             "sim_setup{p}_ms", "sim_cc{p}_ms", "sim_exec{p}_ms",
             "sim_setup_warm_ms", "sim_cc_warm_ms",
             "sim_cycles{p}", "sim_cycles_per_s{p}",
-            "sim_cycles_per_s_with_cc{p}", "sim_long_exec{p}_ms",
+            "sim_cycles_per_s_with_cc{p}", "sim_cycles_per_s_with_build{p}", "sim_long_exec{p}_ms",
             "sim_long_cycles{p}", "sim_long_cycles_per_s{p}",
             "verilator_present",
         ],
@@ -709,6 +709,14 @@ def cmd_append(args, root: Path):
             if phase not in selected:
                 continue
             target_name = spec["target"].format(core=core)
+            if phase == "sim_llvm":
+                # New runs have one native target. Read older LLVM-only logs
+                # under their original name when replaying historical results.
+                native = read_metrics(logdir, PHASES["sim"]["target"].format(core=core))
+                if native and native[0].get("sim_backend_llvm") and "sim_cc_full_ms" not in native[0]:
+                    if "sim" in selected:
+                        continue
+                    target_name = PHASES["sim"]["target"].format(core=core)
             got = read_metrics(logdir, target_name)
             if got is None:
                 continue

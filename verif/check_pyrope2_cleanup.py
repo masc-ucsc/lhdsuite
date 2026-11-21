@@ -179,7 +179,7 @@ def main():
         if checksum and ok:
             # lhd JSON output does not forward puts. Check the generated driver,
             # just as bench/sim.sh does; it remains a LiveHD simulation.
-            cmd = [str(work / label / "sim/drv.bin"), "--cycles", "5000000"]
+            cmd = [str(lhd.with_name("lhd_simrt")), str(work / label / "sim"), "+cycles=5000000", "--no-checkpoint"]
             r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=args.timeout)
             (work / label).with_suffix(".stdout").write_text(r.stdout + r.stderr)
             report["checks"][-1].update(driver_command=cmd,
@@ -187,19 +187,25 @@ def main():
             save()
 
     def interface(label, library, top):
-        destination = work / label / "interface"
-        if not run(label + "/interface_emit", ["compile", library, "--top", top,
-                "--emit-dir", "sim:" + str(destination)]):
+        directory = work / label / "interface"
+        directory.mkdir(parents=True, exist_ok=True)
+        bench = directory / "ports.prp"
+        bench.write_text(f'const top = import("lg:{top}")\ntest interface.ports {{\n'
+                         '  mut dut = top\n  tick 1 { step }\n}\n')
+        if not run(label + "/interface_emit", ["sim", library, bench, "--setup-only"], shared=directory):
             return None
-        candidates = [p for p in destination.glob("*.iface.json")
-                      if p.name.removesuffix(".iface.json").split(".")[-1] == top]
-        if len(candidates) != 1:
+        descriptors = [json.loads(p.read_text()) for p in (directory / "sim").glob("*.dut.json")]
+        matches = [d for d in descriptors if d["module"].split(".")[-1] == top]
+        if len(matches) != 1:
             report["checks"].append({"name": label + "/interface", "ok": False,
-                "error": "Cannot identify the emitted top interface"})
+                "error": "Cannot identify the native top interface"})
             save()
             return None
-        ports = json.loads(candidates[0].read_text())["io"]
-        return sorted((p["name"], p["dir"], p["declared_bits"], p["signed"], p.get("clock", False)) for p in ports)
+        dut = matches[0]
+        ports = [(p["name"], ("input", "output")[p["kind"]], p["bits"], p["sign"], False)
+                 for p in dut["fields"] if p["kind"] in (0, 1)]
+        ports.extend((clock, "input", 1, False, True) for clock in dut["clocks"])
+        return sorted(ports)
 
     def check(core, entry, config=None, label=None):
         top = "MaxPeriodFibonacciLFSR" if entry.endswith("LFSR2") else "RobEnqPtrWrapper" if entry.endswith("_N32") else entry

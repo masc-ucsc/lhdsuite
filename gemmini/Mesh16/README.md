@@ -56,8 +56,8 @@ both sides.
 ## Simulation
 
 The wrapper ports are all <= 64 bits: the 128-bit A/B/D rows are two words,
-the 512-bit accumulator rows eight. Run `drv.bin` with
-`--init-zero --set compile.unknown_zero=true`, as at 8x8.
+the 512-bit accumulator rows eight. Use `--set compile.unknown_zero=true` during setup and run
+`lhd_simrt WORK/sim --init-zero --set sim.unknown_zero=true`, as at 8x8.
 
 The bench runs 2k cycles (`sum=439173468031777837`), not 25k: `sim_pyrope2`
 has to fit the gated run plus three timed re-runs in the 15-min `long` timeout,

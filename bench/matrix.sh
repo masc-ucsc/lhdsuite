@@ -49,7 +49,7 @@ set -u -o pipefail
 
 CORE=${1:?usage: bench/matrix.sh <core> [phase ...]}
 shift || true
-PHASES=${*:-compile synth sim sim_llvm lec}
+PHASES=${*:-compile synth sim_llvm lec}
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 LHD=${LHD:-$ROOT/../livehd/bazel-bin/lhd/lhd}
@@ -69,7 +69,7 @@ HTML=${MATRIX_HTML:-$ROOT/../livehd/docs/current_opt_loop_incr.html}
 # Kept as a small case rather than parsed out of defs.bzl: this script runs
 # outside bazel, and a silent mismatch would be worse than a visible duplicate.
 # SIM_SETS mirrors a core's `sim_sets` (handed to every `lhd sim`, and its
-# run-time keys to every bare drv.bin re-run); LEC_TRUST mirrors `lec_trust`;
+# run-time keys to every native execution); LEC_TRUST mirrors `lec_trust`;
 # PKG_SUB overrides the package dir (default: the core name).
 SIM_SETS=""; LEC_TRUST=""; PKG_SUB=""
 case "$CORE" in
@@ -152,8 +152,13 @@ SIM_ARGS=(); DRV_SETS=(); LEC_ARGS=()
 # shellcheck disable=SC2206
 SIM_ARGS=($SIM_SETS)
 for kv in $SIM_SETS; do
-  # Only the keys drv.bin reads itself; it rejects the generation-time ones.
-  case "$kv" in lhd.seed=* | sim.init_zero=*) DRV_SETS+=(--set "$kv") ;; esac
+  # Only runtime keys; it rejects the generation-time ones.
+  case "$kv" in
+    lhd.seed=*) DRV_SETS+=(--seed "${kv#*=}") ;;
+    sim.init_zero=true) DRV_SETS+=(--init-zero) ;;
+    compile.unknown_zero=true) DRV_SETS+=(--set sim.unknown_zero=true) ;;
+    sim.warn_undefined=*) DRV_SETS+=(--set "$kv") ;;
+  esac
 done
 [ -n "$LEC_TRUST" ] && LEC_ARGS=(--set "formal.lec.trust=$LEC_TRUST")
 
@@ -384,11 +389,11 @@ PY
 # minimum. These runs are a MEASUREMENT, not part of the rebuild, so they happen
 # after the last timed step and never enter wall_ms.
 best_exec() {
-  local bin=$1 cycles=$2 best= t0 t1 ms i
+  local image=$1 cycles=$2 bin="$(dirname "$LHD")/lhd_simrt" best= t0 t1 ms i
   [ -x "$bin" ] || { echo ""; return 0; }
   for i in 1 2 3; do
     t0=$(now_ms)
-    "$bin" --cycles "$cycles" ${DRV_SETS[@]+"${DRV_SETS[@]}"} >/dev/null 2>&1 || { echo ""; return 0; }
+    "$bin" "$image" "+cycles=$cycles" --no-checkpoint ${DRV_SETS[@]+"${DRV_SETS[@]}"} >/dev/null 2>&1 || { echo ""; return 0; }
     t1=$(now_ms)
     ms=$((t1 - t0))
     { [ -n "$best" ] && [ "$best" -le "$ms" ]; } || best=$ms
@@ -408,20 +413,15 @@ dir_bytes() {
 # build time: a change that cuts the host compile by slowing the simulation is a
 # net loss, and only a per-mode measurement can see it.
 sim_extra() {
-  local wd=$1 setup_ms=$2 run_ms=$3 exec_ms cc_ms
-  exec_ms=$(best_exec "$wd/sim/drv.bin" "$SIM_PERF_CYCLES")
+  local wd=$1 setup_ms=$2 run_ms=$3 exec_ms
+  exec_ms=$(best_exec "$wd/sim" "$SIM_PERF_CYCLES")
   if [ -z "$exec_ms" ]; then
     printf '{"sim_setup_ms":%s,"sim_run_ms":%s,"workdir_bytes":%s}' \
       "$setup_ms" "$run_ms" "$(dir_bytes "$wd")"
-    return 0
+    return 1
   fi
-  # sim_cc_ms is the HOST BUILD: the `--run-only` wall minus the simulation it
-  # contained. That simulation ran $SIM_CYCLES, not $SIM_PERF_CYCLES, so scale.
-  local gate_exec_ms=$((exec_ms * SIM_CYCLES / SIM_PERF_CYCLES))
-  cc_ms=$((run_ms - gate_exec_ms))
-  [ "$cc_ms" -ge 0 ] || cc_ms=0   # only reachable if a stall hit the lhd run
-  printf '{"sim_setup_ms":%s,"sim_run_ms":%s,"sim_exec_ms":%s,"sim_cc_ms":%s,"sim_cycles":%s,"workdir_bytes":%s}' \
-    "$setup_ms" "$run_ms" "$exec_ms" "$cc_ms" "$SIM_PERF_CYCLES" "$(dir_bytes "$wd")"
+  printf '{"sim_setup_ms":%s,"sim_run_ms":%s,"sim_exec_ms":%s,"sim_cycles":%s,"workdir_bytes":%s}' \
+    "$setup_ms" "$run_ms" "$exec_ms" "$SIM_PERF_CYCLES" "$(dir_bytes "$wd")"
 }
 
 # warm_phase LABEL -- cmd...  — run a throwaway invocation into a scratch dir,
@@ -595,84 +595,36 @@ if [[ " $PHASES " == *" synth "* ]]; then
   fi
 fi
 
-# -------------------------------------------------------------------- sim ----
-# Two commands per mode: `--setup-only` is codegen, `--run-only` is the host C++
-# build plus the simulation. One row, because the rebuild an edit costs is their
-# sum; the per-pass breakdown separates them again (inou.cgen.sim vs
-# sim.hostbuild vs sim.run).
-#
-# Every sim and sim_llvm command pins sim.tune.profile=off. The cold and
-# incremental rows share ONE workdir, and under lhd's default `auto` a cold run
-# long enough to qualify (minion's 20k cycles can) may leave a sim.tune TRIAL
-# for the next setup, which regenerates the color root: the incremental row
-# would then time a trial rebuild and read as a cache regression. `off` keeps
-# every row on lhd's built-in vector.
-#
-# The `sim` row pins sim.tune.backend=slop: an unset backend is llvm since
-# livehd 98a7e7c44 (it was slop), which would make this row a second copy of
-# `sim_llvm` below instead of the slop column of the pair.
-if [[ " $PHASES " == *" sim "* ]]; then
-  if [ ! -f "$SIM_DIR/$SIM_TB" ]; then
-    echo "  [$CORE sim] SKIPPED: no driver at $SIM_DIR/$SIM_TB" >&2
-  else
-    prep_tree
-    sim_group() {  # MODE WORKDIR
-      local mode=$1 wd=$2
-      local setup_ms run_ms
-      group_begin
-      step sim "$mode" "sim_${mode}_setup.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} ${SIM_ARGS[@]+"${SIM_ARGS[@]}"} \
-        "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --setup-only --set sim.tune.backend=slop --set sim.tune.profile=off \
-        --workdir "$wd" --result-json "sim_${mode}_setup.json"
-      setup_ms=$GRP_MS
-      step sim "$mode" "sim_${mode}_run.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} ${SIM_ARGS[@]+"${SIM_ARGS[@]}"} \
-        "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --run-only --arg "cycles=$SIM_CYCLES" \
- --set sim.tune.backend=slop --set sim.tune.profile=off --diag-fmt pretty --workdir "$wd" \
-        --result-json "sim_${mode}_run.json"
-      run_ms=$((GRP_MS - setup_ms))
-      group_end sim "$mode" "$(sim_extra "$wd" "$setup_ms" "$run_ms")"
-    }
-    rm -rf SW_warm0
-    warm_phase sim "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} ${SIM_ARGS[@]+"${SIM_ARGS[@]}"} "tree/$SIM_UNIT.prp" "tree/$SIM_TB" \
-      --arg "cycles=$SIM_CYCLES" --set sim.tune.backend=slop --set sim.tune.profile=off --workdir SW_warm0
-    rm -rf SW_warm0
-    rm -rf SW_full; sim_group full SW_full
-    rm -rf SW_warm; sim_group cold SW_warm
-    comment_touch "tree/$SIM_UNIT.prp"
-    sim_group incremental SW_warm
-  fi
-fi
-
-# --------------------------------------------------------------- sim_llvm ----
-# The SECOND simulator backend, as its own (target, phase) row rather than a
-# variant of `sim`. It is not a knob on the same flow: `sim.tune.backend=llvm`
-# replaces the per-color Slop C++ with a native object plus an ABI adapter, so
-# its codegen cost, its host build and its cycles/s are all different numbers
-# and belong in different cells. Reuse has to hold for BOTH backends or the
-# incremental work is only half done.
-if [[ " $PHASES " == *" sim_llvm "* ]]; then
+# The old sim phase name selects the native simulation once, including when
+# both spellings were supplied by an existing matrix command.
+if [[ " $PHASES " == *" sim_llvm "* || " $PHASES " == *" sim "* ]]; then
   if [ ! -f "$SIM_DIR/$SIM_TB" ]; then
     echo "  [$CORE sim_llvm] SKIPPED: no driver at $SIM_DIR/$SIM_TB" >&2
   else
     prep_tree
     simllvm_group() {  # MODE WORKDIR
       local mode=$1 wd=$2
-      local setup_ms run_ms
+      local setup_ms run_ms extra
+      local incremental=true
+      [ "$mode" != full ] || incremental=false
       group_begin
       step sim_llvm "$mode" "siml_${mode}_setup.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} ${SIM_ARGS[@]+"${SIM_ARGS[@]}"} \
-        "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --setup-only \
-        --set sim.tune.backend=llvm --set sim.tune.profile=off \
+        "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --setup-only --set "lhd.incremental=$incremental" \
+        --set sim.checkpoint=false \
         --workdir "$wd" --result-json "siml_${mode}_setup.json"
       setup_ms=$GRP_MS
       step sim_llvm "$mode" "siml_${mode}_run.json" -- "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} ${SIM_ARGS[@]+"${SIM_ARGS[@]}"} \
         "tree/$SIM_UNIT.prp" "tree/$SIM_TB" --run-only --arg "cycles=$SIM_CYCLES" \
- --set sim.tune.backend=llvm --set sim.tune.profile=off --diag-fmt pretty \
+        --set sim.checkpoint=false --diag-fmt pretty \
         --workdir "$wd" --result-json "siml_${mode}_run.json"
       run_ms=$((GRP_MS - setup_ms))
-      group_end sim_llvm "$mode" "$(sim_extra "$wd" "$setup_ms" "$run_ms")"
+      GRP_MS=$setup_ms  # the correctness execution is outside build latency
+      extra=$(sim_extra "$wd" "$setup_ms" "$run_ms") || GRP_OK=0
+      group_end sim_llvm "$mode" "$extra"
     }
     rm -rf SL_warm0
     warm_phase sim_llvm "$LHD" sim ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} ${SIM_ARGS[@]+"${SIM_ARGS[@]}"} "tree/$SIM_UNIT.prp" "tree/$SIM_TB" \
-      --arg "cycles=$SIM_CYCLES" --set sim.tune.backend=llvm --set sim.tune.profile=off \
+      --arg "cycles=$SIM_CYCLES" --set sim.checkpoint=false \
       --workdir SL_warm0
     rm -rf SL_warm0
     rm -rf SL_full; simllvm_group full SL_full

@@ -269,14 +269,10 @@ def report_core(root: Path, core: str) -> list:
         sim_rows.append(svl)
     rep.head("sim benchmark throughput", *sim_rows)
     if sp or sp2 or sv or svl:
-        # `lhd sim --setup-only` only writes the driver sources; the host C++
-        # compile lives inside --run-only and is rebuilt every time, so it used
-        # to swamp the simulation it was being reported as. Keep the two apart:
-        # `c++` is the compile+link, `sim` the simulation of `cycles` cycles.
-        # The verilator row is split the same way (verilate / make / run), so
-        # the columns mean the same thing on both simulators.
+        # Native setup includes object compilation. Verilator has a separate
+        # host C++ build. +build includes image preparation and execution.
         print(f"   {'':10} {'v->lg':>9} {'setup':>7} {'c++':>8} {'sim':>8}"
-              f" {'cycles':>9} {'sim cyc/s':>10} {'+c++':>10} {'extra':>8}")
+              f" {'cycles':>9} {'sim cyc/s':>10} {'+build':>10} {'extra':>8}")
 
         def top_state(m):
             v = [m[k] for k in ("sim_cpu_top_ok", "sim_cpu_prog_ok") if k in m]
@@ -298,7 +294,7 @@ def report_core(root: Path, core: str) -> list:
                   f" {fmt(m.get('sim_cc_ms'), 'ms'):>8} {fmt(m.get('sim_exec_ms'), 'ms'):>8}"
                   f" {fmt(m.get('sim_cycles')):>9}"
                   f" {fmt(m.get('sim_cycles_per_s')):>10}"
-                  f" {fmt(m.get('sim_cycles_per_s_with_cc')):>10} {top_state(m):>8}")
+                  f" {fmt(m.get('sim_cycles_per_s_with_build')):>10} {top_state(m):>8}")
 
         # The CMD lines are the authoritative record of which driver each
         # number came from. A throughput row times sim_setup/sim_run only; the

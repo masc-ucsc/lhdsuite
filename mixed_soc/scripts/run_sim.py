@@ -13,12 +13,8 @@ import time
 from generate_rtl import HERE, stage
 
 DEFAULT_CYCLES = 36000
-# Pin only after both independent simulators agree. Other lengths still run
-# all architectural assertions, and compare mode checks their entire signatures.
-# The single-16x16-Gemmini glue is NOT pinned yet: Verilator was unavailable when it was written, so the C++ twin is unrun.
-# `lhd sim` printed sum=1691795345967856877 (12000 cycles) and sum=6893873800832869613 (36000), with mesh=8367253803954778821
-# and acc=264290809912224 for both. Pin them in ORACLES once `run_sim.py compare` shows Verilator printing the same line.
-ORACLES = {}
+# Independently verified by both generated drivers at these workload lengths.
+ORACLES = {12000: 1691795345967856877, 36000: 6893873800832869613, 360000: 5116446881363493101}
 LINE = re.compile(r'(?:^|puts:)mixed_soc: cycles=(\d+) active=(\d+) sum=(\d+) mesh=(\d+) acc=(\d+)$', re.M)
 
 
@@ -90,17 +86,21 @@ def simulate(args, work):
         driver = HERE/'sim/mixed_soc_tb.prp'
         common = [lhd, 'sim', design, driver, '--workdir', work/'lhd',
                   '--set', 'sim.vcd=false', '--set', 'compile.unknown_zero=true',
-                  '--set', 'sim.init_zero=true', '--set', 'sim.tune.profile=off',
+                  '--set', 'sim.init_zero=true',
                   '--set', f'lhd.jobs={args.jobs}']
         run('sim_setup', common + ['--setup-only'], work)
-        run('sim_cc', common + ['--run-only', '--set', 'sim.compile_only=true'], work)
-        output = run('sim_exec', [work/'lhd/sim/drv.bin', '--cycles', args.cycles,
-                     '--set', 'sim.init_zero=true'], work, True, args.host_perf)
+        runtime = lhd.with_name('lhd_simrt')
+        if not runtime.is_file():
+            raise SystemExit(f'missing native runtime beside {lhd}: {runtime}')
+        output = run('sim_exec', [runtime, work/'lhd/sim', f'+cycles={args.cycles}',
+                     '--init-zero', '--set', 'sim.unknown_zero=true', '--no-checkpoint'], work, True, args.host_perf)
         signatures.append(signature(output, args.cycles))
         print(f'METRIC sim_cycles_per_s {args.cycles * 1000 // max(1, run.last_ms)} cycles/s')
     if args.mode in ('verilator', 'compare'):
         verilator = shutil.which(args.verilator)
         if not verilator:
+            if args.mode == 'compare':
+                raise SystemExit('compare requires Verilator')
             print('SKIP: Verilator unavailable\nMETRIC verilator_present 0 bool')
             return
         print('METRIC verilator_present 1 bool')

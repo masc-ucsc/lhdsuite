@@ -99,7 +99,7 @@ Run one synthesis job at a time.
 | `synth`, `synth_incremental` | Mapping time, reuse, gate count, area, and timing with asap7 under the core's SDC. Minion also runs a flat-mapping comparison. |
 | `synth_lec_synth`, `synth_lec_flat` | Synthesized netlist equivalence, including reuse after a comment edit; flat is Minion-only. |
 | `sim_verilog`, `sim_pyrope`, `sim_pyrope2`, `sim_verilator` | Simulation with checked output values; host compilation and execution are timed separately. `sim_pyrope2` is `sim_pyrope` over `<core>/pyrope2` with the same driver, gates and cycle count. The `lhd sim` legs run lhd's default backend (LLVM since livehd 98a7e7c44; `METRIC sim_backend_llvm` records which). |
-| `sim_incremental`, `sim_incremental_llvm` | Simulator build reuse across edits, pinned to the C++ (`slop`) and LLVM backends respectively. Only the builds are timed; each rebuilt driver is then executed once and must behave exactly like a caches-off build of the same tree (cold, comment-only, and the one-module edit against a from-scratch build of the edited tree). |
+| `sim_incremental` | Native simulator build reuse across edits. Each image must match a caches-off build in execution. The older `sim_incremental_llvm` target is an alias. The three Gemmini meshes also provide `sim_incremental_pyrope2` to exercise a MAC edit in the loop-based designs. A query of internal mesh state must change across the edit and match the fresh build. Both scenarios report how many DUT objects have identical bytes and paths across the edit. |
 | `lec`, `lec_bug`, `lec_incremental` | Cross-language equivalence, injected-bug detection, and proof-cache reuse (the cache gate applies only under a proof `LEC_EFFORT`; sampled presets never cache). |
 | `verify`, `verify_bug`, `verify_temporal`, `verify_incremental` | Formal sidecar properties, mutant refutation, sequential properties, and reuse where supported. |
 
@@ -211,6 +211,15 @@ in `CORES`. See [AGENTS.md](AGENTS.md) for maintenance conventions.
 `bench/simcmp.sh [--core minion] [--lhd PATH]` builds Verilator and `lhd sim`
 (Verilog, Pyrope, Pyrope2) once and prints build times, the two-point-fit
 cycles/s and each simulator's marker line in one table. It needs no bazel, so it
-can run against a frozen copy of `lhd` while `../livehd` is being rebuilt. A
+can run against a frozen copy of `lhd` and its sibling `lhd_simrt` while `../livehd` is being rebuilt. A
 testbench's `cycles` parameter has a range (dino's is `U20`), so keep
 `--factor * --cycles` inside it.
+
+### Native simulator checkout
+
+The simulator benchmarks require LiveHD's `lhd_simrt` binary beside `lhd`.
+While the published LiveHD dependency predates the native runtime, use the
+sibling checkout, for example
+`bazel test --override_module=livehd=../livehd //bench:mixed_soc_sim_pyrope`.
+`lhd sim --setup-only` compiles the native objects. To run a prepared image,
+use `lhd_simrt WORK/sim +cycles=36000`.

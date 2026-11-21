@@ -7,31 +7,9 @@
 # printed-value gate is kept as belt-and-braces, since it also catches a driver
 # that runs but never reaches its assert. Anything else fails the target.
 #
-# THE TIME SPLIT. `lhd sim --setup-only` only WRITES the driver sources; the
-# host C++ compile happens inside `--run-only`, which rebuilds drv.bin on every
-# invocation (inou.cgen.sim digests the generated sources, but nothing caches
-# the built binary). On dino that clang++ -O2 of the Slop headers is 5-8 s
-# against a simulation of a couple of seconds, so a `sim_run_ms` read as
-# "simulation" is really a clang timing — which is why the two MODEs used to
-# differ 2.5x while emitting byte-identical C++. So the run is measured twice:
-#   sim_run_ms   `lhd sim --run-only`: host C++ compile + link + simulate
-#   sim_exec_ms  the drv.bin it just built, re-run with the same arguments:
-#                the simulation alone
-#   sim_cc_ms    the remainder, i.e. the C++ compile+link
-# and cycles/s is reported both ways: sim_cycles_per_s over the simulation
-# alone, sim_cycles_per_s_with_cc over compile+simulation.
-#
-# NO VCD IN THE TIMED PATH. The timed leg runs `--set sim.vcd=false`. It used
-# to bake a VCD in, and that made `sim_exec_ms` mostly a tracer stopwatch: on
-# dino at 2000 cycles the writer produced 9.8 MB and cost 40-75% of the
-# measured interval, with a 0.36 s / 0.91 s spread on ONE unchanged binary as
-# the filesystem stalled — a benchmark measuring two things, the exact trap
-# AGENTS.md records for `sim_run_ms`. It also made the //bench:*_sim_verilator
-# comparison meaningless, since verilator built without `--trace` carries no
-# tracing code at all (`sim.vcd=false` likewise emits none: the generated
-# .hpp drops from 29 vcd references to 2). The VCD writer is still covered by
-# the suite — the untimed whole-top correctness drivers below run with
-# `--set sim.vcd=true`.
+# Native setup compiles the DUT and testbench objects. sim_run_ms measures the
+# public run-only command. sim_exec_ms measures lhd_simrt directly. The timed
+# legs disable VCD and checkpoint I/O. Whole-top tests separately exercise VCD.
 #
 # Additional whole-top correctness drivers: $CORE_SIM_TOP_TB and, where the
 # core has one, a program-driving testbench ($CORE_SIM_PROG_TB). They run
@@ -154,102 +132,42 @@ cp -L "$CORE_SIM_DIR"/*.prp tree/
 
 SIM_INPUTS=("$BENCH_INPUT" "tree/$SIM_TB")
 
-# Make the selected execution engine part of the scraped benchmark identity.
-# Historical rows predate this metric and remain under phase `sim`; new rows
-# are rendered as `sim_slop` or `sim_llvm` by bench/ledger.py. An UNSET
-# sim.tune.backend is llvm (lhd's built-in default since livehd 98a7e7c44, owner
-# ruling 2026-10-15; it was slop before). An explicit `auto` is the tuned
-# decision, else slop -- the tuner never trials the backend, and every leg here
-# pins sim.tune.profile=off below, so `auto` is slop.
-SIM_BACKEND=default
-for kv in ${CORE_SIM_SETS:-}; do
-  case "$kv" in sim.tune.backend=*) SIM_BACKEND=${kv#sim.tune.backend=} ;; esac
-done
-case "$SIM_BACKEND" in
-  slop | auto) metric sim_backend_llvm 0 bool ;;
-  llvm | default | "") metric sim_backend_llvm 1 bool ;;
-  *) echo "FAIL: unsupported simulator backend '$SIM_BACKEND'" >&2; exit 2 ;;
-esac
-
-# Hermetic benchmark legs measure a PINNED tune vector: the core's own sim_sets
-# (explicit sim.tune.* knobs) or lhd's defaults. SW is a fresh workdir every
-# run, so lhd's default sim.tune.profile=auto would profile the --run-only leg
-# (sampler, run-time zero-filled `?`, no checkpoints) and never converge,
-# while the separately timed drv.bin exec below would not. A core may still
-# choose its own mode in sim_sets.
-case " ${CORE_SIM_SETS:-} " in
-  *"sim.tune.profile="*) ;;
-  *) CORE_SIM_SETS="--set sim.tune.profile=off ${CORE_SIM_SETS:-}" ;;
-esac
-
-# Host C++ build parallelism: the SAME job count bench/sim_verilator.sh hands
-# `make -j`. Under `bazel test` lhd defaults to 2 jobs (bazel normally runs
-# tests side by side), but every sim target here is tagged `exclusive`, so that
-# default only made sim_cc_ms a 2-core number next to Verilator's all-core one
-# (xs_rob: 629 s at 2 jobs vs 46 s at 128). A core may still pin its own.
-# `lhd.jobs` is the one job knob (it replaced sim.jobs, which lhd now rejects
-# as a usage error).
+metric sim_backend_llvm 1 bool
+SIMRT="$(dirname "$LHD_BIN")/lhd_simrt"
+[ -x "$SIMRT" ] || { echo "Missing LiveHD native runtime at $SIMRT" >&2; exit 1; }
+# Match the parallelism used to build the Verilator model.
 case " ${CORE_SIM_SETS:-} " in
   *"lhd.jobs="*) ;;
   *) CORE_SIM_SETS="--set lhd.jobs=$(cpu_count) ${CORE_SIM_SETS:-}" ;;
 esac
 
-# Run-time keys the generated drv.bin reads itself (`drv.bin --help`: lhd.seed,
-# sim.init_zero; compile.unknown_zero is setup-only and the binary rejects it). `lhd sim --run-only` hands them to the binary
-# it runs, so the gated sim_run sees them; every bare drv.bin re-run below must
-# get them too, or it simulates a DIFFERENT power-on state than the run the gate
-# checked. Measured on gemmini/Mesh8 (state with no initializer reaching the
-# outputs): without them the re-run's checksum moved with --seed and matched
-# neither sim_run nor Verilator. Only these keys: the binary rejects the
-# generation-time ones (sim.tune.backend, lhd.jobs, ...).
-DRV_SETS=()
+DRV_SETS=(--no-checkpoint)
 for kv in ${CORE_SIM_SETS:-}; do
-  case "$kv" in lhd.seed=* | sim.init_zero=*) DRV_SETS+=(--set "$kv") ;; esac
+  case "$kv" in
+    lhd.seed=*) DRV_SETS+=(--seed "${kv#*=}") ;;
+    sim.init_zero=true) DRV_SETS+=(--init-zero) ;;
+    compile.unknown_zero=true) DRV_SETS+=(--set sim.unknown_zero=true) ;;
+    sim.warn_undefined=*) DRV_SETS+=(--set "$kv") ;;
+  esac
 done
 
 # ---- MODE=incr: full plus the three-pass rebuild over ONE workdir ------------
 #
-# The sim counterpart of synth_incremental. The measured endpoint is a compiled
-# simulator, not an executed simulation: sim_setup_ms is `lhd sim` codegen and
-# sim_cc_ms is lhd's host C++ compile+link. This keeps the table focused on
-# incremental build latency and avoids mixing a design-dependent runtime into
-# the edit loop.
-#
-#   full                  caches disabled with fresh work and emit directories.
-#   pass 1  cold          fresh workdir AND fresh emit dir. Both, because sim
-#                         keys its generation digests off the EMIT DIR, not the
-#                         workdir — a "cold" run that only renamed the workdir
-#                         would silently start warm (trap T5).
-#   pass 2  comment1      nothing really changed. Gate: NO generated file is
-#                         rewritten, and the generated tree is byte-identical
-#                         to pass 1's (the mechanical "warm equals cold" check).
-#   pass 3  bug1          one real edit. Gate: something IS rewritten — a pass
-#                         that rebuilds nothing after a real edit is a stale
-#                         cache, not a fast one.
-#
-# `lhd sim --run-only --set sim.compile_only=true` runs lhd's own incremental
-# host build after `--setup-only` and stops at drv.bin, which guarantees that no
-# testbench cycles execute INSIDE a timed step.
-#
-# EXECUTED, UNTIMED. Every drv.bin this scenario links is then run once,
-# outside the timed steps, because a rebuild that compiles is not a rebuild
-# that is right: this scenario used to stop at "drv.bin linked", so an
-# incremental build that reused a stale unit (or a warm `lhd sim` that died on
-# the edit) could only ever be caught by a human. The contract checked here is
-# ONE thing — incremental == non-incremental — and nothing else:
-#   cold, comment   must behave exactly like `full`, the caches-off build of the
-#                   same tree: same exit status, same printed lines.
-#   edit            must behave exactly like `oracle`, the SAME edited tree
-#                   built from scratch with caches off in a workdir of its own.
-#                   (bug1 may legitimately break the testbench's own assert, so
-#                   "passes" is not the question; "same as from scratch" is.)
-# Whether the simulation is RIGHT in absolute terms — $CORE_SIM_MARKER /
-# $CORE_SIM_EXPECT, the Verilator-agreed readback — stays sim_pyrope's gate. It
-# is reported here as METRIC sim_exec_gate_ok and never fails this target: a
-# core whose cold simulation is red for its own reason must show up once, not
-# three times.
+# Time only setup. Compare the behavior of each native image against a fresh
+# build of the same sources, including when the testbench detects the bug edit.
 if [ "$MODE" = incr ]; then
-  # sim_pass TAG [INCREMENTAL] [WORKDIR] — generate, then compile+link drv.bin.
+  query_args=()
+  if [ -n "${CORE_SIM_EDIT_SIGNAL:-}" ]; then
+    python3 - "$CORE_SIM_EDIT_SIGNAL" "$CORE_SIM_EDIT_CYCLE" > edit_query.json <<'PYQUERY'
+import json, sys
+signal, cycle = sys.argv[1:]
+print(json.dumps({"kind": "sim_query", "schema_version": 1, "queries": [
+    {"id": "edit", "op": "value", "signal": signal, "at": {"cycle": int(cycle)}}
+]}))
+PYQUERY
+    query_args=(--query edit_query.json)
+  fi
+  # sim_pass TAG [INCREMENTAL] [WORKDIR] builds the native simulator image.
   # It never launches the binary (sim_exec_built does, untimed).
   sim_pass() {
     local tag=$1 incremental=${2:-true} wd=${3:-SW}
@@ -259,32 +177,41 @@ if [ "$MODE" = incr ]; then
     run_timed "sim_setup_$tag" lhd sim "${SIM_INPUTS[@]}" --setup-only \
     --set sim.vcd=false $CORE_SIM_SETS --workdir "$wd" \
       ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
-      ${incr_args[@]+"${incr_args[@]}"} || return 1
-    # shellcheck disable=SC2086
-    run_timed "sim_cc_$tag" lhd sim "${SIM_INPUTS[@]}" --run-only \
-      --set sim.compile_only=true \
-      $CORE_SIM_SETS --diag-fmt pretty --workdir "$wd" \
-      ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"} \
-      ${incr_args[@]+"${incr_args[@]}"} || return 1
+      ${incr_args[@]+"${incr_args[@]}"} ${query_args[@]+"${query_args[@]}"} || return 1
     metric "workdir_bytes_$tag" "$(dir_bytes "$wd")" bytes
   }
 
-  # sim_exec_built TAG [WORKDIR] — run the drv.bin sim_pass TAG just linked, once
+  # sim_exec_built TAG [WORKDIR] — run the native image from sim_pass TAG, once
   # and untimed. Leaves its output in step_sim_exec_TAG.log and its exit status
   # in SIM_EXEC_RC; it does not judge either (the caller knows whether this tree
   # is supposed to pass).
   sim_exec_built() {
     local tag=$1 wd=${2:-SW}
-    local drv=$wd/sim/drv.bin
-    [ -x "$drv" ] \
-      || { echo "FAIL: sim_pass $tag linked no $drv" >&2; return 1; }
-    log_cmd "sim_exec_$tag" "$drv --cycles $CYCLES ${DRV_SETS[*]-} --result-json $wd/sim/exec_tests.json"
+    [ -s "$wd/sim/drv.tb.json" ] && [ -s "$wd/sim/drv.tb.o" ] \
+      || { echo "FAIL: missing native testbench in $wd/sim" >&2; return 1; }
+    log_cmd "sim_exec_$tag" "$SIMRT $wd/sim +cycles=$CYCLES ${DRV_SETS[*]}"
     SIM_EXEC_RC=0
-    CURRENT_STEP=sim_exec_$tag "$drv" --cycles "$CYCLES" ${DRV_SETS[@]+"${DRV_SETS[@]}"} \
+    CURRENT_STEP=sim_exec_$tag "$SIMRT" "$wd/sim" "+cycles=$CYCLES" "${DRV_SETS[@]}" \
       --result-json "$wd/sim/exec_tests.json" >"step_sim_exec_$tag.log" 2>&1 || SIM_EXEC_RC=$?
+    if [ -n "${CORE_SIM_EDIT_SIGNAL:-}" ]; then
+      "$SIMRT" "$wd/sim" "+cycles=$CYCLES" "${DRV_SETS[@]}" --query-file edit_query.json \
+        --replay-results "$wd/sim/exec_tests.json" --query-json "edit_query_$tag.json" || return 1
+      python3 - "edit_query_$tag.json" >"edit_sample_$tag" <<'PYVALUE' || return 1
+import json, sys
+with open(sys.argv[1]) as request:
+    result, = json.load(request)["results"]
+if not result["ok"]:
+    sys.exit(str(result))
+value = result["value"]
+if int(value["known_mask"], 16) != (1 << value["bits"]) - 1:
+    sys.exit("edit observation contains unknown bits")
+print(value["hex"])
+PYVALUE
+      cat "edit_sample_$tag" >>"step_sim_exec_$tag.log"
+    fi
   }
 
-  # sim_exec_same TAG REF [WORKDIR] — run TAG's drv.bin and require the exit
+  # sim_exec_same TAG REF [WORKDIR] — run TAG's native image and require the exit
   # status and every printed line REF's run produced.
   sim_exec_same() {
     local tag=$1 ref=$2 wd=${3:-SW}
@@ -301,13 +228,15 @@ if [ "$MODE" = incr ]; then
     fi
   }
 
-  # generated_newer MARKER — the generated C++/objects touched since MARKER.
+  # Match only the loadable image, excluding cache keys and execution results.
+  image_files=( '(' -name '*.o' -o -name '*.dut.json' -o -name 'drv.tb.json' ')' )
+  # generated_newer MARKER lists image files touched since MARKER.
   # `find -newer`, not a timestamp read: a whole-second stamp cannot separate
   # two passes that land in the same second, and that makes a no-op pass look
   # green for the wrong reason.
   generated_newer() {
     find SW/sim -maxdepth 1 -type f \
-      \( -name '*.hpp' -o -name '*.cpp' -o -name '*.llvm.o' -o -name '*.iface.json' \) \
+      "${image_files[@]}" \
       -newer "$1" -exec basename {} \; 2>/dev/null | sort | tr '\n' ' '
   }
 
@@ -328,7 +257,7 @@ if [ "$MODE" = incr ]; then
 
   rm -rf SW
   sim_pass cold || exit 1
-  tree_fingerprint SW/sim -name '*.cpp' -o -name '*.hpp' -o -name '*.iface.json' >fp_cold.txt
+  tree_fingerprint SW/sim "${image_files[@]}" >fp_cold.txt
   sim_exec_same cold full
 
   # Some old checked-in comment1 fixtures have drifted into structurally
@@ -348,7 +277,7 @@ if [ "$MODE" = incr ]; then
   # H5, the mechanical "warm equals cold" check (I2). A cache that skipped work
   # must leave the same bytes a cold run would have written; anything else is a
   # miscompile wearing a speedup's clothes.
-  tree_fingerprint SW/sim -name '*.cpp' -o -name '*.hpp' -o -name '*.iface.json' >fp_warm.txt
+  tree_fingerprint SW/sim "${image_files[@]}" >fp_warm.txt
   if cmp -s fp_cold.txt fp_warm.txt; then
     metric sim_warm_equals_cold 1 bool
   else
@@ -376,25 +305,9 @@ if [ "$MODE" = incr ]; then
   sim_pass edit || exit 1
   rewritten=$(generated_newer marker)
   metric sim_rewritten_edit "$(echo "$rewritten" | wc -w | tr -d ' ')" files
-  # What was rewritten, by kind: the edited unit's own sources are expected;
-  # color kernels/plans of the module that inlines it are the fused hierarchy;
-  # anything else is the part of the tree that changed for no visible reason.
-  generated_total=$(find SW/sim -maxdepth 1 -type f \( -name '*.hpp' -o -name '*.cpp' -o -name '*.llvm.o' -o -name '*.iface.json' \) | wc -l | tr -d ' ')
-  n_color=0; n_tune=0; n_unit=0; n_other=0
-  for f in $rewritten; do
-    case "$f" in
-    *.color-* | *.llvm.o) n_color=$((n_color + 1)) ;;
-    *.tune*.cpp) n_tune=$((n_tune + 1)) ;;
-    *.iface.json) n_other=$((n_other + 1)) ;;
-    *.cpp | *.hpp) n_unit=$((n_unit + 1)) ;;
-    *) n_other=$((n_other + 1)) ;;
-    esac
-  done
+  generated_total=$(find SW/sim -maxdepth 1 -type f "${image_files[@]}" | wc -l | tr -d ' ')
   metric sim_generated_total "$generated_total" files
-  metric sim_rewritten_edit_unit "$n_unit" files
-  metric sim_rewritten_edit_color "$n_color" files
-  metric sim_rewritten_edit_tune "$n_tune" files
-  echo "NOTE: 1 source file edited; rewrote $(echo "$rewritten" | wc -w | tr -d ' ') of $generated_total generated files (unit sources $n_unit, color kernels/plans $n_color, tune $n_tune, other $n_other)" >&2
+  echo "NOTE: edited one source and rewrote $rewritten" >&2
   [ -n "$rewritten" ] \
     || { echo "FAIL: a real one-line edit rewrote NO generated file — stale cache" >&2; exit 1; }
 
@@ -406,33 +319,43 @@ if [ "$MODE" = incr ]; then
   sim_exec_built oracle SW_oracle || exit 1
   echo "$SIM_EXEC_RC" >rc_sim_exec_oracle
   sim_exec_same edit oracle
+  if [ -n "${CORE_SIM_EDIT_SIGNAL:-}" ] && cmp -s edit_sample_full edit_sample_edit; then
+    echo "FAIL: the edit did not change $CORE_SIM_EDIT_SIGNAL at cycle $CORE_SIM_EDIT_CYCLE" >&2
+    exit 1
+  fi
   # Informational: byte-identical generated sources would make the equality
   # above true by construction. Not a gate — an incremental compile may order
   # equivalent nodes differently — but a 0 here next to a 1 above is worth a look.
-  tree_fingerprint SW/sim -name '*.cpp' -o -name '*.hpp' -o -name '*.iface.json' >fp_edit.txt
-  tree_fingerprint SW_oracle/sim -name '*.cpp' -o -name '*.hpp' -o -name '*.iface.json' >fp_oracle.txt
+  tree_fingerprint SW/sim "${image_files[@]}" >fp_edit.txt
+  # A moved timestamp can still have identical contents. Compare the path and
+  # digest of each DUT object with the unedited build; exclude the testbench.
+  read -r identical total < <(awk '
+    FILENAME == ARGV[1] { before[$0] = 1; next }
+    /[.]llvm[.]o$/ { total++; if ($0 in before) identical++ }
+    END { print identical + 0, total + 0 }
+  ' fp_warm.txt fp_edit.txt)
+  metric sim_dut_objects_identical_edit "$identical" files
+  metric sim_dut_objects_total_edit "$total" files
+  tree_fingerprint SW_oracle/sim "${image_files[@]}" >fp_oracle.txt
   if cmp -s fp_edit.txt fp_oracle.txt; then
     metric sim_edit_tree_equals_oracle 1 bool
   else
     metric sim_edit_tree_equals_oracle 0 bool
   fi
 
-  echo "PASS: sim_incremental built drv.bin for full/cold/no-change/edit; cold and no-change simulate exactly like the caches-off build, the edit exactly like a from-scratch build of the edited tree"
+  echo "PASS: sim_incremental built native images for full/cold/no-change/edit; cold and no-change simulate exactly like the caches-off build, the edit exactly like a from-scratch build of the edited tree"
   exit 0
 fi
 
-# The setup phase WRITES the driver sources; sim.vcd is read back from what was
-# baked, so it is fixed here and not at --run-only. See the header for why the
-# timed leg keeps the tracer out.
 # shellcheck disable=SC2086  # CORE_SIM_SETS is a token LIST, split on purpose
 run_timed sim_setup lhd sim "${SIM_INPUTS[@]}" --setup-only \
     --set sim.vcd=false $CORE_SIM_SETS --workdir SW \
   ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"}
 # shellcheck disable=SC2086
-run_timed sim_run lhd sim "${SIM_INPUTS[@]}" --run-only --arg "cycles=$CYCLES" \
+SETUP_MS=$LAST_MS
+run_timed sim_run lhd sim "${SIM_INPUTS[@]}" --run-only --set sim.checkpoint=false --arg "cycles=$CYCLES" \
   $CORE_SIM_SETS --diag-fmt pretty --workdir SW \
   ${PYROPE_ARGS[@]+"${PYROPE_ARGS[@]}"}
-RUN_MS=$LAST_MS  # compile + simulate; sim_exec below splits it
 
 sim_gate sim_run
 # A testbench without a `cycles` parameter would silently simulate its own
@@ -443,25 +366,15 @@ if grep -qa "matches no test parameter" step_sim_run.log; then
   exit 1
 fi
 
-# The simulation on its own: re-run the driver `lhd sim` just built, with the
-# same arguments it passed (`--arg k=v` reaches the binary as `--k v`; the
-# result sidecar goes to its own path so lhd's stays untouched). The remainder
-# against sim_run_ms is the host C++ compile+link. BEST of $SIM_REPS, not one
-# sample — see best_run in common.sh. The `+c++` rate stays single-shot,
-# because sim_run_ms is the real cost of one `lhd sim`.
 : "${SIM_REPS:=3}"
-DRV=SW/sim/drv.bin
-log_cmd sim_exec "$DRV --cycles $CYCLES ${DRV_SETS[*]-} --result-json SW/sim/exec_tests.json  (x$SIM_REPS, best)"
-best_run sim_exec "$SIM_REPS" "$DRV" --cycles "$CYCLES" ${DRV_SETS[@]+"${DRV_SETS[@]}"} \
+log_cmd sim_exec "$SIMRT SW/sim +cycles=$CYCLES ${DRV_SETS[*]} (x$SIM_REPS, best)"
+best_run sim_exec "$SIM_REPS" "$SIMRT" SW/sim "+cycles=$CYCLES" "${DRV_SETS[@]}" \
   --result-json SW/sim/exec_tests.json
 EXEC_MS=$BEST_MS
 metric sim_exec_ms "$EXEC_MS" ms
-CC_MS=$((RUN_MS - EXEC_MS))
-[ "$CC_MS" -ge 0 ] || CC_MS=0  # only reachable if a stall hit the lhd run instead
-metric sim_cc_ms "$CC_MS" ms
 metric sim_cycles "$CYCLES" cycles
 rate sim_cycles_per_s "$CYCLES" "$EXEC_MS" "cycles/s"
-rate sim_cycles_per_s_with_cc "$CYCLES" "$RUN_MS" "cycles/s"
+rate sim_cycles_per_s_with_build "$CYCLES" "$((SETUP_MS + EXEC_MS))" "cycles/s"
 
 # run_top_driver LABEL DESIGN_INPUT TB_BASENAME CYCLES -> echoes 1 (ran), 0
 # (failed), or - (no such driver for this core). The design input comes first:
@@ -519,5 +432,4 @@ else
   *) echo "NOTE: whole-top sim still unsupported (informational; not a failure)" ;;
   esac
 fi
-echo "PASS: $MODE $SIM_TB benchmark ($CYCLES cycles in ${EXEC_MS} ms sim," \
-  "${CC_MS} ms host c++)"
+echo "PASS: $MODE $SIM_TB benchmark ($SETUP_MS ms setup, $CYCLES cycles in $EXEC_MS ms)"

@@ -55,20 +55,15 @@ both must be nonzero. The mesh and accumulator results depend on the TPU computi
 so a dropped mesh, a stale read path or a lost write-back fails the run.
 
 Both drivers fold observed transfers on every cycle with
-`sum = (sum * 31 + obs) & (2^63 - 1)`. **The checksum is not pinned for this glue yet:** the
-single-Gemmini rewrite was done on a host without Verilator, so the C++ twin has not run.
-`lhd sim` prints `sum=1691795345967856877` at 12,000 cycles and `sum=6893873800832869613` at
-36,000, both with `mesh=8367253803954778821 acc=264290809912224`; `ORACLES` in
-[run_sim.py](scripts/run_sim.py) stays empty until `run_sim.py compare` shows Verilator
-printing the same line. Zero-filled unknown/uninitialized state matches
-Verilator's two-state power-on behavior. Registered transfer observations at the
-flat boundary let both drivers read below `step` without confusing post-edge
-ready/valid with the beat just consumed.
+`sum = (sum * 31 + obs) & (2^63 - 1)`. The
+Pyrope and C++ drivers agreed at 12,000, 36,000 and 360,000 cycles.
+`run_sim.py` checks the pinned workload checksums at these lengths and compares
+the entire signature in compare mode. Zero-filled power-on state is used by both.
 
-Measured on the development host: about **2.4 s for LiveHD** (36,000 cycles, 15k
-cycles/s with the live 16×16 mesh; Verilator not re-measured), excluding generation
-and host compilation. `CMD` lines record commands; `METRIC sim_setup_ms`, `sim_cc_ms`,
-`sim_exec_ms`, `verilator_cc_ms`, and `verilator_exec_ms` separate the costs.
+LiveHD setup writes native DUT and testbench objects under `lhd/sim/`.
+`lhd_simrt`, built beside `lhd`, runs those objects.
+`sim_setup_ms` measures the complete LiveHD build and `sim_exec_ms` measures
+execution. Verilator reports `verilator_cc_ms` and `verilator_exec_ms`.
 To retain logs, reuse a build, compare another length, or run both directly:
 
 ```sh
@@ -77,7 +72,7 @@ python3 mixed_soc/scripts/run_sim.py compare --lhd ../livehd/bazel-bin/lhd/lhd \
 ```
 
 `--cycles N` changes both simulators together; default-count runs require the
-pinned checksum (none yet, see above), and compare mode requires equality at every length. This runner
+pinned checksum, and compare mode requires equality at every length. This runner
 keeps imported package directories intact instead of flattening them into a
 standalone core's scratch tree; the `//bench:` targets use this runner and keep the usual benchmark names.
 

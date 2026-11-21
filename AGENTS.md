@@ -109,21 +109,13 @@ Every core shares one shape (`<core>/` = `dino/`, `minion/` or `cva6/`):
   invocation as a `CMD` line; `//bench:show` aggregates both from
   `bazel-testlogs/`. A non-lhd command that is part of the flow gets the same
   line via `log_cmd` (only `sim.sh`'s re-run of the driver binary today).
-- **A timed step must time ONE thing.** Twice now: (1) `lhd sim --run-only`
-  host-compiles the generated driver before simulating, and on these designs
-  that clang++ is 5-10s against a simulation of ~1s — so `sim_run_ms` read as
-  "simulation" was really a clang stopwatch, and the two sim MODEs differed
-  2.5x while emitting byte-identical C++; `sim.sh` re-runs the built `drv.bin`
-  to separate `sim_cc_ms` from `sim_exec_ms`. (That "byte-identical" is HISTORY,
-  not an invariant: re-checked 2026-08-09 the two modes now emit genuinely
-  different C++ for dino's top — 1107 lines from `lg:` vs 1270 through the
-  Pyrope round trip, differing in CSE and in redundant `zext` chains, not just
-  in the `Mod` vs `Lib_Mod` struct naming — and run ~3% apart. A cycles/s gap
-  between the modes is now a front-end comparison, not a harness artifact.) (2) The timed leg used to bake a
+- **A timed step must time ONE thing.** Native `--setup-only` compiles the simulator
+  image. Measure execution with the sibling `lhd_simrt WORK/sim +cycles=N`.
+  Keep trace generation and checkpoint writes outside timed runs. The timed leg used to bake a
   VCD in, and the writer cost 40-75% of `sim_exec_ms` on dino with a 0.36s /
   0.91s spread on ONE unchanged binary — so `sim.sh` now runs
   `--set sim.vcd=false` and the untimed whole-top drivers carry the VCD
-  coverage. (3) `sim_exec_ms` still times ONE `execve` plus the simulation, and
+  coverage. `sim_exec_ms` still times ONE `execve` plus the simulation, and
   process startup on this box is ~16-19 ms for every one of the three
   simulators (binary load, model ctor, reset). That is ~12% of dino's 500k run
   and ~96% of minion's 100k one, so a single-count `cycles/s` under-reports
@@ -172,7 +164,7 @@ Every core shares one shape (`<core>/` = `dino/`, `minion/` or `cva6/`):
   reset-free bus registers power on from `lhd sim`'s seeded PRNG but zero in
   Verilator. When reset-free state does reach the outputs (xs_renametable's fp
   read path on cycle 0), set `sim.init_zero=true` in `sim_sets`; bench/sim.sh
-  then passes `--init-zero` to every re-run of drv.bin.
+  then passes `--init-zero` to each native runtime invocation.
 - **A `u64` testbench variable is not unsigned after `wrap`.** The XS drivers'
   xorshift64 used to spell its right shift `lfsr >> 7`, and that made the Pyrope
   stimulus diverge from a plain `uint64_t` xorshift64 at cycle 4: after
