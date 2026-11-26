@@ -4,8 +4,7 @@ const image = import("BootROM.Image")
 // An external halt request wakes WFI. The debug ROM verifies DPC, nested
 // exception entry, single-step and EBREAK/DRET in M, S and U. The machine handler
 // checks the four illegal debug instructions outside debug mode.
-mod run<X,DEBUG>(clk:Clock, rst:Reset, request:Bool)
-    -> (success:U1@[], bad:U1@[], halted:U1@[], nested:U1@[], machine:U1@[]) {
+mod run<X, DEBUG>(clk:Clock, request:Bool, rst:Reset) -> (bad:U1@[], halted:U1@[], machine:U1@[], nested:U1@[], success:U1@[]) {
   comptime const C = cfg.params(xLen=X, useDebug=DEBUG, useSupervisor=true)
   const program:[144]U32 = (
     (U1(DEBUG) << 20) | 0x00c13, // li s8,DEBUG
@@ -84,7 +83,10 @@ mod run<X,DEBUG>(clk:Clock, rst:Reset, request:Bool)
     0xf80c14e3, // bne s8,zero,100ec <fail>
     0x00140413, // addi s0,s0,1
     0x30200073, // mret
-    0x00000013, 0x00000013, 0x00000013, 0x00000013, // align to a cache line
+    0x00000013,
+    0x00000013,
+    0x00000013,
+    0x00000013, // align to a cache line
     // Debug ROM at 0x800. Its exception entry is at 0x808.
     0x0240006f, // jal zero,824 <dispatch>
     0x00000013, // addi zero,zero,0
@@ -135,23 +137,36 @@ mod run<X,DEBUG>(clk:Clock, rst:Reset, request:Bool)
     0x00148493, // addi s1,s1,1
     0x7b200073, // dret
     0x0000006f, // jal zero,8c0 <debug_fail>
-    0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013,
-    0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013 // align to a cache line
+    0x00000013,
+    0x00000013,
+    0x00000013,
+    0x00000013,
+    0x00000013,
+    0x00000013,
+    0x00000013,
+    0x00000013,
+    0x00000013,
+    0x00000013,
+    0x00000013,
+    0x00000013,
+    0x00000013,
+    0x00000013,
+    0x00000013, // align to a cache line
   )
   reg handled:Bool = false
-  const t = image<C=C,WORDS=144,DEBUG_WORDS=64>(clk=clk, rst=rst, program=program, successPC=0x100e8,
-      debugIRQ=U1(request and !handled))
-  if t.trap != 0 and t.cause#[X-1] != 0 and t.cause#[0..<8] == 14 { handled = true }
+  const t = image<C=C, DEBUG_WORDS=64, WORDS=144>(clk=clk, rst=rst, program=program, successPC=0x100e8, debugIRQ=U1(request and !handled))
+  if t.trap != 0 and t.cause#[X - 1] != 0 and t.cause#[0..<8] == 14 {
+    handled = true
+  }
   success = U1(t.success)
   bad = U1(t.badFetch or (t.traceValid and (t.tracePC == 0x100ec or t.tracePC == 0x8c0)))
   halted = U1(t.traceValid and t.privilege == 7 and t.tracePC == 0x800)
   nested = U1(t.traceValid and t.privilege == 7 and t.tracePC == 0x808)
   machine = U1(t.traceValid and t.privilege == 3 and t.tracePC == 0x10158)
 }
-pub mod debug_program(clk:Clock, rst:Reset, request:Bool)
-    -> (done:U4@[], bad:U4@[], halted:U4@[], nested:U4@[], machine:U4@[]) {
+pub mod debug_program(clk:Clock, rst:Reset, request:Bool) -> (bad:U4@[], done:U4@[], halted:U4@[], machine:U4@[], nested:U4@[]) {
   for i in 0..<4 {
-    const r = run<X=(if i < 2 { 32 } else { 64 }),DEBUG=(i%2 == 1)>(clk=clk, rst=rst, request=request)
+    const r = run<X=(if i < 2 { 32 } else { 64 }), DEBUG=(i%2 == 1)>(clk, request, rst)
     done#[i] = r.success
     bad#[i] = r.bad
     halted#[i] = r.halted

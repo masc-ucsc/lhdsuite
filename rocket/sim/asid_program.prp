@@ -7,10 +7,10 @@ comptime const partial = cfg.params(xLen=64, useVM=true, asIdBits=5, pgLevels=5,
 // Use one root and the same instruction and data VPNs in three address spaces.
 // The second uses a different physical data page. The third removes execute
 // permission, then restores it and fences the ASID that saw the fault.
-mod run<C>(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
+mod run<C>(clk:Clock, rst:Reset) -> (bad:Bool@[], done:Bool@[]) {
   comptime const wide = C.xLen == 64
   const code:[112]U32 = (
-    ((C.asIdBits-1) << 20) | 0xd13, // li s10, highest implemented ASID bit index
+    ((C.asIdBits - 1) << 20) | 0xd13, // li s10, highest implemented ASID bit index
     0xfff00293, // li t0,-1
     0x3b029073, // csrw pmpaddr0,t0
     0x00f00293, // li t0,15
@@ -123,14 +123,14 @@ mod run<C>(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
     0x00000013, // nop
     0x00000013, // nop
   )
-  const d = image<C=C,WORDS=112>(clk=clk, rst=rst, program=code, successPC=0x101c0)
+  const d = image<C=C, WORDS=112>(clk=clk, rst=rst, program=code, successPC=0x101c0)
   done = d.success
   bad = d.badFetch or (d.traceValid and d.tracePC == 0x101bc) or (d.trap != 0 and d.cause != 9 and d.cause != 12)
 }
-pub mod asid_program(clk:Clock, rst:Reset) -> (done:U3@[], bad:Bool@[]) {
-  const a = run<sv32>(clk=clk,rst=rst)
-  const b = run<sv39>(clk=clk,rst=rst)
-  const c = run<partial>(clk=clk,rst=rst)
+pub mod asid_program(clk:Clock, rst:Reset) -> (bad:Bool@[], done:U3@[]) {
+  const a = run<sv32>(clk, rst)
+  const b = run<sv39>(clk, rst)
+  const c = run<partial>(clk, rst)
   done = (U1(c.done) << 2) | (U1(b.done) << 1) | U1(a.done)
   bad = a.bad or b.bad or c.bad
 }
@@ -140,7 +140,10 @@ test asid_program.switch_spaces {
   tick 1500 {
     d.rst = clock < 4
     step
-    if clock > 4 { assert(!d.bad, "wrong translation, fetch or trap"); retired |= d.done }
+    if clock > 4 {
+      assert(!d.bad, "wrong translation, fetch or trap")
+      retired |= d.done
+    }
   }
   assert(retired == 7, "each ASID configuration completes the firmware")
 }

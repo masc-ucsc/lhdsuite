@@ -23,15 +23,15 @@ comb rom() -> (words:[16]U32) {
     0x02ef0485, // addi s1,s1,1 / jal t0,1007a <leaf>
     0x04890080, // addi s1,s1,2
     0x04858082, // ret / addi s1,s1,1
-    0x82820489 // addi s1,s1,2 / jr t0
+    0x82820489, // addi s1,s1,2 / jr t0
   )
 }
 
-pub mod return_program(clk:Clock, rst:Reset) -> (plain:Bool@[], plain64:Bool@[], predicted32:Bool@[], predicted64:Bool@[], failed:Bool@[]) {
-  const ref32 = boot<C=baseline,WORDS=16>(clk=clk, rst=rst, program=rom(), successPC=0x10068)
-  const ref64 = boot<C=baseline64,WORDS=16>(clk=clk, rst=rst, program=rom(), successPC=0x10068)
-  const p32 = boot<C=small,WORDS=16>(clk=clk, rst=rst, program=rom(), successPC=0x10068)
-  const p64 = boot<C=wide,WORDS=16>(clk=clk, rst=rst, program=rom(), successPC=0x10068)
+pub mod return_program(clk:Clock, rst:Reset) -> (failed:Bool@[], plain:Bool@[], plain64:Bool@[], predicted32:Bool@[], predicted64:Bool@[]) {
+  const ref32 = boot<C=baseline, WORDS=16>(clk=clk, rst=rst, program=rom(), successPC=0x10068)
+  const ref64 = boot<C=baseline64, WORDS=16>(clk=clk, rst=rst, program=rom(), successPC=0x10068)
+  const p32 = boot<C=small, WORDS=16>(clk=clk, rst=rst, program=rom(), successPC=0x10068)
+  const p64 = boot<C=wide, WORDS=16>(clk=clk, rst=rst, program=rom(), successPC=0x10068)
   plain64 = ref64.success
   plain = ref32.success
   predicted32 = p32.success
@@ -50,10 +50,18 @@ test return_program.nested_calls {
     step
     if clock > 4 {
       assert(!d.failed, "wrong path retired")
-      if d.plain and plainAt == 0 { plainAt = clock }
-      if d.plain64 and plain64At == 0 { plain64At = clock }
-      if d.predicted32 and p32At == 0 { p32At = clock }
-      if d.predicted64 and p64At == 0 { p64At = clock }
+      if d.plain and plainAt == 0 {
+        plainAt = clock
+      }
+      if d.plain64 and plain64At == 0 {
+        plain64At = clock
+      }
+      if d.predicted32 and p32At == 0 {
+        p32At = clock
+      }
+      if d.predicted64 and p64At == 0 {
+        p64At = clock
+      }
     }
   }
   assert(plainAt > 0 and plain64At > 0 and p32At > 0 and p64At > 0, "all tiles must retire the checked loop")
@@ -80,11 +88,11 @@ pub mod coroutine_program(clk:Clock, rst:Reset) -> (done:U2@[], trap:Bool@[]) {
     0x006f0093, // j 10072 <success>
     0x00730000, // ebreak
     0x00000010,
-    0x00000000
+    0x00000000,
   )
   comptime const withHistory = configs.params(xLen=64, btbEntries=16, bhtEntries=64, nRAS=1)
-  const a = boot<C=small,WORDS=16>(clk=clk, rst=rst, program=words, successPC=0x10072)
-  const b = boot<C=withHistory,WORDS=16>(clk=clk, rst=rst, program=words, successPC=0x10072)
+  const a = boot<C=small, WORDS=16>(clk=clk, rst=rst, program=words, successPC=0x10072)
+  const b = boot<C=withHistory, WORDS=16>(clk=clk, rst=rst, program=words, successPC=0x10072)
   done = (U1(b.success) << 1) | U1(a.success)
   trap = a.trap != 0 or b.trap != 0
 }

@@ -7,7 +7,7 @@ comptime const wide = cfg.params(xLen=64, fLen=64)
 // Entry one allows the whole address space. The handler verifies each fault's
 // PC, cause and address. The program also checks an eight-byte NAPOT match
 // and a transfer crossing the upper bound of a 0x100cc entry.
-mod run<C>(clk:Clock, rst:Reset) -> (done:U1@[], fault:U1@[], bad:Bool@[]) {
+mod run<C>(clk:Clock, rst:Reset) -> (bad:Bool@[], done:U1@[], fault:U1@[]) {
   const code:[80]U32 = (
     0x00000297, // auipc t0,0x0
     0x0b028293, // addi t0,t0,176 # 100f0 <trap_handler>
@@ -88,17 +88,17 @@ mod run<C>(clk:Clock, rst:Reset) -> (done:U1@[], fault:U1@[], bad:Bool@[]) {
     0x00000000,
     0x00000000,
     0x00000000,
-    0x00000000
+    0x00000000,
   )
-  const t = image<C=C,WORDS=80>(clk=clk, rst=rst, program=code, successPC=0x100e8)
+  const t = image<C=C, WORDS=80>(clk=clk, rst=rst, program=code, successPC=0x100e8)
   done = U1(t.success)
   fault = t.trap
   bad = t.trap != 0 and (t.tracePC != 0x10090 and t.tracePC != 0x1009c and t.tracePC != 0x100cc)
 }
 
-pub mod pmp_boundary(clk:Clock, rst:Reset) -> (done:U2@[], faults:U2@[], bad:Bool@[]) {
-  const a = run<narrow>(clk=clk,rst=rst)
-  const b = run<wide>(clk=clk,rst=rst)
+pub mod pmp_boundary(clk:Clock, rst:Reset) -> (bad:Bool@[], done:U2@[], faults:U2@[]) {
+  const a = run<narrow>(clk, rst)
+  const b = run<wide>(clk, rst)
   done = (b.done << 1) | a.done
   faults = (b.fault << 1) | a.fault
   bad = a.bad or b.bad
@@ -114,8 +114,12 @@ test pmp_boundary.overlapping_entries {
     step
     if clock > 4 {
       finished |= d.done
-      if d.faults#[0] != 0 { n32 += 1 }
-      if d.faults#[1] != 0 { n64 += 1 }
+      if d.faults#[0] != 0 {
+        n32 += 1
+      }
+      if d.faults#[1] != 0 {
+        n64 += 1
+      }
       assert(!d.bad, "unexpected fault PC")
     }
   }

@@ -3,17 +3,11 @@ const cache = import("../pyrope2/CacheBanks.CacheBanks")
 
 // Hold both D grants until two independent misses have reached A. Return the
 // second line first; keep its CPU response stalled while the first fills.
-pub mod nonblocking_cache(clk:Clock,rst:Reset,issue:Bool,addr:U32,accept:Bool,
-    grant:Bool,source:U5,word:U32) -> (ready:Bool@[], response:Bool@[], value:U32@[], bank:U5@[],
-    acquire:Bool@[], line:U32@[], id:U5@[], dReady:Bool@[]) {
-  const d = cache<N=3,W=32,SETS=4,WAYS=1,BLOCK=16>(clk=clk,rst=rst,request=issue,address=addr,
-      command=0,mask=15,data=0,responseReady=accept,aReady=true,bValid=false,bAddress=0,bParam=0,bSource=0,
-      cReady=true,dValid=grant,dOpcode=5,dParam=1,dSource=source,dSink=source#[0..<4],
-      dData=word,dDenied=false,dCorrupt=false,eReady=true)
+pub mod nonblocking_cache(clk:Clock, rst:Reset, issue:Bool, addr:U32, accept:Bool, grant:Bool, source:U5, word:U32) -> (acquire:Bool@[], bank:U5@[], dReady:Bool@[], id:U5@[], line:U32@[], ready:Bool@[], response:Bool@[], value:U32@[]) {
+  const d = cache<BLOCK=16, N=3, SETS=4, W=32, WAYS=1>(clk=clk, rst=rst, request=issue, address=addr, command=0, mask=15, data=0, responseReady=accept, aReady=true, bValid=false, bAddress=0, bParam=0, bSource=0, cReady=true, dValid=grant, dOpcode=5, dParam=1, dSource=source, dSink=source#[0..<4], dData=word, dDenied=false, dCorrupt=false, eReady=true)
   reg sampled:(ready:Bool, response:Bool, value:U32, bank:U5, acquire:Bool, line:U32, id:U5, dReady:Bool) = nil
-  sampled = (ready=d.ready, response=d.response, value=d.result, bank=d.returnBank,
-      acquire=d.aValid, line=d.aAddress, id=d.aSource, dReady=d.dReady)
-  (ready,response,value,bank,acquire,line,id,dReady) = sampled
+  sampled = (acquire=d.aValid, bank=d.returnBank, dReady=d.dReady, id=d.aSource, line=d.aAddress, ready=d.ready, response=d.response, value=d.result)
+  (ready, response, value, bank, acquire, line, id, dReady) = sampled
 }
 
 test nonblocking_cache.two_misses {
@@ -32,16 +26,21 @@ test nonblocking_cache.two_misses {
     d.accept = clock > 40
     step
     if clock >= 2 {
-      if d.issue and d.ready { issued += 1 }
+      if d.issue and d.ready {
+        issued += 1
+      }
       if d.acquire {
         assert((d.id == 1 and d.line == 0x1000) or (d.id == 2 and d.line == 0x1010), "acquire source owns line")
         acquired += 1
       }
-      if d.grant and d.dReady { granted += 1 }
+      if d.grant and d.dReady {
+        granted += 1
+      }
       if d.response {
-        assert((received == 0 and d.bank == 1 and d.value == 258) or
-            (received == 1 and d.bank == 0 and d.value == 261), "out-of-order return and stable stalled response")
-        if d.accept { received += 1 }
+        assert((received == 0 and d.bank == 1 and d.value == 258) or (received == 1 and d.bank == 0 and d.value == 261), "out-of-order return and stable stalled response")
+        if d.accept {
+          received += 1
+        }
       }
     }
   }
@@ -50,20 +49,15 @@ test nonblocking_cache.two_misses {
 
 // Exercise the CPU pipeline and its saved tags as well as the coherent banks.
 // The manager withholds the first grant until both acquires have handshaken.
-pub mod pipeline(clk:Clock,rst:Reset,issue:Bool,second:Bool,grant:Bool,source:U5,word:U32)
-    -> (ready:Bool@[], acquire:Bool@[], acceptedD:Bool@[], response:Bool@[], tag:U7@[], value:U32@[], nack:Bool@[]) {
-  const d = cachePort<W=32,SETS=4,SCRATCH=false,WAYS=1,BLOCK=16,MSHRS=2>(clock=clk,reset=rst,
-      io_cpu_req_valid=U1(issue),io_cpu_req_bits_addr=(if second { 0x80000018 } else { 0x80000004 }),
-      io_cpu_req_bits_tag=(if second { 12 } else { 10 }),io_cpu_req_bits_cmd=0,io_cpu_req_bits_size=2,
-      io_cpu_req_bits_signed=0,io_cpu_req_bits_dprv=3,io_cpu_req_bits_dv=0,io_cpu_req_bits_phys=0,
-      io_cpu_req_bits_no_xcpt=0,io_cpu_s1_kill=0,io_cpu_s1_data_data=0,io_cpu_s1_data_mask=0,
-      io_ptw_status_debug=0,pmpPermissions=3,auto_out_a_ready=0,auto_out_d_valid=0,auto_out_d_bits_opcode=0,
-      auto_out_d_bits_size=0,auto_out_d_bits_denied=0,auto_out_d_bits_data=0,memAReady=true,memCReady=true,
-      memDValid=grant,memDOpcode=5,memDParam=1,memDSource=source,memDSink=1,memDData=word,memEReady=true)
-  reg sample:(ready:Bool,acquire:Bool,acceptedD:Bool,response:Bool,tag:U7,value:U32,nack:Bool) = nil
-  sample = (ready=d.io_cpu_req_ready != 0,acquire=d.memAValid,acceptedD=d.memDReady and grant,
-      response=d.io_cpu_resp_valid != 0,tag=d.io_cpu_resp_bits_tag,value=d.io_cpu_resp_bits_data,nack=d.io_cpu_s2_nack != 0)
-  (ready,acquire,acceptedD,response,tag,value,nack) = sample
+pub mod pipeline(clk:Clock, rst:Reset, issue:Bool, second:Bool, grant:Bool, source:U5, word:U32) -> (acceptedD:Bool@[], acquire:Bool@[], nack:Bool@[], ready:Bool@[], response:Bool@[], tag:U7@[], value:U32@[]) {
+  const d = cachePort<BLOCK=16, MSHRS=2, SCRATCH=false, SETS=4, W=32, WAYS=1>(clock=clk, reset=rst, io_cpu_req_valid=U1(issue), io_cpu_req_bits_addr=(if second {
+        0x80000018
+      } else {
+        0x80000004
+      }), io_cpu_req_bits_tag=(if second { 12 } else { 10 }), io_cpu_req_bits_cmd=0, io_cpu_req_bits_size=2, io_cpu_req_bits_signed=0, io_cpu_req_bits_dprv=3, io_cpu_req_bits_dv=0, io_cpu_req_bits_phys=0, io_cpu_req_bits_no_xcpt=0, io_cpu_s1_kill=0, io_cpu_s1_data_data=0, io_cpu_s1_data_mask=0, io_ptw_status_debug=0, pmpPermissions=3, auto_out_a_ready=0, auto_out_d_valid=0, auto_out_d_bits_opcode=0, auto_out_d_bits_size=0, auto_out_d_bits_denied=0, auto_out_d_bits_data=0, memAReady=true, memCReady=true, memDValid=grant, memDOpcode=5, memDParam=1, memDSource=source, memDSink=1, memDData=word, memEReady=true)
+  reg sample:(ready:Bool, acquire:Bool, acceptedD:Bool, response:Bool, tag:U7, value:U32, nack:Bool) = nil
+  sample = (acceptedD=d.memDReady and grant, acquire=d.memAValid, nack=d.io_cpu_s2_nack != 0, ready=d.io_cpu_req_ready != 0, response=d.io_cpu_resp_valid != 0, tag=d.io_cpu_resp_bits_tag, value=d.io_cpu_resp_bits_data)
+  (ready, acquire, acceptedD, response, tag, value, nack) = sample
 }
 
 test pipeline.reordered_loads {
@@ -81,13 +75,18 @@ test pipeline.reordered_loads {
     d.word = 256 + beats
     step
     if clock >= 3 {
-      if d.ready and d.issue { issued += 1 }
-      if d.acquire { acquired += 1 }
-      if d.acceptedD { beats += 1 }
+      if d.ready and d.issue {
+        issued += 1
+      }
+      if d.acquire {
+        acquired += 1
+      }
+      if d.acceptedD {
+        beats += 1
+      }
       assert(!d.nack, "independent misses accepted")
       if d.response {
-        assert((returns == 0 and d.tag == 12 and d.value == 258) or
-            (returns == 1 and d.tag == 10 and d.value == 261), "restored CPU tag, lane and payload")
+        assert((returns == 0 and d.tag == 12 and d.value == 258) or (returns == 1 and d.tag == 10 and d.value == 261), "restored CPU tag, lane and payload")
         returns += 1
       }
     }

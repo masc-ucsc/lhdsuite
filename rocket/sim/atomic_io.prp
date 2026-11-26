@@ -3,7 +3,7 @@ const image = import("BootROM.Image")
 
 // Check MISA.A, trap cause and mtval, local RAM contents, and the old value
 // returned by each arithmetic or logical TileLink operation on the device.
-mod run<C>(clk:Clock, rst:Reset) -> (ok:Bool@[], bad:Bool@[]) {
+mod run<C>(clk:Clock, rst:Reset) -> (bad:Bool@[], ok:Bool@[]) {
   const lrCause = if !C.useAtomics { 2 } elif C.useDataScratchpad or C.useAtomicsOnlyForIO { 5 } else { 0 }
   const scCause = if lrCause == 5 { 7 } else { lrCause }
   const localCause = if !C.useAtomics { 2 } elif C.useAtomicsOnlyForIO { 7 } else { 0 }
@@ -68,19 +68,21 @@ mod run<C>(clk:Clock, rst:Reset) -> (ok:Bool@[], bad:Bool@[]) {
     0x004e0e13, // addi t3,t3,4
     0x341e1073, // csrw mepc,t3
     0x30200073, // mret
-    0, 0, 0, 0
+    0,
+    0,
+    0,
+    0,
   )
-  const t = image<C=C,WORDS=64,ATOMIC_DEVICE=true>(clk=clk, rst=rst, program=program, successPC=0x100fc)
+  const t = image<ATOMIC_DEVICE=true, C=C, WORDS=64>(clk=clk, rst=rst, program=program, successPC=0x100fc)
   ok = t.success
   bad = t.badFetch
 }
 
-pub mod atomic_io(clk:Clock, rst:Reset) -> (passed:U10@[], bad:Bool@[]) {
+pub mod atomic_io(clk:Clock, rst:Reset) -> (bad:Bool@[], passed:U10@[]) {
   bad = false
   for j in 0..<10 {
-    comptime const C = cfg.params(xLen=(if j%2 == 0 { 32 } else { 64 }), useDataScratchpad=(j%4 < 2),
-        useAtomics=j < 8, useAtomicsOnlyForIO=j >= 4, dcacheSets=4, dcacheWays=1)
-    const t = run<C>(clk=clk, rst=rst)
+    comptime const C = cfg.params(xLen=(if j%2 == 0 { 32 } else { 64 }), useDataScratchpad=j%4 < 2, useAtomics=j < 8, useAtomicsOnlyForIO=j >= 4, dcacheSets=4, dcacheWays=1)
+    const t = run<C>(clk, rst)
     passed#[j] = U1(t.ok)
     bad = bad or t.bad
   }
@@ -94,7 +96,9 @@ test atomic_io.profiles {
     if clock >= 4 {
       assert(!d.bad, "unexpected TileLink request")
       seen |= d.passed
-      if seen == 0x3ff { break }
+      if seen == 0x3ff {
+        break
+      }
     }
   }
   assert(seen == 0x3ff, "all atomic configurations completed")

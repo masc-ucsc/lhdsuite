@@ -1,5 +1,5 @@
 // Leaf access checks shared by the walker and the cached translation path.
-pub comb permitted(flags:U8, user:Bool, fetch:Bool, store:Bool, sum:Bool, mxr:Bool) -> (allow:Bool) {
+pub comb permitted(fetch:Bool, flags:U8, mxr:Bool, store:Bool, sum:Bool, user:Bool) -> (allow:Bool) {
   const userPage = (flags & 0x10) != 0
   const privilege = if user { userPage } else { !userPage or (!fetch and sum) }
   const readable = (flags & 2) != 0 or (mxr and (flags & 8) != 0)
@@ -9,12 +9,7 @@ pub comb permitted(flags:U8, user:Bool, fetch:Bool, store:Bool, sum:Bool, mxr:Bo
 
 // Single-stage Sv32/Sv39/Sv48/Sv57 translation. One ready/valid read per page-table level.
 // The physical memory port reports PMA, PMP and bus errors through readError.
-pub mod PageTableWalk<XLEN=64, PA=32, EXTRA=0>(clk:Clock, rst:Reset,
-    request:Bool, virtualAddress:Unsigned(bits=XLEN), rootPPN:Unsigned(bits=PA-12),
-    user:Bool, fetch:Bool, store:Bool, sum:Bool, mxr:Bool, consume:Bool,
-    readReady:Bool, readDone:Bool, readError:Bool, readData:Unsigned(bits=XLEN), extra:U2=0)
-    -> (ready:Bool@[], read:Bool@[], aboveLeaf:Bool@[], readAddress:Unsigned(bits=PA)@[],
-        valid:Bool@[], leafFlags:U8@[], address:Unsigned(bits=PA)@[], pageFault:Bool@[], accessFault:Bool@[]) {
+pub mod PageTableWalk<XLEN=64, PA=32, EXTRA=0>(clk:Clock, consume:Bool, extra:U2=0, fetch:Bool, mxr:Bool, readData:Unsigned(bits=XLEN), readDone:Bool, readError:Bool, readReady:Bool, request:Bool, rootPPN:Unsigned(bits=PA - 12), rst:Reset, store:Bool, sum:Bool, user:Bool, virtualAddress:Unsigned(bits=XLEN)) -> (aboveLeaf:Bool@[], accessFault:Bool@[], address:Unsigned(bits=PA)@[], leafFlags:U8@[], pageFault:Bool@[], read:Bool@[], readAddress:Unsigned(bits=PA)@[], ready:Bool@[], valid:Bool@[]) {
   cassert(XLEN == 32 or XLEN == 64)
   cassert(PA >= 32 and PA <= (if XLEN == 32 { 34 } else { 56 }))
   comptime const stride = if XLEN == 32 { 10 } else { 9 }
@@ -22,7 +17,7 @@ pub mod PageTableWalk<XLEN=64, PA=32, EXTRA=0>(clk:Clock, rst:Reset,
   comptime const minLevels = if XLEN == 32 { 2 } else { 3 }
   comptime const entryShift = std.clog2(XLEN/8)
   comptime const ppnBits = if XLEN == 32 { 22 } else { 44 }
-  comptime const levelBits = std.clog2(minLevels+EXTRA)
+  comptime const levelBits = std.clog2(minLevels + EXTRA)
   const idle = 0
   const issue = 1
   const waitRead = 2
@@ -30,7 +25,7 @@ pub mod PageTableWalk<XLEN=64, PA=32, EXTRA=0>(clk:Clock, rst:Reset,
   reg state:U2 = 0
   reg level:Unsigned(bits=levelBits)
   reg va:Unsigned(bits=XLEN)
-  reg table:Unsigned(bits=PA-12)
+  reg table:Unsigned(bits=PA - 12)
   reg asUser:Bool
   reg execute:Bool
   reg write:Bool
@@ -49,12 +44,12 @@ pub mod PageTableWalk<XLEN=64, PA=32, EXTRA=0>(clk:Clock, rst:Reset,
   pageFault = pf
   accessFault = ae
 
-  const index = (va >> (12 + (level*stride))) & ((1 << stride)-1)
+  const index = (va >> (12 + (level*stride))) & ((1 << stride) - 1)
   readAddress = (table << 12) | (index << entryShift)
   if ready and request {
     va = virtualAddress
     table = rootPPN
-    level = if EXTRA == 0 { minLevels-1 } else { (minLevels-1+extra)#[0..<levelBits] }
+    level = if EXTRA == 0 { minLevels - 1 } else { (minLevels - 1 + extra)#[0..<levelBits] }
     asUser = user
     execute = fetch
     write = store
@@ -64,48 +59,55 @@ pub mod PageTableWalk<XLEN=64, PA=32, EXTRA=0>(clk:Clock, rst:Reset,
     pf = false
     ae = false
     state = issue
-    if extra > EXTRA { state = reply; pf = true }
+    if extra > EXTRA {
+      state = reply
+      pf = true
+    }
     if XLEN == 64 {
       for depth in 0..=EXTRA {
-        const bits = 12+(minLevels+depth)*stride
-        const high = virtualAddress >> (bits-1)
-        if (EXTRA == 0 or extra == depth) and high != 0 and high != (1 << (XLEN-bits+1))-1 {
+        const bits = 12 + (minLevels + depth)*stride
+        const high = virtualAddress >> (bits - 1)
+        if (EXTRA == 0 or extra == depth) and high != 0 and high != (1 << (XLEN - bits + 1)) - 1 {
           state = reply
           pf = true
         }
       }
     }
   }
-  if read and readReady { state = waitRead }
+  if read and readReady {
+    state = waitRead
+  }
   if (state == waitRead or (read and readReady)) and readDone {
-    const ppn = readData#[10..<(10+ppnBits)]
+    const ppn = readData#[10..<(10 + ppnBits)]
     const flags = readData#[0..<8]
     const leaf = (flags & 0xe) != 0
-    const lower = (1 << (level*stride))-1
-    const reserved = (readData >> (10+ppnBits)) != 0
+    const lower = (1 << (level*stride)) - 1
+    const reserved = (readData >> (10 + ppnBits)) != 0
     const invalid = (flags & 1) == 0 or (flags & 6) == 4 or reserved
     const badTable = !leaf and (level == 0 or (flags & 0xd0) != 0)
-    const allow = permitted(flags=flags, user=asUser, fetch=execute, store=write, sum=allowUser, mxr=allowExecuteRead)
+    const allow = permitted(fetch=execute, flags, mxr=allowExecuteRead, store=write, sum=allowUser, user=asUser)
     const physicalPage = ppn | ((va >> 12) & lower)
     state = reply
     if readError {
       ae = true
     } elif invalid or badTable or (leaf and (ppn & lower) != 0) {
       pf = true
-    } elif (ppn >> (PA-12)) != 0 {
+    } elif (ppn >> (PA - 12)) != 0 {
       ae = true
     } elif !leaf {
-      table = ppn#[0..<(PA-12)]
+      table = ppn#[0..<(PA - 12)]
       wrap level -= 1
       state = issue
     } elif !allow {
       pf = true
-    } elif (physicalPage >> (PA-12)) != 0 {
+    } elif (physicalPage >> (PA - 12)) != 0 {
       ae = true
     } else {
       leafRights = flags
-      result = (physicalPage#[0..<(PA-12)] << 12) | va#[0..<12]
+      result = (physicalPage#[0..<(PA - 12)] << 12) | va#[0..<12]
     }
   }
-  if valid and consume { state = idle }
+  if valid and consume {
+    state = idle
+  }
 }

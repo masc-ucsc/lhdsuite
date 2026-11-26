@@ -12,10 +12,10 @@ pub comb RVCExpander<C=tiny>(x:U32) -> (bits:U32, compressed:Bool) {
   const ci = (x#[12] << 5) | rs2
   const imm = ci#sext[0..<6]#[0..<12]
   const wide = C.xLen == 64
-  comb iForm(opcode:U7, dest:U5, f:U3, src:U5, immediate:U12) -> (bits:U32) {
+  comb iForm(dest:U5, f:U3, immediate:U12, opcode:U7, src:U5) -> (bits:U32) {
     bits = (immediate << 20) | (src << 15) | (f << 12) | (dest << 7) | opcode
   }
-  comb sForm(opcode:U7, base:U5, data:U5, f:U3, offset:U12) -> (bits:U32) {
+  comb sForm(base:U5, data:U5, f:U3, offset:U12, opcode:U7) -> (bits:U32) {
     bits = (offset#[5..<12] << 25) | (data << 20) | (base << 15) | (f << 12) | (offset#[0..<5] << 7) | opcode
   }
   bits = x
@@ -29,46 +29,39 @@ pub comb RVCExpander<C=tiny>(x:U32) -> (bits:U32, compressed:Bool) {
       const size:U3 = if (op & 3) == 1 or ((op & 3) == 3 and wide) { 3 } else { 2 }
       const fp = (op & 3) == 1 or ((op & 3) == 3 and !wide)
       const write = op >= 4
-      const offset:U12 = if !stack {
-        if size == 3 { (x#[5..<7] << 6) | (x#[10..<13] << 3) }
-        else { (x#[5] << 6) | (x#[10..<13] << 3) | (x#[6] << 2) }
-      } elif write {
-        if size == 3 { (x#[7..<10] << 6) | (x#[10..<13] << 3) }
-        else { (x#[7..<9] << 6) | (x#[9..<13] << 2) }
-      } else {
-        if size == 3 { (x#[2..<5] << 6) | (x#[12] << 5) | (x#[5..<7] << 3) }
-        else { (x#[2..<4] << 6) | (x#[12] << 5) | (x#[4..<7] << 2) }
-      }
+      const offset:U12 = if !stack { if size == 3 { (x#[5..<7] << 6) | (x#[10..<13] << 3) } else { (x#[5] << 6) | (x#[10..<13] << 3) | (x#[6] << 2) } } elif write { if size == 3 { (x#[7..<10] << 6) | (x#[10..<13] << 3) } else { (x#[7..<9] << 6) | (x#[9..<13] << 2) } } else { if size == 3 { (x#[2..<5] << 6) | (x#[12] << 5) | (x#[5..<7] << 3) } else { (x#[2..<4] << 6) | (x#[12] << 5) | (x#[4..<7] << 2) } }
       if op == 0 {
         const nzuimm = (x#[7..<11] << 6) | (x#[11..<13] << 4) | (x#[5] << 3) | (x#[6] << 2)
-        bits = iForm(opcode=if nzuimm == 0 { 0x1f } else { 0x13 },dest=sp,f=0,src=2,immediate=nzuimm)
+        bits = iForm(dest=sp, f=0, immediate=nzuimm, opcode=if nzuimm == 0 { 0x1f } else { 0x13 }, src=2)
       } elif op == 4 {
-        bits = sForm(opcode=0x3f,base=rp,data=sp,f=2,offset=offset)
+        bits = sForm(base=rp, data=sp, f=2, offset, opcode=0x3f)
       } elif write {
-        bits = sForm(opcode=if fp { 0x27 } else { 0x23 },base=base,data=data,f=size,offset=offset)
+        bits = sForm(base, data, f=size, offset, opcode=if fp { 0x27 } else { 0x23 })
       } else {
         const opc = if fp { 7 } elif stack and rd == 0 { 0x1f } else { 3 }
-        bits = iForm(opcode=opc,dest=dest,f=size,src=base,immediate=offset)
+        bits = iForm(dest, f=size, immediate=offset, opcode=opc, src=base)
       }
     } elif quadrant == 1 {
       match op {
-        == 0 { bits = iForm(opcode=0x13,dest=rd,f=0,src=rd,immediate=imm) }
-        in (1,5) {
+        == 0 {
+          bits = iForm(dest=rd, f=0, immediate=imm, opcode=0x13, src=rd)
+        }
+        in (1, 5) {
           if op == 1 and wide {
-            bits = iForm(opcode=if rd != 0 { 0x1b } else { 0x1f },dest=rd,f=0,src=rd,immediate=imm)
+            bits = iForm(dest=rd, f=0, immediate=imm, opcode=if rd != 0 { 0x1b } else { 0x1f }, src=rd)
           } else {
-            const j = (x#[12] << 11) | (x#[8] << 10) | (x#[9..<11] << 8) | (x#[6] << 7) |
-                (x#[7] << 6) | (x#[2] << 5) | (x#[11] << 4) | (x#[3..<6] << 1)
+            const j = (x#[12] << 11) | (x#[8] << 10) | (x#[9..<11] << 8) | (x#[6] << 7) | (x#[7] << 6) | (x#[2] << 5) | (x#[11] << 4) | (x#[3..<6] << 1)
             const disp = j#sext[0..<12]#[0..<21]
-            bits = (disp#[20] << 31) | (disp#[1..<11] << 21) | (disp#[11] << 20) |
-                (disp#[12..<20] << 12) | (U1(op == 1) << 7) | 0x6f
+            bits = (disp#[20] << 31) | (disp#[1..<11] << 21) | (disp#[11] << 20) | (disp#[12..<20] << 12) | (U1(op == 1) << 7) | 0x6f
           }
         }
-        == 2 { bits = iForm(opcode=0x13,dest=rd,f=0,src=0,immediate=imm) }
+        == 2 {
+          bits = iForm(dest=rd, f=0, immediate=imm, opcode=0x13, src=0)
+        }
         == 3 {
           if rd == 2 or rd == 0 {
             const addsp = (x#[12] << 9) | (x#[3..<5] << 7) | (x#[5] << 6) | (x#[2] << 5) | (x#[6] << 4)
-            bits = iForm(opcode=if imm == 0 { 0x1f } else { 0x13 },dest=rd,f=0,src=rd,immediate=addsp#sext[0..<10]#[0..<12])
+            bits = iForm(dest=rd, f=0, immediate=addsp#sext[0..<10]#[0..<12], opcode=if imm == 0 { 0x1f } else { 0x13 }, src=rd)
           } else {
             bits = (ci#sext[0..<6]#[0..<20] << 12) | (rd << 7) | (if imm == 0 { 0x3f } else { 0x37 })
           }
@@ -77,27 +70,35 @@ pub comb RVCExpander<C=tiny>(x:U32) -> (bits:U32, compressed:Bool) {
           const fn = x#[10..<12]
           if fn == 3 {
             const arith = x#[5..<7]
-            const f = match arith { == 0 { 0 } == 1 { 4 } == 2 { 6 } else { 7 } }
+            const f = match arith {
+              == 0 { 0 }
+              == 1 { 4 }
+              == 2 { 6 }
+              else { 7 }
+            }
             const word = x#[12] != 0
             const rfn = if word { if arith < 2 { 0 } else { arith } } else { f }
-            bits = iForm(opcode=if word { 0x3b } else { 0x33 },dest=rp,f=rfn,src=rp,immediate=(U1(arith == 0) << 10) | sp)
+            bits = iForm(dest=rp, f=rfn, immediate=(U1(arith == 0) << 10) | sp, opcode=if word { 0x3b } else { 0x33 }, src=rp)
           } else {
             const value = if fn == 2 { imm } else { (U1(fn == 1) << 10) | ci }
-            bits = iForm(opcode=0x13,dest=rp,f=if fn == 2 { 7 } else { 5 },src=rp,immediate=value)
+            bits = iForm(dest=rp, f=if fn == 2 { 7 } else { 5 }, immediate=value, opcode=0x13, src=rp)
           }
         }
-        in (6,7) {
+        in (6, 7) {
           const disp = branchOffset(half=x#[0..<16])
-          bits = (disp#[12] << 31) | (disp#[5..<11] << 25) | (rp << 15) | (U1(op == 7) << 12) |
-              (disp#[1..<5] << 8) | (disp#[11] << 7) | 0x63
+          bits = (disp#[12] << 31) | (disp#[5..<11] << 25) | (rp << 15) | (U1(op == 7) << 12) | (disp#[1..<5] << 8) | (disp#[11] << 7) | 0x63
         }
       }
-    } elif op == 0 { bits = iForm(opcode=0x13,dest=rd,f=1,src=rd,immediate=ci) }
-    elif rs2 != 0 and x#[12] == 0 and C.useAddiForMv {
-      bits = iForm(opcode=0x13,dest=rd,f=0,src=rs2,immediate=0)
+    } elif op == 0 {
+      bits = iForm(dest=rd, f=1, immediate=ci, opcode=0x13, src=rd)
+    } elif rs2 != 0 and x#[12] == 0 and C.useAddiForMv {
+      bits = iForm(dest=rd, f=0, immediate=0, opcode=0x13, src=rs2)
     } elif rs2 != 0 {
-      bits = iForm(opcode=0x33,dest=rd,f=0,src=if x#[12] != 0 { rd } else { 0 },immediate=rs2)
-    } elif rd == 0 and x#[12] != 0 { bits = 0x100073 }
-    else { bits = iForm(opcode=if rd == 0 { 0x1f } else { 0x67 },dest=x#[12],f=0,src=rd,immediate=0) }
+      bits = iForm(dest=rd, f=0, immediate=rs2, opcode=0x33, src=if x#[12] != 0 { rd } else { 0 })
+    } elif rd == 0 and x#[12] != 0 {
+      bits = 0x100073
+    } else {
+      bits = iForm(dest=x#[12], f=0, immediate=0, opcode=if rd == 0 { 0x1f } else { 0x67 }, src=rd)
+    }
   }
 }

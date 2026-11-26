@@ -6,9 +6,9 @@ comptime const sv57 = cfg.params(xLen=64, useVM=true, pgLevels=5, dcacheSets=512
 
 // Build a real tree at 0x80000000 for each supported satp mode. Run S-mode
 // code at the top-half canonical address, store through the DTLB and trap to M.
-mod run<C>(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
+mod run<C>(clk:Clock, rst:Reset) -> (bad:Bool@[], done:Bool@[]) {
   const program:[96]U32 = (
-    ((C.pgLevels+5) << 20) | 0xd93, // li s11, maximum supported satp mode
+    ((C.pgLevels + 5) << 20) | 0xd93, // li s11, maximum supported satp mode
     0xfff00293, // li	t0,-1
     0x3b029073, // csrw	pmpaddr0,t0
     0x00f00293, // li	t0,15
@@ -109,10 +109,10 @@ mod run<C>(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
   bad = t.badFetch or (t.trap != 0 and t.cause != 9) or (t.traceValid and t.tracePC == 0x10180)
   done = t.success
 }
-pub mod vm_depth_program(clk:Clock, rst:Reset) -> (done:U3@[], bad:Bool@[]) {
-  const a = run<sv39>(clk=clk,rst=rst)
-  const b = run<sv48>(clk=clk,rst=rst)
-  const c = run<sv57>(clk=clk,rst=rst)
+pub mod vm_depth_program(clk:Clock, rst:Reset) -> (bad:Bool@[], done:U3@[]) {
+  const a = run<sv39>(clk, rst)
+  const b = run<sv48>(clk, rst)
+  const c = run<sv57>(clk, rst)
   done = (U1(a.done) << 2) | (U1(b.done) << 1) | U1(c.done)
   bad = a.bad or b.bad or c.bad
 }
@@ -122,7 +122,10 @@ test vm_depth_program.satp_modes {
   tick 3600 {
     d.rst = clock < 4
     step
-    if clock > 4 { assert(!d.bad, "unexpected trap, fetch or firmware failure"); seen |= d.done }
+    if clock > 4 {
+      assert(!d.bad, "unexpected trap, fetch or firmware failure")
+      seen |= d.done
+    }
   }
   assert(seen == 7, "all tiles must execute every supported translation mode")
 }

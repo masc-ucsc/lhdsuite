@@ -4,13 +4,14 @@ comptime const twoBit = configs.params(btbEntries=4, bhtEntries=16, bhtCounterLe
 
 // Train index zero while the speculative hash points elsewhere, install a jump,
 // then combine a resolved taken branch, a predicted fall-through and a redirect.
-pub mod history_table(clk:Clock, phase:U5) -> (taken:U1@[], branch:Bool@[], index:U4@[]) {
+pub mod history_table(clk:Clock, phase:U5) -> (branch:Bool@[], index:U4@[], taken:U1@[]) {
   const jump = phase == 14 or phase == 15
   const train = phase == 1 or phase == 3 or phase == 5 or phase == 7 or phase == 9 or phase == 11 or phase == 17
-  const d = predictor<twoBit>(clock=clk, clear=U1(phase == 0 or phase == 21), pc=if jump { 4 } else { 0 },
-      replace=U1(phase == 1 or phase == 14), install=1, branchPC=if jump { 4 } else { 0 }, destination=0x80,
-      resolve=U1(train), taken=U1(phase <= 5 or phase == 17), branchIndex=0,
-      advance=phase == 13 or phase == 17, direction=U1(phase == 13), restore=phase == 17)
+  const d = predictor<twoBit>(clock=clk, clear=U1(phase == 0 or phase == 21), pc=if jump { 4 } else { 0 }, replace=U1(phase == 1 or phase == 14), install=1, branchPC=if jump {
+      4
+    } else {
+      0
+    }, destination=0x80, resolve=U1(train), taken=U1(phase <= 5 or phase == 17), branchIndex=0, advance=phase == 13 or phase == 17, direction=U1(phase == 13), restore=phase == 17)
   taken = d.predict
   branch = d.branch
   index = d.index
@@ -28,24 +29,31 @@ test history_table.hysteresis_and_restore {
       assert(d.branch and d.taken != 0, "two updates to cross, one miss tolerated when saturated")
     }
     // floor(sqrt(3)/2 * 16) = 13. History 8 hashes to 2 (index 8).
-    if clock == 16 { assert(d.index == 8, "accepted branch advances history once") }
-    if clock == 15 { assert(!d.branch and d.taken != 0 and d.index == 9, "jump ignores conditional counter") }
+    if clock == 16 {
+      assert(d.index == 8, "accepted branch advances history once")
+    }
+    if clock == 15 {
+      assert(!d.branch and d.taken != 0 and d.index == 9, "jump ignores conditional counter")
+    }
     // Resolved outcomes T,T,T,N,N,N,T give committed history 8.
-    if clock == 18 { assert(d.index == 8, "restore includes the resolving branch") }
-    if clock == 22 { assert(d.index == 0 and !d.branch and d.taken == 0, "flush invalidates history and target") }
+    if clock == 18 {
+      assert(d.index == 8, "restore includes the resolving branch")
+    }
+    if clock == 22 {
+      assert(d.index == 0 and !d.branch and d.taken == 0, "flush invalidates history and target")
+    }
   }
 }
 
 const buffer = import("../pyrope2/IBuf.IBuf")
 
-pub mod packet_index(clk:Clock, phase:U3) -> (index:U4@[], valid:U1@[], raw:U32@[]) {
+pub mod packet_index(clk:Clock, phase:U3) -> (index:U4@[], raw:U32@[], valid:U1@[]) {
   // At 1 hold the upper compressed instruction. At 4 hold the first half
   // of an uncompressed instruction which ends in the following packet.
   const first = phase == 1 or phase == 4
   const word = if phase == 1 { 0x00850001 } elif phase == 4 { 0x00930001 } else { 0x00010010 }
-  const b = buffer<twoBit>(clk=clk, rst=phase == 0 or phase == 3, kill=0, ready=U1(first),
-      fetchValid=1, fetchPC=if first { 0x40 } else { 0x44 }, fetchData=word, fetchFault=0, fetchReplay=0,
-      taken=0, branchSlot=0, index=if first { 3 } else { 12 })
+  const b = buffer<twoBit>(clk=clk, rst=phase == 0 or phase == 3, kill=0, ready=U1(first), fetchValid=1, fetchPC=if first { 0x40 }
+      else { 0x44 }, fetchData=word, fetchFault=0, fetchReplay=0, taken=0, branchSlot=0, index=if first { 3 } else { 12 })
   index = b.prediction
   valid = b.valid
   raw = b.raw
@@ -56,7 +64,11 @@ test packet_index.ending_halfword {
   tick 7 {
     d.phase = clock
     step
-    if clock == 2 { assert(d.valid != 0 and d.raw#[0..<16] == 0x85 and d.index == 3, "held compressed instruction") }
-    if clock == 5 { assert(d.valid != 0 and d.raw == 0x00100093 and d.index == 12, "instruction spanning two packets") }
+    if clock == 2 {
+      assert(d.valid != 0 and d.raw#[0..<16] == 0x85 and d.index == 3, "held compressed instruction")
+    }
+    if clock == 5 {
+      assert(d.valid != 0 and d.raw == 0x00100093 and d.index == 12, "instruction spanning two packets")
+    }
   }
 }

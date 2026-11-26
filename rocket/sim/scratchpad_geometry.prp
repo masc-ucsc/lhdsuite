@@ -6,8 +6,8 @@ comptime const large = config.params(xLen=64, dcacheSets=512)
 
 // Write different words at the ends of the lower and upper halves, check
 // both, then read one word beyond the configured end to provoke an access fault.
-mod check<C>(clk:Clock, rst:Reset) -> (passed:Bool@[], failed:Bool@[]) {
-  comptime const size = C.dcacheSets * 64
+mod check<C>(clk:Clock, rst:Reset) -> (failed:Bool@[], passed:Bool@[]) {
+  comptime const size = C.dcacheSets*64
   comptime const loadSize = if size < 2048 { (size << 20) | 0x113 } else { size | 0x137 }
   const program:[16]U32 = (
     0x00100093, // li x1,1
@@ -25,18 +25,20 @@ mod check<C>(clk:Clock, rst:Reset) -> (passed:Bool@[], failed:Bool@[]) {
     0xffc12303, // lw x6,-4(x2)
     0x00531463, // bne x6,x5,fail
     0x00012303, // lw x6,0(x2)
-    0x00100073 // fail: ebreak
+    0x00100073, // fail: ebreak
   )
   const tile = boot<C>(clk=clk, rst=rst, program=program, successPC=0x10078)
   passed = tile.trap != 0 and tile.tracePC == 0x10078 and tile.cause == 5
   reg done:Bool = false
-  if passed { done = true }
+  if passed {
+    done = true
+  }
   failed = !done and tile.trap != 0 and !passed
 }
-pub mod scratchpad_geometry(clk:Clock, rst:Reset) -> (a:Bool@[], b:Bool@[], c:Bool@[], bad:Bool@[]) {
-  const single = check<one>(clk=clk, rst=rst)
-  const narrow = check<small>(clk=clk, rst=rst)
-  const wide = check<large>(clk=clk, rst=rst)
+pub mod scratchpad_geometry(clk:Clock, rst:Reset) -> (a:Bool@[], b:Bool@[], bad:Bool@[], c:Bool@[]) {
+  const single = check<one>(clk, rst)
+  const narrow = check<small>(clk, rst)
+  const wide = check<large>(clk, rst)
   a = narrow.passed
   b = wide.passed
   c = single.passed
@@ -52,10 +54,18 @@ test scratchpad_geometry.bounds_and_storage {
     step
     if clock > 4 {
       assert(!d.bad, "unexpected trap before checking the scratchpad boundary")
-      if d.a { a = true }
-      if d.b { b = true }
-      if d.c { c = true }
-      if a and b and c { break }
+      if d.a {
+        a = true
+      }
+      if d.b {
+        b = true
+      }
+      if d.c {
+        c = true
+      }
+      if a and b and c {
+        break
+      }
     }
   }
   assert(a and b and c, "64 B, 8 KiB and 32 KiB tiles must trap on their first unmapped word")

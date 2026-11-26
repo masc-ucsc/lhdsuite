@@ -39,22 +39,22 @@ comb firmware() -> (words:[32]U32) {
     0x40650533, // sub a0,a0,t1
     0x01800393, // li t2,24
     0xfc759ae3, // bne a1,t2,1008c <fail>
-    0x00008067 // ret
+    0x00008067, // ret
   )
 }
 
-mod run<C>(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[], start:Bool@[], finish:Bool@[]) {
-  const d = image<C=C,WORDS=32>(clk=clk, rst=rst, program=firmware(), successPC=0x10088)
+mod run<C>(clk:Clock, rst:Reset) -> (bad:Bool@[], done:Bool@[], finish:Bool@[], start:Bool@[]) {
+  const d = image<C=C, WORDS=32>(clk=clk, rst=rst, program=firmware(), successPC=0x10088)
   done = d.success
   bad = d.trap != 0
   start = d.traceValid and d.tracePC == 0x10098
   finish = d.traceValid and d.tracePC == 0x100ac
 }
 
-pub mod prediction_mode(clk:Clock, rst:Reset) -> (done:U2@[], bad:Bool@[], start:U2@[], finish:U2@[], illegal:Bool@[]) {
-  const a = run<p32>(clk=clk, rst=rst)
-  const b = run<p64>(clk=clk, rst=rst)
-  const off = image<C=absent,WORDS=32>(clk=clk, rst=rst, program=firmware(), successPC=0x10088)
+pub mod prediction_mode(clk:Clock, rst:Reset) -> (bad:Bool@[], done:U2@[], finish:U2@[], illegal:Bool@[], start:U2@[]) {
+  const a = run<p32>(clk, rst)
+  const b = run<p64>(clk, rst)
+  const off = image<C=absent, WORDS=32>(clk=clk, rst=rst, program=firmware(), successPC=0x10088)
   done = (U1(b.done) << 1) | U1(a.done)
   bad = a.bad or b.bad
   start = (U1(b.start) << 1) | U1(a.start)
@@ -77,10 +77,20 @@ test prediction_mode.switch_at_runtime {
       assert(!d.bad, "mode readback, loop timing or retired path")
       done |= d.done
       illegal = illegal or d.illegal
-      if d.start#[0] != 0 { from32 = clock }
-      if d.start#[1] != 0 { from64 = clock }
-      if d.finish#[0] != 0 { puts("RV32 pass {count32} cycles {clock-from32}"); count32 += 1 }
-      if d.finish#[1] != 0 { puts("RV64 pass {count64} cycles {clock-from64}"); count64 += 1 }
+      if d.start#[0] != 0 {
+        from32 = clock
+      }
+      if d.start#[1] != 0 {
+        from64 = clock
+      }
+      if d.finish#[0] != 0 {
+        puts("RV32 pass {count32} cycles {clock - from32}")
+        count32 += 1
+      }
+      if d.finish#[1] != 0 {
+        puts("RV64 pass {count64} cycles {clock - from64}")
+        count64 += 1
+      }
     }
   }
   assert(done == 3 and illegal and count32 == 3 and count64 == 3)

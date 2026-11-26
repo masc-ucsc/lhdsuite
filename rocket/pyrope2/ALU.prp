@@ -2,17 +2,14 @@
 const BitOps = import("BitOps")
 const configs = import("RocketConfig")
 comptime const tiny = configs.tiny
-pub comb ALU<C=tiny>(io_dw:U1, io_fn:U6, io_in2:Unsigned(bits=C.xLen), io_in1:Unsigned(bits=C.xLen))
-    -> (io_out:Unsigned(bits=C.xLen), io_adder_out:Unsigned(bits=C.xLen), io_cmp_out:U1) {
+pub comb ALU<C=tiny>(io_dw:U1, io_fn:U6, io_in1:Unsigned(bits=C.xLen), io_in2:Unsigned(bits=C.xLen)) -> (io_adder_out:Unsigned(bits=C.xLen), io_cmp_out:U1, io_out:Unsigned(bits=C.xLen)) {
   comptime const width = C.xLen
   cassert(width == 32 or width == 64)
   type XWord = Unsigned(bits=width)
   const sub = io_fn#[3] != 0
   const rhs:XWord = if sub { ~io_in2 } else { io_in2 }
   wrap io_adder_out = io_in1 + rhs + U1(sub)
-  const less = if io_fn#[1] != 0 { io_in1 < io_in2 } else {
-    io_in1#sext[0..<width] < io_in2#sext[0..<width]
-  }
+  const less = if io_fn#[1] != 0 { io_in1 < io_in2 } else { io_in1#sext[0..<width] < io_in2#sext[0..<width] }
   const cmp = if sub { less } else { io_in1 == io_in2 }
   io_cmp_out = U1(cmp) ^ io_fn#[0]
 
@@ -20,23 +17,41 @@ pub comb ALU<C=tiny>(io_dw:U1, io_fn:U6, io_in2:Unsigned(bits=C.xLen), io_in1:Un
   const shamt = if wordOp { io_in2#[0..<5] } else { io_in2#[0..<std.clog2(width)] }
   mut result:XWord = 0
   match io_fn {
-    in (0, 10) { result = io_adder_out }
-    == 1 { wrap result = io_in1 << shamt }
-    == 4 { result = io_in1 ^ io_in2 }
+    in (0, 10) {
+      result = io_adder_out
+    }
+    == 1 {
+      wrap result = io_in1 << shamt
+    }
+    == 4 {
+      result = io_in1 ^ io_in2
+    }
     == 5 {
       const source = if wordOp { io_in1#[0..<32] } else { io_in1 }
       result = source >> shamt
     }
-    == 6 { result = io_in1 | io_in2 }
-    == 7 { result = io_in1 & io_in2 }
+    == 6 {
+      result = io_in1 | io_in2
+    }
+    == 7 {
+      result = io_in1 & io_in2
+    }
     == 11 {
       const source = if wordOp { io_in1#sext[0..<32] } else { io_in1#sext[0..<width] }
       wrap result = source >> shamt
     }
-    in (12,13,14,15) { result = U1(less) }
+    in (12, 13, 14, 15) {
+      result = U1(less)
+    }
   }
   if C.useConditionalZero or C.useZba or C.useZbb or C.useZbs {
-    if io_fn >= 16 { result = BitOps.execute<C>(fn=io_fn, wordOp=wordOp, a=io_in1, b=io_in2) }
+    if io_fn >= 16 {
+      result = BitOps.execute<C>(fn=io_fn, wordOp=wordOp, a=io_in1, b=io_in2)
+    }
   }
-  if wordOp { wrap io_out = result#sext[0..<32] } else { io_out = result }
+  if wordOp {
+    wrap io_out = result#sext[0..<32]
+  } else {
+    io_out = result
+  }
 }

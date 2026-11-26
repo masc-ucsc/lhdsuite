@@ -3,7 +3,7 @@ const vm = import("../pyrope2/TileTranslation")
 
 // Two real translation ports share delayed memory replies. The fence moves
 // the leaf table and both ports must see the new physical mapping.
-mod walks<X,N>(clk:Clock, rst:Reset, phase:U3, ready:Bool) -> (reads:U6@[], correct:Bool@[]) {
+mod walks<X, N>(clk:Clock, phase:U3, ready:Bool, rst:Reset) -> (correct:Bool@[], reads:U6@[]) {
   comptime const C = cfg.params(xLen=X, useVM=true, iTLBEntries=1, dTLBEntries=1, nPTECacheEntries=N)
   comptime const satp = (if X == 32 { 1 << 31 } else { 8 << 60 }) | 1
   const fetch = phase == 1 or phase == 3 or phase == 5
@@ -16,12 +16,8 @@ mod walks<X,N>(clk:Clock, rst:Reset, phase:U3, ready:Bool) -> (reads:U6@[], corr
   wire dReady:Bool = nil
   wire dDone:Bool = nil
   wire pte:Unsigned(bits=X) = nil
-  const i = vm.port<C=C,FETCH=true>(clk=clk, rst=rst, request=fetch, accepted=false, va=(iPage << 12) | 0x10,
-      satp=satp, privilege=1, store=false, sum=false, mxr=false, flush=flush,
-      readReady=iReady, readDone=iDone, readData=pte, readError=false)
-  const d = vm.port<C=C,FETCH=false>(clk=clk, rst=rst, request=load, accepted=false, va=(dPage << 12) | 0x38,
-      satp=satp, privilege=1, store=false, sum=false, mxr=false, flush=flush,
-      readReady=dReady, readDone=dDone, readData=pte, readError=false)
+  const i = vm.port<C=C, FETCH=true>(clk=clk, rst=rst, request=fetch, accepted=false, va=(iPage << 12) | 0x10, satp=satp, privilege=1, store=false, sum=false, mxr=false, flush=flush, readReady=iReady, readDone=iDone, readData=pte, readError=false)
+  const d = vm.port<C=C, FETCH=false>(clk=clk, rst=rst, request=load, accepted=false, va=(dPage << 12) | 0x38, satp=satp, privilege=1, store=false, sum=false, mxr=false, flush=flush, readReady=dReady, readDone=dDone, readData=pte, readError=false)
   reg respond:Bool = false
   reg address:U32
   reg count:U6 = 0
@@ -29,26 +25,27 @@ mod walks<X,N>(clk:Clock, rst:Reset, phase:U3, ready:Bool) -> (reads:U6@[], corr
   const leafTable = if newTree { 4 } else { 3 }
   const leafPPN = (if address >= 0x4000 { 0x200 } else { 0x100 }) | ((address & 0xfff) >> std.clog2(X/8))
   const data = if X == 64 and address == 0x1000 { (2 << 10) | 1 }
-      elif address == 0x1000 or address == 0x2000 { (leafTable << 10) | 1 }
-      else { (leafPPN << 10) | 0x4b }
-  const a = vm.arbiter<W=X,N=N>(clk=clk, rst=rst, iRead=i.read, iAddress=i.readAddress, dRead=d.read, dAddress=d.readAddress,
-      iPointer=i.cachePointer, dPointer=d.cachePointer, ready=ready, done=respond, pte=data, flush=flush)
+    elif address == 0x1000 or address == 0x2000 { (leafTable << 10) | 1 }
+    else { (leafPPN << 10) | 0x4b }
+  const a = vm.arbiter<N=N, W=X>(clk=clk, rst=rst, iRead=i.read, iAddress=i.readAddress, dRead=d.read, dAddress=d.readAddress, iPointer=i.cachePointer, dPointer=d.cachePointer, ready=ready, done=respond, pte=data, flush=flush)
   pte = a.result
   iReady = a.iReady
   dReady = a.dReady
   iDone = a.iDone
   dDone = a.dDone
   respond = a.read and ready
-  if a.read and ready { address = a.address; wrap count += 1 }
+  if a.read and ready {
+    address = a.address
+    wrap count += 1
+  }
   const base = if newTree { 0x200000 } else { 0x100000 }
-  correct = (!fetch or (i.resolved and !i.pf and !i.ae and i.address == (base | (iPage << 12) | 0x10))) and
-      (!load or (d.resolved and !d.pf and !d.ae and d.address == (base | (dPage << 12) | 0x38)))
+  correct = (!fetch or (i.resolved and !i.pf and !i.ae and i.address == (base | (iPage << 12) | 0x10))) and (!load or (d.resolved and !d.pf and !d.ae and d.address == (base | (dPage << 12) | 0x38)))
   reads = count
 }
 pub mod pte_walks(clk:Clock, rst:Reset, phase:U3, ready:Bool) -> (correct:Bool@[], counts:U24@[]) {
   correct = true
   for i in 0..<4 {
-    const w = walks<X=(if i < 2 { 32 } else { 64 }),N=(if i%2 == 0 { 0 } else { 8 })>(clk=clk, rst=rst, phase=phase, ready=ready)
+    const w = walks<X=(if i < 2 { 32 } else { 64 }), N=(if i%2 == 0 { 0 } else { 8 })>(clk, phase, ready, rst)
     counts#[(i*6)..+6] = w.reads
     correct = correct and w.correct
   }
@@ -57,17 +54,19 @@ test pte_walks.shared_parents {
   mut d = pte_walks
   tick 144 {
     d.rst = clock < 2
-    d.phase = clock / 24
-    d.ready = clock % 3 != 0
+    d.phase = clock/24
+    d.ready = clock%3 != 0
     step
-    if clock % 24 == 23 { assert(d.correct, "each requested virtual address resolves with the current permissions and mapping") }
+    if clock%24 == 23 {
+      assert(d.correct, "each requested virtual address resolves with the current permissions and mapping")
+    }
   }
   assert(d.counts == ((10 << 18) | (18 << 12) | (8 << 6) | 12), "PTE reads for six cold L1 translations on either side of a fence")
 }
 
 // Fence after the root read is accepted. The older walk can finish, but its
 // later intermediate PTE must not resurrect the old subtree for the next walk.
-pub mod pte_fence(clk:Clock, rst:Reset, start:Bool, retry:Bool) -> (reads:U4@[], resolved:Bool@[], clean:Bool@[]) {
+pub mod pte_fence(clk:Clock, rst:Reset, start:Bool, retry:Bool) -> (clean:Bool@[], reads:U4@[], resolved:Bool@[]) {
   comptime const C = cfg.params(xLen=64, useVM=true, nL2TLBEntries=1)
   wire accepted:Bool = nil
   wire complete:Bool = nil
@@ -78,11 +77,8 @@ pub mod pte_fence(clk:Clock, rst:Reset, start:Bool, retry:Bool) -> (reads:U4@[],
   const flush = delay == 2 and count == 1
   wire grant:Bool = nil
   wire leaf:U28 = nil
-  const t = vm.port<C=C,FETCH=false>(clk=clk, rst=rst, request=start or retry, accepted=false,
-      va=0x1123, satp=0x8000000000000001, privilege=1, store=false, sum=false, mxr=false,
-      flush=flush, grant=grant, leaf=leaf, readReady=accepted, readDone=complete, readError=false, readData=response)
-  const shared = vm.leaves<C>(clk=clk, rst=rst, flush=flush, iProbe=false, iKey=0, iDone=false, iLeaf=0,
-      dProbe=t.probe, dKey=t.key, dDone=t.walkDone, dLeaf=t.walkLeaf)
+  const t = vm.port<C=C, FETCH=false>(clk=clk, rst=rst, request=start or retry, accepted=false, va=0x1123, satp=0x8000000000000001, privilege=1, store=false, sum=false, mxr=false, flush=flush, grant=grant, leaf=leaf, readReady=accepted, readDone=complete, readError=false, readData=response)
+  const shared = vm.leaves<C>(clk=clk, rst=rst, flush=flush, iProbe=false, iKey=0, iDone=false, iLeaf=0, dProbe=t.probe, dKey=t.key, dDone=t.walkDone, dLeaf=t.walkLeaf)
   grant = shared.dGrant
   leaf = shared.leaf
   const word = match address {
@@ -92,13 +88,17 @@ pub mod pte_fence(clk:Clock, rst:Reset, start:Bool, retry:Bool) -> (reads:U4@[],
     == 0x4008 { (0x200 << 10) | 0x43 }
     else { 0 }
   }
-  const a = vm.arbiter<W=64,N=8>(clk=clk, rst=rst, iRead=false, iAddress=0, dRead=t.read, dAddress=t.readAddress,
-      dPointer=t.cachePointer, flush=flush, pte=word, ready=true, done=delay == 1)
+  const a = vm.arbiter<N=8, W=64>(clk=clk, rst=rst, iRead=false, iAddress=0, dRead=t.read, dAddress=t.readAddress, dPointer=t.cachePointer, flush=flush, pte=word, ready=true, done=delay == 1)
   accepted = a.dReady
   complete = a.dDone
   response = a.result
-  if a.read { wrap count += 1; address = a.address; delay = 2 }
-  elif delay != 0 { wrap delay -= 1 }
+  if a.read {
+    wrap count += 1
+    address = a.address
+    delay = 2
+  } elif delay != 0 {
+    wrap delay -= 1
+  }
   reads = count
   resolved = t.resolved
   clean = !t.pf and !t.ae and t.address == 0x200123
@@ -110,7 +110,9 @@ test pte_fence.discard_an_entire_inflight_walk {
     d.start = clock == 2
     d.retry = clock >= 24
     step
-    if clock == 22 { assert(!d.resolved and d.reads == 3, "old walk finishes without installing a translation") }
+    if clock == 22 {
+      assert(!d.resolved and d.reads == 3, "old walk finishes without installing a translation")
+    }
   }
   assert(d.resolved and d.clean and d.reads == 6, "fenced parent and descendant are fetched again")
 }

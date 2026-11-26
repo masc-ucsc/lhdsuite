@@ -4,21 +4,16 @@ comptime const narrow = config.tiny
 comptime const wide = config.params(xLen=64, mvendorid=0x27, mimpid=0x12345678)
 comptime const lean = config.params(haveBasicCounters=false)
 
-mod access<C>(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:U64, exception:U1)
-    -> (value:Unsigned(bits=C.xLen)@[], illegal:U1@[]) {
-  const d = csr<C>(clock=clk, reset=rst, io_ungated_clock=clk, io_interrupts_debug=0,
-      io_interrupts_mtip=0, io_interrupts_msip=0, io_interrupts_meip=0, io_hartid=0, io_rw_addr=addr,
-      io_rw_cmd=cmd, io_rw_wdata=data#[0..<C.xLen], io_decode_0_inst=addr<<20, io_exception=exception,
-      io_retire=1, io_cause=0x80000007, io_pc=0x10040, io_tval=0, io_htval=0, io_gva=0, io_inst_0=0)
+mod access<C>(addr:U12, clk:Clock, cmd:U3, data:U64, exception:U1, rst:Reset) -> (illegal:U1@[], value:Unsigned(bits=C.xLen)@[]) {
+  const d = csr<C>(clock=clk, reset=rst, io_ungated_clock=clk, io_interrupts_debug=0, io_interrupts_mtip=0, io_interrupts_msip=0, io_interrupts_meip=0, io_hartid=0, io_rw_addr=addr, io_rw_cmd=cmd, io_rw_wdata=data#[0..<C.xLen], io_decode_0_inst=addr << 20, io_exception=exception, io_retire=1, io_cause=0x80000007, io_pc=0x10040, io_tval=0, io_htval=0, io_gva=0, io_inst_0=0)
   value = d.io_rw_rdata
   illegal = d.io_decode_0_read_illegal
 }
 
-pub mod csr_profiles(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:U64, exception:U1)
-    -> (rv32:U32@[], rv64:U64@[], bad32:U1@[], bad64:U1@[], badLean:U1@[]) {
-  const a = access<narrow>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data, exception=exception)
-  const b = access<wide>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data, exception=exception)
-  const c = access<lean>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data, exception=exception)
+pub mod csr_profiles(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:U64, exception:U1) -> (bad32:U1@[], bad64:U1@[], badLean:U1@[], rv32:U32@[], rv64:U64@[]) {
+  const a = access<narrow>(addr, clk, cmd, data, exception, rst)
+  const b = access<wide>(addr, clk, cmd, data, exception, rst)
+  const c = access<lean>(addr, clk, cmd, data, exception, rst)
   rv32 = a.value
   rv64 = b.value
   bad32 = a.illegal

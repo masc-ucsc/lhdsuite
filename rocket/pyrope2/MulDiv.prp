@@ -5,43 +5,41 @@ comptime const tiny = configs.tiny
 comb highestBit<W>(value:Unsigned(bits=W)) -> (bit:Unsigned(bits=std.clog2(W))) {
   bit = 0
   for i in 0..<W {
-    if value#[i] != 0 { bit = i }
+    if value#[i] != 0 {
+      bit = i
+    }
   }
 }
 
-pub mod MulDiv<C=tiny, DIVIDE_ONLY=false>::[timecheck=false](
-    clock:Clock, reset:Reset, io_req_valid:U1, io_req_bits_fn:U4, io_req_bits_dw:U1,
-    io_req_bits_in1:Unsigned(bits=C.xLen), io_req_bits_in2:Unsigned(bits=C.xLen), io_req_bits_tag:U5,
-    io_kill:U1, io_resp_ready:U1)
-    -> (io_req_ready:U1@[], io_resp_valid:U1@[], io_resp_bits_data:Unsigned(bits=C.xLen)@[], io_resp_bits_tag:U5@[]) {
+pub mod MulDiv<C=tiny, DIVIDE_ONLY=false>::[timecheck=false](clock:Clock, io_kill:U1, io_req_bits_dw:U1, io_req_bits_fn:U4, io_req_bits_in1:Unsigned(bits=C.xLen), io_req_bits_in2:Unsigned(bits=C.xLen), io_req_bits_tag:U5, io_req_valid:U1, io_resp_ready:U1, reset:Reset) -> (io_req_ready:U1@[], io_resp_bits_data:Unsigned(bits=C.xLen)@[], io_resp_bits_tag:U5@[], io_resp_valid:U1@[]) {
   comptime const w = C.xLen
   comptime const digit = C.mulUnroll
   cassert((w == 32 or w == 64) and digit > 0 and digit <= w)
-  comptime const iterations = (w+digit-1) / digit
-  comptime const firstBits = w - (iterations-1)*digit
-  comptime const fastWord = w == 64 and digit < 32 and 32 % digit == 0
+  comptime const iterations = (w + digit - 1)/digit
+  comptime const firstBits = w - (iterations - 1)*digit
+  comptime const fastWord = w == 64 and digit < 32 and 32%digit == 0
   comptime const steps = C.divUnroll
   cassert(steps >= 1 and steps <= w and C.divEarlyOutGranularity >= 1)
   type Word = Unsigned(bits=w)
-  type Wide = Unsigned(bits=(2 * w) + 1)
-  comptime const ready=0
-  comptime const normalize=1
-  comptime const multiply=2
-  comptime const divide=3
-  comptime const negate=5
-  comptime const doneMul=6
-  comptime const doneDiv=7
+  type Wide = Unsigned(bits=(2*w) + 1)
+  comptime const ready = 0
+  comptime const normalize = 1
+  comptime const multiply = 2
+  comptime const divide = 3
+  comptime const negate = 5
+  comptime const doneMul = 6
+  comptime const doneDiv = 7
   reg state:U3 = nil
   reg count:Unsigned(bits=std.clog2(w + 1)) = nil
   reg high:Bool = nil
   reg negative:Bool = nil
   reg half:Bool = nil
   reg tag:U5 = nil
-  reg divisor:Unsigned(bits=w+1) = nil
+  reg divisor:Unsigned(bits=w + 1) = nil
   reg work:Wide = nil
   reg digitSign:U1 = nil
 
-  const upper = work#[w..<(2*w+1)]
+  const upper = work#[w..<(2*w + 1)]
   const lower = work#[0..<w]
   const fn = io_req_bits_fn#[0..<3]
   const isMul = !DIVIDE_ONLY and fn < 4
@@ -49,18 +47,21 @@ pub mod MulDiv<C=tiny, DIVIDE_ONLY=false>::[timecheck=false](
   const halfReq = w == 64 and io_req_bits_dw == 0
   const a = io_req_bits_in1
   const b = io_req_bits_in2
-  const signA = (fn == 1 or fn == 2 or fn == 4 or fn == 6) and
-      (if halfReq { a#[31] } else { a#[w-1] }) != 0
-  const signB = (fn == 1 or fn == 4 or fn == 6) and
-      (if halfReq { b#[31] } else { b#[w-1] }) != 0
+  const signA = (fn == 1 or fn == 2 or fn == 4 or fn == 6) and (if halfReq { a#[31] } else { a#[w - 1] }) != 0
+  const signB = (fn == 1 or fn == 4 or fn == 6) and (if halfReq { b#[31] } else { b#[w - 1] }) != 0
 
   io_req_ready = U1(state == ready)
   io_resp_valid = U1(state == doneMul or state == doneDiv)
   io_resp_bits_tag = tag
-  if half { wrap io_resp_bits_data = lower#sext[0..<32] } else { io_resp_bits_data = lower }
+  if half {
+    wrap io_resp_bits_data = lower#sext[0..<32]
+  } else {
+    io_resp_bits_data = lower
+  }
 
-  if reset { state = ready }
-  elif io_req_valid != 0 and state == ready {
+  if reset {
+    state = ready
+  } elif io_req_valid != 0 and state == ready {
     state = if isMul { multiply } elif signA or signB { normalize } else { divide }
     count = 0
     tag = io_req_bits_tag
@@ -70,16 +71,29 @@ pub mod MulDiv<C=tiny, DIVIDE_ONLY=false>::[timecheck=false](
     mut lhs:Word = a
     mut rhs:Word = b
     if halfReq {
-      if signA { wrap lhs = a#sext[0..<32] } else { lhs = a#[0..<32] }
-      if signB { wrap rhs = b#sext[0..<32] } else { rhs = b#[0..<32] }
+      if signA {
+        wrap lhs = a#sext[0..<32]
+      } else {
+        lhs = a#[0..<32]
+      }
+      if signB {
+        wrap rhs = b#sext[0..<32]
+      } else {
+        rhs = b#[0..<32]
+      }
     }
     work = lhs
     divisor = (U1(signB) << w) | rhs
     digitSign = U1(digit == w and signA)
-  } elif io_kill != 0 or (io_resp_valid != 0 and io_resp_ready != 0) { state = ready }
-  elif state == normalize {
-    if lower#[w-1] != 0 { work = (0 - lower)#[0..<w] }
-    if divisor#[w-1] != 0 { wrap divisor = 0 - divisor }
+  } elif io_kill != 0 or (io_resp_valid != 0 and io_resp_ready != 0) {
+    state = ready
+  } elif state == normalize {
+    if lower#[w - 1] != 0 {
+      work = (0 - lower)#[0..<w]
+    }
+    if divisor#[w - 1] != 0 {
+      wrap divisor = 0 - divisor
+    }
     state = divide
   } elif state == divide {
     // Each step consumes one dividend bit. The final cycle uses only the
@@ -87,31 +101,37 @@ pub mod MulDiv<C=tiny, DIVIDE_ONLY=false>::[timecheck=false](
     mut next:Wide = work
     mut finalResult:Word = 0
     for i in 0..<steps {
-      const upperBits = next#[w..<(2*w+1)]
+      const upperBits = next#[w..<(2*w + 1)]
       const lowerBits = next#[0..<w]
-      const difference = (upperBits - divisor)#[0..<(w+1)]
+      const difference = (upperBits - divisor)#[0..<(w + 1)]
       const fits = difference#[w] == 0
       const rem = if fits { difference#[0..<w] } else { upperBits#[0..<w] }
       const q = ((lowerBits << 1) | U1(fits))#[0..<w]
-      next = (rem << (w+1)) | (lowerBits << 1) | U1(fits)
-      if i == w % steps { finalResult = if high { rem } else { q } }
+      next = (rem << (w + 1)) | (lowerBits << 1) | U1(fits)
+      if i == w%steps {
+        finalResult = if high { rem } else { q }
+      }
     }
-    if count == 0 and divisor == 0 and !high { negative = false }
-    if count == w / steps {
+    if count == 0 and divisor == 0 and !high {
+      negative = false
+    }
+    if count == w/steps {
       work = finalResult
       state = if negative { negate } else { doneDiv }
-    } else { work = next }
+    } else {
+      work = next
+    }
     wrap count += 1
     if C.divEarlyOut {
       // Skip whole groups whose quotient bits are known zero. The first
       // nonzero quotient bit can only appear when the leading bits meet.
       const topA = highestBit<w>(value=lower)
       const topB = highestBit<w>(value=divisor#[0..<w])
-      const safe = if topA <= topB { w } else { w - (topA-topB) }
+      const safe = if topA <= topB { w } else { w - (topA - topB) }
       comptime const grain = C.divEarlyOutGranularity
-      const groups = ((safe / grain) * grain) / steps
+      const groups = ((safe/grain)*grain)/steps
       if count == 0 and divisor != 0 and groups > 0 {
-        work = lower << (groups * steps)
+        work = lower << (groups*steps)
         count = groups
       }
     }
@@ -122,35 +142,36 @@ pub mod MulDiv<C=tiny, DIVIDE_ONLY=false>::[timecheck=false](
     // A short first digit aligns the remaining full digits at XLEN without padding the register.
     const short = firstBits != digit and count == 0
     const chunk = if short { lower#[0..<firstBits] } else { lower#[0..<digit] }
-    const factor = ((digitSign << digit) | chunk)#sext[0..<(digit+1)]
-    const accum = (factor * divisor#sext[0..<(w+1)]) + upper#sext[0..<(w+1)]
-    const shifted = if short { (accum << (w-firstBits)) | (lower >> firstBits) }
-                    else { (accum << (w-digit)) | (lower >> digit) }
-    const next = shifted#[0..<(2*w+1)]
+    const factor = ((digitSign << digit) | chunk)#sext[0..<(digit + 1)]
+    const accum = (factor*divisor#sext[0..<(w + 1)]) + upper#sext[0..<(w + 1)]
+    const shifted = if short { (accum << (w - firstBits)) | (lower >> firstBits) } else { (accum << (w - digit)) | (lower >> digit) }
+    const next = shifted#[0..<(2*w + 1)]
     const wordProduct = fastWord and half and !high
-    const last = count == (if wordProduct { 32/digit - 1 } else { iterations-1 })
+    const last = count == (if wordProduct { 32/digit - 1 } else { iterations - 1 })
     mut early = false
     if C.mulEarlyOut {
-      const used = (count*digit - (digit-firstBits))#[0..<std.clog2(w)]
-      early = count != 0 and !last and !high and (lower & (((1 << w)-1) >> used)) == 0
-      if early { work = (work >> ((w - used)#[0..<std.clog2(w)]))#[0..<w] }
+      const used = (count*digit - (digit - firstBits))#[0..<std.clog2(w)]
+      early = count != 0 and !last and !high and (lower & (((1 << w) - 1) >> used)) == 0
+      if early {
+        work = (work >> (w - used)#[0..<std.clog2(w)])#[0..<w]
+      }
     }
     if !early {
-      work = if last and high { next#[w..<(2*w)] }
-             elif last and wordProduct { next >> 32 } else { next }
+      work = if last and high { next#[w..<(2*w)] } elif last and wordProduct { next >> 32 } else { next }
     }
     digitSign = U1(count == iterations - 2 and negative)
     wrap count += 1
-    if last or early { state = doneMul }
+    if last or early {
+      state = doneMul
+    }
   }
 }
 
 // EX captures operands, MEM forms the product, and Rocket's WB register holds
 // the result. Consecutive requests occupy independent pipeline slots.
-pub mod pipelined<W>(clk:Clock, issue:Bool, fn:U2, word:Bool, a:Unsigned(bits=W), b:Unsigned(bits=W))
-    -> (result:Unsigned(bits=W)@[]) {
-  reg lhs:Signed(bits=W+1) = nil
-  reg rhs:Signed(bits=W+1) = nil
+pub mod pipelined<W>(a:Unsigned(bits=W), b:Unsigned(bits=W), clk:Clock, fn:U2, issue:Bool, word:Bool) -> (result:Unsigned(bits=W)@[]) {
+  reg lhs:Signed(bits=W + 1) = nil
+  reg rhs:Signed(bits=W + 1) = nil
   reg high:Bool = nil
   reg half:Bool = nil
   if issue {
@@ -159,6 +180,6 @@ pub mod pipelined<W>(clk:Clock, issue:Bool, fn:U2, word:Bool, a:Unsigned(bits=W)
     high = fn != 0
     half = W == 64 and word
   }
-  const bits = (lhs * rhs)#[0..<(2*W)]
+  const bits = (lhs*rhs)#[0..<(2*W)]
   result = if high { bits#[W..<(2*W)] } elif half { bits#sext[0..<32]#[0..<W] } else { bits#[0..<W] }
 }

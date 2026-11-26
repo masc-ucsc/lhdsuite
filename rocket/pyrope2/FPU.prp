@@ -1,18 +1,16 @@
 const fp = import("Float")
 
 comb supports<C>(fmt:U2) -> (ok:Bool) {
-  ok = (fmt == 0 and C.minFLen <= 32 and C.fLen >= 32) or
-       (fmt == 1 and C.fLen == 64) or (fmt == 2 and C.minFLen == 16 and C.fLen >= 16)
+  ok = (fmt == 0 and C.minFLen <= 32 and C.fLen >= 32) or (fmt == 1 and C.fLen == 64) or (fmt == 2 and C.minFLen == 16 and C.fLen >= 16)
 }
 
-pub comb decode<C>(inst:U32) -> (valid:Bool, fromX:Bool, toX:Bool, load:Bool, store:Bool, round:Bool, double:Bool) {
+pub comb decode<C>(inst:U32) -> (double:Bool, fromX:Bool, load:Bool, round:Bool, store:Bool, toX:Bool, valid:Bool) {
   const opcode = inst#[0..<7]
   const fn = inst#[27..<32]
   const fmt = inst#[25..<27]
   const mode = inst#[12..<15]
   const rs2 = inst#[20..<25]
-  const memFormat = (mode == 2 and supports<C>(fmt=0)) or (mode == 3 and supports<C>(fmt=1)) or
-      (mode == 1 and supports<C>(fmt=2))
+  const memFormat = (mode == 2 and supports<C>(fmt=0)) or (mode == 3 and supports<C>(fmt=1)) or (mode == 1 and supports<C>(fmt=2))
   load = opcode == 7 and memFormat
   store = opcode == 0x27 and memFormat
   const fused = (opcode & 0x73) == 0x43
@@ -20,35 +18,39 @@ pub comb decode<C>(inst:U32) -> (valid:Bool, fromX:Bool, toX:Bool, load:Bool, st
   const convInt = rs2 < (if C.xLen == 64 { 4 } else { 2 })
   const move = C.xLen == 64 or fmt != 1
   const legal = match fn {
-    in (0,1,2) { true }
-    == 3 { C.divSqrt } == 11 { C.divSqrt and rs2 == 0 }
-    == 4 { mode <= 2 } == 5 { mode <= 1 } == 20 { mode <= 2 }
+    in (0, 1, 2) { true }
+    == 3 { C.divSqrt }
+    == 11 { C.divSqrt and rs2 == 0 }
+    == 4 { mode <= 2 }
+    == 5 { mode <= 1 }
+    == 20 { mode <= 2 }
     == 8 { rs2 < 3 and rs2 != fmt and supports<C>(fmt=rs2#[0..<2]) }
-    in (24,26) { convInt }
+    in (24, 26) { convInt }
     == 28 { rs2 == 0 and (mode == 1 or (mode == 0 and move)) }
     == 30 { rs2 == 0 and mode == 0 and move }
     else { false }
   }
   round = fused or (compute and (fn <= 3 or fn == 8 or fn == 11 or fn == 24 or fn == 26))
-  valid = load or store or (supports<C>(fmt=fmt) and (fused or (compute and legal)) and (!round or mode <= 4 or mode == 7))
+  valid = load or store or (supports<C>(fmt) and (fused or (compute and legal)) and (!round or mode <= 4 or mode == 7))
   fromX = compute and (fn == 26 or fn == 30)
   toX = compute and (fn == 20 or fn == 24 or fn == 28)
   double = if load or store { mode == 3 } else { fmt == 1 or (compute and fn == 8 and rs2 == 1) }
 }
 
-comb unbox<E,F>(raw:U64) -> (a:Unsigned(bits=1+E+F)) {
-  comptime const W = 1+E+F
+comb unbox<E, F>(raw:U64) -> (a:Unsigned(bits=1 + E + F)) {
+  comptime const W = 1 + E + F
   a = raw#[0..<W]
-  if W < 64 and (raw >> W) != (1 << (64-W))-1 { a = (((1 << E)-1) << F) | (1 << (F-1)) }
+  if W < 64 and (raw >> W) != (1 << (64 - W)) - 1 {
+    a = (((1 << E) - 1) << F) | (1 << (F - 1))
+  }
 }
 
-comb executeFormat<C,E,F>(inst:U32, a:U64, b:U64, c:U64, x:Unsigned(bits=C.xLen), rm:U3)
-    -> (data:U64, flags:U5) {
-  comptime const W = 1+E+F
-  comptime const one = ((1 << (E-1))-1) << F
-  const fa = unbox<E=E,F=F>(raw=a)
-  const fb = unbox<E=E,F=F>(raw=b)
-  const fc = unbox<E=E,F=F>(raw=c)
+comb executeFormat<C, E, F>(inst:U32, a:U64, b:U64, c:U64, x:Unsigned(bits=C.xLen), rm:U3) -> (data:U64, flags:U5) {
+  comptime const W = 1 + E + F
+  comptime const one = ((1 << (E - 1)) - 1) << F
+  const fa = unbox<E=E, F=F>(raw=a)
+  const fb = unbox<E=E, F=F>(raw=b)
+  const fc = unbox<E=E, F=F>(raw=c)
   const op = inst#[0..<7]
   const fn = inst#[27..<32]
   const f3 = inst#[12..<15]
@@ -59,44 +61,45 @@ comb executeFormat<C,E,F>(inst:U32, a:U64, b:U64, c:U64, x:Unsigned(bits=C.xLen)
   flags = 0
   if fused or fn <= 2 {
     const add = !fused and fn < 2
-    (bits, flags) = fp.mulAdd<E=E,F=F>(a=fa, b=(if add { one } else { fb }), c=(if add { fb } else { fc }),
-        negateProduct=U1(fused) & op#[3], negateC=U1(if fused { op#[2] != 0 } else { fn == 1 }),
-        multiplyOnly=!fused and fn == 2, rm=rm)
+    (bits, flags) = fp.mulAdd<E=E, F=F>(a=fa, b=(if add { one } else { fb }), c=(if add { fb } else { fc }), negateProduct=U1(fused) & op#[3], negateC=U1(if fused { op#[2] != 0 } else { fn == 1 }), multiplyOnly=!fused and fn == 2, rm=rm)
   } elif fn == 3 or fn == 11 {
     if C.divSqrt {
-      (bits, flags) = fp.divSqrt<E=E,F=F>(a=fa, b=fb, sqrt=fn == 11, rm=rm)
+      (bits, flags) = fp.divSqrt<E=E, F=F>(a=fa, b=fb, sqrt=fn == 11, rm=rm)
     }
   } elif fn == 4 {
-    const sign = if f3 == 0 { fb#[W-1] } elif f3 == 1 { fb#[W-1] ^ 1 } else { fa#[W-1] ^ fb#[W-1] }
-    bits = (sign << (W-1)) | fa#[0..<(W-1)]
+    const sign = if f3 == 0 { fb#[W - 1] } elif f3 == 1 { fb#[W - 1] ^ 1 } else { fa#[W - 1] ^ fb#[W - 1] }
+    bits = (sign << (W - 1)) | fa#[0..<(W - 1)]
   } elif fn == 5 or fn == 20 {
-    (bits, flags) = fp.compare<E=E,F=F>(a=fa, b=fb, fn=f3, minMax=fn == 5)
+    (bits, flags) = fp.compare<E=E, F=F>(a=fa, b=fb, fn=f3, minMax=fn == 5)
   } elif fn == 8 {
     if C.minFLen == 16 and W != 16 and rs2 == 2 {
-      (bits, flags) = fp.convertFormat<E=5,F=10,TE=E,TF=F>(a=unbox<E=5,F=10>(raw=a), rm=rm)
+      (bits, flags) = fp.convertFormat<E=5, F=10, TE=E, TF=F>(a=unbox<E=5, F=10>(raw=a), rm=rm)
     } elif C.minFLen <= 32 and W != 32 and rs2 == 0 {
-      (bits, flags) = fp.convertFormat<E=8,F=23,TE=E,TF=F>(a=unbox<E=8,F=23>(raw=a), rm=rm)
+      (bits, flags) = fp.convertFormat<E=8, F=23, TE=E, TF=F>(a=unbox<E=8, F=23>(raw=a), rm=rm)
     } elif C.fLen == 64 and W != 64 {
-      (bits, flags) = fp.convertFormat<E=11,F=52,TE=E,TF=F>(a=a, rm=rm)
+      (bits, flags) = fp.convertFormat<E=11, F=52, TE=E, TF=F>(a=a, rm=rm)
     }
   } elif fn == 26 {
     if C.xLen == 64 and rs2#[1] != 0 {
-      (bits, flags) = fp.fromInteger<E=E,F=F,W=64>(a=x, isSigned=signedInt, rm=rm)
+      (bits, flags) = fp.fromInteger<E=E, F=F, W=64>(a=x, isSigned=signedInt, rm=rm)
     } else {
-      (bits, flags) = fp.fromInteger<E=E,F=F,W=32>(a=x#[0..<32], isSigned=signedInt, rm=rm)
+      (bits, flags) = fp.fromInteger<E=E, F=F, W=32>(a=x#[0..<32], isSigned=signedInt, rm=rm)
     }
-  } elif fn == 30 { bits = x#[0..<W] }
-  data = (((1 << 64)-(1 << W)) | bits)
-  if !fused and fn == 20 { data = bits }
-  elif !fused and fn == 28 {
-    data = if f3 == 1 { fp.classify<E=E,F=F>(a=fa) } else { a#sext[0..<W]#[0..<64] }
+  } elif fn == 30 {
+    bits = x#[0..<W]
+  }
+  data = ((1 << 64) - (1 << W)) | bits
+  if !fused and fn == 20 {
+    data = bits
+  } elif !fused and fn == 28 {
+    data = if f3 == 1 { fp.classify<E=E, F=F>(a=fa) } else { a#sext[0..<W]#[0..<64] }
   } elif !fused and fn == 24 {
     if C.xLen == 64 and rs2#[1] != 0 {
-      const r = fp.toInteger<E=E,F=F,W=64>(a=fa, isSigned=signedInt, rm=rm)
+      const r = fp.toInteger<E=E, F=F, W=64>(a=fa, isSigned=signedInt, rm=rm)
       data = r.bits
       flags = r.flags
     } else {
-      const r = fp.toInteger<E=E,F=F,W=32>(a=fa, isSigned=signedInt, rm=rm)
+      const r = fp.toInteger<E=E, F=F, W=32>(a=fa, isSigned=signedInt, rm=rm)
       data = r.bits#sext[0..<32]#[0..<64]
       flags = r.flags
     }
@@ -105,14 +108,12 @@ comb executeFormat<C,E,F>(inst:U32, a:U64, b:U64, c:U64, x:Unsigned(bits=C.xLen)
 
 // FP arithmetic reads committed registers at WB. A pending cache load keeps
 // subsequent FP users at ID until its tagged response updates the register file.
-pub mod FPU<C>(clk:Clock, rst:Reset, inst:U32, commit:Bool, x:Unsigned(bits=C.xLen), frm:U3,
-    storeRs:U5, response:Bool, tag:U5, loadData:Unsigned(bits=C.dLen))
-    -> (intResult:Unsigned(bits=C.xLen)@[], storeData:Unsigned(bits=C.dLen)@[], flags:U5@[], pending:Bool@[]) {
+pub mod FPU<C>(clk:Clock, commit:Bool, frm:U3, inst:U32, loadData:Unsigned(bits=C.dLen), response:Bool, rst:Reset, storeRs:U5, tag:U5, x:Unsigned(bits=C.xLen)) -> (flags:U5@[], intResult:Unsigned(bits=C.xLen)@[], pending:Bool@[], storeData:Unsigned(bits=C.dLen)@[]) {
   reg words:[32]Unsigned(bits=C.fLen):[ordering="old"] = nil
   reg outstanding:Bool = false
   reg loadSize:U2 = 0
-  const d = decode<C>(inst=inst)
-  const box = (1 << 64)-(1 << C.fLen)
+  const d = decode<C>(inst)
+  const box = (1 << 64) - (1 << C.fLen)
   const a = box | words[inst#[15..<20]]
   const b = box | words[inst#[20..<25]]
   const c = box | words[inst#[27..<32]]
@@ -122,22 +123,29 @@ pub mod FPU<C>(clk:Clock, rst:Reset, inst:U32, commit:Bool, x:Unsigned(bits=C.xL
   mut data:U64 = 0
   mut exceptionFlags:U5 = 0
   if C.minFLen <= 32 and calc and fmt == 0 {
-    (data, exceptionFlags=executeFormat.flags) = executeFormat<C=C,E=8,F=23>(inst=inst, a=a, b=b, c=c, x=x, rm=rm)
+    (data, exceptionFlags=executeFormat.flags) = executeFormat<C=C, E=8, F=23>(inst=inst, a=a, b=b, c=c, x=x, rm=rm)
   } elif C.fLen == 64 and calc and fmt == 1 {
-    (data, exceptionFlags=executeFormat.flags) = executeFormat<C=C,E=11,F=52>(inst=inst, a=a, b=b, c=c, x=x, rm=rm)
+    (data, exceptionFlags=executeFormat.flags) = executeFormat<C=C, E=11, F=52>(inst=inst, a=a, b=b, c=c, x=x, rm=rm)
   } elif C.minFLen == 16 and calc and fmt == 2 {
-    (data, exceptionFlags=executeFormat.flags) = executeFormat<C=C,E=5,F=10>(inst=inst, a=a, b=b, c=c, x=x, rm=rm)
+    (data, exceptionFlags=executeFormat.flags) = executeFormat<C=C, E=5, F=10>(inst=inst, a=a, b=b, c=c, x=x, rm=rm)
   }
   const load = commit and d.load
   const size = if outstanding { loadSize } else { inst#[12..<14] }
   const accept = response and (outstanding or load)
   if accept {
-    const loaded = if size == 1 { 0xffffffffffff0000 | loadData#[0..<16] }
-        elif size == 2 { 0xffffffff00000000 | loadData#[0..<32] } else { loadData }
+    const loaded = if size == 1 { 0xffffffffffff0000 | loadData#[0..<16] } elif size == 2 { 0xffffffff00000000 | loadData#[0..<32] } else { loadData }
     words[tag] = loaded#[0..<C.fLen]
-  } elif calc and !d.toX { words[inst#[7..<12]] = data#[0..<C.fLen] }
-  if rst or accept { outstanding = false } elif load { outstanding = true }
-  if load { loadSize = inst#[12..<14] }
+  } elif calc and !d.toX {
+    words[inst#[7..<12]] = data#[0..<C.fLen]
+  }
+  if rst or accept {
+    outstanding = false
+  } elif load {
+    outstanding = true
+  }
+  if load {
+    loadSize = inst#[12..<14]
+  }
   intResult = data#[0..<C.xLen]
   storeData = words[storeRs]
   flags = exceptionFlags

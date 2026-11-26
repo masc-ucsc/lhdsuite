@@ -1,6 +1,5 @@
 // Ready/valid FIFO. FLOW bypasses the storage on an empty queue.
-pub mod Queue<T, DEPTH=2, FLOW=false>(clk:Clock, rst:Reset, offer:U1, payload:T, take:U1)
-    -> (ready:U1@[], valid:U1@[], head:T@[]) {
+pub mod Queue<T, DEPTH=2, FLOW=false>(clk:Clock, offer:U1, payload:T, rst:Reset, take:U1) -> (head:T@[], ready:U1@[], valid:U1@[]) {
   cassert(DEPTH > 0)
   reg full:Bool = false
   mut equal = true
@@ -8,19 +7,27 @@ pub mod Queue<T, DEPTH=2, FLOW=false>(clk:Clock, rst:Reset, offer:U1, payload:T,
   wire pop:Bool = nil
   if DEPTH == 1 {
     reg saved:T = nil
-    if push { saved = payload }
+    if push {
+      saved = payload
+    }
     head = if FLOW and !full { payload } else { saved }
   } else {
     type Cursor = Unsigned(max=DEPTH)
     reg writeCursor:Cursor = 0
     reg readCursor:Cursor = 0
-    const wr = writeCursor % DEPTH
-    const rd = readCursor % DEPTH
+    const wr = writeCursor%DEPTH
+    const rd = readCursor%DEPTH
     reg slots:[DEPTH]T:[ordering="old"] = nil
     equal = wr == rd
-    if push { slots[wr] = payload }
-    if push { writeCursor = wr + 1 }
-    if pop { readCursor = rd + 1 }
+    if push {
+      slots[wr] = payload
+    }
+    if push {
+      writeCursor = wr + 1
+    }
+    if pop {
+      readCursor = rd + 1
+    }
     head = if FLOW and equal and !full { payload } else { slots[rd] }
   }
   const empty = equal and !full
@@ -28,5 +35,7 @@ pub mod Queue<T, DEPTH=2, FLOW=false>(clk:Clock, rst:Reset, offer:U1, payload:T,
   valid = U1(!empty or (FLOW and offer != 0))
   push = offer != 0 and ready != 0 and !(FLOW and empty and take != 0)
   pop = take != 0 and !empty
-  if push != pop { full = push }
+  if push != pop {
+    full = push
+  }
 }

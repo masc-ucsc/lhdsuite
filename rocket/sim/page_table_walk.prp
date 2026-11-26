@@ -2,7 +2,7 @@ const walk = import("../pyrope2/PageTableWalk.PageTableWalk")
 
 // The root, middle and final tables live at 0x1000, 0x2000 and 0x3000.
 // Check every memory address while the request is stalled and every held reply.
-mod check<W>(clk:Clock, rst:Reset, row:U5, cycle:U5) -> (wrong:Bool@[], done:Bool@[], available:Bool@[]) {
+mod check<W>(clk:Clock, cycle:U5, row:U5, rst:Reset) -> (available:Bool@[], done:Bool@[], wrong:Bool@[]) {
   const slot = cycle >> 2
   const last = if W == 32 { 2 } else { 3 }
   const leafSlot = if row == 1 or row == 3 { 1 } elif row == 2 { 2 } else { last }
@@ -22,37 +22,34 @@ mod check<W>(clk:Clock, rst:Reset, row:U5, cycle:U5) -> (wrong:Bool@[], done:Boo
   const exec = row == 4 or row == 10 or row == 11
   const writing = row == 0 or row == 12 or row == 13
   const ppn = if row == 3 { 0x80001 } elif row == 19 { 0x100000 } else { 0x80000 }
-  const pte = if slot < leafSlot { ((slot+1) << 10) | 1 } else { (ppn << 10) | flags }
+  const pte = if slot < leafSlot { ((slot + 1) << 10) | 1 } else { (ppn << 10) | flags }
   const raw = if (row == 24 or (row == 20 and slot >= leafSlot)) and W == 64 { pte | (1 << 54) } else { pte }
   const virtualAddress = if W == 32 { 0x96235abc } elif row == 21 { 0x4000000000 } else { 0xffffffc196235abc }
   const simultaneous = row == 22
-  const d = walk<XLEN=W>(clk=clk, rst=rst, request=cycle == 1, virtualAddress=virtualAddress#[0..<W],
-      rootPPN=1, user=asUser, fetch=exec, store=writing, sum=row == 9 or row == 10,
-      mxr=row == 6, consume=cycle == 18, readReady=(cycle % 4) == 0,
-      readDone=(cycle % 4) == (if simultaneous { 0 } else { 1 }),
-      readError=row == 23 and slot == 2, readData=raw#[0..<W])
+  const d = walk<XLEN=W>(clk=clk, rst=rst, request=cycle == 1, virtualAddress=virtualAddress#[0..<W], rootPPN=1, user=asUser, fetch=exec, store=writing, sum=row == 9 or row == 10, mxr=row == 6, consume=cycle == 18, readReady=(cycle%4) == 0, readDone=(cycle%4) == (if simultaneous {
+          0
+        } else {
+          1
+        }), readError=row == 23 and slot == 2, readData=raw#[0..<W])
   const noRead = W == 64 and row == 21
   const reads = if noRead { 0 } elif row == 24 and W == 64 { 1 } elif row == 23 { 2 } else { leafSlot }
-  const expectPF = row == 3 or row == 5 or row == 8 or row == 10 or (row >= 12 and row <= 18) or
-                   (W == 64 and (row == 20 or row == 21 or row == 24))
+  const expectPF = row == 3 or row == 5 or row == 8 or row == 10 or (row >= 12 and row <= 18) or (W == 64 and (row == 20 or row == 21 or row == 24))
   const expectAE = row == 19 or row == 23
-  const physical = if leafSlot == last { 0x80000abc } elif W == 32 { 0x80235abc }
-                   elif leafSlot == 1 { 0x96235abc } else { 0x80035abc }
+  const physical = if leafSlot == last { 0x80000abc } elif W == 32 { 0x80235abc } elif leafSlot == 1 { 0x96235abc } else { 0x80035abc }
   const first = if W == 32 { 0x1960 } else { 0x1830 }
   const second = if W == 32 { 0x28d4 } else { 0x2588 }
   // Test inputs are set before the tick edge. Sample midway through each stall.
   const checkRead = cycle == 3 or cycle == 7 or cycle == 11
-  const visit = (cycle+1) >> 2
+  const visit = (cycle + 1) >> 2
   const expectedAddr = if visit == 1 { first } elif visit == 2 { second } else { 0x31a8 }
   const wrongRead = checkRead and (d.read != (visit <= reads) or (d.read and d.readAddress != expectedAddr))
-  wrong = wrongRead or (d.valid and (d.pageFault != expectPF or d.accessFault != expectAE or
-                          (!expectPF and !expectAE and d.address != physical)))
+  wrong = wrongRead or (d.valid and (d.pageFault != expectPF or d.accessFault != expectAE or (!expectPF and !expectAE and d.address != physical)))
   done = d.valid
   available = d.ready
 }
-pub mod page_table_walk(clk:Clock, rst:Reset, row:U5, cycle:U5) -> (wrong:Bool@[], done:Bool@[], ready:Bool@[]) {
-  const sv32 = check<32>(clk=clk, rst=rst, row=row, cycle=cycle)
-  const sv39 = check<64>(clk=clk, rst=rst, row=row, cycle=cycle)
+pub mod page_table_walk(clk:Clock, rst:Reset, row:U5, cycle:U5) -> (done:Bool@[], ready:Bool@[], wrong:Bool@[]) {
+  const sv32 = check<32>(clk, cycle, row, rst)
+  const sv39 = check<64>(clk, cycle, row, rst)
   wrong = sv32.wrong or sv39.wrong
   done = sv32.done and sv39.done
   ready = sv32.available and sv39.available
@@ -60,15 +57,19 @@ pub mod page_table_walk(clk:Clock, rst:Reset, row:U5, cycle:U5) -> (wrong:Bool@[
 test page_table_walk.translation {
   mut d = page_table_walk
   tick 500 {
-    const cycle = clock % 20
+    const cycle = clock%20
     d.cycle = cycle
-    d.row = clock / 20
+    d.row = clock/20
     d.rst = clock == 0
     step
     if cycle >= 2 {
       assert(!d.wrong, "page-table address, fault class, permissions or physical address")
-      if cycle >= 15 and cycle <= 17 { assert(d.done, "hold completed response until consumed") }
-      if cycle == 19 { assert(d.ready, "ready for another walk") }
+      if cycle >= 15 and cycle <= 17 {
+        assert(d.done, "hold completed response until consumed")
+      }
+      if cycle == 19 {
+        assert(d.ready, "ready for another walk")
+      }
     }
   }
 }

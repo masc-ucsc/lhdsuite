@@ -3,7 +3,7 @@ const image = import("BootROM.Image")
 
 // Two root leaves identity-map the ROM and alias the scratchpad into S mode.
 // Repeated data accesses hit one translation on both Sv32 and Sv39.
-mod run<X,L2=0>(clk:Clock, rst:Reset) -> (success:Bool@[], trap:U1@[]) {
+mod run<X, L2=0>(clk:Clock, rst:Reset) -> (success:Bool@[], trap:U1@[]) {
   comptime const C = cfg.params(xLen=X, useVM=true, nPerfCounters=3, nL2TLBEntries=L2)
   const program:[64]U32 = (
     0xfff00293, // li t0,-1
@@ -69,16 +69,16 @@ mod run<X,L2=0>(clk:Clock, rst:Reset) -> (success:Bool@[], trap:U1@[]) {
     (if L2 > 0 { 0xffe28293 } else { 0x00028293 }), // subtract the expected L2 misses
     0xfc029ae3, // bnez t0,10108 <fail>
     0x0000006f, // j 10138 <success>
-    0
+    0,
   )
-  const tile = image<C=C,WORDS=64>(clk=clk, rst=rst, program=program, successPC=0x10138)
+  const tile = image<C=C, WORDS=64>(clk=clk, rst=rst, program=program, successPC=0x10138)
   success = tile.success and tile.privilege == 3
   trap = tile.trap
 }
 
 pub mod hpm_translation(clk:Clock, rst:Reset) -> (success:U4@[], traps:U4@[]) {
   for i in 0..<4 {
-    const t = run<X=(if i%2 == 0 { 32 } else { 64 }), L2=(if i >= 2 { 8 } else { 0 })>(clk=clk, rst=rst)
+    const t = run<L2=(if i >= 2 { 8 } else { 0 }), X=(if i%2 == 0 { 32 } else { 64 })>(clk, rst)
     success#[i] = U1(t.success)
     traps#[i] = t.trap
   }
@@ -95,7 +95,9 @@ test hpm_translation.walk_events {
       assert((once & d.traps) == 0, "unexpected second exception")
       once |= d.traps
       seen |= d.success
-      if seen == 15 { break }
+      if seen == 15 {
+        break
+      }
     }
   }
   assert(seen == 15 and once == 15, "one I-TLB walk and one D-TLB walk per tile")

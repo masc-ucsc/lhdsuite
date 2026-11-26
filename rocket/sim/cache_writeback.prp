@@ -2,14 +2,12 @@ const writeback = import("../pyrope2/CacheWriteback.CacheWriteback")
 const metadata = import("../pyrope2/ClientMetadata")
 
 // Model a synchronous data array whose read port can be occupied by the CPU.
-mod run<W>(clk:Clock, rst:Reset, probe:Bool, release:Bool, state:U2, cap:U2,
-    readReady:Bool, ready:Bool, ack:Bool) -> (accepted:Bool@[], done:Bool@[], good:Bool@[], count:U5@[], ackReady:Bool@[]) {
+mod run<W>(ack:Bool, cap:U2, clk:Clock, probe:Bool, readReady:Bool, ready:Bool, release:Bool, rst:Reset, state:U2) -> (accepted:Bool@[], ackReady:Bool@[], count:U5@[], done:Bool@[], good:Bool@[]) {
   reg word:Unsigned(bits=W) = nil
   reg corrupt:Bool = nil
-  const w = writeback<W=W>(clk=clk, rst=rst, probeValid=probe, probeAddress=0x4030, probeCap=cap, probeSource=18,
-      releaseValid=release, releaseAddress=0x8120, lineState=state, readReady=readReady, readData=word, readCorrupt=corrupt, cReady=ready, ackValid=ack)
+  const w = writeback<W=W>(clk=clk, rst=rst, probeValid=probe, probeAddress=0x4030, probeCap=cap, probeSource=18, releaseValid=release, releaseAddress=0x8120, lineState=state, readReady=readReady, readData=word, readCorrupt=corrupt, cReady=ready, ackValid=ack)
   if w.readValid and readReady {
-    wrap word = (w.lineAddress << 8) | w.readBeat | (1 << (W-1))
+    wrap word = (w.lineAddress << 8) | w.readBeat | (1 << (W - 1))
     corrupt = w.readBeat == 3
   }
 
@@ -37,19 +35,34 @@ mod run<W>(clk:Clock, rst:Reset, probe:Bool, release:Bool, state:U2, cap:U2,
     expectedOp = (if takingProbe { 4 } else { 6 }) | U1(state == 3)
     n = 0
   }
-  if probe and w.probeReady and release and w.releaseReady { failed = true }
-  if stalled and (!w.cValid or w.cData != previous) { failed = true }
+  if probe and w.probeReady and release and w.releaseReady {
+    failed = true
+  }
+  if stalled and (!w.cValid or w.cData != previous) {
+    failed = true
+  }
   if w.cValid {
     const hasData = expectedOp#[0] != 0
-    const expectedWord = (expectedAddress << 8) | n | (1 << (W-1))
-    if w.cOpcode != expectedOp or w.cParam != expectedReport or w.cSource != expectedSource or
-        w.lineAddress != expectedAddress or w.cCorrupt != (hasData and n == 3) or (hasData and w.cData != expectedWord) { failed = true }
-    if w.update != (ready and (!hasData or n == (512/W)-1)) or (w.update and w.newState != expectedState) { failed = true }
-    if ready { wrap n += 1 }
-  } elif w.update { failed = true }
+    const expectedWord = (expectedAddress << 8) | n | (1 << (W - 1))
+    if w.cOpcode != expectedOp or w.cParam != expectedReport or w.cSource != expectedSource or w.lineAddress != expectedAddress or w.cCorrupt != (hasData and n == 3) or (hasData and w.cData != expectedWord) {
+      failed = true
+    }
+    if w.update != (ready and (!hasData or n == (512/W) - 1)) or (w.update and w.newState != expectedState) {
+      failed = true
+    }
+    if ready {
+      wrap n += 1
+    }
+  } elif w.update {
+    failed = true
+  }
   stalled = w.cValid and !ready
   previous = w.cData
-  if rst { n = 0; failed = false; stalled = false }
+  if rst {
+    n = 0
+    failed = false
+    stalled = false
+  }
   good = !failed
   accepted = start
   done = completed
@@ -57,10 +70,9 @@ mod run<W>(clk:Clock, rst:Reset, probe:Bool, release:Bool, state:U2, cap:U2,
   ackReady = w.ackReady
 }
 
-pub mod cache_writeback(clk:Clock, rst:Reset, probe:Bool, release:Bool, state:U2, cap:U2, readReady:Bool, ready:Bool, ack:Bool)
-    -> (good:Bool@[], count32:U5@[], count64:U5@[], accepted:Bool@[], done:Bool@[], waiting:Bool@[]) {
-  const a = run<32>(clk=clk,rst=rst,probe=probe,release=release,state=state,cap=cap,readReady=readReady,ready=ready,ack=ack)
-  const b = run<64>(clk=clk,rst=rst,probe=probe,release=release,state=state,cap=cap,readReady=readReady,ready=ready,ack=ack)
+pub mod cache_writeback(clk:Clock, rst:Reset, probe:Bool, release:Bool, state:U2, cap:U2, readReady:Bool, ready:Bool, ack:Bool) -> (accepted:Bool@[], count32:U5@[], count64:U5@[], done:Bool@[], good:Bool@[], waiting:Bool@[]) {
+  const a = run<32>(ack, cap, clk, probe, readReady, ready, release, rst, state)
+  const b = run<64>(ack, cap, clk, probe, readReady, ready, release, rst, state)
   good = a.good and b.good
   count32 = a.count
   count64 = b.count
@@ -77,16 +89,26 @@ test cache_writeback.dirty_bursts_and_concurrent_probe {
     d.release = clock == 1 or clock == 52 or clock == 103 or clock == 150
     d.state = if clock == 100 { 1 } elif clock == 150 { 0 } else { 3 }
     d.cap = if clock == 1 { 1 } else { 2 }
-    d.readReady = clock % 5 != 1
-    d.ready = clock % 7 >= 2
+    d.readReady = clock%5 != 1
+    d.ready = clock%7 >= 2
     d.ack = clock == 110
     step
     assert(d.good, "C header, data, metadata and beat index survive stalls")
-    if clock == 1 or clock == 52 or clock == 100 or clock == 105 or clock == 150 { assert(d.accepted) }
-    if clock == 103 { assert(!d.accepted, "a second voluntary release waits for D.ReleaseAck") }
-    if clock == 47 or clock == 97 { assert(d.count32 == 16 and d.count64 == 8, "one full dirty line") }
-    if clock == 102 { assert(d.count32 == 1 and d.count64 == 1 and d.waiting, "clean probe completes during the release wait") }
-    if clock == 110 or clock == 150 { assert(d.done, "D acknowledgement or empty eviction completes the release") }
+    if clock == 1 or clock == 52 or clock == 100 or clock == 105 or clock == 150 {
+      assert(d.accepted)
+    }
+    if clock == 103 {
+      assert(!d.accepted, "a second voluntary release waits for D.ReleaseAck")
+    }
+    if clock == 47 or clock == 97 {
+      assert(d.count32 == 16 and d.count64 == 8, "one full dirty line")
+    }
+    if clock == 102 {
+      assert(d.count32 == 1 and d.count64 == 1 and d.waiting, "clean probe completes during the release wait")
+    }
+    if clock == 110 or clock == 150 {
+      assert(d.done, "D acknowledgement or empty eviction completes the release")
+    }
   }
 }
 
@@ -103,10 +125,18 @@ test cache_writeback.unstalled_beats_and_immediate_ack {
     d.ack = clock == 18 or clock == 10 or clock == 24
     step
     assert(d.good)
-    if clock >= 3 and clock <= 10 { assert(d.count32 == clock-2 and d.count64 == clock-2, "one beat every cycle") }
-    if clock >= 11 and clock <= 18 { assert(d.count32 == clock-2 and d.count64 == 8) }
-    if clock == 19 { assert(!d.waiting, "each width accepts an acknowledgement on its final data beat") }
-    if clock == 24 { assert(d.done and d.count32 == 1 and d.count64 == 1, "a clean release has one beat") }
+    if clock >= 3 and clock <= 10 {
+      assert(d.count32 == clock - 2 and d.count64 == clock - 2, "one beat every cycle")
+    }
+    if clock >= 11 and clock <= 18 {
+      assert(d.count32 == clock - 2 and d.count64 == 8)
+    }
+    if clock == 19 {
+      assert(!d.waiting, "each width accepts an acknowledgement on its final data beat")
+    }
+    if clock == 24 {
+      assert(d.done and d.count32 == 1 and d.count64 == 1, "a clean release has one beat")
+    }
   }
 }
 
@@ -123,8 +153,8 @@ test permissions.tilelink_transitions {
   mut d = permissions
   // Columns are Nothing, Branch, Trunk and Dirty. Rows are read, write
   // intent, write for accesses, and toT, toB, toN for incoming probes.
-  const accesses:[12]U3 = (0,5,6,7, 1,2,6,7, 1,2,7,7)
-  const probes:[12]U6 = (20,17,14,46, 20,17,1,33, 20,8,4,36)
+  const accesses:[12]U3 = (0, 5, 6, 7, 1, 2, 6, 7, 1, 2, 7, 7)
+  const probes:[12]U6 = (20, 17, 14, 46, 20, 17, 1, 33, 20, 8, 4, 36)
   tick 12 {
     d.row = clock
     step

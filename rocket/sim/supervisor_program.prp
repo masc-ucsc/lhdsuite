@@ -3,7 +3,7 @@ const image = import("BootROM.Image")
 comptime const narrow = cfg.params(useSupervisor=true)
 comptime const wide = cfg.params(xLen=64, useSupervisor=true)
 
-mod check<C>(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
+mod check<C>(clk:Clock, rst:Reset) -> (bad:Bool@[], done:Bool@[]) {
   const program:[64]U32 = (
     0xfff00293, // entry: li t0,-1
     0x3b029073, // csrw pmpaddr0,t0
@@ -58,21 +58,35 @@ mod check<C>(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
     0x00629463, // bne t0,t1,10110 <fail>
     0x0000006f, // success: j 1010c <success>
     0x0000006f, // fail: j 10110 <fail>
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
   )
   const tile = image<C=C, WORDS=64>(clk=clk, rst=rst, program=program, successPC=0x1010c)
   reg sawUserCall:Bool = false
   reg sawIllegal:Bool = false
   const userCall = tile.tracePC == 0x1008c and tile.privilege == 0 and tile.cause == 8
   const illegal = tile.tracePC == 0x10094 and tile.privilege == 0 and tile.cause == 2
-  if tile.trap != 0 and userCall { sawUserCall = true }
-  if tile.trap != 0 and illegal and sawUserCall { sawIllegal = true }
+  if tile.trap != 0 and userCall {
+    sawUserCall = true
+  }
+  if tile.trap != 0 and illegal and sawUserCall {
+    sawIllegal = true
+  }
   bad = tile.trap != 0 and !userCall and !illegal
   done = tile.success and tile.privilege == 3 and sawIllegal
 }
 pub mod supervisor_program(clk:Clock, rst:Reset) -> (a:Bool@[], b:Bool@[], bad:Bool@[]) {
-  const a32 = check<narrow>(clk=clk, rst=rst)
-  const b64 = check<wide>(clk=clk, rst=rst)
+  const a32 = check<narrow>(clk, rst)
+  const b64 = check<wide>(clk, rst)
   a = a32.done
   b = b64.done
   bad = a32.bad or b64.bad
@@ -86,9 +100,15 @@ test supervisor_program.delegation_and_return {
     step
     if clock > 4 {
       assert(!d.bad, "unexpected trap during U/S/M handoff")
-      if d.a { a = true }
-      if d.b { b = true }
-      if a and b { break }
+      if d.a {
+        a = true
+      }
+      if d.b {
+        b = true
+      }
+      if a and b {
+        break
+      }
     }
   }
   assert(a and b, "both machine handlers checked the results of sret")

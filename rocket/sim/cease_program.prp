@@ -2,24 +2,28 @@ const configs = import("../pyrope2/RocketConfig")
 const boot = import("BootROM.BootROM")
 comptime const disabled = configs.params(xLen=64, haveCease=false)
 
-mod run<C>(clk:Clock, rst:Reset) -> (seen:Bool@[], bad:Bool@[]) {
+mod run<C>(clk:Clock, rst:Reset) -> (bad:Bool@[], seen:Bool@[]) {
   const program:[16]U32 = (0x00000013, 0x30500073, 0x00100073, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
   const core = boot<C>(clk=clk, rst=rst, program=program, successPC=0x10044)
   reg observed:Bool = false
   if C.haveCease {
-    if core.success { observed = true }
+    if core.success {
+      observed = true
+    }
     bad = core.trap != 0
   } else {
     const expected = core.tracePC == 0x10044 and core.cause == 2 and core.trapValue == 0x30500073
-    if core.trap != 0 and expected { observed = true }
+    if core.trap != 0 and expected {
+      observed = true
+    }
     bad = !observed and core.trap != 0 and !expected
   }
   seen = observed
 }
 
-pub mod cease_program(clk:Clock, rst:Reset) -> (seen:Bool@[], bad:Bool@[]) {
-  const a = run<configs.tiny>(clk=clk, rst=rst)
-  const b = run<disabled>(clk=clk, rst=rst)
+pub mod cease_program(clk:Clock, rst:Reset) -> (bad:Bool@[], seen:Bool@[]) {
+  const a = run<configs.tiny>(clk, rst)
+  const b = run<disabled>(clk, rst)
   seen = a.seen and b.seen
   bad = a.bad or b.bad
 }
@@ -31,7 +35,9 @@ test cease_program.boot {
     step
     if clock >= 4 {
       assert(!d.bad, "CEASE must halt before EBREAK or fault at its own PC when disabled")
-      if d.seen { seen = true }
+      if d.seen {
+        seen = true
+      }
     }
   }
   assert(seen)

@@ -1,12 +1,12 @@
 const config = import("../pyrope2/RocketConfig")
 const image = import("BootROM.Image")
-comptime const rv32 = config.params(roccOpcodes=1,vLen=128)
-comptime const rv64 = config.params(xLen=64,useDataScratchpad=false,nMSHRs=2,dcacheSets=4,dcacheWays=1,roccOpcodes=1,vLen=256,clockGate=true)
+comptime const rv32 = config.params(roccOpcodes=1, vLen=128)
+comptime const rv64 = config.params(xLen=64, useDataScratchpad=false, nMSHRs=2, dcacheSets=4, dcacheWays=1, roccOpcodes=1, vLen=256, clockGate=true)
 
 // CUSTOM0 adds two scalar operands. The vector unit accepts vsetvli e8,m1,
 // tracks VL, and returns it to rd. Both units exercise command backpressure
 // and delayed result writeback through the integer scoreboard.
-mod profile<C>(clk:Clock,rst:Reset) -> (done:Bool@[], failed:Bool@[]) {
+mod profile<C>(clk:Clock, rst:Reset) -> (done:Bool@[], failed:Bool@[]) {
   const program:[16]U32 = (
     0x00700093, // li x1,7
     0x00500113, // li x2,5
@@ -23,7 +23,7 @@ mod profile<C>(clk:Clock,rst:Reset) -> (done:Bool@[], failed:Bool@[]) {
     ((C.vLen/8) << 20) | 0x493, // li x9,vlenb
     0x00941463, // bne x8,x9,fail
     0x0000006f, // success
-    0x00100073  // fail
+    0x00100073, // fail
   )
   reg phase:U3 = 0
   wrap phase += 1
@@ -40,12 +40,11 @@ mod profile<C>(clk:Clock,rst:Reset) -> (done:Bool@[], failed:Bool@[]) {
   wire decode:U32 = nil
   const vectorDecode:U4 = if (decode & 0x8000707f) == 0x7057 { 14 } else { 0 }
   const ready = phase >= 5 and delay == 0 and memory == 0
-  const tile = image<C=C, WORDS=16>(clk=clk,rst=rst,program=program,successPC=0x10078,
-      accValid=memory == 1 or memory == 3 or memory == 5, accWrite=memory == 1, accSize=2, accPrivilege=3,
-      accAddress=(if memory == 5 { 0x40000000 } else { 0x80000000 }), accData=result,
-      vectorDecode=vectorDecode,roccReady=ready,vectorReady=ready,roccBusy=!vector and (delay != 0 or memory != 0),vectorBusy=vector and delay != 0,
-      roccResp=!vector and delay == 1,vectorResp=vector and delay == 1,roccRd=rd,vectorRd=rd,roccData=result,vectorData=result,
-      vectorCSRRead=vl)
+  const tile = image<C=C, WORDS=16>(clk=clk, rst=rst, program=program, successPC=0x10078, accValid=memory == 1 or memory == 3 or memory == 5, accWrite=memory == 1, accSize=2, accPrivilege=3, accAddress=(if memory == 5 {
+        0x40000000
+      } else {
+        0x80000000
+      }), accData=result, vectorDecode=vectorDecode, roccReady=ready, vectorReady=ready, roccBusy=!vector and (delay != 0 or memory != 0), vectorBusy=vector and delay != 0, roccResp=!vector and delay == 1, vectorResp=vector and delay == 1, roccRd=rd, vectorRd=rd, roccData=result, vectorData=result, vectorCSRRead=vl)
   const port = tile.ext
   decode = port.decodeInst
   if (port.rocc or port.vector) and ready {
@@ -53,21 +52,41 @@ mod profile<C>(clk:Clock,rst:Reset) -> (done:Bool@[], failed:Bool@[]) {
     delay = 4
     vector = port.vector
     rd = port.instruction#[7..<12]
-    if port.vector { vl = port.rs1; result = port.rs1 } else { wrap result = port.rs1 + port.rs2; memory = 1; delay = 0 }
-  } elif delay > 1 or (delay == 1 and (if vector { port.vectorRespReady } else { port.roccRespReady })) { wrap delay -= 1 }
-  if (memory == 1 or memory == 3 or memory == 5) and tile.accReady { wrap memory += 1 }
+    if port.vector {
+      vl = port.rs1
+      result = port.rs1
+    } else {
+      wrap result = port.rs1 + port.rs2
+      memory = 1
+      delay = 0
+    }
+  } elif delay > 1 or (delay == 1 and (if vector { port.vectorRespReady } else { port.roccRespReady })) {
+    wrap delay -= 1
+  }
+  if (memory == 1 or memory == 3 or memory == 5) and tile.accReady {
+    wrap memory += 1
+  }
   if tile.accDone {
-    if tile.accError != (memory == 6) { memoryFailed = true }
-    if memory == 4 { result = tile.accResult#[0..<C.xLen] }
-    if memory == 6 { memory = 0; delay = 4 } else { wrap memory += 1 }
+    if tile.accError != (memory == 6) {
+      memoryFailed = true
+    }
+    if memory == 4 {
+      result = tile.accResult#[0..<C.xLen]
+    }
+    if memory == 6 {
+      memory = 0
+      delay = 4
+    } else {
+      wrap memory += 1
+    }
   }
   done = tile.success and commands == 2
   failed = memoryFailed or tile.trap != 0 or tile.badFetch or commands > 2
 }
 
-pub mod attachments(clk:Clock,rst:Reset) -> (done32:Bool@[], done64:Bool@[], failed:Bool@[]) {
-  const a = profile<rv32>(clk=clk,rst=rst)
-  const b = profile<rv64>(clk=clk,rst=rst)
+pub mod attachments(clk:Clock, rst:Reset) -> (done32:Bool@[], done64:Bool@[], failed:Bool@[]) {
+  const a = profile<rv32>(clk, rst)
+  const b = profile<rv64>(clk, rst)
   done32 = a.done
   done64 = b.done
   failed = a.failed or b.failed
@@ -85,16 +104,17 @@ test attachments.scalar_results {
       narrow = narrow or d.done32
       wide = wide or d.done64
     }
-    if narrow and wide { break }
+    if narrow and wide {
+      break
+    }
   }
   assert(narrow and wide, "RV32 and RV64 retire the dependent scalar and vector checks")
 }
 
 // Accept a faulting vector operation and verify the architectural trap packet.
-pub mod vector_trap(clk:Clock,rst:Reset) -> (trapped:Bool@[], bad:Bool@[]) {
-  const program:[16]U32 = (0x20000093,0x3000a073,0x0000f357,0x00100073,0,0,0,0,0,0,0,0,0,0,0,0)
-  const d = image<C=rv64,WORDS=16>(clk=clk,rst=rst,program=program,successPC=0,vectorReady=true,vectorDecode=14,
-      vectorFault=true,vectorCause=13,vectorTval=0x12345000)
+pub mod vector_trap(clk:Clock, rst:Reset) -> (bad:Bool@[], trapped:Bool@[]) {
+  const program:[16]U32 = (0x20000093, 0x3000a073, 0x0000f357, 0x00100073, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+  const d = image<C=rv64, WORDS=16>(clk=clk, rst=rst, program=program, successPC=0, vectorReady=true, vectorDecode=14, vectorFault=true, vectorCause=13, vectorTval=0x12345000)
   trapped = d.trap != 0
   bad = trapped and (d.tracePC != 0x10048 or d.cause != 13 or d.trapValue != 0x12345000)
 }
@@ -104,20 +124,21 @@ test vector_trap.precise_fault {
   tick 150 {
     d.rst = clock < 4
     step
-    if clock > 4 and d.trapped { assert(!d.bad, "vector fault PC, cause and tval"); observed = true; break }
+    if clock > 4 and d.trapped {
+      assert(!d.bad, "vector fault PC, cause and tval")
+      observed = true
+      break
+    }
   }
   assert(observed, "enabled vector unit reports synchronous fault")
 }
 
-comptime const supervisor = config.params(useSupervisor=true,roccOpcodes=1)
-pub mod rocc_irq(clk:Clock,rst:Reset) -> (caught:Bool@[], bad:Bool@[]) {
+comptime const supervisor = config.params(useSupervisor=true, roccOpcodes=1)
+pub mod rocc_irq(clk:Clock, rst:Reset) -> (bad:Bool@[], caught:Bool@[]) {
   // Delegate bit 13, check its supervisor enable and pending views, then
   // route the asserted interrupt to M-mode and enable machine interrupts.
-  const program:[16]U32 = (
-    0x000020b7, 0x30309073, 0x10409073, 0x10402173, 0x209c63,
-    0x14402173, 0x209863, 0x30301073, 0x30046073, 0x0000006f,
-    0x00100073, 0,0,0,0,0)
-  const d = image<C=supervisor,WORDS=16>(clk=clk,rst=rst,program=program,successPC=0,roccIRQ=1)
+  const program:[16]U32 = (0x000020b7, 0x30309073, 0x10409073, 0x10402173, 0x209c63, 0x14402173, 0x209863, 0x30301073, 0x30046073, 0x0000006f, 0x00100073, 0, 0, 0, 0, 0)
+  const d = image<C=supervisor, WORDS=16>(clk=clk, rst=rst, program=program, successPC=0, roccIRQ=1)
   caught = d.trap != 0 and d.cause == 0x8000000d
   bad = d.badFetch or (d.trap != 0 and !caught)
 }
@@ -129,7 +150,10 @@ test rocc_irq.delegation {
     step
     if clock > 4 {
       assert(!d.bad, "RoCC interrupt CSR or trap cause")
-      if d.caught { seen = true; break }
+      if d.caught {
+        seen = true
+        break
+      }
     }
   }
   assert(seen, "RoCC interrupt reached machine mode")

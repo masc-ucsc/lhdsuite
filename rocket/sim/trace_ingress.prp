@@ -1,16 +1,42 @@
 const cfg = import("../pyrope2/RocketConfig")
 const image = import("BootROM.Image")
 
-mod boot<C>(clk:Clock, rst:Reset, timer:U1) -> (events:U9@[], bad:Bool@[], done:Bool@[]) {
+mod boot<C>(clk:Clock, rst:Reset, timer:U1) -> (bad:Bool@[], done:Bool@[], events:U9@[]) {
   const program:[32]U32 = (
-    0x00000297, 0x04828293, 0x30529073, 0x00300293, // mtvec = handler, t0 = ASID 3
-    (if C.xLen == 32 { 0x01629293 } else { 0x02c29293 }), 0x18029073, 0x00000f13, 0x00200413,
-    0xfc7d147d, 0x008000ef, 0x0080006f, 0x00008067, // c.addi / c.bnez twice, jal, j, jalr
-    0xffffffff, 0x08000293, 0x30429073, 0x30046073, // illegal instruction, enable timer interrupt
-    0x000f0063, 0x0000006f, 0x342022f3, 0x0002ca63, // wait loop, success, handler reads mcause
-    0x341022f3, 0x00428293, 0x34129073, 0x30200073, // advance past the illegal instruction and return
-    0x30401073, 0x00100f13, 0x30200073, 0, 0, 0, 0, 0) // mask timer interrupt, end wait loop
-  const d = image<C=C,WORDS=32>(clk=clk, rst=rst, program=program, successPC=0x10084, timer=timer)
+    0x00000297,
+    0x04828293,
+    0x30529073,
+    0x00300293, // mtvec = handler, t0 = ASID 3
+    (if C.xLen == 32 { 0x01629293 } else { 0x02c29293 }),
+    0x18029073,
+    0x00000f13,
+    0x00200413,
+    0xfc7d147d,
+    0x008000ef,
+    0x0080006f,
+    0x00008067, // c.addi / c.bnez twice, jal, j, jalr
+    0xffffffff,
+    0x08000293,
+    0x30429073,
+    0x30046073, // illegal instruction, enable timer interrupt
+    0x000f0063,
+    0x0000006f,
+    0x342022f3,
+    0x0002ca63, // wait loop, success, handler reads mcause
+    0x341022f3,
+    0x00428293,
+    0x34129073,
+    0x30200073, // advance past the illegal instruction and return
+    0x30401073,
+    0x00100f13,
+    0x30200073,
+    0,
+    0,
+    0,
+    0,
+    0,
+  ) // mask timer interrupt, end wait loop
+  const d = image<C=C, WORDS=32>(clk=clk, rst=rst, program=program, successPC=0x10084, timer=timer)
   const t = d.ingress
   done = d.success
   bad = d.badFetch
@@ -19,38 +45,44 @@ mod boot<C>(clk:Clock, rst:Reset, timer:U1) -> (events:U9@[], bad:Bool@[], done:
     bad = bad or (t.iretire != 0) != d.traceValid
     if t.iretire != 0 {
       bad = bad or t.iaddr != d.tracePC or t.priv != 3 or t.time != d.traceTime
-      if t.iaddr >= 0x10058 { bad = bad or t.ctx != 3 }
-      if d.success { bad = bad or t.time == 0 }
+      if t.iaddr >= 0x10058 {
+        bad = bad or t.ctx != 3
+      }
+      if d.success {
+        bad = bad or t.time == 0
+      }
       bad = bad or t.ilastsize != U1(t.iaddr != 0x10060 and t.iaddr != 0x10062)
-      const irq = ((1 << (C.xLen-1)) | 7)
+      const irq = (1 << (C.xLen - 1)) | 7
       events = match t.itype {
-        == 0  { U1(t.iaddr == 0x10060) }
-        == 1  { U1(t.iaddr == 0x10070 and t.cause == 2 and t.tval == 0xffffffff) << 1 }
-        == 2  { U1(t.iaddr == 0x10080 and t.cause == irq and t.tval == 0) << 2 }
-        == 4  { U1(t.iaddr == 0x10062) << 3 }
-        == 5  { U1(t.iaddr == 0x10062) << 4 }
+        == 0 { U1(t.iaddr == 0x10060) }
+        == 1 { U1(t.iaddr == 0x10070 and t.cause == 2 and t.tval == 0xffffffff) << 1 }
+        == 2 { U1(t.iaddr == 0x10080 and t.cause == irq and t.tval == 0) << 2 }
+        == 4 { U1(t.iaddr == 0x10062) << 3 }
+        == 5 { U1(t.iaddr == 0x10062) << 4 }
         == 13 { if t.iaddr == 0x1009c { 32 } elif t.iaddr == 0x100a8 { 64 } else { 0 } }
         == 14 { U1(t.iaddr == 0x1006c) << 7 }
         == 15 { U1(t.iaddr == 0x10064) << 8 }
-        else  { 0 }
+        else { 0 }
       }
-    } else { bad = bad or t.ilastsize != 0 }
+    } else {
+      bad = bad or t.ilastsize != 0
+    }
   } else {
-    bad = bad or t.iretire != 0 or t.iaddr != 0 or t.itype != 0 or t.ilastsize != 0 or
-        t.priv != 0 or t.ctx != 0 or t.time != 0 or t.tval != 0 or t.cause != 0
+    bad = bad or t.iretire != 0 or t.iaddr != 0 or t.itype != 0 or t.ilastsize != 0 or t.priv != 0 or t.ctx != 0 or t.time != 0 or t.tval != 0 or t.cause != 0
   }
 }
 
-pub mod trace_ingress(clk:Clock, rst:Reset, timer:U1) -> (events:U18@[], bad:Bool@[], done:U4@[]) {
+pub mod trace_ingress(clk:Clock, rst:Reset, timer:U1) -> (bad:Bool@[], done:U4@[], events:U18@[]) {
   bad = false
   done = 0
   events = 0
   for i in 0..<4 {
-    comptime const C = cfg.params(xLen=(if i%2 == 0 { 32 } else { 64 }), useVM=true,
-        asIdBits=4, enableTraceCoreIngress=(i >= 2))
-    const d = boot<C>(clk=clk, rst=rst, timer=timer)
+    comptime const C = cfg.params(xLen=(if i%2 == 0 { 32 } else { 64 }), useVM=true, asIdBits=4, enableTraceCoreIngress=i >= 2)
+    const d = boot<C>(clk, rst, timer)
     done#[i] = U1(d.done)
-    if i >= 2 { events#[((i-2)*9)..+9] = d.events }
+    if i >= 2 {
+      events#[((i - 2)*9)..+9] = d.events
+    }
     bad = bad or d.bad
   }
 }

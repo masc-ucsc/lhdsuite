@@ -4,11 +4,11 @@ const image = import("BootROM.Image")
 // With entries, the last implemented PMP allows S-mode loads and fetches.
 // A denied store enters M-mode, which revokes execute permission for the
 // return PC. With zero entries the two PMP CSRs trap and S-mode memory is open.
-mod run<X,N>(clk:Clock, rst:Reset) -> (done:U1@[], trap:U1@[]) {
+mod run<X, N>(clk:Clock, rst:Reset) -> (done:U1@[], trap:U1@[]) {
   comptime const C = cfg.params(xLen=X, nPMPs=N, useSupervisor=true)
-  comptime const last = if N == 0 { 0 } else { N-1 }
+  comptime const last = if N == 0 { 0 } else { N - 1 }
   comptime const addrCSR = 0x3b0 + last
-  comptime const nextCSR = if N == 16 { addrCSR } else { addrCSR+1 }
+  comptime const nextCSR = if N == 16 { addrCSR } else { addrCSR + 1 }
   comptime const cfgCSR = 0x3a0 + (last/(X/8))*(X/32)
   comptime const shift = (last%(X/8))*8
   const program:[96]U32 = (
@@ -107,9 +107,9 @@ mod run<X,N>(clk:Clock, rst:Reset) -> (done:U1@[], trap:U1@[]) {
     0x00430313, // addi t1,t1,4
     0x34131073, // csrw mepc,t1
     0x00140413, // addi s0,s0,1
-    0x30200073 // mret
+    0x30200073, // mret
   )
-  const tile = image<C=C,WORDS=96>(clk=clk, rst=rst, program=program, successPC=0x10120)
+  const tile = image<C=C, WORDS=96>(clk=clk, rst=rst, program=program, successPC=0x10120)
   done = U1(tile.success and tile.privilege == 1)
   trap = tile.trap
 }
@@ -118,11 +118,11 @@ pub mod pmp_profiles(clk:Clock, rst:Reset) -> (success:U8@[], trap:U8@[]) {
   success = 0
   trap = 0
   for i in 0..<8 {
-    const widths = [32,64]
-    const counts = [0,1,9,16]
+    const widths = [32, 64]
+    const counts = [0, 1, 9, 16]
     const width = widths[i/4]
     const count = counts[i%4]
-    const r = run<X=width,N=count>(clk=clk, rst=rst)
+    const r = run<N=count, X=width>(clk, rst)
     success#[i] = r.done
     trap#[i] = r.trap
   }

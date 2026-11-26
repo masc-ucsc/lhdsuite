@@ -3,7 +3,7 @@ const image = import("BootROM.Image")
 
 // Program the last trigger and check that store, load, and fetch breakpoints
 // return to the following instruction. A watch action then retires normally.
-mod run<X,N>(clk:Clock, rst:Reset) -> (done:U1@[], trap:U1@[], watched:U1@[]) {
+mod run<X, N>(clk:Clock, rst:Reset) -> (done:U1@[], trap:U1@[], watched:U1@[]) {
   comptime const C = cfg.params(xLen=X, nBreakpoints=N, useBPWatch=N > 1)
   const program:[96]U32 = (
     0x00000297, // auipc t0,0x0
@@ -101,28 +101,27 @@ mod run<X,N>(clk:Clock, rst:Reset) -> (done:U1@[], trap:U1@[], watched:U1@[]) {
     0x00000000,
     0x00000000,
     0x00000000,
-    0x00000000
+    0x00000000,
   )
   const tile = image<C=C, WORDS=96>(clk=clk, rst=rst, program=program, successPC=0x10130)
   done = U1(tile.success)
   trap = tile.trap
   watched = 0
   if N > 1 {
-    watched = U1(tile.traceValid and tile.tracePC == 0x100ec and tile.watchValid == (1 << (N-1)) and
-        tile.watchAction == (2 << (3*(N-1))))
+    watched = U1(tile.traceValid and tile.tracePC == 0x100ec and tile.watchValid == (1 << (N - 1)) and tile.watchAction == (2 << (3*(N - 1))))
   }
 }
 
 pub mod trigger_program(clk:Clock, rst:Reset) -> (done:U6@[], trap:U6@[], watched:U6@[]) {
-  const widths = [32,64]
-  const counts = [0,1,3]
+  const widths = [32, 64]
+  const counts = [0, 1, 3]
   done = 0
   trap = 0
   watched = 0
   for i in 0..<6 {
     const width = widths[i/3]
     const count = counts[i%3]
-    const tile = run<X=width,N=count>(clk=clk, rst=rst)
+    const tile = run<N=count, X=width>(clk, rst)
     done#[i] = tile.done
     trap#[i] = tile.trap
     watched#[i] = tile.watched

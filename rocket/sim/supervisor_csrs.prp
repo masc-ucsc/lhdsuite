@@ -3,20 +3,15 @@ const config = import("../pyrope2/RocketConfig")
 comptime const narrow = config.params(useSupervisor=true)
 comptime const wide = config.params(xLen=64, useSupervisor=true)
 
-mod access<C>(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:U64, external:U1)
-    -> (value:Unsigned(bits=C.xLen)@[], illegal:U1@[]) {
-  const d = csr<C>(clock=clk, reset=rst, io_ungated_clock=clk, io_interrupts_debug=0,
-      io_interrupts_mtip=0, io_interrupts_msip=0, io_interrupts_meip=0, io_interrupts_seip=external, io_hartid=0, io_rw_addr=addr,
-      io_rw_cmd=cmd, io_rw_wdata=data#[0..<C.xLen], io_decode_0_inst=addr<<20, io_exception=0,
-      io_retire=1, io_cause=0x80000007, io_pc=0x10040, io_tval=0, io_htval=0, io_gva=0, io_inst_0=0)
+mod access<C>(addr:U12, clk:Clock, cmd:U3, data:U64, external:U1, rst:Reset) -> (illegal:U1@[], value:Unsigned(bits=C.xLen)@[]) {
+  const d = csr<C>(clock=clk, reset=rst, io_ungated_clock=clk, io_interrupts_debug=0, io_interrupts_mtip=0, io_interrupts_msip=0, io_interrupts_meip=0, io_interrupts_seip=external, io_hartid=0, io_rw_addr=addr, io_rw_cmd=cmd, io_rw_wdata=data#[0..<C.xLen], io_decode_0_inst=addr << 20, io_exception=0, io_retire=1, io_cause=0x80000007, io_pc=0x10040, io_tval=0, io_htval=0, io_gva=0, io_inst_0=0)
   value = d.io_rw_rdata
   illegal = d.io_decode_0_read_illegal
 }
 
-pub mod supervisor_csrs(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:U64, external:U1)
-    -> (rv32:U32@[], rv64:U64@[], illegal:Bool@[]) {
-  const a = access<narrow>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data, external=external)
-  const b = access<wide>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data, external=external)
+pub mod supervisor_csrs(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:U64, external:U1) -> (illegal:Bool@[], rv32:U32@[], rv64:U64@[]) {
+  const a = access<narrow>(addr, clk, cmd, data, external, rst)
+  const b = access<wide>(addr, clk, cmd, data, external, rst)
   rv32 = a.value
   rv64 = b.value
   illegal = a.illegal != 0 or b.illegal != 0
@@ -138,10 +133,10 @@ test supervisor_csrs.aliases_and_masks {
 comptime const oneASID = config.params(useVM=true, asIdBits=1)
 comptime const fiveASID = config.params(xLen=64, useVM=true, asIdBits=5)
 comptime const zeroASID = config.params(xLen=64, useVM=true)
-pub mod satp_fields(clk:Clock, rst:Reset, cmd:U3, data:U64) -> (one:U32@[], five:U64@[], zero:U64@[]) {
-  const a = access<oneASID>(clk=clk, rst=rst, addr=0x180, cmd=cmd, data=data, external=0)
-  const b = access<fiveASID>(clk=clk, rst=rst, addr=0x180, cmd=cmd, data=data, external=0)
-  const c = access<zeroASID>(clk=clk, rst=rst, addr=0x180, cmd=cmd, data=data, external=0)
+pub mod satp_fields(clk:Clock, rst:Reset, cmd:U3, data:U64) -> (five:U64@[], one:U32@[], zero:U64@[]) {
+  const a = access<oneASID>(addr=0x180, clk, cmd, data, external=0, rst)
+  const b = access<fiveASID>(addr=0x180, clk, cmd, data, external=0, rst)
+  const c = access<zeroASID>(addr=0x180, clk, cmd, data, external=0, rst)
   one = a.value
   five = b.value
   zero = c.value
@@ -158,15 +153,13 @@ test satp_fields.probe_width {
   step
   d.cmd = 0
   step
-  assert(d.one == 0x804fffff and d.five == 0x8001f000000fffff and d.zero == 0x80000000000fffff,
-      "only implemented ASID and physical page bits read back")
+  assert(d.one == 0x804fffff and d.five == 0x8001f000000fffff and d.zero == 0x80000000000fffff, "only implemented ASID and physical page bits read back")
   d.cmd = 5
   d.data = 0xf000000000000123
   step
   d.cmd = 0
   step
-  assert(d.one == 0x123 and d.five == 0x8001f000000fffff and d.zero == 0x80000000000fffff,
-      "RV64 ignores the entire unsupported mode write while RV32 accepts bare mode")
+  assert(d.one == 0x123 and d.five == 0x8001f000000fffff and d.zero == 0x80000000000fffff, "RV64 ignores the entire unsupported mode write while RV32 accepts bare mode")
   d.cmd = 7
   d.data = 1 << 44
   step

@@ -2,10 +2,8 @@ const unit = import("../pyrope2/MulDiv.MulDiv")
 const configs = import("../pyrope2/RocketConfig")
 comptime const wide = configs.rv64
 
-pub mod muldiv_rv64(clk:Clock, rst:Reset, issue:Bool, fn:U4, dw:U1, lhs:U64, rhs:U64)
-    -> (done:Bool@[0], data:U64@[0]) {
-  const d = unit<C=wide>(clock=clk, reset=rst, io_req_valid=U1(issue), io_req_bits_fn=fn, io_req_bits_dw=dw,
-      io_req_bits_in1=lhs, io_req_bits_in2=rhs, io_req_bits_tag=0, io_kill=0, io_resp_ready=0)
+pub mod muldiv_rv64(clk:Clock, rst:Reset, issue:Bool, fn:U4, dw:U1, lhs:U64, rhs:U64) -> (data:U64@[0], done:Bool@[0]) {
+  const d = unit<C=wide>(clock=clk, reset=rst, io_req_valid=U1(issue), io_req_bits_fn=fn, io_req_bits_dw=dw, io_req_bits_in1=lhs, io_req_bits_in2=rhs, io_req_bits_tag=0, io_kill=0, io_resp_ready=0)
   done = d.io_resp_valid != 0
   data = d.io_resp_bits_data
 }
@@ -13,8 +11,8 @@ test muldiv_rv64.results {
   mut d = muldiv_rv64
   // MULH of -2 and 3, DIVUW sign-extending its quotient, REM by zero.
   tick 216 {
-    const i = clock / 72
-    const cycle = clock % 72
+    const i = clock/72
+    const cycle = clock%72
     d.rst = cycle == 0
     d.issue = cycle == 1
     d.dw = U1(i != 1)
@@ -22,10 +20,18 @@ test muldiv_rv64.results {
     d.lhs = if i == 1 { 0x1234567880000000 } else { 0xfffffffffffffffe }
     d.rhs = if i == 0 { 3 } elif i == 1 { 1 } else { 0 }
     step
-    if cycle != 71 { continue }
+    if cycle != 71 {
+      continue
+    }
     assert(d.done, "response pending")
-    if i == 0 { assert(d.data == 0xffffffffffffffff, "signed high product") }
-    if i == 1 { assert(d.data == 0xffffffff80000000, "unsigned word quotient") }
-    if i == 2 { assert(d.data == 0xfffffffffffffffe, "remainder by zero") }
+    if i == 0 {
+      assert(d.data == 0xffffffffffffffff, "signed high product")
+    }
+    if i == 1 {
+      assert(d.data == 0xffffffff80000000, "unsigned word quotient")
+    }
+    if i == 2 {
+      assert(d.data == 0xfffffffffffffffe, "remainder by zero")
+    }
   }
 }

@@ -14,18 +14,17 @@ mod exercise<C>(clk:Clock, rst:Reset) -> (done:Bool@[], failed:Bool@[], misses:U
   reg beat:U5 = 0
   reg line:U32 = 0
   reg count:U5 = 0
-  const pc:U32 = 0x10040 + (reads#[0] << 7) + ((reads % 8) << 2)
+  const pc:U32 = 0x10040 + (reads#[0] << 7) + ((reads%8) << 2)
   reg physical:U32
   physical = pc
   const expected = pc ^ 0x12340000
-  const byteAddr = line + (beat * (C.xLen/8))
+  const byteAddr = line + (beat*(C.xLen/8))
   const low = (byteAddr ^ 0x12340000)#[0..<32]
-  const data:Unsigned(bits=C.xLen) = if C.xLen == 64 { (((byteAddr+4) ^ 0x12340000)#[0..<32] << 32) | low } else { low }
-  const last = U1(beat == C.icacheBlockBytes/(C.xLen/8)-1)
+  const data:Unsigned(bits=C.xLen) = if C.xLen == 64 { (((byteAddr + 4) ^ 0x12340000)#[0..<32] << 32) | low } else { low }
+  const last = U1(beat == C.icacheBlockBytes/(C.xLen/8) - 1)
   const issuing = reads < 12 and delay == 0
   const flush = reads == 6 and delay == 3
-  const d = cache<C>(clk=clk, rst=rst, fetch=U1(issuing), vaddr=pc, paddr=physical, killS1=0, killS2=0,
-      invalidate=U1(flush), aReady=~busy, dValid=busy, dOpcode=1, dData=data, dCorrupt=last & line#[7])
+  const d = cache<C>(clk=clk, rst=rst, fetch=U1(issuing), vaddr=pc, paddr=physical, killS1=0, killS2=0, invalidate=U1(flush), aReady=~busy, dValid=busy, dOpcode=1, dData=data, dCorrupt=last & line#[7])
   const received = issuing and d.valid != 0
   failed = received and (d.data != expected or d.accessFault != pc#[7])
   if rst {
@@ -34,12 +33,13 @@ mod exercise<C>(clk:Clock, rst:Reset) -> (done:Bool@[], failed:Bool@[], misses:U
     busy = 0
     count = 0
     beat = 0
-  }
-  else {
+  } else {
     if received {
       wrap reads += 1
       delay = 4
-    } elif delay > 0 { wrap delay -= 1 }
+    } elif delay > 0 {
+      wrap delay -= 1
+    }
     if d.aValid != 0 and busy == 0 {
       wrap count += 1
       busy = 1
@@ -47,19 +47,20 @@ mod exercise<C>(clk:Clock, rst:Reset) -> (done:Bool@[], failed:Bool@[], misses:U
       line = d.aAddress
     } elif busy != 0 {
       wrap beat += 1
-      if last != 0 { busy = 0 }
+      if last != 0 {
+        busy = 0
+      }
     }
   }
   done = reads == 12
   misses = count
 }
 
-pub mod icache_geometry(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[], directMiss:U5@[], assocMiss:U5@[],
-    largeMiss:U5@[], singleMiss:U5@[]) {
-  const a = exercise<direct>(clk=clk, rst=rst)
-  const b = exercise<assoc>(clk=clk, rst=rst)
-  const c = exercise<larger>(clk=clk, rst=rst)
-  const f = exercise<single>(clk=clk, rst=rst)
+pub mod icache_geometry(clk:Clock, rst:Reset) -> (assocMiss:U5@[], bad:Bool@[], directMiss:U5@[], done:Bool@[], largeMiss:U5@[], singleMiss:U5@[]) {
+  const a = exercise<direct>(clk, rst)
+  const b = exercise<assoc>(clk, rst)
+  const c = exercise<larger>(clk, rst)
+  const f = exercise<single>(clk, rst)
   done = a.done and b.done and c.done and f.done
   bad = a.failed or b.failed or c.failed or f.failed
   directMiss = a.misses
@@ -72,7 +73,9 @@ test icache_geometry.conflict_and_invalidate {
   tick 500 {
     d.rst = clock < 4
     step
-    if clock > 4 { assert(!d.bad, "wrong fetch data or fault") }
+    if clock > 4 {
+      assert(!d.bad, "wrong fetch data or fault")
+    }
   }
   assert(d.done, "all geometries completed twelve fetches")
   assert(d.directMiss == 12 and d.assocMiss == 4 and d.largeMiss == 4 and d.singleMiss == 4, "allocation, conflict and flush counts")
@@ -81,7 +84,7 @@ test icache_geometry.conflict_and_invalidate {
 comptime const prefetch = config.params(icacheSets=2, icacheBlockBytes=32, icachePrefetch=true)
 // Stall the hint while the demand refill returns data. A later demand at the
 // last line of the page must never generate a hint into the next page.
-pub mod hints(clk:Clock,rst:Reset,ending:Bool) -> (done:Bool@[], bad:Bool@[]) {
+pub mod hints(clk:Clock, rst:Reset, ending:Bool) -> (bad:Bool@[], done:Bool@[]) {
   const addr:U32 = if ending { 0x10fe0 } else { 0x10040 }
   reg beats:U4 = 0
   reg demands:U2 = 0
@@ -89,21 +92,36 @@ pub mod hints(clk:Clock,rst:Reset,ending:Bool) -> (done:Bool@[], bad:Bool@[]) {
   reg waitCycles:U5 = 0
   reg fail:Bool = false
   const ready = demands == 0 or waitCycles >= 7
-  const d = cache<prefetch>(clk=clk,rst=rst,fetch=1,vaddr=addr,paddr=addr,killS1=0,killS2=0,
-      invalidate=0,aReady=U1(ready),dValid=U1(beats != 0 or accepted),dOpcode=(if beats != 0 { 1 } else { 2 }),
-      dData=0x55,dCorrupt=0)
+  const d = cache<prefetch>(clk=clk, rst=rst, fetch=1, vaddr=addr, paddr=addr, killS1=0, killS2=0, invalidate=0, aReady=U1(ready), dValid=U1(beats != 0 or accepted), dOpcode=(if beats != 0 {
+        1
+      } else {
+        2
+      }), dData=0x55, dCorrupt=0)
   if d.aValid != 0 {
     if d.hint {
-      if ending or d.aAddress != addr+32 or accepted { fail = true }
-      if ready { accepted = true }
+      if ending or d.aAddress != addr + 32 or accepted {
+        fail = true
+      }
+      if ready {
+        accepted = true
+      }
     } elif ready {
-      if d.aAddress != addr or demands != 0 { fail = true }
-      wrap demands += 1; beats = 8
+      if d.aAddress != addr or demands != 0 {
+        fail = true
+      }
+      wrap demands += 1
+      beats = 8
     }
   }
-  if demands != 0 and waitCycles < 16 { wrap waitCycles += 1 }
-  if !ending and demands != 0 and !accepted and !d.hint { fail = true }
-  if beats != 0 { wrap beats -= 1 }
+  if demands != 0 and waitCycles < 16 {
+    wrap waitCycles += 1
+  }
+  if !ending and demands != 0 and !accepted and !d.hint {
+    fail = true
+  }
+  if beats != 0 {
+    wrap beats -= 1
+  }
   done = d.valid != 0 and waitCycles == 16 and (ending or accepted)
   bad = fail or (d.valid != 0 and d.data != 0x55)
 }
@@ -113,6 +131,8 @@ test hints.page_boundary {
     d.ending = clock >= 35
     d.rst = clock == 0 or clock == 35
     step
-    if clock == 34 or clock == 69 { assert(d.done and !d.bad, "stable next-line hint, suppressed at the page boundary") }
+    if clock == 34 or clock == 69 {
+      assert(d.done and !d.bad, "stable next-line hint, suppressed at the page boundary")
+    }
   }
 }

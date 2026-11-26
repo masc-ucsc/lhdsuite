@@ -1,23 +1,22 @@
 // IEEE encodings use E exponent bits and F explicit fraction bits.
 // Finite values are sig * 2^scale; a subnormal shares the minimum normal scale.
-pub comb unpack<E,F>(bits:Unsigned(bits=1+E+F)) -> (sign:U1, sig:Unsigned(bits=F+1), scale:Signed(bits=E+1),
-    zero:Bool, inf:Bool, nan:Bool, signaling:Bool, subnormal:Bool) {
-  comptime const bias = (1 << (E-1))-1
-  const exponent = bits#[F..<(F+E)]
+pub comb unpack<E, F>(bits:Unsigned(bits=1 + E + F)) -> (inf:Bool, nan:Bool, scale:Signed(bits=E + 1), sig:Unsigned(bits=F + 1), sign:U1, signaling:Bool, subnormal:Bool, zero:Bool) {
+  comptime const bias = (1 << (E - 1)) - 1
+  const exponent = bits#[F..<(F + E)]
   const fraction = bits#[0..<F]
-  const special = exponent == (1 << E)-1
-  sign = bits#[F+E]
+  const special = exponent == (1 << E) - 1
+  sign = bits#[F + E]
   zero = exponent == 0 and fraction == 0
   inf = special and fraction == 0
   nan = special and fraction != 0
-  signaling = nan and fraction#[F-1] == 0
+  signaling = nan and fraction#[F - 1] == 0
   subnormal = exponent == 0 and fraction != 0
   sig = (U1(exponent != 0) << F) | fraction
   scale = (if exponent == 0 { 1 } else { exponent }) - bias - F
 }
 
 // Preserve the OR of all discarded bits in bit zero.
-comb shiftJam<N>(value:Unsigned(bits=N), distance:U16) -> (shifted:Unsigned(bits=N)) {
+comb shiftJam<N>(distance:U16, value:Unsigned(bits=N)) -> (shifted:Unsigned(bits=N)) {
   const amount = distance#[0..<std.clog2(N)]
   const r = value >> amount
   shifted = if distance >= N { U1(value != 0) } else { r | U1((r << amount) != value) }
@@ -25,41 +24,46 @@ comb shiftJam<N>(value:Unsigned(bits=N), distance:U16) -> (shifted:Unsigned(bits
 
 comb highest<N>(value:Unsigned(bits=N)) -> (index:Unsigned(bits=std.clog2(N))) {
   index = 0
-  for i in 0..<N { if value#[i] != 0 { index = i } }
+  for i in 0..<N {
+    if value#[i] != 0 {
+      index = i
+    }
+  }
 }
 
-comb roundUp(remainder:U3, odd:U1, sign:U1, rm:U3) -> (up:Bool) {
+comb roundUp(odd:U1, remainder:U3, rm:U3, sign:U1) -> (up:Bool) {
   const inexact = remainder != 0
   up = match rm {
     == 0 { remainder > 4 or (remainder == 4 and odd != 0) }
-    == 2 { sign != 0 and inexact } == 3 { sign == 0 and inexact }
-    == 4 { remainder >= 4 } else { false }
+    == 2 { sign != 0 and inexact }
+    == 3 { sign == 0 and inexact }
+    == 4 { remainder >= 4 }
+    else { false }
   }
 }
 
 // Round a nonnegative magnitude times 2^scale. The input carries at least
 // three rounding bits whenever a caller has already discarded precision.
-pub comb roundPack<E,F,N>(mag:Unsigned(bits=N), scale:S16, sign:U1, rm:U3)
-    -> (bits:Unsigned(bits=1+E+F), flags:U5) {
-  comptime const bias = (1 << (E-1))-1
-  comptime const emin = 1-bias
+pub comb roundPack<E, F, N>(mag:Unsigned(bits=N), rm:U3, scale:S16, sign:U1) -> (bits:Unsigned(bits=1 + E + F), flags:U5) {
+  comptime const bias = (1 << (E - 1)) - 1
+  comptime const emin = 1 - bias
   const top = highest<N>(value=mag)
   const exponent = scale + top
   const limited = if exponent < emin { emin } else { exponent }
-  const shift = limited-F-scale-3
-  const right = shiftJam<N>(value=mag, distance=shift#[0..<16])
-  const left = (-shift)#[0..<std.clog2(N+F+4)]
-  const ext:Unsigned(bits=F+4) = if shift > 0 { right#[0..<(F+4)] } else { (mag << left)#[0..<(F+4)] }
+  const shift = limited - F - scale - 3
+  const right = shiftJam<N>(distance=shift#[0..<16], value=mag)
+  const left = (-shift)#[0..<std.clog2(N + F + 4)]
+  const ext:Unsigned(bits=F + 4) = if shift > 0 { right#[0..<(F + 4)] } else { (mag << left)#[0..<(F + 4)] }
   const remainder = ext#[0..<3]
   const inexact = remainder != 0
-  const increment = roundUp(remainder=remainder, odd=ext#[3], sign=sign, rm=rm)
-  const rounded:Unsigned(bits=F+2) = ext#[3..<(F+4)] + U1(increment)
-  const carry = rounded#[F+1]
+  const increment = roundUp(odd=ext#[3], remainder, rm, sign)
+  const rounded:Unsigned(bits=F + 2) = ext#[3..<(F + 4)] + U1(increment)
+  const carry = rounded#[F + 1]
   const finalExp = limited + carry
   const sub = rounded#[F] == 0 and carry == 0
-  const signBits = sign << (E+F)
+  const signBits = sign << (E + F)
   const overflow = mag != 0 and finalExp > bias
-  const expField = if sub or mag == 0 { 0 } else { (finalExp+bias)#[0..<E] }
+  const expField = if sub or mag == 0 { 0 } else { (finalExp + bias)#[0..<E] }
   bits = signBits | (expField << F) | rounded#[0..<F]
   // With unbounded exponents the binade below emin has half the spacing.
   // Test tininess at that precision even when subnormal rounding reaches emin.
@@ -68,42 +72,41 @@ pub comb roundPack<E,F,N>(mag:Unsigned(bits=N), scale:S16, sign:U1, rm:U3)
   flags = U1(inexact) | (U1(tiny and inexact) << 1)
   if overflow {
     const toInfinity = rm == 0 or rm == 4 or (rm == 2 and sign != 0) or (rm == 3 and sign == 0)
-    bits = signBits | (if toInfinity { ((1 << E)-1) << F } else { (((1 << E)-1) << F)-1 })
+    bits = signBits | (if toInfinity { ((1 << E) - 1) << F } else { (((1 << E) - 1) << F) - 1 })
     flags = 5
   }
 }
 
 // a*b+c, with independent product and addend negation for the four FMA opcodes.
 // For a multiply, omit C; for an add, supply 1.0 as B. Round only after the sum.
-pub comb mulAdd<E,F>(a:Unsigned(bits=1+E+F), b:Unsigned(bits=1+E+F), c:Unsigned(bits=1+E+F),
-    negateProduct:U1, negateC:U1, multiplyOnly:Bool, rm:U3) -> (bits:Unsigned(bits=1+E+F), flags:U5) {
-  comptime const N = 2*F+7
-  comptime const infinity = ((1 << E)-1) << F
-  const x = unpack<E=E,F=F>(bits=a)
-  const y = unpack<E=E,F=F>(bits=b)
-  const z = unpack<E=E,F=F>(bits=c)
+pub comb mulAdd<E, F>(a:Unsigned(bits=1 + E + F), b:Unsigned(bits=1 + E + F), c:Unsigned(bits=1 + E + F), multiplyOnly:Bool, negateC:U1, negateProduct:U1, rm:U3) -> (bits:Unsigned(bits=1 + E + F), flags:U5) {
+  comptime const N = 2*F + 7
+  comptime const infinity = ((1 << E) - 1) << F
+  const x = unpack<E=E, F=F>(bits=a)
+  const y = unpack<E=E, F=F>(bits=b)
+  const z = unpack<E=E, F=F>(bits=c)
   const ps = x.sign ^ y.sign ^ negateProduct
   const cs = z.sign ^ negateC
-  const p:Unsigned(bits=2*F+2) = x.sig * y.sig
+  const p:Unsigned(bits=2*F + 2) = x.sig*y.sig
   const addend = if multiplyOnly { 0 } else { z.sig }
-  comptime const productWidth = 2*F+2
-  comptime const sigWidth = F+1
+  comptime const productWidth = 2*F + 2
+  comptime const sigWidth = F + 1
   const pi = highest<N=productWidth>(value=p)
   const ci = highest<N=sigWidth>(value=addend)
   const pExp = x.scale + y.scale + pi
   const cExp = z.scale + ci
   const exp = if p == 0 or (addend != 0 and cExp > pExp) { cExp } else { pExp }
-  const normP:Unsigned(bits=N) = (p << ((N-2-pi)#[0..<std.clog2(N)]))#[0..<N]
-  const normC:Unsigned(bits=N) = (addend << ((N-2-ci)#[0..<std.clog2(N)]))#[0..<N]
-  const alignedP = shiftJam<N>(value=normP, distance=(exp-pExp)#[0..<16])
-  const alignedC = shiftJam<N>(value=normC, distance=(exp-cExp)#[0..<16])
+  const normP:Unsigned(bits=N) = (p << (N - 2 - pi)#[0..<std.clog2(N)])#[0..<N]
+  const normC:Unsigned(bits=N) = (addend << (N - 2 - ci)#[0..<std.clog2(N)])#[0..<N]
+  const alignedP = shiftJam<N>(distance=(exp - pExp)#[0..<16], value=normP)
+  const alignedC = shiftJam<N>(distance=(exp - cExp)#[0..<16], value=normC)
   const same = ps == cs
   const largerP = alignedP >= alignedC
-  const magnitude:Unsigned(bits=N) = if same { (alignedP+alignedC)#[0..<N] }
-      elif largerP { (alignedP-alignedC)#[0..<N] } else { (alignedC-alignedP)#[0..<N] }
-  const resultSign = if multiplyOnly or same { ps } elif magnitude == 0 { U1(rm == 2) }
-      elif largerP { ps } else { cs }
-  const result = roundPack<E=E,F=F,N=N>(mag=magnitude, scale=exp-(N-2), sign=resultSign, rm=rm)
+  const magnitude:Unsigned(bits=N) = if same { (alignedP + alignedC)#[0..<N] }
+    elif largerP { (alignedP - alignedC)#[0..<N] }
+    else { (alignedC - alignedP)#[0..<N] }
+  const resultSign = if multiplyOnly or same { ps } elif magnitude == 0 { U1(rm == 2) } elif largerP { ps } else { cs }
+  const result = roundPack<E=E, F=F, N=N>(mag=magnitude, rm, scale=exp - (N - 2), sign=resultSign)
   const productInf = x.inf or y.inf
   const invalidProduct = (x.inf and y.zero) or (x.zero and y.inf)
   const invalidSum = !multiplyOnly and productInf and !x.nan and !y.nan and z.inf and ps != cs
@@ -111,97 +114,96 @@ pub comb mulAdd<E,F>(a:Unsigned(bits=1+E+F), b:Unsigned(bits=1+E+F), c:Unsigned(
   bits = result.bits
   flags = result.flags
   if invalid or x.nan or y.nan or (!multiplyOnly and z.nan) {
-    bits = infinity | (1 << (F-1))
+    bits = infinity | (1 << (F - 1))
     flags = U1(invalid) << 4
   } elif productInf or (!multiplyOnly and z.inf) {
-    bits = ((if productInf { ps } else { cs }) << (E+F)) | infinity
+    bits = ((if productInf { ps } else { cs }) << (E + F)) | infinity
     flags = 0
   }
 }
 
 // Restoring division and digit-by-digit square root share the compare and subtract.
 // Each iteration emits one result bit. The final remainder supplies the sticky bit.
-pub comb divSqrt<E,F>(a:Unsigned(bits=1+E+F), b:Unsigned(bits=1+E+F), sqrt:Bool, rm:U3)
-    -> (bits:Unsigned(bits=1+E+F), flags:U5) {
-  comptime const S = F+1
-  comptime const R = F+5
-  comptime const infinity = ((1 << E)-1) << F
-  const x = unpack<E=E,F=F>(bits=a)
-  const y = unpack<E=E,F=F>(bits=b)
+pub comb divSqrt<E, F>(a:Unsigned(bits=1 + E + F), b:Unsigned(bits=1 + E + F), rm:U3, sqrt:Bool) -> (bits:Unsigned(bits=1 + E + F), flags:U5) {
+  comptime const S = F + 1
+  comptime const R = F + 5
+  comptime const infinity = ((1 << E) - 1) << F
+  const x = unpack<E=E, F=F>(bits=a)
+  const y = unpack<E=E, F=F>(bits=b)
   const xi = highest<N=S>(value=x.sig)
   const yi = highest<N=S>(value=y.sig)
-  const nx = (x.sig << (F-xi)#[0..<std.clog2(S)])#[0..<S]
-  const ny = (y.sig << (F-yi)#[0..<std.clog2(S)])#[0..<S]
+  const nx = (x.sig << (F - xi)#[0..<std.clog2(S)])#[0..<S]
+  const ny = (y.sig << (F - yi)#[0..<std.clog2(S)])#[0..<S]
   const xExp = x.scale + xi
   const yExp = y.scale + yi
   const sign = if sqrt { x.sign } else { x.sign ^ y.sign }
-  mut rad:Unsigned(bits=2*R) = nx << (F+8+xExp#[0])
-  mut rem:Unsigned(bits=R+2) = if sqrt { 0 } else { nx }
+  mut rad:Unsigned(bits=2*R) = nx << (F + 8 + xExp#[0])
+  mut rem:Unsigned(bits=R + 2) = if sqrt { 0 } else { nx }
   mut root:Unsigned(bits=R) = 0
   for i in 0..<R {
-    const next = if sqrt { (rem << 2) | rad#[(2*R-2)..<(2*R)] } else { rem }
+    const next = if sqrt { (rem << 2) | rad#[(2*R - 2)..<(2*R)] } else { rem }
     const trial = if sqrt { (root << 2) | 1 } else { ny }
     const take = next >= trial
-    const diff = if take { next-trial } else { next }
-    rem = (if sqrt { diff } else { diff << 1 })#[0..<(R+2)]
+    const diff = if take { next - trial } else { next }
+    rem = (if sqrt { diff } else { diff << 1 })#[0..<(R + 2)]
     root = ((root << 1) | U1(take))#[0..<R]
     rad = (rad << 2)#[0..<(2*R)]
   }
-  const scale = (if sqrt { xExp >> 1 } else { xExp-yExp })-(R-1)
+  const scale = (if sqrt { xExp >> 1 } else { xExp - yExp }) - (R - 1)
   const value = root | U1(rem != 0)
-  const result = roundPack<E=E,F=F,N=R>(mag=value, scale=scale, sign=sign, rm=rm)
+  const result = roundPack<E=E, F=F, N=R>(mag=value, rm, scale, sign)
   const negative = sqrt and x.sign != 0 and !x.nan and !x.zero
   const invalid = negative or x.signaling or (!sqrt and (y.signaling or (x.inf and y.inf) or (x.zero and y.zero)))
   bits = result.bits
   flags = result.flags
   if invalid or x.nan or (!sqrt and y.nan) {
-    bits = infinity | (1 << (F-1))
+    bits = infinity | (1 << (F - 1))
     flags = U1(invalid) << 4
   } elif x.inf or (!sqrt and y.zero) {
-    bits = (sign << (E+F)) | infinity
+    bits = (sign << (E + F)) | infinity
     flags = U1(!sqrt and y.zero and !x.inf) << 3
   } elif x.zero or (!sqrt and y.inf) {
-    bits = sign << (E+F)
+    bits = sign << (E + F)
     flags = 0
   }
 }
 
-pub comb convertFormat<E,F,TE,TF>(a:Unsigned(bits=1+E+F), rm:U3) -> (bits:Unsigned(bits=1+TE+TF), flags:U5) {
-  comptime const S = F+1
-  comptime const infinity = ((1 << TE)-1) << TF
-  const x = unpack<E=E,F=F>(bits=a)
-  const result = roundPack<E=TE,F=TF,N=S>(mag=x.sig, scale=x.scale, sign=x.sign, rm=rm)
+pub comb convertFormat<E, F, TE, TF>(a:Unsigned(bits=1 + E + F), rm:U3) -> (bits:Unsigned(bits=1 + TE + TF), flags:U5) {
+  comptime const S = F + 1
+  comptime const infinity = ((1 << TE) - 1) << TF
+  const x = unpack<E=E, F=F>(bits=a)
+  const result = roundPack<E=TE, F=TF, N=S>(mag=x.sig, rm, scale=x.scale, sign=x.sign)
   bits = result.bits
   flags = result.flags
   if x.nan {
-    bits = infinity | (1 << (TF-1))
+    bits = infinity | (1 << (TF - 1))
     flags = U1(x.signaling) << 4
   } elif x.inf {
-    bits = (x.sign << (TE+TF)) | infinity
+    bits = (x.sign << (TE + TF)) | infinity
     flags = 0
   }
 }
 
-pub comb fromInteger<E,F,W>(a:Unsigned(bits=W), isSigned:Bool, rm:U3) -> (bits:Unsigned(bits=1+E+F), flags:U5) {
-  const sign = a#[W-1] & U1(isSigned)
+pub comb fromInteger<E, F, W>(a:Unsigned(bits=W), isSigned:Bool, rm:U3) -> (bits:Unsigned(bits=1 + E + F), flags:U5) {
+  const sign = a#[W - 1] & U1(isSigned)
   const mag = if sign != 0 { (-a)#[0..<W] } else { a }
-  const result = roundPack<E=E,F=F,N=W>(mag=mag, scale=0, sign=sign, rm=rm)
+  const result = roundPack<E=E, F=F, N=W>(mag, rm, scale=0, sign)
   bits = result.bits
   flags = result.flags
 }
 
-pub comb toInteger<E,F,W>(a:Unsigned(bits=1+E+F), isSigned:Bool, rm:U3) -> (bits:Unsigned(bits=W), flags:U5) {
-  comptime const S = F+1
-  comptime const N = F+4
-  const x = unpack<E=E,F=F>(bits=a)
+pub comb toInteger<E, F, W>(a:Unsigned(bits=1 + E + F), isSigned:Bool, rm:U3) -> (bits:Unsigned(bits=W), flags:U5) {
+  comptime const S = F + 1
+  comptime const N = F + 4
+  const x = unpack<E=E, F=F>(bits=a)
   const exp = x.scale + highest<N=S>(value=x.sig)
-  const right = shiftJam<N>(value=x.sig << 3, distance=(-x.scale)#[0..<16])
-  const left = x.scale#[0..<std.clog2(W+1)]
-  const ext:Unsigned(bits=W+3) = if x.scale < 0 { right#[0..<(W+3)] } else { (x.sig << (left+3))#[0..<(W+3)] }
+  const right = shiftJam<N>(distance=(-x.scale)#[0..<16], value=x.sig << 3)
+  const left = x.scale#[0..<std.clog2(W + 1)]
+  const ext:Unsigned(bits=W + 3) = if x.scale < 0 { right#[0..<(W + 3)] } else { (x.sig << (left + 3))#[0..<(W + 3)] }
   const fraction = ext#[0..<3]
-  const mag = ext#[3..<(W+3)] + U1(roundUp(remainder=fraction, odd=ext#[3], sign=x.sign, rm=rm))
+  const mag = ext#[3..<(W + 3)] + U1(roundUp(odd=ext#[3], remainder=fraction, rm, sign=x.sign))
   const negative = x.sign != 0 and !x.nan
-  const limit = if isSigned { (1 << (W-1))-U1(!negative) } elif negative { 0 } else { (1 << W)-1 }
+  const limit = if isSigned { (1 << (W - 1)) - U1(!negative) } elif negative { 0 } else { (1 << W) - 1 }
   const invalid = x.nan or x.inf or (!x.zero and exp >= W) or mag > limit
   const bounded = if invalid { limit } else { mag }
   bits = (if negative { -bounded } else { bounded })#[0..<W]
@@ -209,26 +211,27 @@ pub comb toInteger<E,F,W>(a:Unsigned(bits=1+E+F), isSigned:Bool, rm:U3) -> (bits
 }
 
 // RISC-V FCLASS distinguishes signed zeros, subnormals, infinities and NaN kinds.
-pub comb classify<E,F>(a:Unsigned(bits=1+E+F)) -> (mask:U10) {
-  const x = unpack<E=E,F=F>(bits=a)
+pub comb classify<E, F>(a:Unsigned(bits=1 + E + F)) -> (mask:U10) {
+  const x = unpack<E=E, F=F>(bits=a)
   const kind = if x.nan { if x.signaling { 8 } else { 9 } }
-      elif x.inf { if x.sign != 0 { 0 } else { 7 } } elif x.zero { if x.sign != 0 { 3 } else { 4 } }
-      elif x.subnormal { if x.sign != 0 { 2 } else { 5 } } elif x.sign != 0 { 1 } else { 6 }
+    elif x.inf { if x.sign != 0 { 0 } else { 7 } }
+    elif x.zero { if x.sign != 0 { 3 } else { 4 } }
+    elif x.subnormal { if x.sign != 0 { 2 } else { 5 } }
+    elif x.sign != 0 { 1 }
+    else { 6 }
   mask = (1 << kind)#[0..<10]
 }
 
-pub comb compare<E,F>(a:Unsigned(bits=1+E+F), b:Unsigned(bits=1+E+F), fn:U3, minMax:Bool)
-    -> (bits:Unsigned(bits=1+E+F), flags:U5) {
-  const x = unpack<E=E,F=F>(bits=a)
-  const y = unpack<E=E,F=F>(bits=b)
+pub comb compare<E, F>(a:Unsigned(bits=1 + E + F), b:Unsigned(bits=1 + E + F), fn:U3, minMax:Bool) -> (bits:Unsigned(bits=1 + E + F), flags:U5) {
+  const x = unpack<E=E, F=F>(bits=a)
+  const y = unpack<E=E, F=F>(bits=b)
   const unordered = x.nan or y.nan
   const less = if x.sign != y.sign { x.sign != 0 } elif x.sign != 0 { a > b } else { a < b }
   const equal = a == b or (x.zero and y.zero)
   flags = U1(x.signaling or y.signaling or (!minMax and fn != 2 and unordered)) << 4
   if minMax {
     const takeA = if fn == 1 { !less } else { less }
-    bits = if x.nan and y.nan { (((1 << E)-1) << F) | (1 << (F-1)) }
-        elif x.nan { b } elif y.nan or takeA { a } else { b }
+    bits = if x.nan and y.nan { (((1 << E) - 1) << F) | (1 << (F - 1)) } elif x.nan { b } elif y.nan or takeA { a } else { b }
   } else {
     bits = U1(!unordered and (if fn == 2 { equal } elif fn == 1 { less and !equal } else { less or equal }))
   }

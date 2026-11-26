@@ -2,16 +2,9 @@ const metadata = import("ClientMetadata")
 
 // One outstanding AcquireBlock. Reserve the destination way until done. A
 // GrantAck can leave after the first D beat, independently of later SRAM writes.
-pub mod CacheRefill<W=32, SOURCE=1, SINK_BITS=4, BLOCK=64>(clk:Clock, rst:Reset,
-    request:Bool, address:U32, state:U2, write:Bool, writeIntent:Bool,
-    aReady:Bool, dValid:Bool, dOpcode:U3, dSource:U5, dSink:Unsigned(bits=SINK_BITS),
-    dCap:U2, dData:Unsigned(bits=W), dDenied:Bool, dCorrupt:Bool, eReady:Bool, ramReady:Bool)
-    -> (ready:Bool@[], lineAddress:U32@[], aValid:Bool@[], aParam:U2@[], aSource:U5@[],
-        dReady:Bool@[], eValid:Bool@[], eSink:Unsigned(bits=SINK_BITS)@[],
-        fill:Bool@[], fillBeat:Unsigned(bits=std.clog2(BLOCK*8/W))@[], fillData:Unsigned(bits=W)@[],
-        fillCorrupt:Bool@[], done:Bool@[], error:Bool@[], install:Bool@[], newState:U2@[]) {
+pub mod CacheRefill<W=32, SOURCE=1, SINK_BITS=4, BLOCK=64>(aReady:Bool, address:U32, clk:Clock, dCap:U2, dCorrupt:Bool, dData:Unsigned(bits=W), dDenied:Bool, dOpcode:U3, dSink:Unsigned(bits=SINK_BITS), dSource:U5, dValid:Bool, eReady:Bool, ramReady:Bool, request:Bool, rst:Reset, state:U2, write:Bool, writeIntent:Bool) -> (ready:Bool@[], lineAddress:U32@[], aValid:Bool@[], aParam:U2@[], aSource:U5@[], dReady:Bool@[], eValid:Bool@[], eSink:Unsigned(bits=SINK_BITS)@[], fill:Bool@[], fillBeat:Unsigned(bits=std.clog2(BLOCK*8/W))@[], fillData:Unsigned(bits=W)@[], fillCorrupt:Bool@[], done:Bool@[], error:Bool@[], install:Bool@[], newState:U2@[]) {
   cassert(W == 32 or W == 64)
-  comptime const beats = BLOCK * 8 / W
+  comptime const beats = BLOCK*8/W
   reg issuing:Bool = false
   reg receiving:Bool = false
   reg base:U32 = nil
@@ -34,7 +27,10 @@ pub mod CacheRefill<W=32, SOURCE=1, SINK_BITS=4, BLOCK=64>(clk:Clock, rst:Reset,
   aParam = grow
   aValid = issuing and !rst
   const sent = aValid and aReady
-  if sent { issuing = false; receiving = true }
+  if sent {
+    issuing = false
+    receiving = true
+  }
 
   const hasData = dOpcode == 5
   const grant = dSource == SOURCE and (hasData or dOpcode == 4)
@@ -45,16 +41,31 @@ pub mod CacheRefill<W=32, SOURCE=1, SINK_BITS=4, BLOCK=64>(clk:Clock, rst:Reset,
   fillBeat = beat
   fillData = dData
   fillCorrupt = dCorrupt
-  done = take and (!hasData or beat == beats-1)
+  done = take and (!hasData or beat == beats - 1)
   newState = metadata.grant(cap=dCap, write=store, exclusive=grow != 0)
   error = done and (dDenied or newState == metadata.invalid)
   install = done and !error
-  if take { wrap beat += 1 }
-  if done { receiving = false; beat = 0 }
+  if take {
+    wrap beat += 1
+  }
+  if done {
+    receiving = false
+    beat = 0
+  }
 
-  if take and beat == 0 { ack = true; sink = dSink }
+  if take and beat == 0 {
+    ack = true
+    sink = dSink
+  }
   eValid = ack and !rst
   eSink = sink
-  if eValid and eReady { ack = false }
-  if rst { issuing = false; receiving = false; ack = false; beat = 0 }
+  if eValid and eReady {
+    ack = false
+  }
+  if rst {
+    issuing = false
+    receiving = false
+    ack = false
+    beat = 0
+  }
 }

@@ -2,35 +2,32 @@ const rowArray = import("DCacheDataArray.DCacheDataArray")
 const tiny = import("RocketConfig.tiny")
 
 // A way reads its tag and data in parallel, with one cycle of SRAM latency.
-mod way<C>(clk:Clock, clear:Reset, read:U1, vaddr:U32, paddr:U32, fillAddr:U32, fillIndex:U32,
-    beat:Unsigned(bits=std.clog2(C.icacheBlockBytes/(C.dLen/8))), fill:U1, last:U1, invalidated:U1, error:U1, wdata:Unsigned(bits=C.dLen))
-    -> (hit:U1@[], fault:U1@[], data:Unsigned(bits=C.dLen)@[]) {
+mod way<C>(clk:Clock, clear:Reset, read:U1, vaddr:U32, paddr:U32, fillAddr:U32, fillIndex:U32, beat:Unsigned(bits=std.clog2(C.icacheBlockBytes/(C.dLen/8))), fill:U1, last:U1, invalidated:U1, error:U1, wdata:Unsigned(bits=C.dLen)) -> (data:Unsigned(bits=C.dLen)@[], fault:U1@[], hit:U1@[]) {
   comptime const sets = C.icacheSets
-  comptime const indexEnd = std.clog2(C.icacheBlockBytes * sets)
+  comptime const indexEnd = std.clog2(C.icacheBlockBytes*sets)
   comptime const tagStart = if C.useVM and indexEnd > 12 { 12 } else { indexEnd }
   comptime const tagBits = 32 - tagStart
-  reg tags:[sets]Unsigned(bits=tagBits+1):[ordering="old", __store_clock_pin=clk]
+  reg tags:[sets]Unsigned(bits=tagBits + 1):[__store_clock_pin=clk, ordering="old"]
   reg present:Unsigned(bits=sets):[clock_pin=clk, reset_pin=clear] = 0
   reg previous:U32:[clock_pin=clk]
   previous = vaddr
-  const set = fillIndex % sets
-  if fill != 0 { present#[set] = last & ~invalidated }
-  if (fill & last) != 0 { tags[set] = (error << tagBits) | (fillAddr >> tagStart) }
-  const lookup = (previous >> std.clog2(C.icacheBlockBytes)) % sets
+  const set = fillIndex%sets
+  if fill != 0 {
+    present#[set] = last & ~invalidated
+  }
+  if (fill & last) != 0 {
+    tags[set] = (error << tagBits) | (fillAddr >> tagStart)
+  }
+  const lookup = (previous >> std.clog2(C.icacheBlockBytes))%sets
   const tag = tags[lookup]
   hit = present#[lookup] & U1(tag#[0..<tagBits] == (paddr >> tagStart))
   fault = tag#[tagBits]
-  const byteAddr = if fill != 0 { (set * C.icacheBlockBytes) | (beat << std.clog2(C.dLen/8)) } else { vaddr }
-  data = rowArray<W=C.dLen, CAPACITY=(sets*C.icacheBlockBytes)>(clk=clk, valid=read | fill,
-      address=byteAddr#[0..<indexEnd], write=fill & ~invalidated, wdata=wdata, mask=(1 << (C.dLen/8))-1)
+  const byteAddr = if fill != 0 { (set*C.icacheBlockBytes) | (beat << std.clog2(C.dLen/8)) } else { vaddr }
+  data = rowArray<CAPACITY=(sets*C.icacheBlockBytes), W=C.dLen>(clk=clk, valid=read | fill, address=byteAddr#[0..<indexEnd], write=fill & ~invalidated, wdata=wdata, mask=(1 << (C.dLen/8)) - 1)
 }
 
-pub mod ICache<C=tiny>::[timecheck=false](clk:Clock, rst:Reset,
-    fetch:U1, vaddr:U32, paddr:U32, killS1:U1, killS2:U1, invalidate:U1,
-    aReady:U1, dValid:U1, dOpcode:U4, dData:Unsigned(bits=C.dLen), dCorrupt:U1, prefetchAllowed:Bool=true)
-    -> (busy:Bool@[], hint:Bool@[], aValid:U1@[], aAddress:U32@[], acquired:U1@[],
-        valid:U1@[], data:U32@[], accessFault:U1@[]) {
-  comptime const beatsPerLine = C.icacheBlockBytes / (C.dLen / 8)
+pub mod ICache<C=tiny>::[timecheck=false](aReady:U1, clk:Clock, dCorrupt:U1, dData:Unsigned(bits=C.dLen), dOpcode:U4, dValid:U1, fetch:U1, invalidate:U1, killS1:U1, killS2:U1, paddr:U32, prefetchAllowed:Bool=true, rst:Reset, vaddr:U32) -> (aAddress:U32@[], aValid:U1@[], accessFault:U1@[], acquired:U1@[], busy:Bool@[], data:U32@[], hint:Bool@[], valid:U1@[]) {
+  comptime const beatsPerLine = C.icacheBlockBytes/(C.dLen/8)
   reg s1Valid:U1 = 0
   reg s1Address:U32
   reg s2Valid:U1 = 0
@@ -50,33 +47,35 @@ pub mod ICache<C=tiny>::[timecheck=false](clk:Clock, rst:Reset,
   wire sending:Bool = nil
   const start = request & aReady & U1(!sending)
   const hasData = dValid & dOpcode#[0]
-  const last = U1(beat == beatsPerLine-1)
+  const last = U1(beat == beatsPerLine - 1)
   const read = fetch & ~hasData
   const error = dCorrupt | (U1(beat != 0) & fillError)
 
   // A way larger than one page uses virtual index bits above the page offset.
   // Hold those bits with the refill and compare the entire physical page tag.
   mut fillIndex:U32 = fillAddr >> std.clog2(C.icacheBlockBytes)
-  if C.useVM and C.icacheSets * C.icacheBlockBytes > 4096 {
+  if C.useVM and C.icacheSets*C.icacheBlockBytes > 4096 {
     reg virtualSet:Unsigned(bits=std.clog2(C.icacheSets))
-    if (s1Valid & available) != 0 { virtualSet = (s1Address >> std.clog2(C.icacheBlockBytes)) % C.icacheSets }
+    if (s1Valid & available) != 0 {
+      virtualSet = (s1Address >> std.clog2(C.icacheBlockBytes))%C.icacheSets
+    }
     fillIndex = virtualSet
   }
   mut chosen = 0
   if C.icacheWays > 1 {
     // Advance replacement for this set only after the line finishes.
     reg victim:[C.icacheSets]Unsigned(bits=std.clog2(C.icacheWays)):[ordering="old"] = 0
-    const set = fillIndex % C.icacheSets
+    const set = fillIndex%C.icacheSets
     chosen = victim[set]
-    if (hasData & last) != 0 { victim[set] = (victim[set] + 1) % C.icacheWays }
+    if (hasData & last) != 0 {
+      victim[set] = (victim[set] + 1)%C.icacheWays
+    }
   }
   mut hit:U1 = 0
   mut fault:U1 = 0
   mut word:Unsigned(bits=C.dLen) = 0
   for i in 0..<C.icacheWays {
-    const w = way<C>(clk=clk, clear=rst or invalidate != 0, read=read, vaddr=vaddr,
-        paddr=paddr, fillAddr=fillAddr, fillIndex=fillIndex, beat=beat, fill=hasData & U1(chosen == i), last=last,
-        invalidated=invalidated, error=error, wdata=dData)
+    const w = way<C>(beat, clear=rst or invalidate != 0, clk, error, fill=hasData & U1(chosen == i), fillAddr, fillIndex, invalidated, last, paddr, read, vaddr, wdata=dData)
     if w.hit != 0 {
       hit = 1
       word = w.data
@@ -86,12 +85,20 @@ pub mod ICache<C=tiny>::[timecheck=false](clk:Clock, rst:Reset,
   s1Valid = read
   s2Valid = s1Valid & ~killS1
   filling = (start | filling) & ~(hasData & last)
-  if hasData != 0 { beat = if last != 0 { 0 } else { (beat+1) % beatsPerLine } }
+  if hasData != 0 {
+    beat = if last != 0 { 0 } else { (beat + 1)%beatsPerLine }
+  }
   canRefill = available
   invalidated = filling & (invalidate | invalidated)
-  if read != 0 { s1Address = vaddr }
-  if (s1Valid & available) != 0 { fillAddr = paddr }
-  if hasData != 0 { fillError = error }
+  if read != 0 {
+    s1Address = vaddr
+  }
+  if (s1Valid & available) != 0 {
+    fillAddr = paddr
+  }
+  if hasData != 0 {
+    fillError = error
+  }
   s2Hit = hit
   if s1Valid != 0 {
     s2Data = if C.dLen == 64 and s1Address#[2] != 0 { word#[32..<64] } else { word#[0..<32] }
@@ -100,23 +107,33 @@ pub mod ICache<C=tiny>::[timecheck=false](clk:Clock, rst:Reset,
   valid = s2Valid & s2Hit
   data = s2Data
   accessFault = s2Error
-  const line = fillAddr & ~(C.icacheBlockBytes-1)
+  const line = fillAddr & ~(C.icacheBlockBytes - 1)
   hint = false
   busy = (filling | s1Valid | s2Valid | request) != 0
   aAddress = line
   if C.icachePrefetch {
     reg eligible:Bool = false
-    if (s1Valid & available) != 0 { eligible = prefetchAllowed }
+    if (s1Valid & available) != 0 {
+      eligible = prefetchAllowed
+    }
     reg send:Bool = false
     reg outstanding:Bool = false
     reg nextLine:U32 = nil
     const next:U32 = (line + C.icacheBlockBytes)#[0..<32]
     if start != 0 and eligible and !outstanding and (line >> 12) == (next >> 12) {
-      send = true; nextLine = next
+      send = true
+      nextLine = next
     }
-    if send and aReady != 0 { send = false; outstanding = true }
-    if dValid != 0 and dOpcode == 2 { outstanding = false }
-    if send { aAddress = nextLine }
+    if send and aReady != 0 {
+      send = false
+      outstanding = true
+    }
+    if dValid != 0 and dOpcode == 2 {
+      outstanding = false
+    }
+    if send {
+      aAddress = nextLine
+    }
     busy = busy or send or outstanding
     hint = send
   }

@@ -6,29 +6,13 @@ comb responseSize(fragment:U4, size:U2) -> (result:U3) {
   const byteMask:U2 = ~(3 << size)#[0..<2]
   const mask:U6 = (fragment << 2) | byteMask
   const boundary:U7 = ((mask << 1) | 1) & ~U7(mask)
-  result = (U1((boundary & 0x70) != 0) << 2) |
-           (U1((boundary & 0x4c) != 0) << 1) | U1((boundary & 0x2a) != 0)
+  result = (U1((boundary & 0x70) != 0) << 2) | (U1((boundary & 0x4c) != 0) << 1) | U1((boundary & 0x2a) != 0)
 }
 
-pub mod TLFragmenter<ADDR=28, EARLY_ACK=false, READ_ONLY=false>::[timecheck=false](
-    clock:Clock, reset:Reset, auto_in_a_valid:U1, auto_in_a_bits_opcode:U4,
-    auto_in_a_bits_param:U3, auto_in_a_bits_size:U3, auto_in_a_bits_source:U5,
-    auto_in_a_bits_address:Unsigned(bits=ADDR), auto_in_a_bits_mask:U4,
-    auto_in_a_bits_data:U32, auto_in_a_bits_corrupt:U1, auto_in_d_ready:U1,
-    auto_out_a_ready:U1, auto_out_d_valid:U1, auto_out_d_bits_opcode:U4=1,
-    auto_out_d_bits_size:U2, auto_out_d_bits_source:Unsigned(bits=10+U1(EARLY_ACK)),
-    auto_out_d_bits_data:U32) -> (
-    auto_in_a_ready:U1@[], auto_in_d_valid:U1@[], auto_in_d_bits_opcode:U4@[],
-    auto_in_d_bits_size:U3@[], auto_in_d_bits_source:U5@[], auto_in_d_bits_data:U32@[],
-    auto_out_a_valid:U1@[], auto_out_a_bits_opcode:U4@[], auto_out_a_bits_param:U3@[],
-    auto_out_a_bits_size:U2@[], auto_out_a_bits_source:Unsigned(bits=10+U1(EARLY_ACK))@[],
-    auto_out_a_bits_address:Unsigned(bits=ADDR)@[], auto_out_a_bits_mask:U4@[],
-    auto_out_a_bits_data:U32@[], auto_out_a_bits_corrupt:U1@[], auto_out_d_ready:U1@[]) {
+pub mod TLFragmenter<ADDR=28, EARLY_ACK=false, READ_ONLY=false>::[timecheck=false](auto_in_a_bits_address:Unsigned(bits=ADDR), auto_in_a_bits_corrupt:U1, auto_in_a_bits_data:U32, auto_in_a_bits_mask:U4, auto_in_a_bits_opcode:U4, auto_in_a_bits_param:U3, auto_in_a_bits_size:U3, auto_in_a_bits_source:U5, auto_in_a_valid:U1, auto_in_d_ready:U1, auto_out_a_ready:U1, auto_out_d_bits_data:U32, auto_out_d_bits_opcode:U4=1, auto_out_d_bits_size:U2, auto_out_d_bits_source:Unsigned(bits=10 + U1(EARLY_ACK)), auto_out_d_valid:U1, clock:Clock, reset:Reset) -> (auto_in_a_ready:U1@[], auto_in_d_bits_data:U32@[], auto_in_d_bits_opcode:U4@[], auto_in_d_bits_size:U3@[], auto_in_d_bits_source:U5@[], auto_in_d_valid:U1@[], auto_out_a_bits_address:Unsigned(bits=ADDR)@[], auto_out_a_bits_corrupt:U1@[], auto_out_a_bits_data:U32@[], auto_out_a_bits_mask:U4@[], auto_out_a_bits_opcode:U4@[], auto_out_a_bits_param:U3@[], auto_out_a_bits_size:U2@[], auto_out_a_bits_source:Unsigned(bits=10 + U1(EARLY_ACK))@[], auto_out_a_valid:U1@[], auto_out_d_ready:U1@[]) {
   type Header = (opcode:U4, param:U3, size:U3, source:U5, address:Unsigned(bits=ADDR), corrupt:U1)
   wire again:U1 = nil
-  const beat = Repeater<Header>(clk=clock, rst=reset, offer=auto_in_a_valid, take=auto_out_a_ready,
-      again=again, payload=(opcode=auto_in_a_bits_opcode, param=auto_in_a_bits_param, size=auto_in_a_bits_size,
-      source=auto_in_a_bits_source, address=auto_in_a_bits_address, corrupt=auto_in_a_bits_corrupt))
+  const beat = Repeater<Header>(clk=clock, rst=reset, offer=auto_in_a_valid, take=auto_out_a_ready, again=again, payload=(address=auto_in_a_bits_address, corrupt=auto_in_a_bits_corrupt, opcode=auto_in_a_bits_opcode, param=auto_in_a_bits_param, size=auto_in_a_bits_size, source=auto_in_a_bits_source))
   reg remaining:U4 = 0
   reg requestToggle:U1 = nil
   reg responseToggle:U1 = 0
@@ -47,8 +31,12 @@ pub mod TLFragmenter<ADDR=28, EARLY_ACK=false, READ_ONLY=false>::[timecheck=fals
   auto_out_a_bits_mask = if beat.full != 0 { 15 } else { auto_in_a_bits_mask }
   auto_out_a_bits_data = auto_in_a_bits_data
   auto_out_a_bits_corrupt = beat.head.corrupt
-  if remaining == 0 { requestToggle = responseToggle }
-  if beat.valid != 0 and auto_out_a_ready != 0 { remaining = fragment }
+  if remaining == 0 {
+    requestToggle = responseToggle
+  }
+  if beat.valid != 0 and auto_out_a_ready != 0 {
+    remaining = fragment
+  }
 
   reg acksLeft:U4 = 0
   reg savedSize:U3 = nil
@@ -65,9 +53,15 @@ pub mod TLFragmenter<ADDR=28, EARLY_ACK=false, READ_ONLY=false>::[timecheck=fals
   auto_in_d_bits_source = auto_out_d_bits_source >> (5 + U1(EARLY_ACK))
   auto_in_d_bits_data = auto_out_d_bits_data
   const accept = auto_out_d_valid != 0 and auto_out_d_ready != 0
-  if accept and first { savedSize = size }
+  if accept and first {
+    savedSize = size
+  }
   if accept {
-    if first { acksLeft = responseFrag; responseToggle = auto_out_d_bits_source#[4] }
-    elif READ_ONLY or hasData or auto_out_d_bits_size == 2 { wrap acksLeft -= 1 }
+    if first {
+      acksLeft = responseFrag
+      responseToggle = auto_out_d_bits_source#[4]
+    } elif READ_ONLY or hasData or auto_out_d_bits_size == 2 {
+      wrap acksLeft -= 1
+    }
   }
 }

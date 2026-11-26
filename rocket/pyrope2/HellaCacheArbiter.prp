@@ -1,19 +1,6 @@
 // The low tag bit selects a client at response time. Pipeline ownership selects
 // the stage-one store data and routes nacks two cycles after a request.
-pub mod HellaCacheArbiter<W=32, WALK=false, XLEN=W, EXT=false>::[timecheck=false](clk:Clock, rst:Reset,
-    cpuValid:U1, cpuAddress:Unsigned(bits=W), cpuTag:U7, cpuCommand:U5, cpuSize:U2,
-    cpuSigned:U1, cpuPrivilege:U2, cpuVirtual:U1, cpuKill:U1, cpuData:Unsigned(bits=W),
-    slaveValid:U1, slaveAddress:U32, slaveCommand:U5, slaveSize:U2, slaveKill:U1,
-    slaveData:Unsigned(bits=W), slaveMask:Unsigned(bits=W/8),
-    cacheReady:U1, cacheNack:U1, cacheValid:U1, cacheTag:U7, cacheLoadError:U1, cacheResponseError:U1,
-    accValid:Bool=false, accWrite:Bool=false, accAddress:U32=0, accSize:U2=0, accPrivilege:U2=0,
-    accData:Unsigned(bits=W)=0, cacheStageError:U1=0, walkRead:Bool=false, walkAddress:U32=0)
-    -> (accReady:Bool@[], accDone:Bool@[], accError:Bool@[], cpuReady:U1@[], cpuNack:U1@[], cpuResponse:U1@[], cpuResponseTag:U7@[], cpuStage2:U1@[],
-        slaveReady:U1@[], slaveNack:U1@[], slaveResponse:U1@[],
-        walkReady:Bool@[], walkDone:Bool@[], walkError:Bool@[],
-        valid:U1@[], address:Unsigned(bits=W)@[], tag:U7@[], command:U5@[], size:U2@[],
-        isSigned:U1@[], privilege:U2@[], dv:U1@[], physical:U1@[], skipException:U1@[],
-        kill:U1@[], data:Unsigned(bits=W)@[], mask:Unsigned(bits=W/8)@[]) {
+pub mod HellaCacheArbiter<W=32, WALK=false, XLEN=W, EXT=false>::[timecheck=false](accAddress:U32=0, accData:Unsigned(bits=W)=0, accPrivilege:U2=0, accSize:U2=0, accValid:Bool=false, accWrite:Bool=false, cacheLoadError:U1, cacheNack:U1, cacheReady:U1, cacheResponseError:U1, cacheStageError:U1=0, cacheTag:U7, cacheValid:U1, clk:Clock, cpuAddress:Unsigned(bits=W), cpuCommand:U5, cpuData:Unsigned(bits=W), cpuKill:U1, cpuPrivilege:U2, cpuSigned:U1, cpuSize:U2, cpuTag:U7, cpuValid:U1, cpuVirtual:U1, rst:Reset, slaveAddress:U32, slaveCommand:U5, slaveData:Unsigned(bits=W), slaveKill:U1, slaveMask:Unsigned(bits=W/8), slaveSize:U2, slaveValid:U1, walkAddress:U32=0, walkRead:Bool=false) -> (accDone:Bool@[], accError:Bool@[], accReady:Bool@[], address:Unsigned(bits=W)@[], command:U5@[], cpuNack:U1@[], cpuReady:U1@[], cpuResponse:U1@[], cpuResponseTag:U7@[], cpuStage2:U1@[], data:Unsigned(bits=W)@[], dv:U1@[], isSigned:U1@[], kill:U1@[], mask:Unsigned(bits=W/8)@[], physical:U1@[], privilege:U2@[], size:U2@[], skipException:U1@[], slaveNack:U1@[], slaveReady:U1@[], slaveResponse:U1@[], tag:U7@[], valid:U1@[], walkDone:Bool@[], walkError:Bool@[], walkReady:Bool@[]) {
   reg s1CPU:U1
   reg s2CPU:U1
   reg s1Walk:U1
@@ -35,7 +22,9 @@ pub mod HellaCacheArbiter<W=32, WALK=false, XLEN=W, EXT=false>::[timecheck=false
       savedAddress = pteAddress
       retry = false
     }
-    if s2Walk != 0 and cacheNack != 0 { retry = true }
+    if s2Walk != 0 and cacheNack != 0 {
+      retry = true
+    }
     walkError = (s2Walk != 0 and cacheLoadError != 0) or (cacheValid != 0 and cacheTag == 3 and cacheResponseError != 0)
     walkDone = walkError or (cacheValid != 0 and cacheTag == 3)
   }
@@ -47,7 +36,9 @@ pub mod HellaCacheArbiter<W=32, WALK=false, XLEN=W, EXT=false>::[timecheck=false
   mut accWidth:U2 = 0
   mut accMode:U2 = 0
   mut accWord:Unsigned(bits=W) = 0
-  accReady = false; accDone = false; accError = false
+  accReady = false
+  accDone = false
+  accError = false
   if EXT {
     reg active:Bool = false
     reg pending:Bool = false
@@ -57,22 +48,37 @@ pub mod HellaCacheArbiter<W=32, WALK=false, XLEN=W, EXT=false>::[timecheck=false
     reg saved:(addr:U32, write:Bool, size:U2, privilege:U2, data:Unsigned(bits=W)) = nil
     accReady = !active and !rst
     if accValid and accReady {
-      saved = (addr=accAddress, write=accWrite, size=accSize, privilege=accPrivilege, data=accData)
-      active = true; pending = true
+      saved = (addr=accAddress, data=accData, privilege=accPrivilege, size=accSize, write=accWrite)
+      active = true
+      pending = true
     }
     accelerator = pending and !wantWalk and (!preferCPU or cpuValid == 0)
-    accPA = saved.addr; accOp = U5(saved.write); accWidth = saved.size
-    accMode = saved.privilege; accWord = saved.data
+    accPA = saved.addr
+    accOp = U5(saved.write)
+    accWidth = saved.size
+    accMode = saved.privilege
+    accWord = saved.data
     stage1 = accelerator and cacheReady != 0
     stage2 = stage1
-    accS1 = stage1; accS2 = stage2
-    if accelerator and cacheReady != 0 { pending = false; preferCPU = true }
-    if !accelerator and !wantWalk and cpuValid != 0 and cacheReady != 0 { preferCPU = false }
-    if stage2 and cacheNack != 0 { pending = true }
+    accS1 = stage1
+    accS2 = stage2
+    if accelerator and cacheReady != 0 {
+      pending = false
+      preferCPU = true
+    }
+    if !accelerator and !wantWalk and cpuValid != 0 and cacheReady != 0 {
+      preferCPU = false
+    }
+    if stage2 and cacheNack != 0 {
+      pending = true
+    }
     const returned = cacheValid != 0 and cacheTag == 5
     accError = (stage2 and cacheStageError != 0) or (returned and cacheResponseError != 0)
     accDone = accError or returned
-    if accDone { active = false; pending = false }
+    if accDone {
+      active = false
+      pending = false
+    }
   }
   const cpu = cpuValid != 0 and !wantWalk and !accelerator
   const slave = !cpu and !wantWalk and !accelerator

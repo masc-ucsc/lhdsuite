@@ -1,7 +1,7 @@
 const rocket = import("../pyrope2/Rocket.Rocket")
 const configs = import("../pyrope2/RocketConfig")
 comptime const wide = configs.rv64
-pub mod rv64_program(clk:Clock, rst:Reset) -> (didStore:Bool@[], where:U64@[], value:U64@[], retired:U1@[], trap:U1@[], tracePC:U64@[], traceTime:U64@[]) {
+pub mod rv64_program(clk:Clock, rst:Reset) -> (didStore:Bool@[], retired:U1@[], tracePC:U64@[], traceTime:U64@[], trap:U1@[], value:U64@[], where:U64@[]) {
   reg pc:U64 = 0
   reg s1Addr:U64 = 0
   reg s1Tag:U7 = 0
@@ -13,9 +13,9 @@ pub mod rv64_program(clk:Clock, rst:Reset) -> (didStore:Bool@[], where:U64@[], v
   reg readIndex:U2 = 0
   const readData = memory[readIndex]
   const instruction:U32 = match pc {
-    == 0 { 0x00100093 }  // addi x1,x0,1
-    == 4 { 0x02809093 }  // slli x1,x1,40
-    == 8 { 0xfff08093 }  // addi x1,x1,-1
+    == 0 { 0x00100093 } // addi x1,x0,1
+    == 4 { 0x02809093 } // slli x1,x1,40
+    == 8 { 0xfff08093 } // addi x1,x1,-1
     == 12 { 0x00103023 } // sd x1,0(x0)
     == 16 { 0x00003183 } // ld x3,0(x0)
     == 20 { 0x0201d193 } // srli x3,x3,32
@@ -33,22 +33,12 @@ pub mod rv64_program(clk:Clock, rst:Reset) -> (didStore:Bool@[], where:U64@[], v
     == 68 { 0x00000013 } // nop
     else { 0x0000006f }
   }
-  const core = rocket<wide>(clock=clk, reset=rst, io_hartid=0,
-      io_interrupts_debug=0, io_interrupts_mtip=0, io_interrupts_msip=0,
-      io_interrupts_meip=0, io_imem_resp_valid=U1(!rst), 
-      io_imem_resp_bits_btb_taken=0, io_imem_resp_bits_btb_bridx=0,
-      io_imem_resp_bits_pc=pc, io_imem_resp_bits_data=instruction,
-      io_imem_resp_bits_mask=3, io_imem_resp_bits_xcpt_pf_inst=0, io_imem_resp_bits_xcpt_gf_inst=0,
-      io_imem_resp_bits_xcpt_ae_inst=0, io_imem_resp_bits_replay=0, io_imem_gpa_valid=0,
-      io_imem_gpa_bits=0, io_imem_npc=(pc+4)#[0..<64], io_imem_perf_acquire=0,
-      io_dmem_req_ready=1, io_dmem_s2_nack=0, io_dmem_resp_valid=U1(s2Load), io_dmem_resp_bits_tag=s2Tag, io_dmem_resp_bits_data=readData,
-      io_dmem_resp_bits_replay=0, io_dmem_resp_bits_has_data=U1(s2Load), io_dmem_resp_bits_data_word_bypass=readData,
-      io_dmem_replay_next=0,
-      io_dmem_s2_xcpt_ma_ld=0, io_dmem_s2_xcpt_ma_st=0, io_dmem_s2_xcpt_pf_ld=0,
-      io_dmem_s2_xcpt_pf_st=0, io_dmem_s2_xcpt_ae_ld=0, io_dmem_s2_xcpt_ae_st=0, io_dmem_ordered=1,
-      io_dmem_perf_grant=0, io_ptw_perf_pte_miss=0, io_ptw_perf_pte_hit=0)
-  if core.io_imem_req_valid != 0 { pc = core.io_imem_req_bits_pc }
-  elif core.io_imem_resp_ready != 0 { wrap pc += 4 }
+  const core = rocket<wide>(clock=clk, reset=rst, io_hartid=0, io_interrupts_debug=0, io_interrupts_mtip=0, io_interrupts_msip=0, io_interrupts_meip=0, io_imem_resp_valid=U1(!rst), io_imem_resp_bits_btb_taken=0, io_imem_resp_bits_btb_bridx=0, io_imem_resp_bits_pc=pc, io_imem_resp_bits_data=instruction, io_imem_resp_bits_mask=3, io_imem_resp_bits_xcpt_pf_inst=0, io_imem_resp_bits_xcpt_gf_inst=0, io_imem_resp_bits_xcpt_ae_inst=0, io_imem_resp_bits_replay=0, io_imem_gpa_valid=0, io_imem_gpa_bits=0, io_imem_npc=(pc + 4)#[0..<64], io_imem_perf_acquire=0, io_dmem_req_ready=1, io_dmem_s2_nack=0, io_dmem_resp_valid=U1(s2Load), io_dmem_resp_bits_tag=s2Tag, io_dmem_resp_bits_data=readData, io_dmem_resp_bits_replay=0, io_dmem_resp_bits_has_data=U1(s2Load), io_dmem_resp_bits_data_word_bypass=readData, io_dmem_replay_next=0, io_dmem_s2_xcpt_ma_ld=0, io_dmem_s2_xcpt_ma_st=0, io_dmem_s2_xcpt_pf_ld=0, io_dmem_s2_xcpt_pf_st=0, io_dmem_s2_xcpt_ae_ld=0, io_dmem_s2_xcpt_ae_st=0, io_dmem_ordered=1, io_dmem_perf_grant=0, io_ptw_perf_pte_miss=0, io_ptw_perf_pte_hit=0)
+  if core.io_imem_req_valid != 0 {
+    pc = core.io_imem_req_bits_pc
+  } elif core.io_imem_resp_ready != 0 {
+    wrap pc += 4
+  }
   s1Addr = core.io_dmem_req_bits_addr
   s1Tag = core.io_dmem_req_bits_tag
   s2Tag = s1Tag
@@ -57,7 +47,9 @@ pub mod rv64_program(clk:Clock, rst:Reset) -> (didStore:Bool@[], where:U64@[], v
   s1Load = core.io_dmem_req_valid != 0 and core.io_dmem_req_bits_cmd == 0
   s2Load = s1Load and core.io_dmem_s1_kill == 0
   didStore = s1Store and core.io_dmem_s1_kill == 0
-  if didStore { memory[s1Addr#[3..<5]] = core.io_dmem_s1_data_data }
+  if didStore {
+    memory[s1Addr#[3..<5]] = core.io_dmem_s1_data_data
+  }
   where = s1Addr
   value = core.io_dmem_s1_data_data
   retired = core.io_trace_insns_0_valid
@@ -72,18 +64,32 @@ test rv64_program.execute {
   tick 80 {
     d.rst = clock == 0
     step
-    if clock > 0 { assert(d.trap == 0, "program raised an exception") }
+    if clock > 0 {
+      assert(d.trap == 0, "program raised an exception")
+    }
     if d.retired != 0 and d.tracePC == 72 {
       assert((d.traceTime >> 40) == 1, "RV64 trace time carries through bit 40")
       reachedEnd = true
     }
     if d.didStore {
-      if stores == 0 { assert(d.where == 0 and d.value == 0xffffffffff, "64-bit shifted store") }
-      if stores == 1 { assert(d.where == 8 and d.value == 255, "loaded high word") }
-      if stores == 2 { assert(d.where == 16 and d.value == 0, "ADDIW truncation") }
-      if stores == 3 { assert(d.where == 24 and d.value == 1, "C.ADDIW and C.SD") }
-      if stores == 4 { assert(d.where == 0 and d.value == 2, "C.LD bypass and C.ADDIW") }
-      if stores == 5 { assert(d.where == 0 and d.value == 0x8000000000801105, "misa.MXL and ISA extension bits") }
+      if stores == 0 {
+        assert(d.where == 0 and d.value == 0xffffffffff, "64-bit shifted store")
+      }
+      if stores == 1 {
+        assert(d.where == 8 and d.value == 255, "loaded high word")
+      }
+      if stores == 2 {
+        assert(d.where == 16 and d.value == 0, "ADDIW truncation")
+      }
+      if stores == 3 {
+        assert(d.where == 24 and d.value == 1, "C.ADDIW and C.SD")
+      }
+      if stores == 4 {
+        assert(d.where == 0 and d.value == 2, "C.LD bypass and C.ADDIW")
+      }
+      if stores == 5 {
+        assert(d.where == 0 and d.value == 0x8000000000801105, "misa.MXL and ISA extension bits")
+      }
       wrap stores += 1
     }
   }
@@ -98,13 +104,19 @@ test rv64_program.reset_in_flight {
   tick 80 {
     d.rst = clock == 0 or clock == 12
     step
-    if clock < 12 and d.retired != 0 { started = true }
+    if clock < 12 and d.retired != 0 {
+      started = true
+    }
     if clock > 12 {
       assert(d.trap == 0, "an instruction from before reset raised a trap")
       if d.retired != 0 {
-        if !restarted { assert(d.tracePC == 0, "the first retirement after reset must be the reset PC") }
+        if !restarted {
+          assert(d.tracePC == 0, "the first retirement after reset must be the reset PC")
+        }
         restarted = true
-        if d.tracePC == 72 and (d.traceTime >> 40) == 1 { finished = true }
+        if d.tracePC == 72 and (d.traceTime >> 40) == 1 {
+          finished = true
+        }
       }
     }
   }

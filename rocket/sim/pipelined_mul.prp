@@ -6,7 +6,7 @@ comptime const open64 = cfg.params(xLen=64, mulUnroll=64)
 
 // Four independent multiplies overlap a pending divide, followed by a dependent
 // multiply, a branch squash, MULW and an illegal multiply with misa.M clear.
-mod run<C>(clk:Clock,rst:Reset) -> (done:Bool@[], bad:Bool@[], valid:Bool@[], pc:U32@[]) {
+mod run<C>(clk:Clock, rst:Reset) -> (bad:Bool@[], done:Bool@[], pc:U32@[], valid:Bool@[]) {
   const rom:[64]U32 = (
     0xffe00413, // li s0,-2
     0xffd00493, // li s1,-3
@@ -73,16 +73,16 @@ mod run<C>(clk:Clock,rst:Reset) -> (done:Bool@[], bad:Bool@[], valid:Bool@[], pc
     0x00000013, // nop
     0x00000013, // nop
   )
-  const r = image<C=C,WORDS=64>(clk=clk,rst=rst,program=rom,successPC=0x10104)
+  const r = image<C=C, WORDS=64>(clk=clk, rst=rst, program=rom, successPC=0x10104)
   done = r.success
   valid = r.traceValid
   pc = r.tracePC#[0..<32]
   bad = r.badFetch or (r.traceValid and pc == 0x10108) or (r.trap != 0 and (pc != 0x100c8 or r.cause != 2))
 }
-pub mod pipelined_mul(clk:Clock,rst:Reset) -> (done:U2@[], burst:U2@[], bad:Bool@[]) {
-  const a = run<p32>(clk=clk,rst=rst)
-  const b = run<p64>(clk=clk,rst=rst)
-  const u = run<open64>(clk=clk,rst=rst)
+pub mod pipelined_mul(clk:Clock, rst:Reset) -> (bad:Bool@[], burst:U2@[], done:U2@[]) {
+  const a = run<p32>(clk, rst)
+  const b = run<p64>(clk, rst)
+  const u = run<open64>(clk, rst)
   done = U1(a.done) | (U1(b.done) << 1)
   burst = U1(a.valid and a.pc >= 0x1005c and a.pc < 0x1006c) | (U1(b.valid and b.pc >= 0x1005c and b.pc < 0x1006c) << 1)
   bad = a.bad or b.bad or u.bad or b.valid != u.valid or (b.valid and b.pc != u.pc) or b.done != u.done
@@ -98,10 +98,18 @@ test pipelined_mul.issue_rate {
     step
     if clock >= 4 {
       assert(!d.bad, "firmware or gated writeback mismatch")
-      if d.burst#[0] != 0 { count32 += 1 }
-      if d.burst#[1] != 0 { count64 += 1 }
-      if active#[0] != 0 and count32 < 4 { assert(d.burst#[0] != 0, "RV32 multiply retirement bubble") }
-      if active#[1] != 0 and count64 < 4 { assert(d.burst#[1] != 0, "RV64 multiply retirement bubble") }
+      if d.burst#[0] != 0 {
+        count32 += 1
+      }
+      if d.burst#[1] != 0 {
+        count64 += 1
+      }
+      if active#[0] != 0 and count32 < 4 {
+        assert(d.burst#[0] != 0, "RV32 multiply retirement bubble")
+      }
+      if active#[1] != 0 and count64 < 4 {
+        assert(d.burst#[1] != 0, "RV64 multiply retirement bubble")
+      }
       active |= d.burst
       done |= d.done
     }

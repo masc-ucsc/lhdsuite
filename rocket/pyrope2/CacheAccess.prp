@@ -1,31 +1,44 @@
 // TileLink/HellaCache byte lanes for an aligned transfer of 2^size bytes.
 pub comb byteMask<W=32>(addr:U32, size:U2) -> (mask:Unsigned(bits=W/8)) {
-  comptime const lanes = W / 8
+  comptime const lanes = W/8
   const offset = addr#[0..<std.clog2(lanes)]
-  for i in 0..<lanes { mask#[i] = U1((offset >> size) == (i >> size)) }
+  for i in 0..<lanes {
+    mask#[i] = U1((offset >> size) == (i >> size))
+  }
 }
 
 // The execute-stage bypass selects a word. Writeback additionally selects bytes and halfwords.
-pub comb loadData<W=32>(addr:U32, size:U2, sign:U1, data:Unsigned(bits=W))
-    -> (value:Unsigned(bits=W), bypass:Unsigned(bits=W)) {
+pub comb loadData<W=32>(addr:U32, data:Unsigned(bits=W), sign:U1, size:U2) -> (bypass:Unsigned(bits=W), value:Unsigned(bits=W)) {
   bypass = data
   if W == 64 and size < 3 {
     const part = if addr#[2] == 0 { data#[0..<32] } else { data#[32..<64] }
-    if sign != 0 { wrap bypass = part#sext[0..<32] } else { bypass = part }
+    if sign != 0 {
+      wrap bypass = part#sext[0..<32]
+    } else {
+      bypass = part
+    }
   }
   value = bypass
   if size < 2 {
     const half = if addr#[1] == 0 { bypass#[0..<16] } else { bypass#[16..<32] }
-    if sign != 0 { wrap value = half#sext[0..<16] } else { value = half }
+    if sign != 0 {
+      wrap value = half#sext[0..<16]
+    } else {
+      value = half
+    }
     if size == 0 {
       const byte = if addr#[0] == 0 { half#[0..<8] } else { half#[8..<16] }
-      if sign != 0 { wrap value = byte#sext[0..<8] } else { value = byte }
+      if sign != 0 {
+        wrap value = byte#sext[0..<8]
+      } else {
+        value = byte
+      }
     }
   }
 }
 
 // HellaCache command classes shared by arbitration, physical protection and the store buffer.
-pub comb command(cmd:U5) -> (read:U1, write:U1, amo:U1, lrsc:U1, partial:U1) {
+pub comb command(cmd:U5) -> (amo:U1, lrsc:U1, partial:U1, read:U1, write:U1) {
   lrsc = U1(cmd == 6 or cmd == 7)
   amo = U1(cmd == 4 or (cmd >= 8 and cmd <= 15))
   partial = U1(cmd == 17)

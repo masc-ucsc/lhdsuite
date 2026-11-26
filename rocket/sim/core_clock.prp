@@ -52,20 +52,20 @@ comb rom() -> (words:[48]U32) {
     0x00000000,
     0x00000000,
     0x00000000,
-    0x00000000
+    0x00000000,
   )
 }
 
-mod run<C>(clk:Clock, rst:Reset, timer:U1) -> (done:U1@[], bad:Bool@[], asleep:U1@[]) {
-  const d = image<C=C,WORDS=48>(clk=clk, rst=rst, timer=timer, program=rom(), successPC=0x100c8)
+mod run<C>(clk:Clock, rst:Reset, timer:U1) -> (asleep:U1@[], bad:Bool@[], done:U1@[]) {
+  const d = image<C=C, WORDS=48>(clk=clk, rst=rst, timer=timer, program=rom(), successPC=0x100c8)
   done = U1(d.success)
   bad = d.trap != 0
   asleep = U1(d.traceValid and d.tracePC == 0x100d4)
 }
 
-pub mod core_clock(clk:Clock, rst:Reset, timer:U1) -> (done:U2@[], bad:Bool@[], asleep:U2@[]) {
-  const a = run<p32>(clk=clk, rst=rst, timer=timer)
-  const b = run<p64>(clk=clk, rst=rst, timer=timer)
+pub mod core_clock(clk:Clock, rst:Reset, timer:U1) -> (asleep:U2@[], bad:Bool@[], done:U2@[]) {
+  const a = run<p32>(clk, rst, timer)
+  const b = run<p64>(clk, rst, timer)
   done = (b.done << 1) | a.done
   bad = a.bad or b.bad
   asleep = (b.asleep << 1) | a.asleep
@@ -81,13 +81,23 @@ test core_clock.sleep_and_wake {
     d.timer = U1(clock == 200 or clock == 470 or clock == 780)
     step
     if clock > 4 {
-      if d.asleep#[0] != 0 { count32 += 1 }
-      if d.asleep#[1] != 0 { count64 += 1 }
+      if d.asleep#[0] != 0 {
+        count32 += 1
+      }
+      if d.asleep#[1] != 0 {
+        count64 += 1
+      }
       finished |= d.done
       assert(!d.bad, "unexpected exception, CSR readback or incorrect arithmetic")
-      if clock == 195 { assert(count32 == 1 and count64 == 1) }
-      if clock == 465 { assert(count32 == 2 and count64 == 2) }
-      if clock == 775 { assert(count32 == 3 and count64 == 3) }
+      if clock == 195 {
+        assert(count32 == 1 and count64 == 1)
+      }
+      if clock == 465 {
+        assert(count32 == 2 and count64 == 2)
+      }
+      if clock == 775 {
+        assert(count32 == 3 and count64 == 3)
+      }
     }
   }
   assert(finished == 3, "both tiles must wake on timer and retire CEASE")

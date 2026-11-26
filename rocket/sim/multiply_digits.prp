@@ -2,41 +2,40 @@ const cfg = import("../pyrope2/RocketConfig")
 const serial = import("../pyrope2/MulDiv.MulDiv")
 const pipeline = import("../pyrope2/MulDiv.pipelined")
 
-mod check<C>(clk:Clock, rst:Reset, phase:U7, row:U6) -> (bad:Bool@[], done:Bool@[]) {
+mod check<C>(clk:Clock, phase:U7, row:U6, rst:Reset) -> (bad:Bool@[], done:Bool@[]) {
   const v = match row {
-    == 0 { (fn=0, word=false, a=0x0, b=0x0, rv32=0x0, rv64=0x0) }
-    == 1 { (fn=0, word=false, a=0x2, b=0x9, rv32=0x12, rv64=0x12) }
-    == 2 { (fn=0, word=true, a=0xfad12345ffffffff, b=0x1076543280000001, rv32=0x7fffffff, rv64=0x7fffffff) }
-    == 3 { (fn=0, word=true, a=0xffffffff80000000, b=0x3, rv32=0x80000000, rv64=0xffffffff80000000) }
-    == 4 { (fn=1, word=false, a=0x8000000080000000, b=0xffffffffffffffff, rv32=0x0, rv64=0x0) }
-    == 5 { (fn=1, word=false, a=0xfffffffffffffffe, b=0xfffffffffffffffd, rv32=0x0, rv64=0x0) }
-    == 6 { (fn=2, word=false, a=0xffffffffffffffff, b=0xffffffffffffffff, rv32=0xffffffff, rv64=0xffffffffffffffff) }
-    == 7 { (fn=3, word=false, a=0xffffffffffffffff, b=0xffffffffffffffff, rv32=0xfffffffe, rv64=0xfffffffffffffffe) }
-    == 8 { (fn=1, word=false, a=0x7777111177771111, b=0x7777888877778888, rv32=0x37c020fe, rv64=0x37c020fefdb95b05) }
-    == 9 { (fn=2, word=false, a=0x8000000080000000, b=0x8000000080000000, rv32=0xc0000000, rv64=0xc000000000000000) }
-    else { (fn=3, word=false, a=0x8000000080000000, b=0x8000000080000000, rv32=0x40000000, rv64=0x4000000080000000) }
+    == 0 { (a=0x0, b=0x0, fn=0, rv32=0x0, rv64=0x0, word=false) }
+    == 1 { (a=0x2, b=0x9, fn=0, rv32=0x12, rv64=0x12, word=false) }
+    == 2 { (a=0xfad12345ffffffff, b=0x1076543280000001, fn=0, rv32=0x7fffffff, rv64=0x7fffffff, word=true) }
+    == 3 { (a=0xffffffff80000000, b=0x3, fn=0, rv32=0x80000000, rv64=0xffffffff80000000, word=true) }
+    == 4 { (a=0x8000000080000000, b=0xffffffffffffffff, fn=1, rv32=0x0, rv64=0x0, word=false) }
+    == 5 { (a=0xfffffffffffffffe, b=0xfffffffffffffffd, fn=1, rv32=0x0, rv64=0x0, word=false) }
+    == 6 { (a=0xffffffffffffffff, b=0xffffffffffffffff, fn=2, rv32=0xffffffff, rv64=0xffffffffffffffff, word=false) }
+    == 7 { (a=0xffffffffffffffff, b=0xffffffffffffffff, fn=3, rv32=0xfffffffe, rv64=0xfffffffffffffffe, word=false) }
+    == 8 { (a=0x7777111177771111, b=0x7777888877778888, fn=1, rv32=0x37c020fe, rv64=0x37c020fefdb95b05, word=false) }
+    == 9 { (a=0x8000000080000000, b=0x8000000080000000, fn=2, rv32=0xc0000000, rv64=0xc000000000000000, word=false) }
+    else { (a=0x8000000080000000, b=0x8000000080000000, fn=3, rv32=0x40000000, rv64=0x4000000080000000, word=false) }
   }
   const a = v.a#[0..<C.xLen]
   const b = v.b#[0..<C.xLen]
-  const d = serial<C>(clock=clk,reset=rst,io_req_valid=U1(phase == 1),io_req_bits_fn=v.fn,
-      io_req_bits_dw=U1(!v.word),io_req_bits_in1=a,io_req_bits_in2=b,io_req_bits_tag=row#[0..<5],io_kill=0,io_resp_ready=0)
-  const product = pipeline<C.xLen>(clk=clk,issue=phase == 1,fn=v.fn,word=v.word,a=a,b=b)
+  const d = serial<C>(clock=clk, reset=rst, io_req_valid=U1(phase == 1), io_req_bits_fn=v.fn, io_req_bits_dw=U1(!v.word), io_req_bits_in1=a, io_req_bits_in2=b, io_req_bits_tag=row#[0..<5], io_kill=0, io_resp_ready=0)
+  const product = pipeline<C.xLen>(clk=clk, issue=phase == 1, fn=v.fn, word=v.word, a=a, b=b)
   const expected = if C.xLen == 32 { v.rv32 } else { v.rv64 }
   done = d.io_resp_valid != 0
-  const fastWord = C.xLen == 64 and v.word and C.mulUnroll < 32 and 32 % C.mulUnroll == 0
+  const fastWord = C.xLen == 64 and v.word and C.mulUnroll < 32 and 32%C.mulUnroll == 0
   const bits = if fastWord { 32 } else { C.xLen }
-  const steps = (bits+C.mulUnroll-1)/C.mulUnroll
-  const badTiming = !C.mulEarlyOut and done != (phase >= 1+steps)
+  const steps = (bits + C.mulUnroll - 1)/C.mulUnroll
+  const badTiming = !C.mulEarlyOut and done != (phase >= 1 + steps)
   bad = badTiming or (done and (product != expected or d.io_resp_bits_data != expected or d.io_resp_bits_tag != row#[0..<5]))
 }
 pub mod multiply_digits(clk:Clock, rst:Reset, phase:U7, row:U6) -> (bad:Bool@[], done:Bool@[]) {
   bad = false
   done = true
-  for width in (32,64) {
-    for digit in (3,8,width-1,width) {
-      for early in (false,true) {
+  for width in (32, 64) {
+    for digit in (3, 8, width - 1, width) {
+      for early in (false, true) {
         comptime const profile = cfg.params(xLen=width, mulUnroll=digit, mulEarlyOut=early)
-        const trial = check<profile>(clk=clk,rst=rst,phase=phase,row=row)
+        const trial = check<profile>(clk, phase, row, rst)
         bad = bad or trial.bad
         done = done and trial.done
       }
@@ -46,12 +45,16 @@ pub mod multiply_digits(clk:Clock, rst:Reset, phase:U7, row:U6) -> (bad:Bool@[],
 test multiply_digits.products {
   mut d = multiply_digits
   tick 748 {
-    const phase = clock % 68
-    d.row = clock / 68
+    const phase = clock%68
+    d.row = clock/68
     d.rst = phase == 0
     d.phase = phase
     step
-    if phase > 1 { assert(!d.bad, "low, high, signed/unsigned or sign-extended word product") }
-    if phase == 67 { assert(d.done, "all digit widths hold their result until accepted") }
+    if phase > 1 {
+      assert(!d.bad, "low, high, signed/unsigned or sign-extended word product")
+    }
+    if phase == 67 {
+      assert(d.done, "all digit widths hold their result until accepted")
+    }
   }
 }

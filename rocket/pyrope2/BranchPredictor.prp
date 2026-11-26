@@ -2,15 +2,15 @@
 comb multiplier<H>() -> (factor) {
   mut root = 0
   for bit in 0..<H {
-    const candidate = root | (1 << (H-1-bit))
-    if candidate*candidate <= (3 << (2*(H-1))) { root = candidate }
+    const candidate = root | (1 << (H - 1 - bit))
+    if candidate*candidate <= (3 << (2*(H - 1))) {
+      root = candidate
+    }
   }
   factor = root
 }
 
-mod history<C>(clk:Clock, clear:Reset, pc:Unsigned(bits=C.xLen), branchIndex:Unsigned(bits=C.bhtIndexBits),
-    resolve:U1, taken:U1, advance:Bool, direction:U1, restore:Bool)
-    -> (index:Unsigned(bits=C.bhtIndexBits)@[], predict:U1@[]) {
+mod history<C>(advance:Bool, branchIndex:Unsigned(bits=C.bhtIndexBits), clear:Reset, clk:Clock, direction:U1, pc:Unsigned(bits=C.xLen), resolve:U1, restore:Bool, taken:U1) -> (index:Unsigned(bits=C.bhtIndexBits)@[], predict:U1@[]) {
   reg counters:[C.bhtEntries]Unsigned(bits=C.bhtCounterLength):[ordering="old"] = nil
   reg trained:Unsigned(bits=C.bhtEntries):[reset_pin=clear] = 0
   const I = C.bhtIndexBits
@@ -21,13 +21,15 @@ mod history<C>(clk:Clock, clear:Reset, pc:Unsigned(bits=C.xLen), branchIndex:Uns
   if B > 0 {
     reg committed:Unsigned(bits=H):[reset_pin=clear] = 0
     reg speculative:Unsigned(bits=H):[reset_pin=clear] = 0
-    const actual = if resolve != 0 { (taken << (H-1)) | (committed >> 1) } else { committed }
-    const next = if restore { actual } elif advance { (direction << (H-1)) | (speculative >> 1) } else { speculative }
+    const actual = if resolve != 0 { (taken << (H - 1)) | (committed >> 1) } else { committed }
+    const next = if restore { actual } elif advance { (direction << (H - 1)) | (speculative >> 1) } else { speculative }
     committed = actual
     speculative = next
     mut hash = next
-    if H > B { hash = (multiplier<H>() * next)#[(H-B)..<H] }
-    mixed = mixed ^ (hash << (I-B))
+    if H > B {
+      hash = (multiplier<H>()*next)#[(H - B)..<H]
+    }
+    mixed = mixed ^ (hash << (I - B))
   }
   index = if C.bhtEntries == 1 { 0 } else { mixed#[0..<I] }
   predict = trained#[index] & counters[index]#[0]
@@ -44,46 +46,47 @@ mod history<C>(clk:Clock, clear:Reset, pc:Unsigned(bits=C.xLen), branchIndex:Uns
 
 // A link is halfword aligned. Use its low bit as the slot-valid flag so an
 // empty pop stays empty and pushing a full stack drops only the oldest link.
-comb stackStep<N,W>(stack:Unsigned(bits=N*W), action:U2, link:Unsigned(bits=W)) -> (next:Unsigned(bits=N*W)) {
+comb stackStep<N, W>(action:U2, link:Unsigned(bits=W), stack:Unsigned(bits=N*W)) -> (next:Unsigned(bits=N*W)) {
   const rest = if action#[1] != 0 { stack >> W } else { stack }
   next = rest
-  if action#[0] != 0 { wrap next = (rest << W) | link | 1 }
+  if action#[0] != 0 {
+    wrap next = (rest << W) | link | 1
+  }
 }
 
-mod returnStack<C>(clk:Clock, clear:U1, resolved:U2, link:Unsigned(bits=C.xLen),
-    fetch:U2, fetchLink:Unsigned(bits=C.xLen), restore:Bool)
-    -> (available:Bool@[], address:Unsigned(bits=C.xLen)@[]) {
+mod returnStack<C>(clear:U1, clk:Clock, fetch:U2, fetchLink:Unsigned(bits=C.xLen), link:Unsigned(bits=C.xLen), resolved:U2, restore:Bool) -> (address:Unsigned(bits=C.xLen)@[], available:Bool@[]) {
   reg committed:Unsigned(bits=C.nRAS*C.xLen) = nil
   reg speculative:Unsigned(bits=C.nRAS*C.xLen) = nil
-  const actual = stackStep<N=C.nRAS,W=C.xLen>(stack=committed, action=resolved, link=link)
-  const predicted = stackStep<N=C.nRAS,W=C.xLen>(stack=speculative, action=fetch, link=fetchLink)
+  const actual = stackStep<N=C.nRAS, W=C.xLen>(action=resolved, link, stack=committed)
+  const predicted = stackStep<N=C.nRAS, W=C.xLen>(action=fetch, link=fetchLink, stack=speculative)
   const head = if restore { actual } else { predicted }
-  if clear != 0 { committed = 0; speculative = 0 }
-  else {
-    if resolved != 0 { committed = actual }
-    if restore or fetch != 0 { speculative = head }
+  if clear != 0 {
+    committed = 0
+    speculative = 0
+  } else {
+    if resolved != 0 {
+      committed = actual
+    }
+    if restore or fetch != 0 {
+      speculative = head
+    }
   }
   available = clear == 0 and head#[0] != 0
   address = head#[1..<C.xLen] << 1
 }
 
-pub mod BranchPredictor<C>(clock:Clock, clear:U1, pc:Unsigned(bits=C.xLen), replace:U1, install:U1,
-    branchPC:Unsigned(bits=C.xLen), destination:Unsigned(bits=C.xLen), resolve:U1, taken:U1,
-    branchIndex:Unsigned(bits=C.bhtIndexBits), advance:Bool, direction:U1, restore:Bool, forceTaken:Bool=false, invalidate:Bool=false,
-    learn:Bool=false, learnedPC:Unsigned(bits=C.xLen)=0, learnedTarget:Unsigned(bits=C.xLen)=0,
-    rasAction:U2=0, fetchAction:U2=0, fetchLink:Unsigned(bits=C.xLen)=0)
-    -> (predict:U1@[], slot:U1@[], target:Unsigned(bits=C.xLen)@[], index:Unsigned(bits=C.bhtIndexBits)@[], branch:Bool@[], action:U2@[]) {
+pub mod BranchPredictor<C>(advance:Bool, branchIndex:Unsigned(bits=C.bhtIndexBits), branchPC:Unsigned(bits=C.xLen), clear:U1, clock:Clock, destination:Unsigned(bits=C.xLen), direction:U1, fetchAction:U2=0, fetchLink:Unsigned(bits=C.xLen)=0, forceTaken:Bool=false, install:U1, invalidate:Bool=false, learn:Bool=false, learnedPC:Unsigned(bits=C.xLen)=0, learnedTarget:Unsigned(bits=C.xLen)=0, pc:Unsigned(bits=C.xLen), rasAction:U2=0, replace:U1, resolve:U1, restore:Bool, taken:U1) -> (action:U2@[], branch:Bool@[], index:Unsigned(bits=C.bhtIndexBits)@[], predict:U1@[], slot:U1@[], target:Unsigned(bits=C.xLen)@[]) {
   const Entries = C.btbEntries
   const W = C.xLen
-  reg tags:[Entries]Unsigned(bits=W-2):[ordering="old"] = nil
+  reg tags:[Entries]Unsigned(bits=W - 2):[ordering="old"] = nil
   reg targets:[Entries]Unsigned(bits=W):[ordering="old"] = nil
   reg slots:[Entries]U1:[ordering="old"] = nil
   reg valid:Unsigned(bits=Entries)
-  const lookup = pc#[2..<W] % Entries
+  const lookup = pc#[2..<W]%Entries
   const late = C.branchPredictionModeCSR and learn and replace == 0
   const allocation = replace != 0 or late
   const pcToInstall = if late { learnedPC } else { branchPC }
-  const update = pcToInstall#[2..<W] % Entries
+  const update = pcToInstall#[2..<W]%Entries
   const staticMode = C.branchPredictionModeCSR and forceTaken
   const hit = valid#[lookup] != 0 and tags[lookup] == pc#[2..<W] and pc#[1] <= slots[lookup]
   slot = slots[lookup]
@@ -91,14 +94,20 @@ pub mod BranchPredictor<C>(clock:Clock, clear:U1, pc:Unsigned(bits=C.xLen), repl
   action = 0
   if C.nRAS > 0 {
     reg actions:[Entries]U2:[ordering="old"] = nil
-    if allocation { actions[update] = if late { 0 } else { rasAction } }
-    if hit { action = actions[lookup] }
-    const ras = returnStack<C>(clk=clock, clear=clear, resolved=rasAction, link=(branchPC+2)#[0..<W],
-        fetch=fetchAction, fetchLink=fetchLink, restore=restore)
-    if action#[1] != 0 and ras.available { target = ras.address }
+    if allocation {
+      actions[update] = if late { 0 } else { rasAction }
+    }
+    if hit {
+      action = actions[lookup]
+    }
+    const ras = returnStack<C>(clear, clk=clock, fetch=fetchAction, fetchLink, link=(branchPC + 2)#[0..<W], resolved=rasAction, restore)
+    if action#[1] != 0 and ras.available {
+      target = ras.address
+    }
   }
-  if clear != 0 or (C.branchPredictionModeCSR and invalidate) { valid = 0 }
-  elif allocation {
+  if clear != 0 or (C.branchPredictionModeCSR and invalidate) {
+    valid = 0
+  } elif allocation {
     valid#[update] = if late { 1 } else { install }
     tags[update] = pcToInstall#[2..<W]
     targets[update] = if late { learnedTarget } else { destination }
@@ -108,18 +117,20 @@ pub mod BranchPredictor<C>(clock:Clock, clear:U1, pc:Unsigned(bits=C.xLen), repl
   branch = false
   if C.bhtEntries > 0 {
     reg conditional:[Entries]U1:[ordering="old"] = nil
-    if allocation { conditional[update] = U1(late or resolve != 0) }
+    if allocation {
+      conditional[update] = U1(late or resolve != 0)
+    }
     branch = hit and conditional[lookup] != 0
-    const h = history<C>(clk=clock, clear=clear != 0, pc=pc, branchIndex=branchIndex, resolve=resolve & U1(!staticMode),
-                         taken=taken, advance=advance and !staticMode, direction=direction, restore=restore and !staticMode)
+    const h = history<C>(advance=advance and !staticMode, branchIndex, clear=clear != 0, clk=clock, direction, pc, resolve=resolve & U1(!staticMode), restore=restore and !staticMode, taken)
     index = h.index
     predict = U1(hit and (staticMode or !branch or h.predict != 0))
   } else {
     reg directions:[Entries]U1:[ordering="old"] = nil
     predict = U1(hit and (staticMode or directions[lookup] != 0))
     if clear == 0 {
-      if allocation { directions[update] = 1 }
-      elif !staticMode and resolve != 0 and valid#[update] != 0 and tags[update] == branchPC#[2..<W] and slots[update] == branchPC#[1] {
+      if allocation {
+        directions[update] = 1
+      } elif !staticMode and resolve != 0 and valid#[update] != 0 and tags[update] == branchPC#[2..<W] and slots[update] == branchPC#[1] {
         directions[update] = taken
       }
     }

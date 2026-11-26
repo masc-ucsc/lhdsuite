@@ -4,7 +4,7 @@ comptime const fast32 = cfg.params(divUnroll=3, mulDivClockGate=true)
 comptime const fast64 = cfg.params(xLen=64, mulDivClockGate=true, divUnroll=4, divEarlyOut=true, divEarlyOutGranularity=8)
 comptime const ungated32 = cfg.params(divUnroll=3)
 comptime const ungated64 = cfg.params(xLen=64, divUnroll=4, divEarlyOut=true, divEarlyOutGranularity=8)
-pub mod div_program(clk:Clock, rst:Reset) -> (ok32:Bool@[], ok64:Bool@[], bad:Bool@[]) {
+pub mod div_program(clk:Clock, rst:Reset) -> (bad:Bool@[], ok32:Bool@[], ok64:Bool@[]) {
   const rom:[16]U32 = (
     0xf8500093, // li x1,-123
     0x00700113, // li x2,7
@@ -21,16 +21,13 @@ pub mod div_program(clk:Clock, rst:Reset) -> (ok32:Bool@[], ok64:Bool@[], bad:Bo
     0xfff00493, // li x9,-1
     0x00941463, // bne x8,x9,fail
     0x0000006f, // success: jal x0,success
-    0x00100073 // fail: ebreak
+    0x00100073, // fail: ebreak
   )
   const a = boot<fast32>(clk=clk, rst=rst, program=rom, successPC=0x10078)
   const b = boot<fast64>(clk=clk, rst=rst, program=rom, successPC=0x10078)
   const ref32 = boot<ungated32>(clk=clk, rst=rst, program=rom, successPC=0x10078)
   const ref64 = boot<ungated64>(clk=clk, rst=rst, program=rom, successPC=0x10078)
-  bad = a.trap != 0 or b.trap != 0 or a.badFetch or b.badFetch or
-      a.traceValid != ref32.traceValid or b.traceValid != ref64.traceValid or
-      (a.traceValid and a.tracePC != ref32.tracePC) or (b.traceValid and b.tracePC != ref64.tracePC) or
-      a.trap != ref32.trap or b.trap != ref64.trap or a.success != ref32.success or b.success != ref64.success
+  bad = a.trap != 0 or b.trap != 0 or a.badFetch or b.badFetch or a.traceValid != ref32.traceValid or b.traceValid != ref64.traceValid or (a.traceValid and a.tracePC != ref32.tracePC) or (b.traceValid and b.tracePC != ref64.tracePC) or a.trap != ref32.trap or b.trap != ref64.trap or a.success != ref32.success or b.success != ref64.success
   ok32 = a.success
   ok64 = b.success
 }
@@ -43,8 +40,12 @@ test div_program.dependent_instructions {
     step
     if clock > 4 {
       assert(!d.bad, "gated and ungated divider firmware must retire together without a trap")
-      if d.ok32 { a = true }
-      if d.ok64 { b = true }
+      if d.ok32 {
+        a = true
+      }
+      if d.ok64 {
+        b = true
+      }
     }
   }
   assert(a and b, "both tiles consumed their long-latency writebacks")

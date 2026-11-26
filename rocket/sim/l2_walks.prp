@@ -1,7 +1,7 @@
 const cfg = import("../pyrope2/RocketConfig")
 const vm = import("../pyrope2/TileTranslation")
 
-mod walks<X>(clk:Clock, rst:Reset, phase:U4, ready:Bool) -> (reads:U5@[], misses:U4@[], correct:Bool@[]) {
+mod walks<X>(clk:Clock, phase:U4, ready:Bool, rst:Reset) -> (correct:Bool@[], misses:U4@[], reads:U5@[]) {
   comptime const C = cfg.params(xLen=X, useVM=true, asIdBits=1, iTLBEntries=1, dTLBEntries=1, nL2TLBEntries=4, nL2TLBWays=2)
   comptime const mode = if X == 32 { 1 << 31 } else { 8 << 60 }
   const context = mode | (U1(phase == 5) << (if X == 32 { 22 } else { 44 })) | (if phase == 8 { 2 } else { 1 })
@@ -19,14 +19,9 @@ mod walks<X>(clk:Clock, rst:Reset, phase:U4, ready:Bool) -> (reads:U5@[], misses
   wire dg:Bool = nil
   wire leaf:U28 = nil
   wire pte:Unsigned(bits=X) = nil
-  const i = vm.port<C=C,FETCH=true>(clk=clk, rst=rst, request=fetch, accepted=false, va=va | 0x18,
-      satp=context, privilege=1, store=false, sum=false, mxr=false, flush=flush,
-      readReady=iReady, readDone=iDone, readError=false, readData=pte, grant=ig, leaf=leaf)
-  const d = vm.port<C=C,FETCH=false>(clk=clk, rst=rst, request=load, accepted=false, va=va | 0x58,
-      satp=context, privilege=1, store=store, sum=false, mxr=true, flush=flush,
-      readReady=dReady, readDone=dDone, readError=false, readData=pte, grant=dg, leaf=leaf)
-  const l2 = vm.leaves<C>(clk=clk, rst=rst, flush=flush, iProbe=i.probe, iKey=i.key, iDone=i.walkDone, iLeaf=i.walkLeaf,
-      dProbe=d.probe, dKey=d.key, dDone=d.walkDone, dLeaf=d.walkLeaf)
+  const i = vm.port<C=C, FETCH=true>(clk=clk, rst=rst, request=fetch, accepted=false, va=va | 0x18, satp=context, privilege=1, store=false, sum=false, mxr=false, flush=flush, readReady=iReady, readDone=iDone, readError=false, readData=pte, grant=ig, leaf=leaf)
+  const d = vm.port<C=C, FETCH=false>(clk=clk, rst=rst, request=load, accepted=false, va=va | 0x58, satp=context, privilege=1, store=store, sum=false, mxr=true, flush=flush, readReady=dReady, readDone=dDone, readError=false, readData=pte, grant=dg, leaf=leaf)
+  const l2 = vm.leaves<C>(clk=clk, rst=rst, flush=flush, iProbe=i.probe, iKey=i.key, iDone=i.walkDone, iLeaf=i.walkLeaf, dProbe=d.probe, dKey=d.key, dDone=d.walkDone, dLeaf=d.walkLeaf)
   ig = l2.iGrant
   dg = l2.dGrant
   leaf = l2.leaf
@@ -36,29 +31,32 @@ mod walks<X>(clk:Clock, rst:Reset, phase:U4, ready:Bool) -> (reads:U5@[], misses
   reg address:U32
   const base = if phase == 8 { 0x600 } elif phase >= 6 { 0x500 } else { 0x400 }
   const word = if address < 0x3000 { ((if X == 64 { 3 } else { 4 }) << 10) | 1 }
-      elif address == 0x3000 { (4 << 10) | 1 }
-      else { ((base | ((address & 0xfff) >> std.clog2(X/8))) << 10) | 0x49 }
-  const a = vm.arbiter<W=X>(clk=clk, rst=rst, iRead=i.read, iAddress=i.readAddress, dRead=d.read, dAddress=d.readAddress,
-      ready=ready, done=respond, pte=word)
+    elif address == 0x3000 { (4 << 10) | 1 }
+    else { ((base | ((address & 0xfff) >> std.clog2(X/8))) << 10) | 0x49 }
+  const a = vm.arbiter<W=X>(clk=clk, rst=rst, iRead=i.read, iAddress=i.readAddress, dRead=d.read, dAddress=d.readAddress, ready=ready, done=respond, pte=word)
   iReady = a.iReady
   dReady = a.dReady
   iDone = a.iDone
   dDone = a.dDone
   pte = a.result
   respond = a.read and ready
-  if a.read and ready { address = a.address; wrap count += 1 }
-  if l2.miss { wrap cold += 1 }
+  if a.read and ready {
+    address = a.address
+    wrap count += 1
+  }
+  if l2.miss {
+    wrap cold += 1
+  }
   reads = count
   misses = cold
-  const pa = ((base | vpn) << 12)
-  correct = (!fetch or (i.resolved and !i.ae and !i.pf and i.address == (pa | 0x18))) and
-      (!load or (d.resolved and !d.ae and d.pf == store and d.address == (pa | 0x58)))
+  const pa = (base | vpn) << 12
+  correct = (!fetch or (i.resolved and !i.ae and !i.pf and i.address == (pa | 0x18))) and (!load or (d.resolved and !d.ae and d.pf == store and d.address == (pa | 0x58)))
 }
 
 pub mod l2_walks(clk:Clock, rst:Reset, phase:U4, ready:Bool) -> (correct:Bool@[], counts:U10@[], misses:U8@[]) {
   correct = true
   for j in 0..<2 {
-    const w = walks<X=(if j == 0 { 32 } else { 64 })>(clk=clk, rst=rst, phase=phase, ready=ready)
+    const w = walks<X=(if j == 0 { 32 } else { 64 })>(clk, phase, ready, rst)
     correct = correct and w.correct
     counts#[(j*5)..+5] = w.reads
     misses#[(j*4)..+4] = w.misses
@@ -68,10 +66,10 @@ test l2_walks.shared_permissions {
   mut d = l2_walks
   tick 216 {
     d.rst = clock < 2
-    d.phase = clock / 24
-    d.ready = clock % 3 != 0
+    d.phase = clock/24
+    d.ready = clock%3 != 0
     step
-    if clock % 24 == 23 {
+    if clock%24 == 23 {
       assert(d.correct, "resolved address and permissions")
       const n = if clock < 24 { 0 } elif clock < 96 { 1 } elif clock < 120 { 2 } elif clock < 168 { 3 } elif clock < 192 { 4 } else { 5 }
       assert(d.misses == n*17 and d.counts == n*98, "one walk per shared miss on each XLEN")

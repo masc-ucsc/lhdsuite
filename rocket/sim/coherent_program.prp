@@ -5,7 +5,7 @@ comptime const narrowD = config.params(useDataScratchpad=false, dcacheSets=2, dc
 comptime const wide = config.params(xLen=64, nMSHRs=2, dcacheBlockBytes=32, useDataScratchpad=false, dcacheSets=2, dcacheWays=1, btbEntries=4, icacheSets=128, icacheWays=2)
 
 // A conflict evicts both dirty lines; the final LW must recover the AMO result from RAM.
-mod profile<C>(clk:Clock,rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
+mod profile<C>(clk:Clock, rst:Reset) -> (bad:Bool@[], done:Bool@[]) {
   const program:[48]U32 = (
     0x00100413, // li s0,1
     0x01f41413, // slli s0,s0,0x1f
@@ -46,16 +46,24 @@ mod profile<C>(clk:Clock,rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
     0x00731463, // bne t1,t2,100d8 <fail>
     0x0000006f, // j 100d4 <success>
     0x00100073, // ebreak
-    0, 0, 0, 0, 0, 0, 0, 0, 0
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
   )
   const tile = image<C=C, WORDS=48>(clk=clk, rst=rst, program=program, successPC=0x100d4)
   done = tile.success and tile.memoryChecked
   bad = tile.trap != 0 or tile.badFetch
 }
-pub mod coherent_program(clk:Clock, rst:Reset) -> (rv32:Bool@[], rv64:Bool@[], rv32d:Bool@[], failed:Bool@[]) {
-  const a = profile<narrow>(clk=clk, rst=rst)
-  const b = profile<wide>(clk=clk, rst=rst)
-  const c = profile<narrowD>(clk=clk, rst=rst)
+pub mod coherent_program(clk:Clock, rst:Reset) -> (failed:Bool@[], rv32:Bool@[], rv32d:Bool@[], rv64:Bool@[]) {
+  const a = profile<narrow>(clk, rst)
+  const b = profile<wide>(clk, rst)
+  const c = profile<narrowD>(clk, rst)
   rv32d = c.done
   rv32 = a.done
   rv64 = b.done
@@ -71,10 +79,18 @@ test coherent_program.run {
     step
     if clock >= 4 {
       assert(!d.failed, "unexpected trap or physical fetch")
-      if d.rv32 { a = true }
-      if d.rv64 { b = true }
-      if d.rv32d { c = true }
-      if a and b and c { break }
+      if d.rv32 {
+        a = true
+      }
+      if d.rv64 {
+        b = true
+      }
+      if d.rv32d {
+        c = true
+      }
+      if a and b and c {
+        break
+      }
     }
   }
   assert(a and b and c, "RV32, RV32D and RV64 completed cached atomics and dirty eviction")
@@ -82,21 +98,35 @@ test coherent_program.run {
 
 comptime const paired32 = config.params(useDataScratchpad=false, nMSHRs=2, dcacheSets=4, dcacheWays=1, dcacheBlockBytes=32)
 
-mod paired<C>(clk:Clock,rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
+mod paired<C>(clk:Clock, rst:Reset) -> (bad:Bool@[], done:Bool@[]) {
   const program:[16]U32 = (
-    0x00100093, 0x01f09093, // x1 = 0x80000000
-    0x0000a183, 0x0200a203, // lw x3,0(x1); lw x4,32(x1)
-    0x01300293, 0x00519863, // bne x3,19,fail
-    0x02500293, 0x00521463, // bne x4,37,fail
-    0x0000006f, 0x00100073, 0,0,0,0,0,0)
-  const d = image<C=C,WORDS=16,REVERSE_GRANTS=true>(clk=clk,rst=rst,program=program,successPC=0x10060)
+    0x00100093,
+    0x01f09093, // x1 = 0x80000000
+    0x0000a183,
+    0x0200a203, // lw x3,0(x1); lw x4,32(x1)
+    0x01300293,
+    0x00519863, // bne x3,19,fail
+    0x02500293,
+    0x00521463, // bne x4,37,fail
+    0x0000006f,
+    0x00100073,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+  )
+  const d = image<C=C, REVERSE_GRANTS=true, WORDS=16>(clk=clk, rst=rst, program=program, successPC=0x10060)
   done = d.success and d.memoryChecked
   bad = d.badFetch or d.trap != 0
 }
-pub mod independent_loads(clk:Clock,rst:Reset) -> (ok32:Bool@[], ok64:Bool@[], bad:Bool@[]) {
-  const a = paired<paired32>(clk=clk,rst=rst)
-  const b = paired<wide>(clk=clk,rst=rst)
-  ok32 = a.done; ok64 = b.done; bad = a.bad or b.bad
+pub mod independent_loads(clk:Clock, rst:Reset) -> (bad:Bool@[], ok32:Bool@[], ok64:Bool@[]) {
+  const a = paired<paired32>(clk, rst)
+  const b = paired<wide>(clk, rst)
+  ok32 = a.done
+  ok64 = b.done
+  bad = a.bad or b.bad
 }
 test independent_loads.reverse_grants {
   mut d = independent_loads
@@ -105,8 +135,14 @@ test independent_loads.reverse_grants {
   tick 250 {
     d.rst = clock < 4
     step
-    if clock > 4 { assert(!d.bad, "trap or unexpected acquire"); a = a or d.ok32; b = b or d.ok64 }
-    if a and b { break }
+    if clock > 4 {
+      assert(!d.bad, "trap or unexpected acquire")
+      a = a or d.ok32
+      b = b or d.ok64
+    }
+    if a and b {
+      break
+    }
   }
   assert(a and b, "both processors consumed both reordered loads")
 }

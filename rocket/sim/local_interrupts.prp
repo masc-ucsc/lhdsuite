@@ -108,10 +108,12 @@ comb firmware() -> (rom:[240]U32) {
     0xf69316e3, // bne t1,s1,1012c <fail>
     0x1044b073, // csrc sie,s1
     0x00140413, // addi s0,s0,1
-    0x10200073 // sret
+    0x10200073, // sret
   )
   rom = 0
-  for i in 0..<100 { rom[i] = code[i] }
+  for i in 0..<100 {
+    rom[i] = code[i]
+  }
   rom[119] = 0xf65ff06f // j 10180 <timer_m>
   rom[128] = 0xf1dff06f // j 1015c <low_m>
   rom[143] = 0xeb9ff06f // j 10134 <high_m>
@@ -120,18 +122,18 @@ comb firmware() -> (rom:[240]U32) {
   rom[239] = 0xda5ff06f // j 101a0 <high_s>
 }
 
-mod run<C>(clk:Clock,rst:Reset,raise:Bool) -> (done:U1@[], asleep:U1@[], bad:Bool@[]) {
-  const pins:Unsigned(bits=C.nLocalInterrupts) = if raise { (1 << (C.nLocalInterrupts-1)) | 1 } else { 0 }
-  const t = image<C=C, WORDS=240>(clk=clk,rst=rst,program=firmware(),successPC=0x10128,localInterrupts=pins,timer=U1(raise))
+mod run<C>(clk:Clock, raise:Bool, rst:Reset) -> (asleep:U1@[], bad:Bool@[], done:U1@[]) {
+  const pins:Unsigned(bits=C.nLocalInterrupts) = if raise { (1 << (C.nLocalInterrupts - 1)) | 1 } else { 0 }
+  const t = image<C=C, WORDS=240>(clk=clk, rst=rst, program=firmware(), successPC=0x10128, localInterrupts=pins, timer=U1(raise))
   done = U1(t.success and t.privilege == (if C.useSupervisor { 1 } else { 3 }))
   asleep = U1(t.traceValid and t.tracePC == 0x100a8)
-  bad = t.trap != 0 and t.cause#[C.xLen-1] == 0
+  bad = t.trap != 0 and t.cause#[C.xLen - 1] == 0
 }
 
-pub mod local_interrupts(clk:Clock,rst:Reset,raise:Bool) -> (done:U3@[], asleep:U3@[], bad:Bool@[]) {
-  const a = run<narrow>(clk=clk,rst=rst,raise=raise)
-  const b = run<wide>(clk=clk,rst=rst,raise=raise)
-  const m = run<machine>(clk=clk,rst=rst,raise=raise)
+pub mod local_interrupts(clk:Clock, rst:Reset, raise:Bool) -> (asleep:U3@[], bad:Bool@[], done:U3@[]) {
+  const a = run<narrow>(clk, raise, rst)
+  const b = run<wide>(clk, raise, rst)
+  const m = run<machine>(clk, raise, rst)
   done = (m.done << 2) | (b.done << 1) | a.done
   asleep = (m.asleep << 2) | (b.asleep << 1) | a.asleep
   bad = a.bad or b.bad or m.bad
@@ -149,7 +151,9 @@ test local_interrupts.priority_and_delegation {
       waited |= d.asleep
       finished |= d.done
       assert(!d.bad, "unexpected synchronous trap")
-      if clock == 248 { assert(waited == 7 and finished == 0, "all tiles must retire WFI before the interrupt") }
+      if clock == 248 {
+        assert(waited == 7 and finished == 0, "all tiles must retire WFI before the interrupt")
+      }
     }
   }
   assert(finished == 7, "each tile must handle the interrupts in priority order and resume in its expected privilege")

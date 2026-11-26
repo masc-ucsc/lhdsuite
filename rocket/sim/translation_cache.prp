@@ -4,19 +4,13 @@ const translate = import("../pyrope2/AddressTranslation.AddressTranslation")
 
 // The PTE at the root maps a supervisor-readable superpage, or a user
 // execute-only page for the second root. Change the PTE to check flushes.
-mod check<W,WAYS=1>(clk:Clock, rst:Reset, row:U5, phase:U4) -> (wrong:Bool@[], done:Bool@[]) {
+mod check<W, WAYS=1>(clk:Clock, phase:U4, row:U5, rst:Reset) -> (done:Bool@[], wrong:Bool@[]) {
   const root = if row >= 15 { 3 } elif row >= 5 and row <= 9 { 2 } else { 1 }
   const ppn = if row >= 8 { 0x40000 } else { 0x80000 }
   const flags = if root == 2 { 0x59 } else { 0x43 }
   // The two VPNs below collide when the cache has two entries.
-  const va = if row == 11 { 0x87654321 } elif row == 12 { 0x100001234 }
-             elif row == 13 { 0x12345678+0x2000 } else { 0x12345678 }
-  const d = translate<XLEN=W, ENTRIES=2, WAYS=WAYS>(clk=clk, rst=rst, request=phase == 1, virtualAddress=va#[0..<W],
-      addressSpace=root, paging=row != 11 and row != 12,
-      flush=(row == 8 and phase == 0) or ((row == 9 or row == 15) and phase == 2),
-      user=root == 2, fetch=row == 3 or row == 5 or row == 8, store=row == 4,
-      sum=false, mxr=row == 7, consume=phase == 7, readReady=phase == 3, readDone=phase == 4,
-      readError=false, readData=(ppn << 10) | flags)
+  const va = if row == 11 { 0x87654321 } elif row == 12 { 0x100001234 } elif row == 13 { 0x12345678 + 0x2000 } else { 0x12345678 }
+  const d = translate<ENTRIES=2, WAYS=WAYS, XLEN=W>(clk=clk, rst=rst, request=phase == 1, virtualAddress=va#[0..<W], addressSpace=root, paging=row != 11 and row != 12, flush=(row == 8 and phase == 0) or ((row == 9 or row == 15) and phase == 2), user=root == 2, fetch=row == 3 or row == 5 or row == 8, store=row == 4, sum=false, mxr=row == 7, consume=phase == 7, readReady=phase == 3, readDone=phase == 4, readError=false, readData=(ppn << 10) | flags)
   // Row 9 hits the cached user entry. Flush at phase 2 drops it while
   // its translation response is held. Row 10 must read from the first root.
   const wantRead = row == 0 or row == 5 or row == 8 or row == 10 or row == 13 or (row == 14 and WAYS == 1) or row == 15 or row == 16
@@ -24,40 +18,44 @@ mod check<W,WAYS=1>(clk:Clock, rst:Reset, row:U5, phase:U4) -> (wrong:Bool@[], d
   const expectedAE = row == 12 and W == 64
   const offset = va & (if W == 32 { 0x3fffff } else { 0x3fffffff })
   const physical = if row == 11 or row == 12 { va#[0..<32] } else { (ppn << 12) | offset }
-  wrong = (phase == 2 and d.read != wantRead) or (d.valid and
-      (d.pageFault != expectedPF or d.accessFault != expectedAE or
-       (!expectedPF and !expectedAE and d.address != physical)))
+  wrong = (phase == 2 and d.read != wantRead) or (d.valid and (d.pageFault != expectedPF or d.accessFault != expectedAE or (!expectedPF and !expectedAE and d.address != physical)))
   done = d.valid
 }
-pub mod translation_cache(clk:Clock, rst:Reset, row:U5, phase:U4) -> (wrong:Bool@[], done:Bool@[]) {
-  const sv32 = check<W=32>(clk=clk, rst=rst, row=row, phase=phase)
-  const sv39 = check<W=64>(clk=clk, rst=rst, row=row, phase=phase)
-  const associative = check<W=64,WAYS=2>(clk=clk,rst=rst,row=row,phase=phase)
+pub mod translation_cache(clk:Clock, rst:Reset, row:U5, phase:U4) -> (done:Bool@[], wrong:Bool@[]) {
+  const sv32 = check<W=32>(clk, phase, row, rst)
+  const sv39 = check<W=64>(clk, phase, row, rst)
+  const associative = check<W=64, WAYS=2>(clk, phase, row, rst)
   done = sv32.done and sv39.done and associative.done
   wrong = sv32.wrong or sv39.wrong or associative.wrong
 }
 test translation_cache.lookup_and_flush {
   mut d = translation_cache
   tick 153 {
-    const phase = clock % 9
-    d.row = clock / 9
+    const phase = clock%9
+    d.row = clock/9
     d.phase = phase
     d.rst = clock == 0
     step
-    if phase >= 2 { assert(!d.wrong, "cache lookup, permissions, bypass or address") }
-    if phase == 6 { assert(d.done, "translation completes") }
+    if phase >= 2 {
+      assert(!d.wrong, "cache lookup, permissions, bypass or address")
+    }
+    if phase == 6 {
+      assert(d.done, "translation completes")
+    }
   }
 }
 
 comptime const withASID = cfg.params(xLen=64, useVM=true, asIdBits=3)
 // Switch ASID after the walker accepts the request and before it returns.
 // A fault and a successful fill both belong to the context sampled at issue.
-pub mod asid_walk(clk:Clock, rst:Reset, phase:U4) -> (resolved:Bool@[], pf:Bool@[], ae:Bool@[], pa:U32@[], read:Bool@[]) {
+pub mod asid_walk(clk:Clock, rst:Reset, phase:U4) -> (ae:Bool@[], pa:U32@[], pf:Bool@[], read:Bool@[], resolved:Bool@[]) {
   const a = phase == 1 or phase == 5 or phase == 8 or phase == 9
   const satp = (8 << 60) | ((if a { 1 } else { 5 }) << 44) | 1
-  const d = port<C=withASID, FETCH=false>(clk=clk, rst=rst, request=phase == 1 or phase == 6, accepted=false,
-      va=0x1234, satp=satp, privilege=1, store=false, sum=false, mxr=false, flush=false,
-      readReady=true, readDone=phase == 2 or phase == 7, readError=false, readData=if phase == 2 { 0 } else { 0x20000043 })
+  const d = port<C=withASID, FETCH=false>(clk=clk, rst=rst, request=phase == 1 or phase == 6, accepted=false, va=0x1234, satp=satp, privilege=1, store=false, sum=false, mxr=false, flush=false, readReady=true, readDone=phase == 2 or phase == 7, readError=false, readData=if phase == 2 {
+      0
+    } else {
+      0x20000043
+    })
   resolved = d.resolved
   pf = d.pf
   ae = d.ae
@@ -70,9 +68,17 @@ test asid_walk.in_flight {
     d.rst = clock == 0
     d.phase = clock
     step
-    if clock == 1 or clock == 6 { assert(d.read, "both address spaces require a walk") }
-    if clock == 4 or clock == 6 or clock == 9 { assert(!d.resolved, "a different ASID cannot consume the result") }
-    if clock == 5 { assert(d.resolved and d.pf and !d.ae, "fault returned to its issuer") }
-    if clock == 10 { assert(d.resolved and !d.pf and !d.ae and d.pa == 0x80001234, "fill returned to its issuer") }
+    if clock == 1 or clock == 6 {
+      assert(d.read, "both address spaces require a walk")
+    }
+    if clock == 4 or clock == 6 or clock == 9 {
+      assert(!d.resolved, "a different ASID cannot consume the result")
+    }
+    if clock == 5 {
+      assert(d.resolved and d.pf and !d.ae, "fault returned to its issuer")
+    }
+    if clock == 10 {
+      assert(d.resolved and !d.pf and !d.ae and d.pa == 0x80001234, "fill returned to its issuer")
+    }
   }
 }

@@ -22,20 +22,24 @@ mod run<C>(clk:Clock, rst:Reset) -> (completed:Bool@[], failed:Bool@[]) {
     0x34102273, // handler: csrr x4,mepc
     0x00420213, // addi x4,x4,4
     0x34121073, // csrw mepc,x4
-    0x30200073  // mret
+    0x30200073, // mret
   )
   const dut = boot<C>(clk=clk, rst=rst, program=program, successPC=0x10064)
   reg traps:U3 = 0
   const expectedPC = 0x10058 + (traps << 2)
   failed = dut.trap != 0 and (!C.useRVE or traps >= 3 or dut.cause != 2 or dut.tracePC != expectedPC)
-  if rst { traps = 0 } elif dut.trap != 0 { wrap traps += 1 }
+  if rst {
+    traps = 0
+  } elif dut.trap != 0 {
+    wrap traps += 1
+  }
   completed = dut.success and traps == (if C.useRVE { 3 } else { 0 })
 }
 
-pub mod embedded_registers(clk:Clock, rst:Reset) -> (ok32:Bool@[], ok64:Bool@[], okI:Bool@[], bad:Bool@[]) {
-  const a = run<e32>(clk=clk, rst=rst)
-  const b = run<e64>(clk=clk, rst=rst)
-  const c = run<i32>(clk=clk, rst=rst)
+pub mod embedded_registers(clk:Clock, rst:Reset) -> (bad:Bool@[], ok32:Bool@[], ok64:Bool@[], okI:Bool@[]) {
+  const a = run<e32>(clk, rst)
+  const b = run<e64>(clk, rst)
+  const c = run<i32>(clk, rst)
   ok32 = a.completed
   ok64 = b.completed
   okI = c.completed
@@ -52,9 +56,15 @@ test embedded_registers.operand_fields {
     step
     if clock > 4 {
       assert(!d.bad, "unexpected trap PC or mcause")
-      if d.ok32 { seen32 = true }
-      if d.ok64 { seen64 = true }
-      if d.okI { seenI = true }
+      if d.ok32 {
+        seen32 = true
+      }
+      if d.ok64 {
+        seen64 = true
+      }
+      if d.okI {
+        seenI = true
+      }
     }
   }
   assert(seen32 and seen64 and seenI, "all profiles must retire the checked program")

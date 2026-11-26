@@ -6,8 +6,7 @@ const cache = import("../pyrope2/DCache.DCache")
 
 // Write actual page tables through the CPU port. Page-table reads share the
 // same DCache, with supervisor PMP protection and normal uncached bus replay.
-mod profile<W>(clk:Clock, rst:Reset, phase:U6, scenario:U3)
-    -> (done:Bool@[], bad:Bool@[], retried:Bool@[]) {
+mod profile<W>(clk:Clock, phase:U6, rst:Reset, scenario:U3) -> (bad:Bool@[], done:Bool@[], retried:Bool@[]) {
   const external = scenario >= 2
   const root = if external { 0x60000 } else { 0x80000 }
   const va = 0xabc
@@ -15,16 +14,13 @@ mod profile<W>(clk:Clock, rst:Reset, phase:U6, scenario:U3)
   wire complete:Bool = nil
   wire error:Bool = nil
   wire data:Unsigned(bits=W) = nil
-  const w = walk<XLEN=W, PA=32>(clk=clk, rst=rst, request=phase == 25, virtualAddress=va, rootPPN=root,
-      user=false, fetch=false, store=false, sum=false, mxr=false, consume=phase == 60,
-      readReady=ready, readDone=complete, readError=error, readData=data)
+  const w = walk<PA=32, XLEN=W>(clk=clk, rst=rst, request=phase == 25, virtualAddress=va, rootPPN=root, user=false, fetch=false, store=false, sum=false, mxr=false, consume=phase == 60, readReady=ready, readDone=complete, readError=error, readData=data)
   const install = scenario == 0 and (phase == 4 or phase == 12 or (W == 64 and phase == 20))
   const leaf = (0x81234 << 10) | 0x43
   const writeAddress = if phase == 4 { 0x80000000 } elif phase == 12 { 0x80001000 } else { 0x80002000 }
   reg storeData:Unsigned(bits=W)
   if install {
-    storeData = if phase == 4 { (0x80001 << 10) | 1 }
-                elif phase == 12 and W == 64 { (0x80002 << 10) | 1 } else { leaf }
+    storeData = if phase == 4 { (0x80001 << 10) | 1 } elif phase == 12 and W == 64 { (0x80002 << 10) | 1 } else { leaf }
   }
   wire cacheReady:U1 = nil
   wire nack:U1 = nil
@@ -32,11 +28,7 @@ mod profile<W>(clk:Clock, rst:Reset, phase:U6, scenario:U3)
   wire tag:U7 = nil
   wire fault:U1 = nil
   wire busError:U1 = nil
-  const a = arbiter<W=W, WALK=true>(clk=clk, rst=rst, cpuValid=U1(install), cpuAddress=writeAddress,
-      cpuTag=6, cpuCommand=1, cpuSize=std.clog2(W/8), cpuSigned=0, cpuPrivilege=3, cpuVirtual=0, cpuKill=0,
-      cpuData=storeData, slaveValid=0, slaveAddress=0, slaveCommand=0, slaveSize=0, slaveKill=0, slaveData=0, slaveMask=0,
-      cacheReady=cacheReady, cacheNack=nack, cacheValid=valid, cacheTag=tag, cacheLoadError=fault,
-      cacheResponseError=busError, walkRead=w.read, walkAddress=w.readAddress)
+  const a = arbiter<W=W, WALK=true>(clk=clk, rst=rst, cpuValid=U1(install), cpuAddress=writeAddress, cpuTag=6, cpuCommand=1, cpuSize=std.clog2(W/8), cpuSigned=0, cpuPrivilege=3, cpuVirtual=0, cpuKill=0, cpuData=storeData, slaveValid=0, slaveAddress=0, slaveCommand=0, slaveSize=0, slaveKill=0, slaveData=0, slaveMask=0, cacheReady=cacheReady, cacheNack=nack, cacheValid=valid, cacheTag=tag, cacheLoadError=fault, cacheResponseError=busError, walkRead=w.read, walkAddress=w.readAddress)
   ready = a.walkReady
   complete = a.walkDone
   error = a.walkError
@@ -46,16 +38,7 @@ mod profile<W>(clk:Clock, rst:Reset, phase:U6, scenario:U3)
   reg reply:Bool = false
   const grant = (0x80000 << 10) | 0x43
   wire permissions:U2 = nil
-  const d = cache<W=W, ATOMICS=false, SETS=256>(clock=clk, reset=rst,
-      auto_out_a_ready=accept, auto_out_d_valid=U1(reply), auto_out_d_bits_opcode=1,
-      auto_out_d_bits_size=std.clog2(W/8), auto_out_d_bits_denied=U1(scenario == 3),
-      auto_out_d_bits_corrupt=U1(scenario == 4), auto_out_d_bits_data=grant,
-      io_cpu_req_valid=a.valid, io_cpu_req_bits_addr=a.address, io_cpu_req_bits_tag=a.tag,
-      io_cpu_req_bits_cmd=a.command, io_cpu_req_bits_size=a.size, io_cpu_req_bits_signed=a.isSigned,
-      io_cpu_req_bits_dprv=a.privilege, io_cpu_req_bits_dv=a.dv, io_cpu_req_bits_phys=a.physical,
-      io_cpu_req_bits_no_xcpt=a.skipException, io_cpu_s1_kill=a.kill, io_cpu_s1_data_data=a.data,
-      io_cpu_s1_data_mask=a.mask, io_ptw_status_debug=0,
-      pmpPermissions=permissions)
+  const d = cache<ATOMICS=false, SETS=256, W=W>(clock=clk, reset=rst, auto_out_a_ready=accept, auto_out_d_valid=U1(reply), auto_out_d_bits_opcode=1, auto_out_d_bits_size=std.clog2(W/8), auto_out_d_bits_denied=U1(scenario == 3), auto_out_d_bits_corrupt=U1(scenario == 4), auto_out_d_bits_data=grant, io_cpu_req_valid=a.valid, io_cpu_req_bits_addr=a.address, io_cpu_req_bits_tag=a.tag, io_cpu_req_bits_cmd=a.command, io_cpu_req_bits_size=a.size, io_cpu_req_bits_signed=a.isSigned, io_cpu_req_bits_dprv=a.privilege, io_cpu_req_bits_dv=a.dv, io_cpu_req_bits_phys=a.physical, io_cpu_req_bits_no_xcpt=a.skipException, io_cpu_s1_kill=a.kill, io_cpu_s1_data_data=a.data, io_cpu_s1_data_mask=a.mask, io_ptw_status_debug=0, pmpPermissions=permissions)
   mut table:protection.Entries = nil
   table.cfg = 0
   table.addr = 0
@@ -64,8 +47,12 @@ mod profile<W>(clk:Clock, rst:Reset, phase:U6, scenario:U3)
   const access = checkPMP<N=1>(table=table, privilege=d.pmpPrivilege, address=d.pmpAddress, size=d.pmpSize)
   permissions = access#[0..<2]
 
-  if d.auto_out_a_valid != 0 and accept != 0 { reply = true }
-  if reply and d.auto_out_d_ready != 0 { reply = false }
+  if d.auto_out_a_valid != 0 and accept != 0 {
+    reply = true
+  }
+  if reply and d.auto_out_d_ready != 0 {
+    reply = false
+  }
   cacheReady = d.io_cpu_req_ready
   nack = d.io_cpu_s2_nack
   valid = d.io_cpu_resp_valid
@@ -76,17 +63,19 @@ mod profile<W>(clk:Clock, rst:Reset, phase:U6, scenario:U3)
   const expectFault = scenario == 1 or scenario == 3 or scenario == 4
   const expectAddress = if external { 0x80000abc } else { 0x81234abc }
   reg sawRetry:Bool = false
-  if phase == 0 { sawRetry = false }
-  if external and nack != 0 { sawRetry = true }
+  if phase == 0 {
+    sawRetry = false
+  }
+  if external and nack != 0 {
+    sawRetry = true
+  }
   done = w.valid
   retried = sawRetry
-  bad = (w.valid and (w.pageFault or w.accessFault != expectFault or (!expectFault and w.address != expectAddress))) or
-         (install and a.cpuReady == 0) or (a.walkDone and (a.cpuResponse != 0 or a.slaveResponse != 0)) or
-         (a.valid != 0 and a.tag == 3 and (a.privilege != 1 or a.physical != 1 or a.skipException != 0))
+  bad = (w.valid and (w.pageFault or w.accessFault != expectFault or (!expectFault and w.address != expectAddress))) or (install and a.cpuReady == 0) or (a.walkDone and (a.cpuResponse != 0 or a.slaveResponse != 0)) or (a.valid != 0 and a.tag == 3 and (a.privilege != 1 or a.physical != 1 or a.skipException != 0))
 }
-pub mod page_table_dcache(clk:Clock, rst:Reset, phase:U6, scenario:U3) -> (done:Bool@[], bad:Bool@[], retried:Bool@[]) {
-  const a = profile<W=32>(clk=clk, rst=rst, phase=phase, scenario=scenario)
-  const b = profile<W=64>(clk=clk, rst=rst, phase=phase, scenario=scenario)
+pub mod page_table_dcache(clk:Clock, rst:Reset, phase:U6, scenario:U3) -> (bad:Bool@[], done:Bool@[], retried:Bool@[]) {
+  const a = profile<W=32>(clk, phase, rst, scenario)
+  const b = profile<W=64>(clk, phase, rst, scenario)
   done = a.done and b.done
   bad = a.bad or b.bad
   retried = a.retried and b.retried
@@ -94,16 +83,20 @@ pub mod page_table_dcache(clk:Clock, rst:Reset, phase:U6, scenario:U3) -> (done:
 test page_table_dcache.scratchpad_and_bus {
   mut d = page_table_dcache
   tick 320 {
-    const phase = clock % 64
-    const scenario = clock / 64
+    const phase = clock%64
+    const scenario = clock/64
     d.rst = clock < 2
     d.phase = phase
     d.scenario = scenario
     step
-    if phase > 2 { assert(!d.bad, "incorrect PTE, protection, fault or response routing") }
+    if phase > 2 {
+      assert(!d.bad, "incorrect PTE, protection, fault or response routing")
+    }
     if phase == 58 {
       assert(d.done, "both walks completed")
-      if scenario >= 2 { assert(d.retried, "the backpressured uncached PTE read must retry") }
+      if scenario >= 2 {
+        assert(d.retried, "the backpressured uncached PTE read must retry")
+      }
     }
   }
 }

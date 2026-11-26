@@ -3,7 +3,7 @@ const image = import("BootROM.Image")
 comptime const narrow = cfg.params(useSupervisor=true)
 comptime const wide = cfg.params(xLen=64, useSupervisor=true)
 
-mod check<C>(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
+mod check<C>(clk:Clock, rst:Reset) -> (bad:Bool@[], done:Bool@[]) {
   const program:[80]U32 = (
     0xfff00293, // machine: li t0,-1
     0x3b029073, // csrw pmpaddr0,t0
@@ -84,22 +84,26 @@ mod check<C>(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
     0xf4729ce3, // bne t0,t2,100c8 <fail>
     0x00140413, // addi s0,s0,1
     0x10200073, // sret
-    0
+    0,
   )
   const tile = image<C=C, WORDS=80>(clk=clk, rst=rst, program=program, successPC=0x100c4, seip=1)
-  const interrupt = 1 << (C.xLen-1)
+  const interrupt = 1 << (C.xLen - 1)
   reg externalSeen:Bool = false
   reg softwareSeen:Bool = false
   const external = tile.privilege == 1 and tile.cause == (interrupt | 9)
   const software = tile.privilege == 1 and tile.cause == (interrupt | 1)
-  if tile.trap != 0 and external { externalSeen = true }
-  if tile.trap != 0 and software and externalSeen { softwareSeen = true }
+  if tile.trap != 0 and external {
+    externalSeen = true
+  }
+  if tile.trap != 0 and software and externalSeen {
+    softwareSeen = true
+  }
   bad = tile.trap != 0 and !external and !software
   done = tile.success and tile.privilege == 1 and softwareSeen
 }
 pub mod supervisor_interrupts(clk:Clock, rst:Reset) -> (a:Bool@[], b:Bool@[], bad:Bool@[]) {
-  const a32 = check<narrow>(clk=clk, rst=rst)
-  const b64 = check<wide>(clk=clk, rst=rst)
+  const a32 = check<narrow>(clk, rst)
+  const b64 = check<wide>(clk, rst)
   a = a32.done
   b = b64.done
   bad = a32.bad or b64.bad
@@ -113,9 +117,15 @@ test supervisor_interrupts.vectored_interrupts {
     step
     if clock > 4 {
       assert(!d.bad, "unexpected cause or privilege during vectored interrupts")
-      if d.a { a = true }
-      if d.b { b = true }
-      if a and b { break }
+      if d.a {
+        a = true
+      }
+      if d.b {
+        b = true
+      }
+      if a and b {
+        break
+      }
     }
   }
   assert(a and b, "both supervisor handlers restored SIE and returned")

@@ -9,49 +9,45 @@ comptime const fast64 = configs.params(xLen=64, divUnroll=4)
 comptime const early64 = configs.params(xLen=64, divUnroll=4, divEarlyOut=true, divEarlyOutGranularity=8)
 comptime const odd64 = configs.params(xLen=64, divUnroll=3, divEarlyOut=true)
 
-mod run<C>(clk:Clock, rst:Reset, issue:Bool, fn:U4, dw:U1, a:U64, b:U64, expect:U64)
-    -> (done:Bool@[], wrong:Bool@[]) {
-  const d = divide<C>(clock=clk, reset=rst, io_req_valid=U1(issue), io_req_bits_fn=fn,
-      io_req_bits_dw=dw, io_req_bits_in1=a#[0..<C.xLen], io_req_bits_in2=b#[0..<C.xLen],
-      io_req_bits_tag=3, io_kill=0, io_resp_ready=0)
+mod run<C>(a:U64, b:U64, clk:Clock, dw:U1, expect:U64, fn:U4, issue:Bool, rst:Reset) -> (done:Bool@[], wrong:Bool@[]) {
+  const d = divide<C>(clock=clk, reset=rst, io_req_valid=U1(issue), io_req_bits_fn=fn, io_req_bits_dw=dw, io_req_bits_in1=a#[0..<C.xLen], io_req_bits_in2=b#[0..<C.xLen], io_req_bits_tag=3, io_kill=0, io_resp_ready=0)
   done = d.io_resp_valid != 0
   wrong = done and (d.io_resp_bits_data != expect#[0..<C.xLen] or d.io_resp_bits_tag != 3)
 }
-pub mod divider_profiles(clk:Clock, rst:Reset, issue:Bool, row:U5)
-    -> (allDone:Bool@[], fastDone:Bool@[], earlyDone:Bool@[], serialDone:Bool@[], wrong:Bool@[]) {
+pub mod divider_profiles(clk:Clock, rst:Reset, issue:Bool, row:U5) -> (allDone:Bool@[], earlyDone:Bool@[], fastDone:Bool@[], serialDone:Bool@[], wrong:Bool@[]) {
   const v = match row {
-    ==  0 { (fn=5, dw=1, a=0x7b, b=0x7, lo=0x11, hi=0x11) }
-    ==  1 { (fn=7, dw=1, a=0x7b, b=0x7, lo=0x4, hi=0x4) }
-    ==  2 { (fn=4, dw=1, a=0xffffffffffffff85, b=0x7, lo=0xffffffef, hi=0xffffffffffffffef) }
-    ==  3 { (fn=6, dw=1, a=0xffffffffffffff85, b=0x7, lo=0xfffffffc, hi=0xfffffffffffffffc) }
-    ==  4 { (fn=4, dw=1, a=0x7b, b=0xfffffffffffffff9, lo=0xffffffef, hi=0xffffffffffffffef) }
-    ==  5 { (fn=6, dw=1, a=0x7b, b=0xfffffffffffffff9, lo=0x4, hi=0x4) }
-    ==  6 { (fn=4, dw=1, a=0xffffffffffffff85, b=0xfffffffffffffff9, lo=0x11, hi=0x11) }
-    ==  7 { (fn=5, dw=1, a=0x3, b=0xc8, lo=0x0, hi=0x0) }
-    ==  8 { (fn=7, dw=1, a=0x3, b=0xc8, lo=0x3, hi=0x3) }
-    ==  9 { (fn=5, dw=1, a=0x0, b=0x7, lo=0x0, hi=0x0) }
-    == 10 { (fn=5, dw=1, a=0x0, b=0x0, lo=0xffffffff, hi=0xffffffffffffffff) }
-    == 11 { (fn=7, dw=1, a=0x0, b=0x0, lo=0x0, hi=0x0) }
-    == 12 { (fn=4, dw=1, a=0xfffffffffffffff9, b=0x0, lo=0xffffffff, hi=0xffffffffffffffff) }
-    == 13 { (fn=6, dw=1, a=0xfffffffffffffff9, b=0x0, lo=0xfffffff9, hi=0xfffffffffffffff9) }
-    == 14 { (fn=5, dw=1, a=0xffffffffffffffff, b=0x1, lo=0xffffffff, hi=0xffffffffffffffff) }
-    == 15 { (fn=7, dw=1, a=0xffffffffffffffff, b=0x8000000000000001, lo=0x0, hi=0x7ffffffffffffffe) }
-    == 16 { (fn=4, dw=1, a=0x8000000000000000, b=0xffffffffffffffff, lo=0x0, hi=0x8000000000000000) }
-    == 17 { (fn=6, dw=1, a=0x8000000000000000, b=0xffffffffffffffff, lo=0x0, hi=0x0) }
-    == 18 { (fn=4, dw=1, a=0x80000000, b=0xffffffffffffffff, lo=0x80000000, hi=0xffffffff80000000) }
-    == 19 { (fn=5, dw=0, a=0x1234456780000000, b=0x1, lo=0x80000000, hi=0xffffffff80000000) }
-    == 20 { (fn=6, dw=0, a=0x1234456780000003, b=0x17, lo=0xfffffffd, hi=0xfffffffffffffffd) }
-    == 21 { (fn=4, dw=0, a=0x12344567000000f0, b=0xf000000080000000, lo=0x0, hi=0x0) }
-    else { (fn=4, dw=1, a=0, b=1, lo=0, hi=0) }
+    == 0 { (a=0x7b, b=0x7, dw=1, fn=5, hi=0x11, lo=0x11) }
+    == 1 { (a=0x7b, b=0x7, dw=1, fn=7, hi=0x4, lo=0x4) }
+    == 2 { (a=0xffffffffffffff85, b=0x7, dw=1, fn=4, hi=0xffffffffffffffef, lo=0xffffffef) }
+    == 3 { (a=0xffffffffffffff85, b=0x7, dw=1, fn=6, hi=0xfffffffffffffffc, lo=0xfffffffc) }
+    == 4 { (a=0x7b, b=0xfffffffffffffff9, dw=1, fn=4, hi=0xffffffffffffffef, lo=0xffffffef) }
+    == 5 { (a=0x7b, b=0xfffffffffffffff9, dw=1, fn=6, hi=0x4, lo=0x4) }
+    == 6 { (a=0xffffffffffffff85, b=0xfffffffffffffff9, dw=1, fn=4, hi=0x11, lo=0x11) }
+    == 7 { (a=0x3, b=0xc8, dw=1, fn=5, hi=0x0, lo=0x0) }
+    == 8 { (a=0x3, b=0xc8, dw=1, fn=7, hi=0x3, lo=0x3) }
+    == 9 { (a=0x0, b=0x7, dw=1, fn=5, hi=0x0, lo=0x0) }
+    == 10 { (a=0x0, b=0x0, dw=1, fn=5, hi=0xffffffffffffffff, lo=0xffffffff) }
+    == 11 { (a=0x0, b=0x0, dw=1, fn=7, hi=0x0, lo=0x0) }
+    == 12 { (a=0xfffffffffffffff9, b=0x0, dw=1, fn=4, hi=0xffffffffffffffff, lo=0xffffffff) }
+    == 13 { (a=0xfffffffffffffff9, b=0x0, dw=1, fn=6, hi=0xfffffffffffffff9, lo=0xfffffff9) }
+    == 14 { (a=0xffffffffffffffff, b=0x1, dw=1, fn=5, hi=0xffffffffffffffff, lo=0xffffffff) }
+    == 15 { (a=0xffffffffffffffff, b=0x8000000000000001, dw=1, fn=7, hi=0x7ffffffffffffffe, lo=0x0) }
+    == 16 { (a=0x8000000000000000, b=0xffffffffffffffff, dw=1, fn=4, hi=0x8000000000000000, lo=0x0) }
+    == 17 { (a=0x8000000000000000, b=0xffffffffffffffff, dw=1, fn=6, hi=0x0, lo=0x0) }
+    == 18 { (a=0x80000000, b=0xffffffffffffffff, dw=1, fn=4, hi=0xffffffff80000000, lo=0x80000000) }
+    == 19 { (a=0x1234456780000000, b=0x1, dw=0, fn=5, hi=0xffffffff80000000, lo=0x80000000) }
+    == 20 { (a=0x1234456780000003, b=0x17, dw=0, fn=6, hi=0xfffffffffffffffd, lo=0xfffffffd) }
+    == 21 { (a=0x12344567000000f0, b=0xf000000080000000, dw=0, fn=4, hi=0x0, lo=0x0) }
+    else { (a=0, b=1, dw=1, fn=4, hi=0, lo=0) }
   }
-  const s32 = run<serial32>(clk=clk, rst=rst, issue=issue, fn=v.fn, dw=v.dw, a=v.a, b=v.b, expect=v.lo)
-  const f32 = run<fast32>(clk=clk, rst=rst, issue=issue, fn=v.fn, dw=v.dw, a=v.a, b=v.b, expect=v.lo)
-  const e32 = run<early32>(clk=clk, rst=rst, issue=issue, fn=v.fn, dw=v.dw, a=v.a, b=v.b, expect=v.lo)
-  const o32 = run<odd32>(clk=clk, rst=rst, issue=issue, fn=v.fn, dw=v.dw, a=v.a, b=v.b, expect=v.lo)
-  const s64 = run<serial64>(clk=clk, rst=rst, issue=issue, fn=v.fn, dw=v.dw, a=v.a, b=v.b, expect=v.hi)
-  const f64 = run<fast64>(clk=clk, rst=rst, issue=issue, fn=v.fn, dw=v.dw, a=v.a, b=v.b, expect=v.hi)
-  const e64 = run<early64>(clk=clk, rst=rst, issue=issue, fn=v.fn, dw=v.dw, a=v.a, b=v.b, expect=v.hi)
-  const o64 = run<odd64>(clk=clk, rst=rst, issue=issue, fn=v.fn, dw=v.dw, a=v.a, b=v.b, expect=v.hi)
+  const s32 = run<serial32>(a=v.a, b=v.b, clk, dw=v.dw, expect=v.lo, fn=v.fn, issue, rst)
+  const f32 = run<fast32>(a=v.a, b=v.b, clk, dw=v.dw, expect=v.lo, fn=v.fn, issue, rst)
+  const e32 = run<early32>(a=v.a, b=v.b, clk, dw=v.dw, expect=v.lo, fn=v.fn, issue, rst)
+  const o32 = run<odd32>(a=v.a, b=v.b, clk, dw=v.dw, expect=v.lo, fn=v.fn, issue, rst)
+  const s64 = run<serial64>(a=v.a, b=v.b, clk, dw=v.dw, expect=v.hi, fn=v.fn, issue, rst)
+  const f64 = run<fast64>(a=v.a, b=v.b, clk, dw=v.dw, expect=v.hi, fn=v.fn, issue, rst)
+  const e64 = run<early64>(a=v.a, b=v.b, clk, dw=v.dw, expect=v.hi, fn=v.fn, issue, rst)
+  const o64 = run<odd64>(a=v.a, b=v.b, clk, dw=v.dw, expect=v.hi, fn=v.fn, issue, rst)
   allDone = s32.done and f32.done and e32.done and o32.done and s64.done and f64.done and e64.done and o64.done
   wrong = s32.wrong or f32.wrong or e32.wrong or o32.wrong or s64.wrong or f64.wrong or e64.wrong or o64.wrong
   fastDone = f32.done and f64.done
@@ -61,15 +57,23 @@ pub mod divider_profiles(clk:Clock, rst:Reset, issue:Bool, row:U5)
 test divider_profiles.quotients_and_latency {
   mut d = divider_profiles
   tick 1584 {
-    const cycle = clock % 72
-    const row = clock / 72
+    const cycle = clock%72
+    const row = clock/72
     d.row = row
     d.rst = cycle == 0
     d.issue = cycle == 1
     step
-    if cycle >= 2 { assert(!d.wrong, "incorrect quotient, remainder, or response tag") }
-    if row == 0 and cycle == 6 { assert(d.earlyDone and !d.fastDone, "early-out skips leading zero quotient digits") }
-    if row == 0 and cycle == 19 { assert(d.fastDone and !d.serialDone, "four division steps per cycle") }
-    if cycle == 70 { assert(d.allDone, "every profile retains its response until accepted") }
+    if cycle >= 2 {
+      assert(!d.wrong, "incorrect quotient, remainder, or response tag")
+    }
+    if row == 0 and cycle == 6 {
+      assert(d.earlyDone and !d.fastDone, "early-out skips leading zero quotient digits")
+    }
+    if row == 0 and cycle == 19 {
+      assert(d.fastDone and !d.serialDone, "four division steps per cycle")
+    }
+    if cycle == 70 {
+      assert(d.allDone, "every profile retains its response until accepted")
+    }
   }
 }

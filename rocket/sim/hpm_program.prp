@@ -3,9 +3,12 @@ const image = import("BootROM.Image")
 
 // Firmware counts retired integer and floating-point instructions, pipeline
 // stalls and cache traffic, then checks U-mode counter permissions.
-mod run<X,COHERENT>(clk:Clock, rst:Reset) -> (success:Bool@[], trap:U1@[]) {
-  comptime const C = cfg.params(xLen=X, fLen=32, useSupervisor=true, nPerfCounters=8,
-      useDataScratchpad=!COHERENT, dcacheSets=8, dcacheWays=2, mulUnroll=(if COHERENT { X } else { 8 }))
+mod run<X, COHERENT>(clk:Clock, rst:Reset) -> (success:Bool@[], trap:U1@[]) {
+  comptime const C = cfg.params(xLen=X, fLen=32, useSupervisor=true, nPerfCounters=8, useDataScratchpad=!COHERENT, dcacheSets=8, dcacheWays=2, mulUnroll=(if COHERENT {
+        X
+      } else {
+        8
+      }))
   const program:[176]U32 = (
     0xfff00293, // li t0,-1
     0x32029073, // csrw mcountinhibit,t0
@@ -182,16 +185,16 @@ mod run<X,COHERENT>(clk:Clock, rst:Reset) -> (success:Bool@[], trap:U1@[]) {
     0x004e8e93, // addi t4,t4,4
     0x341e9073, // csrw mepc,t4
     0x30200073, // mret
-    0
+    0,
   )
-  const tile = image<C=C,WORDS=176>(clk=clk, rst=rst, program=program, successPC=0x102b0)
+  const tile = image<C=C, WORDS=176>(clk=clk, rst=rst, program=program, successPC=0x102b0)
   success = tile.success and tile.privilege == 0
   trap = tile.trap
 }
 
 pub mod hpm_program(clk:Clock, rst:Reset) -> (success:U2@[], traps:U2@[]) {
-  const a = run<X=32,COHERENT=false>(clk=clk, rst=rst)
-  const b = run<X=64,COHERENT=true>(clk=clk, rst=rst)
+  const a = run<COHERENT=false, X=32>(clk, rst)
+  const b = run<COHERENT=true, X=64>(clk, rst)
   success = U1(a.success) | (U1(b.success) << 1)
   traps = a.trap | (b.trap << 1)
 }

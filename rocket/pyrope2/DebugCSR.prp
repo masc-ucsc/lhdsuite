@@ -2,10 +2,7 @@ const legal = import("UserPrivilege.legal")
 
 // Debug entry saves the interrupted privilege and PC. A second trap in debug
 // branches to the exception handler without replacing the saved return state.
-pub mod DebugCSR<C>(clk:Clock, rst:Reset, addr:U12, cmd:U3, operand:Unsigned(bits=C.xLen), pc:Unsigned(bits=C.xLen),
-    privilege:U2, virtualized:U1, compressed:U1, cause:U32, exception:U1, ebreak:U1, retire:U1, dret:U1)
-    -> (active:U1@[], stepEnabled:U1@[], stepped:U1@[], trap:U1@[], returnPC:Unsigned(bits=C.xLen)@[],
-        returnPrv:U2@[], read:Unsigned(bits=C.xLen)@[]) {
+pub mod DebugCSR<C>(addr:U12, cause:U32, clk:Clock, cmd:U3, compressed:U1, dret:U1, ebreak:U1, exception:U1, operand:Unsigned(bits=C.xLen), pc:Unsigned(bits=C.xLen), privilege:U2, retire:U1, rst:Reset, virtualized:U1) -> (active:U1@[], read:Unsigned(bits=C.xLen)@[], returnPC:Unsigned(bits=C.xLen)@[], returnPrv:U2@[], stepEnabled:U1@[], stepped:U1@[], trap:U1@[]) {
   reg inDebug:U1 = 0
   reg single:U1 = 0
   reg didStep:U1 = 0
@@ -24,25 +21,42 @@ pub mod DebugCSR<C>(clk:Clock, rst:Reset, addr:U12, cmd:U3, operand:Unsigned(bit
   trap = didStep | U1(debugCause) | inDebug | (ebreak & breakModes#[privilege])
   const entering = exception != 0 and trap != 0 and inDebug == 0
   const write = cmd >= 5
-  returnPC = dpc & (((1 << C.xLen)-4) | (compressed << 1))
+  returnPC = dpc & (((1 << C.xLen) - 4) | (compressed << 1))
   read = match addr {
     == 0x7b0 { (4 << 28) | (breakModes << 12) | (why << 6) | (savedV << 5) | (single << 2) | savedPrivilege }
-    == 0x7b1 { returnPC } == 0x7b2 { scratch } else { 0 }
+    == 0x7b1 { returnPC }
+    == 0x7b2 { scratch }
+    else { 0 }
   }
-  const data = match cmd#[0..<2] { == 2 { read | operand } == 3 { read & ~operand } else { operand } }
+  const data = match cmd#[0..<2] {
+    == 2 { read | operand }
+    == 3 { read & ~operand }
+    else { operand }
+  }
   if C.useUser {
     reg saved:U2 = 3
-    if write and addr == 0x7b0 { saved = legal<S=C.useSupervisor>(mode=data#[0..<2]) }
-    if entering { saved = privilege }
+    if write and addr == 0x7b0 {
+      saved = legal<S=C.useSupervisor>(mode=data#[0..<2])
+    }
+    if entering {
+      saved = privilege
+    }
     savedPrivilege = saved
-  } else { savedPrivilege = 3 }
+  } else {
+    savedPrivilege = 3
+  }
   if write and addr == 0x7b0 {
     single = data#[2]
     breakModes = data#[12..<16] & modes
   }
-  if write and addr == 0x7b1 { dpc = data#[1..<C.xLen] << 1 }
-  elif entering { dpc = pc#[1..<C.xLen] << 1 }
-  if write and addr == 0x7b2 { scratch = data }
+  if write and addr == 0x7b1 {
+    dpc = data#[1..<C.xLen] << 1
+  } elif entering {
+    dpc = pc#[1..<C.xLen] << 1
+  }
+  if write and addr == 0x7b2 {
+    scratch = data
+  }
   if entering {
     why = if didStep != 0 { 4 } elif debugCause { if cause#[31] != 0 { 3 } else { 2 } } else { 1 }
     savedV = virtualized

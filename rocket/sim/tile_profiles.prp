@@ -25,11 +25,11 @@ comb rom<W=32>() -> (words:[16]U32) {
     0xfff00393, // addi x7,x0,-1
     0x00731463, // bne x6,x7,fail
     0x0000006f, // success
-    0x00100073 // ebreak
+    0x00100073, // ebreak
   )
 }
 
-pub mod tile_profiles(clk:Clock, rst:Reset) -> (ok32:Bool@[], ok64:Bool@[], okMinimal:Bool@[], okFast:Bool@[], failed:Bool@[]) {
+pub mod tile_profiles(clk:Clock, rst:Reset) -> (failed:Bool@[], ok32:Bool@[], ok64:Bool@[], okFast:Bool@[], okMinimal:Bool@[]) {
   const rv32 = boot<tiny>(clk=clk, rst=rst, program=rom<W=tiny.xLen>(), successPC=0x10078)
   const rv64 = boot<wide>(clk=clk, rst=rst, program=rom<W=wide.xLen>(), successPC=0x10078)
   const lean = boot<minimal>(clk=clk, rst=rst, program=rom<W=minimal.xLen>(), successPC=0x10078)
@@ -38,8 +38,7 @@ pub mod tile_profiles(clk:Clock, rst:Reset) -> (ok32:Bool@[], ok64:Bool@[], okMi
   okFast = fast.success
   ok32 = rv32.success
   ok64 = rv64.success
-  failed = rv32.trap != 0 or rv64.trap != 0 or rv32.badFetch or rv64.badFetch or
-      lean.trap != 0 or fast.trap != 0 or lean.badFetch or fast.badFetch
+  failed = rv32.trap != 0 or rv64.trap != 0 or rv32.badFetch or rv64.badFetch or lean.trap != 0 or fast.trap != 0 or lean.badFetch or fast.badFetch
 }
 
 test tile_profiles.boot_from_rom {
@@ -53,10 +52,18 @@ test tile_profiles.boot_from_rom {
     step
     if clock > 4 {
       assert(!d.failed, "tile trapped or issued an unexpected bus transaction")
-      if d.ok32 { saw32 = true }
-      if d.ok64 { saw64 = true }
-      if d.okMinimal { sawMinimal = true }
-      if d.okFast { sawFast = true }
+      if d.ok32 {
+        saw32 = true
+      }
+      if d.ok64 {
+        saw64 = true
+      }
+      if d.okMinimal {
+        sawMinimal = true
+      }
+      if d.okFast {
+        sawFast = true
+      }
     }
   }
   assert(saw32 and saw64 and sawMinimal and sawFast, "all four configurations verified the scratchpad contents")

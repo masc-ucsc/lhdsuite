@@ -1,22 +1,17 @@
 const csr = import("../pyrope2/CSRFile.CSRFile")
 const config = import("../pyrope2/RocketConfig")
 
-mod access<C>(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:U64, lanes:U11, cache:U6, decode:U18=0, advance:U3=0, retire:U1=0)
-    -> (value:Unsigned(bits=C.xLen)@[], illegal:U1@[]) {
-  const d = csr<C>(clock=clk, reset=rst, io_ungated_clock=clk, io_interrupts_debug=0,
-      io_interrupts_mtip=0, io_interrupts_msip=0, io_interrupts_meip=0, io_interrupts_seip=0, io_hartid=0, io_rw_addr=addr,
-      io_rw_cmd=cmd, io_rw_wdata=data#[0..<C.xLen], io_decode_0_inst=addr<<20, io_exception=0,
-      perfID=decode, perfAdvance=advance, perfPipe=lanes, perfMem=cache, io_retire=retire, io_cause=0, io_pc=0x10040, io_tval=0, io_htval=0, io_gva=0, io_inst_0=0)
+mod access<C>(addr:U12, advance:U3=0, cache:U6, clk:Clock, cmd:U3, data:U64, decode:U18=0, lanes:U11, retire:U1=0, rst:Reset) -> (illegal:U1@[], value:Unsigned(bits=C.xLen)@[]) {
+  const d = csr<C>(clock=clk, reset=rst, io_ungated_clock=clk, io_interrupts_debug=0, io_interrupts_mtip=0, io_interrupts_msip=0, io_interrupts_meip=0, io_interrupts_seip=0, io_hartid=0, io_rw_addr=addr, io_rw_cmd=cmd, io_rw_wdata=data#[0..<C.xLen], io_decode_0_inst=addr << 20, io_exception=0, perfID=decode, perfAdvance=advance, perfPipe=lanes, perfMem=cache, io_retire=retire, io_cause=0, io_pc=0x10040, io_tval=0, io_htval=0, io_gva=0, io_inst_0=0)
   value = d.io_rw_rdata
   illegal = d.io_decode_0_read_illegal
 }
 
-pub mod hpm_csrs(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:U64, lanes:U11, cache:U6, decode:U18=0, advance:U3=0, retire:U1=0)
-    -> (a:U32@[], b:U64@[], illegal:U2@[]) {
+pub mod hpm_csrs(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:U64, lanes:U11, cache:U6, decode:U18=0, advance:U3=0, retire:U1=0) -> (a:U32@[], b:U64@[], illegal:U2@[]) {
   comptime const small = config.params(nPerfCounters=2, useMulDiv=false, useSupervisor=true)
   comptime const full = config.params(xLen=64, nPerfCounters=29, fLen=64, useSupervisor=true)
-  const x = access<small>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data, lanes=lanes, cache=cache, decode=decode, advance=advance, retire=retire)
-  const y = access<full>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data, lanes=lanes, cache=cache, decode=decode, advance=advance, retire=retire)
+  const x = access<small>(addr, advance, cache, clk, cmd, data, decode, lanes, retire, rst)
+  const y = access<full>(addr, advance, cache, clk, cmd, data, decode, lanes, retire, rst)
   a = x.value
   b = y.value
   illegal = (y.illegal << 1) | x.illegal
@@ -128,7 +123,9 @@ test hpm_csrs.clear_while_stalled {
   step
   d.cmd = 0
   d.addr = 0
-  tick 8 { step }
+  tick 8 {
+    step
+  }
   d.advance = 2
   step
   d.advance = 4
@@ -137,7 +134,9 @@ test hpm_csrs.clear_while_stalled {
   d.retire = 1
   step
   d.retire = 0
-  tick 8 { step }
+  tick 8 {
+    step
+  }
   d.addr = 0xc03
   step
   assert(d.a == 1 and d.b == 1, "the retiring instruction retains the mask sampled before the stall")
@@ -147,7 +146,9 @@ test hpm_csrs.clear_while_stalled {
   step
   d.cmd = 0
   d.decode = 2
-  tick 3 { step }
+  tick 3 {
+    step
+  }
   d.rst = true
   d.advance = 0
   step
@@ -155,7 +156,9 @@ test hpm_csrs.clear_while_stalled {
   d.decode = 0
   d.retire = 1
   d.addr = 0
-  tick 3 { step }
+  tick 3 {
+    step
+  }
   d.addr = 0xb03
   step
   assert(d.a == 1 and d.b == 1, "reset discards in-flight event samples")

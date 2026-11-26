@@ -4,10 +4,7 @@ comptime const tiny = configs.tiny
 
 // A fetch supplies one aligned word. With C, a 32-bit instruction can
 // span two fetches. Save its first halfword and the fault from that fetch.
-pub mod IBuf<C=tiny>(clk:Clock, rst:Reset, kill:U1, ready:U1, fetchValid:U1,
-    fetchPC:Unsigned(bits=C.xLen), fetchData:U32, fetchFault:U3, fetchReplay:U1, taken:U1, branchSlot:U1, index:Unsigned(bits=C.bhtIndexBits)=0)
-    -> (predictedTaken:U1@[], prediction:Unsigned(bits=C.bhtIndexBits)@[], fetchReady:U1@[], valid:U1@[], pc:Unsigned(bits=C.xLen)@[], raw:U32@[], inst:U32@[],
-        rvc:U1@[], replay:U1@[], firstFault:U3@[], secondFault:U3@[]) {
+pub mod IBuf<C=tiny>(branchSlot:U1, clk:Clock, fetchData:U32, fetchFault:U3, fetchPC:Unsigned(bits=C.xLen), fetchReplay:U1, fetchValid:U1, index:Unsigned(bits=C.bhtIndexBits)=0, kill:U1, ready:U1, rst:Reset, taken:U1) -> (fetchReady:U1@[], firstFault:U3@[], inst:U32@[], pc:Unsigned(bits=C.xLen)@[], predictedTaken:U1@[], prediction:Unsigned(bits=C.bhtIndexBits)@[], raw:U32@[], replay:U1@[], rvc:U1@[], secondFault:U3@[], valid:U1@[]) {
   predictedTaken = taken
   prediction = index
   if C.useCompressed {
@@ -46,14 +43,24 @@ pub mod IBuf<C=tiny>(clk:Clock, rst:Reset, kill:U1, ready:U1, fetchValid:U1,
       reg heldTaken:U1
       const lastSlot = if held != 0 or rvc != 0 { slot } else { 1 }
       predictedTaken = if held != 0 and rvc != 0 { heldTaken } else { taken & U1(branchSlot == lastSlot) }
-      if ready != 0 and save { heldTaken = taken & U1(branchSlot == slot + fromFetch) }
+      if ready != 0 and save {
+        heldTaken = taken & U1(branchSlot == slot + fromFetch)
+      }
     }
     if C.bhtEntries > 0 {
       reg savedIndex:Unsigned(bits=C.bhtIndexBits) = nil
-      if held != 0 and rvc != 0 { prediction = savedIndex }
-      if ready != 0 and save { savedIndex = index }
+      if held != 0 and rvc != 0 {
+        prediction = savedIndex
+      }
+      if ready != 0 and save {
+        savedIndex = index
+      }
     }
-    if rst or kill != 0 { held = 0 } elif ready != 0 and drained { held = U1(save) }
+    if rst or kill != 0 {
+      held = 0
+    } elif ready != 0 and drained {
+      held = U1(save)
+    }
     if ready != 0 and save {
       savedHalf = if slot + fromFetch == 0 { fetchData#[0..<16] } else { high }
       savedPC = (fetchPC#[2..<C.xLen] << 2) | (fetchPC + (fromFetch << 1))#[0..<2]

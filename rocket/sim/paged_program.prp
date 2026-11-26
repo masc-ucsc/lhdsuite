@@ -6,7 +6,7 @@ comptime const wide = config.params(xLen=64, useVM=true, btbEntries=4, icacheSet
 
 // M builds page tables in the DTIM. S remaps a user page, fences and stores again.
 // The trap handlers check virtual PCs, the old and new physical data, and TVM.
-mod profile<C>(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
+mod profile<C>(clk:Clock, rst:Reset) -> (bad:Bool@[], done:Bool@[]) {
   comptime const rv64 = C.xLen == 64
   const program:[144]U32 = (
     0xfff00293, // _start: li t0,-1
@@ -152,37 +152,42 @@ mod profile<C>(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
     if rv64 { 0x0733031b } else { 0x07330313 }, // addiw t1,t1,115 / addi t1,t1,115
     0xf26296e3, // bne t0,t1,101a0 <fail>
     0x0000006f, // success: j 10278 <success>
-    0
+    0,
   )
   const tile = image<C=C, WORDS=144>(clk=clk, rst=rst, program=program, successPC=0x10278)
   const base = if rv64 { 0xffffffc000001000 } else { 0x40001000 }
-  const expected = tile.privilege == 1 and tile.tracePC == base + 0x1019c and
-      tile.trapValue == base + 0x12000 and tile.cause == 13
+  const expected = tile.privilege == 1 and tile.tracePC == base + 0x1019c and tile.trapValue == base + 0x12000 and tile.cause == 13
   const fetchFault = tile.privilege == 1 and tile.tracePC == base + 0x12000 and tile.trapValue == tile.tracePC and tile.cause == 12
   reg sawFetchFault:Bool = false
-  if tile.trap != 0 and fetchFault { sawFetchFault = true }
+  if tile.trap != 0 and fetchFault {
+    sawFetchFault = true
+  }
   reg faulted:Bool = false
-  if tile.trap != 0 and expected and sawFetchFault { faulted = true }
+  if tile.trap != 0 and expected and sawFetchFault {
+    faulted = true
+  }
   const tvmTrap = tile.privilege == 1 and tile.tracePC == base + 0x1024c and tile.cause == 2 and tile.trapValue == 0x12000073
   reg sawTVM:Bool = false
-  if tile.trap != 0 and tvmTrap and faulted { sawTVM = true }
+  if tile.trap != 0 and tvmTrap and faulted {
+    sawTVM = true
+  }
   bad = (tile.trap != 0 and !expected and !fetchFault and !tvmTrap) or tile.badFetch
   done = tile.success and sawTVM and tile.privilege == 3
 }
-pub mod paged_program(clk:Clock, rst:Reset) -> (rv32:Bool@[], rv64:Bool@[], rv32d:Bool@[], failed:Bool@[]) {
-  const a = profile<narrow>(clk=clk, rst=rst)
-  const b = profile<wide>(clk=clk, rst=rst)
-  const c = profile<narrowD>(clk=clk, rst=rst)
+pub mod paged_program(clk:Clock, rst:Reset) -> (failed:Bool@[], rv32:Bool@[], rv32d:Bool@[], rv64:Bool@[]) {
+  const a = profile<narrow>(clk, rst)
+  const b = profile<wide>(clk, rst)
+  const c = profile<narrowD>(clk, rst)
   rv32d = c.done
   rv32 = a.done
   rv64 = b.done
   failed = a.bad or b.bad or c.bad
 }
-pub mod cached_paging(clk:Clock, rst:Reset) -> (rv32:Bool@[], rv64:Bool@[], bad:Bool@[]) {
+pub mod cached_paging(clk:Clock, rst:Reset) -> (bad:Bool@[], rv32:Bool@[], rv64:Bool@[]) {
   comptime const sv32 = config.params(useVM=true, useDataScratchpad=false, dcacheSets=4, dcacheWays=2)
   comptime const sv39 = config.params(xLen=64, useVM=true, useDataScratchpad=false, dcacheSets=4, dcacheWays=2)
-  const a = profile<sv32>(clk=clk, rst=rst)
-  const b = profile<sv39>(clk=clk, rst=rst)
+  const a = profile<sv32>(clk, rst)
+  const b = profile<sv39>(clk, rst)
   rv32 = a.done
   rv64 = b.done
   bad = a.bad or b.bad
@@ -197,9 +202,15 @@ test cached_paging.walk {
     step
     if clock >= 4 {
       assert(!d.bad, "unexpected trap or bus request during cached page-table walk")
-      if d.rv32 { narrowDone = true }
-      if d.rv64 { wideDone = true }
-      if narrowDone and wideDone { break }
+      if d.rv32 {
+        narrowDone = true
+      }
+      if d.rv64 {
+        wideDone = true
+      }
+      if narrowDone and wideDone {
+        break
+      }
     }
   }
   assert(narrowDone and wideDone, "Sv32 and Sv39 remapped memory through the coherent DCache")
@@ -215,10 +226,18 @@ test paged_program.run {
     step
     if clock >= 4 {
       assert(!d.failed, "unexpected trap or physical fetch")
-      if d.rv32 { a = true }
-      if d.rv64 { b = true }
-      if d.rv32d { c = true }
-      if a and b and c { break }
+      if d.rv32 {
+        a = true
+      }
+      if d.rv64 {
+        b = true
+      }
+      if d.rv32d {
+        c = true
+      }
+      if a and b and c {
+        break
+      }
     }
   }
   assert(a and b and c, "Sv32 and high-half Sv39 programs reached their machine handlers")

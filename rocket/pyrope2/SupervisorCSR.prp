@@ -7,12 +7,7 @@ pub comb exists(addr:U12) -> (present:Bool) {
     else { false }
   }
 }
-pub mod SupervisorCSR<W, VM=false, EXTRA=0, ASID=0, LOCAL=0, COUNTERS=3, ROCC=false>(clk:Clock, rst:Reset, prv:U2, csr:U12, cmd:U3,
-    writeData:Unsigned(bits=W), operand:Unsigned(bits=W), seip:U1, compressed:U1,
-    localPending:Unsigned(bits=W)=0, trap:Bool, sret:Bool, cause:Unsigned(bits=W), pc:Unsigned(bits=W), tval:Unsigned(bits=W))
-    -> (rdata:Unsigned(bits=W)@[], status:Unsigned(bits=W)@[], flags:U32@[],
-        pending:U12@[], enabled:Unsigned(bits=W)@[], ideleg:Unsigned(bits=W)@[], delegated:Bool@[], vector:Unsigned(bits=W)@[],
-        returnPC:Unsigned(bits=W)@[], spp:U1@[], sie:U1@[], counters:Unsigned(bits=COUNTERS)@[], satp:Unsigned(bits=W)@[]) {
+pub mod SupervisorCSR<W, VM=false, EXTRA=0, ASID=0, LOCAL=0, COUNTERS=3, ROCC=false>(cause:Unsigned(bits=W), clk:Clock, cmd:U3, compressed:U1, csr:U12, localPending:Unsigned(bits=W)=0, operand:Unsigned(bits=W), pc:Unsigned(bits=W), prv:U2, rst:Reset, seip:U1, sret:Bool, trap:Bool, tval:Unsigned(bits=W), writeData:Unsigned(bits=W)) -> (counters:Unsigned(bits=COUNTERS)@[], delegated:Bool@[], enabled:Unsigned(bits=W)@[], flags:U32@[], ideleg:Unsigned(bits=W)@[], pending:U12@[], rdata:Unsigned(bits=W)@[], returnPC:Unsigned(bits=W)@[], satp:Unsigned(bits=W)@[], sie:U1@[], spp:U1@[], status:Unsigned(bits=W)@[], vector:Unsigned(bits=W)@[]) {
   reg scratch:Unsigned(bits=W)
   reg epc:Unsigned(bits=W)
   reg scause:Unsigned(bits=W)
@@ -29,7 +24,7 @@ pub mod SupervisorCSR<W, VM=false, EXTRA=0, ASID=0, LOCAL=0, COUNTERS=3, ROCC=fa
   reg fiom:U1 = 0
   reg counterEnable:Unsigned(bits=COUNTERS) = 0
   const supervisorIRQs = 0x222
-  comptime const delegable = (U1(ROCC) << 13) | 0x222 | (((1 << LOCAL)-1) << 16)
+  comptime const delegable = (U1(ROCC) << 13) | 0x222 | (((1 << LOCAL) - 1) << 16)
   const num = cause#[0..<8]
   spp = previous
   sie = interruptEnable
@@ -39,53 +34,76 @@ pub mod SupervisorCSR<W, VM=false, EXTRA=0, ASID=0, LOCAL=0, COUNTERS=3, ROCC=fa
   if VM {
     comptime const modeBit = if W == 32 { 31 } else { 60 }
     comptime const baseMode = if W == 32 { 1 } else { 8 }
-    comptime const modeMask = baseMode | ((1 << std.clog2(EXTRA+1))-1)
+    comptime const modeMask = baseMode | ((1 << std.clog2(EXTRA + 1)) - 1)
     comptime const asidBit = if W == 32 { 22 } else { 44 }
-    comptime const writable = (modeMask << modeBit) | (((1 << ASID)-1) << asidBit) | 0xfffff
+    comptime const writable = (modeMask << modeBit) | (((1 << ASID) - 1) << asidBit) | 0xfffff
     reg addressSpace:Unsigned(bits=W) = 0
     reg memoryPrivilege:U2 = 0 // SUM, MXR
     reg trapVM:U1 = 0
     if csr == 0x180 and cmd >= 5 {
       const selected = writeData >> modeBit
-      if selected == 0 or (selected >= baseMode and selected <= baseMode+EXTRA) {
+      if selected == 0 or (selected >= baseMode and selected <= baseMode + EXTRA) {
         addressSpace = writeData & writable
       }
     }
-    if (csr == 0x100 or csr == 0x300) and cmd >= 5 { memoryPrivilege = writeData#[18..<20] }
-    if csr == 0x300 and cmd >= 5 { trapVM = writeData#[20] }
+    if (csr == 0x100 or csr == 0x300) and cmd >= 5 {
+      memoryPrivilege = writeData#[18..<20]
+    }
+    if csr == 0x300 and cmd >= 5 {
+      trapVM = writeData#[20]
+    }
     satp = addressSpace
     pageStatus = memoryPrivilege << 18
     tvm = trapVM
   }
   flags = (restrictions << 21) | (tvm << 20)
   counters = counterEnable
-  status = pageStatus | (if W == 64 { 2 << 32 } else { 0 }) |
-      (previous << 8) | (previousIE << 5) | (interruptEnable << 1)
+  status = pageStatus | (if W == 64 { 2 << 32 } else { 0 }) | (previous << 8) | (previousIE << 5) | (interruptEnable << 1)
   pending = ip | (seip << 9)
   enabled = ie
   ideleg = interruptDeleg
-  const interrupt = cause#[W-1] != 0
+  const interrupt = cause#[W - 1] != 0
   delegated = prv <= 1 and (if interrupt { (interruptDeleg >> num)#[0] != 0 } else { (edeleg >> num)#[0] != 0 })
   const tv = trapVector<W>(tvec=tvec, interrupt=interrupt, number=num)
   vector = tv.target
-  returnPC = epc & (((1 << W)-4) | (compressed << 1))
+  returnPC = epc & (((1 << W) - 4) | (compressed << 1))
   rdata = match csr {
-    == 0x100 { status } == 0x104 { ie & interruptDeleg } == 0x105 { tv.readback }
-    == 0x10a { fiom } == 0x106 { counterEnable } == 0x140 { scratch } == 0x141 { returnPC }
-    == 0x180 { satp } == 0x142 { scause } == 0x143 { badAddress } == 0x144 { (localPending | pending) & interruptDeleg }
-    == 0x302 { edeleg } == 0x303 { interruptDeleg } else { 0 }
+    == 0x100 { status }
+    == 0x104 { ie & interruptDeleg }
+    == 0x105 { tv.readback }
+    == 0x10a { fiom }
+    == 0x106 { counterEnable }
+    == 0x140 { scratch }
+    == 0x141 { returnPC }
+    == 0x180 { satp }
+    == 0x142 { scause }
+    == 0x143 { badAddress }
+    == 0x144 { (localPending | pending) & interruptDeleg }
+    == 0x302 { edeleg }
+    == 0x303 { interruptDeleg }
+    else { 0 }
   }
   if cmd >= 5 {
-    if csr == 0x300 { restrictions = writeData#[21..<23] }
+    if csr == 0x300 {
+      restrictions = writeData#[21..<23]
+    }
     if csr == 0x100 or csr == 0x300 {
       previous = writeData#[8]
       previousIE = writeData#[5]
       interruptEnable = writeData#[1]
     }
-    if csr == 0x302 { edeleg = writeData#[0..<16] & 0xb15d }
-    if csr == 0x303 { interruptDeleg = writeData & delegable }
-    if csr == 0x304 { ie = writeData & delegable }
-    if csr == 0x104 { ie = (ie & ~interruptDeleg) | (writeData & interruptDeleg) }
+    if csr == 0x302 {
+      edeleg = writeData#[0..<16] & 0xb15d
+    }
+    if csr == 0x303 {
+      interruptDeleg = writeData & delegable
+    }
+    if csr == 0x304 {
+      ie = writeData & delegable
+    }
+    if csr == 0x104 {
+      ie = (ie & ~interruptDeleg) | (writeData & interruptDeleg)
+    }
     if csr == 0x344 {
       // CSRRS/CSRRC operate on the stored SEIP bit before OR'ing in the external line.
       ip = match cmd {
@@ -94,14 +112,30 @@ pub mod SupervisorCSR<W, VM=false, EXTRA=0, ASID=0, LOCAL=0, COUNTERS=3, ROCC=fa
         else { operand#[0..<12] & supervisorIRQs }
       }
     }
-    if csr == 0x144 and interruptDeleg#[1] != 0 { ip#[1] = writeData#[1] }
-    if csr == 0x105 { tvec = writeData }
-    if csr == 0x10a { fiom = writeData#[0] }
-    if csr == 0x106 { counterEnable = writeData#[0..<COUNTERS] }
-    if csr == 0x140 { scratch = writeData }
-    if csr == 0x141 { epc = writeData#[1..<W] << 1 }
-    if csr == 0x142 { scause = writeData & ((1 << (W-1)) | 0x1f) }
-    if csr == 0x143 { badAddress = writeData }
+    if csr == 0x144 and interruptDeleg#[1] != 0 {
+      ip#[1] = writeData#[1]
+    }
+    if csr == 0x105 {
+      tvec = writeData
+    }
+    if csr == 0x10a {
+      fiom = writeData#[0]
+    }
+    if csr == 0x106 {
+      counterEnable = writeData#[0..<COUNTERS]
+    }
+    if csr == 0x140 {
+      scratch = writeData
+    }
+    if csr == 0x141 {
+      epc = writeData#[1..<W] << 1
+    }
+    if csr == 0x142 {
+      scause = writeData & ((1 << (W - 1)) | 0x1f)
+    }
+    if csr == 0x143 {
+      badAddress = writeData
+    }
   }
   if trap and delegated {
     epc = pc#[1..<W] << 1
