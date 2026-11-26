@@ -20,23 +20,19 @@ mod arb<N>(clk:Clock, last:Unsigned(bits=N), offers:Unsigned(bits=N), ready:Bool
       next = ((owner + 1)%N)#[0..<5]
     }
   }
-  if rst {
-    locked = false
-    next = 0
-  }
 }
 
 // Each bank owns disjoint sets, one miss slot and a unique TileLink source.
 // Independent loads may complete out of order. Stores, atomics and flushes
 // drain earlier operations and exclude younger ones until they complete.
-pub mod CacheBanks<N=2, W=32, SETS=64, WAYS=4, SOURCE=1, SINK_BITS=4, ATOMICS=true, LRSC_CYCLES=80, CFLUSH=false, BLOCK=64>(aReady:Bool, address:U32, bAddress:U32, bParam:U2, bSource:U5, bValid:Bool, cReady:Bool, clk:Clock, command:U5, dCorrupt:Bool, dData:Unsigned(bits=W), dDenied:Bool, dOpcode:U3, dParam:U2, dSink:Unsigned(bits=SINK_BITS), dSource:U5, dValid:Bool, data:Unsigned(bits=W), eReady:Bool, flushSize:U2=0, mask:Unsigned(bits=W/8), request:Bool, responseReady:Bool, rst:Reset) -> (aAddress:U32@[], aParam:U2@[], aSource:U5@[], aValid:Bool@[], bReady:Bool@[], busy:Bool@[], cAddress:U32@[], cCorrupt:Bool@[], cData:Unsigned(bits=W)@[], cLast:Bool@[], cOpcode:U3@[], cParam:U3@[], cSource:U5@[], cValid:Bool@[], dReady:Bool@[], eSink:Unsigned(bits=SINK_BITS)@[], eValid:Bool@[], error:Bool@[], issueBank:U5@[], needsClock:Bool@[], ready:Bool@[], response:Bool@[], result:Unsigned(bits=W)@[], returnBank:U5@[]) {
-  cassert(N > 0 and N <= SETS and N + SOURCE <= 32)
-  const route = ((address/BLOCK)%SETS)%N
-  const probe = ((bAddress/BLOCK)%SETS)%N
+pub mod CacheBanks<C, N, SOURCE=1, SINK_BITS=4, LRSC_CYCLES=80>(aReady:Bool, address:U32, bAddress:U32, bParam:U2, bSource:U5, bValid:Bool, cReady:Bool, clk:Clock, command:U5, dCorrupt:Bool, dData:Unsigned(bits=C.dLen), dDenied:Bool, dOpcode:U3, dParam:U2, dSink:Unsigned(bits=SINK_BITS), dSource:U5, dValid:Bool, data:Unsigned(bits=C.dLen), eReady:Bool, flushSize:U2=0, mask:Unsigned(bits=C.dLen/8), request:Bool, responseReady:Bool, rst:Reset) -> (aAddress:U32@[], aParam:U2@[], aSource:U5@[], aValid:Bool@[], bReady:Bool@[], busy:Bool@[], cAddress:U32@[], cCorrupt:Bool@[], cData:Unsigned(bits=C.dLen)@[], cLast:Bool@[], cOpcode:U3@[], cParam:U3@[], cSource:U5@[], cValid:Bool@[], dReady:Bool@[], eSink:Unsigned(bits=SINK_BITS)@[], eValid:Bool@[], error:Bool@[], issueBank:U5@[], needsClock:Bool@[], ready:Bool@[], response:Bool@[], result:Unsigned(bits=C.dLen)@[], returnBank:U5@[]) {
+  cassert(N > 0 and N <= C.dcacheSets and N + SOURCE <= 32)
+  const route = ((address/C.dcacheBlockBytes)%C.dcacheSets)%N
+  const probe = ((bAddress/C.dcacheBlockBytes)%C.dcacheSets)%N
   reg occupied:Unsigned(bits=N) = 0
   reg serial:Bool = false
   reg flushing:Bool = false
-  const whole = CFLUSH and command == 5 and flushSize#[0] == 0
+  const whole = C.haveCFlush and command == 5 and flushSize#[0] == 0
   busy = occupied != 0
   wire available:Unsigned(bits=N) = nil
   wire responses:Unsigned(bits=N) = nil
@@ -87,7 +83,7 @@ pub mod CacheBanks<N=2, W=32, SETS=64, WAYS=4, SOURCE=1, SINK_BITS=4, ATOMICS=tr
   for i in 0..<N {
     const push = issue and (whole or route == i)
     const take = pop and (flushing or returned.owner == i)
-    const port = cache<ATOMICS=ATOMICS, BANKS=N, BLOCK=BLOCK, CFLUSH=CFLUSH, LRSC_CYCLES=LRSC_CYCLES, SETS=((SETS + N - 1 - i)/N), SINK_BITS=SINK_BITS, SOURCE=(SOURCE + i), TOTAL_SETS=SETS, W=W, WAYS=WAYS>(clk=clk, rst=rst, request=push, address=address, command=command, mask=mask, data=data, flushSize=flushSize, dropReservation=issue and route != i, responseReady=take, aReady=aReady and a.owner == i, bValid=bValid and probe == i, bAddress=bAddress, bParam=bParam, bSource=bSource, cReady=cReady and c.owner == i, dValid=dValid and dSource == SOURCE + i, dOpcode=dOpcode, dParam=dParam, dSource=dSource, dSink=dSink, dData=dData, dDenied=dDenied, dCorrupt=dCorrupt, eReady=eReady and e.owner == i)
+    const port = cache<BANK=i, BANKS=N, C=C, LRSC_CYCLES=LRSC_CYCLES, SINK_BITS=SINK_BITS, SOURCE=(SOURCE + i)>(request=push, address=address, command=command, mask=mask, data=data, flushSize=flushSize, dropReservation=issue and route != i, responseReady=take, aReady=aReady and a.owner == i, bValid=bValid and probe == i, bAddress=bAddress, bParam=bParam, bSource=bSource, cReady=cReady and c.owner == i, dValid=dValid and dSource == SOURCE + i, dOpcode=dOpcode, dParam=dParam, dSource=dSource, dSink=dSink, dData=dData, dDenied=dDenied, dCorrupt=dCorrupt, eReady=eReady and e.owner == i)
     availableBits#[i] = U1(port.ready)
     responsesBits#[i] = U1(port.response)
     aOffersBits#[i] = U1(port.aValid)
@@ -142,9 +138,4 @@ pub mod CacheBanks<N=2, W=32, SETS=64, WAYS=4, SOURCE=1, SINK_BITS=4, ATOMICS=tr
   cValid = cOffers#[c.owner] != 0
   cLast = ends#[c.owner] != 0
   eValid = eOffers#[e.owner] != 0
-  if rst {
-    occupied = 0
-    serial = false
-    flushing = false
-  }
 }

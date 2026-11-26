@@ -1,10 +1,12 @@
+const configs = import("../pyrope2/RocketConfig")
 const cachePort = import("../pyrope2/DCache.DCache")
 const cache = import("../pyrope2/CacheBanks.CacheBanks")
 
 // Hold both D grants until two independent misses have reached A. Return the
 // second line first; keep its CPU response stalled while the first fills.
 pub mod nonblocking_cache(clk:Clock, rst:Reset, issue:Bool, addr:U32, accept:Bool, grant:Bool, source:U5, word:U32) -> (acquire:Bool@[], bank:U5@[], dReady:Bool@[], id:U5@[], line:U32@[], ready:Bool@[], response:Bool@[], value:U32@[]) {
-  const d = cache<BLOCK=16, N=3, SETS=4, W=32, WAYS=1>(clk=clk, rst=rst, request=issue, address=addr, command=0, mask=15, data=0, responseReady=accept, aReady=true, bValid=false, bAddress=0, bParam=0, bSource=0, cReady=true, dValid=grant, dOpcode=5, dParam=1, dSource=source, dSink=source#[0..<4], dData=word, dDenied=false, dCorrupt=false, eReady=true)
+  comptime const c = configs.params(dcacheBlockBytes=16, dcacheSets=4, dcacheWays=1, useDataScratchpad=false, nMSHRs=3)
+  const d = cache<C=c, N=3>(clk=clk, rst=rst, request=issue, address=addr, command=0, mask=15, data=0, responseReady=accept, aReady=true, bValid=false, bAddress=0, bParam=0, bSource=0, cReady=true, dValid=grant, dOpcode=5, dParam=1, dSource=source, dSink=source#[0..<4], dData=word, dDenied=false, dCorrupt=false, eReady=true)
   reg sampled:(ready:Bool, response:Bool, value:U32, bank:U5, acquire:Bool, line:U32, id:U5, dReady:Bool) = nil
   sampled = (acquire=d.aValid, bank=d.returnBank, dReady=d.dReady, id=d.aSource, line=d.aAddress, ready=d.ready, response=d.response, value=d.result)
   (ready, response, value, bank, acquire, line, id, dReady) = sampled
@@ -50,13 +52,18 @@ test nonblocking_cache.two_misses {
 // Exercise the CPU pipeline and its saved tags as well as the coherent banks.
 // The manager withholds the first grant until both acquires have handshaken.
 pub mod pipeline(clk:Clock, rst:Reset, issue:Bool, second:Bool, grant:Bool, source:U5, word:U32) -> (acceptedD:Bool@[], acquire:Bool@[], nack:Bool@[], ready:Bool@[], response:Bool@[], tag:U7@[], value:U32@[]) {
-  const d = cachePort<BLOCK=16, MSHRS=2, SCRATCH=false, SETS=4, W=32, WAYS=1>(clock=clk, reset=rst, io_cpu_req_valid=U1(issue), io_cpu_req_bits_addr=(if second {
-        0x80000018
-      } else {
-        0x80000004
-      }), io_cpu_req_bits_tag=(if second { 12 } else { 10 }), io_cpu_req_bits_cmd=0, io_cpu_req_bits_size=2, io_cpu_req_bits_signed=0, io_cpu_req_bits_dprv=3, io_cpu_req_bits_dv=0, io_cpu_req_bits_phys=0, io_cpu_req_bits_no_xcpt=0, io_cpu_s1_kill=0, io_cpu_s1_data_data=0, io_cpu_s1_data_mask=0, io_ptw_status_debug=0, pmpPermissions=3, auto_out_a_ready=0, auto_out_d_valid=0, auto_out_d_bits_opcode=0, auto_out_d_bits_size=0, auto_out_d_bits_denied=0, auto_out_d_bits_data=0, memAReady=true, memCReady=true, memDValid=grant, memDOpcode=5, memDParam=1, memDSource=source, memDSink=1, memDData=word, memEReady=true)
+  comptime const profile = configs.params(dcacheBlockBytes=16, nMSHRs=2, useDataScratchpad=false, dcacheSets=4, dcacheWays=1)
+  const d = cachePort<profile>(clock=clk, reset=rst, io_ptw_status_debug=0, pmpPermissions=3, auto_out_a_ready=0, auto_out_d_valid=0, auto_out_d_bits_opcode=0, auto_out_d_bits_size=0, auto_out_d_bits_denied=0, auto_out_d_bits_data=0, memAReady=true, memCReady=true, memDValid=grant, memDOpcode=5, memDParam=1, memDSource=source, memDSink=1, memDData=word, memEReady=true, request=(address=(if second {
+          0x80000018
+        } else {
+          0x80000004
+        }), command=0, isSigned=false, kill=false, physical=false, privilege=3, size=2, skipException=false, storeData=0, storeMask=0, tag=(if second {
+          12
+        } else {
+          10
+        }), valid=issue, virtual=false))
   reg sample:(ready:Bool, acquire:Bool, acceptedD:Bool, response:Bool, tag:U7, value:U32, nack:Bool) = nil
-  sample = (acceptedD=d.memDReady and grant, acquire=d.memAValid, nack=d.io_cpu_s2_nack != 0, ready=d.io_cpu_req_ready != 0, response=d.io_cpu_resp_valid != 0, tag=d.io_cpu_resp_bits_tag, value=d.io_cpu_resp_bits_data)
+  sample = (acceptedD=d.memDReady and grant, acquire=d.memAValid, nack=d.response.s2Nack, ready=d.response.reqReady, response=d.response.respValid, tag=d.response.respTag, value=d.response.respData)
   (ready, acquire, acceptedD, response, tag, value, nack) = sample
 }
 

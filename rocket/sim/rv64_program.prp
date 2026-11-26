@@ -33,28 +33,28 @@ pub mod rv64_program(clk:Clock, rst:Reset) -> (didStore:Bool@[], retired:U1@[], 
     == 68 { 0x00000013 } // nop
     else { 0x0000006f }
   }
-  const core = rocket<wide>(clock=clk, reset=rst, io_hartid=0, io_interrupts_debug=0, io_interrupts_mtip=0, io_interrupts_msip=0, io_interrupts_meip=0, io_imem_resp_valid=U1(!rst), io_imem_resp_bits_btb_taken=0, io_imem_resp_bits_btb_bridx=0, io_imem_resp_bits_pc=pc, io_imem_resp_bits_data=instruction, io_imem_resp_bits_mask=3, io_imem_resp_bits_xcpt_pf_inst=0, io_imem_resp_bits_xcpt_gf_inst=0, io_imem_resp_bits_xcpt_ae_inst=0, io_imem_resp_bits_replay=0, io_imem_gpa_valid=0, io_imem_gpa_bits=0, io_imem_npc=(pc + 4)#[0..<64], io_imem_perf_acquire=0, io_dmem_req_ready=1, io_dmem_s2_nack=0, io_dmem_resp_valid=U1(s2Load), io_dmem_resp_bits_tag=s2Tag, io_dmem_resp_bits_data=readData, io_dmem_resp_bits_replay=0, io_dmem_resp_bits_has_data=U1(s2Load), io_dmem_resp_bits_data_word_bypass=readData, io_dmem_replay_next=0, io_dmem_s2_xcpt_ma_ld=0, io_dmem_s2_xcpt_ma_st=0, io_dmem_s2_xcpt_pf_ld=0, io_dmem_s2_xcpt_pf_st=0, io_dmem_s2_xcpt_ae_ld=0, io_dmem_s2_xcpt_ae_st=0, io_dmem_ordered=1, io_dmem_perf_grant=0, io_ptw_perf_pte_miss=0, io_ptw_perf_pte_hit=0)
-  if core.io_imem_req_valid != 0 {
-    pc = core.io_imem_req_bits_pc
-  } elif core.io_imem_resp_ready != 0 {
+  const core = rocket<wide>(clock=clk, reset=rst, io_hartid=0, io_interrupts_debug=0, io_interrupts_mtip=0, io_interrupts_msip=0, io_interrupts_meip=0, io_ptw_perf_pte_miss=0, io_ptw_perf_pte_hit=0, imemResponse=(gpaBits=0, gpaValid=false, npc=(pc + 4)#[0..<64], perfAcquire=false, respBtbBridx=0, respBtbTaken=false, respData=instruction, respMask=3, respPc=pc, respReplay=false, respValid=!rst, respXcptAeInst=false, respXcptGfInst=false, respXcptPfInst=false), dmemResponse=(ordered=true, perfGrant=false, replayNext=false, reqReady=true, respData=readData, respDataWordBypass=readData, respHasData=s2Load, respReplay=false, respTag=s2Tag, respValid=s2Load, s2Nack=false, s2XcptAeLd=false, s2XcptAeSt=false, s2XcptMaLd=false, s2XcptMaSt=false, s2XcptPfLd=false, s2XcptPfSt=false))
+  if core.imem.valid {
+    pc = core.imem.pc
+  } elif core.imem.respReady {
     wrap pc += 4
   }
-  s1Addr = core.io_dmem_req_bits_addr
-  s1Tag = core.io_dmem_req_bits_tag
+  s1Addr = core.dmem.address
+  s1Tag = core.dmem.tag
   s2Tag = s1Tag
   readIndex = s1Addr#[3..<5]
-  s1Store = core.io_dmem_req_valid != 0 and core.io_dmem_req_bits_cmd == 1
-  s1Load = core.io_dmem_req_valid != 0 and core.io_dmem_req_bits_cmd == 0
-  s2Load = s1Load and core.io_dmem_s1_kill == 0
-  didStore = s1Store and core.io_dmem_s1_kill == 0
+  s1Store = core.dmem.valid and core.dmem.command == 1
+  s1Load = core.dmem.valid and core.dmem.command == 0
+  s2Load = s1Load and !core.dmem.kill
+  didStore = s1Store and !core.dmem.kill
   if didStore {
-    memory[s1Addr#[3..<5]] = core.io_dmem_s1_data_data
+    memory[s1Addr#[3..<5]] = core.dmem.storeData
   }
   where = s1Addr
-  value = core.io_dmem_s1_data_data
-  retired = core.io_trace_insns_0_valid
-  trap = core.io_trace_insns_0_exception
-  tracePC = core.io_trace_insns_0_iaddr
+  value = core.dmem.storeData
+  retired = core.trace.valid
+  trap = core.trace.exception
+  tracePC = core.trace.iaddr
   traceTime = core.io_trace_time
 }
 test rv64_program.execute {

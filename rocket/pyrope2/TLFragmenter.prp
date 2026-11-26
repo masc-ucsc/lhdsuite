@@ -9,10 +9,10 @@ comb responseSize(fragment:U4, size:U2) -> (result:U3) {
   result = (U1((boundary & 0x70) != 0) << 2) | (U1((boundary & 0x4c) != 0) << 1) | U1((boundary & 0x2a) != 0)
 }
 
-pub mod TLFragmenter<ADDR=28, EARLY_ACK=false, READ_ONLY=false>::[timecheck=false](auto_in_a_bits_address:Unsigned(bits=ADDR), auto_in_a_bits_corrupt:U1, auto_in_a_bits_data:U32, auto_in_a_bits_mask:U4, auto_in_a_bits_opcode:U4, auto_in_a_bits_param:U3, auto_in_a_bits_size:U3, auto_in_a_bits_source:U5, auto_in_a_valid:U1, auto_in_d_ready:U1, auto_out_a_ready:U1, auto_out_d_bits_data:U32, auto_out_d_bits_opcode:U4=1, auto_out_d_bits_size:U2, auto_out_d_bits_source:Unsigned(bits=10 + U1(EARLY_ACK)), auto_out_d_valid:U1, clock:Clock, reset:Reset) -> (auto_in_a_ready:U1@[], auto_in_d_bits_data:U32@[], auto_in_d_bits_opcode:U4@[], auto_in_d_bits_size:U3@[], auto_in_d_bits_source:U5@[], auto_in_d_valid:U1@[], auto_out_a_bits_address:Unsigned(bits=ADDR)@[], auto_out_a_bits_corrupt:U1@[], auto_out_a_bits_data:U32@[], auto_out_a_bits_mask:U4@[], auto_out_a_bits_opcode:U4@[], auto_out_a_bits_param:U3@[], auto_out_a_bits_size:U2@[], auto_out_a_bits_source:Unsigned(bits=10 + U1(EARLY_ACK))@[], auto_out_a_valid:U1@[], auto_out_d_ready:U1@[]) {
+pub mod TLFragmenter<ADDR=28, EARLY_ACK=false, READ_ONLY=false>::[timecheck=false](auto_in_d_ready:U1, auto_out_a_ready:U1, clientA:(address:Unsigned(bits=ADDR), corrupt:U1, data:U32, mask:U4, opcode:U4, param:U3, size:U3, source:U5, valid:U1), clock:Clock, reset:Reset, responseD:(data:U32, opcode:U4, size:U2, source:Unsigned(bits=10 + U1(EARLY_ACK)), valid:U1)) -> (auto_in_a_ready:U1@[], auto_out_d_ready:U1@[], clientD:(data:U32, opcode:U4, size:U3, source:U5, valid:U1)@[], requestA:(address:Unsigned(bits=ADDR), corrupt:U1, data:U32, mask:U4, opcode:U4, param:U3, size:U2, source:Unsigned(bits=10 + U1(EARLY_ACK)), valid:U1)@[]) {
   type Header = (opcode:U4, param:U3, size:U3, source:U5, address:Unsigned(bits=ADDR), corrupt:U1)
   wire again:U1 = nil
-  const beat = Repeater<Header>(clk=clock, rst=reset, offer=auto_in_a_valid, take=auto_out_a_ready, again=again, payload=(address=auto_in_a_bits_address, corrupt=auto_in_a_bits_corrupt, opcode=auto_in_a_bits_opcode, param=auto_in_a_bits_param, size=auto_in_a_bits_size, source=auto_in_a_bits_source))
+  const beat = Repeater<Header>(offer=clientA.valid, take=auto_out_a_ready, again=again, payload=(address=clientA.address, corrupt=clientA.corrupt, opcode=clientA.opcode, param=clientA.param, size=clientA.size, source=clientA.source))
   reg remaining:U4 = 0
   reg requestToggle:U1 = nil
   reg responseToggle:U1 = 0
@@ -21,16 +21,16 @@ pub mod TLFragmenter<ADDR=28, EARLY_ACK=false, READ_ONLY=false>::[timecheck=fals
   const toggle = if remaining == 0 { responseToggle } else { requestToggle }
   again = U1(fragment != 0 and (READ_ONLY or beat.head.opcode#[2] != 0))
   auto_in_a_ready = beat.ready
-  auto_out_a_valid = beat.valid
-  auto_out_a_bits_opcode = beat.head.opcode
-  auto_out_a_bits_param = beat.head.param
-  auto_out_a_bits_size = if beat.head.size > 2 { 2 } else { beat.head.size#[0..<2] }
-  auto_out_a_bits_address = beat.head.address | ((~fragment & span) << 2)
+  requestA.valid = beat.valid
+  requestA.opcode = beat.head.opcode
+  requestA.param = beat.head.param
+  requestA.size = if beat.head.size > 2 { 2 } else { beat.head.size#[0..<2] }
+  requestA.address = beat.head.address | ((~fragment & span) << 2)
   const sourceTag = if EARLY_ACK { (beat.head.source << 1) | U1(beat.head.opcode == 0) } else { beat.head.source }
-  auto_out_a_bits_source = (sourceTag << 5) | ((~toggle & 1) << 4) | fragment
-  auto_out_a_bits_mask = if beat.full != 0 { 15 } else { auto_in_a_bits_mask }
-  auto_out_a_bits_data = auto_in_a_bits_data
-  auto_out_a_bits_corrupt = beat.head.corrupt
+  requestA.source = (sourceTag << 5) | ((~toggle & 1) << 4) | fragment
+  requestA.mask = if beat.full != 0 { 15 } else { clientA.mask }
+  requestA.data = clientA.data
+  requestA.corrupt = beat.head.corrupt
   if remaining == 0 {
     requestToggle = responseToggle
   }
@@ -41,26 +41,26 @@ pub mod TLFragmenter<ADDR=28, EARLY_ACK=false, READ_ONLY=false>::[timecheck=fals
   reg acksLeft:U4 = 0
   reg savedSize:U3 = nil
   const first = acksLeft == 0
-  const responseFrag = auto_out_d_bits_source#[0..<4]
-  const hasData = auto_out_d_bits_opcode#[0] != 0
-  const keep = if EARLY_ACK and auto_out_d_bits_source#[5] != 0 { first } else { responseFrag == 0 }
+  const responseFrag = responseD.source#[0..<4]
+  const hasData = responseD.opcode#[0] != 0
+  const keep = if EARLY_ACK and responseD.source#[5] != 0 { first } else { responseFrag == 0 }
   const drop = !READ_ONLY and !hasData and !keep
-  const size = responseSize(fragment=responseFrag, size=auto_out_d_bits_size)
-  auto_in_d_valid = auto_out_d_valid & U1(!drop)
+  const size = responseSize(fragment=responseFrag, size=responseD.size)
+  clientD.valid = responseD.valid & U1(!drop)
   auto_out_d_ready = auto_in_d_ready | U1(drop)
-  auto_in_d_bits_opcode = auto_out_d_bits_opcode
-  auto_in_d_bits_size = if first { size } else { savedSize }
-  auto_in_d_bits_source = auto_out_d_bits_source >> (5 + U1(EARLY_ACK))
-  auto_in_d_bits_data = auto_out_d_bits_data
-  const accept = auto_out_d_valid != 0 and auto_out_d_ready != 0
+  clientD.opcode = responseD.opcode
+  clientD.size = if first { size } else { savedSize }
+  clientD.source = responseD.source >> (5 + U1(EARLY_ACK))
+  clientD.data = responseD.data
+  const accept = responseD.valid != 0 and auto_out_d_ready != 0
   if accept and first {
     savedSize = size
   }
   if accept {
     if first {
       acksLeft = responseFrag
-      responseToggle = auto_out_d_bits_source#[4]
-    } elif READ_ONLY or hasData or auto_out_d_bits_size == 2 {
+      responseToggle = responseD.source#[4]
+    } elif READ_ONLY or hasData or responseD.size == 2 {
       wrap acksLeft -= 1
     }
   }

@@ -4,64 +4,64 @@ comptime const tiny = configs.tiny
 
 // A fetch supplies one aligned word. With C, a 32-bit instruction can
 // span two fetches. Save its first halfword and the fault from that fetch.
-pub mod IBuf<C=tiny>(branchSlot:U1, clk:Clock, fetchData:U32, fetchFault:U3, fetchPC:Unsigned(bits=C.xLen), fetchReplay:U1, fetchValid:U1, index:Unsigned(bits=C.bhtIndexBits)=0, kill:U1, ready:U1, rst:Reset, taken:U1) -> (fetchReady:U1@[], firstFault:U3@[], inst:U32@[], pc:Unsigned(bits=C.xLen)@[], predictedTaken:U1@[], prediction:Unsigned(bits=C.bhtIndexBits)@[], raw:U32@[], replay:U1@[], rvc:U1@[], secondFault:U3@[], valid:U1@[]) {
+pub mod IBuf<C=tiny>(branchSlot:U1, clk:Clock, fetchData:U32, fetchFault:U3, fetchPC:Unsigned(bits=C.xLen), fetchReplay:Bool, fetchValid:Bool, index:Unsigned(bits=C.bhtIndexBits)=0, kill:Bool, ready:Bool, rst:Reset, taken:Bool) -> (fetchReady:Bool@[], firstFault:U3@[], inst:U32@[], pc:Unsigned(bits=C.xLen)@[], predictedTaken:Bool@[], prediction:Unsigned(bits=C.bhtIndexBits)@[], raw:U32@[], replay:Bool@[], rvc:Bool@[], secondFault:U3@[], valid:Bool@[]) {
   predictedTaken = taken
   prediction = index
   if C.useCompressed {
-    reg held:U1 = 0
+    reg held:Bool = false
     reg savedPC:Unsigned(bits=C.xLen) = nil
     reg savedHalf:U16 = nil
     reg savedFault:U3 = nil
-    reg savedReplay:U1 = nil
+    reg savedReplay:Bool = nil
 
     const slot = fetchPC#[1]
     const high = fetchData#[16..<32]
     const first = if slot != 0 { high } else { fetchData#[0..<16] }
-    raw = if held != 0 { (first << 16) | savedHalf } else { (high << 16) | first }
+    raw = if held { (first << 16) | savedHalf } else { (high << 16) | first }
     const expanded = expand<C>(x=raw)
     inst = expanded.bits
-    rvc = U1(expanded.compressed)
-    pc = if held != 0 { savedPC } else { fetchPC }
-    firstFault = if held != 0 { savedFault } else { fetchFault }
-    secondFault = if rvc != 0 { 0 } else { fetchFault }
+    rvc = expanded.compressed
+    pc = if held { savedPC } else { fetchPC }
+    firstFault = if held { savedFault } else { fetchFault }
+    secondFault = if rvc { 0 } else { fetchFault }
 
-    const endSlot = if taken != 0 { branchSlot + 1 } else { 2 }
+    const endSlot = if taken { branchSlot + 1 } else { 2 }
     const fetched = endSlot - slot
-    const available = held + (if fetchValid != 0 { fetched } else { 0 })
-    const retryFirst = held & savedReplay
-    const complete = rvc != 0 or available >= 2 or retryFirst != 0
-    valid = U1(available != 0 and complete)
-    replay = retryFirst | (fetchReplay & U1((held == 0 and available != 0) or (rvc == 0 and available >= 2)))
+    const available = U1(held) + (if fetchValid { fetched } else { 0 })
+    const retryFirst = held and savedReplay
+    const complete = rvc or available >= 2 or retryFirst
+    valid = available != 0 and complete
+    replay = retryFirst or (fetchReplay and ((!held and available != 0) or (!rvc and available >= 2)))
 
-    const consumed = if complete { if rvc != 0 { 1 } else { 2 } } else { 0 }
-    const drained = consumed >= held
-    const fromFetch = consumed - held
+    const consumed = if complete { if rvc { 1 } else { 2 } } else { 0 }
+    const drained = consumed >= U1(held)
+    const fromFetch = consumed - U1(held)
     const capacity = fromFetch + 1
-    fetchReady = ready & U1(drained and fetched <= capacity)
-    const save = fetchValid != 0 and drained and fetched == capacity
+    fetchReady = ready and drained and fetched <= capacity
+    const save = fetchValid and drained and fetched == capacity
     if C.nPerfCounters > 0 and C.btbEntries > 0 {
-      reg heldTaken:U1
-      const lastSlot = if held != 0 or rvc != 0 { slot } else { 1 }
-      predictedTaken = if held != 0 and rvc != 0 { heldTaken } else { taken & U1(branchSlot == lastSlot) }
-      if ready != 0 and save {
-        heldTaken = taken & U1(branchSlot == slot + fromFetch)
+      reg heldTaken:Bool = nil
+      const lastSlot = if held or rvc { slot } else { 1 }
+      predictedTaken = if held and rvc { heldTaken } else { taken and branchSlot == lastSlot }
+      if ready and save {
+        heldTaken = taken and branchSlot == slot + fromFetch
       }
     }
     if C.bhtEntries > 0 {
       reg savedIndex:Unsigned(bits=C.bhtIndexBits) = nil
-      if held != 0 and rvc != 0 {
+      if held and rvc {
         prediction = savedIndex
       }
-      if ready != 0 and save {
+      if ready and save {
         savedIndex = index
       }
     }
-    if rst or kill != 0 {
-      held = 0
-    } elif ready != 0 and drained {
-      held = U1(save)
+    if kill {
+      held = false
+    } elif ready and drained {
+      held = save
     }
-    if ready != 0 and save {
+    if ready and save {
       savedHalf = if slot + fromFetch == 0 { fetchData#[0..<16] } else { high }
       savedPC = (fetchPC#[2..<C.xLen] << 2) | (fetchPC + (fromFetch << 1))#[0..<2]
       savedFault = fetchFault
@@ -73,9 +73,9 @@ pub mod IBuf<C=tiny>(branchSlot:U1, clk:Clock, fetchData:U32, fetchFault:U3, fet
     pc = fetchPC
     raw = fetchData
     inst = fetchData
-    rvc = 0
+    rvc = false
     firstFault = fetchFault
     secondFault = 0
-    replay = fetchReplay & fetchValid
+    replay = fetchReplay and fetchValid
   }
 }

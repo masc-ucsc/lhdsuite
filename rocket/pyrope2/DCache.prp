@@ -1,3 +1,5 @@
+const encodeAtomic = import("CacheAccess.encodeAtomic")
+const tiny = import("RocketConfig.tiny")
 const cached = import("CacheBanks.CacheBanks")
 const command = import("CacheAccess.command")
 const attributes = import("PhysicalMap.attributes")
@@ -8,11 +10,11 @@ const AMOALU = import("AMOALU.AMOALU")
 const DCacheDataArray = import("DCacheDataArray.DCacheDataArray")
 
 // TileLink transfers carry one beat unless a data payload spans multiple beats.
-mod lastBeat<W>(clk:Clock, hasData:U1, rst:Reset, size:U4, transfer:U1) -> (last:U1@[]) {
+mod lastBeat<W>(clk:Clock, hasData:Bool, rst:Reset, size:U4, transfer:Bool) -> (last:Bool@[]) {
   reg remaining:U10 = 0
-  const extra:U10 = if hasData != 0 { ((1 << size) - 1)#[std.clog2(W/8)..<12] } else { 0 }
-  last = U1(remaining == 1 or extra == 0)
-  if transfer != 0 {
+  const extra:U10 = if hasData { ((1 << size) - 1)#[std.clog2(W/8)..<12] } else { 0 }
+  last = remaining == 1 or extra == 0
+  if transfer {
     if remaining == 0 {
       remaining = extra
     } else {
@@ -21,308 +23,287 @@ mod lastBeat<W>(clk:Clock, hasData:U1, rst:Reset, size:U4, transfer:U1) -> (last
   }
 }
 
-pub mod DCache<W=32, ATOMICS=true, SETS=256, SCRATCH=true, WAYS=4, IO_ONLY=false, CFLUSH=false, BLOCK=64, MSHRS=0, EXT=false>::[timecheck=false](auto_out_a_ready:U1, auto_out_d_bits_corrupt:U1=0, auto_out_d_bits_data:Unsigned(bits=W), auto_out_d_bits_denied:U1, auto_out_d_bits_opcode:U4, auto_out_d_bits_size:U4, auto_out_d_valid:U1, clock:Clock, io_cpu_req_bits_addr:Unsigned(bits=W), io_cpu_req_bits_cmd:U5, io_cpu_req_bits_dprv:U2, io_cpu_req_bits_dv:U1, io_cpu_req_bits_no_xcpt:U1, io_cpu_req_bits_phys:U1, io_cpu_req_bits_signed:U1, io_cpu_req_bits_size:U2, io_cpu_req_bits_tag:U7, io_cpu_req_valid:U1, io_cpu_s1_data_data:Unsigned(bits=W), io_cpu_s1_data_mask:Unsigned(bits=W/8), io_cpu_s1_kill:U1, io_ptw_status_debug:U1, memAReady:Bool=false, memBAddress:U32=0, memBParam:U2=0, memBSource:U5=0, memBValid:Bool=false, memCReady:Bool=false, memDCorrupt:Bool=false, memDData:Unsigned(bits=W)=0, memDDenied:Bool=false, memDOpcode:U3=0, memDParam:U2=0, memDSink:U4=0, memDSource:U5=0, memDValid:Bool=false, memEReady:Bool=false, pmpPermissions:U2, reset:Reset, translationAE:Bool=false, translationPF:Bool=false) -> (auto_out_a_bits_address:U32@[], auto_out_a_bits_data:Unsigned(bits=W)@[], auto_out_a_bits_mask:Unsigned(bits=W/8)@[], auto_out_a_bits_opcode:U4@[], auto_out_a_bits_param:U3@[], auto_out_a_bits_size:U4@[], auto_out_a_bits_user_amba_prot_bufferable:U1@[], auto_out_a_bits_user_amba_prot_modifiable:U1@[], auto_out_a_bits_user_amba_prot_privileged:U1@[], auto_out_a_bits_user_amba_prot_readalloc:U1@[], auto_out_a_bits_user_amba_prot_writealloc:U1@[], auto_out_a_valid:U1@[], auto_out_d_ready:U1@[], io_cpu_ordered:U1@[], io_cpu_perf_acquire:U1@[], io_cpu_perf_blocked:U1@[], io_cpu_perf_canAcceptLoadThenLoad:U1@[], io_cpu_perf_canAcceptStoreThenLoad:U1@[], io_cpu_perf_canAcceptStoreThenRMW:U1@[], io_cpu_perf_grant:U1@[], io_cpu_perf_release:U1@[], io_cpu_perf_storeBufferEmptyAfterLoad:U1@[], io_cpu_perf_storeBufferEmptyAfterStore:U1@[], io_cpu_replay_next:U1@[], io_cpu_req_ready:U1@[], io_cpu_resp_bits_addr:U32@[], io_cpu_resp_bits_cmd:U5@[], io_cpu_resp_bits_data:Unsigned(bits=W)@[], io_cpu_resp_bits_data_raw:Unsigned(bits=W)@[], io_cpu_resp_bits_data_word_bypass:Unsigned(bits=W)@[], io_cpu_resp_bits_dprv:U2@[], io_cpu_resp_bits_dv:U1@[], io_cpu_resp_bits_has_data:U1@[], io_cpu_resp_bits_mask:Unsigned(bits=W/8)@[], io_cpu_resp_bits_replay:U1@[], io_cpu_resp_bits_signed:U1@[], io_cpu_resp_bits_size:U2@[], io_cpu_resp_bits_store_data:Unsigned(bits=W)@[], io_cpu_resp_bits_tag:U7@[], io_cpu_resp_error:U1@[], io_cpu_resp_valid:U1@[], io_cpu_s2_gpa:U32@[], io_cpu_s2_nack:U1@[], io_cpu_s2_nack_cause_raw:U1@[], io_cpu_s2_paddr:U32@[], io_cpu_s2_uncached:U1@[], io_cpu_s2_xcpt_ae_ld:U1@[], io_cpu_s2_xcpt_ae_st:U1@[], io_cpu_s2_xcpt_ma_ld:U1@[], io_cpu_s2_xcpt_ma_st:U1@[], io_cpu_s2_xcpt_pf_ld:U1@[], io_cpu_s2_xcpt_pf_st:U1@[], memAAddress:U32@[], memAParam:U2@[], memASource:U5@[], memAValid:Bool@[], memBReady:Bool@[], memCAddress:U32@[], memCCorrupt:Bool@[], memCData:Unsigned(bits=W)@[], memCOpcode:U3@[], memCParam:U3@[], memCSource:U5@[], memCValid:Bool@[], memDReady:Bool@[], memESink:U4@[], memEValid:Bool@[], needsClock:Bool@[], pmpAddress:U32@[], pmpPrivilege:U2@[], pmpSize:U2@[]) {
-  comptime const lanes = W/8
-  comptime const capacity = SETS*BLOCK
+pub mod DCache<C=tiny>::[timecheck=false](auto_out_a_ready:U1, auto_out_d_bits_corrupt:U1=0, auto_out_d_bits_data:Unsigned(bits=C.dLen), auto_out_d_bits_denied:U1, auto_out_d_bits_opcode:U4, auto_out_d_bits_size:U4, auto_out_d_valid:U1, clock:Clock, io_ptw_status_debug:U1, memAReady:Bool=false, memBAddress:U32=0, memBParam:U2=0, memBSource:U5=0, memBValid:Bool=false, memCReady:Bool=false, memDCorrupt:Bool=false, memDData:Unsigned(bits=C.dLen)=0, memDDenied:Bool=false, memDOpcode:U3=0, memDParam:U2=0, memDSink:U4=0, memDSource:U5=0, memDValid:Bool=false, memEReady:Bool=false, pmpPermissions:U2, request:(address:Unsigned(bits=C.dLen), command:U5, privilege:U2, virtual:Bool, skipException:Bool, physical:Bool, isSigned:Bool, size:U2, tag:U7, valid:Bool, storeData:Unsigned(bits=C.dLen), storeMask:Unsigned(bits=C.dLen/8), kill:Bool), reset:Reset, translationAE:Bool=false, translationPF:Bool=false) -> (auto_out_d_ready:U1@[], dataA:(address:U32, data:Unsigned(bits=C.dLen), mask:Unsigned(bits=C.dLen/8), opcode:U4, param:U3, size:U4, bufferable:U1, modifiable:U1, privileged:U1, readalloc:U1, writealloc:U1, valid:U1)@[], memAAddress:U32@[], memAParam:U2@[], memASource:U5@[], memAValid:Bool@[], memBReady:Bool@[], memCAddress:U32@[], memCCorrupt:Bool@[], memCData:Unsigned(bits=C.dLen)@[], memCOpcode:U3@[], memCParam:U3@[], memCSource:U5@[], memCValid:Bool@[], memDReady:Bool@[], memESink:U4@[], memEValid:Bool@[], needsClock:Bool@[], pmpAddress:U32@[], pmpPrivilege:U2@[], pmpSize:U2@[], response:(ordered:Bool, perfAcquire:Bool, perfBlocked:Bool, perfCanAcceptLoadThenLoad:Bool, perfCanAcceptStoreThenLoad:Bool, perfCanAcceptStoreThenRMW:Bool, perfGrant:Bool, perfRelease:Bool, perfStoreBufferEmptyAfterLoad:Bool, perfStoreBufferEmptyAfterStore:Bool, replayNext:Bool, reqReady:Bool, respAddr:U32, respCmd:U5, respData:Unsigned(bits=C.dLen), respDataRaw:Unsigned(bits=C.dLen), respDataWordBypass:Unsigned(bits=C.dLen), respDprv:U2, respDv:Bool, respHasData:Bool, respMask:Unsigned(bits=C.dLen/8), respReplay:Bool, respSigned:Bool, respSize:U2, respStoreData:Unsigned(bits=C.dLen), respTag:U7, respError:Bool, respValid:Bool, s2Gpa:U32, s2Nack:Bool, s2NackCauseRaw:Bool, s2Paddr:U32, s2Uncached:Bool, s2XcptAeLd:Bool, s2XcptAeSt:Bool, s2XcptMaLd:Bool, s2XcptMaSt:Bool, s2XcptPfLd:Bool, s2XcptPfSt:Bool)@[]) {
+  comptime const lanes = C.dLen/8
+  comptime const capacity = C.dcacheSets*C.dcacheBlockBytes
   comptime const indexBits = std.clog2(capacity)
   comptime const offsetBits = std.clog2(lanes)
-  type Word = Unsigned(bits=W)
+  type Word = Unsigned(bits=C.dLen)
   type Mask = Unsigned(bits=lanes)
-  type Request = (address:U32, tag:U7, cmd:U5, size:U2, sign:U1, physical:Bool)
-  cassert(W == 32 or W == 64)
-  reg s1PF:Bool
-  reg s1AE:Bool
-  reg s1AddressOutOfRange:Bool
-
-  reg s1_valid:U1 = 0
+  type Request = (address:U32, tag:U7, cmd:U5, size:U2, sign:Bool, physical:Bool)
+  cassert(C.dLen == 32 or C.dLen == 64)
+  reg s1PF:Bool = nil
+  reg s1AE:Bool = nil
+  reg s1AddressOutOfRange:Bool = nil
+  reg s1Valid:Bool = false
   reg s1:Request = nil
-  reg s1_req_dprv:U2
-  reg s1_req_dv:U1
-
-  reg s1_req_no_xcpt:U1
+  reg s1ReqDprv:U2 = nil
+  reg s1ReqDv:Bool = nil
+  reg s1ReqNoXcpt:Bool = nil
 
   // Device transactions retain one ordered slot. Coherent responses select
   // their saved CPU metadata by the bank that completed the request.
-  reg outstanding:U1 = 0
+  reg outstanding:Bool = false
   reg deviceReq:Request = nil
   wire issued:Request = nil
   wire cacheBusy:Bool = nil
 
-  reg s1_did_read:U1
-  reg s2_valid:U1 = 0
-  reg s2_not_nacked_in_s1:U1
+  reg s1DidRead:Bool = nil
+  reg s2Valid:Bool = false
+  reg s2NotNackedInS1:Bool = nil
   reg s2:Request = nil
-  reg s2_req_dprv:U2
-  reg s2_req_dv:U1
+  reg s2ReqDprv:U2 = nil
+  reg s2ReqDv:Bool = nil
+  reg s2ReqNoXcpt:Bool = nil
 
-  reg s2_req_no_xcpt:U1
+  reg s2TlbXcptGpa:U32 = nil
+  reg s2TlbXcptPfLd:Bool = nil
+  reg s2TlbXcptPfSt:Bool = nil
+  reg s2TlbXcptAeLd:Bool = nil
+  reg s2TlbXcptAeSt:Bool = nil
+  reg s2TlbXcptMaLd:Bool = nil
+  reg s2TlbXcptMaSt:Bool = nil
+  reg s2UncachedRespAddr:U32 = nil
 
-  reg s2_tlb_xcpt_gpa:U32
-  reg s2_tlb_xcpt_pf_ld:U1
-  reg s2_tlb_xcpt_pf_st:U1
-  reg s2_tlb_xcpt_ae_ld:U1
-  reg s2_tlb_xcpt_ae_st:U1
-  reg s2_tlb_xcpt_ma_ld:U1
-  reg s2_tlb_xcpt_ma_st:U1
-
-  reg s2_uncached_resp_addr:U32
-
-  reg s2_data:Word
-  reg scratchHit:U1
-  reg pstore1_cmd:U5
-  reg pstore1_addr:U32
-  reg pstore1_data:Word
-
-  reg pstore1_mask:Mask
-  reg pstore1_rmw_r:U1
-  reg pstore2_valid:U1 = 0
-  reg drainAfterMiss:U1
-  reg pstore1_held:U1 = 0
-  reg pstore2_addr:U32
-
-  reg pstore2Data:Word
-  reg pstore2_storegen_mask:Mask
-  reg priorReadHazard:U1
-  reg blockUncachedGrant:U1
-
-  reg reportFault:U1
-  reg doUncachedResp:U1
-  wire busValid:U1 = nil
+  reg s2Data:Word = nil
+  reg scratchHit:Bool = nil
+  reg pstore1Cmd:U5 = nil
+  reg pstore1Addr:U32 = nil
+  reg pstore1Data:Word = nil
+  reg pstore1Mask:Mask = nil
+  reg pstore1RmwR:Bool = nil
+  reg pstore2Valid:Bool = false
+  reg drainAfterMiss:Bool = nil
+  reg pstore1Held:Bool = false
+  reg pstore2Addr:U32 = nil
+  reg pstore2Data:Word = nil
+  reg pstore2Mask:Mask = nil
+  reg priorReadHazard:Bool = nil
+  reg blockUncachedGrant:Bool = nil
+  reg reportFault:Bool = nil
+  reg doUncachedResp:Bool = nil
+  wire busValid:Bool = nil
   wire busOpcode:U4 = nil
-  wire busDenied:U1 = nil
+  wire busDenied:Bool = nil
   wire busData:Word = nil
-  wire requestReady:U1 = nil
-  const s1Live = s1_valid & ~io_cpu_s1_kill
-  const incoming = command(cmd=io_cpu_req_bits_cmd)
+  wire requestReady:Bool = nil
+  const s1Live = s1Valid and !request.kill
+  const incoming = command(cmd=request.command)
   const stage1 = command(cmd=s1.cmd)
   const stage2 = command(cmd=s2.cmd)
-  const s1Access = stage1.read | stage1.write
-  const s1Fence = U1(s1.cmd >= 20 and s1.cmd <= 22)
-  const checkAddress = s1Access != 0 or (s1.cmd == 5 and s1.size#[0] != 0) or s1.cmd == 23
-  const checkPermissions = s1Live & U1(checkAddress)
-  const storeMask = byteMask<W>(addr=s1.address, size=s1.size)
-  const storeWriteMask = if s1.cmd == 17 { io_cpu_s1_data_mask } else { storeMask }
-  const s2Access = stage2.read | stage2.write
+  const s1Access = stage1.read or stage1.write
+  const checkAddress = s1Access or (stage1.flushAll and s1.size#[0] != 0) or stage1.checkWrite
+  const checkPermissions = s1Live and checkAddress
+  const storeMask = byteMask<C.dLen>(addr=s1.address, size=s1.size)
+  const storeWriteMask = if stage1.partial { request.storeMask } else { storeMask }
+  const s2Access = stage2.read or stage2.write
   // Scratchpad hits complete locally. Coherent and uncached accesses use separate ports.
-  const s2Store = s2_valid & stage2.write
-  const s1Store = s1_valid & stage1.write
-  const storePending = s2Store | pstore1_held
-  const bothStores = storePending & pstore2_valid
-  const forceDrain = bothStores & (s1Store | pstore1_rmw_r)
-  const arrayRead = io_cpu_req_valid & U1(io_cpu_req_bits_cmd != 1 and io_cpu_req_bits_cmd != 3)
-  const drainSlot = ~arrayRead | drainAfterMiss
-  const storeAddress = if pstore2_valid != 0 { pstore2_addr } else { pstore1_addr }
-  const arrayWriteData = if pstore2_valid != 0 { pstore2Data } else { pstore1_data }
-  const arrayMask = if pstore2_valid != 0 { pstore2_storegen_mask } else { pstore1_mask }
-  const store1Conflict = pstore1_addr#[offsetBits..<indexBits] == s1.address#[offsetBits..<indexBits] and (pstore1_mask & storeMask) != 0
-  const store2Conflict = pstore2_addr#[offsetBits..<indexBits] == s1.address#[offsetBits..<indexBits] and (pstore2_storegen_mask & storeMask) != 0
-  const storeConflict = (storePending & U1(store1Conflict)) | (pstore2_valid & U1(store2Conflict))
-  const readHazard = stage1.read & storeConflict
+  const s2Store = s2Valid and stage2.write
+  const s1Store = s1Valid and stage1.write
+  const storePending = s2Store or pstore1Held
+  const bothStores = storePending and pstore2Valid
+  const forceDrain = bothStores and (s1Store or pstore1RmwR)
+  const arrayRead = request.valid and (request.command != 1 and request.command != 3)
+  const drainSlot = !arrayRead or drainAfterMiss
+  const storeAddress = if pstore2Valid { pstore2Addr } else { pstore1Addr }
+  const arrayWriteData = if pstore2Valid { pstore2Data } else { pstore1Data }
+  const arrayMask = if pstore2Valid { pstore2Mask } else { pstore1Mask }
+  const store1Conflict = pstore1Addr#[offsetBits..<indexBits] == s1.address#[offsetBits..<indexBits] and (pstore1Mask & storeMask) != 0
+  const store2Conflict = pstore2Addr#[offsetBits..<indexBits] == s1.address#[offsetBits..<indexBits] and (pstore2Mask & storeMask) != 0
+  const storeConflict = (storePending and store1Conflict) or (pstore2Valid and store2Conflict)
+  const readHazard = stage1.read and storeConflict
   // A read/write command puts an atomic operand on A. Partial stores
   // keep their supplied strobes; other transfers derive them from size.
-  const writeA = stage2.write != 0
-  const partialA = writeA and stage2.partial != 0
-  const rmwA = writeA and stage2.read != 0 and !partialA
-  const maintenance = CFLUSH and s2.cmd == 5
-  const cachedAddress = !SCRATCH and (s2.address >= 0x80000000 or maintenance)
-  const payloadA = cachedAddress or !rmwA or stage2.amo != 0
-  const atomicOpcode = match s2.cmd {
-    in (4, 9, 10, 11) { 3 }
-    in (8, 12, 13, 14, 15) { 2 }
-    else { 0 }
-  }
-  const atomicParam = match s2.cmd {
-    in (4, 15) { 3 }
-    in (10, 13) { 1 }
-    in (11, 14) { 2 }
-    == 8 { 4 }
-    else { 0 }
-  }
-  const requestOpcode:U4 = if !writeA { 4 } elif partialA { 1 } else { atomicOpcode }
+  const writeA = stage2.write
+  const partialA = writeA and stage2.partial
+  const rmwA = writeA and stage2.read and !partialA
+  const maintenance = C.haveCFlush and stage2.flushAll
+  const cachedAddress = !C.useDataScratchpad and (s2.address >= 0x80000000 or maintenance)
+  const payloadA = cachedAddress or !rmwA or stage2.amo
+  const atomic = encodeAtomic(cmd=s2.cmd)
+  const requestOpcode:U4 = if !writeA { 4 } elif partialA { 1 } else { atomic.opcode }
   const requestSize:U4 = if payloadA { s2.size } else { 0 }
   wire busSize:U4 = nil
-  wire busCorrupt:U1 = nil
-  const load = loadData<W>(addr=s2.address, size=s2.size, sign=s2.sign, data=s2_data)
-  const pendingRMW = s2Store & pstore1_rmw_r
-  const nextStoreLoad = ~(s1Store & (pendingRMW | bothStores))#[0]
-  io_cpu_perf_storeBufferEmptyAfterLoad = ~(s1Store | storePending | pstore2_valid)#[0]
-  io_cpu_perf_storeBufferEmptyAfterStore = ~(s1Store | pendingRMW | bothStores)#[0]
-  io_cpu_perf_canAcceptStoreThenLoad = nextStoreLoad
-  io_cpu_perf_canAcceptStoreThenRMW = nextStoreLoad & ~pstore2_valid
-  io_cpu_perf_canAcceptLoadThenLoad = ~(s1Store & (stage1.read | stage1.partial) & (storePending | pstore2_valid))#[0]
-  mut storeResult:Word = pstore1_data
-  if SCRATCH and ATOMICS and !IO_ONLY and pstore1_cmd >= 8 and pstore1_cmd <= 15 {
-    storeResult = AMOALU<W>(io_mask=pstore1_mask, io_cmd=pstore1_cmd, io_lhs=s2_data, io_rhs=pstore1_data)
+  wire busCorrupt:Bool = nil
+  const load = loadData<C.dLen>(addr=s2.address, size=s2.size, sign=U1(s2.sign), data=s2Data)
+  const pendingRMW = s2Store and pstore1RmwR
+  const nextStoreLoad = !(s1Store and (pendingRMW or bothStores))
+  response.perfStoreBufferEmptyAfterLoad = !(s1Store or storePending or pstore2Valid)
+  response.perfStoreBufferEmptyAfterStore = !(s1Store or pendingRMW or bothStores)
+  response.perfCanAcceptStoreThenLoad = nextStoreLoad
+  response.perfCanAcceptStoreThenRMW = nextStoreLoad and !pstore2Valid
+  response.perfCanAcceptLoadThenLoad = !(s1Store and (stage1.read or stage1.partial) and (storePending or pstore2Valid))
+  mut storeResult:Word = pstore1Data
+  if C.useDataScratchpad and C.useAtomics and !C.useAtomicsOnlyForIO and pstore1Cmd >= 8 and pstore1Cmd <= 15 {
+    storeResult = AMOALU<C.dLen>(io_mask=pstore1Mask, io_cmd=pstore1Cmd, io_lhs=s2Data, io_rhs=pstore1Data)
   }
-  io_cpu_s2_nack_cause_raw = priorReadHazard
-  io_cpu_s2_uncached = ~scratchHit
-  io_cpu_s2_paddr = s2.address
-  io_cpu_resp_bits_tag = s2.tag
-  io_cpu_resp_bits_cmd = s2.cmd
-  io_cpu_resp_bits_size = s2.size
-  io_cpu_resp_bits_signed = s2.sign
-  io_cpu_resp_bits_dprv = s2_req_dprv
-  io_cpu_resp_bits_dv = s2_req_dv
-  io_cpu_resp_bits_mask = 0
-  io_cpu_resp_bits_replay = doUncachedResp
-  io_cpu_resp_bits_data_word_bypass = load.bypass
-  io_cpu_resp_bits_data_raw = s2_data
-  io_cpu_resp_bits_store_data = pstore1_data
-  io_cpu_s2_xcpt_ma_ld = reportFault & s2_tlb_xcpt_ma_ld
-  io_cpu_s2_xcpt_ma_st = reportFault & s2_tlb_xcpt_ma_st
-  io_cpu_s2_xcpt_pf_ld = reportFault & s2_tlb_xcpt_pf_ld
-  io_cpu_s2_xcpt_pf_st = reportFault & s2_tlb_xcpt_pf_st
-  io_cpu_s2_xcpt_ae_ld = reportFault & s2_tlb_xcpt_ae_ld
-  io_cpu_s2_xcpt_ae_st = reportFault & s2_tlb_xcpt_ae_st
-  io_cpu_s2_gpa = s2_tlb_xcpt_gpa
-  io_cpu_ordered = ~((s1_valid & ~s1_req_no_xcpt) | (s2_valid & ~s2_req_no_xcpt) | outstanding | U1(cacheBusy))
-  io_cpu_perf_blocked = 0
+  response.s2NackCauseRaw = priorReadHazard
+  response.s2Uncached = !scratchHit
+  response.s2Paddr = s2.address
+  response.respTag = s2.tag
+  response.respCmd = s2.cmd
+  response.respSize = s2.size
+  response.respSigned = s2.sign
+  response.respDprv = s2ReqDprv
+  response.respDv = s2ReqDv
+  response.respMask = 0
+  response.respReplay = doUncachedResp
+  response.respDataWordBypass = load.bypass
+  response.respDataRaw = s2Data
+  response.respStoreData = pstore1Data
+  response.s2XcptMaLd = reportFault and s2TlbXcptMaLd
+  response.s2XcptMaSt = reportFault and s2TlbXcptMaSt
+  response.s2XcptPfLd = reportFault and s2TlbXcptPfLd
+  response.s2XcptPfSt = reportFault and s2TlbXcptPfSt
+  response.s2XcptAeLd = reportFault and s2TlbXcptAeLd
+  response.s2XcptAeSt = reportFault and s2TlbXcptAeSt
+  response.s2Gpa = s2TlbXcptGpa
+  response.ordered = !((s1Valid and !s1ReqNoXcpt) or (s2Valid and !s2ReqNoXcpt) or outstanding or cacheBusy)
+  response.perfBlocked = false
   // Translation precedes arbitration. All three clients use the same physical
   // map and PMP checks in stage one, including implicit supervisor PTE reads.
-  const region = attributes<BLOCK=BLOCK, IO_ONLY=IO_ONLY, SCRATCH=SCRATCH, SETS=SETS>(address=s1.address, debug=io_ptw_status_debug)
+  const region = attributes<BLOCK=C.dcacheBlockBytes, IO_ONLY=C.useAtomicsOnlyForIO, SCRATCH=C.useDataScratchpad, SETS=C.dcacheSets>(address=s1.address, debug=io_ptw_status_debug)
   pmpAddress = s1.address
   pmpSize = s1.size
-  pmpPrivilege = s1_req_dprv
-  const needsWrite = stage1.write != 0 or s1.cmd == 5 or s1.cmd == 23
+  pmpPrivilege = s1ReqDprv
+  const needsWrite = stage1.write or stage1.flushAll or stage1.checkWrite
   const misaligned = (s1.address & ((1 << s1.size) - 1)) != 0
-  const unsupported = (stage1.partial != 0 and region.partial == 0) or (stage1.amo != 0 and (!ATOMICS or region.atomic == 0))
-  const cachedRAM = !SCRATCH and s1.address >= 0x80000000
-  const badLRSC = stage1.lrsc != 0 and (!ATOMICS or IO_ONLY or !cachedRAM)
-  const accessError = (EXT and s1.tag == 5 and s1.size > std.clog2(lanes)) or badLRSC or (misaligned and region.effects != 0) or s1AE or s1AddressOutOfRange
-  const loadError = stage1.read & U1(accessError or (region.read & pmpPermissions#[0]) == 0)
-  const storeError = U1((needsWrite and (accessError or (region.write & pmpPermissions#[1]) == 0)) or unsupported)
-  const inScratchpad = U1(SCRATCH and dtim<BLOCK=BLOCK, SETS=SETS>(address=s1.address))
-  const fault = io_cpu_s2_xcpt_ma_ld | io_cpu_s2_xcpt_ma_st | io_cpu_s2_xcpt_pf_ld | io_cpu_s2_xcpt_pf_st | io_cpu_s2_xcpt_ae_ld | io_cpu_s2_xcpt_ae_st
-  const live = s2_valid & ~fault
-  const accepted = live & s2_not_nacked_in_s1
-  const dataHit = accepted & scratchHit & s2Access
+  const unsupported = (stage1.partial and region.partial == 0) or (stage1.amo and (!C.useAtomics or region.atomic == 0))
+  const cachedRAM = !C.useDataScratchpad and s1.address >= 0x80000000
+  const badLRSC = stage1.lrsc and (!C.useAtomics or C.useAtomicsOnlyForIO or !cachedRAM)
+  const accessError = ((C.vLen != 0 or C.roccOpcodes != 0) and s1.tag == 5 and s1.size > std.clog2(lanes)) or badLRSC or (misaligned and region.effects != 0) or s1AE or s1AddressOutOfRange
+  const loadError = stage1.read and (accessError or (region.read & pmpPermissions#[0]) == 0)
+  const storeError = (needsWrite and (accessError or (region.write & pmpPermissions#[1]) == 0)) or unsupported
+  const inScratchpad = C.useDataScratchpad and dtim<BLOCK=C.dcacheBlockBytes, SETS=C.dcacheSets>(address=s1.address)
+  const fault = response.s2XcptMaLd or response.s2XcptMaSt or response.s2XcptPfLd or response.s2XcptPfSt or response.s2XcptAeLd or response.s2XcptAeSt
+  const live = s2Valid and !fault
+  const accepted = live and s2NotNackedInS1
+  const dataHit = accepted and scratchHit and s2Access
   // Arbitration between a stage-two miss, a hit draining the store buffer,
   // and a late data response. An outstanding transfer occupies the miss slot.
   wire flushComplete:Bool = nil
   const finish = maintenance and flushComplete
-  const miss = accepted & (s2Access | U1(maintenance and !finish)) & ~scratchHit#[0]
-  const issueA = miss & ~outstanding & U1(cachedAddress or !cacheBusy)
-  const fireA = issueA & requestReady
-  const flush:U1 = accepted & U1(s2.cmd == 23)
-  const handled:U1 = if maintenance { accepted & U1(finish) } else { fireA }
-  const nack = live & ~handled & ~flush & ~dataHit#[0]
-  const storeHit = dataHit & stage2.write
-  const buffered = storeHit | pstore1_held
-  const drainable = (buffered & ~pstore1_rmw_r#[0]) | pstore2_valid
-  const drain = forceDrain | (drainable & drainSlot)
-  const advanceStore = buffered & U1(pstore2_valid == drain)
-  const acceptStage1 = ~((s1_valid & readHazard) | nack)#[0]
-  const returnsData = U1(busOpcode#[0..<2] == 1 or (EXT and issued.tag == 5))
-  const stallD = returnsData & (blockUncachedGrant | s1_valid)
-  const dataConflict = stallD & busValid
-  const checkFault = checkPermissions & ~s1_req_no_xcpt & acceptStage1
-  const responseValid = dataHit | doUncachedResp
-  mut mergedStore:Word = s2_data
+  const miss = accepted and (s2Access or (maintenance and !finish)) and !scratchHit
+  const issueA = miss and !outstanding and (cachedAddress or !cacheBusy)
+  const fireA = issueA and requestReady
+  const flush:Bool = accepted and stage2.checkWrite
+  const handled:Bool = if maintenance { accepted and finish } else { fireA }
+  const nack = live and !handled and !flush and !dataHit
+  const storeHit = dataHit and stage2.write
+  const buffered = storeHit or pstore1Held
+  const drainable = (buffered and !pstore1RmwR) or pstore2Valid
+  const drain = forceDrain or (drainable and drainSlot)
+  const advanceStore = buffered and pstore2Valid == drain
+  const acceptStage1 = !((s1Valid and readHazard) or nack)
+  const returnsData = busOpcode#[0..<2] == 1 or ((C.vLen != 0 or C.roccOpcodes != 0) and issued.tag == 5)
+  const stallD = returnsData and (blockUncachedGrant or s1Valid)
+  const dataConflict = stallD and busValid
+  const checkFault = checkPermissions and !s1ReqNoXcpt and acceptStage1
+  const responseValid = dataHit or doUncachedResp
+  mut mergedStore:Word = s2Data
   for i in 0..<lanes {
     const lo = i*8
-    if pstore1_mask#[i] != 0 {
+    if pstore1Mask#[i] != 0 {
       mergedStore#[lo..<(lo + 8)] = storeResult#[lo..<(lo + 8)]
     }
   }
-  const arrayBusy = drain | dataConflict
-  const arrayAddress = if arrayBusy != 0 { storeAddress } else { io_cpu_req_bits_addr }
-  const writeMask:Mask = if arrayBusy != 0 { arrayMask } else { ~Mask(0) }
-  const arrayEnable = arrayBusy | arrayRead
-  const advanceS1 = s1_valid & acceptStage1
-  const busReady = ~stallD#[0]
+  const arrayBusy = drain or dataConflict
+  const arrayAddress = if arrayBusy { storeAddress } else { request.address }
+  const writeMask:Mask = if arrayBusy { arrayMask } else { ~Mask(0) }
+  const arrayEnable = arrayBusy or arrayRead
+  const advanceS1 = s1Valid and acceptStage1
+  const busReady = !stallD
   mut data:Word = 0
-  if SCRATCH {
-    data = DCacheDataArray<CAPACITY=capacity, W=W>(clk=clock, valid=arrayEnable, address=arrayAddress#[0..<indexBits], write=drain, wdata=arrayWriteData, mask=writeMask)
+  if C.useDataScratchpad {
+    data = DCacheDataArray<CAPACITY=capacity, W=C.dLen>(valid=arrayEnable, address=arrayAddress#[0..<indexBits], write=drain, wdata=arrayWriteData, mask=writeMask)
   }
-  auto_out_a_bits_user_amba_prot_bufferable = 0
-  auto_out_a_bits_user_amba_prot_modifiable = 0
-  auto_out_a_bits_user_amba_prot_readalloc = 0
-  auto_out_a_bits_user_amba_prot_writealloc = 0
-  auto_out_a_bits_user_amba_prot_privileged = U1(s2_req_dprv == 3)
-  const fireD = busReady & busValid
-  const lastD = lastBeat<W>(clk=clock, hasData=busOpcode#[0], rst=reset, size=busSize, transfer=fireD)
-  const lastA = lastBeat<W>(clk=clock, hasData=~requestOpcode#[2], rst=reset, size=requestSize, transfer=fireA)
-  const uncachedTransfer = lastA & fireA
-  const replayData = fireD & returnsData
-  const resourceBusy = (arrayBusy & incoming.read) | dataConflict
-  const cpuReady = acceptStage1 & ~resourceBusy#[0]
-  s1_valid = cpuReady & io_cpu_req_valid
-  outstanding = ((fireA & U1(!cachedAddress)) | outstanding) & ~(fireD & lastD & U1(!cacheBusy))#[0]
-  s2_valid = s1Live & ~s1Fence
-  pstore2_valid = (pstore2_valid & ~drain#[0]) | advanceStore
-  pstore1_held = buffered & pstore2_valid & ~drain#[0]
-  if io_cpu_req_valid != 0 {
+  dataA.bufferable = 0
+  dataA.modifiable = 0
+  dataA.readalloc = 0
+  dataA.writealloc = 0
+  dataA.privileged = U1(s2ReqDprv == 3)
+  const fireD = busReady and busValid
+  const lastD = lastBeat<C.dLen>(hasData=busOpcode#[0] != 0, size=busSize, transfer=fireD)
+  const lastA = lastBeat<C.dLen>(hasData=requestOpcode#[2] == 0, size=requestSize, transfer=fireA)
+  const uncachedTransfer = lastA and fireA
+  const replayData = fireD and returnsData
+  const resourceBusy = (arrayBusy and incoming.read) or dataConflict
+  const cpuReady = acceptStage1 and !resourceBusy
+  s1Valid = cpuReady and request.valid
+  outstanding = ((fireA and (!cachedAddress)) or outstanding) and !(fireD and lastD and (!cacheBusy))
+  s2Valid = s1Live and !stage1.fence
+  pstore2Valid = (pstore2Valid and !drain) or advanceStore
+  pstore1Held = buffered and pstore2Valid and !drain
+  if request.valid {
     s1PF = translationPF
     s1AE = translationAE
-    s1AddressOutOfRange = (io_cpu_req_bits_addr >> 32) != 0
-    s1 = (address=io_cpu_req_bits_addr#[0..<32], cmd=io_cpu_req_bits_cmd, physical=CFLUSH and io_cpu_req_bits_phys != 0, sign=io_cpu_req_bits_signed, size=io_cpu_req_bits_size, tag=io_cpu_req_bits_tag)
-    s1_req_dprv = io_cpu_req_bits_dprv
-    s1_req_dv = io_cpu_req_bits_dv
-    s1_req_no_xcpt = io_cpu_req_bits_no_xcpt
-    s1_did_read = ~arrayBusy#[0] & io_cpu_req_valid & (incoming.read | incoming.partial)
+    s1AddressOutOfRange = (request.address >> 32) != 0
+    s1 = (address=request.address#[0..<32], cmd=request.command, physical=C.haveCFlush and request.physical, sign=request.isSigned, size=request.size, tag=request.tag)
+    s1ReqDprv = request.privilege
+    s1ReqDv = request.virtual
+    s1ReqNoXcpt = request.skipException
+    s1DidRead = !arrayBusy and request.valid and (incoming.read or incoming.partial)
   }
 
-  if fireA != 0 and !cachedAddress {
+  if fireA and !cachedAddress {
     deviceReq = s2
   }
-  s2_not_nacked_in_s1 = acceptStage1
-  if replayData != 0 {
+  s2NotNackedInS1 = acceptStage1
+  if replayData {
     s2 = (address=(s1.address & ~U32(lanes - 1)) | issued.address#[0..<offsetBits], cmd=0, physical=issued.physical, sign=issued.sign, size=issued.size, tag=issued.tag)
-    s2_uncached_resp_addr = issued.address
-  } elif advanceS1 != 0 {
+    s2UncachedRespAddr = issued.address
+  } elif advanceS1 {
     s2 = s1
   }
-  if advanceS1 != 0 {
-    s2_req_dprv = s1_req_dprv
-    s2_req_dv = s1_req_dv
-    s2_req_no_xcpt = s1_req_no_xcpt
-    s2_tlb_xcpt_gpa = s1.address
-    s2_tlb_xcpt_pf_ld = U1(s1PF) & stage1.read
-    s2_tlb_xcpt_pf_st = U1(s1PF and (stage1.write != 0 or (CFLUSH and s1.cmd == 5)))
-    s2_tlb_xcpt_ae_ld = U1(!s1PF) & loadError
-    s2_tlb_xcpt_ae_st = U1(!s1PF) & storeError
-    s2_tlb_xcpt_ma_ld = U1(misaligned) & stage1.read
-    s2_tlb_xcpt_ma_st = U1(misaligned) & stage1.write
+  if advanceS1 {
+    s2ReqDprv = s1ReqDprv
+    s2ReqDv = s1ReqDv
+    s2ReqNoXcpt = s1ReqNoXcpt
+    s2TlbXcptGpa = s1.address
+    s2TlbXcptPfLd = s1PF and stage1.read
+    s2TlbXcptPfSt = s1PF and (stage1.write or (C.haveCFlush and stage1.flushAll))
+    s2TlbXcptAeLd = (!s1PF) and loadError
+    s2TlbXcptAeSt = (!s1PF) and storeError
+    s2TlbXcptMaLd = misaligned and stage1.read
+    s2TlbXcptMaSt = misaligned and stage1.write
     scratchHit = inScratchpad
   }
 
-  if replayData != 0 {
-    s2_data = busData
-  } elif s1_valid != 0 {
-    s2_data = if s1_did_read != 0 { data } else { 0 }
+  if replayData {
+    s2Data = busData
+  } elif s1Valid {
+    s2Data = if s1DidRead { data } else { 0 }
   }
-  if advanceS1 != 0 and stage1.write != 0 {
-    pstore1_cmd = s1.cmd
-    pstore1_addr = s1.address
-    pstore1_data = io_cpu_s1_data_data
-
-    pstore1_mask = storeWriteMask
-    pstore1_rmw_r = stage1.read | stage1.partial
+  if advanceS1 and stage1.write {
+    pstore1Cmd = s1.cmd
+    pstore1Addr = s1.address
+    pstore1Data = request.storeData
+    pstore1Mask = storeWriteMask
+    pstore1RmwR = stage1.read or stage1.partial
   }
   drainAfterMiss = nack
-  if advanceStore != 0 {
-    pstore2_addr = pstore1_addr
-
+  if advanceStore {
+    pstore2Addr = pstore1Addr
     pstore2Data = mergedStore
-    pstore2_storegen_mask = pstore1_mask
+    pstore2Mask = pstore1Mask
   }
   priorReadHazard = readHazard
-  blockUncachedGrant = if dataConflict != 0 { drain } else { arrayEnable }
+  blockUncachedGrant = if dataConflict { drain } else { arrayEnable }
 
   reportFault = checkFault
-  reg replayError:U1
-  if replayData != 0 {
-    replayError = busDenied | busCorrupt
+  reg replayError:Bool = nil
+  if replayData {
+    replayError = busDenied or busCorrupt
   }
-  io_cpu_resp_error = doUncachedResp & replayError
+  response.respError = doUncachedResp and replayError
   doUncachedResp = replayData
-  auto_out_a_valid = issueA & U1(!cachedAddress)
-  auto_out_a_bits_opcode = requestOpcode
-  auto_out_a_bits_param = if rmwA { atomicParam } else { 0 }
-  auto_out_a_bits_size = requestSize
-  auto_out_a_bits_address = if payloadA { s2.address } else { 0 }
-  auto_out_a_bits_mask = if partialA { pstore1_mask } elif payloadA { byteMask<W>(addr=s2.address, size=s2.size) } else { 0 }
-  auto_out_a_bits_data = if writeA and payloadA { pstore1_data } else { 0 }
+  dataA.valid = U1(issueA and (!cachedAddress))
+  dataA.opcode = requestOpcode
+  dataA.param = if rmwA { atomic.param } else { 0 }
+  dataA.size = requestSize
+  dataA.address = if payloadA { s2.address } else { 0 }
+  dataA.mask = if partialA { pstore1Mask } elif payloadA { byteMask<C.dLen>(addr=s2.address, size=s2.size) } else { 0 }
+  dataA.data = if writeA and payloadA { pstore1Data } else { 0 }
   // A source identifies the saved request on a late coherent response.
   // Device accesses share one separate slot and drain coherent traffic.
   mut bankClock = false
@@ -333,11 +314,11 @@ pub mod DCache<W=32, ATOMICS=true, SETS=256, SCRATCH=true, WAYS=4, IO_ONLY=false
   mut cachedData:Word = 0
   mut cachedSize:U4 = 0
   mut cachedOpcode:U4 = 0
-  if !SCRATCH {
-    comptime const banks = if MSHRS > 0 { MSHRS } else { 1 }
+  if !C.useDataScratchpad {
+    comptime const banks = if C.nMSHRs > 0 { C.nMSHRs } else { 1 }
     reg requests:[banks]Request:[ordering="old"] = nil
-    const issue = cachedAddress and issueA != 0
-    const c = cached<ATOMICS=(ATOMICS and !IO_ONLY), BLOCK=BLOCK, CFLUSH=CFLUSH, N=banks, SETS=SETS, W=W, WAYS=WAYS>(clk=clock, rst=reset, request=issue, address=s2.address, command=s2.cmd, flushSize=s2.size, mask=auto_out_a_bits_mask, data=auto_out_a_bits_data, responseReady=busReady != 0, aReady=memAReady, bValid=memBValid, bAddress=memBAddress, bParam=memBParam, bSource=memBSource, cReady=memCReady, dValid=memDValid, dOpcode=memDOpcode, dParam=memDParam, dSource=memDSource, dSink=memDSink, dData=memDData, dDenied=memDDenied, dCorrupt=memDCorrupt, eReady=memEReady)
+    const issue = cachedAddress and issueA
+    const c = cached<C=C, N=banks>(request=issue, address=s2.address, command=s2.cmd, flushSize=s2.size, mask=dataA.mask, data=dataA.data, responseReady=busReady, aReady=memAReady, bValid=memBValid, bAddress=memBAddress, bParam=memBParam, bSource=memBSource, cReady=memCReady, dValid=memDValid, dOpcode=memDOpcode, dParam=memDParam, dSource=memDSource, dSink=memDSink, dData=memDData, dDenied=memDDenied, dCorrupt=memDCorrupt, eReady=memEReady)
     if issue and c.ready {
       requests[c.issueBank%banks] = s2
     }
@@ -351,13 +332,13 @@ pub mod DCache<W=32, ATOMICS=true, SETS=256, SCRATCH=true, WAYS=4, IO_ONLY=false
     cachedError = c.error
     cachedSize = completed.size
     const completedOp = command(cmd=completed.cmd)
-    cachedOpcode = completedOp.read
+    cachedOpcode = U1(completedOp.read)
     cachedData = c.result
-    if W == 64 and completed.cmd == 7 and completed.size == 2 {
+    if C.dLen == 64 and completedOp.sc and completed.size == 2 {
       cachedData = (c.result#[0] << 32) | c.result#[0]
     }
-    io_cpu_perf_acquire = (uncachedTransfer & U1(!cachedAddress)) | U1(c.aValid and memAReady)
-    io_cpu_perf_release = U1(c.cLast)
+    response.perfAcquire = (uncachedTransfer and (!cachedAddress)) or (c.aValid and memAReady)
+    response.perfRelease = c.cLast
     memAValid = c.aValid
     memAAddress = c.aAddress
     memAParam = c.aParam
@@ -381,8 +362,8 @@ pub mod DCache<W=32, ATOMICS=true, SETS=256, SCRATCH=true, WAYS=4, IO_ONLY=false
     memAParam = 0
     memASource = 0
     memBReady = false
-    io_cpu_perf_acquire = uncachedTransfer
-    io_cpu_perf_release = 0
+    response.perfAcquire = uncachedTransfer
+    response.perfRelease = false
     memCValid = false
     memCAddress = 0
     memCOpcode = 0
@@ -394,39 +375,39 @@ pub mod DCache<W=32, ATOMICS=true, SETS=256, SCRATCH=true, WAYS=4, IO_ONLY=false
     memEValid = false
     memESink = 0
   }
-  if CFLUSH {
+  if C.haveCFlush {
     // Keep the release receipt through speculative page walks. They share
     // the miss slot and can overwrite issued before the CPU replays.
     reg completed:Bool = false
     reg mode:U2 = nil
-    reg line:Unsigned(bits=32 - std.clog2(BLOCK)) = nil
-    flushComplete = completed and mode == s2.size and (mode#[0] == 0 or line == s2.address >> std.clog2(BLOCK))
-    if fireD != 0 and fromCache and issued.cmd == 5 {
+    reg line:Unsigned(bits=32 - std.clog2(C.dcacheBlockBytes)) = nil
+    flushComplete = completed and mode == s2.size and (mode#[0] == 0 or line == s2.address >> std.clog2(C.dcacheBlockBytes))
+    if fireD and fromCache and issued.cmd == 5 {
       completed = true
       mode = issued.size
-      line = issued.address >> std.clog2(BLOCK)
+      line = issued.address >> std.clog2(C.dcacheBlockBytes)
     }
-    if (fireA != 0 and (!s2.physical or stage2.write != 0)) or (accepted != 0 and finish) {
+    if (fireA and (!s2.physical or stage2.write)) or (accepted and finish) {
       completed = false
     }
   } else {
     flushComplete = false
   }
-  requestReady = if cachedAddress { U1(cachedReady) } else { auto_out_a_ready }
-  busValid = if fromCache { U1(cachedValid) } else { auto_out_d_valid }
+  requestReady = if cachedAddress { cachedReady } else { auto_out_a_ready != 0 }
+  busValid = if fromCache { cachedValid } else { auto_out_d_valid != 0 }
   busOpcode = if fromCache { cachedOpcode } else { auto_out_d_bits_opcode }
-  busDenied = if fromCache { U1(cachedError) } else { auto_out_d_bits_denied }
+  busDenied = if fromCache { cachedError } else { auto_out_d_bits_denied != 0 }
   busData = if fromCache { cachedData } else { auto_out_d_bits_data }
   busSize = if fromCache { cachedSize } else { auto_out_d_bits_size }
-  busCorrupt = if fromCache { U1(cachedError) } else { auto_out_d_bits_corrupt }
-  auto_out_d_ready = busReady & U1(!fromCache)
-  needsClock = (io_cpu_req_valid | s1_valid | s2_valid | pstore1_held | pstore2_valid | doUncachedResp | outstanding | auto_out_d_valid) != 0 or bankClock or memBValid or memDValid
-  io_cpu_req_ready = cpuReady
-  io_cpu_s2_nack = nack
-  io_cpu_resp_valid = responseValid
-  io_cpu_resp_bits_addr = if doUncachedResp != 0 { s2_uncached_resp_addr } else { s2.address }
-  io_cpu_resp_bits_data = load.value
-  io_cpu_resp_bits_has_data = stage2.read
-  io_cpu_replay_next = replayData
-  io_cpu_perf_grant = busValid & lastD & 1
+  busCorrupt = if fromCache { cachedError } else { auto_out_d_bits_corrupt != 0 }
+  auto_out_d_ready = U1(busReady and (!fromCache))
+  needsClock = request.valid or s1Valid or s2Valid or pstore1Held or pstore2Valid or doUncachedResp or outstanding or auto_out_d_valid != 0 or bankClock or memBValid or memDValid
+  response.reqReady = cpuReady
+  response.s2Nack = nack
+  response.respValid = responseValid
+  response.respAddr = if doUncachedResp { s2UncachedRespAddr } else { s2.address }
+  response.respData = load.value
+  response.respHasData = stage2.read
+  response.replayNext = replayData
+  response.perfGrant = busValid and lastD
 }

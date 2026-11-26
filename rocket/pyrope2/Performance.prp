@@ -1,14 +1,14 @@
 // Rocket encodes the set in bits 1:0 and its event mask starting at bit 8.
-pub comb classify<C>(amo:U1, branch:U1, csr:U3, fp:U1, inst:U32, jal:U1, jalr:U1, mem:U1, mulDiv:U1, wxd:U1) -> (events:U18) {
+pub comb classify<C>(amo:Bool, branch:Bool, csr:U3, fp:Bool, inst:U32, jal:Bool, jalr:Bool, mem:Bool, mulDiv:Bool, wxd:Bool) -> (events:U18) {
   const op = inst#[0..<7]
   const system = csr != 0
-  const arithmetic = wxd != 0 and (jal | jalr | mem | fp | mulDiv) == 0 and !system
-  events = (jalr << 8) | (jal << 7) | (branch << 6) | (U1(arithmetic) << 5) | (U1(system) << 4) | (amo << 3) | (U1(op == 0x23) << 2) | (U1(op == 3) << 1)
-  if C.useMulDiv and mulDiv != 0 {
+  const arithmetic = wxd and !(jal or jalr or mem or fp or mulDiv) and !system
+  events = (U1(jalr) << 8) | (U1(jal) << 7) | (U1(branch) << 6) | (U1(arithmetic) << 5) | (U1(system) << 4) | (U1(amo) << 3) | (U1(op == 0x23) << 2) | (U1(op == 3) << 1)
+  if C.useMulDiv and mulDiv {
     events#[9] = ~inst#[14]
     events#[10] = inst#[14]
   }
-  if C.fLen > 0 and fp != 0 {
+  if C.fLen > 0 and fp {
     comptime const base = if C.useMulDiv { 11 } else { 9 }
     const fn = inst#[27..<32]
     const group = if op == 7 { 0 } elif op == 0x27 { 1 } elif op != 0x53 { 4 } elif fn <= 1 { 2 } elif fn == 2 { 3 } elif fn == 3 or fn == 11 { 5 } else { 6 }
@@ -21,10 +21,10 @@ pub comb classify<C>(amo:U1, branch:U1, csr:U3, fp:U1, inst:U32, jal:U1, jalr:U1
 mod counter<C, I>(addr:U12, advance:U3, clk:Clock, cmd:U3, data:Unsigned(bits=C.xLen), inhibit:U1, instruction:U18, interlock:U11, memory:U6, retire:U1, rst:Reset, selector:U32, trap:U1) -> (read:Unsigned(bits=C.xLen)@[]) {
   comptime const lowBits = if C.xLen == 32 { 32 } else { 40 }
   reg count:U40:[clock_pin=clk] = nil
-  reg ex:U1:[clock_pin=clk] = nil
-  reg mem:U1:[clock_pin=clk] = nil
-  reg wb:U1:[clock_pin=clk] = nil
-  reg increment:U1:[clock_pin=clk] = nil
+  reg ex:U1:[clock_pin=clk, reset_pin=rst] = 0
+  reg mem:U1:[clock_pin=clk, reset_pin=rst] = 0
+  reg wb:U1:[clock_pin=clk, reset_pin=rst] = 0
+  reg increment:U1:[clock_pin=clk, reset_pin=rst] = 0
   const mask = selector >> 8
   const event = match selector#[0..<2] {
     == 0 { if trap != 0 { selector#[8] } else { retire & wb } }
@@ -32,22 +32,16 @@ mod counter<C, I>(addr:U12, advance:U3, clk:Clock, cmd:U3, data:Unsigned(bits=C.
     == 2 { U1((mask & memory) != 0) }
     else { 0 }
   }
-  if rst {
-    ex = 0
-    mem = 0
-    wb = 0
-  } else {
-    if advance#[0] != 0 {
-      ex = U1((instruction & mask) != 0)
-    }
-    if advance#[1] != 0 {
-      mem = ex
-    }
-    if advance#[2] != 0 {
-      wb = mem
-    }
+  if advance#[0] != 0 {
+    ex = U1((instruction & mask) != 0)
   }
-  increment = if rst { 0 } else { event }
+  if advance#[1] != 0 {
+    mem = ex
+  }
+  if advance#[2] != 0 {
+    wb = mem
+  }
+  increment = event
   const low = addr == 0xb03 + I
   const high = C.xLen == 32 and addr == 0xb83 + I
   read = if low or addr == 0xc03 + I { count#[0..<lowBits] } elif high or (C.xLen == 32 and addr == 0xc83 + I) { count#[32..<40] } else { 0 }
@@ -78,7 +72,7 @@ pub mod bank<C>(addr:U12, advance:U3, clk:Clock, cmd:U3, data:Unsigned(bits=C.xL
   comptime const K = 9 + (if C.useMulDiv { 2 } else { 0 }) + (if C.fLen > 0 { 7 } else { 0 })
   comptime const writable = (((1 << K) - 1) << 8) | 3
   reg selectors:[N]Unsigned(bits=K + 8):[clock_pin=clk, ordering="old"] = nil
-  reg flight:U4:[async=false, clock_pin=clk, initial=0, reset_pin=rst]
+  reg flight:U4:[async=false, clock_pin=clk, initial=0, reset_pin=rst] = nil
   mut monitoring:U1 = 0
   read = 0
   for i in 0..<N {

@@ -38,11 +38,56 @@ pub comb loadData<W=32>(addr:U32, data:Unsigned(bits=W), sign:U1, size:U2) -> (b
 }
 
 // HellaCache command classes shared by arbitration, physical protection and the store buffer.
-pub comb command(cmd:U5) -> (amo:U1, lrsc:U1, partial:U1, read:U1, write:U1) {
-  lrsc = U1(cmd == 6 or cmd == 7)
-  amo = U1(cmd == 4 or (cmd >= 8 and cmd <= 15))
-  partial = U1(cmd == 17)
-  const both = amo != 0 or cmd == 24 or cmd == 26 or cmd == 27
-  read = U1(both or lrsc != 0 or cmd == 0 or cmd == 16)
-  write = U1(both or partial != 0 or cmd == 1 or cmd == 7)
+enum MemCmd:U5 = (load=0, store=1, swap=4, flushAll=5, lr=6, sc=7, add=8, xorOp=9, orOp=10, andOp=11, min=12, max=13, minu=14, maxu=15, hlvx=16, partialStore=17, sfence=20, hfenceV=21, hfenceG=22, checkWrite=23)
+
+pub comb command(cmd:MemCmd) -> (amo:Bool, checkWrite:Bool, fence:Bool, flushAll:Bool, lr:Bool, lrsc:Bool, partial:Bool, plain:Bool, read:Bool, sc:Bool, write:Bool) {
+  lr = cmd == MemCmd.lr
+  sc = cmd == MemCmd.sc
+  lrsc = lr or sc
+  amo = cmd == MemCmd.swap or (cmd >= U5(MemCmd.add) and cmd <= U5(MemCmd.maxu))
+  partial = cmd == MemCmd.partialStore
+  flushAll = cmd == MemCmd.flushAll
+  fence = cmd >= U5(MemCmd.sfence) and cmd <= U5(MemCmd.hfenceG)
+  checkWrite = cmd == MemCmd.checkWrite
+  plain = cmd == MemCmd.load or cmd == MemCmd.store or partial
+  const both = amo or cmd == 24 or cmd == 26 or cmd == 27
+  read = both or lrsc or cmd == MemCmd.load or cmd == MemCmd.hlvx
+  write = both or partial or cmd == MemCmd.store or sc
+}
+
+// Map HellaCache atomics onto TileLink's ArithmeticData and LogicalData.
+pub comb encodeAtomic(cmd:MemCmd) -> (opcode:U4, param:U3) {
+  const logical = cmd == MemCmd.swap or cmd == MemCmd.xorOp or cmd == MemCmd.orOp or cmd == MemCmd.andOp
+  const arithmetic = cmd == MemCmd.add or (cmd >= U5(MemCmd.min) and cmd <= U5(MemCmd.maxu))
+  opcode = if logical { 3 } elif arithmetic { 2 } else { 0 }
+  param = if cmd == MemCmd.swap or cmd == MemCmd.maxu { 3 }
+    elif cmd == MemCmd.orOp or cmd == MemCmd.max { 1 }
+    elif cmd == MemCmd.andOp or cmd == MemCmd.minu { 2 }
+    elif cmd == MemCmd.add { 4 }
+    else { 0 }
+}
+
+// Decode the AMO funct5 field once at the instruction boundary.
+pub comb instructionCommand(atomOp:U5, atomic:Bool, flush:Bool, store:Bool) -> (cmd:MemCmd) {
+  cmd = if flush {
+    MemCmd.flushAll
+  } elif store {
+    MemCmd.store
+  } elif atomic {
+    match atomOp {
+      == 0 { MemCmd.add }
+      == 1 { MemCmd.swap }
+      == 2 { MemCmd.lr }
+      == 3 { MemCmd.sc }
+      == 4 { MemCmd.xorOp }
+      == 8 { MemCmd.orOp }
+      == 12 { MemCmd.andOp }
+      == 16 { MemCmd.min }
+      == 20 { MemCmd.max }
+      == 24 { MemCmd.minu }
+      else { MemCmd.maxu }
+    }
+  } else {
+    MemCmd.load
+  }
 }

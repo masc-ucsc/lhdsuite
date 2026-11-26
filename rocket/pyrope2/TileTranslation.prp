@@ -17,15 +17,15 @@ pub mod port<C, FETCH>(accepted:Bool, clk:Clock, flush:Bool, grant:Bool=true, le
   const active = mode != 0 and privilege != 3
   const vpn = va >> 12
   const rights = (U1(store) << 4) | (U1(sum) << 3) | (U1(mxr) << 2) | privilege
-  reg missVPN:Unsigned(bits=C.xLen - 12)
-  reg missContext:Unsigned(bits=20 + modeBits + C.asIdBits)
-  reg missRights:U5
+  reg missVPN:Unsigned(bits=C.xLen - 12) = nil
+  reg missContext:Unsigned(bits=20 + modeBits + C.asIdBits) = nil
+  reg missRights:U5 = nil
   reg installFault:Bool = false
   reg negative:Bool = false
-  reg denied:Bool
+  reg denied:Bool = nil
   const faultHit = negative and vpn == missVPN and addressSpace == missContext and rights == missRights
   wire start:Bool = nil
-  const t = translation<ASID=C.asIdBits, ENTRIES=entries, EXTRA=C.extraPgLevels, PA=32, WAYS=ways, XLEN=C.xLen>(clk=clk, rst=rst, request=start, virtualAddress=va, addressSpace=addressSpace, paging=true, flush=flush, user=privilege == 0, fetch=FETCH, store=store, sum=sum, mxr=mxr, grant=grant, leaf=leaf, consume=true, readReady=readReady, readDone=readDone, readError=readError, readData=readData)
+  const t = translation<ASID=C.asIdBits, ENTRIES=entries, EXTRA=C.extraPgLevels, PA=32, WAYS=ways, XLEN=C.xLen>(request=start, virtualAddress=va, addressSpace=addressSpace, paging=true, flush=flush, user=privilege == 0, fetch=FETCH, store=store, sum=sum, mxr=mxr, grant=grant, leaf=leaf, consume=true, readReady=readReady, readDone=readDone, readError=readError, readData=readData)
   start = request and active and !t.cached and !faultHit
   probe = t.probe
   key = (addressSpace << (C.xLen - 12)) | vpn
@@ -78,7 +78,7 @@ pub mod arbiter<W=32, N=0>(clk:Clock, dAddress:U32, dPointer:Bool=false, dRead:B
     const validPointer = (pte & 0xdf) == 1 and (pte >> 30) == 0
     const fill = busy and done and pending and !flush and !error and validPointer
     if lookup or fill or flush or rst {
-      const c = cache<N=N, W=W>(clk=clk, rst=rst, flush=flush, lookup=lookup, fill=fill, address=(if fill { saved } else { address }), page=pte#[10..<30])
+      const c = cache<N=N, W=W>(flush=flush, lookup=lookup, fill=fill, address=(if fill { saved } else { address }), page=pte#[10..<30])
       hit = c.hit
       if hit {
         result = (c.ppn << 10) | 1
@@ -123,7 +123,7 @@ pub mod leaves<C>(clk:Clock, dDone:Bool, dKey:Unsigned(bits=C.tlbKeyBits), dLeaf
   dGrant = lookup and chooseData
   leaf = 0
   if lookup or fill or flush or rst {
-    const c = cacheEntries<DATA=28, KEY=C.tlbKeyBits, SETS=(C.nL2TLBEntries/C.nL2TLBWays), WAYS=C.nL2TLBWays>(clk=clk, rst=rst, flush=flush, lookup=lookup, fill=fill, key=(if fill { saved } else { key }), data=result)
+    const c = cacheEntries<DATA=28, KEY=C.tlbKeyBits, SETS=(C.nL2TLBEntries/C.nL2TLBWays), WAYS=C.nL2TLBWays>(flush=flush, lookup=lookup, fill=fill, key=(if fill { saved } else { key }), data=result)
     if c.hit {
       leaf = c.value
     }

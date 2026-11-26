@@ -1,38 +1,35 @@
+const tiny = import("RocketConfig.tiny")
 const byteMask = import("CacheAccess.byteMask")
 type Request = (opcode:U4, param:U3, size:U2, source:U11, address:U32, mask:U4, data:U32)
 
-pub mod ScratchpadSlavePort<W=32, ATOMICS=true>(auto_in_a_bits_address:U32, auto_in_a_bits_corrupt:U1, auto_in_a_bits_data:U32, auto_in_a_bits_mask:U4, auto_in_a_bits_opcode:U4, auto_in_a_bits_param:U3, auto_in_a_bits_size:U2, auto_in_a_bits_source:U11, auto_in_a_valid:U1, auto_in_d_ready:U1, clock:Clock, io_dmem_req_ready:U1, io_dmem_resp_bits_data_raw:Unsigned(bits=W), io_dmem_resp_valid:U1, io_dmem_s2_nack:U1, reset:Reset) -> (auto_in_a_ready:U1@[], auto_in_d_bits_data:U32@[], auto_in_d_bits_opcode:U4@[], auto_in_d_bits_size:U2@[], auto_in_d_bits_source:U11@[], auto_in_d_valid:U1@[], io_dmem_req_bits_addr:U32@[], io_dmem_req_bits_cmd:U5@[], io_dmem_req_bits_size:U2@[], io_dmem_req_valid:U1@[], io_dmem_s1_data_data:Unsigned(bits=W)@[], io_dmem_s1_data_mask:Unsigned(bits=W/8)@[], io_dmem_s1_kill:U1@[]) {
-  const idle = 0
-  const stage1 = 1
-  const stage2 = 2
-  const replay = 3
-  const init = 4
-  const hold = 5
-  reg state:U3 = init
+enum Phase:U3 = (idle=0, stage1=1, stage2=2, replay=3, init=4, hold=5)
+
+pub mod ScratchpadSlavePort<C=tiny>(auto_in_d_ready:U1, clock:Clock, io_dmem_req_ready:U1, io_dmem_resp_bits_data_raw:Unsigned(bits=C.dLen), io_dmem_resp_valid:U1, io_dmem_s2_nack:U1, requestA:(address:U32, corrupt:U1, data:U32, mask:U4, opcode:U4, param:U3, size:U2, source:U11, valid:U1), reset:Reset) -> (auto_in_a_ready:U1@[], io_dmem_req_bits_addr:U32@[], io_dmem_req_bits_cmd:U5@[], io_dmem_req_bits_size:U2@[], io_dmem_req_valid:U1@[], io_dmem_s1_data_data:Unsigned(bits=C.dLen)@[], io_dmem_s1_data_mask:Unsigned(bits=C.dLen/8)@[], io_dmem_s1_kill:U1@[], responseD:(data:U32, opcode:U4, size:U2, source:U11, valid:U1)@[]) {
+  reg state:Phase = Phase.init
   reg saved:Request = nil
   reg heldData:U32 = nil
-  const incoming:Request = (address=auto_in_a_bits_address, data=auto_in_a_bits_data, mask=auto_in_a_bits_mask, opcode=auto_in_a_bits_opcode, param=auto_in_a_bits_param, size=auto_in_a_bits_size, source=auto_in_a_bits_source)
-  const req = if state == replay { saved } else { incoming }
-  const supported = ATOMICS or (incoming.opcode != 2 and incoming.opcode != 3)
-  const valid = auto_in_a_valid != 0 and supported
+  const incoming:Request = (address=requestA.address, data=requestA.data, mask=requestA.mask, opcode=requestA.opcode, param=requestA.param, size=requestA.size, source=requestA.source)
+  const req = if state == Phase.replay { saved } else { incoming }
+  const supported = C.atomicsInCache or (incoming.opcode != 2 and incoming.opcode != 3)
+  const valid = requestA.valid != 0 and supported
   const responding = io_dmem_resp_valid != 0
-  const ready = state == idle or (state == stage2 and responding and auto_in_d_ready != 0)
+  const ready = state == Phase.idle or (state == Phase.stage2 and responding and auto_in_d_ready != 0)
   auto_in_a_ready = U1(ready and supported) & io_dmem_req_ready
-  if (auto_in_a_ready & auto_in_a_valid) != 0 {
+  if (auto_in_a_ready & requestA.valid) != 0 {
     saved = incoming
   }
 
   // Issue speculatively in stage two. A stalled D response kills that request next cycle.
-  io_dmem_req_valid = U1((valid and (state == idle or state == stage2)) or state == replay)
-  io_dmem_s1_kill = U1(state != stage1)
+  io_dmem_req_valid = U1((valid and (state == Phase.idle or state == Phase.stage2)) or state == Phase.replay)
+  io_dmem_s1_kill = U1(state != Phase.stage1)
   io_dmem_req_bits_addr = req.address
   io_dmem_req_bits_size = req.size
   const lanes = byteMask<32>(addr=req.address, size=req.size)
-  io_dmem_req_bits_cmd = if state == init or req.opcode == 0 {
+  io_dmem_req_bits_cmd = if state == Phase.init or req.opcode == 0 {
     1
   } elif req.opcode == 1 {
     if (req.mask & lanes) == lanes { 1 } else { 17 }
-  } elif ATOMICS and req.opcode == 2 {
+  } elif C.atomicsInCache and req.opcode == 2 {
     match req.param {
       == 0 { 12 }
       == 1 { 13 }
@@ -41,7 +38,7 @@ pub mod ScratchpadSlavePort<W=32, ATOMICS=true>(auto_in_a_bits_address:U32, auto
       == 4 { 8 }
       else { 0 }
     }
-  } elif ATOMICS and req.opcode == 3 {
+  } elif C.atomicsInCache and req.opcode == 3 {
     match req.param {
       == 0 { 9 }
       == 1 { 10 }
@@ -52,30 +49,30 @@ pub mod ScratchpadSlavePort<W=32, ATOMICS=true>(auto_in_a_bits_address:U32, auto
   } else {
     0
   }
-  const high = W == 64 and saved.address#[2] != 0
+  const high = C.dLen == 64 and saved.address#[2] != 0
   io_dmem_s1_data_mask = if high { saved.mask << 4 } else { saved.mask }
-  io_dmem_s1_data_data = if W == 64 { (saved.data << 32) | saved.data } else { saved.data }
+  io_dmem_s1_data_data = if C.dLen == 64 { (saved.data << 32) | saved.data } else { saved.data }
   const word = if high { io_dmem_resp_bits_data_raw >> 32 } else { io_dmem_resp_bits_data_raw#[0..<32] }
-  if state == stage2 {
+  if state == Phase.stage2 {
     heldData = word
   }
-  auto_in_d_valid = U1(responding or state == hold)
-  auto_in_d_bits_data = if state == stage2 { word } else { heldData }
-  auto_in_d_bits_source = saved.source
-  auto_in_d_bits_size = saved.size
-  auto_in_d_bits_opcode = U1(saved.opcode != 0 and saved.opcode != 1)
+  responseD.valid = U1(responding or state == Phase.hold)
+  responseD.data = if state == Phase.stage2 { word } else { heldData }
+  responseD.source = saved.source
+  responseD.size = saved.size
+  responseD.opcode = U1(saved.opcode != 0 and saved.opcode != 1)
 
-  if ((valid and ready) or state == replay) and io_dmem_req_ready != 0 {
-    state = stage1
+  if ((valid and ready) or state == Phase.replay) and io_dmem_req_ready != 0 {
+    state = Phase.stage1
   } elif io_dmem_s2_nack != 0 {
-    state = replay
-  } elif (auto_in_d_ready & auto_in_d_valid) != 0 {
-    state = idle
+    state = Phase.replay
+  } elif (auto_in_d_ready & responseD.valid) != 0 {
+    state = Phase.idle
   } elif responding {
-    state = hold
-  } elif state == init and valid {
-    state = idle
-  } elif state == stage1 {
-    state = stage2
+    state = Phase.hold
+  } elif state == Phase.init and valid {
+    state = Phase.idle
+  } elif state == Phase.stage1 {
+    state = Phase.stage2
   }
 }

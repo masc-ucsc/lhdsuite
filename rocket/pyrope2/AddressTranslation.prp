@@ -14,17 +14,17 @@ pub mod AddressTranslation<XLEN=64, PA=32, ENTRIES=4, EXTRA=0, ASID=0, WAYS=1>(c
   const vpn = virtualAddress >> 12
   const bank = vpn%sets
   reg present:Unsigned(bits=ENTRIES) = 0
-  reg tags:[ENTRIES]Unsigned(bits=XLEN - 12):[ordering="old"]
-  reg contexts:[ENTRIES]Unsigned(bits=tagBits):[ordering="old"]
-  reg pages:[ENTRIES]Unsigned(bits=PA - 12):[ordering="old"]
-  reg rights:[ENTRIES]U8:[ordering="old"]
-  reg missVPN:Unsigned(bits=XLEN - 12)
-  reg missContext:Unsigned(bits=tagBits)
+  reg tags:[ENTRIES]Unsigned(bits=XLEN - 12):[ordering="old"] = nil
+  reg contexts:[ENTRIES]Unsigned(bits=tagBits):[ordering="old"] = nil
+  reg pages:[ENTRIES]Unsigned(bits=PA - 12):[ordering="old"] = nil
+  reg rights:[ENTRIES]U8:[ordering="old"] = nil
+  reg missVPN:Unsigned(bits=XLEN - 12) = nil
+  reg missContext:Unsigned(bits=tagBits) = nil
   reg mayFill:Bool = false
   reg localReply:Bool = false
-  reg localAddress:Unsigned(bits=PA)
-  reg localPF:Bool
-  reg localAE:Bool
+  reg localAddress:Unsigned(bits=PA) = nil
+  reg localPF:Bool = nil
+  reg localAE:Bool = nil
 
   mut index:Unsigned(max=ENTRIES - 1) = (bank*WAYS)%ENTRIES
   mut hit = false
@@ -51,7 +51,7 @@ pub mod AddressTranslation<XLEN=64, PA=32, ENTRIES=4, EXTRA=0, ASID=0, WAYS=1>(c
   cachedAddress = (pages[readSlot] << 12) | virtualAddress#[0..<12]
   cachedPF = !permitted(flags=rights[readSlot], user=user, fetch=fetch, store=store, sum=sum, mxr=mxr)
   const miss = paging and !hit
-  const w = walk<EXTRA=EXTRA, PA=PA, XLEN=XLEN>(clk=clk, rst=rst, request=request and !localReply and !flush and miss and grant and (leaf & 1) == 0, virtualAddress=virtualAddress, rootPPN=rootPPN, extra=extra, user=user, fetch=fetch, store=store, sum=sum, mxr=mxr, consume=consume, readReady=readReady, readDone=readDone, readError=readError, readData=readData)
+  const w = walk<EXTRA=EXTRA, PA=PA, XLEN=XLEN>(request=request and !localReply and !flush and miss and grant and (leaf & 1) == 0, virtualAddress=virtualAddress, rootPPN=rootPPN, extra=extra, user=user, fetch=fetch, store=store, sum=sum, mxr=mxr, consume=consume, readReady=readReady, readDone=readDone, readError=readError, readData=readData)
   probe = request and miss and w.ready and !localReply and !flush and !rst
   ready = w.ready and !localReply and !flush and (!miss or grant)
   fillSlot = ready and miss

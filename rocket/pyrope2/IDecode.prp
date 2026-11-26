@@ -1,16 +1,46 @@
+const instructionCommand = import("CacheAccess.instructionCommand")
+const branchOffset = import("BranchDecode.offset")
+const jumpOffset = import("BranchDecode.jumpOffset")
 // Integer pipeline controls shared by RV32 and RV64. The instruction is
 // already expanded to its 32-bit encoding when it reaches decode.
 const floating = import("FPU")
 const BitOps = import("BitOps")
 
-pub comb IDecode<C>(inst:U32, vectorDecode:U4=0) -> (alu_dw:U1, alu_fn:U6, amo:U1, branch:U1, csr:U3, div:U1, fence:U1, fence_i:U1, fp:U1, fpDouble:U1, fpRound:U1, jal:U1, jalr:U1, legal:U1, mem:U1, mem_cmd:U5, mul:U1, rocc:U1, rxs1:U1, rxs2:U1, sel_alu1:U2, sel_alu2:U2, sel_imm:U3, vector:U1, wxd:U1) {
+enum CsrCmd:U3 = (none=0, read=2, system=4, write=5, setBits=6, clearBits=7)
+
+enum ImmForm:U3 = (store=0, branch=1, upper=2, jump=3, immediate=4, csr=5)
+
+// RV immediates share instruction bit 31 as the sign bit. Z is unsigned.
+pub comb immediate<C>(inst:U32, form:ImmForm) -> (value:Unsigned(bits=C.xLen)) {
+  const s:U12 = (inst#[25..<32] << 5) | inst#[7..<12]
+  const b = branchOffset(inst)
+  const j = jumpOffset(inst)
+  value = match form {
+    == ImmForm.store { s#sext[0..<12]#[0..<C.xLen] }
+    == ImmForm.branch { b#sext[0..<13]#[0..<C.xLen] }
+    == ImmForm.upper { (inst & 0xfffff000)#sext[0..<32]#[0..<C.xLen] }
+    == ImmForm.jump { j#sext[0..<21]#[0..<C.xLen] }
+    == ImmForm.immediate { inst#sext[20..<32]#[0..<C.xLen] }
+    == ImmForm.csr { inst#[15..<20] }
+    else { (inst#[20..<32] & 0xffe)#sext[0..<12]#[0..<C.xLen] }
+  }
+}
+
+pub comb csrControl(cmd:CsrCmd, memory:Bool, zeroSource:Bool) -> (access:Bool, effective:U3, readOnly:Bool, system:Bool) {
+  system = cmd == CsrCmd.system
+  access = cmd == CsrCmd.write or cmd == CsrCmd.setBits or cmd == CsrCmd.clearBits
+  readOnly = zeroSource and (cmd == CsrCmd.setBits or cmd == CsrCmd.clearBits)
+  effective = if system and memory { U3(CsrCmd.none) } elif readOnly { U3(CsrCmd.read) } else { cmd }
+}
+
+pub comb IDecode<C>(inst:U32, vectorDecode:U4=0) -> (alu_dw:U1, alu_fn:U6, amo:Bool, branch:Bool, csr:U3, div:Bool, fence:Bool, fence_i:Bool, fp:Bool, fpDouble:Bool, fpRound:Bool, jal:Bool, jalr:Bool, legal:Bool, mem:Bool, mem_cmd:U5, mul:Bool, rocc:Bool, rxs1:Bool, rxs2:Bool, sel_alu1:U2, sel_alu2:U2, sel_imm:ImmForm, vector:Bool, wxd:Bool) {
   const opcode = inst#[0..<7]
   const funct3 = inst#[12..<15]
   const funct7 = inst#[25..<32]
   const custom = (opcode & 0x1f) == 0x0b
-  rocc = U1(custom and (C.roccOpcodes & (1 << opcode#[5..<7])) != 0)
+  rocc = custom and (C.roccOpcodes & (1 << opcode#[5..<7])) != 0
   const vectorMemory = (opcode == 7 or opcode == 0x27) and (funct3 == 0 or funct3 >= 5)
-  vector = U1(C.vLen > 0 and (opcode == 0x57 or vectorMemory) and vectorDecode#[3] != 0)
+  vector = C.vLen > 0 and (opcode == 0x57 or vectorMemory) and vectorDecode#[3] != 0
   const is64 = C.xLen == 64
   const opImm = opcode == 0x13 or (is64 and opcode == 0x1b)
   const opReg = opcode == 0x33 or (is64 and opcode == 0x3b)
@@ -54,32 +84,37 @@ pub comb IDecode<C>(inst:U32, vectorDecode:U4=0) -> (alu_dw:U1, alu_fn:U6, amo:U
   mut fpStore = false
   mut fromX = false
   mut toX = false
-  fp = 0
-  fpRound = 0
-  fpDouble = 0
+  fp = false
+  fpRound = false
+  fpDouble = false
   if C.fLen > 0 {
     const f = floating.decode<C>(inst=inst)
-    fp = U1(f.valid)
-    fpRound = U1(f.round)
-    fpDouble = U1(f.double)
+    fp = f.valid
+    fpRound = f.round
+    fpDouble = f.double
     fpLoad = f.load
     fpStore = f.store
     fromX = f.fromX
     toX = f.toX
   }
   const fenceOp = opcode == 0xf and funct3 <= 1
-  legal = rocc | vector | U1(fp != 0 or extFn != 0 or integer or mulDiv or load or store or atomic or jump or indirect or cond or lui or auipc or csrOp or system or fenceOp)
-  jal = U1(jump)
-  jalr = U1(indirect)
-  branch = U1(cond)
-  rxs1 = (rocc & inst#[13]) | (vector & vectorDecode#[1]) | U1(fpLoad or fpStore or fromX or flush or sfence or opReg or opImm or load or store or atomic or indirect or cond or (csrOp and funct3 < 4))
-  rxs2 = (rocc & inst#[12]) | (vector & vectorDecode#[0]) | U1(sfence or (opReg and !unaryImm) or store or atomic or cond)
-  wxd = (rocc & inst#[14]) | (vector & vectorDecode#[2]) | U1(toX or opReg or opImm or load or atomic or jump or indirect or lui or auipc or csrOp)
-  mul = U1(mulDiv and C.pipelinedMul and funct3 < 4)
-  div = U1(mulDiv) & ~mul
-  sel_alu1 = if jump or auipc { 2 } else { rxs1 }
+  legal = rocc or vector or fp or extFn != 0 or integer or mulDiv or load or store or atomic or jump or indirect or cond or lui or auipc or csrOp or system or fenceOp
+  jal = jump
+  jalr = indirect
+  branch = cond
+  rxs1 = (rocc and inst#[13] != 0) or (vector and vectorDecode#[1] != 0) or fpLoad or fpStore or fromX or flush or sfence or opReg or opImm or load or store or atomic or indirect or cond or (csrOp and funct3 < 4)
+  rxs2 = (rocc and inst#[12] != 0) or (vector and vectorDecode#[0] != 0) or sfence or (opReg and !unaryImm) or store or atomic or cond
+  wxd = (rocc and inst#[14] != 0) or (vector and vectorDecode#[2] != 0) or toX or opReg or opImm or load or atomic or jump or indirect or lui or auipc or csrOp
+  mul = mulDiv and C.pipelinedMul and funct3 < 4
+  div = mulDiv and !mul
+  sel_alu1 = if jump or auipc { 2 } else { U1(rxs1) }
   sel_alu2 = if (opReg and !unaryImm) or cond { 2 } elif jump { 1 } elif flush or fromX or atomic or (csrOp and funct3 < 4) { 0 } else { 3 }
-  sel_imm = if lui or auipc { 2 } elif cond { 1 } elif jump { 3 } elif fpStore or store { 0 } elif csrOp { 5 } else { 4 }
+  sel_imm = if lui or auipc { ImmForm.upper }
+    elif cond { ImmForm.branch }
+    elif jump { ImmForm.jump }
+    elif fpStore or store { ImmForm.store }
+    elif csrOp { ImmForm.csr }
+    else { ImmForm.immediate }
   alu_dw = U1(!wordOp or fullWidth)
   alu_fn = 0
   if cond {
@@ -97,30 +132,10 @@ pub comb IDecode<C>(inst:U32, vectorDecode:U4=0) -> (alu_dw:U1, alu_fn:U6, amo:U
       else { funct3 }
     }
   }
-  mem = U1(flush or fpLoad or fpStore or load or store or atomic)
-  amo = U1(atomic)
-  mem_cmd = if flush {
-    5
-  } elif fpStore or store {
-    1
-  } elif atomic {
-    match atomOp {
-      == 0 { 8 }
-      == 1 { 4 }
-      == 2 { 6 }
-      == 3 { 7 }
-      == 4 { 9 }
-      == 8 { 10 }
-      == 12 { 11 }
-      == 16 { 12 }
-      == 20 { 13 }
-      == 24 { 14 }
-      else { 15 }
-    }
-  } else {
-    0
-  }
-  csr = if system { 4 } elif csrOp { funct3 | 4 } else { 0 }
-  fence = U1(fenceOp)
-  fence_i = U1(fenceOp and funct3 == 1)
+  mem = flush or fpLoad or fpStore or load or store or atomic
+  amo = atomic
+  mem_cmd = instructionCommand(flush, store=fpStore or store, atomic, atomOp)
+  csr = if system { U3(CsrCmd.system) } elif csrOp { funct3 | U3(CsrCmd.system) } else { U3(CsrCmd.none) }
+  fence = fenceOp
+  fence_i = fenceOp and funct3 == 1
 }

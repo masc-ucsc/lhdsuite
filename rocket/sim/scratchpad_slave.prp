@@ -1,3 +1,4 @@
+const configs = import("../pyrope2/RocketConfig")
 const port = import("../pyrope2/ScratchpadSlavePort.ScratchpadSlavePort")
 
 mod check<W, ATOMICS>(clk:Clock, cycle:U5, rst:Reset) -> (ok:Bool@[]) {
@@ -7,19 +8,16 @@ mod check<W, ATOMICS>(clk:Clock, cycle:U5, rst:Reset) -> (ok:Bool@[]) {
   const param = if cycle < 17 { (cycle - 12)#[0..<3] } else { (cycle - 17)#[0..<3] }
   const ready = cycle != 6 and (!atomic or cycle == 20)
   const word = if W == 64 { 0x12345678abcdef01 } else { 0xabcdef01 }
-  const d = port<ATOMICS=ATOMICS, W=W>(clock=clk, reset=rst, auto_in_a_valid=U1(cycle == 1 or first or cycle == 4 or atomic), auto_in_a_bits_opcode=opcode, auto_in_a_bits_param=param, auto_in_a_bits_size=(if first {
-        0
-      } else {
-        2
-      }), auto_in_a_bits_source=(if first { 123 } else { 42 }), auto_in_a_bits_address=(if first { 0x85 } else { 0x100 }), auto_in_a_bits_mask=(if first {
-        2
-      } else {
-        15
-      }), auto_in_a_bits_data=(if first { 0x31313131 } else { 0 }), auto_in_a_bits_corrupt=0, auto_in_d_ready=U1(cycle == 11), io_dmem_req_ready=U1(ready), io_dmem_s2_nack=U1(cycle == 5), io_dmem_resp_valid=U1(cycle == 9), io_dmem_resp_bits_data_raw=(if cycle == 9 {
+  comptime const profileConfig = configs.params(xLen=W, useAtomics=ATOMICS)
+  const d = port<profileConfig>(clock=clk, reset=rst, auto_in_d_ready=U1(cycle == 11), io_dmem_req_ready=U1(ready), io_dmem_s2_nack=U1(cycle == 5), io_dmem_resp_valid=U1(cycle == 9), io_dmem_resp_bits_data_raw=(if cycle == 9 {
         word
       } else {
         0
-      }))
+      }), requestA=(valid=U1(cycle == 1 or first or cycle == 4 or atomic), opcode=opcode, param=param, size=(if first { 0 } else { 2 }), source=(if first {
+          123
+        } else {
+          42
+        }), address=(if first { 0x85 } else { 0x100 }), mask=(if first { 2 } else { 15 }), data=(if first { 0x31313131 } else { 0 }), corrupt=0))
   mut good = true
   if first or cycle == 6 or cycle == 7 {
     good = d.io_dmem_req_valid != 0 and d.io_dmem_req_bits_addr == 0x85 and d.io_dmem_req_bits_size == 0 and d.io_dmem_req_bits_cmd == 1 and d.auto_in_a_ready == U1(first)
@@ -28,7 +26,7 @@ mod check<W, ATOMICS>(clk:Clock, cycle:U5, rst:Reset) -> (ok:Bool@[]) {
   } elif cycle == 4 {
     good = d.io_dmem_req_valid != 0 and d.auto_in_a_ready == 0 and d.io_dmem_s1_kill != 0
   } elif cycle >= 9 and cycle <= 11 {
-    good = d.auto_in_d_valid != 0 and d.auto_in_d_bits_opcode == 0 and d.auto_in_d_bits_source == 123 and d.auto_in_d_bits_size == 0 and d.auto_in_d_bits_data == (if W == 64 { 0x12345678 } else { 0xabcdef01 })
+    good = d.responseD.valid != 0 and d.responseD.opcode == 0 and d.responseD.source == 123 and d.responseD.size == 0 and d.responseD.data == (if W == 64 { 0x12345678 } else { 0xabcdef01 })
   } elif atomic {
     const arithmetic:[8]U5 = [12, 13, 14, 15, 8, 0, 0, 0]
     const logical:[4]U5 = [9, 10, 11, 4]

@@ -8,24 +8,22 @@ const writeback = import("CacheWriteback.CacheWriteback")
 // supplies lane-aligned data, byte strobes, and a HellaCache command. AMOs
 // return the previous beat; SC returns zero on success and one on failure. TileLink block
 // messages transfer BLOCK bytes; A is AcquireBlock with all lanes enabled.
-pub mod CoherentDataCache<W=32, SETS=64, WAYS=4, SOURCE=1, SINK_BITS=4, ATOMICS=true, LRSC_CYCLES=80, CFLUSH=false, BLOCK=64, BANKS=1, TOTAL_SETS=SETS>(aReady:Bool, address:U32, bAddress:U32, bParam:U2, bSource:U5, bValid:Bool, cReady:Bool, clk:Clock, command:U5, dCorrupt:Bool, dData:Unsigned(bits=W), dDenied:Bool, dOpcode:U3, dParam:U2, dSink:Unsigned(bits=SINK_BITS), dSource:U5, dValid:Bool, data:Unsigned(bits=W), dropReservation:Bool=false, eReady:Bool, flushSize:U2=0, mask:Unsigned(bits=W/8), request:Bool, responseReady:Bool, rst:Reset) -> (aAddress:U32@[], aParam:U2@[], aSource:U5@[], aValid:Bool@[], bReady:Bool@[], cAddress:U32@[], cCorrupt:Bool@[], cData:Unsigned(bits=W)@[], cLast:Bool@[], cOpcode:U3@[], cParam:U3@[], cSource:U5@[], cValid:Bool@[], dReady:Bool@[], eSink:Unsigned(bits=SINK_BITS)@[], eValid:Bool@[], error:Bool@[], needsClock:Bool@[], ready:Bool@[], response:Bool@[], result:Unsigned(bits=W)@[]) {
-  cassert(W == 32 or W == 64)
-  cassert(SETS > 0 and TOTAL_SETS == 1 << std.clog2(TOTAL_SETS))
-  cassert(WAYS > 0 and WAYS == 1 << std.clog2(WAYS))
-  comptime const slots = SETS*WAYS
-  comptime const beats = BLOCK*8/W
-  comptime const lanes = W/8
+enum Phase:U3 = (idle=0, lookup=1, releasing=2, acquire=3, waiting=4, answer=5)
+
+pub mod CoherentDataCache<C, BANK=0, BANKS=1, SOURCE=1, SINK_BITS=4, LRSC_CYCLES=80>(aReady:Bool, address:U32, bAddress:U32, bParam:U2, bSource:U5, bValid:Bool, cReady:Bool, clk:Clock, command:U5, dCorrupt:Bool, dData:Unsigned(bits=C.dLen), dDenied:Bool, dOpcode:U3, dParam:U2, dSink:Unsigned(bits=SINK_BITS), dSource:U5, dValid:Bool, data:Unsigned(bits=C.dLen), dropReservation:Bool=false, eReady:Bool, flushSize:U2=0, mask:Unsigned(bits=C.dLen/8), request:Bool, responseReady:Bool, rst:Reset) -> (aAddress:U32@[], aParam:U2@[], aSource:U5@[], aValid:Bool@[], bReady:Bool@[], cAddress:U32@[], cCorrupt:Bool@[], cData:Unsigned(bits=C.dLen)@[], cLast:Bool@[], cOpcode:U3@[], cParam:U3@[], cSource:U5@[], cValid:Bool@[], dReady:Bool@[], eSink:Unsigned(bits=SINK_BITS)@[], eValid:Bool@[], error:Bool@[], needsClock:Bool@[], ready:Bool@[], response:Bool@[], result:Unsigned(bits=C.dLen)@[]) {
+  comptime const setCount = (C.dcacheSets + BANKS - 1 - BANK)/BANKS
+  comptime const allowAtomics = C.useAtomics and !C.useAtomicsOnlyForIO
+  cassert(C.dLen == 32 or C.dLen == 64)
+  cassert(setCount > 0 and C.dcacheSets == 1 << std.clog2(C.dcacheSets))
+  cassert(C.dcacheWays > 0 and C.dcacheWays == 1 << std.clog2(C.dcacheWays))
+  comptime const slots = setCount*C.dcacheWays
+  comptime const beats = C.dcacheBlockBytes*8/C.dLen
+  comptime const lanes = C.dLen/8
   type Slot = Unsigned(max=slots - 1)
   type Row = Unsigned(max=slots*beats - 1)
-  type Word = Unsigned(bits=W)
-  comptime const idle = 0
-  comptime const lookup = 1
-  comptime const releasing = 2
-  comptime const acquire = 3
-  comptime const waiting = 4
-  comptime const answer = 5
+  type Word = Unsigned(bits=C.dLen)
 
-  reg phase:U3 = 0
+  reg phase:U3 = Phase.idle
   reg reqAddr:U32 = nil
   reg cmd:U5 = nil
   reg strobes:Unsigned(bits=lanes) = nil
@@ -40,20 +38,21 @@ pub mod CoherentDataCache<W=32, SETS=64, WAYS=4, SOURCE=1, SINK_BITS=4, ATOMICS=
   reg probeSlot:Slot = nil
   reg inGrant:Bool = false
   reg present:Unsigned(bits=slots) = 0
-  reg tags:[slots]Unsigned(bits=32 - std.clog2(BLOCK)):[ordering="old"] = nil
+  reg tags:[slots]Unsigned(bits=32 - std.clog2(C.dcacheBlockBytes)):[ordering="old"] = nil
   reg permissions:[slots]U2:[ordering="old"] = nil
   reg words:[slots*beats]Word:[ordering="old", wensize=lanes] = nil
   reg poison:[slots*beats]U1:[ordering="old"] = nil
   reg readRow:Row = nil
 
-  ready = !rst and phase == idle
+  ready = !rst and phase == Phase.idle
   // flushSize[0] selects one addressed line. flushSize[1] discards dirty data.
-  const flush = CFLUSH and cmd == 5
+  const op = decode(cmd=cmd)
+  const flush = C.haveCFlush and op.flushAll
   mut whole = false
   mut discard = false
   mut cursor:Slot = 0
   wire advance:Bool = nil
-  if CFLUSH {
+  if C.haveCFlush {
     reg mode:U2 = nil
     reg scan:Slot = 0
     if ready and request {
@@ -67,33 +66,32 @@ pub mod CoherentDataCache<W=32, SETS=64, WAYS=4, SOURCE=1, SINK_BITS=4, ATOMICS=
     discard = flush and mode#[1] != 0
     cursor = scan
   }
-  const op = decode(cmd=cmd)
-  const store = op.write != 0
-  const lr = ATOMICS and cmd == 6
-  const sc = ATOMICS and cmd == 7
-  const atomic = ATOMICS and op.amo != 0
+  const store = op.write
+  const lr = allowAtomics and op.lr
+  const sc = allowAtomics and op.sc
+  const atomic = allowAtomics and op.amo
   wire startReservation:Bool = nil
   wire probeAccepted:Bool = nil
   mut reserved = false
   mut protect = false
   mut reservationTicks = false
-  if ATOMICS {
+  if allowAtomics {
     cassert(LRSC_CYCLES > 4)
     reg count:Unsigned(max=LRSC_CYCLES - 1) = 0
-    reg line:Unsigned(bits=32 - std.clog2(BLOCK)) = nil
+    reg line:Unsigned(bits=32 - std.clog2(C.dcacheBlockBytes)) = nil
     reservationTicks = count != 0
     protect = count > 3
-    reserved = protect and line == reqAddr >> std.clog2(BLOCK)
+    reserved = protect and line == reqAddr >> std.clog2(C.dcacheBlockBytes)
     if count > 0 {
       wrap count -= 1
     }
     // A subsequent access consumes the reservation; leave a brief probe window.
-    if phase == lookup and !probing and protect {
+    if phase == Phase.lookup and !probing and protect {
       count = 3
     }
     if startReservation and count == 0 {
       count = LRSC_CYCLES - 1
-      line = reqAddr >> std.clog2(BLOCK)
+      line = reqAddr >> std.clog2(C.dcacheBlockBytes)
     }
     if rst or dropReservation or probeAccepted {
       count = 0
@@ -101,23 +99,23 @@ pub mod CoherentDataCache<W=32, SETS=64, WAYS=4, SOURCE=1, SINK_BITS=4, ATOMICS=
   }
   // A probe is serviced before a new lookup, or before the first grant
   // beat. After that beat, all refill writes finish before probing resumes.
-  const otherSet = (((bAddress >> std.clog2(BLOCK))%TOTAL_SETS)/BANKS) != (target/WAYS)
-  const canProbe = !rst and !protect and !probing and !inGrant and !replayGrant and phase != acquire and (phase != releasing or (awaitingReleaseAck and otherSet))
+  const otherSet = (((bAddress >> std.clog2(C.dcacheBlockBytes))%C.dcacheSets)/BANKS) != (target/C.dcacheWays)
+  const canProbe = !rst and !protect and !probing and !inGrant and !replayGrant and phase != Phase.acquire and (phase != Phase.releasing or (awaitingReleaseAck and otherSet))
   const offerProbe = canProbe and bValid
-  const block = (if offerProbe { bAddress } else { reqAddr }) >> std.clog2(BLOCK)
-  const set = ((block%TOTAL_SETS)/BANKS)%SETS
-  mut victim:Slot = set*WAYS
-  if WAYS > 1 {
-    reg nextWay:[SETS]Unsigned(bits=std.clog2(WAYS)):[ordering="old"] = 0
-    victim = set*WAYS + nextWay[set]
-    if phase == acquire and !probing {
-      nextWay[set] = (target + 1)%WAYS
+  const block = (if offerProbe { bAddress } else { reqAddr }) >> std.clog2(C.dcacheBlockBytes)
+  const set = ((block%C.dcacheSets)/BANKS)%setCount
+  mut victim:Slot = set*C.dcacheWays
+  if C.dcacheWays > 1 {
+    reg nextWay:[setCount]Unsigned(bits=std.clog2(C.dcacheWays)):[ordering="old"] = 0
+    victim = set*C.dcacheWays + nextWay[set]
+    if phase == Phase.acquire and !probing {
+      nextWay[set] = (target + 1)%C.dcacheWays
     }
   }
   mut found = false
   mut selected:Slot = victim
-  for way in 0..<WAYS {
-    const slot = set*WAYS + way
+  for way in 0..<C.dcacheWays {
+    const slot = set*C.dcacheWays + way
     if present#[slot] == 0 and !found {
       selected = slot
     } elif present#[slot] != 0 and tags[slot] == block {
@@ -131,14 +129,14 @@ pub mod CoherentDataCache<W=32, SETS=64, WAYS=4, SOURCE=1, SINK_BITS=4, ATOMICS=
   }
   const state = if found { permissions[selected] } else { metadata.invalid }
   const hit = metadata.access(state=state, write=store, writeIntent=lr)
-  const access = phase == lookup and !probing and !offerProbe
+  const access = phase == Phase.lookup and !probing and !offerProbe
   const row = selected*beats + ((reqAddr/lanes)%beats)
   const bad = poison[row] != 0 and (atomic or !store or strobes != (1 << lanes) - 1)
   startReservation = access and hit.hit and lr and !bad
   const evict = access and (if flush { found } else { (!sc or reserved) and !found and present#[selected] != 0 })
   advance = access and whole and !found and cursor != slots - 1
   const owner = if offerProbe { state } else { permissions[selected] }
-  const wb = writeback<BLOCK=BLOCK, SOURCE=SOURCE, W=W>(clk=clk, rst=rst, probeValid=offerProbe, probeAddress=bAddress, probeCap=bParam, probeSource=bSource, releaseValid=evict, releaseAddress=tags[selected] << std.clog2(BLOCK), lineState=owner, discard=discard, readReady=true, readData=words[readRow], readCorrupt=poison[readRow] != 0, cReady=cReady, ackValid=dValid and dOpcode == 6 and dSource == SOURCE)
+  const wb = writeback<BLOCK=C.dcacheBlockBytes, SOURCE=SOURCE, W=C.dLen>(probeValid=offerProbe, probeAddress=bAddress, probeCap=bParam, probeSource=bSource, releaseValid=evict, releaseAddress=tags[selected] << std.clog2(C.dcacheBlockBytes), lineState=owner, discard=discard, readReady=true, readData=words[readRow], readCorrupt=poison[readRow] != 0, cReady=cReady, ackValid=dValid and dOpcode == 6 and dSource == SOURCE)
   cLast = wb.update
   bReady = canProbe and wb.probeReady
   probeAccepted = offerProbe and wb.probeReady
@@ -171,7 +169,7 @@ pub mod CoherentDataCache<W=32, SETS=64, WAYS=4, SOURCE=1, SINK_BITS=4, ATOMICS=
   cCorrupt = wb.cCorrupt
 
   const allowGrant = !probing and !offerProbe
-  const f = refill<BLOCK=BLOCK, SINK_BITS=SINK_BITS, SOURCE=SOURCE, W=W>(clk=clk, rst=rst, request=phase == acquire, address=reqAddr, state=oldState, write=false, writeIntent=store or lr, aReady=aReady, dValid=dValid and allowGrant, dOpcode=dOpcode, dSource=dSource, dSink=dSink, dCap=dParam, dData=dData, dDenied=dDenied, dCorrupt=dCorrupt, eReady=eReady, ramReady=true)
+  const f = refill<BLOCK=C.dcacheBlockBytes, SINK_BITS=SINK_BITS, SOURCE=SOURCE, W=C.dLen>(request=phase == Phase.acquire, address=reqAddr, state=oldState, write=false, writeIntent=store or lr, aReady=aReady, dValid=dValid and allowGrant, dOpcode=dOpcode, dSource=dSource, dSink=dSink, dCap=dParam, dData=dData, dDenied=dDenied, dCorrupt=dCorrupt, eReady=eReady, ramReady=true)
   aValid = f.aValid
   aAddress = f.lineAddress
   aParam = f.aParam
@@ -179,7 +177,7 @@ pub mod CoherentDataCache<W=32, SETS=64, WAYS=4, SOURCE=1, SINK_BITS=4, ATOMICS=
   dReady = if dOpcode == 6 { wb.ackReady and dSource == SOURCE } else { allowGrant and f.dReady }
   eValid = f.eValid
   eSink = f.eSink
-  needsClock = phase != idle or probing or f.eValid or reservationTicks
+  needsClock = phase != Phase.idle or probing or f.eValid or reservationTicks
   if dValid and dReady and dOpcode == 5 {
     inGrant = !f.done
   }
@@ -189,12 +187,12 @@ pub mod CoherentDataCache<W=32, SETS=64, WAYS=4, SOURCE=1, SINK_BITS=4, ATOMICS=
     poison[fillRow] = U1(f.fillCorrupt)
   }
   if f.install {
-    tags[target] = reqAddr >> std.clog2(BLOCK)
+    tags[target] = reqAddr >> std.clog2(C.dcacheBlockBytes)
     permissions[target] = f.newState
     present#[target] = 1
   }
 
-  response = phase == answer
+  response = phase == Phase.answer
   result = value
   error = fault
   if ready and request {
@@ -203,10 +201,10 @@ pub mod CoherentDataCache<W=32, SETS=64, WAYS=4, SOURCE=1, SINK_BITS=4, ATOMICS=
     operand = data
     strobes = mask
     const next = decode(cmd=command)
-    if (CFLUSH and command == 5) or command == 0 or command == 1 or command == 17 or (ATOMICS and (next.lrsc != 0 or next.amo != 0)) {
-      phase = lookup
+    if (C.haveCFlush and next.flushAll) or next.plain or (allowAtomics and (next.lrsc or next.amo)) {
+      phase = Phase.lookup
     } else {
-      phase = answer
+      phase = Phase.answer
       value = 0
       fault = true
     }
@@ -217,17 +215,17 @@ pub mod CoherentDataCache<W=32, SETS=64, WAYS=4, SOURCE=1, SINK_BITS=4, ATOMICS=
       if found {
         if wb.releaseReady {
           target = selected
-          phase = releasing
+          phase = Phase.releasing
         }
       } elif !advance {
         value = 0
         fault = false
-        phase = answer
+        phase = Phase.answer
       }
     } elif sc and !reserved {
       value = 1
       fault = false
-      phase = answer
+      phase = Phase.answer
     } elif hit.hit {
       const previous = words[row]
       value = if sc { 0 } else { previous }
@@ -235,7 +233,7 @@ pub mod CoherentDataCache<W=32, SETS=64, WAYS=4, SOURCE=1, SINK_BITS=4, ATOMICS=
       if store and !bad {
         mut word = operand
         if atomic {
-          word = amo<W>(io_mask=strobes, io_cmd=cmd, io_lhs=previous, io_rhs=operand)
+          word = amo<C.dLen>(io_mask=strobes, io_cmd=cmd, io_lhs=previous, io_rhs=operand)
         }
         for lane in 0..<lanes {
           if strobes#[lane] != 0 {
@@ -245,39 +243,31 @@ pub mod CoherentDataCache<W=32, SETS=64, WAYS=4, SOURCE=1, SINK_BITS=4, ATOMICS=
         permissions[selected] = hit.next
         poison[row] = 0
       }
-      phase = answer
+      phase = Phase.answer
     } elif !evict or wb.releaseReady {
       target = selected
       oldState = state
-      phase = if evict { releasing } else { acquire }
+      phase = if evict { Phase.releasing } else { Phase.acquire }
     }
   }
-  if phase == releasing and wb.releaseDone {
-    phase = if flush { lookup } else { acquire }
+  if phase == Phase.releasing and wb.releaseDone {
+    phase = if flush { Phase.lookup } else { Phase.acquire }
     awaitingReleaseAck = false
   }
-  if phase == acquire and f.ready {
-    phase = waiting
+  if phase == Phase.acquire and f.ready {
+    phase = Phase.waiting
   }
   if f.done {
     if f.error {
       fault = true
       value = 0
-      phase = answer
+      phase = Phase.answer
     } else {
-      phase = lookup
+      phase = Phase.lookup
       replayGrant = true
     }
   }
   if response and responseReady {
-    phase = idle
-  }
-  if rst {
-    phase = idle
-    present = 0
-    probing = false
-    inGrant = false
-    replayGrant = false
-    awaitingReleaseAck = false
+    phase = Phase.idle
   }
 }

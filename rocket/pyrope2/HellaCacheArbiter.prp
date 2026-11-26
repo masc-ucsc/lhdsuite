@@ -1,32 +1,33 @@
+const tiny = import("RocketConfig.tiny")
 // The low tag bit selects a client at response time. Pipeline ownership selects
 // the stage-one store data and routes nacks two cycles after a request.
-pub mod HellaCacheArbiter<W=32, WALK=false, XLEN=W, EXT=false>::[timecheck=false](accAddress:U32=0, accData:Unsigned(bits=W)=0, accPrivilege:U2=0, accSize:U2=0, accValid:Bool=false, accWrite:Bool=false, cacheLoadError:U1, cacheNack:U1, cacheReady:U1, cacheResponseError:U1, cacheStageError:U1=0, cacheTag:U7, cacheValid:U1, clk:Clock, cpuAddress:Unsigned(bits=W), cpuCommand:U5, cpuData:Unsigned(bits=W), cpuKill:U1, cpuPrivilege:U2, cpuSigned:U1, cpuSize:U2, cpuTag:U7, cpuValid:U1, cpuVirtual:U1, rst:Reset, slaveAddress:U32, slaveCommand:U5, slaveData:Unsigned(bits=W), slaveKill:U1, slaveMask:Unsigned(bits=W/8), slaveSize:U2, slaveValid:U1, walkAddress:U32=0, walkRead:Bool=false) -> (accDone:Bool@[], accError:Bool@[], accReady:Bool@[], address:Unsigned(bits=W)@[], command:U5@[], cpuNack:U1@[], cpuReady:U1@[], cpuResponse:U1@[], cpuResponseTag:U7@[], cpuStage2:U1@[], data:Unsigned(bits=W)@[], dv:U1@[], isSigned:U1@[], kill:U1@[], mask:Unsigned(bits=W/8)@[], physical:U1@[], privilege:U2@[], size:U2@[], skipException:U1@[], slaveNack:U1@[], slaveReady:U1@[], slaveResponse:U1@[], tag:U7@[], valid:U1@[], walkDone:Bool@[], walkError:Bool@[], walkReady:Bool@[]) {
-  reg s1CPU:U1
-  reg s2CPU:U1
-  reg s1Walk:U1
-  reg s2Walk:U1
+pub mod HellaCacheArbiter<C=tiny>::[timecheck=false](accAddress:U32=0, accData:Unsigned(bits=C.dLen)=0, accPrivilege:U2=0, accSize:U2=0, accValid:Bool=false, accWrite:Bool=false, cacheLoadError:Bool, cacheNack:Bool, cacheReady:Bool, cacheResponseError:Bool, cacheStageError:Bool=false, cacheTag:U7, cacheValid:Bool, clk:Clock, cpuAddress:Unsigned(bits=C.dLen), cpuCommand:U5, cpuData:Unsigned(bits=C.dLen), cpuKill:Bool, cpuPrivilege:U2, cpuSigned:Bool, cpuSize:U2, cpuTag:U7, cpuValid:Bool, cpuVirtual:Bool, rst:Reset, slaveAddress:U32, slaveCommand:U5, slaveData:Unsigned(bits=C.dLen), slaveKill:Bool, slaveMask:Unsigned(bits=C.dLen/8), slaveSize:U2, slaveValid:Bool, walkAddress:U32=0, walkRead:Bool=false) -> (accDone:Bool@[], accError:Bool@[], accReady:Bool@[], cpuNack:Bool@[], cpuReady:Bool@[], cpuResponse:Bool@[], cpuResponseTag:U7@[], cpuStage2:Bool@[], request:(address:Unsigned(bits=C.dLen), command:U5, storeData:Unsigned(bits=C.dLen), virtual:Bool, isSigned:Bool, kill:Bool, storeMask:Unsigned(bits=C.dLen/8), physical:Bool, privilege:U2, size:U2, skipException:Bool, tag:U7, valid:Bool)@[], slaveNack:Bool@[], slaveReady:Bool@[], slaveResponse:Bool@[], walkDone:Bool@[], walkError:Bool@[], walkReady:Bool@[]) {
+  reg s1CPU:Bool = nil
+  reg s2CPU:Bool = nil
+  reg s1Walk:Bool = nil
+  reg s2Walk:Bool = nil
   mut wantWalk:Bool = false
   mut pteAddress:U32 = 0
   walkReady = false
   walkDone = false
   walkError = false
-  if WALK {
+  if C.useVM {
     // Retain only nacked requests. An accepted uncached read can return
     // later, while other clients continue to use the request pipeline.
     reg retry:Bool = false
-    reg savedAddress:U32
+    reg savedAddress:U32 = nil
     wantWalk = retry or walkRead
     pteAddress = if retry { savedAddress } else { walkAddress }
-    walkReady = !retry and cacheReady != 0
-    if wantWalk and cacheReady != 0 {
+    walkReady = !retry and cacheReady
+    if wantWalk and cacheReady {
       savedAddress = pteAddress
       retry = false
     }
-    if s2Walk != 0 and cacheNack != 0 {
+    if s2Walk and cacheNack {
       retry = true
     }
-    walkError = (s2Walk != 0 and cacheLoadError != 0) or (cacheValid != 0 and cacheTag == 3 and cacheResponseError != 0)
-    walkDone = walkError or (cacheValid != 0 and cacheTag == 3)
+    walkError = (s2Walk and cacheLoadError) or (cacheValid and cacheTag == 3 and cacheResponseError)
+    walkDone = walkError or (cacheValid and cacheTag == 3)
   }
   mut accelerator = false
   mut accS1 = false
@@ -35,76 +36,76 @@ pub mod HellaCacheArbiter<W=32, WALK=false, XLEN=W, EXT=false>::[timecheck=false
   mut accOp:U5 = 0
   mut accWidth:U2 = 0
   mut accMode:U2 = 0
-  mut accWord:Unsigned(bits=W) = 0
+  mut accWord:Unsigned(bits=C.dLen) = 0
   accReady = false
   accDone = false
   accError = false
-  if EXT {
+  if C.vLen != 0 or C.roccOpcodes != 0 {
     reg active:Bool = false
     reg pending:Bool = false
     reg preferCPU:Bool = false
     reg stage1:Bool = false
     reg stage2:Bool = false
-    reg saved:(addr:U32, write:Bool, size:U2, privilege:U2, data:Unsigned(bits=W)) = nil
+    reg saved:(addr:U32, write:Bool, size:U2, privilege:U2, data:Unsigned(bits=C.dLen)) = nil
     accReady = !active and !rst
     if accValid and accReady {
       saved = (addr=accAddress, data=accData, privilege=accPrivilege, size=accSize, write=accWrite)
       active = true
       pending = true
     }
-    accelerator = pending and !wantWalk and (!preferCPU or cpuValid == 0)
+    accelerator = pending and !wantWalk and (!preferCPU or !cpuValid)
     accPA = saved.addr
     accOp = U5(saved.write)
     accWidth = saved.size
     accMode = saved.privilege
     accWord = saved.data
-    stage1 = accelerator and cacheReady != 0
+    stage1 = accelerator and cacheReady
     stage2 = stage1
     accS1 = stage1
     accS2 = stage2
-    if accelerator and cacheReady != 0 {
+    if accelerator and cacheReady {
       pending = false
       preferCPU = true
     }
-    if !accelerator and !wantWalk and cpuValid != 0 and cacheReady != 0 {
+    if !accelerator and !wantWalk and cpuValid and cacheReady {
       preferCPU = false
     }
-    if stage2 and cacheNack != 0 {
+    if stage2 and cacheNack {
       pending = true
     }
-    const returned = cacheValid != 0 and cacheTag == 5
-    accError = (stage2 and cacheStageError != 0) or (returned and cacheResponseError != 0)
+    const returned = cacheValid and cacheTag == 5
+    accError = (stage2 and cacheStageError) or (returned and cacheResponseError)
     accDone = accError or returned
     if accDone {
       active = false
       pending = false
     }
   }
-  const cpu = cpuValid != 0 and !wantWalk and !accelerator
+  const cpu = cpuValid and !wantWalk and !accelerator
   const slave = !cpu and !wantWalk and !accelerator
-  s1CPU = U1(cpu and cacheReady != 0)
+  s1CPU = cpu and cacheReady
   s2CPU = s1CPU
-  s1Walk = U1(wantWalk and cacheReady != 0)
+  s1Walk = wantWalk and cacheReady
   s2Walk = s1Walk
-  cpuReady = if wantWalk or accelerator { 0 } else { cacheReady }
-  slaveReady = if slave { cacheReady } else { 0 }
-  valid = U1(wantWalk or accelerator or cpu or slaveValid != 0)
-  address = if wantWalk { pteAddress } elif accelerator { accPA } elif cpu { cpuAddress } else { slaveAddress }
-  tag = if wantWalk { 3 } elif accelerator { 5 } elif cpu { cpuTag#[0..<6] << 1 } else { 1 }
-  command = if wantWalk { 0 } elif accelerator { accOp } elif cpu { cpuCommand } else { slaveCommand }
-  size = if wantWalk { std.clog2(XLEN/8) } elif accelerator { accWidth } elif cpu { cpuSize } else { slaveSize }
-  isSigned = if cpu { cpuSigned } else { 0 }
-  privilege = if wantWalk { 1 } elif accelerator { accMode } elif cpu { cpuPrivilege } else { 0 }
-  dv = if cpu { cpuVirtual } else { 0 }
-  physical = U1(!cpu)
-  skipException = U1(slave)
-  kill = if s1Walk != 0 or accS1 { 0 } elif s1CPU != 0 { cpuKill } else { slaveKill }
-  data = if accS1 { accWord } elif s1CPU != 0 { cpuData } else { slaveData }
-  mask = if s1CPU != 0 { 0 } else { slaveMask }
+  cpuReady = !wantWalk and !accelerator and cacheReady
+  slaveReady = slave and cacheReady
+  request.valid = wantWalk or accelerator or cpu or slaveValid
+  request.address = if wantWalk { pteAddress } elif accelerator { accPA } elif cpu { cpuAddress } else { slaveAddress }
+  request.tag = if wantWalk { 3 } elif accelerator { 5 } elif cpu { cpuTag#[0..<6] << 1 } else { 1 }
+  request.command = if wantWalk { 0 } elif accelerator { accOp } elif cpu { cpuCommand } else { slaveCommand }
+  request.size = if wantWalk { std.clog2(C.xLen/8) } elif accelerator { accWidth } elif cpu { cpuSize } else { slaveSize }
+  request.isSigned = cpu and cpuSigned
+  request.privilege = if wantWalk { 1 } elif accelerator { accMode } elif cpu { cpuPrivilege } else { 0 }
+  request.virtual = cpu and cpuVirtual
+  request.physical = !cpu
+  request.skipException = slave
+  request.kill = if s1Walk or accS1 { false } elif s1CPU { cpuKill } else { slaveKill }
+  request.storeData = if accS1 { accWord } elif s1CPU { cpuData } else { slaveData }
+  request.storeMask = if s1CPU { 0 } else { slaveMask }
   cpuStage2 = s2CPU
-  cpuNack = s2CPU & cacheNack
-  slaveNack = U1(s2CPU == 0 and s2Walk == 0 and !accS2) & cacheNack
-  cpuResponse = U1(cacheTag#[0] == 0) & cacheValid
-  slaveResponse = U1(cacheTag == 1) & cacheValid
+  cpuNack = s2CPU and cacheNack
+  slaveNack = (!s2CPU and !s2Walk and !accS2) and cacheNack
+  cpuResponse = cacheTag#[0] == 0 and cacheValid
+  slaveResponse = cacheTag == 1 and cacheValid
   cpuResponseTag = cacheTag >> 1
 }

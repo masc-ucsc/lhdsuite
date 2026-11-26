@@ -11,6 +11,8 @@ comb highestBit<W>(value:Unsigned(bits=W)) -> (bit:Unsigned(bits=std.clog2(W))) 
   }
 }
 
+enum Phase:U3 = (ready=0, normalize=1, multiply=2, divide=3, negate=5, doneMul=6, doneDiv=7)
+
 pub mod MulDiv<C=tiny, DIVIDE_ONLY=false>::[timecheck=false](clock:Clock, io_kill:U1, io_req_bits_dw:U1, io_req_bits_fn:U4, io_req_bits_in1:Unsigned(bits=C.xLen), io_req_bits_in2:Unsigned(bits=C.xLen), io_req_bits_tag:U5, io_req_valid:U1, io_resp_ready:U1, reset:Reset) -> (io_req_ready:U1@[], io_resp_bits_data:Unsigned(bits=C.xLen)@[], io_resp_bits_tag:U5@[], io_resp_valid:U1@[]) {
   comptime const w = C.xLen
   comptime const digit = C.mulUnroll
@@ -22,14 +24,7 @@ pub mod MulDiv<C=tiny, DIVIDE_ONLY=false>::[timecheck=false](clock:Clock, io_kil
   cassert(steps >= 1 and steps <= w and C.divEarlyOutGranularity >= 1)
   type Word = Unsigned(bits=w)
   type Wide = Unsigned(bits=(2*w) + 1)
-  comptime const ready = 0
-  comptime const normalize = 1
-  comptime const multiply = 2
-  comptime const divide = 3
-  comptime const negate = 5
-  comptime const doneMul = 6
-  comptime const doneDiv = 7
-  reg state:U3 = nil
+  reg state:Phase = nil
   reg count:Unsigned(bits=std.clog2(w + 1)) = nil
   reg high:Bool = nil
   reg negative:Bool = nil
@@ -50,8 +45,8 @@ pub mod MulDiv<C=tiny, DIVIDE_ONLY=false>::[timecheck=false](clock:Clock, io_kil
   const signA = (fn == 1 or fn == 2 or fn == 4 or fn == 6) and (if halfReq { a#[31] } else { a#[w - 1] }) != 0
   const signB = (fn == 1 or fn == 4 or fn == 6) and (if halfReq { b#[31] } else { b#[w - 1] }) != 0
 
-  io_req_ready = U1(state == ready)
-  io_resp_valid = U1(state == doneMul or state == doneDiv)
+  io_req_ready = U1(state == Phase.ready)
+  io_resp_valid = U1(state == Phase.doneMul or state == Phase.doneDiv)
   io_resp_bits_tag = tag
   if half {
     wrap io_resp_bits_data = lower#sext[0..<32]
@@ -60,9 +55,9 @@ pub mod MulDiv<C=tiny, DIVIDE_ONLY=false>::[timecheck=false](clock:Clock, io_kil
   }
 
   if reset {
-    state = ready
-  } elif io_req_valid != 0 and state == ready {
-    state = if isMul { multiply } elif signA or signB { normalize } else { divide }
+    state = Phase.ready
+  } elif io_req_valid != 0 and state == Phase.ready {
+    state = if isMul { Phase.multiply } elif signA or signB { Phase.normalize } else { Phase.divide }
     count = 0
     tag = io_req_bits_tag
     high = upperResult
@@ -86,16 +81,16 @@ pub mod MulDiv<C=tiny, DIVIDE_ONLY=false>::[timecheck=false](clock:Clock, io_kil
     divisor = (U1(signB) << w) | rhs
     digitSign = U1(digit == w and signA)
   } elif io_kill != 0 or (io_resp_valid != 0 and io_resp_ready != 0) {
-    state = ready
-  } elif state == normalize {
+    state = Phase.ready
+  } elif state == Phase.normalize {
     if lower#[w - 1] != 0 {
       work = (0 - lower)#[0..<w]
     }
     if divisor#[w - 1] != 0 {
       wrap divisor = 0 - divisor
     }
-    state = divide
-  } elif state == divide {
+    state = Phase.divide
+  } elif state == Phase.divide {
     // Each step consumes one dividend bit. The final cycle uses only the
     // remaining steps, including when the unroll factor does not divide XLEN.
     mut next:Wide = work
@@ -117,7 +112,7 @@ pub mod MulDiv<C=tiny, DIVIDE_ONLY=false>::[timecheck=false](clock:Clock, io_kil
     }
     if count == w/steps {
       work = finalResult
-      state = if negative { negate } else { doneDiv }
+      state = if negative { Phase.negate } else { Phase.doneDiv }
     } else {
       work = next
     }
@@ -135,10 +130,10 @@ pub mod MulDiv<C=tiny, DIVIDE_ONLY=false>::[timecheck=false](clock:Clock, io_kil
         count = groups
       }
     }
-  } elif state == negate {
+  } elif state == Phase.negate {
     work = (0 - lower)#[0..<w]
-    state = doneDiv
-  } elif !DIVIDE_ONLY and state == multiply {
+    state = Phase.doneDiv
+  } elif !DIVIDE_ONLY and state == Phase.multiply {
     // A short first digit aligns the remaining full digits at XLEN without padding the register.
     const short = firstBits != digit and count == 0
     const chunk = if short { lower#[0..<firstBits] } else { lower#[0..<digit] }
@@ -162,7 +157,7 @@ pub mod MulDiv<C=tiny, DIVIDE_ONLY=false>::[timecheck=false](clock:Clock, io_kil
     digitSign = U1(count == iterations - 2 and negative)
     wrap count += 1
     if last or early {
-      state = doneMul
+      state = Phase.doneMul
     }
   }
 }

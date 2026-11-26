@@ -1,3 +1,4 @@
+const tiny = import("RocketConfig.tiny")
 const trapVector = import("TrapVector.vector")
 // Bare supervisor mode. The supervisor interrupt CSRs are views of mie/mip
 // restricted by mideleg. The machine status CSR also exposes sstatus.
@@ -7,42 +8,42 @@ pub comb exists(addr:U12) -> (present:Bool) {
     else { false }
   }
 }
-pub mod SupervisorCSR<W, VM=false, EXTRA=0, ASID=0, LOCAL=0, COUNTERS=3, ROCC=false>(cause:Unsigned(bits=W), clk:Clock, cmd:U3, compressed:U1, csr:U12, localPending:Unsigned(bits=W)=0, operand:Unsigned(bits=W), pc:Unsigned(bits=W), prv:U2, rst:Reset, seip:U1, sret:Bool, trap:Bool, tval:Unsigned(bits=W), writeData:Unsigned(bits=W)) -> (counters:Unsigned(bits=COUNTERS)@[], delegated:Bool@[], enabled:Unsigned(bits=W)@[], flags:U32@[], ideleg:Unsigned(bits=W)@[], pending:U12@[], rdata:Unsigned(bits=W)@[], returnPC:Unsigned(bits=W)@[], satp:Unsigned(bits=W)@[], sie:U1@[], spp:U1@[], status:Unsigned(bits=W)@[], vector:Unsigned(bits=W)@[]) {
-  reg scratch:Unsigned(bits=W)
-  reg epc:Unsigned(bits=W)
-  reg scause:Unsigned(bits=W)
-  reg badAddress:Unsigned(bits=W)
-  reg tvec:Unsigned(bits=W) = 0
+pub mod SupervisorCSR<C=tiny>(cause:Unsigned(bits=C.xLen), clk:Clock, cmd:U3, compressed:U1, csr:U12, localPending:Unsigned(bits=C.xLen)=0, operand:Unsigned(bits=C.xLen), pc:Unsigned(bits=C.xLen), prv:U2, rst:Reset, seip:U1, sret:Bool, trap:Bool, tval:Unsigned(bits=C.xLen), writeData:Unsigned(bits=C.xLen)) -> (counters:Unsigned(bits=C.counterBits)@[], delegated:Bool@[], enabled:Unsigned(bits=C.xLen)@[], flags:U32@[], ideleg:Unsigned(bits=C.xLen)@[], pending:U12@[], rdata:Unsigned(bits=C.xLen)@[], returnPC:Unsigned(bits=C.xLen)@[], satp:Unsigned(bits=C.xLen)@[], sie:U1@[], spp:U1@[], status:Unsigned(bits=C.xLen)@[], vector:Unsigned(bits=C.xLen)@[]) {
+  reg scratch:Unsigned(bits=C.xLen) = nil
+  reg epc:Unsigned(bits=C.xLen) = nil
+  reg scause:Unsigned(bits=C.xLen) = nil
+  reg badAddress:Unsigned(bits=C.xLen) = nil
+  reg tvec:Unsigned(bits=C.xLen) = 0
   reg edeleg:U16 = 0
-  reg interruptDeleg:Unsigned(bits=W) = 0
+  reg interruptDeleg:Unsigned(bits=C.xLen) = 0
   reg ip:U12 = 0
-  reg ie:Unsigned(bits=W) = 0
+  reg ie:Unsigned(bits=C.xLen) = 0
   reg previous:U1 = 0
   reg interruptEnable:U1 = 0
   reg previousIE:U1 = 0
   reg restrictions:U2 = 0 // TW, TSR
   reg fiom:U1 = 0
-  reg counterEnable:Unsigned(bits=COUNTERS) = 0
+  reg counterEnable:Unsigned(bits=C.counterBits) = 0
   const supervisorIRQs = 0x222
-  comptime const delegable = (U1(ROCC) << 13) | 0x222 | (((1 << LOCAL) - 1) << 16)
+  comptime const delegable = (U1((C.roccOpcodes != 0)) << 13) | 0x222 | (((1 << C.nLocalInterrupts) - 1) << 16)
   const num = cause#[0..<8]
   spp = previous
   sie = interruptEnable
   satp = 0
   mut pageStatus:U32 = 0
   mut tvm:U1 = 0
-  if VM {
-    comptime const modeBit = if W == 32 { 31 } else { 60 }
-    comptime const baseMode = if W == 32 { 1 } else { 8 }
-    comptime const modeMask = baseMode | ((1 << std.clog2(EXTRA + 1)) - 1)
-    comptime const asidBit = if W == 32 { 22 } else { 44 }
-    comptime const writable = (modeMask << modeBit) | (((1 << ASID) - 1) << asidBit) | 0xfffff
-    reg addressSpace:Unsigned(bits=W) = 0
+  if C.useVM {
+    comptime const modeBit = if C.xLen == 32 { 31 } else { 60 }
+    comptime const baseMode = if C.xLen == 32 { 1 } else { 8 }
+    comptime const modeMask = baseMode | ((1 << std.clog2(C.extraPgLevels + 1)) - 1)
+    comptime const asidBit = if C.xLen == 32 { 22 } else { 44 }
+    comptime const writable = (modeMask << modeBit) | (((1 << C.asIdBits) - 1) << asidBit) | 0xfffff
+    reg addressSpace:Unsigned(bits=C.xLen) = 0
     reg memoryPrivilege:U2 = 0 // SUM, MXR
     reg trapVM:U1 = 0
     if csr == 0x180 and cmd >= 5 {
       const selected = writeData >> modeBit
-      if selected == 0 or (selected >= baseMode and selected <= baseMode + EXTRA) {
+      if selected == 0 or (selected >= baseMode and selected <= baseMode + C.extraPgLevels) {
         addressSpace = writeData & writable
       }
     }
@@ -58,15 +59,15 @@ pub mod SupervisorCSR<W, VM=false, EXTRA=0, ASID=0, LOCAL=0, COUNTERS=3, ROCC=fa
   }
   flags = (restrictions << 21) | (tvm << 20)
   counters = counterEnable
-  status = pageStatus | (if W == 64 { 2 << 32 } else { 0 }) | (previous << 8) | (previousIE << 5) | (interruptEnable << 1)
+  status = pageStatus | (if C.xLen == 64 { 2 << 32 } else { 0 }) | (previous << 8) | (previousIE << 5) | (interruptEnable << 1)
   pending = ip | (seip << 9)
   enabled = ie
   ideleg = interruptDeleg
-  const interrupt = cause#[W - 1] != 0
+  const interrupt = cause#[C.xLen - 1] != 0
   delegated = prv <= 1 and (if interrupt { (interruptDeleg >> num)#[0] != 0 } else { (edeleg >> num)#[0] != 0 })
-  const tv = trapVector<W>(tvec=tvec, interrupt=interrupt, number=num)
+  const tv = trapVector<C.xLen>(tvec=tvec, interrupt=interrupt, number=num)
   vector = tv.target
-  returnPC = epc & (((1 << W) - 4) | (compressed << 1))
+  returnPC = epc & (((1 << C.xLen) - 4) | (compressed << 1))
   rdata = match csr {
     == 0x100 { status }
     == 0x104 { ie & interruptDeleg }
@@ -122,23 +123,23 @@ pub mod SupervisorCSR<W, VM=false, EXTRA=0, ASID=0, LOCAL=0, COUNTERS=3, ROCC=fa
       fiom = writeData#[0]
     }
     if csr == 0x106 {
-      counterEnable = writeData#[0..<COUNTERS]
+      counterEnable = writeData#[0..<C.counterBits]
     }
     if csr == 0x140 {
       scratch = writeData
     }
     if csr == 0x141 {
-      epc = writeData#[1..<W] << 1
+      epc = writeData#[1..<C.xLen] << 1
     }
     if csr == 0x142 {
-      scause = writeData & ((1 << (W - 1)) | 0x1f)
+      scause = writeData & ((1 << (C.xLen - 1)) | 0x1f)
     }
     if csr == 0x143 {
       badAddress = writeData
     }
   }
   if trap and delegated {
-    epc = pc#[1..<W] << 1
+    epc = pc#[1..<C.xLen] << 1
     scause = cause
     badAddress = tval
     previous = prv#[0]

@@ -1,20 +1,20 @@
 // Single-way scratchpad data SRAM. Addresses are byte addresses.
-pub mod DCacheDataArray<W=32, CAPACITY=16384>(clk:Clock, valid:U1, address:Unsigned(bits=std.clog2(CAPACITY)), write:U1, wdata:Unsigned(bits=W), mask:Unsigned(bits=W/8)) -> (data:Unsigned(bits=W)@[]) {
+pub mod DCacheDataArray<W=32, CAPACITY=16384>(clk:Clock, valid:Bool, address:Unsigned(bits=std.clog2(CAPACITY)), write:Bool, wdata:Unsigned(bits=W), mask:Unsigned(bits=W/8)) -> (data:Unsigned(bits=W)@[]) {
   comptime const lanes = W/8
   comptime const rows = CAPACITY/lanes
   cassert(W == 32 or W == 64)
   cassert(CAPACITY == 1 << std.clog2(CAPACITY) and rows > 1)
-  reg words:[rows]Unsigned(bits=W):[__store_clock_pin=clk, __store_posclk=true, ordering="old", wensize=lanes]
+  reg words:[rows]Unsigned(bits=W):[__store_clock_pin=clk, __store_posclk=true, ordering="old", wensize=lanes] = nil
   const index = address >> std.clog2(lanes)
-  reg readIndex:Unsigned(bits=std.clog2(rows)):[clock_pin=clk]
-  reg reading:U1:[clock_pin=clk]
+  reg readIndex:Unsigned(bits=std.clog2(rows)):[clock_pin=clk] = nil
+  reg reading:Bool:[clock_pin=clk] = nil
   readIndex = index
-  reading = valid & ~write
+  reading = valid and !write
   for i in 0..<lanes {
     const lo = i*8
-    if valid != 0 and write != 0 and mask#[i] != 0 {
+    if valid and write and mask#[i] != 0 {
       words[index]#[lo..<(lo + 8)] = wdata#[lo..<(lo + 8)]
     }
   }
-  data = if reading != 0 { words[readIndex] } else { nil }
+  data = if reading { words[readIndex] } else { nil }
 }

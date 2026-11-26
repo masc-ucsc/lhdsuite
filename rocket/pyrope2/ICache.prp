@@ -7,9 +7,9 @@ mod way<C>(clk:Clock, clear:Reset, read:U1, vaddr:U32, paddr:U32, fillAddr:U32, 
   comptime const indexEnd = std.clog2(C.icacheBlockBytes*sets)
   comptime const tagStart = if C.useVM and indexEnd > 12 { 12 } else { indexEnd }
   comptime const tagBits = 32 - tagStart
-  reg tags:[sets]Unsigned(bits=tagBits + 1):[__store_clock_pin=clk, ordering="old"]
+  reg tags:[sets]Unsigned(bits=tagBits + 1):[__store_clock_pin=clk, ordering="old"] = nil
   reg present:Unsigned(bits=sets):[clock_pin=clk, reset_pin=clear] = 0
-  reg previous:U32:[clock_pin=clk]
+  reg previous:U32:[clock_pin=clk] = nil
   previous = vaddr
   const set = fillIndex%sets
   if fill != 0 {
@@ -23,23 +23,23 @@ mod way<C>(clk:Clock, clear:Reset, read:U1, vaddr:U32, paddr:U32, fillAddr:U32, 
   hit = present#[lookup] & U1(tag#[0..<tagBits] == (paddr >> tagStart))
   fault = tag#[tagBits]
   const byteAddr = if fill != 0 { (set*C.icacheBlockBytes) | (beat << std.clog2(C.dLen/8)) } else { vaddr }
-  data = rowArray<CAPACITY=(sets*C.icacheBlockBytes), W=C.dLen>(clk=clk, valid=read | fill, address=byteAddr#[0..<indexEnd], write=fill & ~invalidated, wdata=wdata, mask=(1 << (C.dLen/8)) - 1)
+  data = rowArray<CAPACITY=(sets*C.icacheBlockBytes), W=C.dLen>(valid=read != 0 or fill != 0, address=byteAddr#[0..<indexEnd], write=fill != 0 and invalidated == 0, wdata=wdata, mask=(1 << (C.dLen/8)) - 1)
 }
 
 pub mod ICache<C=tiny>::[timecheck=false](aReady:U1, clk:Clock, dCorrupt:U1, dData:Unsigned(bits=C.dLen), dOpcode:U4, dValid:U1, fetch:U1, invalidate:U1, killS1:U1, killS2:U1, paddr:U32, prefetchAllowed:Bool=true, rst:Reset, vaddr:U32) -> (aAddress:U32@[], aValid:U1@[], accessFault:U1@[], acquired:U1@[], busy:Bool@[], data:U32@[], hint:Bool@[], valid:U1@[]) {
   comptime const beatsPerLine = C.icacheBlockBytes/(C.dLen/8)
   reg s1Valid:U1 = 0
-  reg s1Address:U32
+  reg s1Address:U32 = nil
   reg s2Valid:U1 = 0
-  reg s2Hit:U1
-  reg s2Data:U32
-  reg s2Error:U1
-  reg canRefill:U1
+  reg s2Hit:U1 = nil
+  reg s2Data:U32 = nil
+  reg s2Error:U1 = nil
+  reg canRefill:U1 = nil
   reg filling:U1 = 0
-  reg fillAddr:U32
+  reg fillAddr:U32 = nil
   reg beat:Unsigned(bits=std.clog2(C.icacheBlockBytes/(C.dLen/8))) = 0
-  reg fillError:U1
-  reg invalidated:U1
+  reg fillError:U1 = nil
+  reg invalidated:U1 = nil
 
   const miss = s2Valid & ~s2Hit & ~killS2
   const available = ~(miss | filling)
@@ -55,7 +55,7 @@ pub mod ICache<C=tiny>::[timecheck=false](aReady:U1, clk:Clock, dCorrupt:U1, dDa
   // Hold those bits with the refill and compare the entire physical page tag.
   mut fillIndex:U32 = fillAddr >> std.clog2(C.icacheBlockBytes)
   if C.useVM and C.icacheSets*C.icacheBlockBytes > 4096 {
-    reg virtualSet:Unsigned(bits=std.clog2(C.icacheSets))
+    reg virtualSet:Unsigned(bits=std.clog2(C.icacheSets)) = nil
     if (s1Valid & available) != 0 {
       virtualSet = (s1Address >> std.clog2(C.icacheBlockBytes))%C.icacheSets
     }
