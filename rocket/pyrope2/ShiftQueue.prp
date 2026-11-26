@@ -1,46 +1,40 @@
 // Each response field uses the same five ring slots and shared read/write pointers.
-mod field<W>(`clock`:Clock, push:U1, head:U3, tail:U3, occupied:U1, value:Unsigned(bits=W))
+mod field<W>(clock:Clock, push:U1, head:U3, tail:U3, occupied:U1, value:Unsigned(bits=W))
     -> (out:Unsigned(bits=W)@[]) {
   reg entries:[5]Unsigned(bits=W):[ordering="old"] = nil
   if push != 0 { entries[tail] = value }
   out = if occupied != 0 { entries[head] } else { value }
 }
 
-pub mod ShiftQueue<W=32, I=1, useHistory=false>::[timecheck=false](`clock`:Clock, `reset`:U1,
+pub mod ShiftQueue<W=32, I=1, useHistory=false>::[timecheck=false](clock:Clock, reset:Reset,
     index:Unsigned(bits=I)=0, io_enq_valid:U1, io_enq_bits_btb_taken:U1, io_enq_bits_btb_bridx:U1,
     io_enq_bits_pc:Unsigned(bits=W), io_enq_bits_data:U32, io_enq_bits_mask:U2,
     io_enq_bits_xcpt_pf_inst:U1, io_enq_bits_xcpt_ae_inst:U1, io_enq_bits_replay:U1, io_deq_ready:U1)
     -> (prediction:Unsigned(bits=I)@[], io_enq_ready:U1@[], io_deq_valid:U1@[], io_deq_bits_btb_taken:U1@[], io_deq_bits_btb_bridx:U1@[],
         io_deq_bits_pc:Unsigned(bits=W)@[], io_deq_bits_data:U32@[], io_deq_bits_mask:U2@[], io_deq_bits_xcpt_pf_inst:U1@[],
         io_deq_bits_xcpt_gf_inst:U1@[], io_deq_bits_xcpt_ae_inst:U1@[], io_deq_bits_replay:U1@[], occupancy:U3@[]) {
-  reg head:U3
-  reg tail:U3
-  reg count:U3
+  reg head:U3 = 0
+  reg tail:U3 = 0
+  reg count:U3 = 0
   const occupied = U1(count != 0)
   const space = U1(count < 5)
   const pop = occupied & io_deq_ready
   const push = space & io_enq_valid & (occupied | ~io_deq_ready)
-  if `reset` != 0 {
-    head = 0
-    tail = 0
-    count = 0
-  } else {
-    if pop != 0 { head = if head == 4 { 0 } else { (head + 1)#[0..<3] } }
-    if push != 0 { tail = if tail == 4 { 0 } else { (tail + 1)#[0..<3] } }
-    wrap count = count + push - pop
-  }
+  if pop != 0 { head = if head == 4 { 0 } else { (head + 1)#[0..<3] } }
+  if push != 0 { tail = if tail == 4 { 0 } else { (tail + 1)#[0..<3] } }
+  wrap count = count + push - pop
   io_enq_ready = space
   io_deq_valid = occupied | io_enq_valid
   occupancy = count
   io_deq_bits_xcpt_gf_inst = 0
   prediction = 0
-  if useHistory { prediction = field<I>(`clock`=`clock`, push=push, head=head, tail=tail, occupied=occupied, value=index) }
-  io_deq_bits_btb_taken = field<1>(`clock`=`clock`, push=push, head=head, tail=tail, occupied=occupied, value=io_enq_bits_btb_taken)
-  io_deq_bits_btb_bridx = field<1>(`clock`=`clock`, push=push, head=head, tail=tail, occupied=occupied, value=io_enq_bits_btb_bridx)
-  io_deq_bits_pc = field<W>(`clock`=`clock`, push=push, head=head, tail=tail, occupied=occupied, value=io_enq_bits_pc)
-  io_deq_bits_data = field<32>(`clock`=`clock`, push=push, head=head, tail=tail, occupied=occupied, value=io_enq_bits_data)
-  io_deq_bits_mask = field<2>(`clock`=`clock`, push=push, head=head, tail=tail, occupied=occupied, value=io_enq_bits_mask)
-  io_deq_bits_xcpt_pf_inst = field<1>(`clock`=`clock`, push=push, head=head, tail=tail, occupied=occupied, value=io_enq_bits_xcpt_pf_inst)
-  io_deq_bits_xcpt_ae_inst = field<1>(`clock`=`clock`, push=push, head=head, tail=tail, occupied=occupied, value=io_enq_bits_xcpt_ae_inst)
-  io_deq_bits_replay = field<1>(`clock`=`clock`, push=push, head=head, tail=tail, occupied=occupied, value=io_enq_bits_replay)
+  if useHistory { prediction = field<I>(clock=clock, push=push, head=head, tail=tail, occupied=occupied, value=index) }
+  io_deq_bits_btb_taken = field<1>(clock=clock, push=push, head=head, tail=tail, occupied=occupied, value=io_enq_bits_btb_taken)
+  io_deq_bits_btb_bridx = field<1>(clock=clock, push=push, head=head, tail=tail, occupied=occupied, value=io_enq_bits_btb_bridx)
+  io_deq_bits_pc = field<W>(clock=clock, push=push, head=head, tail=tail, occupied=occupied, value=io_enq_bits_pc)
+  io_deq_bits_data = field<32>(clock=clock, push=push, head=head, tail=tail, occupied=occupied, value=io_enq_bits_data)
+  io_deq_bits_mask = field<2>(clock=clock, push=push, head=head, tail=tail, occupied=occupied, value=io_enq_bits_mask)
+  io_deq_bits_xcpt_pf_inst = field<1>(clock=clock, push=push, head=head, tail=tail, occupied=occupied, value=io_enq_bits_xcpt_pf_inst)
+  io_deq_bits_xcpt_ae_inst = field<1>(clock=clock, push=push, head=head, tail=tail, occupied=occupied, value=io_enq_bits_xcpt_ae_inst)
+  io_deq_bits_replay = field<1>(clock=clock, push=push, head=head, tail=tail, occupied=occupied, value=io_enq_bits_replay)
 }

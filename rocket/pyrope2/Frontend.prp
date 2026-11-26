@@ -6,7 +6,7 @@ const ICache = import("ICache.ICache")
 const ShiftQueue = import("ShiftQueue.ShiftQueue")
 const attributes = import("PhysicalMap.attributes")
 
-pub mod Frontend<C=tiny>::[timecheck=false](`clock`:Clock, `reset`:U1, auto_icache_master_out_a_ready:U1, auto_icache_master_out_d_valid:U1, auto_icache_master_out_d_bits_opcode:U4, auto_icache_master_out_d_bits_data:Unsigned(bits=C.dLen), auto_icache_master_out_d_bits_corrupt:U1, staticPrediction:Bool=false, flushBTB:Bool=false, rasAction:U2=0, branchIndex:Unsigned(bits=C.bhtIndexBits)=0, io_cpu_req_valid:U1, io_cpu_req_bits_pc:Unsigned(bits=C.xLen), io_cpu_req_bits_speculative:U1, io_cpu_resp_ready:U1, io_cpu_btb_update_valid:U1, io_cpu_btb_update_bits_target:Unsigned(bits=C.xLen), io_cpu_btb_update_bits_isValid:U1, io_cpu_btb_update_bits_br_pc:Unsigned(bits=C.xLen), io_cpu_bht_update_valid:U1, io_cpu_bht_update_bits_branch:U1, io_cpu_bht_update_bits_taken:U1, io_cpu_flush_icache:U1, io_cpu_progress:U1, privilege:U2, satp:Unsigned(bits=C.xLen)=0, flush:Bool=false,
+pub mod Frontend<C=tiny>::[timecheck=false](clock:Clock, reset:Reset, auto_icache_master_out_a_ready:U1, auto_icache_master_out_d_valid:U1, auto_icache_master_out_d_bits_opcode:U4, auto_icache_master_out_d_bits_data:Unsigned(bits=C.dLen), auto_icache_master_out_d_bits_corrupt:U1, staticPrediction:Bool=false, flushBTB:Bool=false, rasAction:U2=0, branchIndex:Unsigned(bits=C.bhtIndexBits)=0, io_cpu_req_valid:U1, io_cpu_req_bits_pc:Unsigned(bits=C.xLen), io_cpu_req_bits_speculative:U1, io_cpu_resp_ready:U1, io_cpu_btb_update_valid:U1, io_cpu_btb_update_bits_target:Unsigned(bits=C.xLen), io_cpu_btb_update_bits_isValid:U1, io_cpu_btb_update_bits_br_pc:Unsigned(bits=C.xLen), io_cpu_bht_update_valid:U1, io_cpu_bht_update_bits_branch:U1, io_cpu_bht_update_bits_taken:U1, io_cpu_flush_icache:U1, io_cpu_progress:U1, privilege:U2, satp:Unsigned(bits=C.xLen)=0, flush:Bool=false,
     grant:Bool=true, leaf:U28=0, walkReady:Bool=false, walkDone:Bool=false, walkError:Bool=false, walkData:Unsigned(bits=C.xLen)=0, io_ptw_status_debug:U1, pmpExecute:U1, prefetchEnable:Bool=false) -> (hint:Bool@[], pmpAddress:U32@[], needsClock:Bool@[], fetchIndex:Unsigned(bits=C.bhtIndexBits)@[], tlbMiss:Bool@[], probe:Bool@[], key:Unsigned(bits=C.tlbKeyBits)@[], walkComplete:Bool@[], walkLeaf:U28@[], walkRead:Bool@[], walkPointer:Bool@[], walkAddress:U32@[], auto_icache_master_out_a_valid:U1@[], auto_icache_master_out_a_bits_address:U32@[], auto_icache_master_out_a_bits_user_amba_prot_readalloc:U1@[], auto_icache_master_out_a_bits_user_amba_prot_writealloc:U1@[], io_cpu_resp_valid:U1@[], io_cpu_resp_bits_btb_taken:U1@[], io_cpu_resp_bits_btb_bridx:U1@[], io_cpu_resp_bits_pc:Unsigned(bits=C.xLen)@[], io_cpu_resp_bits_data:U32@[], io_cpu_resp_bits_mask:U2@[], io_cpu_resp_bits_xcpt_pf_inst:U1@[], io_cpu_resp_bits_xcpt_gf_inst:U1@[], io_cpu_resp_bits_xcpt_ae_inst:U1@[], io_cpu_resp_bits_replay:U1@[], io_cpu_gpa_valid:U1@[], io_cpu_gpa_bits:U32@[], io_cpu_npc:Unsigned(bits=C.xLen)@[], io_cpu_perf_acquire:U1@[]) {
   reg s1_valid:U1
   reg s2_valid:U1
@@ -17,7 +17,7 @@ pub mod Frontend<C=tiny>::[timecheck=false](`clock`:Clock, `reset`:U1, auto_icac
   reg s2_tlb_resp_ae_inst:U1
   reg s2_speculative:U1
   reg s2_replay_REG:U1
-  reg recent_progress_counter:U2
+  reg recent_progress_counter:U2 = 3
   reg fq_io_enq_valid_REG:U1
   reg gpa_valid:U1
   wire _fq_io_enq_valid_T_6:U1 = nil
@@ -62,7 +62,7 @@ pub mod Frontend<C=tiny>::[timecheck=false](`clock`:Clock, `reset`:U1, auto_icac
     reg slotS2:U1
     const link = ((s2_pc & ((1 << C.xLen)-4)) + ((slotS2+1) << 1))#[0..<C.xLen]
     const btb = BranchPredictor<C>(forceTaken=staticPrediction, invalidate=flushBTB, learn=learn,
-        learnedPC=learnedPC, learnedTarget=learnedTarget, `clock`=`clock`, clear=`reset` | io_cpu_flush_icache, pc=s1_pc,
+        learnedPC=learnedPC, learnedTarget=learnedTarget, clock=clock, clear=U1(reset) | io_cpu_flush_icache, pc=s1_pc,
         replace=io_cpu_btb_update_valid, install=io_cpu_btb_update_bits_isValid, branchPC=io_cpu_btb_update_bits_br_pc,
         destination=io_cpu_btb_update_bits_target, rasAction=rasAction, fetchAction=fetchAction, fetchLink=link,
         branchIndex=branchIndex, advance=advance, direction=takenS2, restore=s2_redirect__w1 != 0,
@@ -108,7 +108,7 @@ pub mod Frontend<C=tiny>::[timecheck=false](`clock`:Clock, `reset`:U1, auto_icac
       learnedTarget = decoded.target
       if takeLate { repair = 1; repairPC = decoded.target; predictedTaken = 1; predictedSlot = decoded.slot }
     } else { learn = false; learnedPC = 0; learnedTarget = 0 }
-    if `reset` != 0 or io_cpu_req_valid != 0 { partial = 0 }
+    if reset or io_cpu_req_valid != 0 { partial = 0 }
     elif accepted != 0 { partial = U1(highPartial) & ~predictedTaken }
   }
   repairPacket = repair
@@ -131,12 +131,11 @@ pub mod Frontend<C=tiny>::[timecheck=false](`clock`:Clock, `reset`:U1, auto_icac
   }
   fq_io_enq_valid_REG = s1_valid
   gpa_valid = (~io_cpu_req_valid_0__w1#[0]) & gpa_valid & 1
-  if `reset` != 0 {
+  if reset {
     s2_valid = 0
     s2_pc = 0x10040
     s2_speculative = 0
     s2_replay_REG = 1
-    recent_progress_counter = 3
   } else {
     s2_valid = (~s2_replay__w1#[0]) & (~s2_redirect__w1#[0]) & 1
     if not (s2_replay__w1 != 0) {
@@ -144,10 +143,8 @@ pub mod Frontend<C=tiny>::[timecheck=false](`clock`:Clock, `reset`:U1, auto_icac
       s2_speculative = s1_speculative
     }
     s2_replay_REG = s2_replay__w1 & (~s0_valid__w1#[0]) & 1
-    if io_cpu_progress != 0 {
-      recent_progress_counter = 3
-    }
   }
+  if io_cpu_progress != 0 { recent_progress_counter = 3 }
   mut physicalPC:U32 = s1_pc#[0..<32]
   mut waiting:U1 = 0
   mut fetchPageFault:U1 = 0
@@ -162,7 +159,7 @@ pub mod Frontend<C=tiny>::[timecheck=false](`clock`:Clock, `reset`:U1, auto_icac
   walkAddress = 0
   if C.useVM {
     const lookup = s1_valid != 0 and s2_redirect__w1 == 0 and s2_replay__w1 == 0
-    const t = itlb<C=C, FETCH=true>(clk=`clock`, rst=`reset` != 0,
+    const t = itlb<C=C, FETCH=true>(clk=clock, rst=reset,
         request=lookup, accepted=lookup, va=s1_pc, satp=satp,
         privilege=privilege, store=false, sum=false, mxr=false, flush=flush,
         grant=grant, leaf=leaf, readReady=walkReady, readDone=walkDone, readError=walkError, readData=walkData)
@@ -180,7 +177,7 @@ pub mod Frontend<C=tiny>::[timecheck=false](`clock`:Clock, `reset`:U1, auto_icac
     walkAddress = t.readAddress
   }
   if s2_replay__w1 == 0 { s2Miss = waiting }
-  const icache = ICache<C>(clk=`clock`, rst=(`reset` != 0), fetch=s0_valid__w1, vaddr=io_cpu_npc_0__w1#[0..<32],
+  const icache = ICache<C>(clk=clock, rst=reset, fetch=s0_valid__w1, vaddr=io_cpu_npc_0__w1#[0..<32],
       paddr=physicalPC, killS1=s2_redirect__w1 | s2_replay__w1 | waiting, killS2=killSpeculative,
       invalidate=io_cpu_flush_icache, aReady=auto_icache_master_out_a_ready, dValid=auto_icache_master_out_d_valid,
       dOpcode=auto_icache_master_out_d_bits_opcode, dData=auto_icache_master_out_d_bits_data,
@@ -190,7 +187,7 @@ pub mod Frontend<C=tiny>::[timecheck=false](`clock`:Clock, `reset`:U1, auto_icac
   icacheFault = icache.accessFault
   fetchData = icache.data
   _icache_io_resp_valid = icache.valid
-  mut fq = ShiftQueue<W=C.xLen,I=C.bhtIndexBits,useHistory=(C.bhtEntries > 0)>(index=packetIndex, `clock` = `clock`, `reset` = (`reset` | io_cpu_req_valid_0__w1) & 1, io_enq_valid = _fq_io_enq_valid_T_6, io_enq_bits_btb_taken = predictedTaken, io_enq_bits_btb_bridx = predictedSlot, io_enq_bits_pc = s2_pc, io_enq_bits_data = icache.data, io_enq_bits_mask = _fq_io_enq_bits_mask_T_1__w1#[0..<2], io_enq_bits_xcpt_pf_inst = s2_tlb_resp_pf_inst, io_enq_bits_xcpt_ae_inst = ((_icache_io_resp_valid & icache.accessFault & 1) | s2_tlb_resp_ae_inst) & 1, io_enq_bits_replay = killSpeculative & (~_icache_io_resp_valid) & 1 & (~s2_xcpt__w1#[0]) & 1, io_deq_ready = io_cpu_resp_ready)
+  mut fq = ShiftQueue<W=C.xLen,I=C.bhtIndexBits,useHistory=(C.bhtEntries > 0)>(index=packetIndex, clock = clock, reset = reset or io_cpu_req_valid_0__w1 != 0, io_enq_valid = _fq_io_enq_valid_T_6, io_enq_bits_btb_taken = predictedTaken, io_enq_bits_btb_bridx = predictedSlot, io_enq_bits_pc = s2_pc, io_enq_bits_data = icache.data, io_enq_bits_mask = _fq_io_enq_bits_mask_T_1__w1#[0..<2], io_enq_bits_xcpt_pf_inst = s2_tlb_resp_pf_inst, io_enq_bits_xcpt_ae_inst = ((_icache_io_resp_valid & icache.accessFault & 1) | s2_tlb_resp_ae_inst) & 1, io_enq_bits_replay = killSpeculative & (~_icache_io_resp_valid) & 1 & (~s2_xcpt__w1#[0]) & 1, io_deq_ready = io_cpu_resp_ready)
   _fq_io_enq_ready = fq.io_enq_ready
   needsClock = (s1_valid | s2_valid) != 0 or fq.occupancy < 5 or icache.busy or walkRead or (C.nL2TLBEntries > 0 and (probe or walkComplete))
   queued = fq.occupancy

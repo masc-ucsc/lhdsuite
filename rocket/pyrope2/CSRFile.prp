@@ -9,7 +9,7 @@ const UserPrivilege = import("UserPrivilege.UserPrivilege")
 const configs = import("RocketConfig")
 comptime const tiny = configs.tiny
 pub mod CSRFile<C=tiny>::[timecheck=false](
-    `clock`:Clock, `reset`:U1, io_ungated_clock:Clock, io_interrupts_debug:U1, io_interrupts_mtip:U1,
+    clock:Clock, reset:Reset, io_ungated_clock:Clock, io_interrupts_debug:U1, io_interrupts_mtip:U1,
     io_interrupts_msip:U1, io_interrupts_meip:U1, io_interrupts_seip:U1=0,
     localInterrupts:Unsigned(bits=C.localIRQBits)=0, io_hartid:U1, io_rw_addr:U12, io_rw_cmd:U3,
     io_rw_wdata:Unsigned(bits=C.xLen), io_decode_0_inst:U32, io_exception:U1, io_retire:U1, io_cause:U32,
@@ -29,9 +29,9 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
     io_trace_0_iaddr:Unsigned(bits=C.xLen)@[], io_trace_0_insn:U32@[], io_trace_0_priv:U3@[],
     io_trace_0_exception:U1@[], io_trace_0_interrupt:U1@[], io_trace_0_cause:Unsigned(bits=C.xLen)@[],
     io_trace_0_tval:Unsigned(bits=C.xLen)@[], io_customCSRs_0_value:U32@[]) {
-  reg reg_mstatus_v:U1:[clock_pin=`clock`]
-  reg reg_mstatus_mpv:U1:[clock_pin=`clock`]
-  reg reg_mstatus_gva:U1:[clock_pin=`clock`]
+  reg reg_mstatus_v:U1:[clock_pin=clock]
+  reg reg_mstatus_mpv:U1:[clock_pin=clock]
+  reg reg_mstatus_gva:U1:[clock_pin=clock]
   wire mcontext:Unsigned(bits=C.xLen) = nil
   wire scontext:Unsigned(bits=C.xLen) = nil
   wire mode:U1 = nil
@@ -58,22 +58,22 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   wire stepped:U1 = nil
   wire singleStep:U1 = nil
   wire counterEnable:Unsigned(bits=C.counterBits) = nil
-  reg reg_mstatus_mpp:U2:[clock_pin=`clock`]
-  reg reg_mstatus_mpie:U1:[clock_pin=`clock`]
-  reg reg_mstatus_mie:U1:[clock_pin=`clock`]
-  reg reg_mie:Unsigned(bits=C.xLen):[clock_pin=`clock`]
-  reg reg_mepc:Unsigned(bits=C.xLen):[clock_pin=`clock`]
-  reg reg_mcause:Unsigned(bits=C.xLen):[clock_pin=`clock`]
-  reg reg_mtval:Unsigned(bits=C.xLen):[clock_pin=`clock`]
-  reg reg_mscratch:Unsigned(bits=C.xLen):[clock_pin=`clock`]
-  reg reg_mtvec:U32:[clock_pin=`clock`]
-  reg reg_wfi:U1:[initial=0, reset_pin=`reset`, async=false, clock_pin=io_ungated_clock]
-  reg reg_mcountinhibit:Unsigned(bits=C.counterBits):[clock_pin=`clock`]
+  reg reg_mstatus_mpp:U2:[clock_pin=clock]
+  reg reg_mstatus_mpie:U1:[clock_pin=clock]
+  reg reg_mstatus_mie:U1:[clock_pin=clock]
+  reg reg_mie:Unsigned(bits=C.xLen):[clock_pin=clock]
+  reg reg_mepc:Unsigned(bits=C.xLen):[clock_pin=clock]
+  reg reg_mcause:Unsigned(bits=C.xLen):[clock_pin=clock]
+  reg reg_mtval:Unsigned(bits=C.xLen):[clock_pin=clock]
+  reg reg_mscratch:Unsigned(bits=C.xLen):[clock_pin=clock]
+  reg reg_mtvec:U32:[clock_pin=clock]
+  reg reg_wfi:U1:[clock_pin=io_ungated_clock] = 0
+  reg reg_mcountinhibit:Unsigned(bits=C.counterBits):[clock_pin=clock]
   reg cycles:U64:[clock_pin=io_ungated_clock]
-  reg retired:U64:[clock_pin=`clock`]
-  reg reg_misa:U32:[clock_pin=`clock`]
+  reg retired:U64:[clock_pin=clock]
+  reg reg_misa:U32:[clock_pin=clock]
   comptime const controlMask = (if C.clockGate { 14 } else { 8 }) | (if C.icachePrefetch { 1 << 17 } else { 0 }) | U1(C.dcacheClockGate)
-  reg fetchControl:Unsigned(max=controlMask):[clock_pin=`clock`]
+  reg fetchControl:Unsigned(max=controlMask):[clock_pin=clock]
   io_status_dv = reg_mstatus_v
   io_status_v = reg_mstatus_v
   io_status_mpv = reg_mstatus_mpv
@@ -139,7 +139,7 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   wire debugRead:Unsigned(bits=C.xLen) = nil
   if C.useDebug {
     (inDebug=active, singleStep=stepEnabled, stepped, trapToDebug=trap,
-        debugPC=returnPC, debugPrivilege=returnPrv, debugRead=read) = debugCSRs<C>(clk=`clock`, rst=`reset` != 0,
+        debugPC=returnPC, debugPrivilege=returnPrv, debugRead=read) = debugCSRs<C>(clk=clock, rst=reset,
         addr=io_rw_addr, cmd=io_rw_cmd, operand=io_rw_wdata, pc=io_pc, privilege=privilege, virtualized=reg_mstatus_v,
         compressed=reg_misa#[2], cause=cause, exception=exception, ebreak=ebreak, retire=io_retire, dret=U1(dret))
   } else {
@@ -162,7 +162,7 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   const machineVector = if returning != 0 { savedPC } elif trapToDebug != 0 { debugTarget } else { mtvec.target }
   wire ceased:U1 = nil
   if C.haveCease {
-    reg halted:U1:[initial=0, reset_pin=`reset`, clock_pin=`clock`, async=false]
+    reg halted:U1:[clock_pin=clock] = 0
     if systemInsn != 0 and io_rw_addr == 0x305 { halted = 1 }
     ceased = halted
   } else { ceased = 0 }
@@ -174,7 +174,7 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   const stalled = reg_wfi | ceased
   mut pmpRead:Unsigned(bits=C.xLen) = 0
   if C.nPMPs > 0 {
-    const pmp = protection.registers<XLEN=C.xLen, N=C.nPMPs>(clk=`clock`, rst=`reset` != 0,
+    const pmp = protection.registers<XLEN=C.xLen, N=C.nPMPs>(clk=clock, rst=reset,
         index=io_rw_addr, cmd=io_rw_cmd, data=io_rw_wdata)
     pmpTable = pmp.table
     pmpRead = pmp.value
@@ -191,13 +191,13 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   watchAction = 0
   if C.nBreakpoints > 0 {
     (triggerRead=read, triggerTrap=exception, triggerDebug=enterDebug, watchFetch=fetch,
-        watchLoad=load, watchStore=store, watchAction=actions) = triggers<C>(clk=`clock`, rst=`reset` != 0,
+        watchLoad=load, watchStore=store, watchAction=actions) = triggers<C>(clk=clock, rst=reset,
         index=io_rw_addr, cmd=io_rw_cmd, data=io_rw_wdata, debug=inDebug, privilege=privilege, pc=triggerPC, ea=triggerEA,
         mcontext=mcontext, scontext=scontext)
   }
   mut hpmRead:Unsigned(bits=C.xLen) = 0
   if C.haveBasicCounters and C.nPerfCounters > 0 {
-    hpmRead = performance.bank<C>(clk=`clock`, rst=`reset` != 0, addr=io_rw_addr, cmd=io_rw_cmd, data=io_rw_wdata,
+    hpmRead = performance.bank<C>(clk=clock, rst=reset, addr=io_rw_addr, cmd=io_rw_cmd, data=io_rw_wdata,
         inhibit=reg_mcountinhibit, instruction=perfID, interlock=perfPipe, memory=perfMem, advance=perfAdvance,
         retire=io_retire, trap=io_exception)
   }
@@ -228,7 +228,7 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   vectorCSRData = if C.vLen > 0 { csrWrite } else { 0 }
   mut vs:U2 = 0
   if C.vLen > 0 {
-    reg state:U2:[initial=0, clock_pin=`clock`, reset_pin=`reset`, async=false]
+    reg state:U2:[clock_pin=clock] = 0
     if csrWriteEnable != 0 and (io_rw_addr == 0x300 or (C.useSupervisor and io_rw_addr == 0x100)) { state = csrWrite#[9..<11] }
     elif vectorCommit or vectorCSRWrite { state = 3 }
     vs = state
@@ -237,24 +237,24 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   unitStatus = (vs << 9) | (if C.roccOpcodes != 0 { 3 << 15 } else { 0 }) |
       (U1(vs == 3 or C.roccOpcodes != 0) << (C.xLen-1))
   if C.mcontextWidth > 0 {
-    reg machineID:Unsigned(bits=C.mcontextWidth):[initial=0, clock_pin=`clock`, reset_pin=`reset`, async=false]
+    reg machineID:Unsigned(bits=C.mcontextWidth):[clock_pin=clock] = 0
     mcontext = machineID
     if csrWriteEnable != 0 and io_rw_addr == 0x7a8 { machineID = csrWrite#[0..<C.mcontextWidth] }
   } else { mcontext = 0 }
   if C.scontextWidth > 0 {
-    reg supervisorID:Unsigned(bits=C.scontextWidth):[initial=0, clock_pin=`clock`, reset_pin=`reset`, async=false]
+    reg supervisorID:Unsigned(bits=C.scontextWidth):[clock_pin=clock] = 0
     scontext = supervisorID
     if csrWriteEnable != 0 and io_rw_addr == 0x5a8 { supervisorID = csrWrite#[0..<C.scontextWidth] }
   } else { scontext = 0 }
   flushBTB = C.branchPredictionModeCSR and csrWriteEnable != 0 and io_rw_addr == 0x7c0
   if C.branchPredictionModeCSR {
-    reg bpm:U1:[initial=0, clock_pin=`clock`, reset_pin=`reset`, async=false]
+    reg bpm:U1:[clock_pin=clock] = 0
     if flushBTB { bpm = csrWrite#[0] }
     mode = bpm
   } else { mode = 0 }
   staticPrediction = mode != 0
   if C.useSupervisor or C.fLen > 0 {
-    reg fs:U1:[initial=0, clock_pin=`clock`, reset_pin=`reset`, async=false]
+    reg fs:U1:[clock_pin=clock] = 0
     if csrWriteEnable != 0 and (io_rw_addr == 0x300 or (C.useSupervisor and io_rw_addr == 0x100)) {
       fs = U1(csrWrite#[13..<15] != 0)
     }
@@ -262,8 +262,8 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
     fpStatus = (fs << (C.xLen-1)) | (if fs != 0 { 3 << 13 } else { 0 })
   } else { fpStatus = 0 }
   if C.fLen > 0 {
-    reg rounding:U3:[initial=0, clock_pin=`clock`, reset_pin=`reset`, async=false]
-    reg accrued:U5:[initial=0, clock_pin=`clock`, reset_pin=`reset`, async=false]
+    reg rounding:U3:[clock_pin=clock] = 0
+    reg accrued:U5:[clock_pin=clock] = 0
     const writeFP = csrWriteEnable != 0 and io_rw_addr >= 1 and io_rw_addr <= 3
     if writeFP and io_rw_addr != 2 { accrued = csrWrite#[0..<5] } else { accrued |= fpFlags }
     if writeFP and io_rw_addr != 1 {
@@ -273,7 +273,7 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   } else { fcsr = 0 }
   const writeLow = csrWrite#[0..<32]
   const writeEnabled = csrWriteEnable != 0 and C.haveBasicCounters
-  if `reset` != 0 {
+  if reset {
     cycles = 0
     retired = 0
   } else {
@@ -290,7 +290,7 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   }
   const machineTrap:U1 = exception & ~trapToDebug & U1(!delegate)
   if C.useSupervisor {
-    const sv = supervisor.SupervisorCSR<W=C.xLen, VM=C.useVM, EXTRA=C.extraPgLevels, ASID=C.asIdBits, LOCAL=C.nLocalInterrupts, ROCC=(C.roccOpcodes != 0), COUNTERS=C.counterBits>(localPending=localPending, clk=`clock`, rst=(`reset` != 0), prv=privilege, csr=io_rw_addr,
+    const sv = supervisor.SupervisorCSR<W=C.xLen, VM=C.useVM, EXTRA=C.extraPgLevels, ASID=C.asIdBits, LOCAL=C.nLocalInterrupts, ROCC=(C.roccOpcodes != 0), COUNTERS=C.counterBits>(localPending=localPending, clk=clock, rst=reset, prv=privilege, csr=io_rw_addr,
         cmd=io_rw_cmd, writeData=csrWrite, operand=io_rw_wdata, seip=io_interrupts_seip, compressed=reg_misa#[2],
         trap=exception != 0 and trapToDebug == 0, sret=sret, cause=architecturalCause, pc=io_pc, tval=trapValue)
     sRead = sv.rdata
@@ -323,7 +323,7 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   }
   if C.useUser {
     const returnPrv = if dret { debugPrivilege } elif sret { spp } else { reg_mstatus_mpp }
-    const u = UserPrivilege<S=C.useSupervisor,COUNTERS=C.counterBits>(clk=`clock`, rst=(`reset` != 0), returnPrv=returnPrv,
+    const u = UserPrivilege<S=C.useSupervisor,COUNTERS=C.counterBits>(clk=clock, rst=reset, returnPrv=returnPrv,
         write=csrWriteEnable != 0, csr=io_rw_addr, data=writeLow, exception=exception != 0,
         returning=returning != 0, delegated=delegate and trapToDebug == 0,
         basicCounters=C.haveBasicCounters)
@@ -337,7 +337,7 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
     counterEnable = 0
     machineFIOM = 0
   }
-  if `reset` != 0 {
+  if reset {
     reg_mstatus_v = 0
     reg_mstatus_mpv = 0
     reg_mstatus_gva = 0
@@ -401,7 +401,7 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   if csrWriteEnable != 0 and io_rw_addr == 0x340 {
     reg_mscratch = csrWrite
   }
-  if `reset` == 0 {
+  if !reset {
     const wake:U1 = U1(pendingIRQs != 0) | io_interrupts_debug | exception
     const waitForInterrupt = systemInsn & U1(io_rw_addr == 0x105) & ~singleStep & ~inDebug
     reg_wfi = ~wake & (waitForInterrupt | reg_wfi)

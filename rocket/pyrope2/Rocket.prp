@@ -16,7 +16,7 @@ type WritebackControl = (rocc:U1, vector:U1, fp:U1, mem:U1, div:U1, wxd:U1, csr:
 type MemoryOp = (branch:U1, jal:U1, jalr:U1, mem_cmd:U5, mul:U1)
 
 pub mod Rocket<C=tiny>::[timecheck=false](
-    `clock`:Clock, `reset`:U1, io_hartid:U1, io_interrupts_debug:U1, io_interrupts_mtip:U1, io_interrupts_msip:U1,
+    clock:Clock, reset:Reset, io_hartid:U1, io_interrupts_debug:U1, io_interrupts_mtip:U1, io_interrupts_msip:U1,
     io_interrupts_meip:U1, io_interrupts_seip:U1=0, localInterrupts:Unsigned(bits=C.localIRQBits)=0,
     fetchIndex:Unsigned(bits=C.bhtIndexBits)=0, io_imem_resp_valid:U1, io_imem_resp_bits_btb_taken:U1,
     io_imem_resp_bits_btb_bridx:U1, io_imem_resp_bits_pc:Unsigned(bits=C.xLen), io_imem_resp_bits_data:U32,
@@ -58,11 +58,11 @@ pub mod Rocket<C=tiny>::[timecheck=false](
         ctx:Unsigned(bits=C.xLen), tval:Unsigned(bits=C.xLen), cause:Unsigned(bits=C.xLen), time:Unsigned(bits=C.xLen))@[],
     io_trace_time:U64@[], watchValid:Unsigned(bits=C.triggerSlots)@[], watchAction:Unsigned(bits=3*C.triggerSlots)@[], io_wfi:U1@[]
 ) {
-  const running:U1 = ~`reset`
+  const running:U1 = U1(!reset)
   wire active:Bool = nil
   wire pipeClock:Clock = nil
-  if C.clockGate { pipeClock = Clock(clock_pin=`clock`, enable=active) }
-  else { pipeClock = `clock` }
+  if C.clockGate { pipeClock = Clock(clock_pin=clock, enable=active) }
+  else { pipeClock = clock }
   reg paused:U1
   reg fetchMayRequest:U1
   reg exALU:(rxs2:U1, sel_alu2:U2, sel_alu1:U2, sel_imm:U3, alu_dw:U1, alu_fn:U6):[clock_pin=pipeClock] = nil
@@ -96,7 +96,7 @@ pub mod Rocket<C=tiny>::[timecheck=false](
   wire flushFetch:U1 = nil
   wire decodeReady:U1 = nil
   const fetchFault = (io_imem_resp_bits_xcpt_pf_inst << 2) | (io_imem_resp_bits_xcpt_gf_inst << 1) | io_imem_resp_bits_xcpt_ae_inst
-  const ibuf = IBuf<C>(clk=pipeClock, rst=`reset` != 0, kill=flushFetch, ready=decodeReady, fetchValid=io_imem_resp_valid,
+  const ibuf = IBuf<C>(clk=pipeClock, rst=reset, kill=flushFetch, ready=decodeReady, fetchValid=io_imem_resp_valid,
       fetchPC=io_imem_resp_bits_pc, fetchData=io_imem_resp_bits_data, fetchFault=fetchFault, fetchReplay=io_imem_resp_bits_replay,
       index=fetchIndex, taken=io_imem_resp_bits_btb_taken, branchSlot=io_imem_resp_bits_btb_bridx)
   wire redirectWB:U1 = nil
@@ -200,7 +200,7 @@ pub mod Rocket<C=tiny>::[timecheck=false](
   wire perfID:U18 = nil
   wire perfPipe:U11 = nil
   wire perfAdvance:U3 = nil
-  const csr = CSRFile<C>(`clock`=pipeClock, `reset`=`reset`, io_ungated_clock=`clock`, fpFlags=retireFPFlags, roccIRQ=roccIRQ, vectorCSRRead=vectorCSRRead, vectorCommit=ext.vector and vectorReady and !vectorFault,
+  const csr = CSRFile<C>(clock=pipeClock, reset=reset, io_ungated_clock=clock, fpFlags=retireFPFlags, roccIRQ=roccIRQ, vectorCSRRead=vectorCSRRead, vectorCommit=ext.vector and vectorReady and !vectorFault,
       perfID=perfID, perfPipe=perfPipe, perfAdvance=perfAdvance,
       perfMem=(l2TLBMiss << 5) | (dTLBMiss << 4) | (iTLBMiss << 3) | (dataRelease << 2) | (dataAcquire << 1) | io_imem_perf_acquire,
       io_hartid=io_hartid, io_interrupts_debug=io_interrupts_debug, io_interrupts_mtip=io_interrupts_mtip,
@@ -313,7 +313,7 @@ pub mod Rocket<C=tiny>::[timecheck=false](
   const enableFP = C.fLen > 0 and (!C.fpuClockGate or forceCoreClock or fpActive)
   if enableFP {
     (fpResult=intResult, fpStore=storeData, fpFlags=flags, outstandingFP=pending) =
-        floating.FPU<C>(clk=pipeClock, rst=`reset` != 0, inst=wbStage.instruction, commit=(wbControl.fp & retire) != 0,
+        floating.FPU<C>(clk=pipeClock, rst=reset, inst=wbStage.instruction, commit=(wbControl.fp & retire) != 0,
         x=wbStage.wdata, frm=csr.io_fcsr_rm, storeRs=exStage.instruction#[20..<25], response=fpResponse,
         tag=responseRd, loadData=io_dmem_resp_bits_data)
   }
@@ -518,7 +518,7 @@ pub mod Rocket<C=tiny>::[timecheck=false](
   acceptedDiv = divRequestReady & divideRequest
   cacheBlocked = ~io_dmem_req_ready & ~io_dmem_perf_grant & (cacheBlocked | dataRequest | io_dmem_s2_nack)
   retireProgress = wbStage.valid & ~replayWB
-  if `reset` != 0 {
+  if reset {
     fencePending = 0
     pendingWrites = 0
   } else {
@@ -535,13 +535,13 @@ pub mod Rocket<C=tiny>::[timecheck=false](
   mut runDiv = C.useMulDiv
   if C.useMulDiv and C.mulDivClockGate {
     reg inFlight:Bool:[clock_pin=pipeClock] = nil
-    if `reset` != 0 { inFlight = false }
+    if reset { inFlight = false }
     elif issueDiv and divRequestReady != 0 { inFlight = true }
     elif killDiv or (divResponseValid & divReady) != 0 { inFlight = false }
-    runDiv = issueDiv or inFlight or `reset` != 0
+    runDiv = issueDiv or inFlight or reset
   }
   if runDiv {
-    const div = arithmetic.MulDiv<C=C,DIVIDE_ONLY=C.pipelinedMul>(`clock`=pipeClock, `reset`=`reset`, io_req_valid=U1(issueDiv),
+    const div = arithmetic.MulDiv<C=C,DIVIDE_ONLY=C.pipelinedMul>(clock=pipeClock, reset=reset, io_req_valid=U1(issueDiv),
         io_req_bits_fn=exALU.alu_fn#[0..<4], io_req_bits_dw=exALU.alu_dw,
         io_req_bits_in1=ex_rs[0], io_req_bits_in2=ex_rs[1], io_req_bits_tag=exRd,
         io_kill=U1(killDiv), io_resp_ready=divReady)
@@ -567,8 +567,8 @@ pub mod Rocket<C=tiny>::[timecheck=false](
     const canDecode = csr.io_csr_stall == 0 and paused == 0
     const response = io_dmem_resp_valid != 0 or io_dmem_replay_next != 0
     const wake = (canDecode and (io_imem_resp_valid != 0 or ibuf.valid != 0)) or response or (C.roccOpcodes != 0 and roccResp) or (C.vLen != 0 and vectorResp) or csr.io_interrupt != 0
-    keepAwake = `reset` != 0 or forceCoreClock or inPipeline or pending or wake
-    active = `reset` != 0 or keepAwake or wake
+    keepAwake = reset or forceCoreClock or inPipeline or pending or wake
+    active = reset or keepAwake or wake
   } else { active = true }
   staticPrediction = csr.staticPrediction
   flushBTB = csr.flushBTB

@@ -11,7 +11,7 @@ comb responseSize(fragment:U4, size:U2) -> (result:U3) {
 }
 
 pub mod TLFragmenter<ADDR=28, EARLY_ACK=false, READ_ONLY=false>::[timecheck=false](
-    `clock`:Clock, `reset`:U1, auto_in_a_valid:U1, auto_in_a_bits_opcode:U4,
+    clock:Clock, reset:Reset, auto_in_a_valid:U1, auto_in_a_bits_opcode:U4,
     auto_in_a_bits_param:U3, auto_in_a_bits_size:U3, auto_in_a_bits_source:U5,
     auto_in_a_bits_address:Unsigned(bits=ADDR), auto_in_a_bits_mask:U4,
     auto_in_a_bits_data:U32, auto_in_a_bits_corrupt:U1, auto_in_d_ready:U1,
@@ -26,12 +26,12 @@ pub mod TLFragmenter<ADDR=28, EARLY_ACK=false, READ_ONLY=false>::[timecheck=fals
     auto_out_a_bits_data:U32@[], auto_out_a_bits_corrupt:U1@[], auto_out_d_ready:U1@[]) {
   type Header = (opcode:U4, param:U3, size:U3, source:U5, address:Unsigned(bits=ADDR), corrupt:U1)
   wire again:U1 = nil
-  const beat = Repeater<Header>(clk=`clock`, rst=`reset`, offer=auto_in_a_valid, take=auto_out_a_ready,
+  const beat = Repeater<Header>(clk=clock, rst=reset, offer=auto_in_a_valid, take=auto_out_a_ready,
       again=again, payload=(opcode=auto_in_a_bits_opcode, param=auto_in_a_bits_param, size=auto_in_a_bits_size,
       source=auto_in_a_bits_source, address=auto_in_a_bits_address, corrupt=auto_in_a_bits_corrupt))
-  reg remaining:U4 = nil
+  reg remaining:U4 = 0
   reg requestToggle:U1 = nil
-  reg responseToggle:U1 = nil
+  reg responseToggle:U1 = 0
   const span:U4 = ~(63 << beat.head.size)#[2..<6]
   const fragment:U4 = if remaining == 0 { span } else { (remaining - 1)#[0..<4] }
   const toggle = if remaining == 0 { responseToggle } else { requestToggle }
@@ -48,9 +48,9 @@ pub mod TLFragmenter<ADDR=28, EARLY_ACK=false, READ_ONLY=false>::[timecheck=fals
   auto_out_a_bits_data = auto_in_a_bits_data
   auto_out_a_bits_corrupt = beat.head.corrupt
   if remaining == 0 { requestToggle = responseToggle }
-  if `reset` != 0 { remaining = 0 } elif beat.valid != 0 and auto_out_a_ready != 0 { remaining = fragment }
+  if beat.valid != 0 and auto_out_a_ready != 0 { remaining = fragment }
 
-  reg acksLeft:U4 = nil
+  reg acksLeft:U4 = 0
   reg savedSize:U3 = nil
   const first = acksLeft == 0
   const responseFrag = auto_out_d_bits_source#[0..<4]
@@ -66,7 +66,7 @@ pub mod TLFragmenter<ADDR=28, EARLY_ACK=false, READ_ONLY=false>::[timecheck=fals
   auto_in_d_bits_data = auto_out_d_bits_data
   const accept = auto_out_d_valid != 0 and auto_out_d_ready != 0
   if accept and first { savedSize = size }
-  if `reset` != 0 { acksLeft = 0; responseToggle = 0 } elif accept {
+  if accept {
     if first { acksLeft = responseFrag; responseToggle = auto_out_d_bits_source#[4] }
     elif READ_ONLY or hasData or auto_out_d_bits_size == 2 { wrap acksLeft -= 1 }
   }
