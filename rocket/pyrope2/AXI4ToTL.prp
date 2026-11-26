@@ -1,5 +1,6 @@
-const Queue_23 = import("Queue_23.Queue_23")
-const Queue_24 = import("Queue_24.Queue_24")
+const Fifo = import("Queue.Queue")
+type ReadData = (id:U1, data:U64, resp:U2, last:U1)
+type WriteResponse = (id:U1, resp:U2)
 
 pub mod AXI4ToTL::[timecheck=false](clock:u1, reset:u1, auto_in_aw_valid:u1, auto_in_aw_bits_id:u1, auto_in_aw_bits_addr:u32, auto_in_aw_bits_len:u8, auto_in_aw_bits_size:u3, auto_in_aw_bits_burst:u2, auto_in_aw_bits_lock:u1, auto_in_aw_bits_cache:u4, auto_in_aw_bits_prot:u3, auto_in_aw_bits_qos:u4, auto_in_w_valid:u1, auto_in_w_bits_data:u64, auto_in_w_bits_strb:u8, auto_in_w_bits_last:u1, auto_in_b_ready:u1, auto_in_ar_valid:u1, auto_in_ar_bits_id:u1, auto_in_ar_bits_addr:u32, auto_in_ar_bits_len:u8, auto_in_ar_bits_size:u3, auto_in_ar_bits_burst:u2, auto_in_ar_bits_lock:u1, auto_in_ar_bits_cache:u4, auto_in_ar_bits_prot:u3, auto_in_ar_bits_qos:u4, auto_in_r_ready:u1, auto_out_a_ready:u1, auto_out_d_valid:u1, auto_out_d_bits_opcode:u4, auto_out_d_bits_param:u2, auto_out_d_bits_size:u4, auto_out_d_bits_source:u4, auto_out_d_bits_sink:u1, auto_out_d_bits_denied:u1, auto_out_d_bits_data:u64, auto_out_d_bits_corrupt:u1) -> (auto_in_aw_ready:u1@[], auto_in_w_ready:u1@[], auto_in_b_valid:u1@[], auto_in_b_bits_id:u1@[], auto_in_b_bits_resp:u2@[], auto_in_ar_ready:u1@[], auto_in_r_valid:u1@[], auto_in_r_bits_id:u1@[], auto_in_r_bits_data:u64@[], auto_in_r_bits_resp:u2@[], auto_in_r_bits_last:u1@[], auto_out_a_valid:u1@[], auto_out_a_bits_opcode:u4@[], auto_out_a_bits_size:u4@[], auto_out_a_bits_source:u4@[], auto_out_a_bits_address:u32@[], auto_out_a_bits_user_amba_prot_bufferable:u1@[], auto_out_a_bits_user_amba_prot_modifiable:u1@[], auto_out_a_bits_user_amba_prot_readalloc:u1@[], auto_out_a_bits_user_amba_prot_writealloc:u1@[], auto_out_a_bits_user_amba_prot_privileged:u1@[], auto_out_a_bits_user_amba_prot_secure:u1@[], auto_out_a_bits_user_amba_prot_fetch:u1@[], auto_out_a_bits_mask:u8@[], auto_out_a_bits_data:u64@[], auto_out_d_ready:u1@[]) {
   mut _GEN_3:u1 = 0
@@ -267,7 +268,9 @@ pub mod AXI4ToTL::[timecheck=false](clock:u1, reset:u1, auto_in_aw_valid:u1, aut
   mut _b2i_59 = if d_last_counter == 1 { 1 } else { 0 }
   mut _b2i_60 = if d_last_beats1__w1 == 0 { 1 } else { 0 }
   const d_last__w1 = (_b2i_59 | _b2i_60) & 1
-  mut nodeIn_r_deq_q = Queue_23::[name=nodeIn_r_deq_q](clock = clock, reset = reset, io_enq_valid = nodeOut_d_valid__w1 & d_hasData__w1 & 1, io_enq_bits_id = (nodeOut_d_bits_source__w1 >> 3) & 1, io_enq_bits_data = auto_out_d_bits_data, io_enq_bits_resp = d_resp__w1, io_enq_bits_last = d_last__w1, io_deq_ready = auto_in_r_ready)
+  const nodeIn_r_deq_q = Fifo<ReadData, DEPTH=1, FLOW=true>(clk=clock, rst=reset,
+      offer=nodeOut_d_valid__w1 & d_hasData__w1 & 1, take=auto_in_r_ready,
+      payload=(id=(nodeOut_d_bits_source__w1 >> 3) & 1, data=auto_out_d_bits_data, resp=d_resp__w1, last=d_last__w1))
   const nodeIn_ar_ready__w1 = nodeOut_a_ready__w1 & _mux_47 & 1
   const r_out_bits_mask__w1 = r_out_bits_a_mask__w1
   const nodeIn_aw_ready__w1 = w_out_ready__w1 & nodeIn_w_valid__w1 & 1 & auto_in_w_bits_last & 1
@@ -280,7 +283,7 @@ pub mod AXI4ToTL::[timecheck=false](clock:u1, reset:u1, auto_in_aw_valid:u1, aut
   const auto_in_b_bits_resp_0__w1 = nodeIn_b_bits_resp
   const auto_out_d_ready_0__w1 = nodeOut_d_ready
   const _d_last_T__w1 = nodeOut_d_ready & nodeOut_d_valid__w1 & 1
-  mut _mux_63:u1 = if d_hasData__w1 != 0 { nodeIn_r_deq_q.io_enq_ready & 1 } else { ok_b_ready & 1 }
+  mut _mux_63:u1 = if d_hasData__w1 != 0 { nodeIn_r_deq_q.ready & 1 } else { ok_b_ready & 1 }
   nodeOut_d_ready = _mux_63
   nodeIn_b_bits_id = q_b_bits_id
   nodeIn_b_bits_resp = q_b_bits_resp
@@ -327,22 +330,24 @@ pub mod AXI4ToTL::[timecheck=false](clock:u1, reset:u1, auto_in_aw_valid:u1, aut
       b_count_1 = (b_count_1 + 1)#[0..=2]
     }
   }
-  mut q_b_deq_q = Queue_24::[name=q_b_deq_q](clock = clock, reset = reset, io_enq_valid = nodeOut_d_valid__w1 & (~d_hasData__w1) & 1 & 1, io_enq_bits_id = (nodeOut_d_bits_source__w1 >> 3) & 1, io_enq_bits_resp = d_resp__w1, io_deq_ready = nodeIn_b_ready__w1 & b_allow__w1 & 1)
-  ok_b_ready = q_b_deq_q.io_enq_ready
-  q_b_valid = q_b_deq_q.io_deq_valid
-  q_b_bits_id = q_b_deq_q.io_deq_bits_id
-  q_b_bits_resp = q_b_deq_q.io_deq_bits_resp
+  const q_b_deq_q = Fifo<WriteResponse, DEPTH=1, FLOW=true>(clk=clock, rst=reset,
+      offer=nodeOut_d_valid__w1 & (~d_hasData__w1) & 1 & 1, take=nodeIn_b_ready__w1 & b_allow__w1 & 1,
+      payload=(id=(nodeOut_d_bits_source__w1 >> 3) & 1, resp=d_resp__w1))
+  ok_b_ready = q_b_deq_q.ready
+  q_b_valid = q_b_deq_q.valid
+  q_b_bits_id = q_b_deq_q.head.id
+  q_b_bits_resp = q_b_deq_q.head.resp
   auto_in_aw_ready = nodeIn_aw_ready__w1
   auto_in_w_ready = w_out_ready__w1 & nodeIn_aw_valid__w1 & 1
   auto_in_b_valid = auto_in_b_valid_0__w1
   auto_in_b_bits_id = auto_in_b_bits_id_0__w1
   auto_in_b_bits_resp = auto_in_b_bits_resp_0__w1
   auto_in_ar_ready = nodeIn_ar_ready__w1
-  auto_in_r_valid = nodeIn_r_deq_q.io_deq_valid
-  auto_in_r_bits_id = nodeIn_r_deq_q.io_deq_bits_id
-  auto_in_r_bits_data = nodeIn_r_deq_q.io_deq_bits_data
-  auto_in_r_bits_resp = nodeIn_r_deq_q.io_deq_bits_resp
-  auto_in_r_bits_last = nodeIn_r_deq_q.io_deq_bits_last
+  auto_in_r_valid = nodeIn_r_deq_q.valid
+  auto_in_r_bits_id = nodeIn_r_deq_q.head.id
+  auto_in_r_bits_data = nodeIn_r_deq_q.head.data
+  auto_in_r_bits_resp = nodeIn_r_deq_q.head.resp
+  auto_in_r_bits_last = nodeIn_r_deq_q.head.last
   auto_out_a_valid = nodeOut_a_valid__w1
   auto_out_a_bits_opcode = ((muxState_0__w1 & 1) << 2) | (muxState_1__w1 & 1)
   auto_out_a_bits_size = _mux_55 | _mux_56
