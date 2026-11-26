@@ -23,7 +23,7 @@ def configure_tiles(stem, source):
         return header + re.sub(r' = (mixed_cpu(?:_p(\d+))?)::\[name=\w+\]\(', connect, source)
     if re.fullmatch(r'mixed_cpu(?:_p\d+)?', stem):
         tile = 'Rocket' if ' = RocketTile::' in source else 'Boom'
-        preset = 'tiny' if tile == 'Rocket' else 'small'
+        preset = 'rv32' if tile == 'Rocket' else 'small'
         header = f'const configs = import("../../{tile.lower()}/pyrope2/{tile}Config")\ncomptime const defaultTile = configs.{preset}\n'
         # The generated endpoint already carries its ID and network parameters.
         source = source.replace('>::[timecheck=false]', ', C=defaultTile>::[timecheck=false]', 1)

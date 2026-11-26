@@ -10,10 +10,10 @@ measurement (Chisel cold frontend 13.2 s, `asplos27/experiments/frontend_cost_ro
 Choose the default in one place, at the end of `pyrope2/RocketConfig.prp`:
 
 ```pyrope
-pub const selected = tiny
+pub const selected = rv32
 ```
 
-Use `tiny` for the RV32 scratchpad tile, `tinyNoMulDiv` for RV32 without multiply/divide, or `rv64` for a 64-bit tile with multiplier early-out. The `earlyMul` preset enables early-out on RV32. A bare `RocketTile` and standalone blocks with a default configuration use `selected`. The tile forwards the same record to its children.
+Use `rv32` for the RV32 scratchpad tile, `rv32NoMulDiv` for RV32 without multiply/divide, or `rv64` for a 64-bit tile with multiplier early-out. The `earlyMul` preset enables early-out on RV32. A bare `RocketTile` and standalone blocks with a default configuration use `selected`. The tile forwards the same record to its children.
 
 To choose per instance, bind the profile at the call site. For example, `RocketTile<C=configs.rv64>(...)` selects RV64 for one tile. For a custom profile, use the factory and specify only the options you want to change:
 
@@ -25,7 +25,7 @@ comptime const profile = configs.params(xLen=64, fastLoadByte=true, btbEntries=1
 
 Instantiate it as `RocketTile<profile>(...)`. Consumers that name a profile explicitly keep that choice when `selected` changes.
 
-| Configuration group | Factory parameters and Tiny defaults |
+| Configuration group | Factory parameters and RV32 defaults |
 | --- | --- |
 | Base ISA | `xLen=32`, `useRVE=false`, `useCompressed=true`, `useAddiForMv=false`, `useAtomics=true`, `useAtomicsOnlyForIO=false` |
 | Multiply and divide | `useMulDiv=true`, `mulUnroll=8`, `mulEarlyOut=false`, `divUnroll=1`, `divEarlyOut=false`, `divEarlyOutGranularity=1`, `mulDivClockGate=false` |
@@ -54,7 +54,7 @@ The four optional integer instruction groups follow Chipyard's Rocket decode tab
 
 The instruction cache defaults to 64 sets and one way. The instruction and data line sizes default to 64 bytes. Each can be a power of two from two bus beats to 4096 bytes. The set and way counts are powers of two, and associative configurations rotate the replacement way within each set.
 
-Both profiles use Tiny's 32-bit physical memory map. The scratchpad starts at `0x80000000`, with `dcacheBlockBytes` bytes per set and a default capacity of 16 KiB. Choose a power of two for `dcacheSets`. Fetch and data access use the same map and check PMP permissions independently. The bare tile has no page-table walker instance. The TileLink master beat is `max(xLen, fLen)` bits, including 64-bit beats on RV32D. The scratchpad slave port transfers four bytes per beat on either profile. The compressed decoder follows the local Chipyard Rocket implementation. Set `useAddiForMv=true` to expand C.MV into ADDI with a zero immediate. The default expansion uses ADD with x0. The archived Tiny RTL also decoded some Zcb and Zcmop encodings. Set `btbEntries` to a positive entry count to instantiate a direct-mapped target buffer with one direction bit per entry. Zero selects sequential fetch until the core redirects. With `useRVE=true`, the register file stores x1 through x15 and instructions that use x16 through x31 trap. The basic counters support 64-bit writes on RV64 and low/high CSR pairs on RV32.
+The RV32 and RV64 profiles share the 32-bit physical memory map from Rocket Chip’s `TinyConfig`. The scratchpad starts at `0x80000000`, with `dcacheBlockBytes` bytes per set and a default capacity of 16 KiB. Choose a power of two for `dcacheSets`. Fetch and data access use the same map and check PMP permissions independently. The bare tile has no page-table walker instance. The TileLink master beat is `max(xLen, fLen)` bits, including 64-bit beats on RV32D. The scratchpad slave port transfers four bytes per beat on either profile. The compressed decoder follows the local Chipyard Rocket implementation. Set `useAddiForMv=true` to expand C.MV into ADDI with a zero immediate. The default expansion uses ADD with x0. The archived Tiny RTL also decoded some Zcb and Zcmop encodings. Set `btbEntries` to a positive entry count to instantiate a direct-mapped target buffer with one direction bit per entry. Zero selects sequential fetch until the core redirects. With `useRVE=true`, the register file stores x1 through x15 and instructions that use x16 through x31 trap. The basic counters support 64-bit writes on RV64 and low/high CSR pairs on RV32.
 
 With `haveBasicCounters=true`, set `nPerfCounters` to allocate 40-bit counters starting at `mhpmcounter3`. Write `mhpmeventN` to select events. Bits 1–0 select retired instructions (0), pipeline stalls and redirects (1), or cache and TLB traffic (2). The event mask starts at bit 8. Multiple selected events increment a counter at most once per cycle. For example, `0x600` counts retired integer loads and stores, and `0x202` counts data-cache A-channel transfers. The retired group includes separate multiply/divide and FP instruction classes when those units are present. The cache group orders its bits as I-cache acquisition, D-cache acquisition, D-cache release, I-TLB miss, D-TLB miss, and L2 TLB miss. Selector `0x2002` counts accepted L2 lookups that miss and start a walk. It reads zero with the L2 disabled.
 
@@ -313,7 +313,7 @@ The two packages keep the original module filenames. An import such as
 Use the package-aware LiveHD compiler when building the combined design.
 
 The maintained tile also accepts a compile-time configuration record.
-`RocketConfig.tiny` preserves the generated RV32 multiplier, and
+`RocketConfig.rv32` preserves the generated RV32 multiplier, and
 `RocketConfig.earlyMul` enables the upstream `mulEarlyOut` option.
 The [multiplier test](sim/mul_profiles.prp) exercises both with two
 independent early-out instances.
