@@ -148,7 +148,11 @@ lhd sim sim/cache_lanes.prp --workdir /tmp/rocket-byte-lanes
 
 The boot test feeds a complete instruction-cache line over TileLink and checks retirement after dependent scratchpad stores, loads and branches in four configurations. The direct RV64 pipeline test also checks compressed loads, stores, word arithmetic and the architectural XLEN in `misa`. The LFSR test below measures throughput separately. The historical equivalence results describe the earlier fixed-width implementation.
 
-## Layout and status (2026-11-09)
+## Source layout
+
+`rocket/pyrope2/` contains the configurable `RocketTile` and two modules exercised by the TileLink buffer tests (`Queue` and `TLBuffer`). The [Chipyard Pyrope directory](../chipyard/pyrope/) holds the surrounding SoC blocks and older fixed-configuration tile modules, and the standalone LFSR with its [full-period test](../chipyard/pyrope/tests/lfsr_tb.prp). Some of those blocks import shared modules from `rocket/pyrope2/`. Rocket simulation drivers live in `rocket/sim/`.
+
+## Historical layout and status (2026-11-09)
 
 | Dir | Contents | Status |
 |---|---|---|

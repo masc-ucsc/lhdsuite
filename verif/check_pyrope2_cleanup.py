@@ -207,11 +207,16 @@ def main():
         ports.extend((clock, "input", 1, False, True) for clock in dut["clocks"])
         return sorted(ports)
 
+    def implementation(core, entry):
+        # The Rocket RTL and emitted Pyrope remain the references for this standalone leaf.
+        directory = ROOT / ("chipyard/pyrope" if core == "rocket" else f"{core}/pyrope2")
+        return directory / (entry + ".prp")
+
     def check(core, entry, config=None, label=None):
         top = "MaxPeriodFibonacciLFSR" if entry.endswith("LFSR2") else "RobEnqPtrWrapper" if entry.endswith("_N32") else entry
         label = label or (core + "/" + entry).replace("/", "_")
         base = ROOT / core
-        impl = base / "pyrope2" / (entry + ".prp")
+        impl = implementation(core, entry)
         checked = base / "pyrope" / (top + ".prp")
         target = work / label
         target.mkdir(exist_ok=True)
@@ -309,7 +314,7 @@ def main():
                 tb = base / "sim/matched_filter_tb.prp"
                 sim_args = ["--arg", "cycles=5000000"]
             elif core == "rocket":
-                tb = ROOT / "verif/pyrope2/lfsr_tb.prp"
+                tb = (impl.parent / "tests/lfsr_tb.prp").resolve(strict=True)
             elif top.startswith("SnapshotGenerator"):
                 tb = ROOT / "verif/pyrope2" / (top + "_tb.prp")
             elif top == "RobEnqPtrWrapper":
@@ -323,7 +328,8 @@ def main():
     skipped = set(args.skip.split(","))
 
     def selected(core, entry):
-        return entry not in skipped and args.only in core + "/pyrope2/" + entry
+        current = implementation(core, entry).relative_to(ROOT).as_posix()
+        return entry not in skipped and (args.only in current or args.only in f"{core}/pyrope2/{entry}")
 
     for core, entries in ENTRIES.items():
         for entry in entries:
