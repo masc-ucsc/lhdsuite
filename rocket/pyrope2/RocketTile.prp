@@ -99,7 +99,7 @@ pub mod RocketTile<C=tiny>::[timecheck=false](`clock`:Clock, `reset`:U1, auto_bu
   wire leaf:U28 = nil
   wire walkError:Bool = nil
   wire walkData:Unsigned(bits=C.xLen) = nil
-  mut dcache = DCache<W=C.dLen, ATOMICS=C.useAtomics, IO_ONLY=C.useAtomicsOnlyForIO, SETS=C.dcacheSets, SCRATCH=C.useDataScratchpad, WAYS=C.dcacheWays>(`clock` = `clock`, `reset` = `reset`, auto_out_a_ready = tlMasterXbar.auto_in_0_a_ready, auto_out_d_valid = tlMasterXbar.auto_in_0_d_valid, auto_out_d_bits_opcode = tlMasterXbar.auto_in_0_d_bits_opcode, auto_out_d_bits_size = tlMasterXbar.auto_in_0_d_bits_size, auto_out_d_bits_corrupt=tlMasterXbar.auto_in_0_d_bits_corrupt, auto_out_d_bits_denied = tlMasterXbar.auto_in_0_d_bits_denied, auto_out_d_bits_data = tlMasterXbar.auto_in_0_d_bits_data, memAReady=memAReady, memBValid=memBValid, memBAddress=memBAddress, memBParam=memBParam,
+  mut dcache = DCache<W=C.dLen, ATOMICS=C.useAtomics, IO_ONLY=C.useAtomicsOnlyForIO, CFLUSH=C.haveCFlush, SETS=C.dcacheSets, SCRATCH=C.useDataScratchpad, WAYS=C.dcacheWays>(`clock` = `clock`, `reset` = `reset`, auto_out_a_ready = tlMasterXbar.auto_in_0_a_ready, auto_out_d_valid = tlMasterXbar.auto_in_0_d_valid, auto_out_d_bits_opcode = tlMasterXbar.auto_in_0_d_bits_opcode, auto_out_d_bits_size = tlMasterXbar.auto_in_0_d_bits_size, auto_out_d_bits_corrupt=tlMasterXbar.auto_in_0_d_bits_corrupt, auto_out_d_bits_denied = tlMasterXbar.auto_in_0_d_bits_denied, auto_out_d_bits_data = tlMasterXbar.auto_in_0_d_bits_data, memAReady=memAReady, memBValid=memBValid, memBAddress=memBAddress, memBParam=memBParam,
     memBSource=memBSource, memCReady=memCReady, memDValid=memDValid, memDOpcode=memDOpcode,
     memDParam=memDParam, memDSource=memDSource, memDSink=memDSink, memDData=memDData,
     memDDenied=memDDenied, memDCorrupt=memDCorrupt, memEReady=memEReady,
@@ -222,10 +222,12 @@ pub mod RocketTile<C=tiny>::[timecheck=false](`clock`:Clock, `reset`:U1, auto_bu
     wire dataReady:Bool = nil
     wire dataDone:Bool = nil
     const command = cacheCommand(cmd=_core_io_dmem_req_bits_cmd)
+    const flushCache = C.haveCFlush and _core_io_dmem_req_bits_cmd == 5
+    const whole = flushCache and _core_io_dmem_req_bits_size#[0] == 0
     const t = vm.port<C=C, FETCH=false>(clk=`clock`, rst=`reset` != 0,
-        request=_core_io_dmem_req_valid != 0, accepted=_dcacheArb_io_mem_req_valid != 0 and _dcacheArb_io_mem_req_bits_phys == 0 and dcache.io_cpu_req_ready != 0,
+        request=_core_io_dmem_req_valid != 0 and !whole, accepted=!whole and _dcacheArb_io_mem_req_valid != 0 and _dcacheArb_io_mem_req_bits_phys == 0 and dcache.io_cpu_req_ready != 0,
         va=_core_io_dmem_req_bits_addr, satp=satp,
-        privilege=dataPrivilege, store=command.write != 0, sum=sum, mxr=mxr, flush=flush,
+        privilege=dataPrivilege, store=command.write != 0 or flushCache, sum=sum, mxr=mxr, flush=flush,
         grant=dataGrant, leaf=leaf, readReady=dataReady, readDone=dataDone, readError=walkError, readData=walkData)
     if C.nL2TLBEntries > 0 {
       const l2 = vm.leaves<C>(clk=`clock`, rst=`reset` != 0, flush=flush,
@@ -248,8 +250,8 @@ pub mod RocketTile<C=tiny>::[timecheck=false](`clock`:Clock, `reset`:U1, auto_bu
     walkRead = shared.read
     walkAddress = shared.address
     dataTLBMiss = t.miss
-    readyForCPU = _core_io_dmem_req_valid == 0 or t.resolved
-    cpuAddress = t.address
+    readyForCPU = _core_io_dmem_req_valid == 0 or whole or t.resolved
+    cpuAddress = if whole { 0 } else { t.address }
     translatedPF = t.pf and _dcacheArb_io_mem_req_bits_phys == 0
     translatedAE = t.ae and _dcacheArb_io_mem_req_bits_phys == 0
   } else {

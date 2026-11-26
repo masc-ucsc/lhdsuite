@@ -1,0 +1,86 @@
+const config = import("../pyrope2/RocketConfig")
+const decode = import("../pyrope2/IDecode.IDecode")
+const image = import("BootROM.Image")
+comptime const narrow = config.params(useVM=true, useDataScratchpad=false, haveCFlush=true, dcacheSets=2, dcacheWays=2)
+comptime const wide = config.params(xLen=64, useVM=true, useDataScratchpad=false, haveCFlush=true, dcacheSets=2, dcacheWays=2)
+comptime const large = config.params(useVM=true, useDataScratchpad=false, haveCFlush=true, dcacheSets=128)
+
+mod profile<C>(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
+  // Both dirty lines map to the same set. A line flush must preserve its
+  // neighbor; discard must restore the last value actually written back.
+  const program:[32]U32 = (
+    0x00100413, 0x01f41413, // s0 = 0x80000000
+    0x00700293, 0x00d00313, // t0 = 7, t1 = 13
+    0x00542023, 0x08542023, // sw t0,0(s0); sw t0,128(s0)
+    0x00340493, 0xfc048073, // s1 = s0+3; cflush.d.l1 s1
+    0x00642023, 0x08642023, // overwrite both with 13
+    0xfc200073,             // cdiscard.d.l1 x0 (all)
+    0x00042383, 0x02539e63, // lw t2,0(s0); bne t2,t0,fail
+    0x08042383, 0x02039a63, // lw t2,128(s0); bnez t2,fail
+    0x00642023, 0x08642023, // overwrite both with 13
+    0xfc000073,             // cflush.d.l1 x0 (all)
+    0x00542023, 0x08542023, // overwrite both with 7
+    0xfc248073,             // cdiscard.d.l1 s1 (only the first)
+    0x00042383, 0x00639a63, // lw t2,0(s0); bne t2,t1,fail
+    0x08042383, 0x00539663, // lw t2,128(s0); bne t2,t0,fail
+    0x0000006f, 0, 0x00100073, 0, 0, 0, 0
+  )
+  const tile = image<C=C, WORDS=32>(clk=clk, rst=rst, program=program, successPC=0x100a4)
+  done = tile.success and tile.memoryChecked
+  bad = tile.trap != 0 or tile.badFetch
+}
+
+// MPRV makes data accesses use S-mode translation. The root page table is
+// empty. The all-lines form must retire, then rs1=t2 (whose value is zero)
+// must take a store page fault on the line form.
+mod permissions<C>(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
+  const program:[16]U32 = (
+    0xfff00293, 0x3b029073, // pmpaddr0 = all ones
+    0x00f00293, 0x3a029073, // pmpcfg0 = TOR RWX
+    0x000802b7,             // t0 = root page number 0x80000
+    0x00100313,
+    if C.xLen == 64 { 0x03f31313 } else { 0x01f31313 }, // Sv39 or Sv32
+    0x0062e2b3, 0x18029073, // satp = mode | t0
+    0x000212b7, 0x80028293, // t0 = MPRV | MPP.S
+    0x30029073, 0x00000393, // csrw mstatus,t0; li t2,0
+    0xfc000073, 0xfc038073, // flush all, then flush the unmapped line at zero
+    0x00100073
+  )
+  const tile = image<C=C, WORDS=16>(clk=clk, rst=rst, program=program, successPC=0x10074)
+  reg wholeRetired:Bool = false
+  if tile.success { wholeRetired = true }
+  done = wholeRetired and tile.trap != 0 and tile.tracePC == 0x10078 and tile.cause == 15 and tile.trapValue == 0
+  reg finished:Bool = false
+  if done { finished = true }
+  bad = !finished and !done and (tile.trap != 0 or tile.badFetch)
+}
+
+pub mod cache_flush(clk:Clock, rst:Reset) -> (rv32:Bool@[], rv64:Bool@[], faults:U2@[], bad:Bool@[]) {
+  const a = profile<narrow>(clk=clk, rst=rst)
+  const b = profile<wide>(clk=clk, rst=rst)
+  const pa = permissions<narrow>(clk=clk, rst=rst)
+  const pb = permissions<wide>(clk=clk, rst=rst)
+  faults = (U1(pb.done) << 1) | U1(pa.done)
+  rv32 = a.done
+  rv64 = b.done
+  bad = a.bad or b.bad or pa.bad or pb.bad or decode<config.tiny>(inst=0xfc000073).legal != 0 or
+      decode<large>(inst=0xfc048073).legal != 0 or decode<large>(inst=0xfc200073).legal == 0
+}
+test cache_flush.run {
+  mut d = cache_flush
+  mut a = false
+  mut b = false
+  mut seen:U2 = 0
+  tick 2000 {
+    d.rst = clock < 4
+    step
+    if clock >= 4 {
+      assert(!d.bad, "cache flush trapped or decoded outside its configured geometry")
+      if d.rv32 { a = true }
+      if d.rv64 { b = true }
+      seen |= d.faults
+      if a and b and seen == 3 { break }
+    }
+  }
+  assert(a and b and seen == 3, "RV32 and RV64 preserved dirty data on flush and dropped it on discard")
+}

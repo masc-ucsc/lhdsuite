@@ -37,7 +37,9 @@ pub comb IDecode<C>(inst:U32) -> (legal:U1, branch:U1, jal:U1, jalr:U1,
     == 0x30500073 { C.haveCease } else { false }
   }
   const sfence = C.useVM and (inst & 0xfe007fff) == 0x12000073
-  const system = sfence or machineSystem or (C.useSupervisor and inst == 0x10200073)
+  const lineFlush = !C.useVM or C.dcacheSets * 64 <= 4096
+  const flush = C.haveCFlush and (inst & 0xffd07fff) == 0xfc000073 and (lineFlush or inst#[15..<20] == 0)
+  const system = flush or sfence or machineSystem or (C.useSupervisor and inst == 0x10200073)
   mut extFn:U6 = 0
   mut unaryImm = false
   mut fullWidth = false
@@ -69,13 +71,13 @@ pub comb IDecode<C>(inst:U32) -> (legal:U1, branch:U1, jal:U1, jalr:U1,
   jal = U1(jump)
   jalr = U1(indirect)
   branch = U1(cond)
-  rxs1 = U1(fpLoad or fpStore or fromX or sfence or opReg or opImm or load or store or atomic or indirect or cond or (csrOp and funct3 < 4))
+  rxs1 = U1(fpLoad or fpStore or fromX or flush or sfence or opReg or opImm or load or store or atomic or indirect or cond or (csrOp and funct3 < 4))
   rxs2 = U1(sfence or (opReg and !unaryImm) or store or atomic or cond)
   wxd = U1(toX or opReg or opImm or load or atomic or jump or indirect or lui or auipc or csrOp)
   mul = U1(mulDiv and C.pipelinedMul and funct3 < 4)
   div = U1(mulDiv) & ~mul
   sel_alu1 = if jump or auipc { 2 } else { rxs1 }
-  sel_alu2 = if (opReg and !unaryImm) or cond { 2 } elif jump { 1 } elif fromX or atomic or (csrOp and funct3 < 4) { 0 } else { 3 }
+  sel_alu2 = if (opReg and !unaryImm) or cond { 2 } elif jump { 1 } elif flush or fromX or atomic or (csrOp and funct3 < 4) { 0 } else { 3 }
   sel_imm = if lui or auipc { 2 } elif cond { 1 } elif jump { 3 } elif fpStore or store { 0 } elif csrOp { 5 } else { 4 }
   alu_dw = U1(!wordOp or fullWidth)
   alu_fn = 0
@@ -91,9 +93,9 @@ pub comb IDecode<C>(inst:U32) -> (legal:U1, branch:U1, jal:U1, jalr:U1,
       else { funct3 }
     }
   }
-  mem = U1(fpLoad or fpStore or load or store or atomic)
+  mem = U1(flush or fpLoad or fpStore or load or store or atomic)
   amo = U1(atomic)
-  mem_cmd = if fpStore or store { 1 } elif atomic {
+  mem_cmd = if flush { 5 } elif fpStore or store { 1 } elif atomic {
     match atomOp {
       == 0 { 8 } == 1 { 4 } == 2 { 6 } == 3 { 7 } == 4 { 9 } == 8 { 10 }
       == 12 { 11 } == 16 { 12 } == 20 { 13 } == 24 { 14 } else { 15 }

@@ -23,7 +23,7 @@ Instantiate the tile with `RocketTile<profile>(...)`. The named profiles are `ti
 | Base ISA | `xLen=32`, `useRVE=false`, `useCompressed=true`, `useAddiForMv=false`, `useAtomics=true`, `useAtomicsOnlyForIO=false` |
 | Multiply and divide | `useMulDiv=true`, `mulUnroll=8`, `mulEarlyOut=false`, `divUnroll=1`, `divEarlyOut=false`, `divEarlyOutGranularity=1`, `mulDivClockGate=false` |
 | Clock gating | `clockGate=false` controls the core pipeline and instruction frontend. |
-| Nonstandard instructions | `haveCease=true` enables Rocket’s CEASE instruction, which halts retirement until reset. |
+| Nonstandard instructions | `haveCease=true` enables CEASE, which halts retirement until reset. `haveCFlush=false` controls coherent D-cache flush and discard. |
 | Optional integer instructions | `useConditionalZero=false`, `useZba=false`, `useZbb=false`, `useZbs=false` |
 | Fetch and load bypass | `btbEntries=0`, `icacheSets=64`, `icacheWays=1`, `fastLoadWord=true`, `fastLoadByte=false` |
 | Return address stack | `nRAS=0` |
@@ -60,6 +60,8 @@ With a target buffer enabled, set `nRAS` to the number of return addresses to re
 Set `useAtomicsOnlyForIO=true` with `useAtomics=true` to keep MISA.A and send arithmetic and logical AMOs to capable uncached TileLink devices. The local scratchpad and coherent RAM raise a store access fault for AMOs. LR raises a load access fault and SC raises a store access fault in every region. The scratchpad slave accepts Get and Put transactions in this profile. Setting `useAtomics=false` disables the ISA extension in either configuration.
 
 Set `useDataScratchpad=false` to instantiate the blocking coherent DCache on RV32 or RV64. The cache covers physical addresses `0x80000000` through `0xffffffff`. Choose powers of two for `dcacheSets` and `dcacheWays`. The tile exposes the cache's five TileLink channels on the `memA` through `memE` ports. A carries AcquireBlock with every byte enabled. A and C use 64-byte lines. D must return the request's source ID. The existing master port still carries instruction fetches and uncached device accesses. The coherent profile omits the scratchpad slave adapter. A manager supplies backing memory and permission grants. The directed tests use one tile.
+
+Set `haveCFlush=true` with `useDataScratchpad=false` to enable Rocket's machine-mode `CFLUSH_D_L1` and `CDISCARD_D_L1` instructions. Both invalidate cache lines. Flush writes dirty data back and discard drops it. Use `rs1=x0` for the whole cache or another register for one address. With virtual memory enabled, line operations require `dcacheSets * 64 <= 4096` and store permission on the address. Run `lhd sim sim/cache_flush.prp` to exercise both widths.
 
 Set `enableTraceCoreIngress=true` to expose the single-retire processor trace record on `RocketTile.ingress`. Sample `iaddr`, `itype` and `ilastsize` when `iretire` is set. The event type is 0 for an ordinary instruction, 1 for an exception, 2 for an interrupt, 4 or 5 for an untaken or taken conditional branch, 13 for a trap return, 14 for an indirect jump and 15 for a direct jump. A full-width instruction sets `ilastsize`; a compressed instruction clears it. The record also carries privilege, ASID, trap value, cause and the low XLEN bits of the cycle counter. The default configuration drives the record to zero and omits the writeback trace register.
 
