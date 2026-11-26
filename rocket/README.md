@@ -7,16 +7,23 @@ measurement (Chisel cold frontend 13.2 s, `asplos27/experiments/frontend_cost_ro
 
 ## Configuring the Pyrope tile
 
-`pyrope2/RocketTile.prp` defaults to the RV32 Tiny scratchpad tile. Pass a compile-time record to the same module for RV64. The configuration factory supplies the defaults for omitted fields.
+Choose the default in one place, at the end of `pyrope2/RocketConfig.prp`:
+
+```pyrope
+pub const selected = tiny
+```
+
+Use `tiny` for the RV32 scratchpad tile, `tinyNoMulDiv` for RV32 without multiply/divide, or `rv64` for a 64-bit tile with multiplier early-out. The `earlyMul` preset enables early-out on RV32. A bare `RocketTile` and standalone blocks with a default configuration use `selected`. The tile forwards the same record to its children.
+
+To choose per instance, bind the profile at the call site. For example, `RocketTile<C=configs.rv64>(...)` selects RV64 for one tile. For a custom profile, use the factory and specify only the options you want to change:
 
 ```pyrope
 const configs = import("RocketConfig")
 const RocketTile = import("RocketTile.RocketTile")
-comptime const profile = configs.params(xLen=64, useCompressed=true, mulUnroll=8, fastLoadByte=true, btbEntries=16)
-// Inside the enclosing module, connect its TileLink, clock, reset and interrupt ports.
+comptime const profile = configs.params(xLen=64, fastLoadByte=true, btbEntries=16)
 ```
 
-Instantiate the tile with `RocketTile<profile>(...)`. The named profiles are `tiny`, `rv64`, `earlyMul` and `tinyNoMulDiv`.
+Instantiate it as `RocketTile<profile>(...)`. Consumers that name a profile explicitly keep that choice when `selected` changes.
 
 | Configuration group | Factory parameters and Tiny defaults |
 | --- | --- |
