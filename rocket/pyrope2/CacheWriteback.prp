@@ -3,16 +3,16 @@ const metadata = import("ClientMetadata")
 // One C-channel message owns the line and SRAM read port through its last beat.
 // The SRAM returns a granted read on the next cycle and holds its output until
 // another read. A following probe can run while a voluntary release awaits D.
-pub mod CacheWriteback<W=32, SOURCE=1>(clk:Clock, rst:Reset,
+pub mod CacheWriteback<W=32, SOURCE=1, BLOCK=64>(clk:Clock, rst:Reset,
     probeValid:Bool, probeAddress:U32, probeCap:U2, probeSource:U5,
     releaseValid:Bool, releaseAddress:U32, lineState:U2,
     readReady:Bool, readData:Unsigned(bits=W), readCorrupt:Bool=false, cReady:Bool, ackValid:Bool, discard:Bool=false)
     -> (probeReady:Bool@[], releaseReady:Bool@[], lineAddress:U32@[],
-        readValid:Bool@[], readBeat:Unsigned(bits=std.clog2(512/W))@[],
+        readValid:Bool@[], readBeat:Unsigned(bits=std.clog2(BLOCK*8/W))@[],
         cValid:Bool@[], cOpcode:U3@[], cParam:U3@[], cSource:U5@[], cData:Unsigned(bits=W)@[], cCorrupt:Bool@[],
         update:Bool@[], newState:U2@[], ackReady:Bool@[], releaseDone:Bool@[]) {
   cassert(W == 32 or W == 64)
-  comptime const beats = 512 / W
+  comptime const beats = BLOCK * 8 / W
   reg active:Bool = false
   reg voluntary:Bool = nil
   reg address:U32 = nil
@@ -29,7 +29,7 @@ pub mod CacheWriteback<W=32, SOURCE=1>(clk:Clock, rst:Reset,
   const probe = probeValid and probeReady
   const release = releaseValid and releaseReady
   const selected = if probeValid { probeAddress } else { releaseAddress }
-  lineAddress = if active { address } else { (selected >> 6) << 6 }
+  lineAddress = if active { address } else { (selected >> std.clog2(BLOCK)) << std.clog2(BLOCK) }
   const transition = metadata.shrink(state=lineState, cap=(if probe { probeCap } else { 2 }))
   const emptyRelease = release and lineState == metadata.invalid
   if probe or (release and !emptyRelease) {

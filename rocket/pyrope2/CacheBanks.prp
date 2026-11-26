@@ -1,0 +1,113 @@
+const cache = import("CoherentDataCache.CoherentDataCache")
+
+// Hold the owner across backpressure and, on C, across all beats of a message.
+mod arb<N>(clk:Clock, rst:Reset, offers:Unsigned(bits=N), ready:Bool, last:Unsigned(bits=N)) -> (owner:U5@[]) {
+  reg locked:Bool = false
+  reg held:U5 = nil
+  reg next:U5 = 0
+  mut selected:U5 = next
+  for offset in 0..<N {
+    const port = (next + N - 1 - offset) % N
+    if offers#[port] != 0 { selected = port }
+  }
+  owner = if locked { held } else { selected }
+  if offers#[owner] != 0 {
+    held = owner
+    locked = !(ready and last#[owner] != 0)
+    if ready and last#[owner] != 0 { next = ((owner+1) % N)#[0..<5] }
+  }
+  if rst { locked = false; next = 0 }
+}
+
+// Each bank owns disjoint sets, one miss slot and a unique TileLink source.
+// Independent loads may complete out of order. Stores, atomics and flushes
+// drain earlier operations and exclude younger ones until they complete.
+pub mod CacheBanks<N=2, W=32, SETS=64, WAYS=4, SOURCE=1, SINK_BITS=4, ATOMICS=true, LRSC_CYCLES=80, CFLUSH=false, BLOCK=64>(clk:Clock, rst:Reset,
+    request:Bool, address:U32, command:U5, mask:Unsigned(bits=W/8), data:Unsigned(bits=W), responseReady:Bool,
+    aReady:Bool, bValid:Bool, bAddress:U32, bParam:U2, bSource:U5, cReady:Bool,
+    dValid:Bool, dOpcode:U3, dParam:U2, dSource:U5, dSink:Unsigned(bits=SINK_BITS),
+    dData:Unsigned(bits=W), dDenied:Bool, dCorrupt:Bool, eReady:Bool, flushSize:U2=0)
+    -> (needsClock:Bool@[], ready:Bool@[], response:Bool@[], busy:Bool@[], issueBank:U5@[], returnBank:U5@[], result:Unsigned(bits=W)@[], error:Bool@[],
+        aValid:Bool@[], aAddress:U32@[], aParam:U2@[], aSource:U5@[], bReady:Bool@[],
+        cLast:Bool@[], cValid:Bool@[], cAddress:U32@[], cOpcode:U3@[], cParam:U3@[], cSource:U5@[],
+        cData:Unsigned(bits=W)@[], cCorrupt:Bool@[], dReady:Bool@[], eValid:Bool@[], eSink:Unsigned(bits=SINK_BITS)@[]) {
+  cassert(N > 0 and N <= SETS and N + SOURCE <= 32)
+  const route = ((address / BLOCK) % SETS) % N
+  const probe = ((bAddress / BLOCK) % SETS) % N
+  reg occupied:Unsigned(bits=N) = 0
+  reg serial:Bool = false
+  reg flushing:Bool = false
+  const whole = CFLUSH and command == 5 and flushSize#[0] == 0
+  busy = occupied != 0
+  wire available:Unsigned(bits=N) = nil
+  wire responses:Unsigned(bits=N) = nil
+  wire aOffers:Unsigned(bits=N) = nil
+  wire cOffers:Unsigned(bits=N) = nil
+  wire eOffers:Unsigned(bits=N) = nil
+  wire ends:Unsigned(bits=N) = nil
+  comptime const allPorts = (1 << N)-1
+  const a = arb<N>(clk=clk,rst=rst,offers=aOffers,ready=aReady,last=allPorts)
+  const c = arb<N>(clk=clk,rst=rst,offers=cOffers,ready=cReady,last=ends)
+  const e = arb<N>(clk=clk,rst=rst,offers=eOffers,ready=eReady,last=allPorts)
+  const returned = arb<N>(clk=clk,rst=rst,offers=(if flushing { 0 } else { responses }),ready=responseReady,last=allPorts)
+  issueBank = if whole { 0 } else { route#[0..<5] }
+  returnBank = if flushing { 0 } else { returned.owner }
+  ready = !rst and !serial and (command == 0 or !busy) and
+      (if whole { available == allPorts } else { available#[route] != 0 })
+  const issue = request and ready
+  response = if flushing { responses == allPorts } else { responses != 0 }
+  const pop = response and responseReady
+  if issue { serial = command != 0; flushing = whole }
+  if pop and serial { serial = false; flushing = false }
+  aAddress = 0; aParam = 0; aSource = 0
+  cAddress = 0; cOpcode = 0; cParam = 0; cSource = 0; cData = 0; cCorrupt = false
+  bReady = false; dReady = false; eSink = 0; result = 0; error = false
+  mut availableBits:Unsigned(bits=N) = 0
+  mut responsesBits:Unsigned(bits=N) = 0
+  mut aOffersBits:Unsigned(bits=N) = 0
+  mut cOffersBits:Unsigned(bits=N) = 0
+  mut eOffersBits:Unsigned(bits=N) = 0
+  mut endsBits:Unsigned(bits=N) = 0
+  needsClock = false
+  for i in 0..<N {
+    const push = issue and (whole or route == i)
+    const take = pop and (flushing or returned.owner == i)
+    const port = cache<W=W, SETS=((SETS+N-1-i)/N), WAYS=WAYS, SOURCE=(SOURCE+i), SINK_BITS=SINK_BITS,
+        ATOMICS=ATOMICS, LRSC_CYCLES=LRSC_CYCLES, CFLUSH=CFLUSH, BLOCK=BLOCK, BANKS=N, TOTAL_SETS=SETS>(
+        clk=clk,rst=rst,request=push,address=address,command=command,mask=mask,data=data,flushSize=flushSize,
+        dropReservation=issue and route != i, responseReady=take,aReady=aReady and a.owner == i,
+        bValid=bValid and probe == i,bAddress=bAddress,bParam=bParam,bSource=bSource,cReady=cReady and c.owner == i,
+        dValid=dValid and dSource == SOURCE+i,dOpcode=dOpcode,dParam=dParam,dSource=dSource,dSink=dSink,
+        dData=dData,dDenied=dDenied,dCorrupt=dCorrupt,eReady=eReady and e.owner == i)
+    availableBits#[i] = U1(port.ready)
+    responsesBits#[i] = U1(port.response)
+    aOffersBits#[i] = U1(port.aValid)
+    cOffersBits#[i] = U1(port.cValid)
+    eOffersBits#[i] = U1(port.eValid)
+    endsBits#[i] = U1(port.cLast)
+    if port.needsClock { needsClock = true }
+    if push { occupied#[i] = 1 }
+    if take { occupied#[i] = 0 }
+    if probe == i { bReady = port.bReady }
+    if dSource == SOURCE+i { dReady = port.dReady }
+    if a.owner == i { aAddress = port.aAddress; aParam = port.aParam; aSource = port.aSource }
+    if c.owner == i {
+      cAddress = port.cAddress; cOpcode = port.cOpcode; cParam = port.cParam
+      cSource = port.cSource; cData = port.cData; cCorrupt = port.cCorrupt
+    }
+    if e.owner == i { eSink = port.eSink }
+    if returnBank == i { result = port.result }
+    if (flushing or returnBank == i) and port.error { error = true }
+  }
+  available = availableBits
+  responses = responsesBits
+  aOffers = aOffersBits
+  cOffers = cOffersBits
+  eOffers = eOffersBits
+  ends = endsBits
+  aValid = aOffers#[a.owner] != 0
+  cValid = cOffers#[c.owner] != 0
+  cLast = ends#[c.owner] != 0
+  eValid = eOffers#[e.owner] != 0
+  if rst { occupied = 0; serial = false; flushing = false }
+}

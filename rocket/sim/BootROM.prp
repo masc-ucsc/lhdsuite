@@ -1,17 +1,19 @@
 const tile = import("../pyrope2/RocketTile.RocketTile")
 
-// Back a 16 KiB coherent test RAM with 64-byte lines. The manager grants
+// Back a 16 KiB coherent test RAM with the configured line size. The manager grants
 // the requested permission and stores dirty releases for subsequent refills.
-mod TestRAM<W>(clk:Clock, rst:Reset, acquire:Bool, address:U32, grow:U2,
+mod TestRAM<W,BLOCK>(clk:Clock, rst:Reset, acquire:Bool, address:U32, grow:U2,
     release:Bool, releaseAddress:U32, opcode:U3, data:Unsigned(bits=W),
-    corrupt:Bool, dReady:Bool, grantAck:Bool)
+    corrupt:Bool, dReady:Bool, grantAck:Bool, aSource:U5, cSource:U5)
     -> (ready:Bool@[], cReady:Bool@[], valid:Bool@[], dOpcode:U3@[], cap:U2@[],
-        readData:Unsigned(bits=W)@[], eReady:Bool@[], checked:Bool@[], bad:Bool@[]) {
-  comptime const beats = 512/W
+        readData:Unsigned(bits=W)@[], eReady:Bool@[], checked:Bool@[], bad:Bool@[], source:U5@[]) {
+  comptime const beats = BLOCK*8/W
   reg ram:[16384/(W/8)]Unsigned(bits=W):[ordering="old"] = 0
   reg busy:Bool = false
+  reg owner:U5 = nil
+  source = owner
   reg releaseAck:Bool = false
-  reg line:U8 = 0
+  reg line:Unsigned(bits=14-std.clog2(BLOCK)) = 0
   reg beat:Unsigned(max=beats-1) = 0
   reg permission:U2 = 0
   reg phase:U2 = 0
@@ -27,16 +29,18 @@ mod TestRAM<W>(clk:Clock, rst:Reset, acquire:Bool, address:U32, grow:U2,
   readData = ram[line * beats + beat]
   bad = false
   if acquire and ready {
-    line = address#[6..<14]
+    owner = aSource
+    line = address#[std.clog2(BLOCK)..<14]
     permission = if grow == 0 { 1 } else { 0 }
-    bad = address >> 14 != 0x20000 or address#[0..<6] != 0
+    bad = address >> 14 != 0x20000 or address#[0..<std.clog2(BLOCK)] != 0
     busy = true
     releaseAck = false
   } elif release and cReady {
     bad = releaseAddress >> 14 != 0x20000 or corrupt or (opcode != 6 and opcode != 7)
-    if opcode == 7 { ram[releaseAddress#[6..<14] * beats + beat] = data }
+    if opcode == 7 { ram[releaseAddress#[std.clog2(BLOCK)..<14] * beats + beat] = data }
     if opcode == 6 or beat == beats-1 {
       beat = 0
+      owner = cSource
       releaseAck = true
       busy = true
       if opcode == 7 { writes = true }
@@ -49,21 +53,29 @@ mod TestRAM<W>(clk:Clock, rst:Reset, acquire:Bool, address:U32, grow:U2,
   checked = writes and acks >= 3
 }
 
-// Serve 64-byte TileLink instruction refills. The last DEBUG_WORDS, when present, start at 0x800.
-pub mod Image<C, WORDS, DEBUG_WORDS=0, ATOMIC_DEVICE=false>(clk:Clock, rst:Reset, program:[WORDS]U32, successPC:Unsigned(bits=C.xLen), seip:U1=0, timer:U1=0, localInterrupts:Unsigned(bits=C.localIRQBits)=0, debugIRQ:U1=0) -> (success:Bool@[], trap:U1@[], badFetch:Bool@[], tracePC:Unsigned(bits=C.xLen)@[], traceValid:Bool@[], trapValue:Unsigned(bits=C.xLen)@[], privilege:U3@[], cause:Unsigned(bits=C.xLen)@[], traceTime:Unsigned(bits=C.xLen)@[], ingress:(iretire:U1, iaddr:Unsigned(bits=C.xLen), itype:U4, ilastsize:U1, priv:U4,
+// Serve configured TileLink instruction refills. The last DEBUG_WORDS, when present, start at 0x800.
+pub mod Image<C, WORDS, DEBUG_WORDS=0, ATOMIC_DEVICE=false, REVERSE_GRANTS=false>(clk:Clock, rst:Reset, program:[WORDS]U32, successPC:Unsigned(bits=C.xLen), seip:U1=0, timer:U1=0, localInterrupts:Unsigned(bits=C.localIRQBits)=0, debugIRQ:U1=0,
+    accValid:Bool=false, accWrite:Bool=false, accAddress:U32=0, accSize:U2=0, accPrivilege:U2=0,
+    accData:Unsigned(bits=C.dLen)=0,
+    roccReady:Bool=false, roccBusy:Bool=false, roccIRQ:U1=0, roccResp:Bool=false, roccRd:U5=0, roccData:Unsigned(bits=C.xLen)=0,
+    vectorReady:Bool=false, vectorBusy:Bool=false, vectorDecode:U4=0, vectorResp:Bool=false, vectorRd:U5=0, vectorData:Unsigned(bits=C.xLen)=0,
+    vectorFault:Bool=false, vectorCause:U6=0, vectorTval:Unsigned(bits=C.xLen)=0, vectorCSRRead:Unsigned(bits=C.xLen)=0) -> (accReady:Bool@[], accDone:Bool@[], accError:Bool@[], accResult:Unsigned(bits=C.dLen)@[], hinted:Bool@[], ext:(rocc:Bool, vector:Bool, instruction:U32, pc:Unsigned(bits=C.xLen), rs1:Unsigned(bits=C.xLen), rs2:Unsigned(bits=C.xLen),
+        privilege:U2, dprv:U2, exception:Bool, decodeInst:U32, roccRespReady:Bool, vectorRespReady:Bool,
+        csrAddress:U12, csrWrite:Bool, csrData:Unsigned(bits=C.xLen))@[], success:Bool@[], trap:U1@[], badFetch:Bool@[], tracePC:Unsigned(bits=C.xLen)@[], traceValid:Bool@[], trapValue:Unsigned(bits=C.xLen)@[], privilege:U3@[], cause:Unsigned(bits=C.xLen)@[], traceTime:Unsigned(bits=C.xLen)@[], ingress:(iretire:U1, iaddr:Unsigned(bits=C.xLen), itype:U4, ilastsize:U1, priv:U4,
         ctx:Unsigned(bits=C.xLen), tval:Unsigned(bits=C.xLen), cause:Unsigned(bits=C.xLen), time:Unsigned(bits=C.xLen))@[], memoryChecked:Bool@[], watchValid:Unsigned(bits=C.triggerSlots)@[], watchAction:Unsigned(bits=3*C.triggerSlots)@[]) {
   reg busy:Bool = false
-  reg index:U4 = 0
+  reg index:Unsigned(max=C.icacheBlockBytes/4-1) = 0
   cassert(WORDS >= 16 and WORDS % 16 == 0)
   cassert(DEBUG_WORDS >= 0 and DEBUG_WORDS < WORDS and DEBUG_WORDS % 16 == 0)
   reg base:U32 = 0
-  const slot = (base + index) % WORDS
+  const slot = (base + index)#[0..<32] % WORDS
   const low = program[slot]
   mut beat:Unsigned(bits=C.dLen) = low
   if C.dLen == 64 {
     const high = program[(slot+1) % WORDS]
     beat = (high << 32) | low
   }
+  reg hintReply:Bool = false
   reg deviceReply:Bool = false
   wire responseData:Unsigned(bits=C.dLen) = nil
   wire ar:Bool = nil
@@ -71,27 +83,53 @@ pub mod Image<C, WORDS, DEBUG_WORDS=0, ATOMIC_DEVICE=false>(clk:Clock, rst:Reset
   wire dv:Bool = nil
   wire er:Bool = nil
   wire dop:U3 = nil
+  wire source:U5 = nil
   wire cap:U2 = nil
   wire rd:Unsigned(bits=C.dLen) = nil
   mut badRAM = false
   const core = tile<C>(
+      accValid=accValid, accWrite=accWrite, accAddress=accAddress, accSize=accSize, accPrivilege=accPrivilege, accData=accData,
+      roccReady=roccReady, roccBusy=roccBusy, roccIRQ=roccIRQ, roccResp=roccResp, roccRd=roccRd, roccData=roccData, vectorReady=vectorReady, vectorBusy=vectorBusy, vectorDecode=vectorDecode, vectorResp=vectorResp, vectorRd=vectorRd, vectorData=vectorData, vectorFault=vectorFault, vectorCause=vectorCause, vectorTval=vectorTval, vectorCSRRead=vectorCSRRead,
       memAReady=ar, memCReady=cr, memDValid=dv, memDOpcode=dop, memDParam=cap,
-      memDSource=1, memDSink=1, memDData=rd, memEReady=er,
+      memDSource=source, memDSink=1, memDData=rd, memEReady=er,
       `clock`=clk, `reset`=U1(rst), auto_buffer_in_a_valid=0,
       auto_buffer_in_a_bits_opcode=0, auto_buffer_in_a_bits_param=0, auto_buffer_in_a_bits_size=0,
       auto_buffer_in_a_bits_source=0, auto_buffer_in_a_bits_address=0, auto_buffer_in_a_bits_mask=0,
       auto_buffer_in_a_bits_data=0, auto_buffer_in_a_bits_corrupt=0, auto_buffer_in_d_ready=1,
-      auto_buffer_out_a_ready=U1(!busy), auto_buffer_out_d_valid=U1(busy), auto_buffer_out_d_bits_opcode=1,
-      auto_buffer_out_d_bits_param=0, auto_buffer_out_d_bits_size=(if deviceReply { std.clog2(C.xLen/8) } else { 6 }), auto_buffer_out_d_bits_source=U1(deviceReply),
+      auto_buffer_out_a_ready=U1(!busy), auto_buffer_out_d_valid=U1(busy), auto_buffer_out_d_bits_opcode=(if hintReply { 2 } else { 1 }),
+      auto_buffer_out_d_bits_param=0, auto_buffer_out_d_bits_size=(if deviceReply { std.clog2(C.xLen/8) } else { std.clog2(C.icacheBlockBytes) }), auto_buffer_out_d_bits_source=(if C.icachePrefetch and hintReply { 2 } else { U1(deviceReply) }),
       auto_buffer_out_d_bits_sink=0, auto_buffer_out_d_bits_denied=0, auto_buffer_out_d_bits_data=responseData,
       auto_buffer_out_d_bits_corrupt=0, auto_int_local_in_2_0=0, auto_int_local_in_1_0=0,
       auto_int_local_in_1_1=timer, auto_int_local_in_0_0=debugIRQ, auto_hartid_in=0, supervisorExternalInterrupt=seip, localInterrupts=localInterrupts)
 
-  if !C.useDataScratchpad {
-    const ram = TestRAM<C.dLen>(clk=clk, rst=rst, acquire=core.memAValid, address=core.memAAddress,
+  if REVERSE_GRANTS {
+    // Withhold D until the processor issues both independent loads.
+    comptime const beats = C.dcacheBlockBytes*8/C.dLen
+    reg count:U2 = 0
+    reg returned:U2 = 0
+    reg owners:[2]U5:[ordering="old"] = nil
+    reg grantBeat:Unsigned(max=beats-1) = 0
+    ar = count < 2; cr = true; er = true
+    if core.memAValid and ar {
+      badRAM = core.memAAddress != 0x80000000 + count*C.dcacheBlockBytes or core.memAParam != 0
+      owners[count#[0]] = core.memASource
+      wrap count += 1
+    }
+    dv = count == 2 and returned < 2
+    source = owners[1-returned#[0]]
+    dop = 5; cap = 1
+    rd = if returned == 0 { 37 } else { 19 }
+    if dv and core.memDReady {
+      wrap grantBeat += 1
+      if grantBeat == beats-1 { wrap returned += 1 }
+    }
+    memoryChecked = returned == 2
+  } elif !C.useDataScratchpad {
+    const ram = TestRAM<W=C.dLen,BLOCK=C.dcacheBlockBytes>(clk=clk, rst=rst, acquire=core.memAValid, address=core.memAAddress,
         grow=core.memAParam, release=core.memCValid, releaseAddress=core.memCAddress,
         opcode=core.memCOpcode, data=core.memCData, corrupt=core.memCCorrupt,
-        dReady=core.memDReady, grantAck=core.memEValid)
+        dReady=core.memDReady, grantAck=core.memEValid,aSource=core.memASource,cSource=core.memCSource)
+    source = ram.source
     ar = ram.ready
     cr = ram.cReady
     dv = ram.valid
@@ -100,9 +138,10 @@ pub mod Image<C, WORDS, DEBUG_WORDS=0, ATOMIC_DEVICE=false>(clk:Clock, rst:Reset
     rd = ram.readData
     er = ram.eReady
     memoryChecked = ram.checked
-    badRAM = ram.bad or (core.memAValid and core.memASource != 1) or
-        (core.memCValid and core.memCSource != 1) or (core.memEValid and core.memESink != 1)
+    badRAM = ram.bad or core.memASize != std.clog2(C.dcacheBlockBytes) or core.memCSize != std.clog2(C.dcacheBlockBytes) or (core.memAValid and (core.memASource < 1 or core.memASource > (if C.nMSHRs > 0 { C.nMSHRs } else { 1 }))) or
+        (core.memCValid and (core.memCSource < 1 or core.memCSource > (if C.nMSHRs > 0 { C.nMSHRs } else { 1 }))) or (core.memEValid and core.memESink != 1)
   } else {
+    source = 0
     ar = false
     cr = false
     dv = false
@@ -127,21 +166,26 @@ pub mod Image<C, WORDS, DEBUG_WORDS=0, ATOMIC_DEVICE=false>(clk:Clock, rst:Reset
     }
     responseData = if deviceReply { prior } else { beat }
   } else { responseData = beat }
-  const bootLine = address >= 0x10040 and address < 0x10040+4*(WORDS-DEBUG_WORDS)
+  const hint = C.icachePrefetch and core.auto_buffer_out_a_bits_source == 2 and core.auto_buffer_out_a_bits_opcode == 5 and core.auto_buffer_out_a_bits_size == std.clog2(C.icacheBlockBytes)
+  hinted = hint and !busy and core.auto_buffer_out_a_valid != 0
+  const bootLine = address + C.icacheBlockBytes > 0x10040 and address < 0x10040+4*(WORDS-DEBUG_WORDS)
   const debugLine = DEBUG_WORDS > 0 and address >= 0x800 and address < 0x800+4*DEBUG_WORDS
   if rst {
     busy = false
     index = 0
   } elif !busy and core.auto_buffer_out_a_valid != 0 {
     index = 0
-    base = if debugLine { WORDS-DEBUG_WORDS + ((address-0x800)#[0..<32] >> 2) } else { (address-0x10040)#[0..<32] >> 2 }
+    base = if debugLine { WORDS-DEBUG_WORDS + ((address-0x800)#[0..<32] >> 2) } else { ((address >> 2) - (0x10040 >> 2))#[0..<32] }
     busy = true
+    hintReply = hint
     deviceReply = device
   } elif busy and core.auto_buffer_out_d_ready != 0 {
-    if deviceReply or index == 16 - (C.dLen/32) { busy = false; deviceReply = false }
+    if hintReply or deviceReply or index == C.icacheBlockBytes/4 - (C.dLen/32) { busy = false; deviceReply = false }
     wrap index += C.dLen/32
   }
   traceTime = core.auto_broadcast_out_time#[0..<C.xLen]
+  accReady = core.accReady; accDone = core.accDone; accError = core.accError; accResult = core.accResult
+  ext = core.ext
   ingress = core.ingress
   success = core.auto_broadcast_out_insns_0_valid != 0 and core.auto_broadcast_out_insns_0_iaddr == successPC
   privilege = core.auto_broadcast_out_insns_0_priv
@@ -152,8 +196,8 @@ pub mod Image<C, WORDS, DEBUG_WORDS=0, ATOMIC_DEVICE=false>(clk:Clock, rst:Reset
   tracePC = core.auto_broadcast_out_insns_0_iaddr
   cause = core.auto_broadcast_out_insns_0_cause
   trap = core.auto_broadcast_out_insns_0_exception
-  const getLine = core.auto_buffer_out_a_bits_source == 0 and core.auto_buffer_out_a_bits_size == 6 and core.auto_buffer_out_a_bits_opcode == 4
-  badFetch = badRAM or (!busy and core.auto_buffer_out_a_valid != 0 and !validDevice and (!getLine or !(bootLine or debugLine)))
+  const getLine = core.auto_buffer_out_a_bits_source == 0 and core.auto_buffer_out_a_bits_size == std.clog2(C.icacheBlockBytes) and core.auto_buffer_out_a_bits_opcode == 4
+  badFetch = badRAM or (!busy and core.auto_buffer_out_a_valid != 0 and !validDevice and !hint and (!getLine or !(bootLine or debugLine)))
 }
 
 pub mod BootROM<C>(clk:Clock, rst:Reset, program:[16]U32, successPC:Unsigned(bits=C.xLen)) -> (success:Bool@[], trap:U1@[], badFetch:Bool@[], tracePC:Unsigned(bits=C.xLen)@[], traceValid:Bool@[], trapValue:Unsigned(bits=C.xLen)@[], privilege:U3@[], cause:Unsigned(bits=C.xLen)@[]) {

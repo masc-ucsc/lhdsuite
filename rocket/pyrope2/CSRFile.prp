@@ -13,7 +13,7 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
     io_interrupts_msip:U1, io_interrupts_meip:U1, io_interrupts_seip:U1=0,
     localInterrupts:Unsigned(bits=C.localIRQBits)=0, io_hartid:U1, io_rw_addr:U12, io_rw_cmd:U3,
     io_rw_wdata:Unsigned(bits=C.xLen), io_decode_0_inst:U32, io_exception:U1, io_retire:U1, io_cause:U32,
-    io_pc:Unsigned(bits=C.xLen), io_tval:Unsigned(bits=C.xLen), io_htval:U32, io_gva:U1, io_inst_0:U32, fpFlags:U5=0,
+    io_pc:Unsigned(bits=C.xLen), io_tval:Unsigned(bits=C.xLen), io_htval:U32, io_gva:U1, io_inst_0:U32, roccIRQ:U1=0, vectorCSRRead:Unsigned(bits=C.xLen)=0, vectorCommit:Bool=false, fpFlags:U5=0,
     perfID:U18=0, perfPipe:U11=0, perfMem:U6=0, perfAdvance:U3=0, triggerPC:Unsigned(bits=C.xLen)=0, triggerEA:Unsigned(bits=C.xLen)=0) -> (
     staticPrediction:Bool@[], flushBTB:Bool@[], io_rw_rdata:Unsigned(bits=C.xLen)@[], io_decode_0_read_illegal:U1@[],
     io_decode_0_write_illegal:U1@[], io_decode_0_write_flush:U1@[], io_decode_0_system_illegal:U1@[],
@@ -22,7 +22,7 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
     io_status_dprv:U2@[], io_status_debug:U1@[], io_status_cease:U1@[], io_status_wfi:U1@[], io_status_isa:U32@[],
     io_status_dv:U1@[], io_status_v:U1@[], io_status_mpv:U1@[], io_status_gva:U1@[], io_status_mpp:U2@[],
     io_status_mpie:U1@[], io_status_mie:U1@[], io_evec:Unsigned(bits=C.xLen)@[], io_time:Unsigned(bits=C.xLen)@[],
-    fpEnabled:Bool@[], io_fcsr_rm:U3@[], io_interrupt:U1@[], io_interrupt_cause:U32@[], triggerTrap:U3@[],
+    vectorEnabled:Bool@[], vectorCSRWrite:Bool@[], vectorCSRData:Unsigned(bits=C.xLen)@[], fpEnabled:Bool@[], io_fcsr_rm:U3@[], io_interrupt:U1@[], io_interrupt_cause:U32@[], triggerTrap:U3@[],
     triggerDebug:U3@[], watchFetch:Unsigned(bits=C.triggerSlots)@[], watchLoad:Unsigned(bits=C.triggerSlots)@[],
     watchStore:Unsigned(bits=C.triggerSlots)@[], watchAction:Unsigned(bits=3*C.triggerSlots)@[],
     pmpTable:protection.Entries@[], io_inhibit_cycle:U1@[], io_trace_0_valid:U1@[],
@@ -36,6 +36,7 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   wire scontext:Unsigned(bits=C.xLen) = nil
   wire mode:U1 = nil
   wire sRead:Unsigned(bits=C.xLen) = nil
+  wire unitStatus:Unsigned(bits=C.xLen) = nil
   wire fpStatus:Unsigned(bits=C.xLen) = nil
   wire fcsr:U8 = nil
   wire sStatus:Unsigned(bits=C.xLen) = nil
@@ -71,8 +72,8 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   reg cycles:U64:[clock_pin=io_ungated_clock]
   reg retired:U64:[clock_pin=`clock`]
   reg reg_misa:U32:[clock_pin=`clock`]
-  comptime const controlMask = if C.clockGate { 14 } else { 8 }
-  reg fetchControl:U4:[clock_pin=`clock`]
+  comptime const controlMask = (if C.clockGate { 14 } else { 8 }) | (if C.icachePrefetch { 1 << 17 } else { 0 }) | U1(C.dcacheClockGate)
+  reg fetchControl:Unsigned(max=controlMask):[clock_pin=`clock`]
   io_status_dv = reg_mstatus_v
   io_status_v = reg_mstatus_v
   io_status_mpv = reg_mstatus_mpv
@@ -83,8 +84,9 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   io_status_debug = inDebug
   io_status_wfi = reg_wfi
   comptime const localMask = ((1 << C.nLocalInterrupts)-1) << 16
-  comptime const machineMask = 0x888 | (if C.useSupervisor { 0 } else { localMask })
-  const localPending = (localInterrupts << 16) & localMask
+  comptime const roccMask = U1(C.roccOpcodes != 0) << 13
+  comptime const machineMask = 0x888 | (if C.useSupervisor { 0 } else { localMask | roccMask })
+  const localPending = ((localInterrupts << 16) & localMask) | ((roccIRQ << 13) & roccMask)
   const mip:Unsigned(bits=C.xLen) = localPending | (io_interrupts_meip << 11) | (io_interrupts_mtip << 7) |
       (io_interrupts_msip << 3) | sPending
   const enables = (reg_mie & machineMask) | sEnabled
@@ -93,7 +95,7 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   const supervisorIRQs = if privilege == 0 or (privilege == 1 and sie != 0) { pendingIRQs & iDeleg } else { 0 }
   const enabledIRQs = if machineIRQs != 0 { machineIRQs } else { supervisorIRQs }
   const interruptPending = U1(enabledIRQs != 0) | io_interrupts_debug
-  mut irqNumber:U6 = if enabledIRQs#[11] != 0 { 11 }
+  mut irqNumber:U6 = if enabledIRQs#[13] != 0 { 13 } elif enabledIRQs#[11] != 0 { 11 }
       elif enabledIRQs#[3] != 0 { 3 } elif enabledIRQs#[7] != 0 { 7 } elif enabledIRQs#[9] != 0 { 9 }
       elif enabledIRQs#[1] != 0 { 1 } elif enabledIRQs#[5] != 0 { 5 } else { 4 }
   for i in 0..<C.nLocalInterrupts {
@@ -117,7 +119,7 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   const fpCSR = C.fLen > 0 and fpStatus#[13..<15] != 0 and reg_misa#[5] != 0 and addr >= 1 and addr <= 3
   const userCSR = C.useUser and (addr == 0x30a or (C.xLen == 32 and addr == 0x31a) or (C.haveBasicCounters and addr == 0x306))
   const pmpCSR = C.nPMPs > 0 and (pmpConfig or (addr >= 0x3b0 and addr <= 0x3bf))
-  const csrExists = U1(fpCSR or userCSR or pmpCSR or counterCSR or (C.useSupervisor and supervisor.exists(addr=addr)) or
+  const csrExists = U1((C.vLen > 0 and unitStatus#[9..<11] != 0 and reg_misa#[21] != 0 and addr in (8,9,10,15,0xc20,0xc21,0xc22)) or fpCSR or userCSR or pmpCSR or counterCSR or (C.useSupervisor and supervisor.exists(addr=addr)) or
       (C.mcontextWidth > 0 and addr == 0x7a8) or (C.scontextWidth > 0 and addr == 0x5a8) or
       (addr >= 0x7a0 and addr <= 0x7a3) or (C.useDebug and addr >= 0x7b0 and addr <= 0x7b2) or
       (addr >= 0xf11 and addr <= 0xf15) or (addr >= 0x340 and addr <= 0x344) or
@@ -203,8 +205,10 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
       elif C.scontextWidth > 0 and io_rw_addr == 0x5a8 { scontext } else { 0 }
   const csrRead:Unsigned(bits=C.xLen) = match io_rw_addr {
     == 1 { fcsr#[0..<5] } == 2 { fcsr#[5..<8] } == 3 { fcsr }
-    == 0x100 { sRead | fpStatus }
-    == 0x300 { fpStatus | sStatus | sFlags | (if C.useSupervisor and C.xLen == 64 { 2 << 34 } else { 0 }) | (if C.useUser and C.xLen == 64 { 2 << 32 } else { 0 }) | (mprv << 17) | (reg_mstatus_mpp << 11) | (reg_mstatus_mpie << 7) | (reg_mstatus_mie << 3) }
+    in (8,9,10,15,0xc20,0xc21) { if C.vLen > 0 { vectorCSRRead } else { 0 } }
+    == 0xc22 { C.vLen/8 }
+    == 0x100 { sRead | unitStatus | fpStatus }
+    == 0x300 { unitStatus | fpStatus | sStatus | sFlags | (if C.useSupervisor and C.xLen == 64 { 2 << 34 } else { 0 }) | (if C.useUser and C.xLen == 64 { 2 << 32 } else { 0 }) | (mprv << 17) | (reg_mstatus_mpp << 11) | (reg_mstatus_mpie << 7) | (reg_mstatus_mie << 3) }
     == 0x301 { ((C.xLen / 32) << (C.xLen-2)) | reg_misa#[0..<26] }
     == 0x30a { machineFIOM } == 0x306 { counterEnable }
     == 0x304 { enables } == 0x305 { mtvec.readback }
@@ -220,6 +224,18 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   const csrWrite:Unsigned(bits=C.xLen) = match io_rw_cmd#[0..<2] {
     == 2 { csrRead | io_rw_wdata } == 3 { csrRead & ~io_rw_wdata } else { io_rw_wdata }
   }
+  vectorCSRWrite = C.vLen > 0 and csrWriteEnable != 0 and io_rw_addr in (8,9,10,15)
+  vectorCSRData = if C.vLen > 0 { csrWrite } else { 0 }
+  mut vs:U2 = 0
+  if C.vLen > 0 {
+    reg state:U2:[initial=0, clock_pin=`clock`, reset_pin=`reset`, async=false]
+    if csrWriteEnable != 0 and (io_rw_addr == 0x300 or (C.useSupervisor and io_rw_addr == 0x100)) { state = csrWrite#[9..<11] }
+    elif vectorCommit or vectorCSRWrite { state = 3 }
+    vs = state
+  }
+  vectorEnabled = C.vLen > 0 and vs != 0 and reg_misa#[21] != 0
+  unitStatus = (vs << 9) | (if C.roccOpcodes != 0 { 3 << 15 } else { 0 }) |
+      (U1(vs == 3 or C.roccOpcodes != 0) << (C.xLen-1))
   if C.mcontextWidth > 0 {
     reg machineID:Unsigned(bits=C.mcontextWidth):[initial=0, clock_pin=`clock`, reset_pin=`reset`, async=false]
     mcontext = machineID
@@ -274,7 +290,7 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
   }
   const machineTrap:U1 = exception & ~trapToDebug & U1(!delegate)
   if C.useSupervisor {
-    const sv = supervisor.SupervisorCSR<W=C.xLen, VM=C.useVM, EXTRA=C.extraPgLevels, ASID=C.asIdBits, LOCAL=C.nLocalInterrupts, COUNTERS=C.counterBits>(localPending=localPending, clk=`clock`, rst=(`reset` != 0), prv=privilege, csr=io_rw_addr,
+    const sv = supervisor.SupervisorCSR<W=C.xLen, VM=C.useVM, EXTRA=C.extraPgLevels, ASID=C.asIdBits, LOCAL=C.nLocalInterrupts, ROCC=(C.roccOpcodes != 0), COUNTERS=C.counterBits>(localPending=localPending, clk=`clock`, rst=(`reset` != 0), prv=privilege, csr=io_rw_addr,
         cmd=io_rw_cmd, writeData=csrWrite, operand=io_rw_wdata, seip=io_interrupts_seip, compressed=reg_misa#[2],
         trap=exception != 0 and trapToDebug == 0, sret=sret, cause=architecturalCause, pc=io_pc, tval=trapValue)
     sRead = sv.rdata
@@ -332,7 +348,7 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
     reg_mtvec = C.mtvecInit
     reg_mcountinhibit = 0
     const baseISA = if C.useRVE { 0x10 } else { 0x100 }
-    reg_misa = 0x40800000 | (U1(C.fLen >= 32) << 5) | (U1(C.fLen == 64) << 3) | (U1(C.useSupervisor) << 18) | (U1(C.useUser) << 20) | baseISA | (U1(C.useMulDiv) << 12) | (U1(C.useCompressed) << 2) | U1(C.useAtomics)
+    reg_misa = 0x40800000 | (U1(C.vLen > 0) << 21) | (U1(C.fLen >= 32) << 5) | (U1(C.fLen == 64) << 3) | (U1(C.useSupervisor) << 18) | (U1(C.useUser) << 20) | baseISA | (U1(C.useMulDiv) << 12) | (U1(C.useCompressed) << 2) | U1(C.useAtomics)
     fetchControl = controlMask
   } else {
     const machineReturn:U1 = returning & U1(!dret) & U1(!sret)
@@ -365,12 +381,12 @@ pub mod CSRFile<C=tiny>::[timecheck=false](
     }
     if C.misaWritable and csrWriteEnable != 0 and io_rw_addr == 0x301 and
         (reg_misa#[2] == 0 or io_pc#[1] == 0 or writeLow#[2] != 0) {
-      const writable = (U1(C.fLen >= 32) << 5) | (U1(C.fLen == 64) << 3) | (U1(C.useMulDiv) << 12) | (U1(C.useCompressed) << 2) | U1(C.useAtomics)
+      const writable = (U1(C.vLen > 0) << 21) | (U1(C.fLen >= 32) << 5) | (U1(C.fLen == 64) << 3) | (U1(C.useMulDiv) << 12) | (U1(C.useCompressed) << 2) | U1(C.useAtomics)
       const extensions = if writeLow#[5] == 0 { writeLow & 0xfffffff7 } else { writeLow }
       reg_misa = (reg_misa & (0xffffffff ^ writable)) | (extensions & writable)
     }
     if csrWriteEnable != 0 and io_rw_addr == 0x7c1 {
-      fetchControl = csrWrite#[0..<4] & controlMask
+      fetchControl = csrWrite & controlMask
     }
   }
   if csrWriteEnable != 0 and io_rw_addr == 0x304 {

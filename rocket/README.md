@@ -22,16 +22,18 @@ Instantiate the tile with `RocketTile<profile>(...)`. The named profiles are `ti
 | --- | --- |
 | Base ISA | `xLen=32`, `useRVE=false`, `useCompressed=true`, `useAddiForMv=false`, `useAtomics=true`, `useAtomicsOnlyForIO=false` |
 | Multiply and divide | `useMulDiv=true`, `mulUnroll=8`, `mulEarlyOut=false`, `divUnroll=1`, `divEarlyOut=false`, `divEarlyOutGranularity=1`, `mulDivClockGate=false` |
-| Clock gating | `clockGate=false` controls the core pipeline and instruction frontend. |
+| Clock gating | `clockGate=false` controls the core pipeline and instruction frontend. `dcacheClockGate=false` controls the D-cache separately. |
 | Nonstandard instructions | `haveCease=true` enables CEASE, which halts retirement until reset. `haveCFlush=false` controls coherent D-cache flush and discard. |
 | Optional integer instructions | `useConditionalZero=false`, `useZba=false`, `useZbb=false`, `useZbs=false` |
 | Fetch and load bypass | `btbEntries=0`, `icacheSets=64`, `icacheWays=1`, `fastLoadWord=true`, `fastLoadByte=false` |
 | Return address stack | `nRAS=0` |
 | Branch history | `branchPredictionModeCSR=false`, `bhtEntries=0`, `bhtCounterLength=1`, `bhtHistoryLength=8`, `bhtHistoryBits=3` |
 | Floating point | `fLen=0`, `minFLen=32`, `divSqrt=true`, `fpuClockGate=false` |
-| Data cache | `useDataScratchpad=true`, `dcacheSets=256`, `dcacheWays=4` (coherent cache) |
+| Data cache | `useDataScratchpad=true`, `dcacheSets=256`, `dcacheWays=4`, `dcacheBlockBytes=64`, `nMSHRs=0` |
+| Instruction cache | `icacheBlockBytes=64`, `icachePrefetch=false` |
+| Accelerator ports | `roccOpcodes=0`, `vLen=0` |
 | Privilege | `useUser=false`, `useSupervisor=false`, `useVM=false` |
-| Translation | `iTLBEntries=4`, `dTLBEntries=4`, `nPTECacheEntries=8`, `nL2TLBEntries=0`, `nL2TLBWays=1`, `pgLevels=0` (XLEN default), `asIdBits=0` |
+| Translation | `iTLBEntries=4`, `dTLBEntries=4`, `iTLBWays=1`, `dTLBWays=1`, `nPTECacheEntries=8`, `nL2TLBEntries=0`, `nL2TLBWays=1`, `pgLevels=0` (XLEN default), `asIdBits=0` |
 | External debug | `useDebug=true` |
 | Hardware triggers | `nBreakpoints=1`, `useBPWatch=false`, `mcontextWidth=0`, `scontextWidth=0` |
 | Physical memory protection | `nPMPs=8` |
@@ -43,9 +45,9 @@ Instantiate the tile with `RocketTile<profile>(...)`. The named profiles are `ti
 
 The four optional integer instruction groups follow Chipyard's Rocket decode tables. Each defaults off. RV64 also supports the word and unsigned-word variants of the enabled extensions.
 
-The instruction cache defaults to 64 sets and one way. Each line holds 64 bytes. The set and way counts are powers of two, and associative configurations rotate the replacement way within each set.
+The instruction cache defaults to 64 sets and one way. The instruction and data line sizes default to 64 bytes. Each can be a power of two from two bus beats to 4096 bytes. The set and way counts are powers of two, and associative configurations rotate the replacement way within each set.
 
-Both profiles use Tiny's 32-bit physical memory map. The scratchpad starts at `0x80000000`, with 64 bytes per set and a default capacity of 16 KiB. Choose a power of two for `dcacheSets`. Fetch and data access use the same map and check PMP permissions independently. The bare tile has no page-table walker instance. The TileLink master beat is `max(xLen, fLen)` bits, including 64-bit beats on RV32D. The scratchpad slave port transfers four bytes per beat on either profile. The compressed decoder follows the local Chipyard Rocket implementation. Set `useAddiForMv=true` to expand C.MV into ADDI with a zero immediate. The default expansion uses ADD with x0. The archived Tiny RTL also decoded some Zcb and Zcmop encodings. Set `btbEntries` to a positive entry count to instantiate a direct-mapped target buffer with one direction bit per entry. Zero selects sequential fetch until the core redirects. With `useRVE=true`, the register file stores x1 through x15 and instructions that use x16 through x31 trap. The basic counters support 64-bit writes on RV64 and low/high CSR pairs on RV32.
+Both profiles use Tiny's 32-bit physical memory map. The scratchpad starts at `0x80000000`, with `dcacheBlockBytes` bytes per set and a default capacity of 16 KiB. Choose a power of two for `dcacheSets`. Fetch and data access use the same map and check PMP permissions independently. The bare tile has no page-table walker instance. The TileLink master beat is `max(xLen, fLen)` bits, including 64-bit beats on RV32D. The scratchpad slave port transfers four bytes per beat on either profile. The compressed decoder follows the local Chipyard Rocket implementation. Set `useAddiForMv=true` to expand C.MV into ADDI with a zero immediate. The default expansion uses ADD with x0. The archived Tiny RTL also decoded some Zcb and Zcmop encodings. Set `btbEntries` to a positive entry count to instantiate a direct-mapped target buffer with one direction bit per entry. Zero selects sequential fetch until the core redirects. With `useRVE=true`, the register file stores x1 through x15 and instructions that use x16 through x31 trap. The basic counters support 64-bit writes on RV64 and low/high CSR pairs on RV32.
 
 With `haveBasicCounters=true`, set `nPerfCounters` to allocate 40-bit counters starting at `mhpmcounter3`. Write `mhpmeventN` to select events. Bits 1–0 select retired instructions (0), pipeline stalls and redirects (1), or cache and TLB traffic (2). The event mask starts at bit 8. Multiple selected events increment a counter at most once per cycle. For example, `0x600` counts retired integer loads and stores, and `0x202` counts data-cache A-channel transfers. The retired group includes separate multiply/divide and FP instruction classes when those units are present. The cache group orders its bits as I-cache acquisition, D-cache acquisition, D-cache release, I-TLB miss, D-TLB miss, and L2 TLB miss. Selector `0x2002` counts accepted L2 lookups that miss and start a walk. It reads zero with the L2 disabled.
 
@@ -59,13 +61,19 @@ With a target buffer enabled, set `nRAS` to the number of return addresses to re
 
 Set `useAtomicsOnlyForIO=true` with `useAtomics=true` to keep MISA.A and send arithmetic and logical AMOs to capable uncached TileLink devices. The local scratchpad and coherent RAM raise a store access fault for AMOs. LR raises a load access fault and SC raises a store access fault in every region. The scratchpad slave accepts Get and Put transactions in this profile. Setting `useAtomics=false` disables the ISA extension in either configuration.
 
-Set `useDataScratchpad=false` to instantiate the blocking coherent DCache on RV32 or RV64. The cache covers physical addresses `0x80000000` through `0xffffffff`. Choose powers of two for `dcacheSets` and `dcacheWays`. The tile exposes the cache's five TileLink channels on the `memA` through `memE` ports. A carries AcquireBlock with every byte enabled. A and C use 64-byte lines. D must return the request's source ID. The existing master port still carries instruction fetches and uncached device accesses. The coherent profile omits the scratchpad slave adapter. A manager supplies backing memory and permission grants. The directed tests use one tile.
+Set `useDataScratchpad=false` to instantiate the coherent D-cache on RV32 or RV64. The cache covers physical addresses `0x80000000` through `0xffffffff`. Choose powers of two for `dcacheSets` and `dcacheWays`. The tile exposes the cache's five TileLink channels on the `memA` through `memE` ports. A carries AcquireBlock with every byte enabled. `memASize` and `memCSize` report log₂ of the configured line size. D must return the request's source ID. The existing master port still carries instruction fetches and uncached device accesses. The coherent profile omits the scratchpad slave adapter. A manager supplies backing memory and permission grants. The directed tests use one tile.
 
-Set `haveCFlush=true` with `useDataScratchpad=false` to enable Rocket's machine-mode `CFLUSH_D_L1` and `CDISCARD_D_L1` instructions. Both invalidate cache lines. Flush writes dirty data back and discard drops it. Use `rs1=x0` for the whole cache or another register for one address. With virtual memory enabled, line operations require `dcacheSets * 64 <= 4096` and store permission on the address. Run `lhd sim sim/cache_flush.prp` to exercise both widths.
+With `nMSHRs=0`, one coherent miss can be outstanding. Values from two upward allow misses to overlap. A positive value creates that many interleaved banks, each with a miss slot and a TileLink source. Use at most the smaller of 31 and `dcacheSets`. The physical set modulo the bank count selects the bank. Loads to different banks may finish out of issue order. Requests to a busy bank replay. Stores, atomics and cache maintenance drain older requests and serialize until completion. The cache has one ordered device slot. [CPU-port and TileLink tests](sim/nonblocking_cache.prp) and [reverse-grant firmware](sim/coherent_program.prp)
+
+Set `icachePrefetch=true` to add next-line TileLink Hint requests. Clear bit 17 of machine CSR `0x7c1` to enable them. On the instruction/device master, source 0 carries instruction Get, source 1 carries data traffic, and source 2 carries Hint and its HintAck. The tile checks execute permission for the entire next line and suppresses hints across a 4 KiB boundary. With `dcacheClockGate=true`, clear bit 0 of the same CSR to allow the D-cache clock to stop when idle. Requests and probes wake it. Pending stores, refills, grant acknowledgements, and reservation expiry keep it awake. [L1 control test](sim/l1_controls.prp)
+
+Set `iTLBWays` and `dTLBWays` independently. Each way count divides its port's total entry count. The VPN selects the set. Each way compares both the VPN and its address-space context, and replacement rotates within the selected set. [Translation tests](sim/translation_cache.prp)
+
+Set `haveCFlush=true` with `useDataScratchpad=false` to enable Rocket's machine-mode `CFLUSH_D_L1` and `CDISCARD_D_L1` instructions. Both invalidate cache lines. Flush writes dirty data back and discard drops it. Use `rs1=x0` for the whole cache or another register for one address. With virtual memory enabled, line operations require `dcacheSets * dcacheBlockBytes <= 4096` and store permission on the address. Run `lhd sim sim/cache_flush.prp` to exercise both widths.
 
 Set `enableTraceCoreIngress=true` to expose the single-retire processor trace record on `RocketTile.ingress`. Sample `iaddr`, `itype` and `ilastsize` when `iretire` is set. The event type is 0 for an ordinary instruction, 1 for an exception, 2 for an interrupt, 4 or 5 for an untaken or taken conditional branch, 13 for a trap return, 14 for an indirect jump and 15 for a direct jump. A full-width instruction sets `ilastsize`; a compressed instruction clears it. The record also carries privilege, ASID, trap value, cause and the low XLEN bits of the cycle counter. The default configuration drives the record to zero and omits the writeback trace register.
 
-Set `clockGate=true` to gate the pipeline and instruction frontend independently. CSR `0x7c1` resets to `0xe` with this option. Bit 2 forces the pipeline and FPU clocks on and bit 1 forces the frontend clock on. Clear both overrides with `csrci 0x7c1, 6`. WFI wakeup logic stays on the tile clock, and the core resumes on a locally enabled interrupt.
+Set `clockGate=true` to gate the pipeline and instruction frontend independently. Bits 1–3 of CSR `0x7c1` reset high with this option. Bit 2 forces the pipeline and FPU clocks on and bit 1 forces the frontend clock on. Clear both overrides with `csrci 0x7c1, 6`. WFI wakeup logic stays on the tile clock, and the core resumes on a locally enabled interrupt.
 
 Set `mulDivClockGate=true` to stop the integer multiply/divide clock while idle. An incoming request wakes the unit. It stays awake until writeback accepts the result or the pipeline kills the instruction. In a full-unroll configuration the separate multiplier also has a clock gate and wakes independently of the divider.
 
@@ -91,9 +99,22 @@ The I-cache uses the virtual set for lookup and refill and checks a physical tag
 
 The paged firmware test installs its own tables, runs supervisor code from a virtual ROM mapping, remaps a user data page, and verifies the results at both physical locations. It also checks instruction and load page faults, supervisor trap return, and a TVM-protected fence on both widths.
 
+### Vector and RoCC attachments
+
+`roccOpcodes` is a four-bit mask for custom-0 through custom-3. Set `vLen` to the attached vector unit's register length in bits. The unit supplies a four-bit classification of `ext.decodeInst`. Bits 3 through 0 indicate a recognized vector encoding, an integer destination, an integer rs1 operand, and an integer rs2 operand. The unit owns vector decoding, execution, vector registers, and vector CSR values. The tile handles VS, `misa.V`, and `vlenb`.
+
+Sample a command when `ext.rocc && roccReady` or `ext.vector && vectorReady` holds. Each accepted command carries the instruction, PC, scalar operands, and effective privilege. Backpressure replays the instruction. Keep a scalar response and its destination stable until the corresponding `ext.*RespReady` handshake. Assert the unit's busy signal while work is outstanding. The tile orders dependent scalar instructions, fences and CSR accesses. A vector unit can report a synchronous fault with cause and trap value when accepting a command. RoCC can assert `roccIRQ` on interrupt cause 13. Supervisor profiles can delegate it through `mideleg`.
+
+Both attachments can share one physical L1 request port. An integrator with two memory-using units arbitrates them and retains the requester until completion. At `accValid && accReady` the tile captures a read or write, its byte address, log₂ size, effective privilege, and lane-aligned write data. One `accDone` pulse returns the zero-extended load data on `accResult` or a fault on `accError`. The port applies physical-region and PMP checks and retries cache nacks internally. The tile's port uses Pyrope records and handshakes. An existing Chisel accelerator needs an adapter. [Example units and precise-fault tests](sim/attachments.prp)
+
+### Simulation checks
+
 Run the checks from this directory with a current LiveHD build.
 
 ```sh
+lhd sim sim/nonblocking_cache.prp --workdir /tmp/rocket-nonblocking
+lhd sim sim/attachments.prp --workdir /tmp/rocket-attachments
+lhd sim sim/l1_controls.prp --workdir /tmp/rocket-l1
 lhd sim sim/return_program.prp --workdir /tmp/rocket-return-program
 lhd sim sim/return_stack.prp --workdir /tmp/rocket-return-stack
 lhd sim sim/core_clock.prp --workdir /tmp/rocket-clock

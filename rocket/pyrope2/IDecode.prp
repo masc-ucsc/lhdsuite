@@ -3,12 +3,16 @@
 const floating = import("FPU")
 const BitOps = import("BitOps")
 
-pub comb IDecode<C>(inst:U32) -> (legal:U1, branch:U1, jal:U1, jalr:U1,
+pub comb IDecode<C>(inst:U32, vectorDecode:U4=0) -> (legal:U1, branch:U1, jal:U1, jalr:U1,
     rxs1:U1, rxs2:U1, sel_alu1:U2, sel_alu2:U2, sel_imm:U3, alu_dw:U1, alu_fn:U6,
-    mem:U1, mem_cmd:U5, mul:U1, div:U1, wxd:U1, csr:U3, fence_i:U1, fence:U1, amo:U1, fp:U1, fpDouble:U1, fpRound:U1) {
+    mem:U1, mem_cmd:U5, mul:U1, div:U1, wxd:U1, csr:U3, fence_i:U1, fence:U1, amo:U1, fp:U1, fpDouble:U1, fpRound:U1, rocc:U1, vector:U1) {
   const opcode = inst#[0..<7]
   const funct3 = inst#[12..<15]
   const funct7 = inst#[25..<32]
+  const custom = (opcode & 0x1f) == 0x0b
+  rocc = U1(custom and (C.roccOpcodes & (1 << opcode#[5..<7])) != 0)
+  const vectorMemory = (opcode == 7 or opcode == 0x27) and (funct3 == 0 or funct3 >= 5)
+  vector = U1(C.vLen > 0 and (opcode == 0x57 or vectorMemory) and vectorDecode#[3] != 0)
   const is64 = C.xLen == 64
   const opImm = opcode == 0x13 or (is64 and opcode == 0x1b)
   const opReg = opcode == 0x33 or (is64 and opcode == 0x3b)
@@ -37,7 +41,7 @@ pub comb IDecode<C>(inst:U32) -> (legal:U1, branch:U1, jal:U1, jalr:U1,
     == 0x30500073 { C.haveCease } else { false }
   }
   const sfence = C.useVM and (inst & 0xfe007fff) == 0x12000073
-  const lineFlush = !C.useVM or C.dcacheSets * 64 <= 4096
+  const lineFlush = !C.useVM or C.dcacheSets * C.dcacheBlockBytes <= 4096
   const flush = C.haveCFlush and (inst & 0xffd07fff) == 0xfc000073 and (lineFlush or inst#[15..<20] == 0)
   const system = flush or sfence or machineSystem or (C.useSupervisor and inst == 0x10200073)
   mut extFn:U6 = 0
@@ -67,13 +71,13 @@ pub comb IDecode<C>(inst:U32) -> (legal:U1, branch:U1, jal:U1, jalr:U1,
     toX = f.toX
   }
   const fenceOp = opcode == 0xf and funct3 <= 1
-  legal = U1(fp != 0 or extFn != 0 or integer or mulDiv or load or store or atomic or jump or indirect or cond or lui or auipc or csrOp or system or fenceOp)
+  legal = rocc | vector | U1(fp != 0 or extFn != 0 or integer or mulDiv or load or store or atomic or jump or indirect or cond or lui or auipc or csrOp or system or fenceOp)
   jal = U1(jump)
   jalr = U1(indirect)
   branch = U1(cond)
-  rxs1 = U1(fpLoad or fpStore or fromX or flush or sfence or opReg or opImm or load or store or atomic or indirect or cond or (csrOp and funct3 < 4))
-  rxs2 = U1(sfence or (opReg and !unaryImm) or store or atomic or cond)
-  wxd = U1(toX or opReg or opImm or load or atomic or jump or indirect or lui or auipc or csrOp)
+  rxs1 = (rocc & inst#[13]) | (vector & vectorDecode#[1]) | U1(fpLoad or fpStore or fromX or flush or sfence or opReg or opImm or load or store or atomic or indirect or cond or (csrOp and funct3 < 4))
+  rxs2 = (rocc & inst#[12]) | (vector & vectorDecode#[0]) | U1(sfence or (opReg and !unaryImm) or store or atomic or cond)
+  wxd = (rocc & inst#[14]) | (vector & vectorDecode#[2]) | U1(toX or opReg or opImm or load or atomic or jump or indirect or lui or auipc or csrOp)
   mul = U1(mulDiv and C.pipelinedMul and funct3 < 4)
   div = U1(mulDiv) & ~mul
   sel_alu1 = if jump or auipc { 2 } else { rxs1 }

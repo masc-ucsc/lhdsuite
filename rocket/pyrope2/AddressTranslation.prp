@@ -4,20 +4,21 @@ const permitted = import("PageTableWalk.permitted")
 // Single translation port. Cache successful translations at 4 KiB granularity.
 // The tag contains the ASID, page-walk depth and root PPN. A flush drops every mapping
 // and prevents a walk already in flight from installing stale permissions.
-pub mod AddressTranslation<XLEN=64, PA=32, ENTRIES=4, EXTRA=0, ASID=0>(clk:Clock, rst:Reset,
+pub mod AddressTranslation<XLEN=64, PA=32, ENTRIES=4, EXTRA=0, ASID=0, WAYS=1>(clk:Clock, rst:Reset,
     request:Bool, virtualAddress:Unsigned(bits=XLEN), addressSpace:Unsigned(bits=PA-12+std.clog2(EXTRA+1)+ASID),
     paging:Bool, flush:Bool, user:Bool, fetch:Bool, store:Bool, sum:Bool, mxr:Bool, consume:Bool,
     readReady:Bool, readDone:Bool, readError:Bool, readData:Unsigned(bits=XLEN),
     grant:Bool=true, leaf:Unsigned(bits=PA-12+8)=0)
     -> (ready:Bool@[], probe:Bool@[], walkDone:Bool@[], walkLeaf:Unsigned(bits=PA-12+8)@[], read:Bool@[], cachePointer:Bool@[], readAddress:Unsigned(bits=PA)@[],
         cached:Bool@[], cachedAddress:Unsigned(bits=PA)@[], cachedPF:Bool@[], valid:Bool@[], address:Unsigned(bits=PA)@[], pageFault:Bool@[], accessFault:Bool@[]) {
-  cassert(ENTRIES >= 1)
+  cassert(WAYS >= 1 and ENTRIES >= WAYS and ENTRIES % WAYS == 0)
+  comptime const sets = ENTRIES / WAYS
   comptime const modeBits = std.clog2(EXTRA+1)
   comptime const tagBits = PA-12+modeBits+ASID
   const rootPPN = addressSpace#[0..<(PA-12)]
   const extra = (addressSpace >> (PA-12)) & ((1 << modeBits)-1)
   const vpn = virtualAddress >> 12
-  const index = vpn % ENTRIES
+  const bank = vpn % sets
   reg present:Unsigned(bits=ENTRIES) = 0
   reg tags:[ENTRIES]Unsigned(bits=XLEN-12):[ordering="old"]
   reg contexts:[ENTRIES]Unsigned(bits=tagBits):[ordering="old"]
@@ -31,16 +32,34 @@ pub mod AddressTranslation<XLEN=64, PA=32, ENTRIES=4, EXTRA=0, ASID=0>(clk:Clock
   reg localPF:Bool
   reg localAE:Bool
 
-  const hit = extra <= EXTRA and present#[index] != 0 and tags[index] == vpn and contexts[index] == addressSpace
+  mut index:Unsigned(max=ENTRIES-1) = (bank * WAYS) % ENTRIES
+  mut hit = false
+  mut victim:Unsigned(max=ENTRIES-1) = index
+  reg missSlot:Unsigned(max=ENTRIES-1) = nil
+  for way in 0..<WAYS {
+    const slot = (bank * WAYS + way) % ENTRIES
+    if extra <= EXTRA and present#[slot] != 0 and tags[slot] == vpn and contexts[slot] == addressSpace {
+      hit = true; index = slot
+    }
+  }
+  wire fillSlot:Bool = nil
+  if WAYS > 1 {
+    reg next:[sets]Unsigned(max=WAYS-1):[ordering="old"] = 0
+    victim = (bank * WAYS + next[bank]) % ENTRIES
+    if request and fillSlot { next[bank] = (next[bank]+1) % WAYS }
+  }
+  const readSlot = index % ENTRIES
+  const fillIndex = victim % ENTRIES
   cached = hit
-  cachedAddress = (pages[index] << 12) | virtualAddress#[0..<12]
-  cachedPF = !permitted(flags=rights[index], user=user, fetch=fetch, store=store, sum=sum, mxr=mxr)
+  cachedAddress = (pages[readSlot] << 12) | virtualAddress#[0..<12]
+  cachedPF = !permitted(flags=rights[readSlot], user=user, fetch=fetch, store=store, sum=sum, mxr=mxr)
   const miss = paging and !hit
   const w = walk<XLEN=XLEN, PA=PA, EXTRA=EXTRA>(clk=clk, rst=rst, request=request and !localReply and !flush and miss and grant and (leaf & 1) == 0,
       virtualAddress=virtualAddress, rootPPN=rootPPN, extra=extra, user=user, fetch=fetch, store=store, sum=sum, mxr=mxr,
       consume=consume, readReady=readReady, readDone=readDone, readError=readError, readData=readData)
   probe = request and miss and w.ready and !localReply and !flush and !rst
   ready = w.ready and !localReply and !flush and (!miss or grant)
+  fillSlot = ready and miss
   walkDone = w.valid
   walkLeaf = if w.valid and mayFill and !w.aboveLeaf and !w.accessFault and !w.pageFault { ((w.address >> 12) << 8) | w.leafFlags } else { 0 }
   cachePointer = mayFill and w.aboveLeaf
@@ -56,16 +75,17 @@ pub mod AddressTranslation<XLEN=64, PA=32, ENTRIES=4, EXTRA=0, ASID=0>(clk:Clock
     if miss and (leaf & 1) != 0 {
       const flags = leaf#[0..<8]
       const ppn = leaf >> 8
-      tags[index] = vpn
-      contexts[index] = addressSpace
-      pages[index] = ppn
-      rights[index] = flags
-      present#[index] = 1
+      tags[fillIndex] = vpn
+      contexts[fillIndex] = addressSpace
+      pages[fillIndex] = ppn
+      rights[fillIndex] = flags
+      present#[fillIndex] = 1
       localReply = true
       localPF = !permitted(flags=flags, user=user, fetch=fetch, store=store, sum=sum, mxr=mxr)
       localAE = false
       localAddress = (ppn << 12) | virtualAddress#[0..<12]
     } elif miss {
+      missSlot = victim
       missVPN = vpn
       missContext = addressSpace
       mayFill = true
@@ -83,7 +103,7 @@ pub mod AddressTranslation<XLEN=64, PA=32, ENTRIES=4, EXTRA=0, ASID=0>(clk:Clock
   } elif w.valid and mayFill {
     mayFill = false
     if !w.pageFault and !w.accessFault {
-      const replace = missVPN % ENTRIES
+      const replace = missSlot % ENTRIES
       tags[replace] = missVPN
       contexts[replace] = missContext
       pages[replace] = w.address >> 12

@@ -12,7 +12,7 @@ const IBuf = import("IBuf.IBuf")
 const arithmetic = import("MulDiv")
 const RegFile = import("RegFile.RegFile")
 
-type WritebackControl = (fp:U1, mem:U1, div:U1, wxd:U1, csr:U3, fence_i:U1)
+type WritebackControl = (rocc:U1, vector:U1, fp:U1, mem:U1, div:U1, wxd:U1, csr:U3, fence_i:U1)
 type MemoryOp = (branch:U1, jal:U1, jalr:U1, mem_cmd:U5, mul:U1)
 
 pub mod Rocket<C=tiny>::[timecheck=false](
@@ -28,7 +28,10 @@ pub mod Rocket<C=tiny>::[timecheck=false](
     io_dmem_resp_bits_data_word_bypass:Unsigned(bits=C.dLen), io_dmem_replay_next:U1, io_dmem_s2_xcpt_ma_ld:U1,
     io_dmem_s2_xcpt_ma_st:U1, io_dmem_s2_xcpt_pf_ld:U1, io_dmem_s2_xcpt_pf_st:U1, io_dmem_s2_xcpt_ae_ld:U1,
     io_dmem_s2_xcpt_ae_st:U1, io_dmem_ordered:U1, io_dmem_perf_grant:U1, io_ptw_perf_pte_miss:U1,
-    io_ptw_perf_pte_hit:U1, dataAcquire:U1=0, dataRelease:U1=0, iTLBMiss:U1=0, dTLBMiss:U1=0, l2TLBMiss:U1=0
+    io_ptw_perf_pte_hit:U1, dataAcquire:U1=0, dataRelease:U1=0, iTLBMiss:U1=0, dTLBMiss:U1=0, l2TLBMiss:U1=0,
+    roccReady:Bool=false, roccBusy:Bool=false, roccIRQ:U1=0, roccResp:Bool=false, roccRd:U5=0, roccData:Unsigned(bits=C.xLen)=0,
+    vectorReady:Bool=false, vectorBusy:Bool=false, vectorDecode:U4=0, vectorResp:Bool=false, vectorRd:U5=0, vectorData:Unsigned(bits=C.xLen)=0,
+    vectorFault:Bool=false, vectorCause:U6=0, vectorTval:Unsigned(bits=C.xLen)=0, vectorCSRRead:Unsigned(bits=C.xLen)=0
 ) -> (
     staticPrediction:Bool@[], flushBTB:Bool@[], rasAction:U2@[], branchIndex:Unsigned(bits=C.bhtIndexBits)@[],
     io_imem_might_request:U1@[], io_imem_req_valid:U1@[], io_imem_req_bits_pc:Unsigned(bits=C.xLen)@[],
@@ -48,6 +51,9 @@ pub mod Rocket<C=tiny>::[timecheck=false](
     io_trace_insns_0_iaddr:Unsigned(bits=C.xLen)@[], io_trace_insns_0_insn:U32@[], io_trace_insns_0_priv:U3@[],
     io_trace_insns_0_exception:U1@[], io_trace_insns_0_interrupt:U1@[],
     io_trace_insns_0_cause:Unsigned(bits=C.xLen)@[], io_trace_insns_0_tval:Unsigned(bits=C.xLen)@[],
+    ext:(rocc:Bool, vector:Bool, instruction:U32, pc:Unsigned(bits=C.xLen), rs1:Unsigned(bits=C.xLen), rs2:Unsigned(bits=C.xLen),
+        privilege:U2, dprv:U2, exception:Bool, decodeInst:U32, roccRespReady:Bool, vectorRespReady:Bool,
+        csrAddress:U12, csrWrite:Bool, csrData:Unsigned(bits=C.xLen))@[],
     ingress:(iretire:U1, iaddr:Unsigned(bits=C.xLen), itype:U4, ilastsize:U1, priv:U4,
         ctx:Unsigned(bits=C.xLen), tval:Unsigned(bits=C.xLen), cause:Unsigned(bits=C.xLen), time:Unsigned(bits=C.xLen))@[],
     io_trace_time:U64@[], watchValid:Unsigned(bits=C.triggerSlots)@[], watchAction:Unsigned(bits=3*C.triggerSlots)@[], io_wfi:U1@[]
@@ -158,33 +164,43 @@ pub mod Rocket<C=tiny>::[timecheck=false](
   const wbMemory = wbStage.valid & wbControl.mem
   const dataFault = io_dmem_s2_xcpt_pf_st | io_dmem_s2_xcpt_pf_ld | io_dmem_s2_xcpt_ae_st |
       io_dmem_s2_xcpt_ae_ld | io_dmem_s2_xcpt_ma_st | io_dmem_s2_xcpt_ma_ld
-  const wbException:U1 = wbStage.exception | (wbMemory & dataFault)
+  const commonReplay = io_dmem_s2_nack | wbStage.replay
+  const issueUnit = wbStage.valid != 0 and wbStage.exception == 0 and commonReplay == 0 and running != 0
+  ext.rocc = C.roccOpcodes != 0 and issueUnit and wbControl.rocc != 0
+  ext.vector = C.vLen != 0 and issueUnit and wbControl.vector != 0
+  const vectorTrap = ext.vector and vectorReady and vectorFault
+  const unitRetry = (ext.rocc and !roccReady) or (ext.vector and !vectorReady)
+  const wbException:U1 = wbStage.exception | (wbMemory & dataFault) | U1(vectorTrap)
   const wbCause:U32 = if wbStage.exception != 0 { wbStage.cause }
-      elif (wbMemory & io_dmem_s2_xcpt_pf_st) != 0 { 15 } elif (wbMemory & io_dmem_s2_xcpt_pf_ld) != 0 { 13 }
+      elif vectorTrap { vectorCause } elif (wbMemory & io_dmem_s2_xcpt_pf_st) != 0 { 15 } elif (wbMemory & io_dmem_s2_xcpt_pf_ld) != 0 { 13 }
       elif (wbMemory & io_dmem_s2_xcpt_ae_st) != 0 { 7 } elif (wbMemory & io_dmem_s2_xcpt_ae_ld) != 0 { 5 }
       elif (wbMemory & io_dmem_s2_xcpt_ma_st) != 0 { 6 } else { 4 }
   const wbWrites:U1 = wbStage.valid & wbControl.wxd & 1
-  const lateResult = wbControl.div | loadMiss
-  const replayWB:U1 = (io_dmem_s2_nack | wbStage.replay) & 1
+  const lateResult = wbControl.div | loadMiss | wbControl.rocc | wbControl.vector
+  const replayWB:U1 = commonReplay | U1(unitRetry)
   const responseFP = io_dmem_resp_bits_tag#[0]
   const responseInt = ~responseFP#[0]
   const responseRd = io_dmem_resp_bits_tag#[1..<6]
   const dataResponse = io_dmem_resp_valid & io_dmem_resp_bits_has_data
   const replayLoad:U1 = dataResponse & io_dmem_resp_bits_replay & responseInt
   const divReady = ~replayLoad & ~wbWrites
+  ext.roccRespReady = C.roccOpcodes != 0 and divReady != 0 and divResponseValid == 0
+  const takeRoCC = ext.roccRespReady and roccResp
+  ext.vectorRespReady = C.vLen != 0 and divReady != 0 and divResponseValid == 0 and !takeRoCC
+  const takeVector = ext.vectorRespReady and vectorResp
   const retire = wbStage.valid & ~replayWB & ~wbException
   const wbWrite = retire & wbControl.wxd & 1
 
   const dataTrap = ~wbStage.exception
   const addressTrap = dataTrap | U1(wbStage.cause in (1, 3, 12, 20))
-  const trapValue = if wbException != 0 and (addressTrap != 0 or wbStage.cause == 2) { wbStage.wdata } else { 0 }
+  const trapValue = if vectorTrap { vectorTval } elif wbException != 0 and (addressTrap != 0 or wbStage.cause == 2) { wbStage.wdata } else { 0 }
   const guestAddress = if wbStage.exception != 0 and wbStage.cause == 20 { io_imem_gpa_bits } else { 0 }
   const instruction = if wbStage.raw_inst#[0..<2] == 3 { wbStage.instruction#[16..<32] << 16 } else { 0 }
   wire retireFPFlags:U5 = nil
   wire perfID:U18 = nil
   wire perfPipe:U11 = nil
   wire perfAdvance:U3 = nil
-  const csr = CSRFile<C>(`clock`=pipeClock, `reset`=`reset`, io_ungated_clock=`clock`, fpFlags=retireFPFlags,
+  const csr = CSRFile<C>(`clock`=pipeClock, `reset`=`reset`, io_ungated_clock=`clock`, fpFlags=retireFPFlags, roccIRQ=roccIRQ, vectorCSRRead=vectorCSRRead, vectorCommit=ext.vector and vectorReady and !vectorFault,
       perfID=perfID, perfPipe=perfPipe, perfAdvance=perfAdvance,
       perfMem=(l2TLBMiss << 5) | (dTLBMiss << 4) | (iTLBMiss << 3) | (dataRelease << 2) | (dataAcquire << 1) | io_imem_perf_acquire,
       io_hartid=io_hartid, io_interrupts_debug=io_interrupts_debug, io_interrupts_mtip=io_interrupts_mtip,
@@ -194,6 +210,24 @@ pub mod Rocket<C=tiny>::[timecheck=false](
       io_exception=wbException, io_cause=wbCause, io_tval=trapValue, io_htval=guestAddress,
       io_gva=wbException & ((addressTrap & virtualMode) | (dataTrap & wbStage.hls_or_dv)),
       triggerPC=ibuf.pc, triggerEA=memStage.wdata, io_inst_0=instruction | wbStage.raw_inst#[0..<16])
+  ext.csrAddress = wbStage.instruction#[20..<32]
+  ext.csrWrite = csr.vectorCSRWrite
+  ext.csrData = csr.vectorCSRData
+  ext.privilege = csr.io_status_prv
+  ext.dprv = csr.io_status_dprv
+  ext.exception = wbException != 0
+  ext.decodeInst = if C.vLen != 0 { ibuf.inst } else { 0 }
+  ext.instruction = if C.roccOpcodes != 0 or C.vLen != 0 { wbStage.instruction } else { 0 }
+  ext.pc = if C.roccOpcodes != 0 or C.vLen != 0 { wbStage.address } else { 0 }
+  if C.roccOpcodes != 0 or C.vLen != 0 {
+    type Operands = (a:Unsigned(bits=C.xLen), b:Unsigned(bits=C.xLen))
+    reg memArgs:Operands:[clock_pin=pipeClock] = nil
+    reg wbArgs:Operands:[clock_pin=pipeClock] = nil
+    if exStage.valid != 0 and (exWB.rocc | exWB.vector) != 0 { memArgs = (a=ex_rs[0], b=ex_rs[1]) }
+    if memStage.valid != 0 and (memWB.rocc | memWB.vector) != 0 { wbArgs = memArgs }
+    ext.rs1 = wbArgs.a
+    ext.rs2 = wbArgs.b
+  } else { ext.rs1 = 0; ext.rs2 = 0 }
   virtualMode = csr.io_status_v
   const busyRegs = pendingWrites#[1..<32] << 1
   flushTLB = C.useVM and wbStage.valid != 0 and wbStage.exception == 0 and (wbStage.instruction & 0xfe007fff) == 0x12000073
@@ -210,7 +244,7 @@ pub mod Rocket<C=tiny>::[timecheck=false](
   const secondFetchTrap = ibuf.secondFault != 0
   const fetchTrap = firstFetchTrap or secondFetchTrap
   // Exception packets can carry stale I-cache data. Decode no operation for them.
-  const decode = IDecode<C>(inst=if fetchTrap { 0 } else { ibuf.inst })
+  const decode = IDecode<C>(vectorDecode=vectorDecode, inst=if fetchTrap { 0 } else { ibuf.inst })
   const csrAccess = U1(decode.csr == 5 or decode.csr == 6 or decode.csr == 7)
   const systemInstruction = U1(decode.csr == 4)
   const csrReadOnly = U1((decode.csr == 6 or decode.csr == 7) and id_raddr1 == 0)
@@ -223,13 +257,16 @@ pub mod Rocket<C=tiny>::[timecheck=false](
   const system = ~ibuf.rvc & systemInstruction
   const badFP = decode.fp != 0 and (!csr.fpEnabled or (decode.fpDouble != 0 and csr.io_status_isa#[3] == 0) or
       (decode.fpRound != 0 and ibuf.inst#[12..<15] == 7 and csr.io_fcsr_rm > 4))
-  const illegalInstruction = U1(badFP) | ~decode.legal | badReg | ((decode.mul | decode.div) & ~csr.io_status_isa#[12]) |
+  const illegalInstruction = U1(decode.vector != 0 and !csr.vectorEnabled) | U1(badFP) | ~decode.legal | badReg | ((decode.mul | decode.div) & ~csr.io_status_isa#[12]) |
       (decode.amo & ~csr.io_status_isa#[0]) | (ibuf.rvc & ~csr.io_status_isa#[2]) |
       (csrAccess & (csr.io_decode_0_read_illegal | csrWrite)) | (system & csr.io_decode_0_system_illegal)
   const virtualInstruction = decode.legal & ((csrAccess & ~csrWrite & csr.io_decode_0_virtual_access_illegal) |
       (system & csr.io_decode_0_virtual_system_illegal))
   const needsFence = decode.fence | (decode.amo & ibuf.inst#[26])
-  const waitFence = memoryBusy & ((decode.amo & ibuf.inst#[25]) | decode.fence_i | (fencePending & decode.mem))
+  const extInFlight = (C.roccOpcodes != 0 and roccBusy) or (C.vLen != 0 and vectorBusy) or
+      ((exStage.valid & (exWB.rocc | exWB.vector)) | (memStage.valid & (memWB.rocc | memWB.vector)) |
+       (wbStage.valid & (wbControl.rocc | wbControl.vector))) != 0
+  const waitFence = U1(extInFlight and (decode.fence != 0 or decode.csr != 0)) | (memoryBusy & ((decode.amo & ibuf.inst#[25]) | decode.fence_i | (fencePending & decode.mem)))
   const decodeTrap:U1 = csr.io_interrupt | csr.triggerDebug#[2] | U1(fetchTrap) | virtualInstruction | illegalInstruction
   const fault = if ibuf.firstFault != 0 { ibuf.firstFault } else { ibuf.secondFault }
   const decodeCause:U32 = if csr.io_interrupt != 0 { csr.io_interrupt_cause#[0..<32] }
@@ -261,8 +298,8 @@ pub mod Rocket<C=tiny>::[timecheck=false](
   const killMemory = replayPort | redirectWB | memStage.exception | ~memStage.valid
   const killMEM:U1 = killMemory | memException
   redirectWB = replayWB | wbException | csr.io_eret | wbStage.flush_pipe
-  const lateRd = if replayLoad != 0 { responseRd } else { divResponseRd }
-  const lateWrite = replayLoad | (divReady & divResponseValid)
+  const lateRd = if replayLoad != 0 { responseRd } elif takeRoCC { roccRd } elif takeVector { vectorRd } else { divResponseRd }
+  const lateWrite = U1(takeRoCC or takeVector) | replayLoad | (divReady & divResponseValid)
   const writeRF = wbWrite | lateWrite
   const writeRd = if lateWrite != 0 { lateRd } else { wbRd }
   mut fpResult:Unsigned(bits=C.xLen) = 0
@@ -288,7 +325,7 @@ pub mod Rocket<C=tiny>::[timecheck=false](
   const writerAhead = (exStage.valid & exWB.fp) | (memStage.valid & memWB.fp)
   const fpWait = enableFP and decode.fp != 0 and (outstandingFP or loadAhead != 0 or (storeID and writerAhead != 0))
   const writeData = if dataResponse != 0 and responseInt != 0 { io_dmem_resp_bits_data#[0..<C.xLen] }
-      elif lateWrite != 0 { divData } elif wbControl.fp != 0 { fpResult } elif wbControl.csr != 0 { csr.io_rw_rdata } else { wbStage.wdata }
+      elif takeRoCC { roccData } elif takeVector { vectorData } elif lateWrite != 0 { divData } elif wbControl.fp != 0 { fpResult } elif wbControl.csr != 0 { csr.io_rw_rdata } else { wbStage.wdata }
   comptime const regBits = if C.useRVE { 4 } else { 5 }
   const rf = RegFile<XLEN=C.xLen, RegBits=regBits>(clk=pipeClock, rs1=id_raddr1#[0..<regBits],
       rs2=id_raddr2#[0..<regBits], rd=writeRd#[0..<regBits], write=writeRF != 0, data=writeData)
@@ -309,8 +346,8 @@ pub mod Rocket<C=tiny>::[timecheck=false](
     }
   }
   const slowLoad = if !C.fastLoadWord { 1 } elif C.fastLoadByte { 0 } else { memStage.slow_bypass }
-  const exCannotBypass = U1(exWB.csr != 0) | exOp.jalr | exWB.mem | exOp.mul | exWB.div | exWB.fp
-  const memCannotBypass = U1(memWB.csr != 0) | (memWB.mem & slowLoad) | memOp.mul | memWB.div | memWB.fp
+  const exCannotBypass = exWB.rocc | exWB.vector | U1(exWB.csr != 0) | exOp.jalr | exWB.mem | exOp.mul | exWB.div | exWB.fp
+  const memCannotBypass = memWB.rocc | memWB.vector | U1(memWB.csr != 0) | (memWB.mem & slowLoad) | memOp.mul | memWB.div | memWB.fp
   const hazardEX = exStage.valid & exWB.wxd & matchEX & exCannotBypass
   const hazardMEM = memStage.valid & memWB.wxd & matchMEM & memCannotBypass
   const hazardWB = wbStage.valid & wbControl.wxd & matchWB & lateResult
@@ -368,6 +405,8 @@ pub mod Rocket<C=tiny>::[timecheck=false](
   paused = running & U1(endPause == 0) & (startPause | paused)
   fetchMayRequest = exPCValid | memPCValid | csr.io_customCSRs_0_value#[1]
   if killID == 0 {
+    exWB.rocc = decode.rocc
+    exWB.vector = decode.vector
     exWB.fp = decode.fp
     exOp.branch = decode.branch
     exOp.jal = decode.jal
@@ -527,7 +566,7 @@ pub mod Rocket<C=tiny>::[timecheck=false](
     const pending = busyRegs != 0 or divRequestReady == 0
     const canDecode = csr.io_csr_stall == 0 and paused == 0
     const response = io_dmem_resp_valid != 0 or io_dmem_replay_next != 0
-    const wake = (canDecode and (io_imem_resp_valid != 0 or ibuf.valid != 0)) or response or csr.io_interrupt != 0
+    const wake = (canDecode and (io_imem_resp_valid != 0 or ibuf.valid != 0)) or response or (C.roccOpcodes != 0 and roccResp) or (C.vLen != 0 and vectorResp) or csr.io_interrupt != 0
     keepAwake = `reset` != 0 or forceCoreClock or inPipeline or pending or wake
     active = `reset` != 0 or keepAwake or wake
   } else { active = true }

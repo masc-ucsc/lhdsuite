@@ -1,9 +1,9 @@
 const config = import("../pyrope2/RocketConfig")
 const cache = import("../pyrope2/ICache.ICache")
 comptime const direct = config.params(icacheSets=2)
-comptime const assoc = config.params(icacheSets=2, icacheWays=2)
+comptime const assoc = config.params(icacheSets=2, icacheWays=2, icacheBlockBytes=32)
 comptime const larger = config.params(xLen=64, icacheSets=4)
-comptime const single = config.params(xLen=64, icacheSets=1, icacheWays=2)
+comptime const single = config.params(xLen=64, icacheSets=1, icacheWays=2, icacheBlockBytes=128)
 
 // Alternate between two lines 128 bytes apart. Revisit both after FENCE.I.
 // The second line ends in a corrupt refill beat and must retain its fault.
@@ -21,7 +21,7 @@ mod exercise<C>(clk:Clock, rst:Reset) -> (done:Bool@[], failed:Bool@[], misses:U
   const byteAddr = line + (beat * (C.xLen/8))
   const low = (byteAddr ^ 0x12340000)#[0..<32]
   const data:Unsigned(bits=C.xLen) = if C.xLen == 64 { (((byteAddr+4) ^ 0x12340000)#[0..<32] << 32) | low } else { low }
-  const last = U1(beat == 64/(C.xLen/8)-1)
+  const last = U1(beat == C.icacheBlockBytes/(C.xLen/8)-1)
   const issuing = reads < 12 and delay == 0
   const flush = reads == 6 and delay == 3
   const d = cache<C>(clk=clk, rst=rst, fetch=U1(issuing), vaddr=pc, paddr=physical, killS1=0, killS2=0,
@@ -76,4 +76,43 @@ test icache_geometry.conflict_and_invalidate {
   }
   assert(d.done, "all geometries completed twelve fetches")
   assert(d.directMiss == 12 and d.assocMiss == 4 and d.largeMiss == 4 and d.singleMiss == 4, "allocation, conflict and flush counts")
+}
+
+comptime const prefetch = config.params(icacheSets=2, icacheBlockBytes=32, icachePrefetch=true)
+// Stall the hint while the demand refill returns data. A later demand at the
+// last line of the page must never generate a hint into the next page.
+pub mod hints(clk:Clock,rst:Reset,ending:Bool) -> (done:Bool@[], bad:Bool@[]) {
+  const addr:U32 = if ending { 0x10fe0 } else { 0x10040 }
+  reg beats:U4 = 0
+  reg demands:U2 = 0
+  reg accepted:Bool = false
+  reg waitCycles:U5 = 0
+  reg fail:Bool = false
+  const ready = demands == 0 or waitCycles >= 7
+  const d = cache<prefetch>(clk=clk,rst=rst,fetch=1,vaddr=addr,paddr=addr,killS1=0,killS2=0,
+      invalidate=0,aReady=U1(ready),dValid=U1(beats != 0 or accepted),dOpcode=(if beats != 0 { 1 } else { 2 }),
+      dData=0x55,dCorrupt=0)
+  if d.aValid != 0 {
+    if d.hint {
+      if ending or d.aAddress != addr+32 or accepted { fail = true }
+      if ready { accepted = true }
+    } elif ready {
+      if d.aAddress != addr or demands != 0 { fail = true }
+      wrap demands += 1; beats = 8
+    }
+  }
+  if demands != 0 and waitCycles < 16 { wrap waitCycles += 1 }
+  if !ending and demands != 0 and !accepted and !d.hint { fail = true }
+  if beats != 0 { wrap beats -= 1 }
+  done = d.valid != 0 and waitCycles == 16 and (ending or accepted)
+  bad = fail or (d.valid != 0 and d.data != 0x55)
+}
+test hints.page_boundary {
+  mut d = hints
+  tick 70 {
+    d.ending = clock >= 35
+    d.rst = clock == 0 or clock == 35
+    step
+    if clock == 34 or clock == 69 { assert(d.done and !d.bad, "stable next-line hint, suppressed at the page boundary") }
+  }
 }

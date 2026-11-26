@@ -4,14 +4,14 @@ const translate = import("../pyrope2/AddressTranslation.AddressTranslation")
 
 // The PTE at the root maps a supervisor-readable superpage, or a user
 // execute-only page for the second root. Change the PTE to check flushes.
-mod check<W>(clk:Clock, rst:Reset, row:U5, phase:U4) -> (wrong:Bool@[], done:Bool@[]) {
+mod check<W,WAYS=1>(clk:Clock, rst:Reset, row:U5, phase:U4) -> (wrong:Bool@[], done:Bool@[]) {
   const root = if row >= 15 { 3 } elif row >= 5 and row <= 9 { 2 } else { 1 }
   const ppn = if row >= 8 { 0x40000 } else { 0x80000 }
   const flags = if root == 2 { 0x59 } else { 0x43 }
   // The two VPNs below collide when the cache has two entries.
   const va = if row == 11 { 0x87654321 } elif row == 12 { 0x100001234 }
              elif row == 13 { 0x12345678+0x2000 } else { 0x12345678 }
-  const d = translate<XLEN=W, ENTRIES=2>(clk=clk, rst=rst, request=phase == 1, virtualAddress=va#[0..<W],
+  const d = translate<XLEN=W, ENTRIES=2, WAYS=WAYS>(clk=clk, rst=rst, request=phase == 1, virtualAddress=va#[0..<W],
       addressSpace=root, paging=row != 11 and row != 12,
       flush=(row == 8 and phase == 0) or ((row == 9 or row == 15) and phase == 2),
       user=root == 2, fetch=row == 3 or row == 5 or row == 8, store=row == 4,
@@ -19,7 +19,7 @@ mod check<W>(clk:Clock, rst:Reset, row:U5, phase:U4) -> (wrong:Bool@[], done:Boo
       readError=false, readData=(ppn << 10) | flags)
   // Row 9 hits the cached user entry. Flush at phase 2 drops it while
   // its translation response is held. Row 10 must read from the first root.
-  const wantRead = row == 0 or row == 5 or row == 8 or row == 10 or row == 13 or row == 14 or row == 15 or row == 16
+  const wantRead = row == 0 or row == 5 or row == 8 or row == 10 or row == 13 or (row == 14 and WAYS == 1) or row == 15 or row == 16
   const expectedPF = row == 3 or row == 4 or row == 6 or row == 9
   const expectedAE = row == 12 and W == 64
   const offset = va & (if W == 32 { 0x3fffff } else { 0x3fffffff })
@@ -30,10 +30,11 @@ mod check<W>(clk:Clock, rst:Reset, row:U5, phase:U4) -> (wrong:Bool@[], done:Boo
   done = d.valid
 }
 pub mod translation_cache(clk:Clock, rst:Reset, row:U5, phase:U4) -> (wrong:Bool@[], done:Bool@[]) {
-  const sv32 = check<32>(clk=clk, rst=rst, row=row, phase=phase)
-  const sv39 = check<64>(clk=clk, rst=rst, row=row, phase=phase)
-  done = sv32.done and sv39.done
-  wrong = sv32.wrong or sv39.wrong
+  const sv32 = check<W=32>(clk=clk, rst=rst, row=row, phase=phase)
+  const sv39 = check<W=64>(clk=clk, rst=rst, row=row, phase=phase)
+  const associative = check<W=64,WAYS=2>(clk=clk,rst=rst,row=row,phase=phase)
+  done = sv32.done and sv39.done and associative.done
+  wrong = sv32.wrong or sv39.wrong or associative.wrong
 }
 test translation_cache.lookup_and_flush {
   mut d = translation_cache

@@ -9,6 +9,7 @@ pub mod port<C, FETCH>(clk:Clock, rst:Reset, request:Bool, accepted:Bool, va:Uns
     readReady:Bool, readDone:Bool, readError:Bool, readData:Unsigned(bits=C.xLen), grant:Bool=true, leaf:U28=0)
     -> (probe:Bool@[], key:Unsigned(bits=C.tlbKeyBits)@[], walkDone:Bool@[], walkLeaf:U28@[], miss:Bool@[], resolved:Bool@[], address:U32@[], pf:Bool@[], ae:Bool@[], read:Bool@[], readAddress:U32@[], cachePointer:Bool@[]) {
   comptime const entries = if FETCH { C.iTLBEntries } else { C.dTLBEntries }
+  comptime const ways = if FETCH { C.iTLBWays } else { C.dTLBWays }
   comptime const modeBits = std.clog2(C.extraPgLevels+1)
   comptime const modeBit = if C.xLen == 32 { 31 } else { 60 }
   comptime const asidBit = if C.xLen == 32 { 22 } else { 44 }
@@ -27,7 +28,7 @@ pub mod port<C, FETCH>(clk:Clock, rst:Reset, request:Bool, accepted:Bool, va:Uns
   reg denied:Bool
   const faultHit = negative and vpn == missVPN and addressSpace == missContext and rights == missRights
   wire start:Bool = nil
-  const t = translation<XLEN=C.xLen, PA=32, ENTRIES=entries, EXTRA=C.extraPgLevels, ASID=C.asIdBits>(clk=clk, rst=rst, request=start, virtualAddress=va,
+  const t = translation<XLEN=C.xLen, PA=32, ENTRIES=entries, WAYS=ways, EXTRA=C.extraPgLevels, ASID=C.asIdBits>(clk=clk, rst=rst, request=start, virtualAddress=va,
       addressSpace=addressSpace, paging=true, flush=flush, user=privilege == 0, fetch=FETCH, store=store, sum=sum, mxr=mxr,
       grant=grant, leaf=leaf, consume=true, readReady=readReady, readDone=readDone, readError=readError, readData=readData)
   start = request and active and !t.cached and !faultHit

@@ -1,0 +1,46 @@
+const config = import("../pyrope2/RocketConfig")
+const image = import("BootROM.Image")
+comptime const narrow = config.params(icachePrefetch=true, dcacheClockGate=true, icacheBlockBytes=32)
+comptime const wide = config.params(xLen=64, icachePrefetch=true, dcacheClockGate=true,
+    icacheBlockBytes=32, useDataScratchpad=false, dcacheSets=4, dcacheWays=2, nMSHRs=2)
+
+// Clear bits 17 and 0 of the machine control CSR. Fetch across a cache line,
+// let the D-cache idle, then wake it with a store and dependent load.
+mod profile<C>(clk:Clock,rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
+  const program:[32]U32 = (
+    0x000200b7, 0x00108093, 0x7c10b073, // li x1,0x20001; csrc 0x7c1,x1
+    0x00100113, 0x01f11113,             // x2 = 0x80000000
+    0x02a00193, 0x00312023, 0x00012203, // sw x3,0(x2); lw x4,0(x2)
+    0x00419663,                         // bne x3,x4,fail
+    0x00000013, 0x0000006f, 0x00100073,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
+  const d = image<C=C,WORDS=32>(clk=clk,rst=rst,program=program,successPC=0x10068)
+  reg observed:Bool = false
+  if d.hinted { observed = true }
+  done = observed and d.success
+  bad = d.trap != 0 or d.badFetch
+}
+
+pub mod l1_controls(clk:Clock,rst:Reset) -> (ok32:Bool@[], ok64:Bool@[], bad:Bool@[]) {
+  const a = profile<narrow>(clk=clk,rst=rst)
+  const b = profile<wide>(clk=clk,rst=rst)
+  ok32 = a.done
+  ok64 = b.done
+  bad = a.bad or b.bad
+}
+test l1_controls.hint_and_wakeup {
+  mut d = l1_controls
+  mut a = false
+  mut b = false
+  tick 600 {
+    d.rst = clock < 4
+    step
+    if clock > 4 {
+      assert(!d.bad, "unexpected trap or TileLink request")
+      a = a or d.ok32
+      b = b or d.ok64
+    }
+    if a and b { break }
+  }
+  assert(a and b, "both tiles issued a hint and retired the checked load")
+}

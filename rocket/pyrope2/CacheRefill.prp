@@ -2,16 +2,16 @@ const metadata = import("ClientMetadata")
 
 // One outstanding AcquireBlock. Reserve the destination way until done. A
 // GrantAck can leave after the first D beat, independently of later SRAM writes.
-pub mod CacheRefill<W=32, SOURCE=1, SINK_BITS=4>(clk:Clock, rst:Reset,
+pub mod CacheRefill<W=32, SOURCE=1, SINK_BITS=4, BLOCK=64>(clk:Clock, rst:Reset,
     request:Bool, address:U32, state:U2, write:Bool, writeIntent:Bool,
     aReady:Bool, dValid:Bool, dOpcode:U3, dSource:U5, dSink:Unsigned(bits=SINK_BITS),
     dCap:U2, dData:Unsigned(bits=W), dDenied:Bool, dCorrupt:Bool, eReady:Bool, ramReady:Bool)
     -> (ready:Bool@[], lineAddress:U32@[], aValid:Bool@[], aParam:U2@[], aSource:U5@[],
         dReady:Bool@[], eValid:Bool@[], eSink:Unsigned(bits=SINK_BITS)@[],
-        fill:Bool@[], fillBeat:Unsigned(bits=std.clog2(512/W))@[], fillData:Unsigned(bits=W)@[],
+        fill:Bool@[], fillBeat:Unsigned(bits=std.clog2(BLOCK*8/W))@[], fillData:Unsigned(bits=W)@[],
         fillCorrupt:Bool@[], done:Bool@[], error:Bool@[], install:Bool@[], newState:U2@[]) {
   cassert(W == 32 or W == 64)
-  comptime const beats = 512 / W
+  comptime const beats = BLOCK * 8 / W
   reg issuing:Bool = false
   reg receiving:Bool = false
   reg base:U32 = nil
@@ -24,7 +24,7 @@ pub mod CacheRefill<W=32, SOURCE=1, SINK_BITS=4>(clk:Clock, rst:Reset,
   ready = !rst and !issuing and !receiving and !ack
   if request and ready {
     const permission = metadata.access(state=state, write=write, writeIntent=writeIntent)
-    base = (address >> 6) << 6
+    base = (address >> std.clog2(BLOCK)) << std.clog2(BLOCK)
     grow = permission.grow
     store = write
     issuing = true
