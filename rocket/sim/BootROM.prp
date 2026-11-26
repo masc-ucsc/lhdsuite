@@ -50,7 +50,8 @@ mod TestRAM<W>(clk:Clock, rst:Reset, acquire:Bool, address:U32, grow:U2,
 }
 
 // Serve 64-byte TileLink instruction refills. The last DEBUG_WORDS, when present, start at 0x800.
-pub mod Image<C, WORDS, DEBUG_WORDS=0, ATOMIC_DEVICE=false>(clk:Clock, rst:Reset, program:[WORDS]U32, successPC:Unsigned(bits=C.xLen), seip:U1=0, timer:U1=0, localInterrupts:Unsigned(bits=C.localIRQBits)=0, debugIRQ:U1=0) -> (success:Bool@[], trap:U1@[], badFetch:Bool@[], tracePC:Unsigned(bits=C.xLen)@[], traceValid:Bool@[], trapValue:Unsigned(bits=C.xLen)@[], privilege:U3@[], cause:Unsigned(bits=C.xLen)@[], memoryChecked:Bool@[], watchValid:Unsigned(bits=C.triggerSlots)@[], watchAction:Unsigned(bits=3*C.triggerSlots)@[]) {
+pub mod Image<C, WORDS, DEBUG_WORDS=0, ATOMIC_DEVICE=false>(clk:Clock, rst:Reset, program:[WORDS]U32, successPC:Unsigned(bits=C.xLen), seip:U1=0, timer:U1=0, localInterrupts:Unsigned(bits=C.localIRQBits)=0, debugIRQ:U1=0) -> (success:Bool@[], trap:U1@[], badFetch:Bool@[], tracePC:Unsigned(bits=C.xLen)@[], traceValid:Bool@[], trapValue:Unsigned(bits=C.xLen)@[], privilege:U3@[], cause:Unsigned(bits=C.xLen)@[], traceTime:Unsigned(bits=C.xLen)@[], ingress:(iretire:U1, iaddr:Unsigned(bits=C.xLen), itype:U4, ilastsize:U1, priv:U4,
+        ctx:Unsigned(bits=C.xLen), tval:Unsigned(bits=C.xLen), cause:Unsigned(bits=C.xLen), time:Unsigned(bits=C.xLen))@[], memoryChecked:Bool@[], watchValid:Unsigned(bits=C.triggerSlots)@[], watchAction:Unsigned(bits=3*C.triggerSlots)@[]) {
   reg busy:Bool = false
   reg index:U4 = 0
   cassert(WORDS >= 16 and WORDS % 16 == 0)
@@ -140,6 +141,8 @@ pub mod Image<C, WORDS, DEBUG_WORDS=0, ATOMIC_DEVICE=false>(clk:Clock, rst:Reset
     if deviceReply or index == 16 - (C.dLen/32) { busy = false; deviceReply = false }
     wrap index += C.dLen/32
   }
+  traceTime = core.auto_broadcast_out_time#[0..<C.xLen]
+  ingress = core.ingress
   success = core.auto_broadcast_out_insns_0_valid != 0 and core.auto_broadcast_out_insns_0_iaddr == successPC
   privilege = core.auto_broadcast_out_insns_0_priv
   trapValue = core.auto_broadcast_out_insns_0_tval

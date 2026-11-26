@@ -49,6 +49,8 @@ pub mod Rocket<C=tiny>::[timecheck=false](
     io_trace_insns_0_iaddr:Unsigned(bits=C.xLen)@[], io_trace_insns_0_insn:U32@[], io_trace_insns_0_priv:U3@[],
     io_trace_insns_0_exception:U1@[], io_trace_insns_0_interrupt:U1@[],
     io_trace_insns_0_cause:Unsigned(bits=C.xLen)@[], io_trace_insns_0_tval:Unsigned(bits=C.xLen)@[],
+    ingress:(iretire:U1, iaddr:Unsigned(bits=C.xLen), itype:U4, ilastsize:U1, priv:U4,
+        ctx:Unsigned(bits=C.xLen), tval:Unsigned(bits=C.xLen), cause:Unsigned(bits=C.xLen), time:Unsigned(bits=C.xLen))@[],
     io_trace_time:U64@[], watchValid:Unsigned(bits=C.triggerSlots)@[], watchAction:Unsigned(bits=3*C.triggerSlots)@[], io_wfi:U1@[]
 ) {
   const running:U1 = ~`reset`
@@ -579,6 +581,21 @@ pub mod Rocket<C=tiny>::[timecheck=false](
   io_ptw_status_mie = csr.io_status_mie
   pmpTable = csr.pmpTable
   io_ptw_customCSRs_csrs_0_value = csr.io_customCSRs_0_value
+  ingress = (iretire=0, iaddr=0, itype=0, ilastsize=0, priv=0, ctx=0, tval=0, cause=0, time=0)
+  if C.enableTraceCoreIngress {
+    // Capture the resolved MEM control flow alongside the retiring PC, including compressed jumps.
+    reg flow:U4:[clock_pin=pipeClock] = nil
+    if memPCValid != 0 {
+      flow = if memOp.branch != 0 { 4 | memTaken } elif memOp.jal != 0 { 15 } elif memOp.jalr != 0 { 14 } else { 0 }
+    }
+    const kind = if csr.io_trace_0_exception != 0 { if csr.io_trace_0_interrupt != 0 { 2 } else { 1 } }
+        elif csr.io_eret != 0 { 13 } else { flow }
+    const asidBit = if C.xLen == 32 { 22 } else { 44 }
+    ingress = (iretire=csr.io_trace_0_valid, iaddr=wbStage.address, itype=kind,
+        ilastsize=csr.io_trace_0_valid & U1(wbStage.raw_inst#[0..<2] == 3), priv=csr.io_trace_0_priv,
+        ctx=(csr.satp >> asidBit) & ((1 << C.asIdBits)-1), tval=trapValue,
+        cause=(wbCause#[31] << (C.xLen-1)) | wbCause#[0..<31], time=csr.io_time#[0..<C.xLen])
+  }
   io_trace_insns_0_valid = csr.io_trace_0_valid
   io_trace_insns_0_iaddr = csr.io_trace_0_iaddr
   io_trace_insns_0_insn = csr.io_trace_0_insn
