@@ -1,0 +1,91 @@
+const vm = import("../pyrope2/TileTranslation")
+
+// Each transaction has a request, a stall, a memory reply, then an idle cycle.
+// A hit must complete on the request even when the memory interface is stalled.
+mod check<X>(clk:Clock, rst:Reset, slot:U5, beat:U2) -> (correct:Bool@[]) {
+  const fetch = slot#[0] == 0
+  const expectHit = slot == 1 or slot == 5 or slot == 17 or slot == 20
+  const request = beat == 0
+  const ready = !expectHit
+  const pointer = slot != 2
+  const tag = if slot < 3 { 0x1000 } elif slot < 8 { 0x2000 } elif slot < 18 { 0x3000 } else { 0x4000 }
+  const page = 0x12300 + slot
+  const good = (page << 10) | 0x321
+  const data = match slot {
+    == 8 { (page << 10) | 0x21 }   // V and G, with a memory error
+    == 9 { (page << 10) | 0xcb }   // leaf
+    == 10 { (page << 10) | 0x11 }  // U on a non-leaf
+    == 11 { (page << 10) | 0x81 }  // D on a non-leaf
+    == 12 { (1 << 30) | 1 }          // PPN beyond the tile's physical address width
+    == 13 { 0 }                    // invalid
+    == 14 { (page << 10) | 0x41 }  // A on a non-leaf
+    == 15 { (page << 10) | 5 }     // reserved W-only encoding
+    else { good }
+  }
+  const flush = (slot == 3 and beat == 1) or (slot == 6 and beat == 0) or (slot == 18 and beat == 2)
+  const memoryDone = beat == 2 and !expectHit
+  const a = vm.arbiter<W=X,N=3>(clk=clk, rst=rst, iRead=request and fetch, iAddress=tag,
+      dRead=request and !fetch, dAddress=tag, iPointer=pointer, dPointer=pointer,
+      ready=ready, done=memoryDone, flush=flush, pte=data, error=(slot == 8 and memoryDone))
+  const completion = if fetch { a.iDone } else { a.dDone }
+  const other = if fetch { a.dDone } else { a.iDone }
+  const expectedPage = if slot == 1 { 0x12300 } elif slot == 5 { 0x12304 } elif slot == 17 { 0x12310 } else { 0x12313 }
+  correct = !other and a.read == (request and !expectHit) and completion == ((request and expectHit) or memoryDone)
+  if request {
+    correct = correct and (if fetch { a.iReady } else { a.dReady })
+    if expectHit { correct = correct and !a.fault and a.result == ((expectedPage << 10) | 1) }
+  }
+  if memoryDone { correct = correct and a.result == data and a.fault == (slot == 8) }
+}
+pub mod pte_refill(clk:Clock, rst:Reset, slot:U5, beat:U2) -> (ok:Bool@[]) {
+  const a = check<32>(clk=clk, rst=rst, slot=slot, beat=beat)
+  const b = check<64>(clk=clk, rst=rst, slot=slot, beat=beat)
+  reg sampled:Bool = true
+  sampled = a.correct and b.correct
+  ok = sampled
+}
+
+test pte_refill.fence_and_invalid_entries {
+  mut d = pte_refill
+  tick 86 {
+    d.rst = clock < 2
+    d.slot = if clock < 2 { 0 } else { (clock-2)/4 }
+    d.beat = if clock < 2 { 3 } else { (clock-2)%4 }
+    step
+    if clock >= 2 { assert(d.ok, "only eligible, successful reads after the most recent fence can fill") }
+  }
+}
+
+const pointers = import("../pyrope2/PTECache.pointers")
+
+// Sequence includes touches before eviction and a partial subtree at N=3.
+mod probe<N>(clk:Clock, rst:Reset, key:U4, access:Bool) -> (wasHit:Bool@[]) {
+  wire hit:Bool = nil
+  const c = pointers<N=N,W=64>(clk=clk, rst=rst, flush=false, lookup=access, fill=access and !hit, address=key << 3, page=key)
+  hit = c.hit
+  reg last:Bool = false
+  last = hit and c.ppn == key
+  wasHit = last
+}
+pub mod pte_replacement(clk:Clock, rst:Reset, ordinal:U5, access:Bool) -> (hits:U3@[]) {
+  const keys:[20]U4 = [0,1,2,0,3,1,2,1,0,4,5,6,7,0,8,2,1,9,0,1]
+  const key = keys[ordinal%20]
+  const a = probe<1>(clk=clk, rst=rst, key=key, access=access)
+  const b = probe<3>(clk=clk, rst=rst, key=key, access=access)
+  const c = probe<8>(clk=clk, rst=rst, key=key, access=access)
+  hits = (U1(c.wasHit) << 2) | (U1(b.wasHit) << 1) | U1(a.wasHit)
+}
+test pte_replacement.tree_policy {
+  mut d = pte_replacement
+  tick 21 {
+    d.rst = clock == 0
+    d.access = clock != 0
+    const i = if clock == 0 { 0 } else { clock-1 }
+    d.ordinal = i
+    step
+    if clock > 0 {
+      const expected = (((0xda1e8 >> i) & 1) << 2) | (((0x801a8 >> i) & 1) << 1)
+      assert(d.hits == expected, "one, three and eight entries follow their replacement trees")
+    }
+  }
+}

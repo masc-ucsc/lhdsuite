@@ -1,0 +1,123 @@
+const image = import("BootROM.Image")
+const cfg = import("../pyrope2/RocketConfig")
+comptime const narrow = cfg.params(xLen=32, fLen=64)
+comptime const wide = cfg.params(xLen=64, fLen=64)
+
+// Entry zero initially covers only the upper word of an eight-byte access.
+// Entry one allows the whole address space. The handler verifies each fault's
+// PC, cause and address. The program also checks an eight-byte NAPOT match
+// and a transfer crossing the upper bound of a 0x100cc entry.
+mod run<C>(clk:Clock, rst:Reset) -> (done:U1@[], fault:U1@[], bad:Bool@[]) {
+  const code:[80]U32 = (
+    0x00000297, // auipc t0,0x0
+    0x0b028293, // addi t0,t0,176 # 100f0 <trap_handler>
+    0x30529073, // csrw mtvec,t0
+    0x000022b7, // lui t0,0x2
+    0x3002a073, // csrs mstatus,t0
+    0x00100413, // li s0,1
+    0x01f41413, // slli s0,s0,0x1f
+    0x00000493, // li s1,0
+    0x200002b7, // lui t0,0x20000
+    0x00128293, // addi t0,t0,1 # 20000001 <__global_pointer$+0x1ffee6a9>
+    0x3b029073, // csrw pmpaddr0,t0
+    0xfff00293, // li t0,-1
+    0x3b129073, // csrw pmpaddr1,t0
+    0x000022b7, // lui t0,0x2
+    0xf1328293, // addi t0,t0,-237 # 1f13 <_start-0xe12d>
+    0x3a029073, // csrw pmpcfg0,t0
+    0x02a00313, // li t1,42
+    0x00642223, // sw t1,4(s0)
+    0x00442283, // lw t0,4(s0)
+    0x06629063, // bne t0,t1,100ec <fail>
+    0x00043087, // fld ft1,0(s0)
+    0x00100293, // li t0,1
+    0x04549a63, // bne s1,t0,100ec <fail>
+    0x00043027, // fsd ft0,0(s0)
+    0x00200293, // li t0,2
+    0x04549463, // bne s1,t0,100ec <fail>
+    0x00442283, // lw t0,4(s0)
+    0x04629063, // bne t0,t1,100ec <fail>
+    0x000022b7, // lui t0,0x2
+    0xf1b28293, // addi t0,t0,-229 # 1f1b <_start-0xe125>
+    0x3a029073, // csrw pmpcfg0,t0
+    0x00043087, // fld ft1,0(s0)
+    0x000022b7, // lui t0,0x2
+    0xf0b28293, // addi t0,t0,-245 # 1f0b <_start-0xe135>
+    0x3a029073, // csrw pmpcfg0,t0
+    0x00043087, // fld ft1,0(s0)
+    0x00300293, // li t0,3
+    0x00549c63, // bne s1,t0,100ec <fail>
+    0x200002b7, // lui t0,0x20000
+    0x00428293, // addi t0,t0,4 # 20000004 <__global_pointer$+0x1ffee6ac>
+    0x3b029073, // csrw pmpaddr0,t0
+    0x00043087, // fld ft1,0(s0)
+    0x30500073, // 0x30500073
+    0x00100073, // ebreak
+    0x342023f3, // csrr t2,mcause
+    0x34302e73, // csrr t3,mtval
+    0xfe8e1ae3, // bne t3,s0,100ec <fail>
+    0x34102ef3, // csrr t4,mepc
+    0x02048a63, // beqz s1,10134 <check_load>
+    0x00200f13, // li t5,2
+    0x01e48c63, // beq s1,t5,10120 <check_tor>
+    0x00700f13, // li t5,7
+    0xfde39ee3, // bne t2,t5,100ec <fail>
+    0x00000f17, // auipc t5,0x0
+    0xf88f0f13, // addi t5,t5,-120 # 1009c <denied_store>
+    0x0280006f, // j 10144 <advance>
+    0x00500f13, // li t5,5
+    0xfde394e3, // bne t2,t5,100ec <fail>
+    0x00000f17, // auipc t5,0x0
+    0xfa4f0f13, // addi t5,t5,-92 # 100cc <denied_tor>
+    0x0140006f, // j 10144 <advance>
+    0x00500f13, // li t5,5
+    0xfbe39ae3, // bne t2,t5,100ec <fail>
+    0x00000f17, // auipc t5,0x0
+    0xf54f0f13, // addi t5,t5,-172 # 10090 <denied_load>
+    0xfbee94e3, // bne t4,t5,100ec <fail>
+    0x004e8e93, // addi t4,t4,4
+    0x341e9073, // csrw mepc,t4
+    0x00148493, // addi s1,s1,1
+    0x30200073, // mret
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000
+  )
+  const t = image<C=C,WORDS=80>(clk=clk, rst=rst, program=code, successPC=0x100e8)
+  done = U1(t.success)
+  fault = t.trap
+  bad = t.trap != 0 and (t.tracePC != 0x10090 and t.tracePC != 0x1009c and t.tracePC != 0x100cc)
+}
+
+pub mod pmp_boundary(clk:Clock, rst:Reset) -> (done:U2@[], faults:U2@[], bad:Bool@[]) {
+  const a = run<narrow>(clk=clk,rst=rst)
+  const b = run<wide>(clk=clk,rst=rst)
+  done = (b.done << 1) | a.done
+  faults = (b.fault << 1) | a.fault
+  bad = a.bad or b.bad
+}
+
+test pmp_boundary.overlapping_entries {
+  mut d = pmp_boundary
+  mut finished:U2 = 0
+  mut n32 = 0
+  mut n64 = 0
+  tick 650 {
+    d.rst = clock < 4
+    step
+    if clock > 4 {
+      finished |= d.done
+      if d.faults#[0] != 0 { n32 += 1 }
+      if d.faults#[1] != 0 { n64 += 1 }
+      assert(!d.bad, "unexpected fault PC")
+    }
+  }
+  assert(finished == 3 and n32 == 3 and n64 == 3, "both tiles recover from exactly three partial matches")
+}

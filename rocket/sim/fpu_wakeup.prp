@@ -1,0 +1,51 @@
+const configs = import("../pyrope2/RocketConfig")
+const fpu = import("../pyrope2/FPU.FPU")
+comptime const rv32d = configs.params(xLen=32, fLen=64)
+
+pub mod fpu_wakeup(clk:Clock, rst:Reset, issue:Bool, response:Bool, read:Bool)
+    -> (pending:Bool@[], stored:U64@[]) {
+  pending = false
+  stored = 0
+  if issue or response or read {
+    const f = fpu<rv32d>(clk=clk, rst=rst, inst=(if issue { 0x00002087 } else { 0x13 }),
+        commit=issue, x=0, frm=0, storeRs=7, response=response, tag=7, loadData=0x40400000)
+    pending = f.pending
+    stored = f.storeData
+  }
+}
+
+test fpu_wakeup.delayed_load_and_idle_reset {
+  mut d = fpu_wakeup
+  tick 20 {
+    d.rst = clock == 0 or clock == 16
+    d.issue = clock == 1 or clock == 13
+    d.response = clock == 8
+    d.read = clock == 6 or clock == 11 or clock == 15 or clock == 18
+    step
+    if clock == 6 or clock == 15 { assert(d.pending, "the load stays pending across idle cycles") }
+    if clock == 11 { assert(!d.pending and d.stored == 0xffffffff40400000, "tagged FLW wakes the FPU and boxes the word") }
+    if clock == 18 { assert(!d.pending, "reset clears the outstanding request while idle") }
+  }
+}
+
+pub mod arithmetic_wakeup(clk:Clock, rst:Reset, commit:Bool, inst:U32, x:U32)
+    -> (result:U32@[], flags:U5@[]) {
+  const f = fpu<rv32d>(clk=clk, rst=rst, inst=inst, commit=commit, x=x,
+      frm=0, storeRs=0, response=false, tag=0, loadData=0)
+  result = f.intResult
+  flags = f.flags
+}
+
+test arithmetic_wakeup.only_committed_arithmetic {
+  mut d = arithmetic_wakeup
+  tick 8 {
+    d.rst = clock == 0
+    d.commit = clock >= 3 and clock <= 6
+    // FCVT.S.W, an FLW, an FSW, an integer ADDI, then another idle FCVT.
+    d.inst = if clock == 4 { 0x2087 } elif clock == 5 { 0x2027 } elif clock == 6 { 0x13 } else { 0xd0000053 }
+    d.x = if clock == 3 { 7 } else { 11 }
+    step
+    assert(d.result == (if clock == 3 { 0x40e00000 } else { 0 }) and d.flags == 0,
+        "only a committed FP arithmetic instruction supplies a result")
+  }
+}

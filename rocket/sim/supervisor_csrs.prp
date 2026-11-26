@@ -1,0 +1,176 @@
+const csr = import("../pyrope2/CSRFile.CSRFile")
+const config = import("../pyrope2/RocketConfig")
+comptime const narrow = config.params(useSupervisor=true)
+comptime const wide = config.params(xLen=64, useSupervisor=true)
+
+mod access<C>(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:U64, external:U1)
+    -> (value:Unsigned(bits=C.xLen)@[], illegal:U1@[]) {
+  const d = csr<C>(`clock`=clk, `reset`=U1(rst), io_ungated_clock=clk, io_interrupts_debug=0,
+      io_interrupts_mtip=0, io_interrupts_msip=0, io_interrupts_meip=0, io_interrupts_seip=external, io_hartid=0, io_rw_addr=addr,
+      io_rw_cmd=cmd, io_rw_wdata=data#[0..<C.xLen], io_decode_0_inst=addr<<20, io_exception=0,
+      io_retire=1, io_cause=0x80000007, io_pc=0x10040, io_tval=0, io_htval=0, io_gva=0, io_inst_0=0)
+  value = d.io_rw_rdata
+  illegal = d.io_decode_0_read_illegal
+}
+
+pub mod supervisor_csrs(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:U64, external:U1)
+    -> (rv32:U32@[], rv64:U64@[], illegal:Bool@[]) {
+  const a = access<narrow>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data, external=external)
+  const b = access<wide>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data, external=external)
+  rv32 = a.value
+  rv64 = b.value
+  illegal = a.illegal != 0 or b.illegal != 0
+}
+test supervisor_csrs.aliases_and_masks {
+  mut d = supervisor_csrs
+  d.rst = true
+  d.external = 0
+  d.cmd = 0
+  d.addr = 0
+  d.data = 0
+  step
+  d.rst = false
+  d.addr = 0x100
+  d.cmd = 5
+  d.data = 0x6122
+  step
+  d.addr = 0x100
+  d.cmd = 0
+  step
+  assert(!d.illegal and d.rv32 == 0x80006122 and d.rv64 == 0x8000000200006122, "supervisor status reflects FS dirty and UXL")
+  d.addr = 0x300
+  d.cmd = 0
+  step
+  assert(!d.illegal and d.rv32 == 0x80007922 and d.rv64 == 0x8000000a00007922, "machine status shares SPP, SPIE, SIE and FS")
+  d.addr = 0x100
+  d.cmd = 5
+  d.data = 0x0
+  step
+  d.addr = 0x302
+  d.cmd = 5
+  d.data = 0xffff
+  step
+  d.addr = 0x302
+  d.cmd = 0
+  step
+  assert(!d.illegal and d.rv32 == 0xb15d and d.rv64 == 0xb15d, "delegable synchronous exceptions")
+  d.addr = 0x303
+  d.cmd = 5
+  d.data = 0xffff
+  step
+  d.addr = 0x303
+  d.cmd = 0
+  step
+  assert(!d.illegal and d.rv32 == 0x222 and d.rv64 == 0x222, "only supervisor interrupts are delegable")
+  d.addr = 0x304
+  d.cmd = 5
+  d.data = 0xffff
+  step
+  d.addr = 0x104
+  d.cmd = 0
+  step
+  assert(!d.illegal and d.rv32 == 0x222 and d.rv64 == 0x222, "supervisor interrupt enable alias")
+  d.addr = 0x104
+  d.cmd = 7
+  d.data = 0x20
+  step
+  d.addr = 0x304
+  d.cmd = 0
+  step
+  assert(!d.illegal and d.rv32 == 0xa8a and d.rv64 == 0xa8a, "clearing STIE preserves machine sources and siblings")
+  d.addr = 0x344
+  d.cmd = 5
+  d.data = 0x20
+  step
+  d.addr = 0x144
+  d.cmd = 6
+  d.data = 0x2
+  step
+  d.addr = 0x344
+  d.cmd = 0
+  step
+  assert(!d.illegal and d.rv32 == 0x22 and d.rv64 == 0x22, "SIP can set SSIP without overwriting STIP")
+  d.addr = 0x10a
+  d.cmd = 5
+  d.data = 0xff
+  step
+  d.addr = 0x10a
+  d.cmd = 0
+  step
+  assert(!d.illegal and d.rv32 == 0x1 and d.rv64 == 0x1, "senvcfg implements FIOM")
+  d.addr = 0x30a
+  d.cmd = 5
+  d.data = 0xab
+  step
+  d.addr = 0x30a
+  d.cmd = 0
+  step
+  assert(!d.illegal and d.rv32 == 0x1 and d.rv64 == 0x1, "menvcfg implements FIOM")
+  d.addr = 0x105
+  d.cmd = 5
+  d.data = 0x100ff
+  step
+  d.addr = 0x105
+  d.cmd = 0
+  step
+  assert(!d.illegal and d.rv32 == 0x10081 and d.rv64 == 0x10001, "vectored stvec alignment")
+  d.addr = 0x180
+  d.cmd = 5
+  d.data = 0xffffffffffffffff
+  step
+  d.addr = 0x180
+  d.cmd = 0
+  step
+  assert(!d.illegal and d.rv32 == 0x0 and d.rv64 == 0x0, "bare profile hardwires satp to zero")
+  d.external = 1
+  d.addr = 0x344
+  d.cmd = 6
+  d.data = 2
+  step
+  d.cmd = 0
+  step
+  assert(d.rv32 == 0x222 and d.rv64 == 0x222, "asserted external interrupt appears in mip")
+  d.external = 0
+  step
+  assert(d.rv32 == 0x22 and d.rv64 == 0x22, "CSRRS on another bit never latches the external line")
+}
+
+comptime const oneASID = config.params(useVM=true, asIdBits=1)
+comptime const fiveASID = config.params(xLen=64, useVM=true, asIdBits=5)
+comptime const zeroASID = config.params(xLen=64, useVM=true)
+pub mod satp_fields(clk:Clock, rst:Reset, cmd:U3, data:U64) -> (one:U32@[], five:U64@[], zero:U64@[]) {
+  const a = access<oneASID>(clk=clk, rst=rst, addr=0x180, cmd=cmd, data=data, external=0)
+  const b = access<fiveASID>(clk=clk, rst=rst, addr=0x180, cmd=cmd, data=data, external=0)
+  const c = access<zeroASID>(clk=clk, rst=rst, addr=0x180, cmd=cmd, data=data, external=0)
+  one = a.value
+  five = b.value
+  zero = c.value
+}
+test satp_fields.probe_width {
+  mut d = satp_fields
+  d.rst = true
+  d.cmd = 0
+  d.data = 0
+  step
+  d.rst = false
+  d.cmd = 5
+  d.data = 0x8fffffffffffffff
+  step
+  d.cmd = 0
+  step
+  assert(d.one == 0x804fffff and d.five == 0x8001f000000fffff and d.zero == 0x80000000000fffff,
+      "only implemented ASID and physical page bits read back")
+  d.cmd = 5
+  d.data = 0xf000000000000123
+  step
+  d.cmd = 0
+  step
+  assert(d.one == 0x123 and d.five == 0x8001f000000fffff and d.zero == 0x80000000000fffff,
+      "RV64 ignores the entire unsupported mode write while RV32 accepts bare mode")
+  d.cmd = 7
+  d.data = 1 << 44
+  step
+  d.cmd = 0
+  step
+  assert(d.five == 0x8001e000000fffff, "CSRRC preserves sibling ASID bits and the root")
+}

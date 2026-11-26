@@ -1,0 +1,53 @@
+const configs = import("../pyrope2/RocketConfig")
+const image = import("BootROM.Image")
+comptime const half = configs.params(fLen=32, minFLen=16)
+comptime const single = configs.params(xLen=64, fLen=64)
+
+mod run<C>(clk:Clock, rst:Reset, expected:U32) -> (seen:Bool@[], wrong:Bool@[]) {
+  const code:[32]U32 = (
+    0x000022b7, // lui t0, 0x2
+    0x3002a073, // csrs mstatus, t0
+    0x00300293, // li t0, 0x3
+    0xd402f053, // fcvt.h.w ft0, t0
+    0x040070d3, // fadd.h ft1, ft0, ft0
+    0x00100413, // li s0, 0x1
+    0x01f41413, // slli s0, s0, 0x1f
+    0x00141127, // fsh ft1, 0x2(s0)
+    0x00241107, // flh ft2, 0x2(s0)
+    0x402101d3, // fcvt.s.h ft3, ft2
+    0xc001f353, // fcvt.w.s t1, ft3
+    0x00600393, // li t2, 0x6
+    0x00731863, // bne t1, t2, 0x10080 <fail>
+    0x02000293, // li t0, 0x20
+    0x3012b073, // csrc misa, t0
+    0x00007053, // fadd.s ft0, ft0, ft0
+    0x00100073, // ebreak
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+  )
+  const t = image<C=C, WORDS=32>(clk=clk, rst=rst, program=code, successPC=0x10080)
+  const correct = t.tracePC == expected and t.cause == 2
+  reg complete:Bool = false
+  if t.trap != 0 and correct { complete = true }
+  seen = complete
+  wrong = !complete and (t.success or (t.trap != 0 and !correct))
+}
+
+pub mod half_program(clk:Clock, rst:Reset) -> (done:Bool@[], failed:Bool@[]) {
+  const h = run<half>(clk=clk, rst=rst, expected=0x1007c)
+  const s = run<single>(clk=clk, rst=rst, expected=0x1004c)
+  done = h.seen and s.seen
+  failed = h.wrong or s.wrong
+}
+test half_program.extensions {
+  mut d = half_program
+  mut done = false
+  tick 200 {
+    d.rst = clock < 4
+    step
+    if clock >= 4 {
+      assert(!d.failed, "half firmware trapped at the wrong instruction")
+      if d.done { done = true; break }
+    }
+  }
+  assert(done, "half result, memory transfer and disabling misa.F")
+}

@@ -1,0 +1,29 @@
+pub comb legal<S>(mode:U2) -> (prv:U2) {
+  prv = if S { if mode == 2 { 0 } else { mode } } elif mode#[0] != 0 { 3 } else { 0 }
+}
+
+// State that exists only when user mode is enabled. MPP and interrupt enables
+// live in the machine trap CSRs. Both the trap and return paths use their old values.
+pub mod UserPrivilege<S=false, COUNTERS=3>(clk:Clock, rst:Reset, returnPrv:U2, write:Bool, csr:U12, data:U32,
+    exception:Bool, returning:Bool, delegated:Bool, basicCounters:Bool)
+    -> (prv:U2@[], fiom:U1@[], mprv:U1@[], counters:Unsigned(bits=COUNTERS)@[]) {
+  reg orderIO:U1 = 0
+  reg current:U2 = 3
+  reg overrideData:U1 = 0
+  reg counterMask:Unsigned(bits=COUNTERS) = 0
+  if write {
+    if csr == 0x30a { orderIO = data#[0] }
+    if csr == 0x300 { overrideData = data#[17] }
+    if csr == 0x306 and basicCounters { counterMask = data#[0..<COUNTERS] }
+  }
+  if returning {
+    current = returnPrv
+    if returnPrv != 3 { overrideData = 0 }
+  } elif exception {
+    current = if delegated { 1 } else { 3 }
+  }
+  fiom = orderIO
+  prv = current
+  mprv = overrideData
+  counters = counterMask
+}

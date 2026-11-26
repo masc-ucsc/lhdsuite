@@ -1,0 +1,136 @@
+const cfg = import("../pyrope2/RocketConfig")
+const image = import("BootROM.Image")
+
+// Both context CSRs keep more bits than tdata3 can compare. Exercise each
+// mismatch independently, then enter S mode and check CSR permissions.
+mod run<X>(clk:Clock, rst:Reset) -> (done:Bool@[], trap:U1@[]) {
+  comptime const C = cfg.params(xLen=X, useSupervisor=true, nBreakpoints=2, mcontextWidth=X-1, scontextWidth=X)
+  const program:[112]U32 = (
+    0x00000297, // auipc t0,0x0
+    0x13428293, // addi t0,t0,308 # 10174 <handler>
+    0x30529073, // csrw mtvec,t0
+    0xfff00293, // li t0,-1
+    0x3b029073, // csrw pmpaddr0,t0
+    0x00f00293, // li t0,15
+    0x3a029073, // csrw pmpcfg0,t0
+    0x7a8022f3, // csrr t0,mcontext
+    0x5a802373, // csrr t1,0x5a8
+    0x0062e2b3, // or t0,t0,t1
+    0x10029463, // bnez t0,10170 <fail>
+    0xfff00293, // li t0,-1
+    0x7a829073, // csrw mcontext,t0
+    0x5a829073, // csrw 0x5a8,t0
+    0x5a802373, // csrr t1,0x5a8
+    0x0e629a63, // bne t0,t1,10170 <fail>
+    0x0012d293, // srli t0,t0,0x1
+    0x7a802373, // csrr t1,mcontext
+    0x0e629463, // bne t0,t1,10170 <fail>
+    0x7a80f073, // csrci mcontext,1
+    0x5a80f073, // csrci 0x5a8,1
+    0xfff00293, // li t0,-1
+    0x7a329073, // csrw tdata3,t0
+    0x7a302373, // csrr t1,tdata3
+    ((if X == 32 { 25 } else { 50 }) << 20) | 0x00493, // li s1, mselect position
+    ((if X == 32 { 16 } else { 34 }) << 20) | 0x00393, // li t2, svalue width
+    0x00100e13, // li t3,1
+    0x007e1eb3, // sll t4,t3,t2
+    0xfffe8e93, // addi t4,t4,-1
+    0x002e9e93, // slli t4,t4,0x2
+    0x001eee93, // ori t4,t4,1
+    0xfff00f13, // li t5,-1
+    0x009f1f33, // sll t5,t5,s1
+    0x01eeeeb3, // or t4,t4,t5
+    0x0bd31463, // bne t1,t4,10170 <fail>
+    0x00100293, // li t0,1
+    0x7a029073, // csrw tselect,t0
+    0x7a302373, // csrr t1,tdata3
+    0x08031c63, // bnez t1,10170 <fail>
+    0x7a001073, // csrw tselect,zero
+    0x00100413, // li s0,1
+    0x01f41413, // slli s0,s0,0x1f
+    0x01500293, // li t0,21
+    0x00542023, // sw t0,0(s0)
+    0x7a241073, // csrw tdata2,s0
+    0x05100293, // li t0,81
+    0x7a129073, // csrw tdata1,t0
+    0x00042283, // lw t0,0(s0)
+    0x7a80e073, // csrsi mcontext,1
+    0x00042283, // lw t0,0(s0)
+    0x7a80f073, // csrci mcontext,1
+    0x5a80e073, // csrsi 0x5a8,1
+    0x00042283, // lw t0,0(s0)
+    0x7a80e073, // csrsi mcontext,1
+    0x00000913, // li s2,0
+    0x00042283, // lw t0,0(s0)
+    0x00100293, // li t0,1
+    0x04591663, // bne s2,t0,10170 <fail>
+    0x00000297, // auipc t0,0x0
+    0x01c28293, // addi t0,t0,28 # 10144 <supervisor>
+    0x34129073, // csrw mepc,t0
+    0x000012b7, // lui t0,0x1
+    0x80028293, // addi t0,t0,-2048 # 800 <_start-0xf840>
+    0x30029073, // csrw mstatus,t0
+    0x30200073, // mret
+    0x5a80f073, // csrci 0x5a8,1
+    0x00042283, // lw t0,0(s0)
+    0x01500313, // li t1,21
+    0x02629063, // bne t0,t1,10170 <fail>
+    0x5a8022f3, // csrr t0,0x5a8
+    0xffe00313, // li t1,-2
+    0x00629a63, // bne t0,t1,10170 <fail>
+    0x7a8022f3, // csrr t0,mcontext
+    0x00200293, // li t0,2
+    0x00591463, // bne s2,t0,10170 <fail>
+    0x0000006f, // j 1016c <success>
+    0x0000006f, // j 10170 <fail>
+    0x34202ef3, // csrr t4,mcause
+    0x34102f73, // csrr t5,mepc
+    0x00090e63, // beqz s2,10198 <breakpoint>
+    0x00000f97, // auipc t6,0x0
+    0xfe0f8f93, // addi t6,t6,-32 # 10160 <forbidden>
+    0xffff14e3, // bne t5,t6,10170 <fail>
+    0x00200f93, // li t6,2
+    0xfffe90e3, // bne t4,t6,10170 <fail>
+    0x0200006f, // j 101b4 <resume>
+    0x00000f97, // auipc t6,0x0
+    0xf84f8f93, // addi t6,t6,-124 # 1011c <matching_load>
+    0xfdff18e3, // bne t5,t6,10170 <fail>
+    0x00300f93, // li t6,3
+    0xfdfe94e3, // bne t4,t6,10170 <fail>
+    0x34302ff3, // csrr t6,mtval
+    0xfc8f90e3, // bne t6,s0,10170 <fail>
+    0x00190913, // addi s2,s2,1
+    0x004f0f13, // addi t5,t5,4
+    0x341f1073, // csrw mepc,t5
+    0x30200073, // mret
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+  )
+  const tile = image<C=C, WORDS=112>(clk=clk, rst=rst, program=program, successPC=0x1016c)
+  done = tile.success and tile.privilege == 1
+  trap = tile.trap
+}
+
+pub mod trigger_context(clk:Clock, rst:Reset) -> (done:U2@[], traps:U2@[]) {
+  const a = run<32>(clk=clk, rst=rst)
+  const b = run<64>(clk=clk, rst=rst)
+  done = (U1(b.done) << 1) | U1(a.done)
+  traps = (b.trap << 1) | a.trap
+}
+
+test trigger_context.machine_and_supervisor {
+  mut d = trigger_context
+  mut finished:U2 = 0
+  mut once:U2 = 0
+  mut twice:U2 = 0
+  tick 1100 {
+    d.rst = clock < 4
+    step
+    if clock > 4 {
+      assert((twice & d.traps) == 0, "unexpected third trap")
+      twice |= once & d.traps
+      once |= d.traps
+      finished |= d.done
+    }
+  }
+  assert(finished == 3 and twice == 3, "both XLENs resume in S mode after the breakpoint and the illegal CSR access")
+}

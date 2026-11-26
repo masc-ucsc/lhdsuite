@@ -6,6 +6,8 @@ core: a 4x4 systolic mesh of PEs (8-bit inputs, 32-bit accumulators,
 transposer, tag queue) and `AccumulatorMem` (64x128 two-port SRAM), without the
 RoCC/rocket-chip front end. The non-RISC-V, loop-rich design of the suite.
 
+The [gated DMA tracker comparison](controller/README.md) extracts the load controller’s command tracker and exercises its reset, backpressure and wake-up behavior independently of the mesh.
+
 ## Layout and status (2026-11-06, lhd c53e1728c)
 
 | Dir | Contents | Status |

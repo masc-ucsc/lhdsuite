@@ -1,0 +1,26 @@
+// Tiny's 32-bit physical map. These attributes belong to the address region.
+// The core separately applies its privilege and PMP permissions.
+pub comb dtim<SETS=256>(address:U32) -> (hit:Bool) {
+  hit = address >= 0x80000000 and address < 0x80000000 + (SETS*64)
+}
+
+pub comb attributes<SETS=256, SCRATCH=true, IO_ONLY=false>(address:U32, debug:U1)
+    -> (read:U1, write:U1, execute:U1, partial:U1, atomic:U1, effects:U1, mapped:U1) {
+  const debugPage = address < 0x1000
+  const errorPage = address >= 0x3000 and address < 0x4000
+  const bootROM = address >= 0x10000 and address < 0x20000
+  const clint = address >= 0x02000000 and address < 0x02010000
+  const plic = address >= 0x0c000000 and address < 0x10000000
+  const external = address >= 0x60000000 and address < 0x80000000
+  const ram = if SCRATCH { dtim<SETS>(address=address) } else { address >= 0x80000000 }
+  const access = !debugPage or debug != 0
+  const devices = clint or plic
+  const localRW = debugPage or errorPage or ram
+  mapped = U1(localRW or bootROM or devices or external)
+  read = mapped & U1(access)
+  partial = U1(localRW or devices or external)
+  write = partial & U1(access)
+  execute = U1((localRW or bootROM or external) and access)
+  atomic = U1(debugPage or errorPage or devices or (ram and !IO_ONLY))
+  effects = U1(debugPage or devices or external)
+}

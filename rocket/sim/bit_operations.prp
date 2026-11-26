@@ -1,0 +1,105 @@
+const configs = import("../pyrope2/RocketConfig")
+const alu = import("../pyrope2/ALU.ALU")
+const decode = import("../pyrope2/IDecode.IDecode")
+comptime const b32 = configs.params(useZba=true, useZbb=true, useZbs=true, useConditionalZero=true)
+comptime const b64 = configs.params(xLen=64, useZba=true, useZbb=true, useZbs=true, useConditionalZero=true)
+comptime const zba = configs.params(xLen=64, useZba=true)
+comptime const zbb = configs.params(xLen=64, useZbb=true)
+comptime const zbs = configs.params(xLen=64, useZbs=true)
+comptime const zicond = configs.params(xLen=64, useConditionalZero=true)
+
+comb run<C>(inst:U32, a:Unsigned(bits=C.xLen), b:Unsigned(bits=C.xLen)) -> (legal:U1, value:Unsigned(bits=C.xLen)) {
+  const d = decode<C>(inst=inst)
+  const rhs = if d.sel_alu2 == 2 { b } else { inst#[20..<32] }
+  const x = alu<C>(io_fn=d.alu_fn, io_dw=d.alu_dw, io_in1=a, io_in2=rhs)
+  legal = d.legal
+  value = x.io_out
+}
+
+// Each row holds the instruction, its RV32 and RV64 answers, and the legal-XLEN mask.
+pub mod bit_operations(row:U7) -> (ok:Bool@[0]) {
+  const v = match row {
+    == 0  { (ins=0x0e73d1b3, rv32=0xff008182, rv64=0x81230080ff008182, legal=3, ext=1) } // czero_eqz
+    == 1  { (ins=0x0e73f1b3, rv32=0x00000000, rv64=0x0000000000000000, legal=3, ext=1) } // czero_nez
+    == 2  { (ins=0x2073a1b3, rv32=0xfe010325, rv64=0x02460101fe010325, legal=3, ext=2) } // sh1add
+    == 3  { (ins=0x2073c1b3, rv32=0xfc020629, rv64=0x048c0203fc020629, legal=3, ext=2) } // sh2add
+    == 4  { (ins=0x2073e1b3, rv32=0xf8040c31, rv64=0x09180407f8040c31, legal=3, ext=2) } // sh3add
+    == 5  { (ins=0x2073a1bb, rv32=0x00000000, rv64=0x00000001fe010325, legal=2, ext=2) } // sh1add_uw
+    == 6  { (ins=0x2073c1bb, rv32=0x00000000, rv64=0x00000003fc020629, legal=2, ext=2) } // sh2add_uw
+    == 7  { (ins=0x2073e1bb, rv32=0x00000000, rv64=0x00000007f8040c31, legal=2, ext=2) } // sh3add_uw
+    == 8  { (ins=0x087381bb, rv32=0x00000000, rv64=0x00000000ff0081a3, legal=2, ext=2) } // add_uw
+    == 9  { (ins=0x0873919b, rv32=0x00000000, rv64=0x0000007f8040c100, legal=2, ext=2) } // slli_uw
+    == 10 { (ins=0x0a83919b, rv32=0x00000000, rv64=0x0081820000000000, legal=2, ext=2) } // slli_uw
+    == 11 { (ins=0x4073f1b3, rv32=0xff008182, rv64=0x81230080ff008182, legal=3, ext=4) } // andn
+    == 12 { (ins=0x4073e1b3, rv32=0xffffffde, rv64=0xffffffffffffffde, legal=3, ext=4) } // orn
+    == 13 { (ins=0x4073c1b3, rv32=0x00ff7e5c, rv64=0x7edcff7f00ff7e5c, legal=3, ext=4) } // xnor
+    == 14 { (ins=0x0a73c1b3, rv32=0xff008182, rv64=0x81230080ff008182, legal=3, ext=4) } // min
+    == 15 { (ins=0x0a73d1b3, rv32=0x00000021, rv64=0x0000000000000021, legal=3, ext=4) } // minu
+    == 16 { (ins=0x0a73e1b3, rv32=0x00000021, rv64=0x0000000000000021, legal=3, ext=4) } // max
+    == 17 { (ins=0x0a73f1b3, rv32=0xff008182, rv64=0x81230080ff008182, legal=3, ext=4) } // maxu
+    == 18 { (ins=0x60039193, rv32=0x00000000, rv64=0x0000000000000000, legal=3, ext=4) } // clz
+    == 19 { (ins=0x60139193, rv32=0x00000001, rv64=0x0000000000000001, legal=3, ext=4) } // ctz
+    == 20 { (ins=0x60239193, rv32=0x0000000c, rv64=0x0000000000000012, legal=3, ext=4) } // cpop
+    == 21 { (ins=0x6003919b, rv32=0x00000000, rv64=0x0000000000000000, legal=2, ext=4) } // clzw
+    == 22 { (ins=0x6013919b, rv32=0x00000000, rv64=0x0000000000000001, legal=2, ext=4) } // ctzw
+    == 23 { (ins=0x6023919b, rv32=0x00000000, rv64=0x000000000000000c, legal=2, ext=4) } // cpopw
+    == 24 { (ins=0x60439193, rv32=0xffffff82, rv64=0xffffffffffffff82, legal=3, ext=4) } // sext_b
+    == 25 { (ins=0x60539193, rv32=0xffff8182, rv64=0xffffffffffff8182, legal=3, ext=4) } // sext_h
+    == 26 { (ins=0x0803c1bb, rv32=0x00000000, rv64=0x0000000000008182, legal=2, ext=4) } // zext_h
+    == 27 { (ins=0x0803c1b3, rv32=0x00008182, rv64=0x0000000000000000, legal=1, ext=4) } // zext_h
+    == 28 { (ins=0x2873d193, rv32=0xff00ffff, rv64=0xffff00ffff00ffff, legal=3, ext=4) } // orc_b
+    == 29 { (ins=0x6b83d193, rv32=0x00000000, rv64=0x828100ff80002381, legal=2, ext=4) } // rev8
+    == 30 { (ins=0x6983d193, rv32=0x828100ff, rv64=0x0000000000000000, legal=1, ext=4) } // rev8
+    == 31 { (ins=0x607391b3, rv32=0xfe010305, rv64=0xfe01030502460101, legal=3, ext=4) } // rol
+    == 32 { (ins=0x6073d1b3, rv32=0x7f8040c1, rv64=0x7f8040c140918040, legal=3, ext=4) } // ror
+    == 33 { (ins=0x6073d193, rv32=0x05fe0103, rv64=0x0502460101fe0103, legal=3, ext=4) } // rori
+    == 34 { (ins=0x6283d193, rv32=0x00000000, rv64=0x80ff008182812300, legal=2, ext=4) } // rori
+    == 35 { (ins=0x607391bb, rv32=0x00000000, rv64=0xfffffffffe010305, legal=2, ext=4) } // rolw
+    == 36 { (ins=0x6073d1bb, rv32=0x00000000, rv64=0x000000007f8040c1, legal=2, ext=4) } // rorw
+    == 37 { (ins=0x6073d19b, rv32=0x00000000, rv64=0x0000000005fe0103, legal=2, ext=4) } // roriw
+    == 38 { (ins=0x487391b3, rv32=0xff008180, rv64=0x81230080ff008182, legal=3, ext=8) } // bclr
+    == 39 { (ins=0x48739193, rv32=0xff008102, rv64=0x81230080ff008102, legal=3, ext=8) } // bclri
+    == 40 { (ins=0x4a839193, rv32=0x00000000, rv64=0x81230080ff008182, legal=2, ext=8) } // bclri
+    == 41 { (ins=0x287391b3, rv32=0xff008182, rv64=0x81230082ff008182, legal=3, ext=8) } // bset
+    == 42 { (ins=0x28739193, rv32=0xff008182, rv64=0x81230080ff008182, legal=3, ext=8) } // bseti
+    == 43 { (ins=0x2a839193, rv32=0x00000000, rv64=0x81230180ff008182, legal=2, ext=8) } // bseti
+    == 44 { (ins=0x687391b3, rv32=0xff008180, rv64=0x81230082ff008182, legal=3, ext=8) } // binv
+    == 45 { (ins=0x68739193, rv32=0xff008102, rv64=0x81230080ff008102, legal=3, ext=8) } // binvi
+    == 46 { (ins=0x6a839193, rv32=0x00000000, rv64=0x81230180ff008182, legal=2, ext=8) } // binvi
+    == 47 { (ins=0x4873d1b3, rv32=0x00000001, rv64=0x0000000000000000, legal=3, ext=8) } // bext
+    == 48 { (ins=0x4873d193, rv32=0x00000001, rv64=0x0000000000000001, legal=3, ext=8) } // bexti
+    == 49 { (ins=0x4a83d193, rv32=0x00000000, rv64=0x0000000000000000, legal=2, ext=8) } // bexti
+    == 50 { (ins=0x0e73d1b3, rv32=0x00000000, rv64=0x0000000000000000, legal=3, ext=1) } // czero_eqz
+    == 51 { (ins=0x0e73f1b3, rv32=0xff008182, rv64=0x81230080ff008182, legal=3, ext=1) } // czero_nez
+    == 52 { (ins=0x60039193, rv32=0x00000020, rv64=0x0000000000000040, legal=3, ext=4) } // clz
+    == 53 { (ins=0x60139193, rv32=0x00000020, rv64=0x0000000000000040, legal=3, ext=4) } // ctz
+    == 54 { (ins=0x60239193, rv32=0x00000000, rv64=0x0000000000000000, legal=3, ext=4) } // cpop
+    == 55 { (ins=0x6003919b, rv32=0x00000000, rv64=0x0000000000000020, legal=2, ext=4) } // clzw
+    == 56 { (ins=0x6013919b, rv32=0x00000000, rv64=0x0000000000000020, legal=2, ext=4) } // ctzw
+    == 57 { (ins=0x6073d1bb, rv32=0x00000000, rv64=0x0000000000000000, legal=2, ext=4) } // rorw
+    == 58 { (ins=0x607391bb, rv32=0x00000000, rv64=0x0000000000000000, legal=2, ext=4) } // rolw
+    else { (ins=0, rv32=0, rv64=0, legal=0, ext=0) }
+  }
+  const inst:U32 = v.ins
+  const a:U64 = if row >= 52 { 0 } else { 0x81230080ff008182 }
+  const b:U64 = if row >= 50 { 0 } else { 33 }
+  const small = run<b32>(inst=inst, a=a#[0..<32], b=b#[0..<32])
+  const wide = run<b64>(inst=inst, a=a, b=b)
+  const base = decode<configs.rv64>(inst=inst)
+  const aloneA = decode<zba>(inst=inst)
+  const aloneB = decode<zbb>(inst=inst)
+  const aloneS = decode<zbs>(inst=inst)
+  const aloneC = decode<zicond>(inst=inst)
+  const single = aloneC.legal | (aloneA.legal << 1) | (aloneB.legal << 2) | (aloneS.legal << 3)
+  const flags:U2 = v.legal
+  ok = single == (if flags#[1] != 0 { v.ext } else { 0 }) and base.legal == 0 and small.legal == flags#[0] and wide.legal == flags#[1] and
+      (small.legal == 0 or small.value == v.rv32) and (wide.legal == 0 or wide.value == v.rv64)
+}
+test bit_operations.decode_and_execute {
+  mut d = bit_operations
+  tick 59 {
+    d.row = clock
+    step
+    assert(d.ok, "extension decode or result disagrees with its RV32/RV64 vector")
+  }
+}

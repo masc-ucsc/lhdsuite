@@ -1,0 +1,98 @@
+// Rocket encodes the set in bits 1:0 and its event mask starting at bit 8.
+pub comb classify<C>(inst:U32, mem:U1, fp:U1, amo:U1, csr:U3, wxd:U1, branch:U1, jal:U1, jalr:U1, mulDiv:U1)
+    -> (events:U18) {
+  const op = inst#[0..<7]
+  const system = csr != 0
+  const arithmetic = wxd != 0 and (jal | jalr | mem | fp | mulDiv) == 0 and !system
+  events = (jalr << 8) | (jal << 7) | (branch << 6) | (U1(arithmetic) << 5) | (U1(system) << 4) |
+      (amo << 3) | (U1(op == 0x23) << 2) | (U1(op == 3) << 1)
+  if C.useMulDiv and mulDiv != 0 {
+    events#[9] = ~inst#[14]
+    events#[10] = inst#[14]
+  }
+  if C.fLen > 0 and fp != 0 {
+    comptime const base = if C.useMulDiv { 11 } else { 9 }
+    const fn = inst#[27..<32]
+    const group = if op == 7 { 0 } elif op == 0x27 { 1 } elif op != 0x53 { 4 }
+        elif fn <= 1 { 2 } elif fn == 2 { 3 } elif fn == 3 or fn == 11 { 5 } else { 6 }
+    events#[(base+group)] = 1
+  }
+}
+
+// The retired instruction event samples its mask in decode. Each stage holds
+// its bit over stalls. All three sets register the selected pulse before counting.
+mod counter<C, I>(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:Unsigned(bits=C.xLen), inhibit:U1, selector:U32,
+    instruction:U18, interlock:U11, memory:U6, advance:U3, retire:U1, trap:U1)
+    -> (read:Unsigned(bits=C.xLen)@[]) {
+  comptime const lowBits = if C.xLen == 32 { 32 } else { 40 }
+  reg count:U40:[clock_pin=clk] = nil
+  reg ex:U1:[clock_pin=clk] = nil
+  reg mem:U1:[clock_pin=clk] = nil
+  reg wb:U1:[clock_pin=clk] = nil
+  reg increment:U1:[clock_pin=clk] = nil
+  const mask = selector >> 8
+  const event = match selector#[0..<2] {
+    == 0 { if trap != 0 { selector#[8] } else { retire & wb } }
+    == 1 { U1((mask & interlock) != 0) }
+    == 2 { U1((mask & memory) != 0) }
+    else { 0 }
+  }
+  if rst { ex = 0; mem = 0; wb = 0 } else {
+    if advance#[0] != 0 { ex = U1((instruction & mask) != 0) }
+    if advance#[1] != 0 { mem = ex }
+    if advance#[2] != 0 { wb = mem }
+  }
+  increment = if rst { 0 } else { event }
+  const low = addr == 0xb03+I
+  const high = C.xLen == 32 and addr == 0xb83+I
+  read = if low or addr == 0xc03+I { count#[0..<lowBits] }
+      elif high or (C.xLen == 32 and addr == 0xc83+I) { count#[32..<40] } else { 0 }
+  const write = cmd >= 5
+  const value = match cmd#[0..<2] { == 2 { read | data } == 3 { read & ~data } else { data } }
+  if write and low { count#[0..<lowBits] = value#[0..<lowBits] }
+  elif write and high { count#[32..<40] = value#[0..<8] }
+  elif increment != 0 and inhibit == 0 {
+    // On RV32, writing the low CSR establishes its value independently of the high CSR.
+    const carry = count#[0..<32] == 0xffffffff
+    wrap count#[0..<32] = count#[0..<32] + 1
+    if carry { wrap count#[32..<40] = count#[32..<40] + 1 }
+  }
+}
+
+// A single gate serves the counter bank. Preserve the sampled mask until
+// it advances through writeback, even if firmware clears the last selector.
+pub mod bank<C>(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:Unsigned(bits=C.xLen), inhibit:Unsigned(bits=C.counterBits),
+    instruction:U18, interlock:U11, memory:U6, advance:U3, retire:U1, trap:U1) -> (read:Unsigned(bits=C.xLen)@[]) {
+  comptime const N = C.nPerfCounters
+  comptime const K = 9 + (if C.useMulDiv { 2 } else { 0 }) + (if C.fLen > 0 { 7 } else { 0 })
+  comptime const writable = (((1 << K)-1) << 8) | 3
+  reg selectors:[N]Unsigned(bits=K+8):[clock_pin=clk, ordering="old"] = nil
+  reg flight:U4:[initial=0, clock_pin=clk, reset_pin=rst, async=false]
+  mut monitoring:U1 = 0
+  read = 0
+  for i in 0..<N {
+    const sel = selectors[i]
+    monitoring |= U1((sel >> 8) != 0)
+    const selected = addr == 0x323+i
+    if selected { read = sel }
+    if rst { selectors[i] = 0 } elif cmd >= 5 and selected {
+      const value = match cmd#[0..<2] { == 2 { sel | data } == 3 { sel & ~data } else { data } }
+      selectors[i] = value#[0..<(8+K)] & writable
+    }
+  }
+  const live = flight
+  if advance#[0] != 0 { flight#[0] = monitoring }
+  if advance#[1] != 0 { flight#[1] = live#[0] }
+  if advance#[2] != 0 { flight#[2] = live#[1] }
+  flight#[3] = monitoring | live#[2]
+  const slot = addr#[0..<5]
+  const page = addr#[5..<12]
+  const access = slot >= 3 and slot < C.counterBits and
+      (page == 0x58 or page == 0x60 or (C.xLen == 32 and (page == 0x5c or page == 0x64)))
+  if monitoring != 0 or live != 0 or access or rst {
+    for i in 0..<N {
+      read |= counter<C=C,I=i>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data, inhibit=inhibit#[3+i], selector=selectors[i],
+          instruction=instruction, interlock=interlock, memory=memory, advance=advance, retire=retire, trap=trap)
+    }
+  }
+}

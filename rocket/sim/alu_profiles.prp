@@ -1,0 +1,43 @@
+const alu = import("../pyrope2/ALU.ALU")
+const configs = import("../pyrope2/RocketConfig")
+comptime const tiny = configs.tiny
+comptime const wide = configs.rv64
+
+pub mod alu_profiles(a:U64, b:U64, fn:U4, dw:U1) -> (r32:U32@[0], r64:U64@[0], add64:U64@[0], cmp32:U1@[0], cmp64:U1@[0]) {
+  const x = alu<tiny>(io_in1=a#[0..<32], io_in2=b#[0..<32], io_fn=fn, io_dw=dw)
+  const y = alu<wide>(io_in1=a, io_in2=b, io_fn=fn, io_dw=dw)
+  r32 = x.io_out
+  r64 = y.io_out
+  add64 = y.io_adder_out
+  cmp32 = x.io_cmp_out
+  cmp64 = y.io_cmp_out
+}
+test alu_profiles.word_and_full {
+  mut d = alu_profiles
+  d.a = 0x80000001
+  d.b = 32
+  d.fn = 1
+  d.dw = 1
+  step
+  assert(d.r32 == 0x80000001 and d.r64 == 0x8000000100000000, "shift amount follows XLEN")
+  d.dw = 0
+  step
+  assert(d.r64 == 0xffffffff80000001, "SLLW masks the shift and sign extends")
+  d.b = 1
+  d.fn = 11
+  step
+  assert(d.r64 == 0xffffffffc0000000, "SRAW shifts from bit 31")
+  d.a = 0xffffffff00000008
+  d.fn = 5
+  step
+  assert(d.r64 == 4, "SRLW ignores upper bits")
+  d.fn = 0
+  d.a = 0x7fffffff
+  step
+  assert(d.r64 == 0xffffffff80000000 and d.add64 == 0x80000000, "ADDW leaves the bypass sum full width")
+  d.dw = 1
+  d.a = 0x80000000
+  d.fn = 12
+  step
+  assert(d.cmp32 == 1 and d.cmp64 == 0, "signed compare follows XLEN")
+}

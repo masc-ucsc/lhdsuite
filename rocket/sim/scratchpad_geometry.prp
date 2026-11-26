@@ -1,0 +1,62 @@
+const boot = import("BootROM.BootROM")
+const config = import("../pyrope2/RocketConfig")
+comptime const one = config.params(xLen=64, dcacheSets=1)
+comptime const small = config.params(dcacheSets=128)
+comptime const large = config.params(xLen=64, dcacheSets=512)
+
+// Write different words at the ends of the lower and upper halves, check
+// both, then read one word beyond the configured end to provoke an access fault.
+mod check<C>(clk:Clock, rst:Reset) -> (passed:Bool@[], failed:Bool@[]) {
+  comptime const size = C.dcacheSets * 64
+  comptime const loadSize = if size < 2048 { (size << 20) | 0x113 } else { size | 0x137 }
+  const program:[16]U32 = (
+    0x00100093, // li x1,1
+    0x01f09093, // slli x1,x1,31
+    loadSize, // li x2,scratchpad size
+    0x00115193, // srli x3,x2,1
+    0x003081b3, // add x3,x1,x3
+    0x00208133, // add x2,x1,x2
+    0x01100213, // li x4,17
+    0xfe41ae23, // sw x4,-4(x3)
+    0x01d00293, // li x5,29
+    0xfe512e23, // sw x5,-4(x2)
+    0xffc1a303, // lw x6,-4(x3)
+    0x00431863, // bne x6,x4,fail
+    0xffc12303, // lw x6,-4(x2)
+    0x00531463, // bne x6,x5,fail
+    0x00012303, // lw x6,0(x2)
+    0x00100073 // fail: ebreak
+  )
+  const tile = boot<C>(clk=clk, rst=rst, program=program, successPC=0x10078)
+  passed = tile.trap != 0 and tile.tracePC == 0x10078 and tile.cause == 5
+  reg done:Bool = false
+  if passed { done = true }
+  failed = !done and tile.trap != 0 and !passed
+}
+pub mod scratchpad_geometry(clk:Clock, rst:Reset) -> (a:Bool@[], b:Bool@[], c:Bool@[], bad:Bool@[]) {
+  const single = check<one>(clk=clk, rst=rst)
+  const narrow = check<small>(clk=clk, rst=rst)
+  const wide = check<large>(clk=clk, rst=rst)
+  a = narrow.passed
+  b = wide.passed
+  c = single.passed
+  bad = narrow.failed or wide.failed or single.failed
+}
+test scratchpad_geometry.bounds_and_storage {
+  mut d = scratchpad_geometry
+  mut a = false
+  mut b = false
+  mut c = false
+  tick 160 {
+    d.rst = clock < 4
+    step
+    if clock > 4 {
+      assert(!d.bad, "unexpected trap before checking the scratchpad boundary")
+      if d.a { a = true }
+      if d.b { b = true }
+      if d.c { c = true }
+      if a and b and c { break }
+    }
+  }
+  assert(a and b and c, "64 B, 8 KiB and 32 KiB tiles must trap on their first unmapped word")
+}

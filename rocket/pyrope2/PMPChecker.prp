@@ -1,34 +1,28 @@
-pub comb PMPChecker::[timecheck=false](io_prv:U2, io_pmp_0_cfg_l:U1, io_pmp_0_cfg_a:U2, io_pmp_0_cfg_x:U1, io_pmp_0_cfg_w:U1, io_pmp_0_cfg_r:U1, io_pmp_0_addr:U30, io_pmp_0_mask:U32, io_pmp_1_cfg_l:U1, io_pmp_1_cfg_a:U2, io_pmp_1_cfg_x:U1, io_pmp_1_cfg_w:U1, io_pmp_1_cfg_r:U1, io_pmp_1_addr:U30, io_pmp_1_mask:U32, io_pmp_2_cfg_l:U1, io_pmp_2_cfg_a:U2, io_pmp_2_cfg_x:U1, io_pmp_2_cfg_w:U1, io_pmp_2_cfg_r:U1, io_pmp_2_addr:U30, io_pmp_2_mask:U32, io_pmp_3_cfg_l:U1, io_pmp_3_cfg_a:U2, io_pmp_3_cfg_x:U1, io_pmp_3_cfg_w:U1, io_pmp_3_cfg_r:U1, io_pmp_3_addr:U30, io_pmp_3_mask:U32, io_pmp_4_cfg_l:U1, io_pmp_4_cfg_a:U2, io_pmp_4_cfg_x:U1, io_pmp_4_cfg_w:U1, io_pmp_4_cfg_r:U1, io_pmp_4_addr:U30, io_pmp_4_mask:U32, io_pmp_5_cfg_l:U1, io_pmp_5_cfg_a:U2, io_pmp_5_cfg_x:U1, io_pmp_5_cfg_w:U1, io_pmp_5_cfg_r:U1, io_pmp_5_addr:U30, io_pmp_5_mask:U32, io_pmp_6_cfg_l:U1, io_pmp_6_cfg_a:U2, io_pmp_6_cfg_x:U1, io_pmp_6_cfg_w:U1, io_pmp_6_cfg_r:U1, io_pmp_6_addr:U30, io_pmp_6_mask:U32, io_pmp_7_cfg_l:U1, io_pmp_7_cfg_a:U2, io_pmp_7_cfg_x:U1, io_pmp_7_cfg_w:U1, io_pmp_7_cfg_r:U1, io_pmp_7_addr:U30, io_pmp_7_mask:U32, io_addr:U32, io_size:U2) -> (io_r:U1, io_w:U1, io_x:U1) {
-  // PMP entries as arrays (entry k = the io_pmp_k_* ports)
-  const pmpL:[8]U1 = (io_pmp_0_cfg_l, io_pmp_1_cfg_l, io_pmp_2_cfg_l, io_pmp_3_cfg_l, io_pmp_4_cfg_l, io_pmp_5_cfg_l, io_pmp_6_cfg_l, io_pmp_7_cfg_l)
-  const pmpA:[8]U2 = (io_pmp_0_cfg_a, io_pmp_1_cfg_a, io_pmp_2_cfg_a, io_pmp_3_cfg_a, io_pmp_4_cfg_a, io_pmp_5_cfg_a, io_pmp_6_cfg_a, io_pmp_7_cfg_a)
-  const pmpX:[8]U1 = (io_pmp_0_cfg_x, io_pmp_1_cfg_x, io_pmp_2_cfg_x, io_pmp_3_cfg_x, io_pmp_4_cfg_x, io_pmp_5_cfg_x, io_pmp_6_cfg_x, io_pmp_7_cfg_x)
-  const pmpW:[8]U1 = (io_pmp_0_cfg_w, io_pmp_1_cfg_w, io_pmp_2_cfg_w, io_pmp_3_cfg_w, io_pmp_4_cfg_w, io_pmp_5_cfg_w, io_pmp_6_cfg_w, io_pmp_7_cfg_w)
-  const pmpR:[8]U1 = (io_pmp_0_cfg_r, io_pmp_1_cfg_r, io_pmp_2_cfg_r, io_pmp_3_cfg_r, io_pmp_4_cfg_r, io_pmp_5_cfg_r, io_pmp_6_cfg_r, io_pmp_7_cfg_r)
-  const pmpAddr:[8]U30 = (io_pmp_0_addr, io_pmp_1_addr, io_pmp_2_addr, io_pmp_3_addr, io_pmp_4_addr, io_pmp_5_addr, io_pmp_6_addr, io_pmp_7_addr)
-  const pmpMask:[8]U32 = (io_pmp_0_mask, io_pmp_1_mask, io_pmp_2_mask, io_pmp_3_mask, io_pmp_4_mask, io_pmp_5_mask, io_pmp_6_mask, io_pmp_7_mask)
-  const default_0__w1 = io_prv#[1..<2]
-  // entry k matches: NAPOT/NA4 (cfg_a bit 1) by mask, TOR (cfg_a == 1) by [addr(k-1), addr(k)) with addr(-1) = 0
-  mut lower:[8]U32 = (0, 0, 0, 0, 0, 0, 0, 0)
-  for k in 1..<8 {
-    lower[k] = pmpAddr[k - 1] << 2
-  }
-  // priority: entry 0 wins, so scan 7 down to 0 and let each hit overwrite
-  mut r:U1 = default_0__w1
-  mut w:U1 = default_0__w1
-  mut x:U1 = default_0__w1
-  for i in 0..<8 {
-    const k = 7 - i
-    const base = pmpAddr[k] << 2
-    const hit = if pmpA[k]#[1..<2] != 0 { U1(((io_addr ^ base)#[0..<32] & (~pmpMask[k]#[0..=31]))#[0..<32] == 0) } else { pmpA[k] & 1 & U1(io_addr >= lower[k]) & U1(io_addr < base) }
-    const ignore = default_0__w1 & (~pmpL[k]#[0]) & 1
-    if hit != 0 {
-      r = (pmpR[k] | ignore) & 1
-      w = (pmpW[k] | ignore) & 1
-      x = (pmpX[k] | ignore) & 1
+const protection = import("PhysicalProtection")
+
+// Lower-numbered entries have priority even when they only cover part of an access.
+pub comb PMPChecker<N=8>(table:protection.Entries, privilege:U2, address:U32, size:U2) -> (permissions:U3) {
+  cassert(N >= 0 and N <= 16)
+  const machine = privilege > 1
+  const accessMask:U32 = (1 << size) - 1
+  const last = address | accessMask
+  permissions = if N == 0 or machine { 7 } else { 0 }
+  mut lower:U32 = 0
+  mut matched = false
+  for i in 0..<N {
+    const cfg = table.cfg[i]
+    const mode = cfg#[3..<5]
+    const encoded = table.addr[i]
+    const base:U32 = encoded << 2
+    const mask = protection.addressMask(encoded=encoded, mode=mode)
+    const powerOfTwo = mode#[1] != 0
+    const touches = if powerOfTwo { ((address ^ base) & ~(mask | accessMask)#[0..<32]) == 0 }
+        else { mode == 1 and lower < base and address < base and last >= lower }
+    if touches and !matched {
+      matched = true
+      const fits = if powerOfTwo { (accessMask & ~mask) == 0 } else { address >= lower and last < base }
+      permissions = if !fits { 0 } elif machine and cfg#[7] == 0 { 7 } else { cfg#[0..<3] }
     }
+    lower = base
   }
-  io_r = r
-  io_w = w
-  io_x = x
 }

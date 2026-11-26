@@ -17,6 +17,30 @@ The `scripts/` directory holds the simulation runners, source generators,
 shared topology, and floorplan generator/validator. Simulation drivers stay in
 `sim/`, and design glue stays in `pyrope/` and `rtl/`.
 
+### Tile configurations
+
+The concrete `MixedSocTop` uses the `selected` record in
+[TileProfiles.prp](pyrope/TileProfiles.prp). The default `uniform` preset
+matches the pinned RTL. Set `selected = heterogeneous` to give Rocket tiles
+1 and 2 early-out multipliers and BOOM tiles 13 and 14 four slow entries in
+each memory and integer ALU issue queue. A parent can also bind its own
+16-entry record to `mixed_soc<Tiles>`. Each tile owns its register state.
+
+The supported Rocket option is `mulEarlyOut` on the RV32 radix-256
+multiplier. BOOM supports per-queue `numSlowEntries` with eight entries and
+one physical dispatch lane. The compiler checks each queue against the core
+width. This workload exercises connectivity. Separate tests check multiplier
+latency and the cycle when dispatch backpressure begins.
+
+From lhdsuite, run both presets, both unit tests and the invalid-width control:
+
+```sh
+python3 mixed_soc/scripts/check_profiles.py --lhd ../livehd/bazel-bin/lhd/lhd
+```
+
+For Bazel runs below, add `--override_module=livehd=../livehd` while the
+suite's pinned LiveHD predates package-relative imports and record bindings.
+
 ### Matched Pyrope and Verilator simulation
 
 ```sh
@@ -102,8 +126,7 @@ python3 mixed_soc/scripts/gen_sim.py
 
 The recipe retains only glue, imports the existing core trees, and generates the
 Pyrope XY mesh from [topology.py](scripts/topology.py). Re-run the matched simulation
-after regeneration. Rocket's colliding filenames are qualified by
-[`rocket/qualify_pyrope.py`](../rocket/qualify_pyrope.py).
+after regeneration. Rocket and BOOM retain their own sibling module names in Pyrope.
 
 ### Additional connectivity regressions
 

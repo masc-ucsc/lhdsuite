@@ -1,0 +1,81 @@
+const config = import("../pyrope2/RocketConfig")
+const image = import("BootROM.Image")
+comptime const narrow = config.params(useDataScratchpad=false, dcacheSets=2, dcacheWays=1, btbEntries=4, icacheSets=128, icacheWays=2)
+comptime const narrowD = config.params(useDataScratchpad=false, dcacheSets=2, dcacheWays=1, fLen=64, btbEntries=4, icacheSets=128, icacheWays=2)
+comptime const wide = config.params(xLen=64, useDataScratchpad=false, dcacheSets=2, dcacheWays=1, btbEntries=4, icacheSets=128, icacheWays=2)
+
+// A conflict evicts both dirty lines; the final LW must recover the AMO result from RAM.
+mod profile<C>(clk:Clock,rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
+  const program:[48]U32 = (
+    0x00100413, // li s0,1
+    0x01f41413, // slli s0,s0,0x1f
+    0x00700293, // li t0,7
+    0x00542023, // sw t0,0(s0)
+    0x00042303, // lw t1,0(s0)
+    0x08629263, // bne t0,t1,100d8 <fail>
+    0x100423af, // lr.w t2,(s0)
+    0x06729e63, // bne t0,t2,100d8 <fail>
+    0x1854232f, // sc.w t1,t0,(s0)
+    0x06031a63, // bnez t1,100d8 <fail>
+    0x1854232f, // sc.w t1,t0,(s0)
+    0x06030663, // beqz t1,100d8 <fail>
+    0x00600313, // li t1,6
+    0x006423af, // amoadd.w t2,t1,(s0)
+    0x06539063, // bne t2,t0,100d8 <fail>
+    0x08542023, // sw t0,128(s0)
+    0x00042303, // lw t1,0(s0)
+    0x00d00393, // li t2,13
+    0x04731863, // bne t1,t2,100d8 <fail>
+    0x00440493, // addi s1,s0,4
+    0x0054a023, // sw t0,0(s1)
+    0x1004a3af, // lr.w t2,(s1)
+    0x1854a32f, // sc.w t1,t0,(s1)
+    0x02031e63, // bnez t1,100d8 <fail>
+    0x1854a32f, // sc.w t1,t0,(s1)
+    0x00100393, // li t2,1
+    0x02731863, // bne t1,t2,100d8 <fail>
+    0x00100293, // li t0,1
+    if C.xLen == 64 { 0x02a29293 } else { 0x01629293 }, // slli t0,t0,0x2a / slli t0,t0,0x16
+    if C.xLen == 64 { 0x00543023 } else { 0x00542023 }, // sd t0,0(s0) / sw t0,0(s0)
+    if C.xLen == 64 { 0x100433af } else { 0x100423af }, // lr.d t2,(s0) / lr.w t2,(s0)
+    0x00539e63, // bne t2,t0,100d8 <fail>
+    if C.xLen == 64 { 0x1854332f } else { 0x1854232f }, // sc.d t1,t0,(s0) / sc.w t1,t0,(s0)
+    0x00031a63, // bnez t1,100d8 <fail>
+    if C.xLen == 64 { 0x1854332f } else { 0x1854232f }, // sc.d t1,t0,(s0) / sc.w t1,t0,(s0)
+    0x00100393, // li t2,1
+    0x00731463, // bne t1,t2,100d8 <fail>
+    0x0000006f, // j 100d4 <success>
+    0x00100073, // ebreak
+    0, 0, 0, 0, 0, 0, 0, 0, 0
+  )
+  const tile = image<C=C, WORDS=48>(clk=clk, rst=rst, program=program, successPC=0x100d4)
+  done = tile.success and tile.memoryChecked
+  bad = tile.trap != 0 or tile.badFetch
+}
+pub mod coherent_program(clk:Clock, rst:Reset) -> (rv32:Bool@[], rv64:Bool@[], rv32d:Bool@[], failed:Bool@[]) {
+  const a = profile<narrow>(clk=clk, rst=rst)
+  const b = profile<wide>(clk=clk, rst=rst)
+  const c = profile<narrowD>(clk=clk, rst=rst)
+  rv32d = c.done
+  rv32 = a.done
+  rv64 = b.done
+  failed = a.bad or b.bad or c.bad
+}
+test coherent_program.run {
+  mut d = coherent_program
+  mut a = false
+  mut b = false
+  mut c = false
+  tick 1500 {
+    d.rst = clock < 4
+    step
+    if clock >= 4 {
+      assert(!d.failed, "unexpected trap or physical fetch")
+      if d.rv32 { a = true }
+      if d.rv64 { b = true }
+      if d.rv32d { c = true }
+      if a and b and c { break }
+    }
+  }
+  assert(a and b and c, "RV32, RV32D and RV64 completed cached atomics and dirty eviction")
+}

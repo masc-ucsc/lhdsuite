@@ -1,0 +1,153 @@
+const cfg = import("../pyrope2/RocketConfig")
+const image = import("BootROM.Image")
+
+// Program the last trigger and check that store, load, and fetch breakpoints
+// return to the following instruction. A watch action then retires normally.
+mod run<X,N>(clk:Clock, rst:Reset) -> (done:U1@[], trap:U1@[], watched:U1@[]) {
+  comptime const C = cfg.params(xLen=X, nBreakpoints=N, useBPWatch=N > 1)
+  const program:[96]U32 = (
+    0x00000297, // auipc t0,0x0
+    0x0f828293, // addi t0,t0,248 # 10138 <handler>
+    0x30529073, // csrw mtvec,t0
+    0x00000413, // li s0,0
+    0x00100493, // li s1,1
+    0x01f49493, // slli s1,s1,0x1f
+    0x00448493, // addi s1,s1,4
+    0x02a00313, // li t1,42
+    0x0064a023, // sw t1,0(s1)
+    (N << 20) | 0x00913, // li s2,N
+    0x08090a63, // beqz s2,100fc <absent>
+    0xfff90293, // addi t0,s2,-1
+    0x7a029073, // csrw tselect,t0
+    0x7a002373, // csrr t1,tselect
+    0x0a531e63, // bne t1,t0,10134 <fail>
+    0x7a249073, // csrw tdata2,s1
+    0x04300293, // li t0,67
+    0x7a129073, // csrw tdata1,t0
+    0x01100393, // li t2,17
+    0x0074a023, // sw t2,0(s1)
+    0x0004a383, // lw t2,0(s1)
+    0x00200293, // li t0,2
+    0x08541e63, // bne s0,t0,10134 <fail>
+    0x00000297, // auipc t0,0x0
+    0x01428293, // addi t0,t0,20 # 100b0 <denied_fetch>
+    0x7a229073, // csrw tdata2,t0
+    0x04400293, // li t0,68
+    0x7a129073, // csrw tdata1,t0
+    0x0840006f, // j 10134 <fail>
+    0x7a101073, // csrw tdata1,zero
+    0x0004a283, // lw t0,0(s1)
+    0x02a00313, // li t1,42
+    0x06629a63, // bne t0,t1,10134 <fail>
+    0x00300293, // li t0,3
+    0x06541663, // bne s0,t0,10134 <fail>
+    0x00100293, // li t0,1
+    0x06590063, // beq s2,t0,10130 <success>
+    0x00000297, // auipc t0,0x0
+    0x01828293, // addi t0,t0,24 # 100ec <watched>
+    0x7a229073, // csrw tdata2,t0
+    0x000022b7, // lui t0,0x2
+    0x04428293, // addi t0,t0,68 # 2044 <_start-0xdffc>
+    0x7a129073, // csrw tdata1,t0
+    0x01300e13, // li t3,19
+    0x00300293, // li t0,3
+    0x04541063, // bne s0,t0,10134 <fail>
+    0x0380006f, // j 10130 <success>
+    0xfff00293, // li t0,-1
+    0x7a029073, // csrw tselect,t0
+    0x7a129073, // csrw tdata1,t0
+    0x7a229073, // csrw tdata2,t0
+    0x7a0022f3, // csrr t0,tselect
+    0x7a102373, // csrr t1,tdata1
+    0x7a2023f3, // csrr t2,tdata2
+    0x0062e2b3, // or t0,t0,t1
+    0x0072e2b3, // or t0,t0,t2
+    0x00029a63, // bnez t0,10134 <fail>
+    0x0004a023, // sw zero,0(s1)
+    0x0004a283, // lw t0,0(s1)
+    0x00029463, // bnez t0,10134 <fail>
+    0x0000006f, // j 10130 <success>
+    0x0000006f, // j 10134 <fail>
+    0x34202ef3, // csrr t4,mcause
+    0x00300f13, // li t5,3
+    0xffee9ae3, // bne t4,t5,10134 <fail>
+    0x34102ef3, // csrr t4,mepc
+    0x34302f73, // csrr t5,mtval
+    0x00000f97, // auipc t6,0x0
+    0xf40f8f93, // addi t6,t6,-192 # 1008c <denied_store>
+    0x03fe8263, // beq t4,t6,10178 <data_fault>
+    0x00000f97, // auipc t6,0x0
+    0xf38f8f93, // addi t6,t6,-200 # 10090 <denied_load>
+    0x01fe8c63, // beq t4,t6,10178 <data_fault>
+    0x00000f97, // auipc t6,0x0
+    0xf4cf8f93, // addi t6,t6,-180 # 100b0 <denied_fetch>
+    0xfdfe94e3, // bne t4,t6,10134 <fail>
+    0xfdee92e3, // bne t4,t5,10134 <fail>
+    0x0080006f, // j 1017c <resume>
+    0xfa9f1ee3, // bne t5,s1,10134 <fail>
+    0x00140413, // addi s0,s0,1
+    0x004e8e93, // addi t4,t4,4
+    0x341e9073, // csrw mepc,t4
+    0x30200073, // mret
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000
+  )
+  const tile = image<C=C, WORDS=96>(clk=clk, rst=rst, program=program, successPC=0x10130)
+  done = U1(tile.success)
+  trap = tile.trap
+  watched = 0
+  if N > 1 {
+    watched = U1(tile.traceValid and tile.tracePC == 0x100ec and tile.watchValid == (1 << (N-1)) and
+        tile.watchAction == (2 << (3*(N-1))))
+  }
+}
+
+pub mod trigger_program(clk:Clock, rst:Reset) -> (done:U6@[], trap:U6@[], watched:U6@[]) {
+  const widths = [32,64]
+  const counts = [0,1,3]
+  done = 0
+  trap = 0
+  watched = 0
+  for i in 0..<6 {
+    const width = widths[i/3]
+    const count = counts[i%3]
+    const tile = run<X=width,N=count>(clk=clk, rst=rst)
+    done#[i] = tile.done
+    trap#[i] = tile.trap
+    watched#[i] = tile.watched
+  }
+}
+
+test trigger_program.trap_and_resume {
+  mut d = trigger_program
+  mut completed:U6 = 0
+  mut seen:U6 = 0
+  mut once:U6 = 0
+  mut twice:U6 = 0
+  mut three:U6 = 0
+  tick 1100 {
+    d.rst = clock < 4
+    step
+    if clock > 4 {
+      completed |= d.done
+      seen |= d.watched
+      assert((three & d.trap) == 0, "unexpected fourth trap")
+      three |= twice & d.trap
+      twice |= once & d.trap
+      once |= d.trap
+    }
+  }
+  assert(completed == 63 and three == 0x36 and once == three, "exactly three breakpoints per enabled tile")
+  assert(seen == 0x24, "both three-entry tiles retire the watched instruction with action 2")
+}

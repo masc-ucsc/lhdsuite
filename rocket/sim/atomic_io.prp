@@ -1,0 +1,101 @@
+const cfg = import("../pyrope2/RocketConfig")
+const image = import("BootROM.Image")
+
+// Check MISA.A, trap cause and mtval, local RAM contents, and the old value
+// returned by each arithmetic or logical TileLink operation on the device.
+mod run<C>(clk:Clock, rst:Reset) -> (ok:Bool@[], bad:Bool@[]) {
+  const lrCause = if !C.useAtomics { 2 } elif C.useDataScratchpad or C.useAtomicsOnlyForIO { 5 } else { 0 }
+  const scCause = if lrCause == 5 { 7 } else { lrCause }
+  const localCause = if !C.useAtomics { 2 } elif C.useAtomicsOnlyForIO { 7 } else { 0 }
+  const program:[64]U32 = (
+    0x00000297, // la t0,handler
+    0x0c428293, // la t0,handler
+    0x30529073, // csrw mtvec,t0
+    0x301022f3, // csrr t0,misa
+    0x0012f293, // andi t0,t0,1
+    (U1(C.useAtomics) << 20) | 0x00000313, // li t1,ENABLED
+    0x0a629463, // bne t0,t1,fail
+    0x00100413, // li s0,1
+    0x01f41413, // slli s0,s0,31
+    0x00700313, // li t1,7
+    0x00642023, // sw t1,0(s0)
+    (lrCause << 20) | 0x00000913, // li s2,LR
+    0x100423af, // lr.w t2,(s0)
+    0x08091663, // bnez s2,fail
+    (scCause << 20) | 0x00000913, // li s2,SC
+    0x186423af, // sc.w t2,t1,(s0)
+    0x08091063, // bnez s2,fail
+    (localCause << 20) | 0x00000913, // li s2,LOCAL
+    0x006423af, // amoadd.w t2,t1,(s0)
+    0x06091a63, // bnez s2,fail
+    0x00042383, // lw t2,0(s0)
+    ((if C.atomicsInCache { 14 } else { 7 }) << 20) | 0x00000293, // li t0,RAM
+    0x06729463, // bne t0,t2,fail
+    0x02000437, // li s0,0x02000000
+    ((if C.useAtomics { 5 } else { 2 }) << 20) | 0x00000913, // li s2,DEVLR
+    0x100423af, // lr.w t2,(s0)
+    0x04091c63, // bnez s2,fail
+    ((if C.useAtomics { 7 } else { 2 }) << 20) | 0x00000913, // li s2,DEVSC
+    0x186423af, // sc.w t2,t1,(s0)
+    0x04091663, // bnez s2,fail
+    0x00100313, // li t1,1
+    ((if C.xLen == 64 { 34 } else { 16 }) << 20) | 0x00031313, // slli t1,t1,SHIFT
+    0x00730313, // addi t1,t1,7
+    ((if C.useAtomics { 0 } else { 2 }) << 20) | 0x00000913, // li s2,DEV
+    (0x006423af | (U1(C.xLen == 64) << 12)), // amoadd.w t2,t1,(s0)
+    0x02091a63, // bnez s2,fail
+    (U1(C.useAtomics) << 20) | 0x00000293, // li t0,ENABLED
+    0x02028463, // beqz t0,success
+    0x00500293, // li t0,5
+    0x02539263, // bne t2,t0,fail
+    0x00530293, // addi t0,t1,5
+    0x00300313, // li t1,3
+    (0x206423af | (U1(C.xLen == 64) << 12)), // amoxor.w t2,t1,(s0)
+    0x00539a63, // bne t2,t0,fail
+    0x0032c293, // xori t0,t0,3
+    (0x000423af | (U1(C.xLen == 64) << 12)), // amoadd.w t2,zero,(s0)
+    0x00539463, // bne t2,t0,fail
+    0x0000006f, // j success
+    0x0000006f, // j fail
+    0x34202e73, // csrr t3,mcause
+    0xff2e1ce3, // bne t3,s2,fail
+    0x00200e13, // li t3,2
+    0x01c90663, // beq s2,t3,resume
+    0x34302e73, // csrr t3,mtval
+    0xfe8e14e3, // bne t3,s0,fail
+    0x00000913, // li s2,0
+    0x34102e73, // csrr t3,mepc
+    0x004e0e13, // addi t3,t3,4
+    0x341e1073, // csrw mepc,t3
+    0x30200073, // mret
+    0, 0, 0, 0
+  )
+  const t = image<C=C,WORDS=64,ATOMIC_DEVICE=true>(clk=clk, rst=rst, program=program, successPC=0x100fc)
+  ok = t.success
+  bad = t.badFetch
+}
+
+pub mod atomic_io(clk:Clock, rst:Reset) -> (passed:U10@[], bad:Bool@[]) {
+  bad = false
+  for j in 0..<10 {
+    comptime const C = cfg.params(xLen=(if j%2 == 0 { 32 } else { 64 }), useDataScratchpad=(j%4 < 2),
+        useAtomics=j < 8, useAtomicsOnlyForIO=j >= 4, dcacheSets=4, dcacheWays=1)
+    const t = run<C>(clk=clk, rst=rst)
+    passed#[j] = U1(t.ok)
+    bad = bad or t.bad
+  }
+}
+test atomic_io.profiles {
+  mut d = atomic_io
+  mut seen:U10 = 0
+  tick 2000 {
+    d.rst = clock < 4
+    step
+    if clock >= 4 {
+      assert(!d.bad, "unexpected TileLink request")
+      seen |= d.passed
+      if seen == 0x3ff { break }
+    }
+  }
+  assert(seen == 0x3ff, "all atomic configurations completed")
+}

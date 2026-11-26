@@ -1,0 +1,49 @@
+const walk = import("../pyrope2/PageTableWalk.PageTableWalk")
+const dataArray = import("../pyrope2/DCacheDataArray.DCacheDataArray")
+
+// The same data-array port installs PTEs and returns the walker's physical reads.
+// Three 4 KiB tables start at 0x80000000. The RV64 leaf uses bits above bit 31.
+mod check<W, PA>(clk:Clock, rst:Reset, phase:U5, round:U2)
+    -> (done:Bool@[], wrong:Bool@[]) {
+  const install = phase == 1 or phase == 2 or phase == 3
+  const rootAddr = if W == 32 { 0x960 } else { 0x830 }
+  const nextAddr = if W == 32 { 0x18d4 } else { 0x1588 }
+  const writeAddr = if phase == 1 { rootAddr } elif phase == 2 { nextAddr } else { 0x21a8 }
+  const finalPhase = if W == 32 { 2 } else { 3 }
+  const ppn = if W == 32 { 0x315555 } else { 0x123456789ab }
+  const page = if round == 0 { ppn } else { ppn+1 }
+  const leaf = (page << 10) | (if round == 2 { 0x03 } else { 0x43 })
+  const nextTable = (if phase == 1 { 0x80001 } else { 0x80002 }) << 10
+  const word = if phase == finalPhase { leaf } else { nextTable | 1 }
+  reg returning:Bool = false
+  wire data:Unsigned(bits=W) = nil
+  const va = if W == 32 { 0x96235abc } else { 0xffffffc196235abc }
+  const d = walk<XLEN=W, PA=PA>(clk=clk, rst=rst, request=phase == 4, virtualAddress=va,
+      rootPPN=0x80000, user=false, fetch=false, store=false, sum=false, mxr=false, consume=phase == 16,
+      readReady=!install, readDone=returning, readError=false, readData=data)
+  returning = d.read and !install
+  const index = if install { writeAddr } else { d.readAddress#[0..<14] }
+  data = dataArray<W=W, CAPACITY=16384>(clk=clk, valid=U1(install or d.read), address=index,
+      write=U1(install), wdata=word, mask=(1 << (W/8))-1)
+  done = d.valid
+  wrong = (d.read and (d.readAddress >> 14) != 0x20000) or (d.valid and
+      (d.accessFault or d.pageFault != (round == 2) or (round != 2 and d.address != ((page << 12) | 0xabc))))
+}
+pub mod page_table_sram(clk:Clock, rst:Reset, phase:U5, round:U2) -> (done:Bool@[], wrong:Bool@[]) {
+  const a = check<W=32, PA=34>(clk=clk, rst=rst, phase=phase, round=round)
+  const b = check<W=64, PA=56>(clk=clk, rst=rst, phase=phase, round=round)
+  done = a.done and b.done
+  wrong = a.wrong or b.wrong
+}
+test page_table_sram.stored_entries {
+  mut d = page_table_sram
+  tick 54 {
+    const phase = clock % 18
+    d.phase = phase
+    d.round = clock / 18
+    d.rst = clock == 0
+    step
+    if phase >= 4 { assert(!d.wrong, "wrong SRAM address, translated page or fault") }
+    if phase == 15 { assert(d.done, "both walks complete from stored PTEs") }
+  }
+}

@@ -1,0 +1,59 @@
+const boot = import("BootROM.BootROM")
+const configs = import("../pyrope2/RocketConfig")
+comptime const baseline = configs.params(btbEntries=16)
+comptime const baseline64 = configs.params(xLen=64, btbEntries=16)
+comptime const small = configs.params(btbEntries=16, bhtEntries=64, bhtHistoryLength=4, bhtHistoryBits=4)
+comptime const wide = configs.params(xLen=64, btbEntries=16, bhtEntries=512, bhtCounterLength=2)
+
+// Success requires exactly 32 increments in 64 alternating branches.
+comb rom() -> (words:[16]U32) {
+  words = (
+    0x04000413, // li s0,64
+    0x00000493, // li s1,0
+    0x00000293, // li t0,0
+    0x0012c293, // loop: xori t0,t0,1
+    0x00028463, // beqz t0,skip
+    0x00148493, // addi s1,s1,1
+    0xfff40413, // skip: addi s0,s0,-1
+    0xfe0418e3, // bnez s0,loop
+    0x02000293, // li t0,32
+    0x00929463, // bne t0,s1,fail
+    0x0000006f, // success: j success
+    0x00100073, // fail: ebreak
+    0, 0, 0, 0
+  )
+}
+
+pub mod history_program(clk:Clock, rst:Reset) -> (plain:Bool@[], plain64:Bool@[], predicted32:Bool@[], predicted64:Bool@[], failed:Bool@[]) {
+  const ref32 = boot<baseline>(clk=clk, rst=rst, program=rom(), successPC=0x10068)
+  const ref64 = boot<baseline64>(clk=clk, rst=rst, program=rom(), successPC=0x10068)
+  const p32 = boot<small>(clk=clk, rst=rst, program=rom(), successPC=0x10068)
+  const p64 = boot<wide>(clk=clk, rst=rst, program=rom(), successPC=0x10068)
+  plain64 = ref64.success
+  plain = ref32.success
+  predicted32 = p32.success
+  predicted64 = p64.success
+  failed = ref32.trap != 0 or ref64.trap != 0 or p32.trap != 0 or p64.trap != 0
+}
+
+test history_program.alternating {
+  mut d = history_program
+  mut plainAt = 0
+  mut plain64At = 0
+  mut p32At = 0
+  mut p64At = 0
+  tick 640 {
+    d.rst = clock < 4
+    step
+    if clock > 4 {
+      assert(!d.failed, "wrong path retired")
+      if d.plain and plainAt == 0 { plainAt = clock }
+      if d.plain64 and plain64At == 0 { plain64At = clock }
+      if d.predicted32 and p32At == 0 { p32At = clock }
+      if d.predicted64 and p64At == 0 { p64At = clock }
+    }
+  }
+  assert(plainAt > 0 and p32At > 0 and p64At > 0, "all tiles must retire the checked loop")
+  assert(p32At < plainAt and p64At < plain64At, "history should learn the alternating branch")
+  puts("RV32 {plainAt} -> {p32At}, RV64 {plain64At} -> {p64At}")
+}

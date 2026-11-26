@@ -1,0 +1,82 @@
+const bank = import("../pyrope2/PhysicalProtection.registers")
+
+pub mod pmp_registers(clk:Clock, rst:Reset, index:U12, cmd:U3, data:U64)
+    -> (absent:U32@[], one:U32@[], nine:U64@[], full:U32@[]) {
+  const a = bank<XLEN=32,N=0>(clk=clk,rst=rst,index=index,cmd=cmd,data=data#[0..<32])
+  const b = bank<XLEN=32,N=1>(clk=clk,rst=rst,index=index,cmd=cmd,data=data#[0..<32])
+  const c = bank<XLEN=64,N=9>(clk=clk,rst=rst,index=index,cmd=cmd,data=data)
+  const d = bank<XLEN=32,N=16>(clk=clk,rst=rst,index=index,cmd=cmd,data=data#[0..<32])
+  absent = a.value
+  one = b.value
+  nine = c.value
+  full = d.value
+}
+
+test pmp_registers.counts_and_locking {
+  mut d = pmp_registers
+  d.rst = true
+  d.index = 0x3a0
+  d.cmd = 0
+  d.data = 0
+  step
+  d.rst = false
+  d.index = 0x3bf
+  d.cmd = 5
+  d.data = 0x3abc000f
+  step
+  d.cmd = 0
+  step
+  assert(d.absent == 0)
+  assert(d.one == 0 and d.nine == 0 and d.full == 0x3abc000f)
+  d.index = 0x3a1
+  step
+  assert(d.nine == 0, "RV64 only implements even-numbered configuration CSRs")
+  d.index = 0x3a2
+  d.cmd = 5
+  d.data = 0x1f1f1f1f1f1f1f1f
+  step
+  d.cmd = 0
+  step
+  assert(d.one == 0 and d.nine == 0x1f and d.full == 0x1f1f1f1f)
+  d.index = 0x3b0
+  d.cmd = 5
+  d.data = 0x100
+  step
+  d.index = 0x3b1
+  d.data = 0x200
+  step
+  d.index = 0x3a0
+  d.data = 0x8912
+  step
+  d.cmd = 0
+  step
+  assert(d.one == 0x10 and d.nine == 0x8910 and d.full == 0x8910, "write permission requires read permission")
+  d.cmd = 5
+  d.data = 0
+  step
+  d.index = 0x3b0
+  d.data = 0x123
+  step
+  d.cmd = 0
+  step
+  assert(d.one == 0x123 and d.nine == 0x100 and d.full == 0x100, "locked TOR protects its predecessor")
+  d.index = 0x3b1
+  d.cmd = 5
+  d.data = 0xff
+  step
+  d.cmd = 0
+  step
+  assert(d.one == 0 and d.nine == 0x200 and d.full == 0x200)
+  d.rst = true
+  step
+  d.rst = false
+  d.cmd = 6
+  d.data = 0x13
+  step
+  d.cmd = 7
+  d.data = 0x101
+  step
+  d.cmd = 0
+  step
+  assert(d.one == 0 and d.nine == 0x212 and d.full == 0x212, "reset releases TOR lock for CSRRS and CSRRC")
+}

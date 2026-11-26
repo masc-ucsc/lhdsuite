@@ -1,0 +1,94 @@
+const image = import("BootROM.Image")
+const cfg = import("../pyrope2/RocketConfig")
+comptime const p32 = cfg.params(clockGate=true, fLen=32, fpuClockGate=true)
+comptime const p64 = cfg.params(xLen=64, clockGate=true, fLen=32, fpuClockGate=true, mulDivClockGate=true, btbEntries=4)
+
+comb rom() -> (words:[48]U32) {
+  words = (
+    0x7c102373, // csrr t1,0x7c1
+    0x00e00393, // li t2,14
+    0x08731263, // bne t1,t2,100cc <fail>
+    0x08000293, // li t0,128
+    0x30429073, // csrw mie,t0
+    0x00000413, // li s0,0
+    0x078000ef, // jal ra,100d0 <idle>
+    0x7c137373, // csrrci t1,0x7c1,6
+    0x06731663, // bne t1,t2,100cc <fail>
+    0x7c102373, // csrr t1,0x7c1
+    0x00800393, // li t2,8
+    0x06731063, // bne t1,t2,100cc <fail>
+    0x060000ef, // jal ra,100d0 <idle>
+    0x38500513, // li a0,901
+    0x01100593, // li a1,17
+    0x02b54633, // div a2,a0,a1
+    0x03500293, // li t0,53
+    0x04561463, // bne a2,t0,100cc <fail>
+    0x000062b7, // lui t0,0x6
+    0x3002a073, // csrs mstatus,t0
+    0x3fc002b7, // lui t0,0x3fc00
+    0xf00280d3, // fmv.w.x ft1,t0
+    0x0010f153, // fadd.s ft2,ft1,ft1
+    0xe00102d3, // fmv.x.w t0,ft2
+    0x40400337, // lui t1,0x40400
+    0x02629463, // bne t0,t1,100cc <fail>
+    0x7c126373, // csrrsi t1,0x7c1,4
+    0x02731063, // bne t1,t2,100cc <fail>
+    0x020000ef, // jal ra,100d0 <idle>
+    0x00300293, // li t0,3
+    0x00541a63, // bne s0,t0,100cc <fail>
+    0x7c127373, // csrrci t1,0x7c1,4
+    0x00c00393, // li t2,12
+    0x00731463, // bne t1,t2,100cc <fail>
+    0x30500073, // 0x30500073
+    0x00100073, // ebreak
+    0xb00026f3, // csrr a3,mcycle
+    0x10500073, // wfi
+    0xb0002773, // csrr a4,mcycle
+    0x40d70733, // sub a4,a4,a3
+    0x04073713, // sltiu a4,a4,64
+    0xfe0704e3, // beqz a4,100cc <fail>
+    0x00140413, // addi s0,s0,1
+    0x00008067, // ret
+    0x00000000,
+    0x00000000,
+    0x00000000,
+    0x00000000
+  )
+}
+
+mod run<C>(clk:Clock, rst:Reset, timer:U1) -> (done:U1@[], bad:Bool@[], asleep:U1@[]) {
+  const d = image<C=C,WORDS=48>(clk=clk, rst=rst, timer=timer, program=rom(), successPC=0x100c8)
+  done = U1(d.success)
+  bad = d.trap != 0
+  asleep = U1(d.traceValid and d.tracePC == 0x100d4)
+}
+
+pub mod core_clock(clk:Clock, rst:Reset, timer:U1) -> (done:U2@[], bad:Bool@[], asleep:U2@[]) {
+  const a = run<p32>(clk=clk, rst=rst, timer=timer)
+  const b = run<p64>(clk=clk, rst=rst, timer=timer)
+  done = (b.done << 1) | a.done
+  bad = a.bad or b.bad
+  asleep = (b.asleep << 1) | a.asleep
+}
+
+test core_clock.sleep_and_wake {
+  mut d = core_clock
+  mut finished:U2 = 0
+  mut count32 = 0
+  mut count64 = 0
+  tick 950 {
+    d.rst = clock < 4
+    d.timer = U1(clock == 200 or clock == 470 or clock == 780)
+    step
+    if clock > 4 {
+      if d.asleep#[0] != 0 { count32 += 1 }
+      if d.asleep#[1] != 0 { count64 += 1 }
+      finished |= d.done
+      assert(!d.bad, "unexpected exception, CSR readback or incorrect arithmetic")
+      if clock == 195 { assert(count32 == 1 and count64 == 1) }
+      if clock == 465 { assert(count32 == 2 and count64 == 2) }
+      if clock == 775 { assert(count32 == 3 and count64 == 3) }
+    }
+  }
+  assert(finished == 3, "both tiles must wake on timer and retire CEASE")
+}

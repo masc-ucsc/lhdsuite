@@ -1,0 +1,60 @@
+const metadata = import("ClientMetadata")
+
+// One outstanding AcquireBlock. Reserve the destination way until done. A
+// GrantAck can leave after the first D beat, independently of later SRAM writes.
+pub mod CacheRefill<W=32, SOURCE=1, SINK_BITS=4>(clk:Clock, rst:Reset,
+    request:Bool, address:U32, state:U2, write:Bool, writeIntent:Bool,
+    aReady:Bool, dValid:Bool, dOpcode:U3, dSource:U5, dSink:Unsigned(bits=SINK_BITS),
+    dCap:U2, dData:Unsigned(bits=W), dDenied:Bool, dCorrupt:Bool, eReady:Bool, ramReady:Bool)
+    -> (ready:Bool@[], lineAddress:U32@[], aValid:Bool@[], aParam:U2@[], aSource:U5@[],
+        dReady:Bool@[], eValid:Bool@[], eSink:Unsigned(bits=SINK_BITS)@[],
+        fill:Bool@[], fillBeat:Unsigned(bits=std.clog2(512/W))@[], fillData:Unsigned(bits=W)@[],
+        fillCorrupt:Bool@[], done:Bool@[], error:Bool@[], install:Bool@[], newState:U2@[]) {
+  cassert(W == 32 or W == 64)
+  comptime const beats = 512 / W
+  reg issuing:Bool = false
+  reg receiving:Bool = false
+  reg base:U32 = nil
+  reg grow:U2 = nil
+  reg store:Bool = nil
+  reg beat:Unsigned(bits=std.clog2(beats)) = 0
+  reg ack:Bool = false
+  reg sink:Unsigned(bits=SINK_BITS) = nil
+
+  ready = !rst and !issuing and !receiving and !ack
+  if request and ready {
+    const permission = metadata.access(state=state, write=write, writeIntent=writeIntent)
+    base = (address >> 6) << 6
+    grow = permission.grow
+    store = write
+    issuing = true
+  }
+  lineAddress = base
+  aSource = SOURCE
+  aParam = grow
+  aValid = issuing and !rst
+  const sent = aValid and aReady
+  if sent { issuing = false; receiving = true }
+
+  const hasData = dOpcode == 5
+  const grant = dSource == SOURCE and (hasData or dOpcode == 4)
+  const needsRAM = hasData and !dDenied
+  dReady = !rst and (receiving or sent) and grant and (!needsRAM or ramReady)
+  const take = dValid and dReady
+  fill = take and needsRAM
+  fillBeat = beat
+  fillData = dData
+  fillCorrupt = dCorrupt
+  done = take and (!hasData or beat == beats-1)
+  newState = metadata.grant(cap=dCap, write=store, exclusive=grow != 0)
+  error = done and (dDenied or newState == metadata.invalid)
+  install = done and !error
+  if take { wrap beat += 1 }
+  if done { receiving = false; beat = 0 }
+
+  if take and beat == 0 { ack = true; sink = dSink }
+  eValid = ack and !rst
+  eSink = sink
+  if eValid and eReady { ack = false }
+  if rst { issuing = false; receiving = false; ack = false; beat = 0 }
+}

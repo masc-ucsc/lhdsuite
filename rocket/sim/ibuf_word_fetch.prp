@@ -1,0 +1,35 @@
+const buffer = import("../pyrope2/IBuf.IBuf")
+const configs = import("../pyrope2/RocketConfig")
+comptime const word32 = configs.params(useCompressed=false)
+comptime const word64 = configs.params(xLen=64, useCompressed=false)
+
+mod check<C>(clk:Clock, rst:Reset, fetch:U1, ready:U1, address:U64, data:U32, fault:U3, retry:U1)
+    -> (correct:Bool@[]) {
+  const b = buffer<C>(clk=clk, rst=rst, kill=0, ready=ready, fetchValid=fetch,
+      fetchPC=address#[0..<C.xLen], fetchData=data, fetchFault=fault, fetchReplay=retry, taken=1, branchSlot=0)
+  correct = b.fetchReady == ready and b.valid == fetch and b.pc == address#[0..<C.xLen] and
+      b.raw == data and b.inst == data and b.rvc == 0 and b.replay == (retry & fetch) and
+      b.firstFault == fault and b.secondFault == 0
+}
+
+pub mod ibuf_word_fetch(clk:Clock, rst:Reset, fetch:U1, ready:U1, address:U64, data:U32, fault:U3, retry:U1)
+    -> (correct:Bool@[]) {
+  const a = check<word32>(clk=clk,rst=rst,fetch=fetch,ready=ready,address=address,data=data,fault=fault,retry=retry)
+  const b = check<word64>(clk=clk,rst=rst,fetch=fetch,ready=ready,address=address,data=data,fault=fault,retry=retry)
+  correct = a and b
+}
+
+test ibuf_word_fetch.uncompressed_beats {
+  mut d = ibuf_word_fetch
+  tick 65 {
+    d.rst = clock == 0
+    d.fetch = clock#[0]
+    d.ready = clock#[1]
+    d.retry = clock#[2]
+    d.fault = clock#[3..<6]
+    d.data = 0xabc00000 + clock
+    d.address = 0x100000004 + (clock << 2)
+    step
+    assert(d.correct, "a word-aligned fetch carries its original instruction and one set of faults")
+  }
+}

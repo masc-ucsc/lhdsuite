@@ -1,0 +1,147 @@
+const cfg = import("../pyrope2/RocketConfig")
+const image = import("BootROM.Image")
+
+// With entries, the last implemented PMP allows S-mode loads and fetches.
+// A denied store enters M-mode, which revokes execute permission for the
+// return PC. With zero entries the two PMP CSRs trap and S-mode memory is open.
+mod run<X,N>(clk:Clock, rst:Reset) -> (done:U1@[], trap:U1@[]) {
+  comptime const C = cfg.params(xLen=X, nPMPs=N, useSupervisor=true)
+  comptime const last = if N == 0 { 0 } else { N-1 }
+  comptime const addrCSR = 0x3b0 + last
+  comptime const nextCSR = if N == 16 { addrCSR } else { addrCSR+1 }
+  comptime const cfgCSR = 0x3a0 + (last/(X/8))*(X/32)
+  comptime const shift = (last%(X/8))*8
+  const program:[96]U32 = (
+    0x00000297, // auipc t0,0x0
+    0x0e828293, // addi t0,t0,232 # 10128 <handler>
+    0x30529073, // csrw mtvec,t0
+    0x00000413, // li s0,0
+    0x00100493, // li s1,1
+    0x01f49493, // slli s1,s1,0x1f
+    0x02a00293, // li t0,42
+    0x0054a023, // sw t0,0(s1)
+    (N << 20) | 0x00913, // set_count
+    (shift << 20) | 0x00993, // set_shift
+    0x04090c63, // beqz s2,100c0 <absent>
+    0xfff00293, // li t0,-1
+    (addrCSR << 20) | 0x29073, // csrw pmpaddr0 for the selected PMP entry
+    (addrCSR << 20) | 0x022f3, // csrr t0 for the selected PMP entry
+    0x40000337, // lui t1,0x40000
+    0xfff30313, // addi t1,t1,-1 # 3fffffff <__global_pointer$+0x3ffee63f>
+    0x0a629263, // bne t0,t1,10124 <fail>
+    0x01d00293, // li t0,29
+    0x013292b3, // sll t0,t0,s3
+    (cfgCSR << 20) | 0x29073, // csrw pmpcfg0 for the selected PMP entry
+    (cfgCSR << 20) | 0x022f3, // csrr t0 for the selected PMP entry
+    0x0132d2b3, // srl t0,t0,s3
+    0x0ff2f293, // zext.b t0,t0
+    0x01d00313, // li t1,29
+    0x08629263, // bne t0,t1,10124 <fail>
+    0x01000293, // li t0,16
+    0x02590463, // beq s2,t0,100d0 <enter>
+    0xfff00293, // li t0,-1
+    (nextCSR << 20) | 0x29073, // csrw pmpaddr1 for the selected PMP entry
+    (nextCSR << 20) | 0x022f3, // csrr t0 for the selected PMP entry
+    0x06029663, // bnez t0,10124 <fail>
+    0x0140006f, // j 100d0 <enter>
+    0x3a0022f3, // csrr t0,pmpcfg0
+    0x3bf022f3, // csrr t0,pmpaddr15
+    0x00200293, // li t0,2
+    0x04541c63, // bne s0,t0,10124 <fail>
+    0x00000297, // auipc t0,0x0
+    0x01c28293, // addi t0,t0,28 # 100ec <worker>
+    0x34129073, // csrw mepc,t0
+    0x000012b7, // lui t0,0x1
+    0x80028293, // addi t0,t0,-2048 # 800 <_start-0xf840>
+    0x30029073, // csrw mstatus,t0
+    0x30200073, // mret
+    0x0004a283, // lw t0,0(s1)
+    0x02a00313, // li t1,42
+    0x02629863, // bne t0,t1,10124 <fail>
+    0x03f00293, // li t0,63
+    0x0054a023, // sw t0,0(s1)
+    0x0004a283, // lw t0,0(s1)
+    0x00090663, // beqz s2,10110 <check>
+    0x02a00313, // li t1,42
+    0x0080006f, // j 10114 <compare>
+    0x03f00313, // li t1,63
+    0x00629863, // bne t0,t1,10124 <fail>
+    0x00200313, // li t1,2
+    0x00641463, // bne s0,t1,10124 <fail>
+    0x0000006f, // j 10120 <success>
+    0x0000006f, // j 10124 <fail>
+    0x342022f3, // csrr t0,mcause
+    0x34102373, // csrr t1,mepc
+    0x06090263, // beqz s2,10194 <illegal>
+    0x02041863, // bnez s0,10164 <fetch_fault>
+    0x00700393, // li t2,7
+    0xfe7294e3, // bne t0,t2,10124 <fail>
+    0x343023f3, // csrr t2,mtval
+    0xfe9390e3, // bne t2,s1,10124 <fail>
+    0x00000397, // auipc t2,0x0
+    0xfb438393, // addi t2,t2,-76 # 100fc <denied_store>
+    0xfc731ae3, // bne t1,t2,10124 <fail>
+    0x01b00293, // li t0,27
+    0x013292b3, // sll t0,t0,s3
+    (cfgCSR << 20) | 0x29073, // csrw pmpcfg0 for the selected PMP entry
+    0x0500006f, // j 101b0 <advance>
+    0x00100393, // li t2,1
+    0xfa729ee3, // bne t0,t2,10124 <fail>
+    0xfa741ce3, // bne s0,t2,10124 <fail>
+    0x00000397, // auipc t2,0x0
+    0xf9038393, // addi t2,t2,-112 # 10100 <denied_fetch>
+    0xfa7316e3, // bne t1,t2,10124 <fail>
+    0x343022f3, // csrr t0,mtval
+    0xfa7292e3, // bne t0,t2,10124 <fail>
+    0x01d00293, // li t0,29
+    0x013292b3, // sll t0,t0,s3
+    (cfgCSR << 20) | 0x29073, // csrw pmpcfg0 for the selected PMP entry
+    0x0280006f, // j 101b8 <resume>
+    0x00200393, // li t2,2
+    0xf87296e3, // bne t0,t2,10124 <fail>
+    0x00000397, // auipc t2,0x0
+    0xf2438393, // addi t2,t2,-220 # 100c0 <absent>
+    0x00241e13, // slli t3,s0,0x2
+    0x01c383b3, // add t2,t2,t3
+    0xf6731ce3, // bne t1,t2,10124 <fail>
+    0x00430313, // addi t1,t1,4
+    0x34131073, // csrw mepc,t1
+    0x00140413, // addi s0,s0,1
+    0x30200073 // mret
+  )
+  const tile = image<C=C,WORDS=96>(clk=clk, rst=rst, program=program, successPC=0x10120)
+  done = U1(tile.success and tile.privilege == 1)
+  trap = tile.trap
+}
+
+pub mod pmp_profiles(clk:Clock, rst:Reset) -> (success:U8@[], trap:U8@[]) {
+  success = 0
+  trap = 0
+  for i in 0..<8 {
+    const widths = [32,64]
+    const counts = [0,1,9,16]
+    const width = widths[i/4]
+    const count = counts[i%4]
+    const r = run<X=width,N=count>(clk=clk, rst=rst)
+    success#[i] = r.done
+    trap#[i] = r.trap
+  }
+}
+
+test pmp_profiles.last_entry_and_absence {
+  mut d = pmp_profiles
+  mut seen:U8 = 0
+  mut once:U8 = 0
+  mut twice:U8 = 0
+  tick 950 {
+    d.rst = clock < 4
+    step
+    if clock > 4 {
+      seen |= d.success
+      assert((twice & d.trap) == 0, "more than two traps on one tile")
+      twice |= once & d.trap
+      once |= d.trap
+    }
+  }
+  assert(seen == 0xff and twice == 0xff, "every tile must take two expected traps and resume in S-mode")
+}

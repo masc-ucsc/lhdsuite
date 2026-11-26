@@ -1,0 +1,429 @@
+const debugCSRs = import("DebugCSR.DebugCSR")
+const performance = import("Performance")
+const triggers = import("BreakpointUnit.BreakpointUnit")
+const trapVector = import("TrapVector.vector")
+const protection = import("PhysicalProtection")
+const supervisor = import("SupervisorCSR")
+const legalPrivilege = import("UserPrivilege.legal")
+const UserPrivilege = import("UserPrivilege.UserPrivilege")
+const configs = import("RocketConfig")
+comptime const tiny = configs.tiny
+pub mod CSRFile<C=tiny>::[timecheck=false](
+    `clock`:Clock, `reset`:U1, io_ungated_clock:Clock, io_interrupts_debug:U1, io_interrupts_mtip:U1,
+    io_interrupts_msip:U1, io_interrupts_meip:U1, io_interrupts_seip:U1=0,
+    localInterrupts:Unsigned(bits=C.localIRQBits)=0, io_hartid:U1, io_rw_addr:U12, io_rw_cmd:U3,
+    io_rw_wdata:Unsigned(bits=C.xLen), io_decode_0_inst:U32, io_exception:U1, io_retire:U1, io_cause:U32,
+    io_pc:Unsigned(bits=C.xLen), io_tval:Unsigned(bits=C.xLen), io_htval:U32, io_gva:U1, io_inst_0:U32, fpFlags:U5=0,
+    perfID:U18=0, perfPipe:U11=0, perfMem:U6=0, perfAdvance:U3=0, triggerPC:Unsigned(bits=C.xLen)=0, triggerEA:Unsigned(bits=C.xLen)=0) -> (
+    staticPrediction:Bool@[], flushBTB:Bool@[], io_rw_rdata:Unsigned(bits=C.xLen)@[], io_decode_0_read_illegal:U1@[],
+    io_decode_0_write_illegal:U1@[], io_decode_0_write_flush:U1@[], io_decode_0_system_illegal:U1@[],
+    io_decode_0_virtual_access_illegal:U1@[], io_decode_0_virtual_system_illegal:U1@[], io_csr_stall:U1@[],
+    io_eret:U1@[], io_singleStep:U1@[], satp:Unsigned(bits=C.xLen)@[], sum:Bool@[], mxr:Bool@[], io_status_prv:U2@[],
+    io_status_dprv:U2@[], io_status_debug:U1@[], io_status_cease:U1@[], io_status_wfi:U1@[], io_status_isa:U32@[],
+    io_status_dv:U1@[], io_status_v:U1@[], io_status_mpv:U1@[], io_status_gva:U1@[], io_status_mpp:U2@[],
+    io_status_mpie:U1@[], io_status_mie:U1@[], io_evec:Unsigned(bits=C.xLen)@[], io_time:Unsigned(bits=C.xLen)@[],
+    fpEnabled:Bool@[], io_fcsr_rm:U3@[], io_interrupt:U1@[], io_interrupt_cause:U32@[], triggerTrap:U3@[],
+    triggerDebug:U3@[], watchFetch:Unsigned(bits=C.triggerSlots)@[], watchLoad:Unsigned(bits=C.triggerSlots)@[],
+    watchStore:Unsigned(bits=C.triggerSlots)@[], watchAction:Unsigned(bits=3*C.triggerSlots)@[],
+    pmpTable:protection.Entries@[], io_inhibit_cycle:U1@[], io_trace_0_valid:U1@[],
+    io_trace_0_iaddr:Unsigned(bits=C.xLen)@[], io_trace_0_insn:U32@[], io_trace_0_priv:U3@[],
+    io_trace_0_exception:U1@[], io_trace_0_interrupt:U1@[], io_trace_0_cause:Unsigned(bits=C.xLen)@[],
+    io_trace_0_tval:Unsigned(bits=C.xLen)@[], io_customCSRs_0_value:U32@[]) {
+  reg reg_mstatus_v:U1:[clock_pin=`clock`]
+  reg reg_mstatus_mpv:U1:[clock_pin=`clock`]
+  reg reg_mstatus_gva:U1:[clock_pin=`clock`]
+  wire mcontext:Unsigned(bits=C.xLen) = nil
+  wire scontext:Unsigned(bits=C.xLen) = nil
+  wire mode:U1 = nil
+  wire sRead:Unsigned(bits=C.xLen) = nil
+  wire fpStatus:Unsigned(bits=C.xLen) = nil
+  wire fcsr:U8 = nil
+  wire sStatus:Unsigned(bits=C.xLen) = nil
+  wire sFlags:U32 = nil
+  wire sPending:U12 = nil
+  wire sEnabled:Unsigned(bits=C.xLen) = nil
+  wire iDeleg:Unsigned(bits=C.xLen) = nil
+  wire delegate:Bool = nil
+  wire sVector:Unsigned(bits=C.xLen) = nil
+  wire sEpc:Unsigned(bits=C.xLen) = nil
+  wire spp:U1 = nil
+  wire sie:U1 = nil
+  wire sCounters:Unsigned(bits=C.counterBits) = nil
+  wire machineFIOM:U1 = nil
+  wire privilege:U2 = nil
+  wire mprv:U1 = nil
+  wire debugPrivilege:U2 = nil
+  wire inDebug:U1 = nil
+  wire stepped:U1 = nil
+  wire singleStep:U1 = nil
+  wire counterEnable:Unsigned(bits=C.counterBits) = nil
+  reg reg_mstatus_mpp:U2:[clock_pin=`clock`]
+  reg reg_mstatus_mpie:U1:[clock_pin=`clock`]
+  reg reg_mstatus_mie:U1:[clock_pin=`clock`]
+  reg reg_mie:Unsigned(bits=C.xLen):[clock_pin=`clock`]
+  reg reg_mepc:Unsigned(bits=C.xLen):[clock_pin=`clock`]
+  reg reg_mcause:Unsigned(bits=C.xLen):[clock_pin=`clock`]
+  reg reg_mtval:Unsigned(bits=C.xLen):[clock_pin=`clock`]
+  reg reg_mscratch:Unsigned(bits=C.xLen):[clock_pin=`clock`]
+  reg reg_mtvec:U32:[clock_pin=`clock`]
+  reg reg_wfi:U1:[initial=0, reset_pin=`reset`, async=false, clock_pin=io_ungated_clock]
+  reg reg_mcountinhibit:Unsigned(bits=C.counterBits):[clock_pin=`clock`]
+  reg cycles:U64:[clock_pin=io_ungated_clock]
+  reg retired:U64:[clock_pin=`clock`]
+  reg reg_misa:U32:[clock_pin=`clock`]
+  comptime const controlMask = if C.clockGate { 14 } else { 8 }
+  reg fetchControl:U4:[clock_pin=`clock`]
+  io_status_dv = reg_mstatus_v
+  io_status_v = reg_mstatus_v
+  io_status_mpv = reg_mstatus_mpv
+  io_status_gva = reg_mstatus_gva
+  io_status_mpp = reg_mstatus_mpp
+  io_status_mpie = reg_mstatus_mpie
+  io_status_mie = reg_mstatus_mie
+  io_status_debug = inDebug
+  io_status_wfi = reg_wfi
+  comptime const localMask = ((1 << C.nLocalInterrupts)-1) << 16
+  comptime const machineMask = 0x888 | (if C.useSupervisor { 0 } else { localMask })
+  const localPending = (localInterrupts << 16) & localMask
+  const mip:Unsigned(bits=C.xLen) = localPending | (io_interrupts_meip << 11) | (io_interrupts_mtip << 7) |
+      (io_interrupts_msip << 3) | sPending
+  const enables = (reg_mie & machineMask) | sEnabled
+  const pendingIRQs = enables & mip
+  const machineIRQs = if privilege != 3 or reg_mstatus_mie != 0 { pendingIRQs & ~iDeleg } else { 0 }
+  const supervisorIRQs = if privilege == 0 or (privilege == 1 and sie != 0) { pendingIRQs & iDeleg } else { 0 }
+  const enabledIRQs = if machineIRQs != 0 { machineIRQs } else { supervisorIRQs }
+  const interruptPending = U1(enabledIRQs != 0) | io_interrupts_debug
+  mut irqNumber:U6 = if enabledIRQs#[11] != 0 { 11 }
+      elif enabledIRQs#[3] != 0 { 3 } elif enabledIRQs#[7] != 0 { 7 } elif enabledIRQs#[9] != 0 { 9 }
+      elif enabledIRQs#[1] != 0 { 1 } elif enabledIRQs#[5] != 0 { 5 } else { 4 }
+  for i in 0..<C.nLocalInterrupts {
+    if enabledIRQs#[16+i] != 0 { irqNumber = 16+i }
+  }
+  if io_interrupts_debug != 0 { irqNumber = 14 }
+  io_status_isa = reg_misa
+  const systemInsn = U1(io_rw_cmd == 4)
+  const ecall = systemInsn & U1(io_rw_addr == 0)
+  const ebreak = systemInsn & U1(io_rw_addr == 1)
+  const sret = C.useSupervisor and systemInsn != 0 and io_rw_addr == 0x102
+  const dret = C.useDebug and systemInsn != 0 and io_rw_addr == 0x7b2
+  const returning = U1(sret or dret) | (systemInsn & U1(io_rw_addr == 0x302))
+  const addr = io_decode_0_inst#[20..<32]
+  const countBank = addr#[5..<12]
+  const lowBank = countBank == 0x58 or countBank == 0x60
+  const highBank = countBank == 0x5c or countBank == 0x64
+  const counterCSR = C.haveBasicCounters and (((lowBank or (C.xLen == 32 and highBank)) and addr#[0..<5] != 1) or
+      addr == 0x320 or (addr >= 0x323 and addr <= 0x33f))
+  const pmpConfig = addr >= 0x3a0 and addr <= 0x3a3 and (C.xLen == 32 or addr#[0] == 0)
+  const fpCSR = C.fLen > 0 and fpStatus#[13..<15] != 0 and reg_misa#[5] != 0 and addr >= 1 and addr <= 3
+  const userCSR = C.useUser and (addr == 0x30a or (C.xLen == 32 and addr == 0x31a) or (C.haveBasicCounters and addr == 0x306))
+  const pmpCSR = C.nPMPs > 0 and (pmpConfig or (addr >= 0x3b0 and addr <= 0x3bf))
+  const csrExists = U1(fpCSR or userCSR or pmpCSR or counterCSR or (C.useSupervisor and supervisor.exists(addr=addr)) or
+      (C.mcontextWidth > 0 and addr == 0x7a8) or (C.scontextWidth > 0 and addr == 0x5a8) or
+      (addr >= 0x7a0 and addr <= 0x7a3) or (C.useDebug and addr >= 0x7b0 and addr <= 0x7b2) or
+      (addr >= 0xf11 and addr <= 0xf15) or (addr >= 0x340 and addr <= 0x344) or
+      addr == 0x300 or addr == 0x301 or addr == 0x304 or addr == 0x305 or addr == 0x7c1 or (C.branchPredictionModeCSR and addr == 0x7c0))
+  const debugCSR = addr >= 0x7b0 and addr <= 0x7bf
+  const illegalCSR = U1(csrExists == 0 or (debugCSR and inDebug == 0))
+  const machineAlias = addr | 0x300
+  const illegalSystem = U1(io_decode_0_inst == 0x7b200073 and inDebug == 0)
+  const ecallPrivilege = if reg_mstatus_v != 0 and privilege#[0] != 0 { 2 } else { privilege }
+  const cause:U32 = if ecall != 0 { 8 + ecallPrivilege } elif ebreak != 0 { 3 } else { io_cause }
+  const causeNumber = cause#[0..<8]
+  const interruptCause = cause#[31..<32]
+  const architecturalCause = (interruptCause << (C.xLen-1)) | cause#[0..<31]
+  const exception = ecall | ebreak | io_exception
+  wire trapToDebug:U1 = nil
+  wire debugPC:Unsigned(bits=C.xLen) = nil
+  wire debugRead:Unsigned(bits=C.xLen) = nil
+  if C.useDebug {
+    (inDebug=active, singleStep=stepEnabled, stepped, trapToDebug=trap,
+        debugPC=returnPC, debugPrivilege=returnPrv, debugRead=read) = debugCSRs<C>(clk=`clock`, rst=`reset` != 0,
+        addr=io_rw_addr, cmd=io_rw_cmd, operand=io_rw_wdata, pc=io_pc, privilege=privilege, virtualized=reg_mstatus_v,
+        compressed=reg_misa#[2], cause=cause, exception=exception, ebreak=ebreak, retire=io_retire, dret=U1(dret))
+  } else {
+    inDebug = 0
+    singleStep = 0
+    stepped = 0
+    trapToDebug = 0
+    debugPC = 0
+    debugPrivilege = 3
+    debugRead = 0
+  }
+  const debugTarget = if inDebug != 0 and ebreak == 0 { 0x808 } else { 0x800 }
+  const mtvec = trapVector<W=C.xLen>(tvec=reg_mtvec, interrupt=interruptCause != 0, number=causeNumber)
+  const systemTrap = ecall | ebreak
+  const redirect = systemTrap | returning
+  const epc = io_pc#[1..<C.xLen] << 1
+  const trapValue = if ebreak != 0 { epc } else { io_tval }
+  const returnMask = ((1 << C.xLen)-4) | (reg_misa#[2] << 1)
+  const savedPC = if dret { debugPC } else { reg_mepc & returnMask }
+  const machineVector = if returning != 0 { savedPC } elif trapToDebug != 0 { debugTarget } else { mtvec.target }
+  wire ceased:U1 = nil
+  if C.haveCease {
+    reg halted:U1:[initial=0, reset_pin=`reset`, clock_pin=`clock`, async=false]
+    if systemInsn != 0 and io_rw_addr == 0x305 { halted = 1 }
+    ceased = halted
+  } else { ceased = 0 }
+  const csrWriteEnable = U1(io_rw_cmd >= 5)
+  const traceValid = io_retire | exception
+  const inhibitCycle = reg_mcountinhibit#[0]
+  const tracePrivilege = (inDebug << 2) | privilege
+  const takeInterrupt = ((interruptPending & ~singleStep) | stepped) & ~inDebug & ~ceased
+  const stalled = reg_wfi | ceased
+  mut pmpRead:Unsigned(bits=C.xLen) = 0
+  if C.nPMPs > 0 {
+    const pmp = protection.registers<XLEN=C.xLen, N=C.nPMPs>(clk=`clock`, rst=`reset` != 0,
+        index=io_rw_addr, cmd=io_rw_cmd, data=io_rw_wdata)
+    pmpTable = pmp.table
+    pmpRead = pmp.value
+  } else {
+    pmpTable.cfg = 0
+    pmpTable.addr = 0
+  }
+  mut triggerRead:Unsigned(bits=C.xLen) = 0
+  triggerTrap = 0
+  triggerDebug = 0
+  watchFetch = 0
+  watchLoad = 0
+  watchStore = 0
+  watchAction = 0
+  if C.nBreakpoints > 0 {
+    (triggerRead=read, triggerTrap=exception, triggerDebug=enterDebug, watchFetch=fetch,
+        watchLoad=load, watchStore=store, watchAction=actions) = triggers<C>(clk=`clock`, rst=`reset` != 0,
+        index=io_rw_addr, cmd=io_rw_cmd, data=io_rw_wdata, debug=inDebug, privilege=privilege, pc=triggerPC, ea=triggerEA,
+        mcontext=mcontext, scontext=scontext)
+  }
+  mut hpmRead:Unsigned(bits=C.xLen) = 0
+  if C.haveBasicCounters and C.nPerfCounters > 0 {
+    hpmRead = performance.bank<C>(clk=`clock`, rst=`reset` != 0, addr=io_rw_addr, cmd=io_rw_cmd, data=io_rw_wdata,
+        inhibit=reg_mcountinhibit, instruction=perfID, interlock=perfPipe, memory=perfMem, advance=perfAdvance,
+        retire=io_retire, trap=io_exception)
+  }
+  const contextRead = if C.mcontextWidth > 0 and io_rw_addr == 0x7a8 { mcontext }
+      elif C.scontextWidth > 0 and io_rw_addr == 0x5a8 { scontext } else { 0 }
+  const csrRead:Unsigned(bits=C.xLen) = match io_rw_addr {
+    == 1 { fcsr#[0..<5] } == 2 { fcsr#[5..<8] } == 3 { fcsr }
+    == 0x100 { sRead | fpStatus }
+    == 0x300 { fpStatus | sStatus | sFlags | (if C.useSupervisor and C.xLen == 64 { 2 << 34 } else { 0 }) | (if C.useUser and C.xLen == 64 { 2 << 32 } else { 0 }) | (mprv << 17) | (reg_mstatus_mpp << 11) | (reg_mstatus_mpie << 7) | (reg_mstatus_mie << 3) }
+    == 0x301 { ((C.xLen / 32) << (C.xLen-2)) | reg_misa#[0..<26] }
+    == 0x30a { machineFIOM } == 0x306 { counterEnable }
+    == 0x304 { enables } == 0x305 { mtvec.readback }
+    == 0x340 { reg_mscratch } == 0x341 { reg_mepc & returnMask }
+    == 0x342 { reg_mcause } == 0x343 { reg_mtval } == 0x344 { mip }
+    == 0x7c0 { mode } == 0x7c1 { fetchControl }
+    == 0xf11 { C.mvendorid } == 0xf12 { 1 } == 0xf13 { C.mimpid } == 0xf14 { io_hartid }
+    == 0x320 { reg_mcountinhibit }
+    == 0xb00 { cycles#[0..<C.xLen] } == 0xc00 { cycles#[0..<C.xLen] } == 0xb02 { retired#[0..<C.xLen] } == 0xc02 { retired#[0..<C.xLen] }
+    == 0xb80 { cycles#[32..<64] } == 0xc80 { cycles#[32..<64] } == 0xb82 { retired#[32..<64] } == 0xc82 { retired#[32..<64] }
+    else { debugRead | pmpRead | sRead | triggerRead | contextRead | hpmRead }
+  }
+  const csrWrite:Unsigned(bits=C.xLen) = match io_rw_cmd#[0..<2] {
+    == 2 { csrRead | io_rw_wdata } == 3 { csrRead & ~io_rw_wdata } else { io_rw_wdata }
+  }
+  if C.mcontextWidth > 0 {
+    reg machineID:Unsigned(bits=C.mcontextWidth):[initial=0, clock_pin=`clock`, reset_pin=`reset`, async=false]
+    mcontext = machineID
+    if csrWriteEnable != 0 and io_rw_addr == 0x7a8 { machineID = csrWrite#[0..<C.mcontextWidth] }
+  } else { mcontext = 0 }
+  if C.scontextWidth > 0 {
+    reg supervisorID:Unsigned(bits=C.scontextWidth):[initial=0, clock_pin=`clock`, reset_pin=`reset`, async=false]
+    scontext = supervisorID
+    if csrWriteEnable != 0 and io_rw_addr == 0x5a8 { supervisorID = csrWrite#[0..<C.scontextWidth] }
+  } else { scontext = 0 }
+  flushBTB = C.branchPredictionModeCSR and csrWriteEnable != 0 and io_rw_addr == 0x7c0
+  if C.branchPredictionModeCSR {
+    reg bpm:U1:[initial=0, clock_pin=`clock`, reset_pin=`reset`, async=false]
+    if flushBTB { bpm = csrWrite#[0] }
+    mode = bpm
+  } else { mode = 0 }
+  staticPrediction = mode != 0
+  if C.useSupervisor or C.fLen > 0 {
+    reg fs:U1:[initial=0, clock_pin=`clock`, reset_pin=`reset`, async=false]
+    if csrWriteEnable != 0 and (io_rw_addr == 0x300 or (C.useSupervisor and io_rw_addr == 0x100)) {
+      fs = U1(csrWrite#[13..<15] != 0)
+    }
+    // Rocket's formFS implements Off and Dirty. FS and SD are shared by mstatus and sstatus.
+    fpStatus = (fs << (C.xLen-1)) | (if fs != 0 { 3 << 13 } else { 0 })
+  } else { fpStatus = 0 }
+  if C.fLen > 0 {
+    reg rounding:U3:[initial=0, clock_pin=`clock`, reset_pin=`reset`, async=false]
+    reg accrued:U5:[initial=0, clock_pin=`clock`, reset_pin=`reset`, async=false]
+    const writeFP = csrWriteEnable != 0 and io_rw_addr >= 1 and io_rw_addr <= 3
+    if writeFP and io_rw_addr != 2 { accrued = csrWrite#[0..<5] } else { accrued |= fpFlags }
+    if writeFP and io_rw_addr != 1 {
+      rounding = if io_rw_addr == 2 { csrWrite#[0..<3] } else { csrWrite#[5..<8] }
+    }
+    fcsr = (rounding << 5) | accrued
+  } else { fcsr = 0 }
+  const writeLow = csrWrite#[0..<32]
+  const writeEnabled = csrWriteEnable != 0 and C.haveBasicCounters
+  if `reset` != 0 {
+    cycles = 0
+    retired = 0
+  } else {
+    if writeEnabled and io_rw_addr == 0xb00 {
+      cycles#[0..<C.xLen] = csrWrite
+    } elif C.xLen == 32 and writeEnabled and io_rw_addr == 0xb80 {
+      cycles#[32..<64] = writeLow
+    } elif (stalled | reg_mcountinhibit#[0]) == 0 { wrap cycles += 1 }
+    if writeEnabled and io_rw_addr == 0xb02 {
+      retired#[0..<C.xLen] = csrWrite
+    } elif C.xLen == 32 and writeEnabled and io_rw_addr == 0xb82 {
+      retired#[32..<64] = writeLow
+    } elif io_retire != 0 and reg_mcountinhibit#[2] == 0 { wrap retired += 1 }
+  }
+  const machineTrap:U1 = exception & ~trapToDebug & U1(!delegate)
+  if C.useSupervisor {
+    const sv = supervisor.SupervisorCSR<W=C.xLen, VM=C.useVM, EXTRA=C.extraPgLevels, ASID=C.asIdBits, LOCAL=C.nLocalInterrupts, COUNTERS=C.counterBits>(localPending=localPending, clk=`clock`, rst=(`reset` != 0), prv=privilege, csr=io_rw_addr,
+        cmd=io_rw_cmd, writeData=csrWrite, operand=io_rw_wdata, seip=io_interrupts_seip, compressed=reg_misa#[2],
+        trap=exception != 0 and trapToDebug == 0, sret=sret, cause=architecturalCause, pc=io_pc, tval=trapValue)
+    sRead = sv.rdata
+    sStatus = sv.status
+    sFlags = sv.flags
+    sPending = sv.pending
+    sEnabled = sv.enabled
+    iDeleg = sv.ideleg
+    delegate = sv.delegated
+    satp = sv.satp
+    sVector = sv.vector
+    sEpc = sv.returnPC
+    spp = sv.spp
+    sie = sv.sie
+    sCounters = sv.counters
+  } else {
+    sRead = 0
+    sStatus = 0
+    sFlags = 0
+    sPending = 0
+    sEnabled = 0
+    iDeleg = 0
+    delegate = false
+    satp = 0
+    sVector = 0
+    sEpc = 0
+    spp = 0
+    sie = 0
+    sCounters = 0
+  }
+  if C.useUser {
+    const returnPrv = if dret { debugPrivilege } elif sret { spp } else { reg_mstatus_mpp }
+    const u = UserPrivilege<S=C.useSupervisor,COUNTERS=C.counterBits>(clk=`clock`, rst=(`reset` != 0), returnPrv=returnPrv,
+        write=csrWriteEnable != 0, csr=io_rw_addr, data=writeLow, exception=exception != 0,
+        returning=returning != 0, delegated=delegate and trapToDebug == 0,
+        basicCounters=C.haveBasicCounters)
+    privilege = u.prv
+    mprv = u.mprv
+    counterEnable = u.counters
+    machineFIOM = u.fiom
+  } else {
+    privilege = 3
+    mprv = 0
+    counterEnable = 0
+    machineFIOM = 0
+  }
+  if `reset` != 0 {
+    reg_mstatus_v = 0
+    reg_mstatus_mpv = 0
+    reg_mstatus_gva = 0
+    reg_mstatus_mpp = 3
+    reg_mstatus_mpie = 0
+    reg_mstatus_mie = 0
+    reg_mcause = 0
+    reg_mtvec = C.mtvecInit
+    reg_mcountinhibit = 0
+    const baseISA = if C.useRVE { 0x10 } else { 0x100 }
+    reg_misa = 0x40800000 | (U1(C.fLen >= 32) << 5) | (U1(C.fLen == 64) << 3) | (U1(C.useSupervisor) << 18) | (U1(C.useUser) << 20) | baseISA | (U1(C.useMulDiv) << 12) | (U1(C.useCompressed) << 2) | U1(C.useAtomics)
+    fetchControl = controlMask
+  } else {
+    const machineReturn:U1 = returning & U1(!dret) & U1(!sret)
+    reg_mstatus_v &= ~returning & (~exception | (trapToDebug & inDebug))
+    reg_mstatus_mpv = ~machineReturn & (if machineTrap != 0 { reg_mstatus_v } else { reg_mstatus_mpv })
+    if machineTrap != 0 { reg_mstatus_gva = io_gva }
+    if C.useUser and csrWriteEnable != 0 and io_rw_addr == 0x300 {
+      reg_mstatus_mpp = legalPrivilege<S=C.useSupervisor>(mode=writeLow#[11..<13])
+    } elif returning != 0 and !dret and !sret {
+      reg_mstatus_mpp = if C.useUser { 0 } else { 3 }
+    } elif exception != 0 and trapToDebug == 0 and !delegate {
+      reg_mstatus_mpp = privilege
+    }
+    if csrWriteEnable != 0 and io_rw_addr == 0x300 {
+      reg_mstatus_mpie = writeLow#[7..<8]
+      reg_mstatus_mie = writeLow#[3..<4]
+    } else {
+      reg_mstatus_mpie = machineReturn | (if machineTrap != 0 { reg_mstatus_mie } else { reg_mstatus_mpie })
+      if machineReturn != 0 { reg_mstatus_mie = reg_mstatus_mpie }
+      else { reg_mstatus_mie &= ~machineTrap }
+    }
+    if csrWriteEnable != 0 and io_rw_addr == 0x342 {
+      reg_mcause = csrWrite & ((1 << (C.xLen - 1)) | ((1 << std.clog2(16+C.nLocalInterrupts))-1))
+    } elif machineTrap != 0 { reg_mcause = architecturalCause }
+    if C.mtvecWritable and csrWriteEnable != 0 and io_rw_addr == 0x305 {
+      reg_mtvec = writeLow
+    }
+    if writeEnabled and io_rw_addr == 0x320 {
+      reg_mcountinhibit = writeLow#[0..<C.counterBits] & ((1 << C.counterBits)-3)
+    }
+    if C.misaWritable and csrWriteEnable != 0 and io_rw_addr == 0x301 and
+        (reg_misa#[2] == 0 or io_pc#[1] == 0 or writeLow#[2] != 0) {
+      const writable = (U1(C.fLen >= 32) << 5) | (U1(C.fLen == 64) << 3) | (U1(C.useMulDiv) << 12) | (U1(C.useCompressed) << 2) | U1(C.useAtomics)
+      const extensions = if writeLow#[5] == 0 { writeLow & 0xfffffff7 } else { writeLow }
+      reg_misa = (reg_misa & (0xffffffff ^ writable)) | (extensions & writable)
+    }
+    if csrWriteEnable != 0 and io_rw_addr == 0x7c1 {
+      fetchControl = csrWrite#[0..<4] & controlMask
+    }
+  }
+  if csrWriteEnable != 0 and io_rw_addr == 0x304 {
+    reg_mie = csrWrite & machineMask
+  }
+  if csrWriteEnable != 0 and io_rw_addr == 0x341 {
+    reg_mepc = csrWrite#[1..<C.xLen] << 1
+  } elif machineTrap != 0 { reg_mepc = epc }
+  if csrWriteEnable != 0 and io_rw_addr == 0x343 {
+    reg_mtval = csrWrite
+  } elif machineTrap != 0 { reg_mtval = trapValue }
+  if csrWriteEnable != 0 and io_rw_addr == 0x340 {
+    reg_mscratch = csrWrite
+  }
+  if `reset` == 0 {
+    const wake:U1 = U1(pendingIRQs != 0) | io_interrupts_debug | exception
+    const waitForInterrupt = systemInsn & U1(io_rw_addr == 0x105) & ~singleStep & ~inDebug
+    reg_wfi = ~wake & (waitForInterrupt | reg_wfi)
+  }
+  io_rw_rdata = csrRead
+  const badPrivilege = privilege < addr#[8..<10]
+  const userCounter = (countBank == 0x60 or countBank == 0x64) and privilege != 3
+  const permittedCounters = if C.useSupervisor and privilege == 0 { counterEnable & sCounters } else { counterEnable }
+  const counterAllowed = ((permittedCounters >> addr#[0..<5]) & 1) != 0
+  io_decode_0_read_illegal = illegalCSR | U1(badPrivilege or (privilege == 1 and addr == 0x180 and sFlags#[20] != 0) or (userCounter and !counterAllowed))
+  io_decode_0_write_illegal = U1(addr#[10..<12] == 3)
+  io_decode_0_write_flush = U1(machineAlias < 0x340 or machineAlias > 0x343)
+  sum = sStatus#[18] != 0
+  mxr = sStatus#[19] != 0
+  const restrictedSystem = (addr#[5..<12] == 9 and sFlags#[20] != 0) or (addr == 0x102 and sFlags#[22] != 0) or (addr == 0x105 and sFlags#[21] != 0)
+  io_decode_0_system_illegal = illegalSystem | U1(badPrivilege or (privilege < 3 and restrictedSystem))
+  io_decode_0_virtual_access_illegal = 0
+  io_decode_0_virtual_system_illegal = 0
+  io_csr_stall = stalled
+  io_eret = redirect
+  io_singleStep = singleStep
+  io_status_prv = privilege
+  io_status_dprv = if mprv != 0 and inDebug == 0 { reg_mstatus_mpp } else { privilege }
+  io_status_cease = ceased
+  io_evec = if sret { sEpc } elif returning == 0 and delegate and trapToDebug == 0 { sVector } else { machineVector }
+  io_time = cycles#[0..<C.xLen]
+  io_fcsr_rm = fcsr#[5..<8]
+  fpEnabled = fpStatus#[13..<15] != 0 and reg_misa#[5] != 0
+  io_interrupt = takeInterrupt
+  io_interrupt_cause = 0x80000000 | irqNumber
+  io_inhibit_cycle = inhibitCycle
+  io_trace_0_valid = traceValid
+  io_trace_0_iaddr = io_pc
+  io_trace_0_insn = io_inst_0
+  io_trace_0_priv = tracePrivilege
+  io_trace_0_exception = exception
+  io_trace_0_interrupt = interruptCause
+  io_trace_0_cause = architecturalCause
+  io_trace_0_tval = io_tval
+  io_customCSRs_0_value = fetchControl
+}

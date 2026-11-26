@@ -1,0 +1,95 @@
+const fp = import("../pyrope2/Float")
+
+comb check<E,F>(row:U5) -> (good:Bool) {
+  comptime const bias = (1 << (E-1))-1
+  comptime const one = bias << F
+  comptime const two = one+(1 << F)
+  comptime const sign = 1 << (E+F)
+  comptime const inf = ((1 << E)-1) << F
+  comptime const nan = inf | (1 << (F-1))
+  comptime const minNormal = 1 << F
+  comptime const halfUlp = (bias-F-1) << F
+  comptime const fused = sign | (if bias > 2*F { (bias-2*F) << F } else { 1 << (bias-F-1) })
+  comptime const sqrtTwo = if E == 5 { 0x3da8 } elif E == 8 { 0x3fb504f3 } else { 0x3ff6a09e667f3bcd }
+
+  // fn selects FMA, multiply, divide, square root, minimum, or equality.
+  const v = match row {
+    == 0  { (fn=0, a=one, b=two, c=one-minNormal, rm=0, result=two+(1 << (F-2)), flags=0) }
+    == 1  { (fn=0, a=one+1, b=one-2, c=sign|one, rm=0, result=fused, flags=0) }
+    == 2  { (fn=0, a=one, b=one, c=halfUlp, rm=0, result=one, flags=1) }
+    == 3  { (fn=0, a=one, b=one, c=halfUlp, rm=3, result=one+1, flags=1) }
+    == 4  { (fn=0, a=one, b=one, c=halfUlp, rm=4, result=one+1, flags=1) }
+    == 5  { (fn=0, a=one+1, b=one, c=halfUlp, rm=0, result=one+2, flags=1) }
+    == 6  { (fn=1, a=minNormal, b=one-1, c=0, rm=0, result=minNormal, flags=3) }
+    == 7  { (fn=1, a=1, b=one, c=0, rm=0, result=1, flags=0) }
+    == 8  { (fn=1, a=inf-1, b=two, c=0, rm=1, result=inf-1, flags=5) }
+    == 9  { (fn=0, a=inf, b=0, c=nan, rm=0, result=nan, flags=16) }
+    == 10 { (fn=0, a=inf, b=one, c=sign|inf, rm=0, result=nan, flags=16) }
+    == 11 { (fn=0, a=one, b=one, c=sign|one, rm=2, result=sign, flags=0) }
+    == 12 { (fn=2, a=one, b=sign, c=0, rm=0, result=sign|inf, flags=8) }
+    == 13 { (fn=2, a=0, b=0, c=0, rm=0, result=nan, flags=16) }
+    == 14 { (fn=2, a=inf, b=0, c=0, rm=0, result=inf, flags=0) }
+    == 15 { (fn=3, a=two, b=0, c=0, rm=0, result=sqrtTwo, flags=1) }
+    == 16 { (fn=3, a=sign|one, b=0, c=0, rm=0, result=nan, flags=16) }
+    == 17 { (fn=3, a=sign, b=0, c=0, rm=0, result=sign, flags=0) }
+    == 18 { (fn=4, a=0, b=sign, c=0, rm=0, result=sign, flags=0) }
+    == 19 { (fn=4, a=inf+1, b=one, c=0, rm=0, result=one, flags=16) }
+    == 20 { (fn=5, a=nan, b=one, c=0, rm=0, result=0, flags=0) }
+    else  { (fn=5, a=0, b=sign, c=0, rm=0, result=1, flags=0) }
+  }
+  const a = v.a#[0..<(1+E+F)]
+  const b = v.b#[0..<(1+E+F)]
+  const c = v.c#[0..<(1+E+F)]
+  const fma = fp.mulAdd<E=E,F=F>(a=a, b=b, c=c, rm=v.rm, negateProduct=0, negateC=0, multiplyOnly=v.fn == 1)
+  const div = fp.divSqrt<E=E,F=F>(a=a, b=b, rm=v.rm, sqrt=v.fn == 3)
+  const cmp = fp.compare<E=E,F=F>(a=a, b=b, fn=(if v.fn == 5 { 2 } else { 0 }), minMax=v.fn == 4)
+  const bits = if v.fn < 2 { fma.bits } elif v.fn < 4 { div.bits } else { cmp.bits }
+  const flags = if v.fn < 2 { fma.flags } elif v.fn < 4 { div.flags } else { cmp.flags }
+  good = bits == v.result and flags == v.flags
+}
+
+pub mod float_arithmetic(clk:Clock, row:U5) -> (half:Bool@[], single:Bool@[], double:Bool@[]) {
+  half = check<E=5,F=10>(row=row)
+  single = check<E=8,F=23>(row=row)
+  double = check<E=11,F=52>(row=row)
+}
+test float_arithmetic.rounding {
+  mut u = float_arithmetic
+  tick 22 {
+    u.row = clock
+    step
+    assert(u.half and u.single and u.double, "incorrect IEEE result or RISC-V exception flags")
+  }
+}
+
+pub mod float_conversions(clk:Clock, row:U4) -> (good:Bool@[]) {
+  const v = match row {
+    // The unsigned word result saturates on NaN and signed extremes.
+    == 0 { (a=0x7ff0000000000001, i=0xffffffff, flags=16, class=256) }
+    == 1 { (a=0xfff0000000000000, i=0, flags=16, class=1) }
+    == 2 { (a=0xbfe0000000000000, i=0, flags=1, class=2) }
+    == 3 { (a=0x41efffffffe00000, i=0xffffffff, flags=0, class=64) }
+    == 4 { (a=0x41f0000000000000, i=0xffffffff, flags=16, class=64) }
+    == 5 { (a=0x8000000000000000, i=0, flags=0, class=8) }
+    == 6 { (a=1, i=0, flags=1, class=32) }
+    else { (a=0x8000000000000001, i=0, flags=1, class=4) }
+  }
+  const word = fp.toInteger<E=11,F=52,W=32>(a=v.a, isSigned=false, rm=0)
+  const classMask = fp.classify<E=11,F=52>(a=v.a)
+  // 2^24+1 is halfway between adjacent singles. It remains exact in double.
+  const single = fp.fromInteger<E=8,F=23,W=64>(a=0x1000001, isSigned=true, rm=4)
+  const double = fp.fromInteger<E=11,F=52,W=64>(a=0x1000001, isSigned=false, rm=0)
+  const narrow = fp.convertFormat<E=11,F=52,TE=8,TF=23>(a=double.bits, rm=0)
+  const wide = fp.convertFormat<E=5,F=10,TE=11,TF=52>(a=0x8001, rm=0)
+  good = word.bits == v.i and word.flags == v.flags and classMask == v.class and
+      single.bits == 0x4b800001 and single.flags == 1 and double.flags == 0 and
+      narrow.bits == 0x4b800000 and narrow.flags == 1 and wide.bits == 0xbe70000000000000 and wide.flags == 0
+}
+test float_conversions.boundaries {
+  mut u = float_conversions
+  tick 8 {
+    u.row = clock
+    step
+    assert(u.good, "incorrect class, conversion result, or exception flags")
+  }
+}

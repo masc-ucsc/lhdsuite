@@ -1,0 +1,45 @@
+// The architectural CSR window has 16 entries on this Rocket.
+pub type Entries = (cfg:[16]U8, addr:[16]U30)
+
+pub comb addressMask(encoded:U30, mode:U2) -> (mask:U32) {
+  const base:U30 = ((encoded << 1) | mode#[0])#[0..<30]
+  mask = ((base & ~(base + 1)#[0..<30]) << 2) | 3
+}
+
+pub mod registers<XLEN=32, N=8>(clk:Clock, rst:Bool, index:U12, cmd:U3, data:Unsigned(bits=XLEN))
+    -> (table:Entries@[], value:Unsigned(bits=XLEN)@[]) {
+  cassert(N >= 0 and N <= 16 and (XLEN == 32 or XLEN == 64))
+  table.cfg = 0
+  table.addr = 0
+  value = 0
+  if N > 0 {
+    reg cfg:[N]U8:[clock_pin=clk, ordering="old"] = nil
+    reg address:[N]U30:[clock_pin=clk, ordering="old"] = nil
+    comptime const bytes = XLEN / 8
+    for i in 0..<N {
+      const offset = (i % bytes) * 8
+      table.cfg[i] = cfg[i]
+      table.addr[i] = address[i]
+      if index == 0x3a0 + (i / bytes) * (XLEN / 32) { value#[offset..+8] = cfg[i] }
+      if index == 0x3b0 + i { value = address[i] }
+    }
+    const writeData = match cmd#[0..<2] {
+      == 2 { value | data } == 3 { value & ~data } else { data }
+    }
+    for i in 0..<N {
+      const locked = cfg[i]#[7] != 0
+      const next = if i+1 < N { i+1 } else { i }
+      const torLock = cfg[next]#[7] != 0 and cfg[next]#[3..<5] == 1
+      const written = writeData#[((i%bytes)*8)..+8]
+      const configWrite = cmd >= 5 and !locked and index == 0x3a0 + (i / bytes) * (XLEN / 32)
+      // Bits 5 and 6 are reserved. A writable region must also be readable.
+      const flags = (written & 5) | ((written#[0] & written#[1]) << 1)
+      if rst {
+        cfg[i] = if configWrite { flags } else { cfg[i] & 7 }
+      } elif configWrite {
+        cfg[i] = (written & 0x98) | flags
+      }
+      if cmd >= 5 and !locked and !torLock and index == 0x3b0 + i { address[i] = writeData#[0..<30] }
+    }
+  }
+}

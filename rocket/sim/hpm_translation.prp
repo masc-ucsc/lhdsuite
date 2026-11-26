@@ -1,0 +1,102 @@
+const cfg = import("../pyrope2/RocketConfig")
+const image = import("BootROM.Image")
+
+// Two root leaves identity-map the ROM and alias the scratchpad into S mode.
+// Repeated data accesses hit one translation on both Sv32 and Sv39.
+mod run<X,L2=0>(clk:Clock, rst:Reset) -> (success:Bool@[], trap:U1@[]) {
+  comptime const C = cfg.params(xLen=X, useVM=true, nPerfCounters=3, nL2TLBEntries=L2)
+  const program:[64]U32 = (
+    0xfff00293, // li t0,-1
+    0x3b029073, // csrw pmpaddr0,t0
+    0x00f00293, // li t0,15
+    0x3a029073, // csrw pmpcfg0,t0
+    0x00000297, // auipc t0,0x0
+    0x0bc28293, // addi t0,t0,188 # 1010c <handler>
+    0x30529073, // csrw mtvec,t0
+    0x00100413, // li s0,1
+    0x01f41413, // slli s0,s0,0x1f
+    0x0cf00313, // li t1,207
+    0x00642023, // sw t1,0(s0)
+    0x00042223, // sw zero,4(s0)
+    0x20000337, // lui t1,0x20000
+    0x0c730313, // addi t1,t1,199 # 200000c7 <__global_pointer$+0x1ffee78f>
+    (if X == 64 { 0x00642423 } else { 0x00642223 }), // sw t1,8(s0) on RV64 or 4(s0) on RV32
+    0x00042623, // sw zero,12(s0)
+    0x000012b7, // lui t0,0x1
+    0x80228293, // addi t0,t0,-2046 # 802 <_start-0xf83e>
+    0x32329073, // csrw mhpmevent3,t0
+    0xb0301073, // csrw mhpmcounter3,zero
+    0x000012b7, // lui t0,0x1
+    0x00228293, // addi t0,t0,2 # 1002 <_start-0xf03e>
+    0x32429073, // csrw mhpmevent4,t0
+    0xb0401073, // csrw mhpmcounter4,zero
+    0x000022b7, // lui t0,0x2
+    0x00228293, // addi t0,t0,2 # 2002 <_start-0xe03e>
+    0x32529073, // csrw mhpmevent5,t0
+    0xb0501073, // csrw mhpmcounter5,zero
+    0x00100493, // li s1,1
+    (if X == 64 { 0x01e49493 } else { 0x01649493 }), // root index 1 at bit 30 or 22
+    0x04048493, // addi s1,s1,64
+    0x00100293, // li t0,1
+    (if X == 64 { 0x03f29293 } else { 0x01f29293 }), // Sv39 or Sv32 mode
+    0x00080337, // lui t1,0x80
+    0x0062e2b3, // or t0,t0,t1
+    0x18029073, // csrw satp,t0
+    0x00000297, // auipc t0,0x0
+    0x01c28293, // addi t0,t0,28 # 100ec <supervisor>
+    0x34129073, // csrw mepc,t0
+    0x000012b7, // lui t0,0x1
+    0x80028293, // addi t0,t0,-2048 # 800 <_start-0xf840>
+    0x30029073, // csrw mstatus,t0
+    0x30200073, // mret
+    0x04900313, // li t1,73
+    0x0064a023, // sw t1,0(s1)
+    0x0004a283, // lw t0,0(s1)
+    0x00629863, // bne t0,t1,10108 <fail>
+    0x0004a283, // lw t0,0(s1)
+    0x00629463, // bne t0,t1,10108 <fail>
+    0x00000073, // ecall
+    0x0000006f, // j 10108 <fail>
+    0x342022f3, // csrr t0,mcause
+    0x00900313, // li t1,9
+    0xfe629ae3, // bne t0,t1,10108 <fail>
+    0xb03022f3, // csrr t0,mhpmcounter3
+    0x00100313, // li t1,1
+    0xfe6294e3, // bne t0,t1,10108 <fail>
+    0xb04022f3, // csrr t0,mhpmcounter4
+    0xfe6290e3, // bne t0,t1,10108 <fail>
+    0xb05022f3, // csrr t0,mhpmcounter5
+    (if L2 > 0 { 0xffe28293 } else { 0x00028293 }), // subtract the expected L2 misses
+    0xfc029ae3, // bnez t0,10108 <fail>
+    0x0000006f, // j 10138 <success>
+    0
+  )
+  const tile = image<C=C,WORDS=64>(clk=clk, rst=rst, program=program, successPC=0x10138)
+  success = tile.success and tile.privilege == 3
+  trap = tile.trap
+}
+
+pub mod hpm_translation(clk:Clock, rst:Reset) -> (success:U4@[], traps:U4@[]) {
+  for i in 0..<4 {
+    const t = run<X=(if i%2 == 0 { 32 } else { 64 }), L2=(if i >= 2 { 8 } else { 0 })>(clk=clk, rst=rst)
+    success#[i] = U1(t.success)
+    traps#[i] = t.trap
+  }
+}
+
+test hpm_translation.walk_events {
+  mut d = hpm_translation
+  mut seen:U4 = 0
+  mut once:U4 = 0
+  tick 3000 {
+    d.rst = clock < 4
+    step
+    if clock > 4 {
+      assert((once & d.traps) == 0, "unexpected second exception")
+      once |= d.traps
+      seen |= d.success
+      if seen == 15 { break }
+    }
+  }
+  assert(seen == 15 and once == 15, "one I-TLB walk and one D-TLB walk per tile")
+}

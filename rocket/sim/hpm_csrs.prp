@@ -1,0 +1,162 @@
+const csr = import("../pyrope2/CSRFile.CSRFile")
+const config = import("../pyrope2/RocketConfig")
+
+mod access<C>(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:U64, lanes:U11, cache:U6, decode:U18=0, advance:U3=0, retire:U1=0)
+    -> (value:Unsigned(bits=C.xLen)@[], illegal:U1@[]) {
+  const d = csr<C>(`clock`=clk, `reset`=U1(rst), io_ungated_clock=clk, io_interrupts_debug=0,
+      io_interrupts_mtip=0, io_interrupts_msip=0, io_interrupts_meip=0, io_interrupts_seip=0, io_hartid=0, io_rw_addr=addr,
+      io_rw_cmd=cmd, io_rw_wdata=data#[0..<C.xLen], io_decode_0_inst=addr<<20, io_exception=0,
+      perfID=decode, perfAdvance=advance, perfPipe=lanes, perfMem=cache, io_retire=retire, io_cause=0, io_pc=0x10040, io_tval=0, io_htval=0, io_gva=0, io_inst_0=0)
+  value = d.io_rw_rdata
+  illegal = d.io_decode_0_read_illegal
+}
+
+pub mod hpm_csrs(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:U64, lanes:U11, cache:U6, decode:U18=0, advance:U3=0, retire:U1=0)
+    -> (a:U32@[], b:U64@[], illegal:U2@[]) {
+  comptime const small = config.params(nPerfCounters=2, useMulDiv=false, useSupervisor=true)
+  comptime const full = config.params(xLen=64, nPerfCounters=29, fLen=64, useSupervisor=true)
+  const x = access<small>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data, lanes=lanes, cache=cache, decode=decode, advance=advance, retire=retire)
+  const y = access<full>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data, lanes=lanes, cache=cache, decode=decode, advance=advance, retire=retire)
+  a = x.value
+  b = y.value
+  illegal = (y.illegal << 1) | x.illegal
+}
+
+test hpm_csrs.masks_and_carry {
+  mut d = hpm_csrs
+  d.rst = true
+  d.cmd = 0
+  d.addr = 0x323
+  d.data = 0xffffffffffffffff
+  d.lanes = 0
+  d.cache = 0
+  step
+  d.rst = false
+  d.cmd = 5
+  step
+  d.cmd = 0
+  step
+  assert(d.a == 0x1ff03 and d.b == 0x3ffff03, "event selector WARL masks depend on the configured extensions")
+  d.addr = 0x320
+  d.cmd = 5
+  step
+  d.cmd = 0
+  step
+  assert(d.a == 29 and d.b == 0xfffffffd, "only implemented counters can be inhibited")
+  d.cmd = 5
+  d.addr = 0x33f
+  d.data = 0x602
+  step
+  d.cmd = 0
+  step
+  assert(d.a == 0 and d.b == 0x602, "counter 31 exists only in the full profile")
+  d.addr = 0xb1f
+  d.cmd = 5
+  d.data = 0xffffffffffffffff
+  step
+  d.cmd = 0
+  step
+  assert(d.a == 0 and d.b == 0xffffffffff, "HPM counters keep 40 bits")
+  d.addr = 0xb03
+  d.cmd = 5
+  d.data = 0xffffffff
+  step
+  d.addr = 0xb83
+  d.data = 0x101
+  step
+  d.cmd = 0
+  step
+  assert(d.a == 1 and d.illegal == 2, "RV32 high half contains eight writable bits")
+  d.addr = 0x323
+  d.cmd = 5
+  d.data = 0x301
+  step
+  d.addr = 0x320
+  d.data = 0
+  step
+  d.cmd = 0
+  d.lanes = 3
+  d.cache = 6
+  step
+  d.lanes = 0
+  d.cache = 0
+  step
+  d.addr = 0xc03
+  step
+  assert(d.a == 0 and d.b == 0x100000000, "two selected interlocks in one cycle count once")
+  d.addr = 0xc83
+  step
+  assert(d.a == 2, "RV32 low-half carry reaches the high CSR")
+  d.addr = 0xc1f
+  step
+  assert(d.b == 0, "counter 31 independently wraps after one cache transfer cycle")
+  d.cmd = 5
+  d.addr = 0x306
+  d.data = 0xffffffffffffffff
+  step
+  d.cmd = 0
+  step
+  assert(d.a == 31 and d.b == 0xffffffff)
+  d.cmd = 5
+  d.addr = 0x106
+  step
+  d.cmd = 0
+  step
+  assert(d.a == 31 and d.b == 0xffffffff)
+}
+
+test hpm_csrs.clear_while_stalled {
+  mut d = hpm_csrs
+  d.rst = true
+  step
+  d.rst = false
+  d.cmd = 5
+  d.addr = 0xb03
+  d.data = 0
+  step
+  d.addr = 0x323
+  d.data = 0x200
+  step
+  d.cmd = 0
+  d.decode = 2
+  d.advance = 1
+  step
+  d.cmd = 5
+  d.data = 0
+  d.decode = 0
+  d.advance = 0
+  step
+  d.cmd = 0
+  d.addr = 0
+  tick 8 { step }
+  d.advance = 2
+  step
+  d.advance = 4
+  step
+  d.advance = 7
+  d.retire = 1
+  step
+  d.retire = 0
+  tick 8 { step }
+  d.addr = 0xc03
+  step
+  assert(d.a == 1 and d.b == 1, "the retiring instruction retains the mask sampled before the stall")
+  d.addr = 0x323
+  d.cmd = 5
+  d.data = 0x200
+  step
+  d.cmd = 0
+  d.decode = 2
+  tick 3 { step }
+  d.rst = true
+  d.advance = 0
+  step
+  d.rst = false
+  d.decode = 0
+  d.retire = 1
+  d.addr = 0
+  tick 3 { step }
+  d.addr = 0xb03
+  step
+  assert(d.a == 1 and d.b == 1, "reset discards in-flight event samples")
+}

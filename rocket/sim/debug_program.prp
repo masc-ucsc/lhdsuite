@@ -1,0 +1,182 @@
+const cfg = import("../pyrope2/RocketConfig")
+const image = import("BootROM.Image")
+
+// An external halt request wakes WFI. The debug ROM verifies DPC, nested
+// exception entry, single-step and EBREAK/DRET in M, S and U. The machine handler
+// checks the four illegal debug instructions outside debug mode.
+mod run<X,DEBUG>(clk:Clock, rst:Reset, request:Bool)
+    -> (success:U1@[], bad:U1@[], halted:U1@[], nested:U1@[], machine:U1@[]) {
+  comptime const C = cfg.params(xLen=X, useDebug=DEBUG, useSupervisor=true)
+  const program:[144]U32 = (
+    (U1(DEBUG) << 20) | 0x00c13, // li s8,DEBUG
+    0x00000297, // auipc t0,0x0
+    0x0ac28293, // addi t0,t0,172 # 100f0 <handler>
+    0x30529073, // csrrw zero,mtvec,t0
+    0x00000413, // addi s0,zero,0
+    0x00000493, // addi s1,zero,0
+    0x00000913, // addi s2,zero,0
+    0x00000993, // addi s3,zero,0
+    0x00000a13, // addi s4,zero,0
+    0x00300a93, // addi s5,zero,3
+    0x10500073, // wfi
+    0x001a0a13, // addi s4,s4,1
+    0x00100073, // ebreak
+    0x7b0022f3, // csrrs t0,dcsr,zero
+    0x7b1022f3, // csrrs t0,dpc,zero
+    0x7b2022f3, // csrrs t0,dscratch0,zero
+    0x7b200073, // dret
+    0x00100293, // addi t0,zero,1
+    0x06541263, // bne s0,t0,100ec <fail>
+    0x07849063, // bne s1,s8,100ec <fail>
+    0x04591e63, // bne s2,t0,100ec <fail>
+    0x045a1c63, // bne s4,t0,100ec <fail>
+    0x00400293, // addi t0,zero,4
+    0x04599863, // bne s3,t0,100ec <fail>
+    0x040c0463, // beq s8,zero,100e8 <success>
+    0xfff00293, // addi t0,zero,-1
+    0x3b029073, // csrrw zero,pmpaddr0,t0
+    0x00f00293, // addi t0,zero,15
+    0x3a029073, // csrrw zero,pmpcfg0,t0
+    0x00100a93, // addi s5,zero,1
+    0x000022b7, // lui t0,0x2
+    0x80028293, // addi t0,t0,-2048 # 1800 <debug_fail+0xf40>
+    0x3002b073, // csrrc zero,mstatus,t0
+    0x00ba9293, // slli t0,s5,0xb
+    0x3002a073, // csrrs zero,mstatus,t0
+    0x00000297, // auipc t0,0x0
+    0x01028293, // addi t0,t0,16 # 100dc <lower>
+    0x34129073, // csrrw zero,mepc,t0
+    0x30200073, // mret
+    0x00100073, // ebreak
+    0x00000073, // ecall
+    0x0080006f, // jal zero,100ec <fail>
+    0x0000006f, // jal zero,100e8 <success>
+    0x0000006f, // jal zero,100ec <fail>
+    0x342022f3, // csrrs t0,mcause,zero
+    0x0602c263, // blt t0,zero,10158 <irq>
+    0x00800313, // addi t1,zero,8
+    0x02628e63, // beq t0,t1,10138 <lower_ecall>
+    0x00900313, // addi t1,zero,9
+    0x02628a63, // beq t0,t1,10138 <lower_ecall>
+    0x00200313, // addi t1,zero,2
+    0x00628c63, // beq t0,t1,10124 <illegal>
+    0x00300313, // addi t1,zero,3
+    0xfc629ce3, // bne t0,t1,100ec <fail>
+    0xfc0c1ae3, // bne s8,zero,100ec <fail>
+    0x00190913, // addi s2,s2,1
+    0x0080006f, // jal zero,10128 <skip>
+    0x00198993, // addi s3,s3,1
+    0x341022f3, // csrrs t0,mepc,zero
+    0x00428293, // addi t0,t0,4
+    0x34129073, // csrrw zero,mepc,t0
+    0x30200073, // mret
+    0x008a8313, // addi t1,s5,8
+    0xfa6298e3, // bne t0,t1,100ec <fail>
+    0x000a8663, // beq s5,zero,1014c <lower_done>
+    0x00000a93, // addi s5,zero,0
+    0xf71ff06f, // jal zero,100b8 <lower_return>
+    0x00300293, // addi t0,zero,3
+    0xf9229ee3, // bne t0,s2,100ec <fail>
+    0xf95ff06f, // jal zero,100e8 <success>
+    0x0ff2f293, // andi t0,t0,255
+    0x00e00313, // addi t1,zero,14
+    0xf85316e3, // bne t1,t0,100ec <fail>
+    0xf80c14e3, // bne s8,zero,100ec <fail>
+    0x00140413, // addi s0,s0,1
+    0x30200073, // mret
+    0x00000013, 0x00000013, 0x00000013, 0x00000013, // align to a cache line
+    // Debug ROM at 0x800. Its exception entry is at 0x808.
+    0x0240006f, // jal zero,824 <dispatch>
+    0x00000013, // addi zero,zero,0
+    0x7b2022f3, // csrrs t0,dscratch0,zero
+    0x7b102373, // csrrs t1,dpc,zero
+    0x0a629863, // bne t0,t1,8c0 <debug_fail>
+    0x0000b2b7, // lui t0,0xb
+    0x0042e293, // ori t0,t0,4
+    0x7b02a073, // csrrs zero,dcsr,t0
+    0x7b200073, // dret
+    0x7b0022f3, // csrrs t0,dcsr,zero
+    0x0032f313, // andi t1,t0,3
+    0x00300393, // addi t2,zero,3
+    0x09531863, // bne t1,s5,8c0 <debug_fail>
+    0x0062d293, // srli t0,t0,0x6
+    0x0072f293, // andi t0,t0,7
+    0x04728263, // beq t0,t2,880 <halt>
+    0x00400393, // addi t2,zero,4
+    0x04728c63, // beq t0,t2,89c <stepped>
+    0x00100393, // addi t2,zero,1
+    0x06729a63, // bne t0,t2,8c0 <debug_fail>
+    0x7b1022f3, // csrrs t0,dpc,zero
+    0x00300393, // addi t2,zero,3
+    0x00010317, // auipc t1,0x10
+    0x81830313, // addi t1,t1,-2024 # 10070 <bp>
+    0x007a8663, // beq s5,t2,86c <check_pc>
+    0x00010317, // auipc t1,0x10
+    0x87830313, // addi t1,t1,-1928 # 100dc <lower>
+    0x04629a63, // bne t0,t1,8c0 <debug_fail>
+    0x00428293, // addi t0,t0,4 # b004 <debug_fail+0xa744>
+    0x7b129073, // csrrw zero,dpc,t0
+    0x00190913, // addi s2,s2,1
+    0x7b200073, // dret
+    0x7b1022f3, // csrrs t0,dpc,zero
+    0x0000f317, // auipc t1,0xf
+    0x7e830313, // addi t1,t1,2024 # 1006c <resume>
+    0x02629a63, // bne t0,t1,8c0 <debug_fail>
+    0x7b229073, // csrrw zero,dscratch0,t0
+    0x00140413, // addi s0,s0,1
+    0xf1429073, // csrrw zero,mhartid,t0
+    0x00100293, // addi t0,zero,1
+    0x03429063, // bne t0,s4,8c0 <debug_fail>
+    0x7b1022f3, // csrrs t0,dpc,zero
+    0x0000f317, // auipc t1,0xf
+    0x7c830313, // addi t1,t1,1992 # 10070 <bp>
+    0x00629863, // bne t0,t1,8c0 <debug_fail>
+    0x7b027073, // csrrci zero,dcsr,4
+    0x00148493, // addi s1,s1,1
+    0x7b200073, // dret
+    0x0000006f, // jal zero,8c0 <debug_fail>
+    0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013,
+    0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013, 0x00000013 // align to a cache line
+  )
+  reg handled:Bool = false
+  const t = image<C=C,WORDS=144,DEBUG_WORDS=64>(clk=clk, rst=rst, program=program, successPC=0x100e8,
+      debugIRQ=U1(request and !handled))
+  if t.trap != 0 and t.cause#[X-1] != 0 and t.cause#[0..<8] == 14 { handled = true }
+  success = U1(t.success)
+  bad = U1(t.badFetch or (t.traceValid and (t.tracePC == 0x100ec or t.tracePC == 0x8c0)))
+  halted = U1(t.traceValid and t.privilege == 7 and t.tracePC == 0x800)
+  nested = U1(t.traceValid and t.privilege == 7 and t.tracePC == 0x808)
+  machine = U1(t.traceValid and t.privilege == 3 and t.tracePC == 0x10158)
+}
+pub mod debug_program(clk:Clock, rst:Reset, request:Bool)
+    -> (done:U4@[], bad:U4@[], halted:U4@[], nested:U4@[], machine:U4@[]) {
+  for i in 0..<4 {
+    const r = run<X=(if i < 2 { 32 } else { 64 }),DEBUG=(i%2 == 1)>(clk=clk, rst=rst, request=request)
+    done#[i] = r.success
+    bad#[i] = r.bad
+    halted#[i] = r.halted
+    nested#[i] = r.nested
+    machine#[i] = r.machine
+  }
+}
+test debug_program.wfi_and_debug_return {
+  mut d = debug_program
+  mut done:U4 = 0
+  mut haltROM:U4 = 0
+  mut nested:U4 = 0
+  mut machine:U4 = 0
+  tick 1600 {
+    d.rst = clock < 4
+    d.request = clock >= 180
+    step
+    if clock > 4 {
+      assert(d.bad == 0, "firmware or fetch failure")
+      done |= d.done
+      haltROM |= d.halted
+      nested |= d.nested
+      machine |= d.machine
+    }
+  }
+  assert(done == 15, "debug and machine returns on both widths")
+  assert(haltROM == 10 and nested == 10 and machine == 5, "halt requests use the configured exception vector")
+}

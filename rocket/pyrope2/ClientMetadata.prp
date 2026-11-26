@@ -1,0 +1,32 @@
+// TileLink client states carry both permission and writeback responsibility.
+pub const invalid:U2 = 0
+pub const branch:U2 = 1
+pub const trunk:U2 = 2
+pub const dirty:U2 = 3
+
+pub comb access(state:U2, write:Bool, writeIntent:Bool) -> (hit:Bool, next:U2, grow:U2) {
+  const exclusive = write or writeIntent
+  hit = if exclusive { state >= trunk } else { state != invalid }
+  next = if hit and write { dirty } else { state }
+  // Acquire NtoB for reads, NtoT for exclusive misses, BtoT for upgrades.
+  grow = if !exclusive { 0 } elif state == branch { 2 } else { 1 }
+}
+
+// A probe can retain Trunk (0), retain at most Branch (1), or invalidate (2).
+// Returning dirty data makes any retained copy clean.
+pub comb shrink(state:U2, cap:U2) -> (data:Bool, report:U3, next:U2) {
+  data = state == dirty
+  next = if cap == 2 or state == invalid { invalid }
+      elif cap == 1 or state == branch { branch } else { trunk }
+  report = match state {
+    == invalid { 5 }                                      // NtoN
+    == branch { if next == invalid { 2 } else { 4 } }    // BtoN, BtoB
+    else { if next == invalid { 1 } elif next == branch { 0 } else { 3 } }
+  }
+}
+
+// A read can receive Branch or Trunk. A writer needs Trunk permission.
+pub comb grant(cap:U2, write:Bool, exclusive:Bool) -> (state:U2) {
+  state = if cap == 0 { if write { dirty } else { trunk } }
+      elif cap == 1 and !write and !exclusive { branch } else { invalid }
+}

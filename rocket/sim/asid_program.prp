@@ -1,0 +1,146 @@
+const cfg = import("../pyrope2/RocketConfig")
+const image = import("BootROM.Image")
+comptime const sv32 = cfg.params(useVM=true, asIdBits=9, dcacheSets=512)
+comptime const sv39 = cfg.params(xLen=64, useVM=true, asIdBits=16, dcacheSets=512)
+comptime const partial = cfg.params(xLen=64, useVM=true, asIdBits=5, pgLevels=5, dcacheSets=512)
+
+// Use one root and the same instruction and data VPNs in three address spaces.
+// The second uses a different physical data page. The third removes execute
+// permission, then restores it and fences the ASID that saw the fault.
+mod run<C>(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
+  comptime const wide = C.xLen == 64
+  const code:[112]U32 = (
+    ((C.asIdBits-1) << 20) | 0xd13, // li s10, highest implemented ASID bit index
+    0xfff00293, // li t0,-1
+    0x3b029073, // csrw pmpaddr0,t0
+    0x00f00293, // li t0,15
+    0x3a029073, // csrw pmpcfg0,t0
+    0x00000297, // auipc t0,0x0
+    0x0d828293, // addi t0,t0,216 # 1012c <handler>
+    0x30529073, // csrw mtvec,t0
+    0x00100413, // li s0,1
+    0x01f41413, // slli s0,s0,0x1f
+    0x000012b7, // lui t0,0x1
+    0x005404b3, // add s1,s0,t0
+    0x00548333, // add t1,s1,t0
+    0x0024d393, // srli t2,s1,0x2
+    0x0013e393, // ori t2,t2,1
+    if wide { 0x00733023 } else { 0x00000013 }, // sd t2,0(t1) / nop
+    if wide { 0x00235393 } else { 0x00000013 }, // srli t2,t1,0x2 / nop
+    if wide { 0x0013e393 } else { 0x00000013 }, // ori t2,t2,1 / nop
+    if wide { 0x00743023 } else { 0x00742023 }, // sd t2,0(s0) / sw t2,0(s0)
+    0x000032b7, // lui t0,0x3
+    0x00540bb3, // add s7,s0,t0
+    0x000042b7, // lui t0,0x4
+    0x00540c33, // add s8,s0,t0
+    0x00b00293, // li t0,11
+    0x005ba023, // sw t0,0(s7)
+    0x01600293, // li t0,22
+    0x005c2023, // sw t0,0(s8)
+    0x000042b7, // lui t0,0x4
+    if wide { 0x04b2829b } else { 0x04b28293 }, // addiw t0,t0,75 / addi t0,t0,75 # 404b <XLEN+0x402b>
+    if wide { 0x0254b023 } else { 0x0054a823 }, // sd t0,32(s1) / sw t0,16(s1)
+    0x002bd293, // srli t0,s7,0x2
+    0x0c72e293, // ori t0,t0,199
+    if wide { 0x0254b423 } else { 0x0054aa23 }, // sd t0,40(s1) / sw t0,20(s1)
+    0x00000917, // auipc s2,0x0
+    0x06090913, // addi s2,s2,96 # 10124 <payload>
+    0x0000c2b7, // lui t0,0xc
+    0x40590933, // sub s2,s2,t0
+    0x000059b7, // lui s3,0x5
+    0x00100a13, // li s4,1
+    0x00000a93, // li s5,0
+    0x00100b13, // li s6,1
+    0x01ab1b33, // sll s6,s6,s10
+    0x00c45c93, // srli s9,s0,0xc
+    0x00100293, // li t0,1
+    if wide { 0x03f29293 } else { 0x01f29293 }, // slli t0,t0,0x3f / slli t0,t0,0x1f
+    0x005cecb3, // or s9,s9,t0
+    0x12000073, // sfence.vma
+    if wide { 0x02ca9293 } else { 0x016a9293 }, // slli t0,s5,0x2c / slli t0,s5,0x16
+    0x0192e2b3, // or t0,t0,s9
+    0x18029073, // csrw satp,t0
+    0x18002373, // csrr t1,satp
+    0x0a629863, // bne t0,t1,101bc <fail>
+    0x000012b7, // lui t0,0x1
+    if wide { 0x8002829b } else { 0x80028293 }, // addiw t0,t0,-2048 / addi t0,t0,-2048 # 800 <XLEN+0x7e0>
+    0x30029073, // csrw mstatus,t0
+    0x34191073, // csrw mepc,s2
+    0x30200073, // mret
+    0x0009a583, // lw a1,0(s3) # 5000 <XLEN+0x4fe0>
+    0x00000073, // ecall
+    0x34202373, // csrr t1,mcause
+    0x00300293, // li t0,3
+    0x045a0e63, // beq s4,t0,10190 <instruction_fault>
+    0x00900293, // li t0,9
+    0x08531063, // bne t1,t0,101bc <fail>
+    0x00100293, // li t0,1
+    0x025a0463, // beq s4,t0,1016c <first>
+    0x01600293, // li t0,22
+    0x06559863, // bne a1,t0,101bc <fail>
+    0x00400293, // li t0,4
+    0x065a0663, // beq s4,t0,101c0 <success>
+    0x000042b7, // lui t0,0x4
+    if wide { 0x0432829b } else { 0x04328293 }, // addiw t0,t0,67 / addi t0,t0,67 # 4043 <XLEN+0x4023>
+    if wide { 0x0254b023 } else { 0x0054a823 }, // sd t0,32(s1) / sw t0,16(s1)
+    0x001b0a93, // addi s5,s6,1
+    0x01c0006f, // j 10184 <next>
+    0x00b00293, // li t0,11
+    0x04559663, // bne a1,t0,101bc <fail>
+    0x002c5293, // srli t0,s8,0x2
+    0x0c72e293, // ori t0,t0,199
+    if wide { 0x0254b423 } else { 0x0054aa23 }, // sd t0,40(s1) / sw t0,20(s1)
+    0x000b0a93, // mv s5,s6
+    0x0330000f, // fence rw,rw
+    0x001a0a13, // addi s4,s4,1
+    0xf71ff06f, // j 100fc <enter>
+    0x00c00293, // li t0,12
+    0x02531463, // bne t1,t0,101bc <fail>
+    0x341022f3, // csrr t0,mepc
+    0x02591063, // bne s2,t0,101bc <fail>
+    0x343022f3, // csrr t0,mtval
+    0x00591c63, // bne s2,t0,101bc <fail>
+    0x000042b7, // lui t0,0x4
+    if wide { 0x04b2829b } else { 0x04b28293 }, // addiw t0,t0,75 / addi t0,t0,75 # 404b <XLEN+0x402b>
+    if wide { 0x0254b023 } else { 0x0054a823 }, // sd t0,32(s1) / sw t0,16(s1)
+    0x13500073, // sfence.vma zero,s5
+    0xfcdff06f, // j 10184 <next>
+    0x0000006f, // j 101bc <fail>
+    0x0000006f, // j 101c0 <success>
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+  )
+  const d = image<C=C,WORDS=112>(clk=clk, rst=rst, program=code, successPC=0x101c0)
+  done = d.success
+  bad = d.badFetch or (d.traceValid and d.tracePC == 0x101bc) or (d.trap != 0 and d.cause != 9 and d.cause != 12)
+}
+pub mod asid_program(clk:Clock, rst:Reset) -> (done:U3@[], bad:Bool@[]) {
+  const a = run<sv32>(clk=clk,rst=rst)
+  const b = run<sv39>(clk=clk,rst=rst)
+  const c = run<partial>(clk=clk,rst=rst)
+  done = (U1(c.done) << 2) | (U1(b.done) << 1) | U1(a.done)
+  bad = a.bad or b.bad or c.bad
+}
+test asid_program.switch_spaces {
+  mut d = asid_program
+  mut retired:U3 = 0
+  tick 1500 {
+    d.rst = clock < 4
+    step
+    if clock > 4 { assert(!d.bad, "wrong translation, fetch or trap"); retired |= d.done }
+  }
+  assert(retired == 7, "each ASID configuration completes the firmware")
+}

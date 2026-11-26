@@ -1,0 +1,120 @@
+// Extension operations share the integer pipeline's six-bit ALU selector.
+// Values below 16 are the base integer, branch and M-extension controls.
+const czEq = 16
+const czNe = 17
+const shAdd = 20    // low two bits select the amount to shift rs1
+const shAddUw = 24  // zero-extend rs1[31:0] before shifting
+const slliUw = 28
+const bClr = 32
+const bSet = 33
+const bInv = 34
+const bExt = 35
+const xnor = 36
+const orn = 37
+const andn = 38
+const minMax = 40  // bit 1 selects max, bit 0 selects unsigned
+const rol = 44
+const ror = 45
+const unary = 46
+
+pub comb decode<C>(inst:U32) -> (fn:U6, unaryImm:Bool, fullWidth:Bool) {
+  const opcode = inst#[0..<7]
+  const f3 = inst#[12..<15]
+  const f7 = inst#[25..<32]
+  const imm = inst#[20..<32]
+  const is64 = C.xLen == 64
+  const regOp = opcode == 0x33
+  const immOp = opcode == 0x13
+  const regW = is64 and opcode == 0x3b
+  const immW = is64 and opcode == 0x1b
+  fn = 0
+  if C.useConditionalZero and regOp and f7 == 7 {
+    if f3 == 5 { fn = czEq } elif f3 == 7 { fn = czNe }
+  }
+  if C.useZba {
+    if (regOp or regW) and f7 == 0x10 and f3 != 0 and f3#[0] == 0 {
+      fn = (if regW { shAddUw } else { shAdd }) | (f3 >> 1)
+    } elif regW and f7 == 4 and f3 == 0 { fn = shAddUw }
+    elif immW and f7 >> 1 == 2 and f3 == 1 { fn = slliUw }
+  }
+  if C.useZbs and (regOp or immOp) and (!immOp or is64 or f7#[0] == 0) {
+    const code = if immOp { f7 & 0x7e } else { f7 }
+    if f3 == 1 {
+      if code == 0x24 { fn = bClr } elif code == 0x14 { fn = bSet } elif code == 0x34 { fn = bInv }
+    } elif f3 == 5 and code == 0x24 { fn = bExt }
+  }
+  if C.useZbb {
+    if regOp and f7 == 0x20 {
+      if f3 == 4 { fn = xnor } elif f3 == 6 { fn = orn } elif f3 == 7 { fn = andn }
+    } elif regOp and f7 == 5 and f3 >= 4 { fn = minMax | f3#[0..<2] }
+    elif (regOp or regW) and f7 == 0x30 {
+      if f3 == 1 { fn = rol } elif f3 == 5 { fn = ror }
+    } elif (immOp or immW) and f3 == 5 and (f7 == 0x30 or (is64 and immOp and f7 == 0x31)) { fn = ror }
+    elif (immOp or immW) and f3 == 1 and imm >= 0x600 and imm <= 0x602 { fn = unary }
+    elif immOp and f3 == 1 and (imm == 0x604 or imm == 0x605) { fn = unary }
+    elif immOp and f3 == 5 and (imm == 0x287 or imm == (if is64 { 0x6b8 } else { 0x698 })) { fn = unary }
+    elif ((regOp and !is64) or regW) and f3 == 4 and imm == 0x080 { fn = unary }
+  }
+  unaryImm = fn == unary
+  fullWidth = fn >= shAddUw and fn <= slliUw
+}
+
+// The word variants use the same operations, with their input reduced to U32.
+comb rotate<W>(a:Unsigned(bits=W), b:U6, left:Bool) -> (r:Unsigned(bits=W)) {
+  const n = b % W
+  const inv = (W-n) % W
+  wrap r = if left { (a << n) | (a >> inv) } else { (a >> n) | (a << inv) }
+}
+comb countBits<W>(a:Unsigned(bits=W), op:U2) -> (r:U7) {
+  mut leading:U7 = W
+  mut trailing:U7 = W
+  for i in 0..<W {
+    if a#[i] != 0 { leading = W-1-i }
+    if a#[W-1-i] != 0 { trailing = W-1-i }
+  }
+  r = if op == 0 { leading } elif op == 1 { trailing } else { a#+[..] }
+}
+pub comb execute<C>(fn:U6, wordOp:Bool, a:Unsigned(bits=C.xLen), b:Unsigned(bits=C.xLen)) -> (r:Unsigned(bits=C.xLen)) {
+  comptime const W = C.xLen
+  const shamt = b#[0..<std.clog2(W)]
+  r = 0
+  if C.useConditionalZero {
+    if (fn == czEq and b != 0) or (fn == czNe and b == 0) { r = a }
+  }
+  if C.useZba {
+    if fn >= shAdd and fn < slliUw {
+      const lhs = if fn >= shAddUw { a#[0..<32] } else { a }
+      wrap r = (lhs << fn#[0..<2]) + b
+    } elif fn == slliUw { wrap r = a#[0..<32] << shamt }
+  }
+  if C.useZbs {
+    const bit:Unsigned(bits=W) = 1 << shamt
+    if fn == bClr { r = a & ~bit } elif fn == bSet { r = a | bit }
+    elif fn == bInv { r = a ^ bit } elif fn == bExt { r = a#[shamt] }
+  }
+  if C.useZbb {
+    if fn == xnor { r = ~(a ^ b) } elif fn == orn { r = a | ~b } elif fn == andn { r = a & ~b }
+    elif fn >= minMax and fn < rol {
+      const less = if fn#[0] != 0 { a < b } else { a#sext[0..<W] < b#sext[0..<W] }
+      r = if less != (fn#[1] != 0) { a } else { b }
+    } elif fn == rol or fn == ror {
+      r = if wordOp { rotate<32>(a=a#[0..<32], b=b#[0..<6], left=fn == rol) }
+          else { rotate<W>(a=a, b=b#[0..<6], left=fn == rol) }
+    } elif fn == unary {
+      const imm = b#[0..<12]
+      if imm == 0x080 { r = a#[0..<16] }
+      elif imm == 0x604 { wrap r = a#sext[0..<8] }
+      elif imm == 0x605 { wrap r = a#sext[0..<16] }
+      elif imm == 0x287 or imm == 0x698 or imm == 0x6b8 {
+        for i in 0..<(W/8) {
+          const byte = (a >> (8*i))#[0..<8]
+          if imm == 0x287 {
+            if byte != 0 { r |= 0xff << (8*i) }
+          } else { r |= byte << (W-8-8*i) }
+        }
+      } else {
+        r = if wordOp { countBits<32>(a=a#[0..<32], op=b#[0..<2]) } else { countBits<W>(a=a, op=b#[0..<2]) }
+      }
+    }
+  }
+}

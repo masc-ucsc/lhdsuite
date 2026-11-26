@@ -1,0 +1,131 @@
+const cacheEntries = import("PTECache.entries")
+const cache = import("PTECache.pointers")
+const translation = import("AddressTranslation.AddressTranslation")
+
+// The pipeline sees a combinational lookup. On a miss it reissues the access
+// until the walk fills the TLB or returns a fault for this privilege and access.
+pub mod port<C, FETCH>(clk:Clock, rst:Reset, request:Bool, accepted:Bool, va:Unsigned(bits=C.xLen), satp:Unsigned(bits=C.xLen),
+    privilege:U2, store:Bool, sum:Bool, mxr:Bool, flush:Bool,
+    readReady:Bool, readDone:Bool, readError:Bool, readData:Unsigned(bits=C.xLen), grant:Bool=true, leaf:U28=0)
+    -> (probe:Bool@[], key:Unsigned(bits=C.tlbKeyBits)@[], walkDone:Bool@[], walkLeaf:U28@[], miss:Bool@[], resolved:Bool@[], address:U32@[], pf:Bool@[], ae:Bool@[], read:Bool@[], readAddress:U32@[], cachePointer:Bool@[]) {
+  comptime const entries = if FETCH { C.iTLBEntries } else { C.dTLBEntries }
+  comptime const modeBits = std.clog2(C.extraPgLevels+1)
+  comptime const modeBit = if C.xLen == 32 { 31 } else { 60 }
+  comptime const asidBit = if C.xLen == 32 { 22 } else { 44 }
+  const mode = satp >> modeBit
+  const extra = mode & ((1 << modeBits)-1)
+  const asid = (satp >> asidBit) & ((1 << C.asIdBits)-1)
+  const addressSpace = (asid << (20+modeBits)) | (extra << 20) | satp#[0..<20]
+  const active = mode != 0 and privilege != 3
+  const vpn = va >> 12
+  const rights = (U1(store) << 4) | (U1(sum) << 3) | (U1(mxr) << 2) | privilege
+  reg missVPN:Unsigned(bits=C.xLen-12)
+  reg missContext:Unsigned(bits=20+modeBits+C.asIdBits)
+  reg missRights:U5
+  reg installFault:Bool = false
+  reg negative:Bool = false
+  reg denied:Bool
+  const faultHit = negative and vpn == missVPN and addressSpace == missContext and rights == missRights
+  wire start:Bool = nil
+  const t = translation<XLEN=C.xLen, PA=32, ENTRIES=entries, EXTRA=C.extraPgLevels, ASID=C.asIdBits>(clk=clk, rst=rst, request=start, virtualAddress=va,
+      addressSpace=addressSpace, paging=true, flush=flush, user=privilege == 0, fetch=FETCH, store=store, sum=sum, mxr=mxr,
+      grant=grant, leaf=leaf, consume=true, readReady=readReady, readDone=readDone, readError=readError, readData=readData)
+  start = request and active and !t.cached and !faultHit
+  probe = t.probe
+  key = (addressSpace << (C.xLen-12)) | vpn
+  walkDone = t.walkDone
+  walkLeaf = t.walkLeaf
+  miss = start and t.ready and !flush and !rst
+  if start and t.ready {
+    missVPN = vpn
+    missContext = addressSpace
+    missRights = rights
+    negative = false
+    installFault = true
+  }
+  if accepted and faultHit { negative = false }
+  if flush {
+    negative = false
+    installFault = false
+  } elif t.valid and installFault {
+    negative = t.accessFault or t.pageFault
+    denied = t.accessFault
+    installFault = false
+  }
+  resolved = !active or (!flush and (t.cached or faultHit))
+  address = if active { t.cachedAddress } else { va#[0..<32] }
+  pf = active and ((t.cached and t.cachedPF) or (faultHit and !denied))
+  ae = if active { faultHit and denied } else { (va >> 32) != 0 }
+  cachePointer = t.cachePointer
+  read = t.read
+  readAddress = t.readAddress
+}
+
+// One PTE transaction is outstanding on the DCache port. Keep its owner until
+// the reply, including across an uncached retry. Alternate simultaneous requests.
+pub mod arbiter<W=32,N=0>(clk:Clock, rst:Reset, iRead:Bool, iAddress:U32, dRead:Bool, dAddress:U32,
+    ready:Bool, done:Bool, iPointer:Bool=false, dPointer:Bool=false, flush:Bool=false, error:Bool=false, pte:Unsigned(bits=W)=0)
+    -> (read:Bool@[], address:U32@[], iReady:Bool@[], iDone:Bool@[], dReady:Bool@[], dDone:Bool@[],
+        result:Unsigned(bits=W)@[], fault:Bool@[]) {
+  reg busy:Bool = false
+  reg dataOwner:Bool = false
+  const chooseData = dRead and (!iRead or !dataOwner)
+  const request = !busy and (iRead or dRead)
+  address = if chooseData { dAddress } else { iAddress }
+  mut hit = false
+  result = pte
+  fault = error
+  if N > 0 {
+    reg pending:Bool = false
+    reg saved:U32 = nil
+    const lookup = request and !flush and (if chooseData { dPointer } else { iPointer })
+    // The tile has 32-bit physical addresses. G and RSW are allowed on a pointer.
+    const validPointer = (pte & 0xdf) == 1 and (pte >> 30) == 0
+    const fill = busy and done and pending and !flush and !error and validPointer
+    if lookup or fill or flush or rst {
+      const c = cache<N=N,W=W>(clk=clk, rst=rst, flush=flush, lookup=lookup, fill=fill,
+          address=(if fill { saved } else { address }), page=pte#[10..<30])
+      hit = c.hit
+      if hit { result = (c.ppn << 10) | 1; fault = false }
+    }
+    if flush or done { pending = false }
+    elif request and ready and !hit { pending = lookup; if lookup { saved = address } }
+  }
+  read = request and !hit
+  iReady = !busy and !chooseData and (hit or ready)
+  dReady = !busy and chooseData and (hit or ready)
+  iDone = (busy and !dataOwner and done) or (hit and !chooseData)
+  dDone = (busy and dataOwner and done) or (hit and chooseData)
+  if request and (hit or ready) {
+    busy = !hit
+    dataOwner = chooseData
+  } elif done { busy = false }
+}
+
+// A shared L2 miss owns the walker until its reply, including a fault or a
+// fenced walk. The two L1s recheck leaf permissions for each access.
+pub mod leaves<C>(clk:Clock, rst:Reset, flush:Bool,
+    iProbe:Bool, iKey:Unsigned(bits=C.tlbKeyBits), iDone:Bool, iLeaf:U28,
+    dProbe:Bool, dKey:Unsigned(bits=C.tlbKeyBits), dDone:Bool, dLeaf:U28)
+    -> (iGrant:Bool@[], dGrant:Bool@[], leaf:U28@[], miss:Bool@[]) {
+  reg busy:Bool = false
+  reg dataOwner:Bool = false
+  reg saved:Unsigned(bits=C.tlbKeyBits) = nil
+  const lookup = !busy and !flush and !rst and (iProbe or dProbe)
+  const chooseData = dProbe and (!iProbe or !dataOwner)
+  const done = busy and (if dataOwner { dDone } else { iDone })
+  const result = if dataOwner { dLeaf } else { iLeaf }
+  const fill = done and (result & 1) != 0 and !flush
+  const key = if chooseData { dKey } else { iKey }
+  iGrant = lookup and !chooseData
+  dGrant = lookup and chooseData
+  leaf = 0
+  if lookup or fill or flush or rst {
+    const c = cacheEntries<SETS=(C.nL2TLBEntries/C.nL2TLBWays),WAYS=C.nL2TLBWays,KEY=C.tlbKeyBits,DATA=28>(
+        clk=clk, rst=rst, flush=flush, lookup=lookup, fill=fill, key=(if fill { saved } else { key }), data=result)
+    if c.hit { leaf = c.value }
+  }
+  miss = lookup and (leaf & 1) == 0
+  if lookup { dataOwner = chooseData }
+  if miss { busy = true; saved = key } elif done { busy = false }
+}

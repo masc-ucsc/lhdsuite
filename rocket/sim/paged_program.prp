@@ -1,0 +1,225 @@
+const config = import("../pyrope2/RocketConfig")
+const image = import("BootROM.Image")
+comptime const narrow = config.params(useVM=true, btbEntries=4, icacheSets=128, icacheWays=2)
+comptime const narrowD = config.params(useVM=true, fLen=64, btbEntries=4, icacheSets=128, icacheWays=2)
+comptime const wide = config.params(xLen=64, useVM=true, btbEntries=4, icacheSets=128, icacheWays=2)
+
+// M builds page tables in the DTIM. S remaps a user page, fences and stores again.
+// The trap handlers check virtual PCs, the old and new physical data, and TVM.
+mod profile<C>(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
+  comptime const rv64 = C.xLen == 64
+  const program:[144]U32 = (
+    0xfff00293, // _start: li t0,-1
+    0x3b029073, // csrw pmpaddr0,t0
+    0x00f00293, // li t0,15
+    0x3a029073, // csrw pmpcfg0,t0
+    0x00000297, // auipc t0,0x0
+    0x18028293, // addi t0,t0,384
+    0x30529073, // csrw mtvec,t0
+    0x00100413, // li s0,1
+    0x01f41413, // slli s0,s0,0x1f
+    0x00100313, // li t1,1
+    if rv64 { 0x00b31313 } else { 0x00a31313 }, // slli t1,t1,0xb / slli t1,t1,0xa
+    0x00830333, // add t1,t1,s0
+    0x00245393, // srli t2,s0,0x2
+    0x40138393, // addi t2,t2,1025
+    if rv64 { 0x00733023 } else { 0x00732023 }, // sd t2,0(t1) / sw t2,0(t1)
+    0x000012b7, // lui t0,0x1
+    0x00540333, // add t1,s0,t0
+    if rv64 { 0x40038393 } else { 0x00000013 }, // addi t2,t2,1024 / nop
+    if rv64 { 0x00733023 } else { 0x00000013 }, // sd t2,0(t1) / nop
+    if rv64 { 0x00530333 } else { 0x00000013 }, // add t1,t1,t0 / nop
+    0x000043b7, // lui t2,0x4
+    if rv64 { 0x04b3839b } else { 0x04b38393 }, // addiw t2,t2,75 / addi t2,t2,75
+    if rv64 { 0x08733423 } else { 0x04732223 }, // sd t2,136(t1) / sw t2,68(t1)
+    0x00245393, // srli t2,s0,0x2
+    0x00001e37, // lui t3,0x1
+    if rv64 { 0xcd7e0e1b } else { 0xcd7e0e13 }, // addiw t3,t3,-809 / addi t3,t3,-809
+    0x01c383b3, // add t2,t2,t3
+    if rv64 { 0x08733823 } else { 0x04732423 }, // sd t2,144(t1) / sw t2,72(t1)
+    0x00235393, // srli t2,t1,0x2
+    0x0c73e393, // ori t2,t2,199
+    if rv64 { 0x08033c23 } else { 0x04032623 }, // sd zero,152(t1) / sw zero,76(t1)
+    if rv64 { 0x0a733023 } else { 0x04732823 }, // sd t2,160(t1) / sw t2,80(t1)
+    0x00100493, // li s1,1
+    if rv64 { 0x02649493 } else { 0x01e49493 }, // slli s1,s1,0x26 / slli s1,s1,0x1e
+    if rv64 { 0x409004b3 } else { 0x00000013 }, // neg s1,s1 / nop
+    0x000012b7, // lui t0,0x1
+    0x005484b3, // add s1,s1,t0
+    0x00000297, // auipc t0,0x0
+    0x0d028293, // addi t0,t0,208
+    0x009282b3, // add t0,t0,s1
+    0x10529073, // csrw stvec,t0
+    0x000012b7, // lui t0,0x1
+    0x30229073, // csrw medeleg,t0
+    0x00000297, // auipc t0,0x0
+    0x04828293, // addi t0,t0,72
+    0x009282b3, // add t0,t0,s1
+    0x34129073, // csrw mepc,t0
+    0x00100293, // li t0,1
+    0x00b29293, // slli t0,t0,0xb
+    0x30029073, // csrw mstatus,t0
+    0x00100293, // li t0,1
+    if rv64 { 0x03f29293 } else { 0x01f29293 }, // slli t0,t0,0x3f / slli t0,t0,0x1f
+    0x00c45313, // srli t1,s0,0xc
+    0x0062e2b3, // or t0,t0,t1
+    0x18029073, // csrw satp,t0
+    if rv64 { 0xfff00393 } else { 0x00000013 }, // li t2,-1 / nop
+    if rv64 { 0x18039073 } else { 0x00000013 }, // csrw satp,t2 / nop
+    0x18002373, // csrr t1,satp
+    0x06629c63, // bne t0,t1,101a0 <fail>
+    0x12000073, // sfence.vma
+    0x30200073, // mret
+    0x00000917, // paged: auipc s2,0x0
+    0x000112b7, // lui t0,0x11
+    0x009289b3, // add s3,t0,s1
+    0x00100293, // li t0,1
+    0x01229293, // slli t0,t0,0x12
+    0x1002a073, // csrs sstatus,t0
+    0x05b00a13, // li s4,91
+    0x0149a623, // sw s4,12(s3)
+    0x00c9a303, // lw t1,12(s3)
+    0x05431463, // bne t1,s4,101a0 <fail>
+    0x000132b7, // lui t0,0x13
+    0x009282b3, // add t0,t0,s1
+    0x00245313, // srli t1,s0,0x2
+    0x0d736313, // ori t1,t1,215
+    if rv64 { 0x0862b823 } else { 0x0462a423 }, // sd t1,144(t0) / sw t1,72(t0)
+    0x12098073, // sfence.vma s3
+    0x03900293, // li t0,57
+    0x0059a623, // sw t0,12(s3)
+    0x00c9a303, // lw t1,12(s3)
+    0x02629063, // bne t0,t1,101a0 <fail>
+    0x00300a93, // li s5,3
+    0xfffa8a93, // loop: addi s5,s5,-1
+    0xfe0a9ee3, // bnez s5,10188 <loop>
+    0x000122b7, // lui t0,0x12
+    0x00548b33, // add s6,s1,t0
+    0x000b0067, // jr s6
+    0x000b2303, // badload: lw t1,0(s6)
+    0x00100073, // fail: ebreak
+    0x142022f3, // supervisor: csrr t0,scause
+    0x00c00313, // li t1,12
+    0xfe629ae3, // bne t0,t1,101a0 <fail>
+    0x141022f3, // csrr t0,sepc
+    0xff6296e3, // bne t0,s6,101a0 <fail>
+    0x143022f3, // csrr t0,stval
+    0xff6292e3, // bne t0,s6,101a0 <fail>
+    0x00000297, // auipc t0,0x0
+    0xfdc28293, // addi t0,t0,-36
+    0x14129073, // csrw sepc,t0
+    0x10200073, // sret
+    0x342022f3, // handler: csrr t0,mcause
+    0x00200313, // li t1,2
+    0x06628e63, // beq t0,t1,10254 <tvmtrap>
+    0x00d00313, // li t1,13
+    0xfc6290e3, // bne t0,t1,101a0 <fail>
+    0x343022f3, // csrr t0,mtval
+    0xfb629ce3, // bne t0,s6,101a0 <fail>
+    0x341022f3, // csrr t0,mepc
+    0x00000317, // auipc t1,0x0
+    0xfac30313, // addi t1,t1,-84
+    0x00930333, // add t1,t1,s1
+    0xfa6292e3, // bne t0,t1,101a0 <fail>
+    0x00000317, // auipc t1,0x0
+    0xf3430313, // addi t1,t1,-204
+    0x00930333, // add t1,t1,s1
+    0xf9231ae3, // bne t1,s2,101a0 <fail>
+    0x000032b7, // lui t0,0x3
+    0x008282b3, // add t0,t0,s0
+    0x00c2a303, // lw t1,12(t0)
+    0xf94312e3, // bne t1,s4,101a0 <fail>
+    0x00c42303, // lw t1,12(s0)
+    0x03900293, // li t0,57
+    0xf6629ce3, // bne t0,t1,101a0 <fail>
+    0x00000297, // auipc t0,0x0
+    0x02028293, // addi t0,t0,32
+    0x009282b3, // add t0,t0,s1
+    0x34129073, // csrw mepc,t0
+    0x001012b7, // lui t0,0x101
+    if rv64 { 0x8002829b } else { 0x80028293 }, // addiw t0,t0,-2048 / addi t0,t0,-2048
+    0x3002a073, // csrs mstatus,t0
+    0x30200073, // mret
+    0x12000073, // forbidden: sfence.vma
+    0xf51ff06f, // j 101a0 <fail>
+    0x341022f3, // tvmtrap: csrr t0,mepc
+    0x00000317, // auipc t1,0x0
+    0xff430313, // addi t1,t1,-12
+    0x00930333, // add t1,t1,s1
+    0xf2629ee3, // bne t0,t1,101a0 <fail>
+    0x343022f3, // csrr t0,mtval
+    0x12000337, // lui t1,0x12000
+    if rv64 { 0x0733031b } else { 0x07330313 }, // addiw t1,t1,115 / addi t1,t1,115
+    0xf26296e3, // bne t0,t1,101a0 <fail>
+    0x0000006f, // success: j 10278 <success>
+    0
+  )
+  const tile = image<C=C, WORDS=144>(clk=clk, rst=rst, program=program, successPC=0x10278)
+  const base = if rv64 { 0xffffffc000001000 } else { 0x40001000 }
+  const expected = tile.privilege == 1 and tile.tracePC == base + 0x1019c and
+      tile.trapValue == base + 0x12000 and tile.cause == 13
+  const fetchFault = tile.privilege == 1 and tile.tracePC == base + 0x12000 and tile.trapValue == tile.tracePC and tile.cause == 12
+  reg sawFetchFault:Bool = false
+  if tile.trap != 0 and fetchFault { sawFetchFault = true }
+  reg faulted:Bool = false
+  if tile.trap != 0 and expected and sawFetchFault { faulted = true }
+  const tvmTrap = tile.privilege == 1 and tile.tracePC == base + 0x1024c and tile.cause == 2 and tile.trapValue == 0x12000073
+  reg sawTVM:Bool = false
+  if tile.trap != 0 and tvmTrap and faulted { sawTVM = true }
+  bad = (tile.trap != 0 and !expected and !fetchFault and !tvmTrap) or tile.badFetch
+  done = tile.success and sawTVM and tile.privilege == 3
+}
+pub mod paged_program(clk:Clock, rst:Reset) -> (rv32:Bool@[], rv64:Bool@[], rv32d:Bool@[], failed:Bool@[]) {
+  const a = profile<narrow>(clk=clk, rst=rst)
+  const b = profile<wide>(clk=clk, rst=rst)
+  const c = profile<narrowD>(clk=clk, rst=rst)
+  rv32d = c.done
+  rv32 = a.done
+  rv64 = b.done
+  failed = a.bad or b.bad or c.bad
+}
+pub mod cached_paging(clk:Clock, rst:Reset) -> (rv32:Bool@[], rv64:Bool@[], bad:Bool@[]) {
+  comptime const sv32 = config.params(useVM=true, useDataScratchpad=false, dcacheSets=4, dcacheWays=2)
+  comptime const sv39 = config.params(xLen=64, useVM=true, useDataScratchpad=false, dcacheSets=4, dcacheWays=2)
+  const a = profile<sv32>(clk=clk, rst=rst)
+  const b = profile<sv39>(clk=clk, rst=rst)
+  rv32 = a.done
+  rv64 = b.done
+  bad = a.bad or b.bad
+}
+
+test cached_paging.walk {
+  mut d = cached_paging
+  mut narrowDone = false
+  mut wideDone = false
+  tick 4000 {
+    d.rst = clock < 4
+    step
+    if clock >= 4 {
+      assert(!d.bad, "unexpected trap or bus request during cached page-table walk")
+      if d.rv32 { narrowDone = true }
+      if d.rv64 { wideDone = true }
+      if narrowDone and wideDone { break }
+    }
+  }
+  assert(narrowDone and wideDone, "Sv32 and Sv39 remapped memory through the coherent DCache")
+}
+
+test paged_program.run {
+  mut d = paged_program
+  mut a = false
+  mut b = false
+  mut c = false
+  tick 1500 {
+    d.rst = clock < 4
+    step
+    if clock >= 4 {
+      assert(!d.failed, "unexpected trap or physical fetch")
+      if d.rv32 { a = true }
+      if d.rv64 { b = true }
+      if d.rv32d { c = true }
+      if a and b and c { break }
+    }
+  }
+  assert(a and b and c, "Sv32 and high-half Sv39 programs reached their machine handlers")
+}

@@ -1,0 +1,79 @@
+const config = import("../pyrope2/RocketConfig")
+const cache = import("../pyrope2/ICache.ICache")
+comptime const direct = config.params(icacheSets=2)
+comptime const assoc = config.params(icacheSets=2, icacheWays=2)
+comptime const larger = config.params(xLen=64, icacheSets=4)
+comptime const single = config.params(xLen=64, icacheSets=1, icacheWays=2)
+
+// Alternate between two lines 128 bytes apart. Revisit both after FENCE.I.
+// The second line ends in a corrupt refill beat and must retain its fault.
+mod exercise<C>(clk:Clock, rst:Reset) -> (done:Bool@[], failed:Bool@[], misses:U5@[]) {
+  reg reads:U4 = 0
+  reg delay:U3 = 0
+  reg busy:U1 = 0
+  reg beat:U5 = 0
+  reg line:U32 = 0
+  reg count:U5 = 0
+  const pc:U32 = 0x10040 + (reads#[0] << 7) + ((reads % 8) << 2)
+  reg physical:U32
+  physical = pc
+  const expected = pc ^ 0x12340000
+  const byteAddr = line + (beat * (C.xLen/8))
+  const low = (byteAddr ^ 0x12340000)#[0..<32]
+  const data:Unsigned(bits=C.xLen) = if C.xLen == 64 { (((byteAddr+4) ^ 0x12340000)#[0..<32] << 32) | low } else { low }
+  const last = U1(beat == 64/(C.xLen/8)-1)
+  const issuing = reads < 12 and delay == 0
+  const flush = reads == 6 and delay == 3
+  const d = cache<C>(clk=clk, rst=rst, fetch=U1(issuing), vaddr=pc, paddr=physical, killS1=0, killS2=0,
+      invalidate=U1(flush), aReady=~busy, dValid=busy, dOpcode=1, dData=data, dCorrupt=last & line#[7])
+  const received = issuing and d.valid != 0
+  failed = received and (d.data != expected or d.accessFault != pc#[7])
+  if rst {
+    reads = 0
+    delay = 0
+    busy = 0
+    count = 0
+    beat = 0
+  }
+  else {
+    if received {
+      wrap reads += 1
+      delay = 4
+    } elif delay > 0 { wrap delay -= 1 }
+    if d.aValid != 0 and busy == 0 {
+      wrap count += 1
+      busy = 1
+      beat = 0
+      line = d.aAddress
+    } elif busy != 0 {
+      wrap beat += 1
+      if last != 0 { busy = 0 }
+    }
+  }
+  done = reads == 12
+  misses = count
+}
+
+pub mod icache_geometry(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[], directMiss:U5@[], assocMiss:U5@[],
+    largeMiss:U5@[], singleMiss:U5@[]) {
+  const a = exercise<direct>(clk=clk, rst=rst)
+  const b = exercise<assoc>(clk=clk, rst=rst)
+  const c = exercise<larger>(clk=clk, rst=rst)
+  const f = exercise<single>(clk=clk, rst=rst)
+  done = a.done and b.done and c.done and f.done
+  bad = a.failed or b.failed or c.failed or f.failed
+  directMiss = a.misses
+  assocMiss = b.misses
+  largeMiss = c.misses
+  singleMiss = f.misses
+}
+test icache_geometry.conflict_and_invalidate {
+  mut d = icache_geometry
+  tick 500 {
+    d.rst = clock < 4
+    step
+    if clock > 4 { assert(!d.bad, "wrong fetch data or fault") }
+  }
+  assert(d.done, "all geometries completed twelve fetches")
+  assert(d.directMiss == 12 and d.assocMiss == 4 and d.largeMiss == 4 and d.singleMiss == 4, "allocation, conflict and flush counts")
+}

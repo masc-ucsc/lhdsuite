@@ -1,0 +1,105 @@
+// Integer pipeline controls shared by RV32 and RV64. The instruction is
+// already expanded to its 32-bit encoding when it reaches decode.
+const floating = import("FPU")
+const BitOps = import("BitOps")
+
+pub comb IDecode<C>(inst:U32) -> (legal:U1, branch:U1, jal:U1, jalr:U1,
+    rxs1:U1, rxs2:U1, sel_alu1:U2, sel_alu2:U2, sel_imm:U3, alu_dw:U1, alu_fn:U6,
+    mem:U1, mem_cmd:U5, mul:U1, div:U1, wxd:U1, csr:U3, fence_i:U1, fence:U1, amo:U1, fp:U1, fpDouble:U1, fpRound:U1) {
+  const opcode = inst#[0..<7]
+  const funct3 = inst#[12..<15]
+  const funct7 = inst#[25..<32]
+  const is64 = C.xLen == 64
+  const opImm = opcode == 0x13 or (is64 and opcode == 0x1b)
+  const opReg = opcode == 0x33 or (is64 and opcode == 0x3b)
+  const wordOp = opcode == 0x1b or opcode == 0x3b
+  const isShift = funct3 == 1 or funct3 == 5
+  const shiftCode = if is64 and !wordOp { funct7 & 0x7e } else { funct7 }
+  const immValid = !isShift or shiftCode == 0 or (funct3 == 5 and shiftCode == 0x20)
+  const regValid = funct7 == 0 or (funct7 == 0x20 and (funct3 == 0 or funct3 == 5))
+  const mulDiv = C.useMulDiv and opReg and funct7 == 1 and (!wordOp or funct3 == 0 or funct3 >= 4)
+  const integer = ((opImm and immValid) or (opReg and regValid)) and (!wordOp or funct3 == 0 or isShift)
+  const load = opcode == 3 and (funct3 < 3 or funct3 == 4 or funct3 == 5 or (is64 and (funct3 == 3 or funct3 == 6)))
+  const store = opcode == 0x23 and (funct3 < 3 or (is64 and funct3 == 3))
+  const atomOp = inst#[27..<32]
+  const atomic = C.useAtomics and opcode == 0x2f and (funct3 == 2 or (is64 and funct3 == 3)) and
+      (atomOp == 0 or atomOp == 1 or (atomOp == 2 and inst#[20..<25] == 0) or atomOp == 3 or
+       atomOp == 4 or atomOp == 8 or atomOp == 12 or atomOp == 16 or atomOp == 20 or atomOp == 24 or atomOp == 28)
+  const jump = opcode == 0x6f
+  const indirect = opcode == 0x67 and funct3 == 0
+  const cond = opcode == 0x63 and (funct3 < 2 or funct3 >= 4)
+  const lui = opcode == 0x37
+  const auipc = opcode == 0x17
+  const csrOp = opcode == 0x73 and funct3 != 0 and funct3 != 4
+  const machineSystem = match inst {
+    in (0x73, 0x100073, 0x30200073, 0x10500073) { true }
+    == 0x7b200073 { C.useDebug }
+    == 0x30500073 { C.haveCease } else { false }
+  }
+  const sfence = C.useVM and (inst & 0xfe007fff) == 0x12000073
+  const system = sfence or machineSystem or (C.useSupervisor and inst == 0x10200073)
+  mut extFn:U6 = 0
+  mut unaryImm = false
+  mut fullWidth = false
+  if C.useConditionalZero or C.useZba or C.useZbb or C.useZbs {
+    const ext = BitOps.decode<C>(inst=inst)
+    extFn = ext.fn
+    unaryImm = ext.unaryImm
+    fullWidth = ext.fullWidth
+  }
+  mut fpLoad = false
+  mut fpStore = false
+  mut fromX = false
+  mut toX = false
+  fp = 0
+  fpRound = 0
+  fpDouble = 0
+  if C.fLen > 0 {
+    const f = floating.decode<C>(inst=inst)
+    fp = U1(f.valid)
+    fpRound = U1(f.round)
+    fpDouble = U1(f.double)
+    fpLoad = f.load
+    fpStore = f.store
+    fromX = f.fromX
+    toX = f.toX
+  }
+  const fenceOp = opcode == 0xf and funct3 <= 1
+  legal = U1(fp != 0 or extFn != 0 or integer or mulDiv or load or store or atomic or jump or indirect or cond or lui or auipc or csrOp or system or fenceOp)
+  jal = U1(jump)
+  jalr = U1(indirect)
+  branch = U1(cond)
+  rxs1 = U1(fpLoad or fpStore or fromX or sfence or opReg or opImm or load or store or atomic or indirect or cond or (csrOp and funct3 < 4))
+  rxs2 = U1(sfence or (opReg and !unaryImm) or store or atomic or cond)
+  wxd = U1(toX or opReg or opImm or load or atomic or jump or indirect or lui or auipc or csrOp)
+  mul = U1(mulDiv and C.pipelinedMul and funct3 < 4)
+  div = U1(mulDiv) & ~mul
+  sel_alu1 = if jump or auipc { 2 } else { rxs1 }
+  sel_alu2 = if (opReg and !unaryImm) or cond { 2 } elif jump { 1 } elif fromX or atomic or (csrOp and funct3 < 4) { 0 } else { 3 }
+  sel_imm = if lui or auipc { 2 } elif cond { 1 } elif jump { 3 } elif fpStore or store { 0 } elif csrOp { 5 } else { 4 }
+  alu_dw = U1(!wordOp or fullWidth)
+  alu_fn = 0
+  if cond {
+    alu_fn = if funct3 < 2 { funct3 + 2 } else { funct3 + 8 }
+  } elif mulDiv { alu_fn = funct3 }
+  elif extFn != 0 { alu_fn = extFn }
+  elif opReg or opImm {
+    alu_fn = match funct3 {
+      == 0 { if opReg and funct7 == 0x20 { 10 } else { 0 } }
+      == 2 { 12 } == 3 { 14 }
+      == 5 { if inst#[30] != 0 { 11 } else { 5 } }
+      else { funct3 }
+    }
+  }
+  mem = U1(fpLoad or fpStore or load or store or atomic)
+  amo = U1(atomic)
+  mem_cmd = if fpStore or store { 1 } elif atomic {
+    match atomOp {
+      == 0 { 8 } == 1 { 4 } == 2 { 6 } == 3 { 7 } == 4 { 9 } == 8 { 10 }
+      == 12 { 11 } == 16 { 12 } == 20 { 13 } == 24 { 14 } else { 15 }
+    }
+  } else { 0 }
+  csr = if system { 4 } elif csrOp { funct3 | 4 } else { 0 }
+  fence = U1(fenceOp)
+  fence_i = U1(fenceOp and funct3 == 1)
+}

@@ -1,0 +1,30 @@
+// The mask selects the active word for AMO.W, or both words for AMO.D.
+pub comb AMOALU<W=32>(io_mask:Unsigned(bits=W/8), io_cmd:U5, io_lhs:Unsigned(bits=W), io_rhs:Unsigned(bits=W))
+    -> (io_out_unmasked:Unsigned(bits=W)) {
+  cassert(W == 32 or W == 64)
+  const unsignedCmp = io_cmd#[1] != 0
+  mut less = if unsignedCmp { io_lhs < io_rhs } else { io_lhs#sext[0..<W] < io_rhs#sext[0..<W] }
+  mut sum:Unsigned(bits=W)
+  if W == 64 {
+    // Keep the low word independent of uninitialized upper scratchpad lanes.
+    // An upper-word AMO.W also cuts the carry from the inactive lower word.
+    const low:U33 = io_lhs#[0..<32] + io_rhs#[0..<32]
+    const upperWord = io_mask#[4] != 0 and io_mask#[3] == 0
+    const carry = low#[32] & U1(!upperWord)
+    sum = (((io_lhs#[32..<64] + io_rhs#[32..<64] + carry)#[0..<32]) << 32) | low#[0..<32]
+    if io_mask#[4] == 0 {
+      less = if unsignedCmp { io_lhs#[0..<32] < io_rhs#[0..<32] } else { io_lhs#sext[0..<32] < io_rhs#sext[0..<32] }
+    } elif upperWord {
+      less = if unsignedCmp { io_lhs#[32..<64] < io_rhs#[32..<64] } else { io_lhs#sext[32..<64] < io_rhs#sext[32..<64] }
+    }
+  } else { wrap sum = io_lhs + io_rhs }
+  io_out_unmasked = match io_cmd {
+    == 8 { sum }
+    == 9 { io_lhs ^ io_rhs }
+    == 10 { io_lhs | io_rhs }
+    == 11 { io_lhs & io_rhs }
+    in (12, 14) { if less { io_lhs } else { io_rhs } }
+    in (13, 15) { if less { io_rhs } else { io_lhs } }
+    else { io_rhs }
+  }
+}

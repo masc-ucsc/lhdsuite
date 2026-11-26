@@ -1,0 +1,31 @@
+const cfg = import("../pyrope2/RocketConfig")
+const expand = import("../pyrope2/RVCExpander.RVCExpander")
+comptime const addi32 = cfg.params(useAddiForMv=true)
+comptime const addi64 = cfg.params(xLen=64, useAddiForMv=true)
+comptime const noC = cfg.params(useCompressed=false)
+
+mod check<A,B>(x:U32) -> (ok:Bool@[]) {
+  const a = expand<A>(x=x)
+  const b = expand<B>(x=x)
+  const rd = x#[7..<12]
+  const rs = x#[2..<7]
+  const mv = x#[0..<2] == 2 and x#[12..<16] == 8 and rs != 0
+  const expectedAdd = (rs << 20) | (rd << 7) | 0x33
+  const expectedAddi = (rs << 15) | (rd << 7) | 0x13
+  ok = a.compressed == (x#[0..<2] != 3) and a.compressed == b.compressed and
+      (a.compressed or a.bits == x) and
+      (if mv { a.bits == expectedAdd and b.bits == expectedAddi } else { a.bits == b.bits })
+}
+pub mod rvc_profiles(x:U32) -> (ok:Bool@[]) {
+  const bare = expand<noC>(x=x)
+  ok = check<A=cfg.tiny,B=addi32>(x=x) and check<A=cfg.rv64,B=addi64>(x=x) and
+      !bare.compressed and bare.bits == x
+}
+test rvc_profiles.all_halfwords {
+  mut d = rvc_profiles
+  tick 65536 {
+    d.x = ((0xffff-clock) << 16) | clock
+    step
+    assert(d.ok, "compressed move expansion and uncompressed passthrough")
+  }
+}

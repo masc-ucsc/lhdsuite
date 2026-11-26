@@ -1,0 +1,110 @@
+const image = import("BootROM.Image")
+const cfg = import("../pyrope2/RocketConfig")
+comptime const p32 = cfg.params(mulUnroll=32, mulDivClockGate=true)
+comptime const p64 = cfg.params(xLen=64, mulUnroll=64, mulDivClockGate=true)
+comptime const open64 = cfg.params(xLen=64, mulUnroll=64)
+
+// Four independent multiplies overlap a pending divide, followed by a dependent
+// multiply, a branch squash, MULW and an illegal multiply with misa.M clear.
+mod run<C>(clk:Clock,rst:Reset) -> (done:Bool@[], bad:Bool@[], valid:Bool@[], pc:U32@[]) {
+  const rom:[64]U32 = (
+    0xffe00413, // li s0,-2
+    0xffd00493, // li s1,-3
+    0x02a00913, // li s2,42
+    0x00000297, // auipc t0,0x0
+    0x08428293, // addi t0,t0,132 # 100d0 <handler>
+    0x30529073, // csrw mtvec,t0
+    0x0284c9b3, // div s3,s1,s0
+    0x029402b3, // mul t0,s0,s1
+    0x02941333, // mulh t1,s0,s1
+    0x029423b3, // mulhsu t2,s0,s1
+    0x02943e33, // mulhu t3,s0,s1
+    0x02528eb3, // mul t4,t0,t0
+    0x00600513, // li a0,6
+    0x08a29a63, // bne t0,a0,10108 <fail>
+    0x08031863, // bnez t1,10108 <fail>
+    0x08839663, // bne t2,s0,10108 <fail>
+    0xffb00513, // li a0,-5
+    0x08ae1263, // bne t3,a0,10108 <fail>
+    0x02400513, // li a0,36
+    0x06ae9e63, // bne t4,a0,10108 <fail>
+    0x00100513, // li a0,1
+    0x06a99a63, // bne s3,a0,10108 <fail>
+    0x00840463, // beq s0,s0,100a0 <skip>
+    0x02948933, // mul s2,s1,s1
+    0x02a00513, // li a0,42
+    0x06a91263, // bne s2,a0,10108 <fail>
+    0x00100293, // li t0,1
+    0x01f29293, // slli t0,t0,0x1f
+    0x00300313, // li t1,3
+    if C.xLen == 64 { 0x026283bb } else { 0x026283b3 }, // mulw t2,t0,t1
+    0x80000537, // lui a0,0x80000
+    0x04a39663, // bne t2,a0,10108 <fail>
+    0x00001537, // lui a0,0x1
+    0x30153073, // csrc misa,a0
+    0x02940933, // mul s2,s0,s1
+    0x03c0006f, // j 10108 <fail>
+    0x342022f3, // csrr t0,mcause
+    0x00200313, // li t1,2
+    0x02629863, // bne t0,t1,10108 <fail>
+    0x341022f3, // csrr t0,mepc
+    0x00000317, // auipc t1,0x0
+    0xfe830313, // addi t1,t1,-24 # 100c8 <illegal>
+    0x02629063, // bne t0,t1,10108 <fail>
+    0x343022f3, // csrr t0,mtval
+    0x02941337, // lui t1,0x2941
+    if C.xLen == 64 { 0x9333031b } else { 0x93330313 }, // addiw t1,t1,-1741
+    0x00629863, // bne t0,t1,10108 <fail>
+    0x02a00293, // li t0,42
+    0x00591463, // bne s2,t0,10108 <fail>
+    0x0000006f, // j 10104 <success>
+    0x0000006f, // j 10108 <fail>
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+    0x00000013, // nop
+  )
+  const r = image<C=C,WORDS=64>(clk=clk,rst=rst,program=rom,successPC=0x10104)
+  done = r.success
+  valid = r.traceValid
+  pc = r.tracePC#[0..<32]
+  bad = r.badFetch or (r.traceValid and pc == 0x10108) or (r.trap != 0 and (pc != 0x100c8 or r.cause != 2))
+}
+pub mod pipelined_mul(clk:Clock,rst:Reset) -> (done:U2@[], burst:U2@[], bad:Bool@[]) {
+  const a = run<p32>(clk=clk,rst=rst)
+  const b = run<p64>(clk=clk,rst=rst)
+  const u = run<open64>(clk=clk,rst=rst)
+  done = U1(a.done) | (U1(b.done) << 1)
+  burst = U1(a.valid and a.pc >= 0x1005c and a.pc < 0x1006c) | (U1(b.valid and b.pc >= 0x1005c and b.pc < 0x1006c) << 1)
+  bad = a.bad or b.bad or u.bad or b.valid != u.valid or (b.valid and b.pc != u.pc) or b.done != u.done
+}
+test pipelined_mul.issue_rate {
+  mut d = pipelined_mul
+  mut done:U2 = 0
+  mut active:U2 = 0
+  mut count32 = 0
+  mut count64 = 0
+  tick 400 {
+    d.rst = clock < 4
+    step
+    if clock >= 4 {
+      assert(!d.bad, "firmware or gated writeback mismatch")
+      if d.burst#[0] != 0 { count32 += 1 }
+      if d.burst#[1] != 0 { count64 += 1 }
+      if active#[0] != 0 and count32 < 4 { assert(d.burst#[0] != 0, "RV32 multiply retirement bubble") }
+      if active#[1] != 0 and count64 < 4 { assert(d.burst#[1] != 0, "RV64 multiply retirement bubble") }
+      active |= d.burst
+      done |= d.done
+    }
+  }
+  assert(done == 3 and count32 == 4 and count64 == 4, "both tiles retire the burst and reach success")
+}

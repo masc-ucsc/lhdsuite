@@ -1,0 +1,104 @@
+const boot = import("BootROM.Image")
+const configs = import("../pyrope2/RocketConfig")
+comptime const baseline = configs.params(btbEntries=16)
+comptime const baseline64 = configs.params(xLen=64, btbEntries=16)
+comptime const small = configs.params(btbEntries=16, nRAS=3)
+comptime const wide = configs.params(xLen=64, btbEntries=16, nRAS=6)
+
+// Two call sites share a nested callee. The inner call uses x5 and spans two fetch words.
+comb rom() -> (words:[16]U32) {
+  words = (
+    0x01800413, // li s0,24
+    0x00000493, // li s1,0
+    0x028000ef, // jal ra,10070 <outer>
+    0x00248493, // addi s1,s1,2
+    0x020000ef, // jal ra,10070 <outer>
+    0x00448493, // addi s1,s1,4
+    0xfff40413, // addi s0,s0,-1
+    0xfe0416e3, // bnez s0,10048 <loop>
+    0x1b000393, // li t2,432
+    0x00749463, // bne s1,t2,1006c <fail>
+    0x0000006f, // j 10068 <success>
+    0x00100073, // ebreak
+    0x02ef0485, // addi s1,s1,1 / jal t0,1007a <leaf>
+    0x04890080, // addi s1,s1,2
+    0x04858082, // ret / addi s1,s1,1
+    0x82820489 // addi s1,s1,2 / jr t0
+  )
+}
+
+pub mod return_program(clk:Clock, rst:Reset) -> (plain:Bool@[], plain64:Bool@[], predicted32:Bool@[], predicted64:Bool@[], failed:Bool@[]) {
+  const ref32 = boot<C=baseline,WORDS=16>(clk=clk, rst=rst, program=rom(), successPC=0x10068)
+  const ref64 = boot<C=baseline64,WORDS=16>(clk=clk, rst=rst, program=rom(), successPC=0x10068)
+  const p32 = boot<C=small,WORDS=16>(clk=clk, rst=rst, program=rom(), successPC=0x10068)
+  const p64 = boot<C=wide,WORDS=16>(clk=clk, rst=rst, program=rom(), successPC=0x10068)
+  plain64 = ref64.success
+  plain = ref32.success
+  predicted32 = p32.success
+  predicted64 = p64.success
+  failed = ref32.trap != 0 or ref64.trap != 0 or p32.trap != 0 or p64.trap != 0
+}
+
+test return_program.nested_calls {
+  mut d = return_program
+  mut plainAt = 0
+  mut plain64At = 0
+  mut p32At = 0
+  mut p64At = 0
+  tick 768 {
+    d.rst = clock < 4
+    step
+    if clock > 4 {
+      assert(!d.failed, "wrong path retired")
+      if d.plain and plainAt == 0 { plainAt = clock }
+      if d.plain64 and plain64At == 0 { plain64At = clock }
+      if d.predicted32 and p32At == 0 { p32At = clock }
+      if d.predicted64 and p64At == 0 { p64At = clock }
+    }
+  }
+  assert(plainAt > 0 and plain64At > 0 and p32At > 0 and p64At > 0, "all tiles must retire the checked loop")
+  assert(p32At < plainAt and p64At < plain64At, "the return stack should predict the shared callee")
+  puts("RV32 {plainAt} -> {p32At}, RV64 {plain64At} -> {p64At}")
+}
+
+// C.JALR pushes a two-byte link. JALR x5,0(x1) exchanges links, and C.JR x5
+// resumes the other coroutine. The skipped EBREAK catches a bad fall-through.
+pub mod coroutine_program(clk:Clock, rst:Reset) -> (done:U2@[], trap:Bool@[]) {
+  const words:[16]U32 = (
+    0x00000417, // auipc s0,0x0
+    0x01840413, // addi s0,s0,24 # 10058 <exchange>
+    0x00000493, // li s1,0
+    0x00c00913, // li s2,12
+    0x04859402, // jalr s0 / addi s1,s1,1
+    0x90028282, // jr t0 / ebreak
+    0x82e70489, // addi s1,s1,2 / jalr t0,ra
+    0x84930000, // addi s1,s1,4
+    0x09130044, // addi s2,s2,-1
+    0x15e3fff9, // bnez s2,10050 <again>
+    0x0393fe09, // li t2,84
+    0x94630540, // bne t2,s1,10076 <fail>
+    0x006f0093, // j 10072 <success>
+    0x00730000, // ebreak
+    0x00000010,
+    0x00000000
+  )
+  comptime const withHistory = configs.params(xLen=64, btbEntries=16, bhtEntries=64, nRAS=1)
+  const a = boot<C=small,WORDS=16>(clk=clk, rst=rst, program=words, successPC=0x10072)
+  const b = boot<C=withHistory,WORDS=16>(clk=clk, rst=rst, program=words, successPC=0x10072)
+  done = (U1(b.success) << 1) | U1(a.success)
+  trap = a.trap != 0 or b.trap != 0
+}
+
+test coroutine_program.exchange {
+  mut d = coroutine_program
+  mut done:U2 = 0
+  tick 480 {
+    d.rst = clock < 4
+    step
+    if clock > 4 {
+      assert(!d.trap, "coroutine trapped")
+      done |= d.done
+    }
+  }
+  assert(done == 3, "both coroutines must finish")
+}

@@ -1,0 +1,56 @@
+const boot = import("BootROM.BootROM")
+const configs = import("../pyrope2/RocketConfig")
+comptime const rv32b = configs.params(useZba=true, useZbb=true, useZbs=true, useConditionalZero=true)
+comptime const rv64b = configs.params(xLen=64, useZba=true, useZbb=true, useZbs=true, useConditionalZero=true)
+comptime const tiny = configs.tiny
+
+mod run<C>(clk:Clock, rst:Reset) -> (retired:Bool@[], illegal:Bool@[], failed:Bool@[]) {
+  const program:[16]U32 = (
+      0xffe00093, // addi x1,x0,-2
+      0x00300113, // addi x2,x0,3
+      0x2020c1b3, // sh2add x3,x1,x2
+      0xffb00213, // addi x4,x0,-5
+      0x02419463, // bne x3,x4,fail
+      0x28701293, // bseti x5,x0,7
+      0x60229313, // cpop x6,x5
+      0x00100393, // addi x7,x0,1
+      0x00731c63, // bne x6,x7,fail
+      0x0e72d433, // czero.eqz x8,x5,x7
+      0x00541863, // bne x8,x5,fail
+      0x0e72f433, // czero.nez x8,x5,x7
+      0x00041463, // bne x8,x0,fail
+      0x0000006f, // jal x0,success
+      0x00100073, // ebreak
+      0x00000013 // nop
+  )
+  const tile = boot<C>(clk=clk, rst=rst, program=program, successPC=0x10074)
+  retired = tile.success
+  illegal = tile.trap != 0 and tile.tracePC == 0x10048 and tile.cause == 2
+  failed = tile.trap != 0
+}
+pub mod bit_program(clk:Clock, rst:Reset) -> (a:Bool@[], b:Bool@[], denied:Bool@[], bad:Bool@[]) {
+  const small = run<rv32b>(clk=clk, rst=rst)
+  const wide = run<rv64b>(clk=clk, rst=rst)
+  const base = run<tiny>(clk=clk, rst=rst)
+  a = small.retired
+  b = wide.retired
+  bad = small.failed or wide.failed or base.retired
+  denied = base.illegal
+}
+test bit_program.boot {
+  mut d = bit_program
+  mut small = false
+  mut wide = false
+  mut illegal = false
+  tick 120 {
+    d.rst = clock < 4
+    step
+    if clock > 4 {
+      assert(!d.bad, "bit-manipulation firmware took the failure path")
+      if d.a { small = true }
+      if d.b { wide = true }
+      if d.denied { illegal = true }
+    }
+  }
+  assert(small and wide and illegal, "both XLENs retire the program and Tiny traps on its first extension instruction")
+}

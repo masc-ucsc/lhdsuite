@@ -1,0 +1,46 @@
+const dataArray = import("../pyrope2/DCacheDataArray.DCacheDataArray")
+const atomic = import("../pyrope2/AMOALU.AMOALU")
+
+pub mod cache_lanes(clk:Clock, addr:U6, wr:U1, lanes:U8, lhs:U64, rhs:U64, cmd:U5)
+    -> (word:U64@[], amo:U64@[0]) {
+  word = dataArray<W=64, CAPACITY=64>(clk=clk, valid=1, address=addr, write=wr, wdata=rhs, mask=lanes)
+  amo = atomic<64>(io_mask=lanes, io_cmd=cmd, io_lhs=lhs, io_rhs=rhs)
+}
+test cache_lanes.access {
+  mut d = cache_lanes
+  d.addr = 8
+  d.wr = 1
+  d.lanes = 255
+  d.rhs = 0x123456789abcdef0
+  step
+  d.addr = 0
+  d.rhs = 0xaabbccddeeff0011
+  step
+  d.addr = 8
+  d.lanes = 0x81
+  step
+  d.wr = 0
+  step
+  assert(d.word == 0xaa3456789abcde11, "masked byte writes retain other six lanes")
+  d.addr = 0
+  step
+  assert(d.word == 0xaabbccddeeff0011, "adjacent words have distinct addresses")
+  d.lhs = 0x80000000ffffffff
+  d.rhs = 1
+  d.cmd = 8
+  d.lanes = 0xf0
+  step
+  assert((d.amo >> 32) == 0x80000000, "high-word AMOADD ignores carry from low word")
+  d.lanes = 255
+  step
+  assert(d.amo == 0x8000000100000000, "doubleword AMOADD propagates carry")
+  d.lhs = 0x1000000080000000
+  d.rhs = 0x2000000000000001
+  d.cmd = 12
+  d.lanes = 15
+  step
+  assert(d.amo == d.lhs, "low-word signed minimum")
+  d.cmd = 14
+  step
+  assert(d.amo == d.rhs, "low-word unsigned minimum")
+}

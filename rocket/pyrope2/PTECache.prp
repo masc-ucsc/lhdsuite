@@ -1,0 +1,62 @@
+// Each tree node names the gap between its lower and upper ways. Skipping
+// splits beyond N prunes empty branches for a non-power-of-two capacity.
+mod replacement<N,B,SETS>(clk:Clock, rst:Reset, index:Unsigned(bits=std.clog2(SETS)+1), touch:Bool, way:Unsigned(bits=B)) -> (victim:Unsigned(bits=B)@[]) {
+  reg tree:[SETS]Unsigned(bits=N-1):[ordering="old"] = nil
+  const set = index % SETS
+  const older = tree[set]
+  victim = 0
+  for depth in 0..<B {
+    const split = victim | (1 << (B-depth-1))
+    if split < N and older#[split-1] != 0 { victim = split }
+  }
+  if touch {
+    mut next = older
+    for split in 1..<N {
+      const half = split & -split
+      if (way / (2*half)) == (split / (2*half)) { next#[split-1] = U1((way & half) == 0) }
+    }
+    tree[set] = next
+  }
+}
+
+// Indexed by the low key bits. Search one set and replace its first invalid
+// way, or the least recently used subtree once the set is full.
+pub mod entries<SETS,WAYS,KEY,DATA>(clk:Clock, rst:Reset, flush:Bool, lookup:Bool, fill:Bool,
+    key:Unsigned(bits=KEY), data:Unsigned(bits=DATA)) -> (hit:Bool@[], value:Unsigned(bits=DATA)@[]) {
+  comptime const bits = if WAYS > 1 { std.clog2(WAYS) } else { 1 }
+  const set = key % SETS
+  const tag = key / SETS
+  reg valid:Unsigned(bits=SETS*WAYS) = 0
+  reg tags:[SETS*WAYS]Unsigned(bits=KEY-std.clog2(SETS)):[ordering="old"] = nil
+  reg values:[SETS*WAYS]Unsigned(bits=DATA):[ordering="old"] = nil
+  wire replace:Unsigned(bits=bits) = nil
+  mut target:Unsigned(bits=bits) = replace
+  mut matched:Unsigned(bits=bits) = 0
+  hit = false
+  value = 0
+  for i in 0..<WAYS {
+    const slot = set*WAYS+i
+    if valid#[set*WAYS+(WAYS-1-i)] == 0 { target = WAYS-1-i }
+    if valid#[slot] != 0 and tags[slot] == tag {
+      hit = lookup
+      matched = i
+      value = values[slot]
+    }
+  }
+  if WAYS > 1 {
+    replace = replacement<N=WAYS,B=bits,SETS=SETS>(clk=clk, rst=rst, index=set, touch=hit or fill, way=(if fill { target } else { matched }))
+  } else { replace = 0 }
+  if flush { valid = 0 } elif fill {
+    const slot = set*WAYS+target
+    tags[slot] = tag
+    values[slot] = data
+    valid#[slot] = 1
+  }
+}
+
+pub mod pointers<N,W>(clk:Clock, rst:Reset, flush:Bool, lookup:Bool, fill:Bool, address:U32, page:U20)
+    -> (hit:Bool@[], ppn:U20@[]) {
+  comptime const shift = std.clog2(W/8)
+  (hit=hit, ppn=value) = entries<SETS=1,WAYS=N,KEY=(32-shift),DATA=20>(clk=clk, rst=rst, flush=flush,
+      lookup=lookup, fill=fill, key=address >> shift, data=page)
+}

@@ -1,0 +1,61 @@
+const csr = import("../pyrope2/CSRFile.CSRFile")
+const config = import("../pyrope2/RocketConfig")
+
+mod access<C>(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:U64)
+    -> (value:Unsigned(bits=C.xLen)@[], illegal:U1@[]) {
+  const d = csr<C>(`clock`=clk, `reset`=U1(rst), io_ungated_clock=clk, io_interrupts_debug=0,
+      io_interrupts_mtip=0, io_interrupts_msip=0, io_interrupts_meip=0, io_interrupts_seip=0, io_hartid=0, io_rw_addr=addr,
+      io_rw_cmd=cmd, io_rw_wdata=data#[0..<C.xLen], io_decode_0_inst=addr<<20, io_exception=0,
+      io_retire=0, io_cause=0, io_pc=0x10040, io_tval=0, io_htval=0, io_gva=0, io_inst_0=0)
+  value = d.io_rw_rdata
+  illegal = d.io_decode_0_read_illegal
+}
+
+pub mod context_csrs(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:U64)
+    -> (machine:U32@[], supervisor:U64@[], emptyBank:U32@[], illegal:U4@[]) {
+  comptime const m = config.params(mcontextWidth=3)
+  comptime const s = config.params(xLen=64, scontextWidth=5, useSupervisor=true)
+  comptime const e = config.params(nBreakpoints=0, mcontextWidth=4, scontextWidth=4)
+  const mOnly = access<m>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data)
+  const sOnly = access<s>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data)
+  const empty = access<e>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data)
+  const tiny = access<config.tiny>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data)
+  machine = mOnly.value
+  supervisor = sOnly.value
+  emptyBank = empty.value
+  illegal = (tiny.illegal << 3) | (empty.illegal << 2) | (sOnly.illegal << 1) | mOnly.illegal
+}
+
+test context_csrs.optional_fields {
+  mut d = context_csrs
+  d.rst = true
+  d.cmd = 0
+  d.addr = 0x7a8
+  d.data = 0xffffffffffffffff
+  step
+  d.rst = false
+  d.cmd = 5
+  step
+  d.cmd = 0
+  step
+  assert(d.illegal == 10 and d.machine == 7 and d.emptyBank == 15, "machine ID is present independently of supervisor ID and trigger count")
+  d.addr = 0x5a8
+  d.cmd = 5
+  step
+  d.cmd = 0
+  step
+  assert(d.illegal == 9 and d.supervisor == 31 and d.emptyBank == 15, "supervisor ID keeps the configured width")
+  d.addr = 0x7a3
+  d.cmd = 5
+  step
+  d.cmd = 0
+  step
+  assert(d.illegal == 0 and d.emptyBank == 0)
+  assert(d.machine == 0x1e000000 and d.supervisor == 0x7d, "only configured select and value bits are writable")
+  d.cmd = 7
+  d.data = 0x02000001
+  step
+  d.cmd = 0
+  step
+  assert(d.machine == 0x1c000000 and d.supervisor == 0x7c, "clearing either select preserves its value")
+}

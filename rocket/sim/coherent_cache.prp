@@ -1,0 +1,222 @@
+const cache = import("../pyrope2/CoherentDataCache.CoherentDataCache")
+
+// A small manager returns patterned data, can grant an upgrade without data,
+// and holds a release acknowledgement until the entire C message arrives.
+mod system<W,WAYS,ATOMICS=true,SETS=2>(clk:Clock, rst:Reset, request:Bool, addr:U32, cmd:U5, mask:U8, data:U64, accept:Bool,
+    probe:Bool, probeAddr:U32, cap:U2, bus:Bool)
+    -> (ready:Bool@[], response:Bool@[], value:U64@[], error:Bool@[], probeReady:Bool@[],
+        acquires:U8@[], grants:U8@[], releases:U8@[], probeAcks:U8@[], bad:Bool@[], dirtyWord:U64@[], cBeats:U8@[]) {
+  comptime const beats = 512 / W
+  reg replying:Bool = false
+  reg releaseAck:Bool = false
+  reg line:U32 = nil
+  reg noData:Bool = nil
+  reg permission:U2 = nil
+  reg index:Unsigned(bits=std.clog2(beats)) = 0
+  reg ci:Unsigned(bits=std.clog2(beats)) = 0
+  reg nA:U8 = 0
+  reg nE:U8 = 0
+  reg nR:U8 = 0
+  reg nP:U8 = 0
+  reg nC:U8 = 0
+  reg failed:Bool = false
+  reg captured:U64 = 0
+  const word = (line << 8) | index | (1 << (W-1))
+  const deny = line == 0x3000
+  const poison = line == 0x4000 and index == 1
+  const c = cache<W=W,SETS=SETS,WAYS=WAYS,ATOMICS=ATOMICS>(clk=clk,rst=rst,request=request,address=addr,command=cmd,mask=mask#[0..<(W/8)],data=data#[0..<W],
+      responseReady=accept,aReady=bus and !replying,bValid=probe,bAddress=probeAddr,bParam=cap,bSource=17,cReady=bus,
+      dValid=(replying or releaseAck) and bus,dOpcode=(if releaseAck { 6 } elif noData { 4 } else { 5 }),
+      dParam=permission,dSource=1,dSink=11,dData=word#[0..<W],dDenied=deny,dCorrupt=deny or poison,eReady=bus)
+  if c.aValid and bus and !replying {
+    if c.aAddress#[0..<6] != 0 or c.aSource != 1 { failed = true }
+    replying = true
+    line = c.aAddress
+    noData = c.aParam == 2
+    permission = if c.aParam == 0 { 1 } else { 0 }
+    index = 0
+    wrap nA += 1
+  }
+  if bus and c.dReady {
+    if releaseAck { releaseAck = false }
+    elif replying {
+      if index == beats-1 or noData { replying = false }
+      wrap index += 1
+    }
+  }
+  if c.eValid and bus {
+    if c.eSink != 11 { failed = true }
+    wrap nE += 1
+  }
+  if c.cValid and bus {
+    const voluntary = c.cOpcode >= 6
+    const withData = c.cOpcode#[0] != 0
+    if c.cSource != (if voluntary { 1 } else { 17 }) or c.cAddress#[0..<6] != 0 { failed = true }
+    if withData {
+      const initial = ((c.cAddress << 8) | ci | (1 << (W-1)))#[0..<W]
+      const expected = if ci != 1 { initial } elif c.cAddress == 0x1000 { ((initial >> 8) << 8) | 0xef }
+          else { 0x0123456789abcdef#[0..<W] }
+      if c.cData != expected { failed = true }
+      if ci == 1 { captured = c.cData }
+      if c.cCorrupt != (c.cAddress == 0x4000 and ci == 1) { failed = true }
+      wrap nC += 1
+    }
+    if !withData or ci == beats-1 {
+      if voluntary { releaseAck = true; wrap nR += 1 } else { wrap nP += 1 }
+      ci = 0
+    } else { wrap ci += 1 }
+  }
+  ready = c.ready
+  response = c.response
+  value = c.result
+  error = c.error
+  probeReady = c.bReady
+  acquires = nA
+  grants = nE
+  releases = nR
+  probeAcks = nP
+  cBeats = nC
+  bad = failed
+  dirtyWord = captured
+}
+
+// Exercise a one-entry and a two-set/two-way cache in parallel. The driver
+// waits for both before retiring a CPU request.
+pub mod coherent_cache(clk:Clock,rst:Reset,op:U4,request:Bool,accept:Bool,probe:Bool,bus:Bool)
+    -> (ready:Bool@[], valid:Bool@[], correct:Bool@[], probed:Bool@[], finalCounts:Bool@[]) {
+  const base = match op { in (4,5) { 0x1080 } == 6 { 0x1100 } == 7 { 0x3000 } in (8,9,10,11) { 0x4000 } else { 0x1000 } }
+  const write = op == 1 or op == 5 or op == 9 or op == 10
+  const partial = op == 1 or op == 9
+  const a = system<W=32,WAYS=1,SETS=1>(clk=clk,rst=rst,request=request,addr=base+4,cmd=(if write { 1 } else { 0 }),mask=(if partial { 1 } else { 15 }),
+      data=0x0123456789abcdef,accept=accept,probe=probe,probeAddr=0x1000,cap=1,bus=bus)
+  const b = system<W=64,WAYS=2>(clk=clk,rst=rst,request=request,addr=base+8,cmd=(if write { 1 } else { 0 }),mask=(if partial { 1 } else { 255 }),
+      data=0x0123456789abcdef,accept=accept,probe=probe,probeAddr=0x1000,cap=1,bus=bus)
+  const checkWord = op == 0 or op == 2 or op == 3 or op == 4 or op == 6 or op == 11
+  const lo = if op == 11 { 0x89abcdef } else { 0x80000000 | (base << 8) | (if op == 2 or op == 3 { 0xef } else { 1 }) }
+  const hi = if op == 11 { 0x0123456789abcdef } else { 0x8000000000000000 | (base << 8) | (if op == 2 or op == 3 { 0xef } else { 1 }) }
+  const expectedError = op == 7 or op == 8 or op == 9
+  ready = a.ready and b.ready
+  valid = a.response and b.response
+  correct = !a.bad and !b.bad and (!valid or (a.error == expectedError and b.error == expectedError and
+      (!checkWord or (a.value == lo and b.value == hi))))
+  probed = a.probeAcks == 1 and b.probeAcks == 1
+  finalCounts = a.acquires == a.grants and b.acquires == b.grants and a.releases > b.releases and b.releases > 0 and
+      a.dirtyWord != 0 and b.dirtyWord != 0 and a.cBeats >= 16 and b.cBeats >= 8
+}
+
+test coherent_cache.ownership_and_data {
+  mut d = coherent_cache
+  mut op = 0
+  mut issued = false
+  mut probing = false
+  mut probeSent = false
+  mut retire = false
+  mut completed = false
+  tick 1200 {
+    d.rst = clock < 2
+    d.op = op
+    d.bus = clock % 5 != 2
+    d.request = clock >= 2 and !issued and !probing and !completed
+    d.accept = retire
+    d.probe = probing and !probeSent
+    step
+    if clock >= 2 {
+      assert(d.correct, "coherent cache data, denial, corruption and C/E channel responses")
+      if probing {
+        probeSent = true
+        if d.probed { probing = false }
+      } elif !completed {
+        if retire {
+          if op == 2 { probing = true }
+          if op == 11 { completed = true } else { op += 1 }
+          issued = false
+          retire = false
+        } else {
+          issued = true
+          retire = d.valid
+        }
+      }
+      if completed { assert(d.finalCounts, "both geometries complete grants, dirty probes and conflict evictions"); break }
+    }
+  }
+  assert(completed, "all cache requests must complete under stalls")
+}
+
+// The manager initially fills word 1 with the line address and its beat number.
+// Hold the LR response while a probe waits, so a stalled CPU cannot renew LR.
+mod atomicClient<W,ENABLED>(clk:Clock, rst:Reset, op:U5, send:Bool, take:Bool, probe:Bool)
+    -> (valid:Bool@[], correct:Bool@[], probed:Bool@[], busCount:U8@[]) {
+  const cmd = match op {
+    in (0,6,9,11) { 6 } in (1,2,8,10,12) { 7 } in (3,13,15,18,19) { 8 }
+    == 5 { 4 } in (14,17) { 1 } else { 0 }
+  }
+  const base = if op >= 13 { 0x4000 } elif op >= 6 { 0x1040 } else { 0x1000 }
+  const initial = ((base << 8) | 1 | (1 << (W-1)))#[0..<W]
+  const val = if op == 1 { 7 } elif op == 3 { 5 } elif op == 5 { 19 } elif op == 14 { 29 } else { 1 }
+  const operand = if op == 17 { 0xfffffff0fffffffe } elif op == 18 or op == 19 { 0x0000000100000004 } else { val }
+  const upper = W == 64 and op == 18
+  const laneMask = if upper { 0xf0 } elif W == 64 and op == 19 { 0x0f } else { (1 << (W/8))-1 }
+  const c = system<W=W,WAYS=2,ATOMICS=ENABLED>(clk=clk,rst=rst,request=send,addr=base+W/8+(if upper { 4 } else { 0 }),cmd=cmd,
+      mask=laneMask,data=operand,accept=take,probe=probe,probeAddr=0x1040,cap=2,bus=true)
+  const expected = match op {
+    in (0,6,7,9,11) { initial } == 1 { 0 } in (2,8,10,12) { 1 }
+    == 3 { 7 } in (4,5) { 12 } == 15 { 29 } == 16 { 30 }
+    == 18 { 0xfffffff0fffffffe#[0..<W] }
+    == 19 { if W == 64 { 0xfffffff1fffffffe } else { 2 } }
+    == 20 { if W == 64 { 0xfffffff100000002 } else { 6 } }
+    else { 0 }
+  }
+  const disabled = !ENABLED and (cmd == 6 or cmd == 7 or cmd == 4 or cmd == 8)
+  valid = c.response
+  correct = !c.bad and (!valid or (c.error == (disabled or op == 13) and
+      (disabled or op == 13 or op == 14 or op == 17 or c.value == expected)))
+  probed = c.probeAcks != 0
+  busCount = c.acquires
+}
+
+pub mod cached_atomics(clk:Clock,rst:Reset,op:U5,send:Bool,take:Bool,probe:Bool)
+    -> (valid:Bool@[], correct:Bool@[], probed:Bool@[], disabled:Bool@[]) {
+  const a = atomicClient<W=32,ENABLED=true>(clk=clk,rst=rst,op=op,send=send,take=take,probe=probe)
+  const b = atomicClient<W=64,ENABLED=true>(clk=clk,rst=rst,op=op,send=send,take=take,probe=probe)
+  const off = atomicClient<W=32,ENABLED=false>(clk=clk,rst=rst,op=0,send=send and op == 0,take=false,probe=false)
+  disabled = off.valid and off.correct and off.busCount == 0
+  valid = a.valid and b.valid
+  correct = a.correct and b.correct
+  probed = a.probed and b.probed
+}
+
+test cached_atomics.reservation_and_rmw {
+  mut d = cached_atomics
+  mut op = 0
+  mut issue = true
+  mut retire = false
+  mut age = 0
+  mut completed = false
+  tick 800 {
+    d.rst = clock == 0
+    d.op = op
+    d.send = clock != 0 and issue
+    d.take = retire
+    d.probe = op == 11 and age > 0 and age < 90
+    step
+    if clock != 0 {
+      assert(d.correct, "atomic return value, poisoned data and conditional-store status")
+      if clock > 3 { assert(d.disabled, "disabled atomics return an error without acquiring a line") }
+      if op == 11 and age > 3 and age < 65 { assert(!d.probed, "protect a fresh LR against a contending probe") }
+      if retire {
+        if op == 20 { completed = true; break }
+        op += 1
+        issue = true
+        retire = false
+        age = 0
+      } else {
+        issue = false
+        if d.valid {
+          age += 1
+          retire = if op == 9 { age > 85 } elif op == 11 { d.probed } else { true }
+        }
+      }
+    }
+  }
+  assert(completed, "two coherent caches finish every operation including the waiting probe")
+}

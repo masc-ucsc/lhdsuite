@@ -1,0 +1,55 @@
+const boot = import("BootROM.BootROM")
+const configs = import("../pyrope2/RocketConfig")
+comptime const disabled = configs.params()
+comptime const small = configs.params(btbEntries=4)
+comptime const wide = configs.params(xLen=64, btbEntries=7)
+
+// Train compressed branches in opposite halfwords, exit both loops, then change a JALR target.
+comb rom() -> (words:[16]U32) {
+  words = (
+    0x44814431, // c.li s0,12 / c.li s1,0
+    0x0485147d, // c.addi s0,-1 / c.addi s1,1
+    0x4425fc75, // c.bnez s0,-4 / c.li s0,9
+    0xfc7d147d, // c.addi s0,-1 / c.bnez s0,-2
+    0x00c00293, // li t0,12
+    0x02549063, // bne s1,t0,fail
+    0x00000317, // auipc t1,0
+    0x01030313, // addi t1,t1,16
+    0x00030067, // jalr x0,0(t1)
+    0x00100073, // ebreak (wrong path)
+    0x00830313, // addi t1,t1,8
+    0xff5ff06f, // jal x0,-12
+    0x0000006f, // success
+    0x00100073, // fail
+    0, 0
+  )
+}
+
+pub mod branch_program(clk:Clock, rst:Reset) -> (plain:Bool@[], predicted32:Bool@[], predicted64:Bool@[], failed:Bool@[]) {
+  const ref32 = boot<disabled>(clk=clk, rst=rst, program=rom(), successPC=0x10070)
+  const p32 = boot<small>(clk=clk, rst=rst, program=rom(), successPC=0x10070)
+  const p64 = boot<wide>(clk=clk, rst=rst, program=rom(), successPC=0x10070)
+  plain = ref32.success
+  predicted32 = p32.success
+  predicted64 = p64.success
+  failed = ref32.trap != 0 or p32.trap != 0 or p64.trap != 0
+}
+
+test branch_program.learn_and_recover {
+  mut d = branch_program
+  mut plainAt = 0
+  mut p32At = 0
+  mut p64At = 0
+  tick 180 {
+    d.rst = clock < 4
+    step
+    if clock > 4 {
+      assert(!d.failed, "wrong path retired")
+      if d.plain and plainAt == 0 { plainAt = clock }
+      if d.predicted32 and p32At == 0 { p32At = clock }
+      if d.predicted64 and p64At == 0 { p64At = clock }
+    }
+  }
+  assert(plainAt > 0 and p32At > 0 and p64At > 0, "all tiles must retire the checked loop")
+  assert(p32At < plainAt, "training should remove loop redirects")
+}

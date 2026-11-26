@@ -1,0 +1,70 @@
+// Parameters shared by the Rocket pipeline, caches and tile.
+pub comb params(xLen=32, useCompressed=true, useMulDiv=true, mulUnroll=8, mulEarlyOut=false,
+    useAtomics=true, fastLoadWord=true, fastLoadByte=false, misaWritable=true, mtvecInit=0, mtvecWritable=true,
+    btbEntries=0, useRVE=false, haveBasicCounters=true, mvendorid=0, mimpid=0x20181004,
+    icacheSets=64, icacheWays=1, useConditionalZero=false, useZba=false, useZbb=false, useZbs=false,
+    divUnroll=1, divEarlyOut=false, divEarlyOutGranularity=1, dcacheSets=256,
+    useUser=false, useSupervisor=false, useVM=false, iTLBEntries=4, dTLBEntries=4,
+    fLen=0, minFLen=32, divSqrt=true, haveCease=true, fpuClockGate=false, useDataScratchpad=true, dcacheWays=4,
+    mulDivClockGate=false, pgLevels=0, useAddiForMv=false, asIdBits=0,
+    bhtEntries=0, bhtCounterLength=1, bhtHistoryLength=8, bhtHistoryBits=3, nRAS=0, branchPredictionModeCSR=false, clockGate=false, nLocalInterrupts=0, nPMPs=8, nBreakpoints=1, useBPWatch=false,
+    mcontextWidth=0, scontextWidth=0, nPerfCounters=0, useDebug=true, nPTECacheEntries=8, nL2TLBEntries=0, nL2TLBWays=1, useAtomicsOnlyForIO=false)
+    -> (cfg) {
+  cassert(nPerfCounters >= 0 and nPerfCounters <= 29)
+  cassert(mcontextWidth >= 0 and mcontextWidth <= xLen)
+  cassert(scontextWidth >= 0 and scontextWidth <= xLen)
+  cassert(nBreakpoints >= 0)
+  cassert(nPMPs >= 0 and nPMPs <= 16)
+  cassert(nLocalInterrupts >= 0 and nLocalInterrupts <= xLen-16)
+  const minLevels = if xLen == 32 { 2 } else { 3 }
+  const levels = if pgLevels == 0 { minLevels } else { pgLevels }
+  cassert((xLen == 32 and levels == 2) or (xLen == 64 and levels >= 3 and levels <= 5))
+  cassert(asIdBits >= 0 and asIdBits <= (if xLen == 32 { 9 } else { 16 }))
+  cassert(fLen == 0 or fLen == 32 or fLen == 64)
+  cassert(minFLen == 16 or minFLen == 32)
+  cassert(fLen == 0 or !useRVE)
+  cassert(nPTECacheEntries >= 0 and nL2TLBEntries >= 0 and nL2TLBWays >= 1)
+  if nL2TLBEntries > 0 {
+    cassert(nL2TLBEntries == 1 << std.clog2(nL2TLBEntries))
+    cassert(nL2TLBWays <= nL2TLBEntries and nL2TLBWays == 1 << std.clog2(nL2TLBWays))
+  }
+  cassert(iTLBEntries > 0 and dTLBEntries > 0)
+  cassert(btbEntries >= 0 and bhtEntries >= 0)
+  cassert(nRAS >= 0 and (nRAS == 0 or btbEntries > 0))
+  if bhtEntries > 0 {
+    cassert(btbEntries > 0 and bhtEntries == 1 << std.clog2(bhtEntries))
+    cassert(bhtCounterLength == 1 or bhtCounterLength == 2)
+    cassert(bhtHistoryLength >= 1 and bhtHistoryBits >= 0 and bhtHistoryBits <= bhtHistoryLength)
+    cassert(bhtHistoryBits <= std.clog2(bhtEntries))
+  }
+  cassert(icacheSets > 0 and icacheSets == 1 << std.clog2(icacheSets))
+  cassert(dcacheSets > 0 and dcacheSets == 1 << std.clog2(dcacheSets) and dcacheSets <= (1 << 25))
+  cassert(dcacheWays > 0 and dcacheWays == 1 << std.clog2(dcacheWays))
+  cassert(icacheWays > 0 and icacheWays == 1 << std.clog2(icacheWays))
+  cfg = (const xLen=xLen, const asIdBits=asIdBits, const pgLevels=levels, const extraPgLevels=levels-minLevels,
+         const useDebug=useDebug, const nPerfCounters=nPerfCounters, const counterBits=3+nPerfCounters,
+         const mcontextWidth=mcontextWidth, const scontextWidth=scontextWidth,
+         const nBreakpoints=nBreakpoints, const triggerSlots=(if nBreakpoints > 0 { nBreakpoints } else { 1 }), const useBPWatch=useBPWatch,
+         const nPMPs=nPMPs, const nLocalInterrupts=nLocalInterrupts, const localIRQBits=(if nLocalInterrupts > 0 { nLocalInterrupts } else { 1 }),
+         const clockGate=clockGate, const branchPredictionModeCSR=branchPredictionModeCSR, const nRAS=nRAS, const bhtEntries=bhtEntries, const bhtCounterLength=bhtCounterLength,
+         const bhtHistoryLength=bhtHistoryLength, const bhtHistoryBits=bhtHistoryBits,
+         const bhtIndexBits=(if bhtEntries > 1 { std.clog2(bhtEntries) } else { 1 }),
+         const useAddiForMv=useAddiForMv, const dLen=(if xLen >= fLen { xLen } else { fLen }),
+         const haveCease=haveCease, const fpuClockGate=fpuClockGate, const fLen=fLen, const minFLen=minFLen, const divSqrt=divSqrt,
+         const useUser=(useUser or useSupervisor or useVM), const useSupervisor=(useSupervisor or useVM), const useVM=useVM,
+         const nL2TLBEntries=nL2TLBEntries, const nL2TLBWays=nL2TLBWays,
+         const tlbKeyBits=xLen-12+20+std.clog2(levels-minLevels+1)+asIdBits,
+         const nPTECacheEntries=nPTECacheEntries, const iTLBEntries=iTLBEntries, const dTLBEntries=dTLBEntries, const useCompressed=useCompressed, const useMulDiv=useMulDiv,
+         const pipelinedMul=(useMulDiv and mulUnroll == xLen), const mulDivClockGate=mulDivClockGate, const mulUnroll=mulUnroll, const mulEarlyOut=mulEarlyOut, const useAtomics=useAtomics,
+         const useAtomicsOnlyForIO=useAtomicsOnlyForIO, const atomicsInCache=(useAtomics and !useAtomicsOnlyForIO),
+         const divUnroll=divUnroll, const divEarlyOut=divEarlyOut, const divEarlyOutGranularity=divEarlyOutGranularity,
+         const fastLoadWord=fastLoadWord, const fastLoadByte=fastLoadByte, const misaWritable=misaWritable,
+         const mtvecInit=mtvecInit, const mtvecWritable=mtvecWritable, const btbEntries=btbEntries, const useRVE=useRVE,
+         const haveBasicCounters=haveBasicCounters, const mvendorid=mvendorid, const mimpid=mimpid,
+         const useDataScratchpad=useDataScratchpad, const dcacheWays=dcacheWays, const dcacheSets=dcacheSets, const icacheSets=icacheSets, const icacheWays=icacheWays, const useConditionalZero=useConditionalZero,
+         const useZba=useZba, const useZbb=useZbb, const useZbs=useZbs)
+}
+pub const tiny = params()
+pub const earlyMul = params(mulEarlyOut=true)
+pub const rv64 = params(xLen=64, mulEarlyOut=true)
+pub const tinyNoMulDiv = params(useMulDiv=false)

@@ -1,0 +1,116 @@
+const configs = import("../pyrope2/RocketConfig")
+const triggers = import("../pyrope2/BreakpointUnit.BreakpointUnit")
+comptime const narrow = configs.params(useSupervisor=true, nBreakpoints=3, useBPWatch=true)
+comptime const wide = configs.params(xLen=64, useVM=true, nBreakpoints=3, useBPWatch=true)
+
+pub mod trigger_profiles(clk:Clock, rst:Reset, index:U12, cmd:U3, data:U64, debug:U1, prv:U2, pc:U64, ea:U64)
+    -> (rv32:U32@[], rv64:U64@[], exception:U3@[], enterDebug:U3@[], load:U3@[], store:U3@[], fetch:U3@[], actions:U9@[]) {
+  const a = triggers<narrow>(clk=clk, rst=rst, index=index, cmd=cmd, data=data#[0..<32], debug=debug, privilege=prv, pc=pc#[0..<32], ea=ea#[0..<32])
+  const b = triggers<wide>(clk=clk, rst=rst, index=index, cmd=cmd, data=data, debug=debug, privilege=prv, pc=pc, ea=ea)
+  rv32 = a.read
+  rv64 = b.read
+  exception = b.exception
+  enterDebug = b.enterDebug
+  load = b.load
+  store = b.store
+  fetch = b.fetch
+  actions = b.actions
+}
+
+test trigger_profiles.chains_privilege_and_readback {
+  mut d = trigger_profiles
+  d.rst = true
+  d.cmd = 0
+  d.debug = 0
+  d.prv = 3
+  d.pc = 0x100
+  d.ea = 0x104
+  d.index = 0x7a1
+  d.data = 0
+  step
+  d.rst = false
+  step
+  assert(d.rv32 == 0x20800040 and d.rv64 == 0x2080000000000040, "mcontrol type and maskmax occupy XLEN-relative fields")
+  d.cmd = 5
+  d.data = 0x947 // chain, range >=, M, x/w/r
+  step
+  d.index = 0x7a2
+  d.data = 0x100
+  step
+  d.index = 0x7a0
+  d.data = 1
+  step
+  d.index = 0x7a2
+  d.data = 0x108
+  step
+  d.index = 0x7a1
+  d.data = 0x19c7 // request debug without dmode, range <, M, x/w/r
+  step
+  d.cmd = 0
+  step
+  assert((d.rv64 & 0x18ff) == 0xc7, "adjacent chains and machine-mode debug actions are disallowed")
+  assert(d.exception == 7 and d.fetch == 2 and d.load == 2 and d.store == 2, "both range entries must match the same access")
+  d.ea = 0xf8
+  step
+  assert(d.exception == 4 and d.load == 0 and d.store == 0, "one half of a chained range cannot fire")
+  d.prv = 1
+  step
+  assert(d.exception == 0)
+  d.prv = 3
+  d.ea = 0x104
+  d.index = 0x7a0
+  d.data = 2
+  d.cmd = 5
+  step
+  d.index = 0x7a2
+  d.data = 0x103
+  step
+  d.index = 0x7a1
+  d.data = 0x28d7 // watch action 2, masked address, M/S, x/w/r; last entry cannot chain
+  step
+  d.cmd = 0
+  step
+  assert(d.exception == 0 and d.enterDebug == 0 and d.actions == 128, "the last matching action wins")
+  assert(d.fetch == 6 and d.load == 6 and d.store == 6, "both end-of-chain watch bits survive")
+  d.ea = 0x108
+  d.prv = 1
+  step
+  assert(d.fetch == 4 and d.load == 0 and d.store == 0, "NAPOT mask ends before 0x108")
+  d.cmd = 5
+  d.debug = 1
+  d.data = 0x0800000008001044
+  step
+  d.cmd = 0
+  step
+  assert(d.rv32 == 0x28801044 and d.rv64 == 0x2880000000001044, "debug-only action and dmode use the active XLEN")
+  d.debug = 0
+  d.prv = 3
+  d.pc = 0x103
+  d.cmd = 7
+  d.data = 0xffffffffffffffff
+  step
+  d.cmd = 0
+  step
+  assert(d.enterDebug == 4 and d.rv64 == 0x2880000000001044, "machine writes cannot alter a debug-owned trigger")
+  d.index = 0x7a0
+  d.cmd = 5
+  d.data = 3
+  step
+  d.cmd = 0
+  step
+  assert(d.rv32 == 3 and d.rv64 == 3)
+  d.index = 0x7a1
+  step
+  assert(d.rv32 == 0 and d.rv64 == 0, "an unimplemented selector reads zero")
+  d.debug = 1
+  d.cmd = 5
+  d.index = 0x7a0
+  d.data = 2
+  step
+  d.index = 0x7a2
+  d.data = 0x4000000001
+  step
+  d.cmd = 0
+  step
+  assert(d.rv32 == 1 and d.rv64 == 0xffffffc000000001, "Sv39 breakpoint addresses read sign-extended")
+}

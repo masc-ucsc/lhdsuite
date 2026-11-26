@@ -1,0 +1,43 @@
+const translate = import("../pyrope2/AddressTranslation.AddressTranslation")
+
+// Reuse one root and VPN across satp modes. Consecutive requests hit, while
+// changing the mode changes both the number of reads and the physical leaf.
+pub mod vm_depth_walk(clk:Clock, rst:Reset, row:U4, phase:U5) -> (bad:Bool@[], done:Bool@[]) {
+  const extra:U2 = match row { in (0,1) { 0 } in (2,3,6,8,10) { 1 } == 11 { 3 } else { 2 } }
+  const noncanonical = row == 6 or row == 7
+  const superpage = row == 8 or row == 9
+  const va:U64 = if row == 6 { 1 << 47 } elif row == 7 { 1 << 56 }
+      elif superpage { (1 << 32) | 0x1234 } else { 0xfffffffedcba9876 }
+  const levelCount = 3 + extra
+  const visit = (phase - 2) >> 1
+  const root = 1
+  const leaf = 0x81000 + extra
+  const pte = if superpage { 0x43 } elif visit + 1 == levelCount { (leaf << 10) | 0x43 }
+      else { ((visit + 2) << 10) | 1 }
+  const d = translate<XLEN=64, PA=32, ENTRIES=4, EXTRA=2>(clk=clk, rst=rst, request=phase == 1,
+      virtualAddress=va, addressSpace=(extra << 20) | root, paging=true, flush=false, user=false,
+      fetch=false, store=false, sum=false, mxr=false, consume=phase == 16,
+      readReady=phase#[0] != 0, readDone=phase#[0] != 0, readError=false, readData=pte)
+  const hit = row == 1 or row == 3 or row == 5
+  const reads = if noncanonical or hit or row == 11 { 0 } elif superpage { 1 } else { levelCount }
+  const expectRead = phase >= 2 and visit < reads
+  const level = (levelCount-1-visit)#[0..<3]
+  const index = (va >> (12+9*level)) & 511
+  const at = ((visit+1) << 12) | (index << 3)
+  bad = (phase == 1 and d.cached != hit) or (phase >= 2 and phase#[0] == 0 and (d.read != expectRead or (d.read and d.readAddress != at))) or (d.valid and
+      (d.pageFault != (noncanonical or row == 11) or d.accessFault != superpage or
+      (!d.pageFault and !d.accessFault and d.address != ((leaf << 12) | va#[0..<12]))))
+  done = d.valid
+}
+test vm_depth_walk.modes_and_faults {
+  mut d = vm_depth_walk
+  tick 216 {
+    const phase = clock % 18
+    d.rst = clock == 0
+    d.row = clock / 18
+    d.phase = phase
+    step
+    if phase > 0 { assert(!d.bad, "walk address, mode tag or fault class") }
+    if phase == 14 { assert(d.done, "walk completes and holds its response") }
+  }
+}

@@ -1,0 +1,122 @@
+const cfg = import("../pyrope2/RocketConfig")
+const image = import("BootROM.Image")
+comptime const narrow = cfg.params(useSupervisor=true)
+comptime const wide = cfg.params(xLen=64, useSupervisor=true)
+
+mod check<C>(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
+  const program:[80]U32 = (
+    0xfff00293, // machine: li t0,-1
+    0x3b029073, // csrw pmpaddr0,t0
+    0x00f00293, // li t0,15
+    0x3a029073, // csrw pmpcfg0,t0
+    0x00000297, // auipc t0,0x0
+    0x07828293, // addi t0,t0,120
+    0x30529073, // csrw mtvec,t0
+    0x00000297, // auipc t0,0x0
+    0x0a428293, // addi t0,t0,164
+    0x0012e293, // ori t0,t0,1
+    0x10529073, // csrw stvec,t0
+    0x20200293, // li t0,514
+    0x30329073, // csrw mideleg,t0
+    0x10429073, // csrw sie,t0
+    0x00200293, // li t0,2
+    0x14429073, // csrw sip,t0
+    0x00000413, // li s0,0
+    0x00000297, // auipc t0,0x0
+    0x01c28293, // addi t0,t0,28
+    0x34129073, // csrw mepc,t0
+    0x000012b7, // lui t0,0x1
+    0x80228293, // addi t0,t0,-2046
+    0x30029073, // csrw mstatus,t0
+    0x30200073, // mret
+    0x00200313, // run_s: li t1,2
+    0x02641263, // bne s0,t1,100c8 <fail>
+    0x10002373, // csrr t1,sstatus
+    0x12237313, // andi t1,t1,290
+    0x02200393, // li t2,34
+    0x00731a63, // bne t1,t2,100c8 <fail>
+    0x14402373, // csrr t1,sip
+    0x20000393, // li t2,512
+    0x00731463, // bne t1,t2,100c8 <fail>
+    0x0000006f, // success: j 100c4 <success>
+    0x0000006f, // fail: j 100c8 <fail>
+    0x00000000, // padding
+    0x00000000, // padding
+    0x00000000, // padding
+    0x00000000, // padding
+    0x00000000, // padding
+    0x00000000, // padding
+    0x00000000, // padding
+    0x00000000, // padding
+    0x00000000, // padding
+    0x00000000, // padding
+    0x00000000, // padding
+    0x00000000, // padding
+    0x00000000, // padding
+    0xfc9ff06f, // vector: j 100c8 <fail>
+    0x0380006f, // j 1013c <software>
+    0xfc1ff06f, // j 100c8 <fail>
+    0xfbdff06f, // j 100c8 <fail>
+    0xfb9ff06f, // j 100c8 <fail>
+    0xfb5ff06f, // j 100c8 <fail>
+    0xfb1ff06f, // j 100c8 <fail>
+    0xfadff06f, // j 100c8 <fail>
+    0xfa9ff06f, // j 100c8 <fail>
+    0x0040006f, // j 10128 <external>
+    0xfa0410e3, // external: bnez s0,100c8 <fail>
+    0x20000293, // li t0,512
+    0x1042b073, // csrc sie,t0
+    0x00900393, // li t2,9
+    0x0180006f, // j 10150 <validate>
+    0x00100293, // software: li t0,1
+    0xf85414e3, // bne s0,t0,100c8 <fail>
+    0x00200293, // li t0,2
+    0x1442b073, // csrc sip,t0
+    0x00100393, // li t2,1
+    0x142022f3, // validate: csrr t0,scause
+    0xf602dae3, // bgez t0,100c8 <fail>
+    0x00129293, // slli t0,t0,0x1
+    0x00139393, // slli t2,t2,0x1
+    0xf67294e3, // bne t0,t2,100c8 <fail>
+    0x100022f3, // csrr t0,sstatus
+    0x1222f293, // andi t0,t0,290
+    0x12000393, // li t2,288
+    0xf4729ce3, // bne t0,t2,100c8 <fail>
+    0x00140413, // addi s0,s0,1
+    0x10200073, // sret
+    0
+  )
+  const tile = image<C=C, WORDS=80>(clk=clk, rst=rst, program=program, successPC=0x100c4, seip=1)
+  const interrupt = 1 << (C.xLen-1)
+  reg externalSeen:Bool = false
+  reg softwareSeen:Bool = false
+  const external = tile.privilege == 1 and tile.cause == (interrupt | 9)
+  const software = tile.privilege == 1 and tile.cause == (interrupt | 1)
+  if tile.trap != 0 and external { externalSeen = true }
+  if tile.trap != 0 and software and externalSeen { softwareSeen = true }
+  bad = tile.trap != 0 and !external and !software
+  done = tile.success and tile.privilege == 1 and softwareSeen
+}
+pub mod supervisor_interrupts(clk:Clock, rst:Reset) -> (a:Bool@[], b:Bool@[], bad:Bool@[]) {
+  const a32 = check<narrow>(clk=clk, rst=rst)
+  const b64 = check<wide>(clk=clk, rst=rst)
+  a = a32.done
+  b = b64.done
+  bad = a32.bad or b64.bad
+}
+test supervisor_interrupts.vectored_interrupts {
+  mut d = supervisor_interrupts
+  mut a = false
+  mut b = false
+  tick 500 {
+    d.rst = clock < 4
+    step
+    if clock > 4 {
+      assert(!d.bad, "unexpected cause or privilege during vectored interrupts")
+      if d.a { a = true }
+      if d.b { b = true }
+      if a and b { break }
+    }
+  }
+  assert(a and b, "both supervisor handlers restored SIE and returned")
+}

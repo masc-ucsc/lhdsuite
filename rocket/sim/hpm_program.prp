@@ -1,0 +1,215 @@
+const cfg = import("../pyrope2/RocketConfig")
+const image = import("BootROM.Image")
+
+// Firmware counts retired integer and floating-point instructions, pipeline
+// stalls and cache traffic, then checks U-mode counter permissions.
+mod run<X,COHERENT>(clk:Clock, rst:Reset) -> (success:Bool@[], trap:U1@[]) {
+  comptime const C = cfg.params(xLen=X, fLen=32, useSupervisor=true, nPerfCounters=8,
+      useDataScratchpad=!COHERENT, dcacheSets=8, dcacheWays=2, mulUnroll=(if COHERENT { X } else { 8 }))
+  const program:[176]U32 = (
+    0xfff00293, // li t0,-1
+    0x32029073, // csrw mcountinhibit,t0
+    0x3b029073, // csrw pmpaddr0,t0
+    0x00f00293, // li t0,15
+    0x3a029073, // csrw pmpcfg0,t0
+    0x00000297, // auipc t0,0x0
+    0x26828293, // addi t0,t0,616 # 102bc <handler>
+    0x30529073, // csrw mtvec,t0
+    0x000062b7, // lui t0,0x6
+    0x3002a073, // csrs mstatus,t0
+    0x00100413, // li s0,1
+    0x01f41413, // slli s0,s0,0x1f
+    0x00300493, // li s1,3
+    0x01000913, // li s2,16
+    0x00000997, // auipc s3,0x0
+    0x0bc98993, // addi s3,s3,188 # 10134 <back>
+    0xfff00a13, // li s4,-1
+    (if X == 32 { 0xb8301073 } else { 0x13 }), // RV32 csrw mhpmcounter3h,zero
+    (if X == 32 { 0xb8401073 } else { 0x13 }), // RV32 csrw mhpmcounter4h,zero
+    (if X == 32 { 0xb8501073 } else { 0x13 }), // RV32 csrw mhpmcounter5h,zero
+    (if X == 32 { 0xb8601073 } else { 0x13 }), // RV32 csrw mhpmcounter6h,zero
+    (if X == 32 { 0xb8701073 } else { 0x13 }), // RV32 csrw mhpmcounter7h,zero
+    (if X == 32 { 0xb8801073 } else { 0x13 }), // RV32 csrw mhpmcounter8h,zero
+    (if X == 32 { 0xb8901073 } else { 0x13 }), // RV32 csrw mhpmcounter9h,zero
+    (if X == 32 { 0xb8a01073 } else { 0x13 }), // RV32 csrw mhpmcounter10h,zero
+    0x60000293, // li t0,1536
+    0x32329073, // csrw mhpmevent3,t0
+    0xb0301073, // csrw mhpmcounter3,zero
+    0x000042b7, // lui t0,0x4
+    0x32429073, // csrw mhpmevent4,t0
+    0xb0401073, // csrw mhpmcounter4,zero
+    0x000602b7, // lui t0,0x60
+    0x32529073, // csrw mhpmevent5,t0
+    0xb0501073, // csrw mhpmcounter5,zero
+    0x000182b7, // lui t0,0x18
+    0x32629073, // csrw mhpmevent6,t0
+    0xb0601073, // csrw mhpmcounter6,zero
+    0x000012b7, // lui t0,0x1
+    0x80228293, // addi t0,t0,-2046 # 802 <_start-0xf83e>
+    0x32729073, // csrw mhpmevent7,t0
+    0xb0701073, // csrw mhpmcounter7,zero
+    0x000012b7, // lui t0,0x1
+    0x80128293, // addi t0,t0,-2047 # 801 <_start-0xf83f>
+    0x32829073, // csrw mhpmevent8,t0
+    0xb0801073, // csrw mhpmcounter8,zero
+    0x10200293, // li t0,258
+    0x32929073, // csrw mhpmevent9,t0
+    0xb0901073, // csrw mhpmcounter9,zero
+    0x20200293, // li t0,514
+    0x32a29073, // csrw mhpmevent10,t0
+    0xb0a01073, // csrw mhpmcounter10,zero
+    0x32001073, // csrw mcountinhibit,zero
+    0x00942023, // sw s1,0(s0)
+    0x00042303, // lw t1,0(s0)
+    0x00130393, // addi t2,t1,1
+    0x00734463, // blt t1,t2,10124 <taken>
+    0x1940006f, // j 102b4 <fail>
+    0x18931863, // bne t1,s1,102b4 <fail>
+    0x03248e33, // mul t3,s1,s2
+    0x029e4e33, // div t3,t3,s1
+    0x188000ef, // jal ra,102b8 <subroutine>
+    0x320a1073, // csrw mcountinhibit,s4
+    0x00200293, // li t0,2
+    0xb0302373, // csrr t1,mhpmcounter3
+    0x16531a63, // bne t1,t0,102b4 <fail>
+    0xb0402373, // csrr t1,mhpmcounter4
+    0x16531663, // bne t1,t0,102b4 <fail>
+    0xb0502373, // csrr t1,mhpmcounter5
+    0x16531263, // bne t1,t0,102b4 <fail>
+    0xb0602373, // csrr t1,mhpmcounter6
+    0x14531e63, // bne t1,t0,102b4 <fail>
+    0xb0702373, // csrr t1,mhpmcounter7
+    0x14031a63, // bnez t1,102b4 <fail>
+    0xb0802373, // csrr t1,mhpmcounter8
+    0x14030663, // beqz t1,102b4 <fail>
+    0xb0902373, // csrr t1,mhpmcounter9
+    0x14030263, // beqz t1,102b4 <fail>
+    0xb0a02373, // csrr t1,mhpmcounter10
+    (U1(COHERENT) << 20) | 0x00293, // li t0,expected cold D-cache acquisitions
+    0x12531c63, // bne t1,t0,102b4 <fail>
+    0x04028663, // beqz t0,101cc <fp_test>
+    0x20200293, // li t0,514
+    0x32829073, // csrw mhpmevent8,t0
+    0xb0801073, // csrw mhpmcounter8,zero
+    0x40200293, // li t0,1026
+    0x32929073, // csrw mhpmevent9,t0
+    0xb0901073, // csrw mhpmcounter9,zero
+    0x32001073, // csrw mcountinhibit,zero
+    0x20942023, // sw s1,512(s0)
+    0x40942023, // sw s1,1024(s0)
+    0x40042303, // lw t1,1024(s0)
+    0x320a1073, // csrw mcountinhibit,s4
+    0x10931263, // bne t1,s1,102b4 <fail>
+    0x00200293, // li t0,2
+    0xb0802373, // csrr t1,mhpmcounter8
+    0x0e531c63, // bne t1,t0,102b4 <fail>
+    0x00100293, // li t0,1
+    0xb0902373, // csrr t1,mhpmcounter9
+    0x0e531663, // bne t1,t0,102b4 <fail>
+    0x006002b7, // lui t0,0x600
+    0x32329073, // csrw mhpmevent3,t0
+    0xb0301073, // csrw mhpmcounter3,zero
+    0x001802b7, // lui t0,0x180
+    0x32429073, // csrw mhpmevent4,t0
+    0xb0401073, // csrw mhpmcounter4,zero
+    0x008002b7, // lui t0,0x800
+    0x32529073, // csrw mhpmevent5,t0
+    0xb0501073, // csrw mhpmcounter5,zero
+    0x010002b7, // lui t0,0x1000
+    0x32629073, // csrw mhpmevent6,t0
+    0xb0601073, // csrw mhpmcounter6,zero
+    0x020002b7, // lui t0,0x2000
+    0x32729073, // csrw mhpmevent7,t0
+    0xb0701073, // csrw mhpmcounter7,zero
+    0x32001073, // csrw mcountinhibit,zero
+    0x00042087, // flw ft1,0(s0)
+    0x0010f153, // fadd.s ft2,ft1,ft1
+    0x101171d3, // fmul.s ft3,ft2,ft1
+    0x1011f243, // fmadd.s ft4,ft3,ft1,ft2
+    0x1811f2d3, // fdiv.s ft5,ft3,ft1
+    0x20120353, // fsgnj.s ft6,ft4,ft1
+    0x00642227, // fsw ft6,4(s0)
+    0x320a1073, // csrw mcountinhibit,s4
+    0xb0302373, // csrr t1,mhpmcounter3
+    0x00200293, // li t0,2
+    0x08531063, // bne t1,t0,102b4 <fail>
+    0xb0402373, // csrr t1,mhpmcounter4
+    0x06531c63, // bne t1,t0,102b4 <fail>
+    0x00100293, // li t0,1
+    0xb0502373, // csrr t1,mhpmcounter5
+    0x06531663, // bne t1,t0,102b4 <fail>
+    0xb0602373, // csrr t1,mhpmcounter6
+    0x06531263, // bne t1,t0,102b4 <fail>
+    0xb0702373, // csrr t1,mhpmcounter7
+    0x04531e63, // bne t1,t0,102b4 <fail>
+    0x10000293, // li t0,256
+    0x32a29073, // csrw mhpmevent10,t0
+    0xb0a01073, // csrw mhpmcounter10,zero
+    0x40000293, // li t0,1024
+    0x3202b073, // csrc mcountinhibit,t0
+    0x01800293, // li t0,24
+    0x30629073, // csrw mcounteren,t0
+    0x02800293, // li t0,40
+    0x10629073, // csrw scounteren,t0
+    0x00000297, // auipc t0,0x0
+    0x01828293, // addi t0,t0,24 # 10298 <user>
+    0x34129073, // csrw mepc,t0
+    0x30001073, // csrw mstatus,zero
+    0x00000a93, // li s5,0
+    0x30200073, // mret
+    0xc03022f3, // csrr t0,hpmcounter3
+    0x00200313, // li t1,2
+    0x00629a63, // bne t0,t1,102b4 <fail>
+    0xc04022f3, // csrr t0,hpmcounter4
+    0xc05022f3, // csrr t0,hpmcounter5
+    0x006a9463, // bne s5,t1,102b4 <fail>
+    0x0000006f, // j 102b0 <success>
+    0x0000006f, // j 102b4 <fail>
+    0x00098067, // jr s3
+    0x34202ef3, // csrr t4,mcause
+    0x00200f13, // li t5,2
+    0xffee98e3, // bne t4,t5,102b4 <fail>
+    0xb0a02ff3, // csrr t6,mhpmcounter10
+    0x001a8f13, // addi t5,s5,1
+    0xffff12e3, // bne t5,t6,102b4 <fail>
+    0x34102ef3, // csrr t4,mepc
+    0x00000f17, // auipc t5,0x0
+    0xfccf0f13, // addi t5,t5,-52 # 102a4 <denied_s>
+    0x002a9f93, // slli t6,s5,0x2
+    0x01ff0f33, // add t5,t5,t6
+    0xfdee96e3, // bne t4,t5,102b4 <fail>
+    0x001a8a93, // addi s5,s5,1
+    0x004e8e93, // addi t4,t4,4
+    0x341e9073, // csrw mepc,t4
+    0x30200073, // mret
+    0
+  )
+  const tile = image<C=C,WORDS=176>(clk=clk, rst=rst, program=program, successPC=0x102b0)
+  success = tile.success and tile.privilege == 0
+  trap = tile.trap
+}
+
+pub mod hpm_program(clk:Clock, rst:Reset) -> (success:U2@[], traps:U2@[]) {
+  const a = run<X=32,COHERENT=false>(clk=clk, rst=rst)
+  const b = run<X=64,COHERENT=true>(clk=clk, rst=rst)
+  success = U1(a.success) | (U1(b.success) << 1)
+  traps = a.trap | (b.trap << 1)
+}
+
+test hpm_program.count_and_delegate {
+  mut d = hpm_program
+  mut seen:U2 = 0
+  mut once:U2 = 0
+  mut twice:U2 = 0
+  tick 3000 {
+    d.rst = clock < 4
+    step
+    if clock > 4 {
+      assert((twice & d.traps) == 0, "unexpected third exception")
+      twice |= once & d.traps
+      once |= d.traps
+      seen |= d.success
+    }
+  }
+  assert(seen == 3 and twice == 3, "both tiles verify counter values and the two forbidden user reads")
+}

@@ -1,0 +1,108 @@
+const csr = import("../pyrope2/CSRFile.CSRFile")
+const config = import("../pyrope2/RocketConfig")
+comptime const narrow = config.tiny
+comptime const wide = config.params(xLen=64, mvendorid=0x27, mimpid=0x12345678)
+comptime const lean = config.params(haveBasicCounters=false)
+
+mod access<C>(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:U64, exception:U1)
+    -> (value:Unsigned(bits=C.xLen)@[], illegal:U1@[]) {
+  const d = csr<C>(`clock`=clk, `reset`=U1(rst), io_ungated_clock=clk, io_interrupts_debug=0,
+      io_interrupts_mtip=0, io_interrupts_msip=0, io_interrupts_meip=0, io_hartid=0, io_rw_addr=addr,
+      io_rw_cmd=cmd, io_rw_wdata=data#[0..<C.xLen], io_decode_0_inst=addr<<20, io_exception=exception,
+      io_retire=1, io_cause=0x80000007, io_pc=0x10040, io_tval=0, io_htval=0, io_gva=0, io_inst_0=0)
+  value = d.io_rw_rdata
+  illegal = d.io_decode_0_read_illegal
+}
+
+pub mod csr_profiles(clk:Clock, rst:Reset, addr:U12, cmd:U3, data:U64, exception:U1)
+    -> (rv32:U32@[], rv64:U64@[], bad32:U1@[], bad64:U1@[], badLean:U1@[]) {
+  const a = access<narrow>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data, exception=exception)
+  const b = access<wide>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data, exception=exception)
+  const c = access<lean>(clk=clk, rst=rst, addr=addr, cmd=cmd, data=data, exception=exception)
+  rv32 = a.value
+  rv64 = b.value
+  bad32 = a.illegal
+  bad64 = b.illegal
+  badLean = c.illegal
+}
+
+test csr_profiles.counters_and_traps {
+  mut d = csr_profiles
+  d.rst = true
+  d.cmd = 0
+  d.exception = 0
+  d.addr = 0
+  d.data = 0
+  step
+  d.rst = false
+  d.addr = 0x320
+  d.data = 5
+  d.cmd = 5
+  step
+  d.addr = 0xb00
+  d.data = 0x12345678ffffffff
+  step
+  d.addr = 0xb02
+  d.data = 0x22334455ffffffff
+  step
+  d.addr = 0xb80
+  d.data = 0xcafe
+  step
+  d.addr = 0xb82
+  d.data = 0xbeef
+  step
+  d.cmd = 0
+  d.addr = 0xc00
+  step
+  assert(d.rv32 == 0xffffffff and d.rv64 == 0x12345678ffffffff, "cycle reads the entire active XLEN")
+  assert(d.bad32 == 0 and d.bad64 == 0 and d.badLean == 1, "counter banks follow haveBasicCounters")
+  d.addr = 0xc02
+  step
+  assert(d.rv32 == 0xffffffff and d.rv64 == 0x22334455ffffffff, "instret accepts XLEN-wide writes")
+  d.addr = 0xc80
+  step
+  assert(d.rv32 == 0xcafe and d.bad32 == 0 and d.bad64 == 1, "only RV32 exposes cycleh")
+  d.addr = 0xc82
+  step
+  assert(d.rv32 == 0xbeef and d.bad64 == 1, "instreth addresses the high RV32 half")
+  d.addr = 0x320
+  d.cmd = 7
+  d.data = 5
+  step
+  d.cmd = 0
+  d.addr = 0xc02
+  step
+  step
+  assert(d.rv32 < 8 and (d.rv64 >> 32) == 0x22334456, "minstret carries across the low word")
+  d.addr = 0xc80
+  step
+  assert(d.rv32 == 0xcaff, "mcycle carries across the low word")
+  d.addr = 0x342
+  d.exception = 1
+  step
+  d.exception = 0
+  step
+  assert(d.rv32 == 0x80000007 and d.rv64 == 0x8000000000000007, "interrupt flag is bit XLEN-1")
+  d.cmd = 7
+  d.data = 0x8000000000000002
+  step
+  d.cmd = 0
+  step
+  assert(d.rv32 == 0x80000005 and d.rv64 == 5, "CSR clear uses every XLEN bit")
+  d.addr = 0xf11
+  step
+  assert(d.rv32 == 0 and d.rv64 == 0x27, "configured vendor ID")
+  d.addr = 0xf13
+  step
+  assert(d.rv32 == 0x20181004 and d.rv64 == 0x12345678, "configured implementation ID")
+  d.addr = 0x3a0
+  d.cmd = 5
+  d.data = 0x1f0f0907051d0f01
+  step
+  d.cmd = 0
+  step
+  assert(d.rv32 == 0x051d0f01 and d.rv64 == 0x1f0f0907051d0f01, "pack four or eight PMP bytes per CSR")
+  d.addr = 0x3a1
+  step
+  assert(d.bad32 == 0 and d.bad64 == 1, "RV64 reserves odd pmpcfg addresses")
+}

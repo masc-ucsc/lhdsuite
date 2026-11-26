@@ -1,0 +1,61 @@
+const configs = import("../pyrope2/RocketConfig")
+const boot = import("BootROM.BootROM")
+comptime const e32 = configs.params(useRVE=true, mtvecInit=0x10070)
+comptime const e64 = configs.params(xLen=64, useRVE=true, mtvecInit=0x10070)
+comptime const i32 = configs.params(mtvecInit=0x10070)
+
+// A trap handler advances mepc so that the same program checks rd, rs1 and rs2.
+mod run<C>(clk:Clock, rst:Reset) -> (completed:Bool@[], failed:Bool@[]) {
+  const program:[16]U32 = (
+    0x301022f3, // csrr x5,misa
+    0x1102f293, // andi x5,x5,E|I
+    if C.useRVE { 0x01000793 } else { 0x10000793 }, // li x15,expected base ISA
+    0x00f29e63, // bne x5,x15,fail
+    0x01f00793, // addi x15,x0,31 (immediate, no rs2)
+    0x340fe073, // csrsi mscratch,31 (immediate, no rs1)
+    0x00100813, // addi x16,x0,1
+    0x00380113, // addi x2,x16,3
+    0x010081b3, // add x3,x1,x16
+    0x0000006f, // success
+    0x0000006f, // fail
+    0x00000013, // nop
+    0x34102273, // handler: csrr x4,mepc
+    0x00420213, // addi x4,x4,4
+    0x34121073, // csrw mepc,x4
+    0x30200073  // mret
+  )
+  const dut = boot<C>(clk=clk, rst=rst, program=program, successPC=0x10064)
+  reg traps:U3 = 0
+  const expectedPC = 0x10058 + (traps << 2)
+  failed = dut.trap != 0 and (!C.useRVE or traps >= 3 or dut.cause != 2 or dut.tracePC != expectedPC)
+  if rst { traps = 0 } elif dut.trap != 0 { wrap traps += 1 }
+  completed = dut.success and traps == (if C.useRVE { 3 } else { 0 })
+}
+
+pub mod embedded_registers(clk:Clock, rst:Reset) -> (ok32:Bool@[], ok64:Bool@[], okI:Bool@[], bad:Bool@[]) {
+  const a = run<e32>(clk=clk, rst=rst)
+  const b = run<e64>(clk=clk, rst=rst)
+  const c = run<i32>(clk=clk, rst=rst)
+  ok32 = a.completed
+  ok64 = b.completed
+  okI = c.completed
+  bad = a.failed or b.failed or c.failed
+}
+
+test embedded_registers.operand_fields {
+  mut d = embedded_registers
+  mut seen32 = false
+  mut seen64 = false
+  mut seenI = false
+  tick 160 {
+    d.rst = clock < 4
+    step
+    if clock > 4 {
+      assert(!d.bad, "unexpected trap PC or mcause")
+      if d.ok32 { seen32 = true }
+      if d.ok64 { seen64 = true }
+      if d.okI { seenI = true }
+    }
+  }
+  assert(seen32 and seen64 and seenI, "all profiles must retire the checked program")
+}

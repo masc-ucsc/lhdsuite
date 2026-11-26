@@ -1,0 +1,95 @@
+const cfg = import("../pyrope2/RocketConfig")
+const image = import("BootROM.Image")
+comptime const narrow = cfg.params(useSupervisor=true)
+comptime const wide = cfg.params(xLen=64, useSupervisor=true)
+
+mod check<C>(clk:Clock, rst:Reset) -> (done:Bool@[], bad:Bool@[]) {
+  const program:[64]U32 = (
+    0xfff00293, // entry: li t0,-1
+    0x3b029073, // csrw pmpaddr0,t0
+    0x00f00293, // li t0,15
+    0x3a029073, // csrw pmpcfg0,t0
+    0x10000293, // li t0,256
+    0x30229073, // csrw medeleg,t0
+    0x00200293, // li t0,2
+    0x30329073, // csrw mideleg,t0
+    0x00000297, // auipc t0,0x0
+    0x07828293, // addi t0,t0,120
+    0x30529073, // csrw mtvec,t0
+    0x00000297, // auipc t0,0x0
+    0x03028293, // addi t0,t0,48
+    0x10529073, // csrw stvec,t0
+    0x00000297, // auipc t0,0x0
+    0x01428293, // addi t0,t0,20
+    0x34129073, // csrw mepc,t0
+    0x30001073, // csrw mstatus,zero
+    0x30200073, // mret
+    0x00000073, // user: ecall
+    0x07b00513, // li a0,123
+    0x140022f3, // csrr t0,sscratch
+    0x0780006f, // j 10110 <fail>
+    0x142022f3, // supervisor: csrr t0,scause
+    0x00800313, // li t1,8
+    0x06629663, // bne t0,t1,10110 <fail>
+    0x141022f3, // csrr t0,sepc
+    0x00000317, // auipc t1,0x0
+    0xfe030313, // addi t1,t1,-32
+    0x04629e63, // bne t0,t1,10110 <fail>
+    0x00428293, // addi t0,t0,4
+    0x14129073, // csrw sepc,t0
+    0x100022f3, // csrr t0,sstatus
+    0x1002f293, // andi t0,t0,256
+    0x04029463, // bnez t0,10110 <fail>
+    0x05b00293, // li t0,91
+    0x14029073, // csrw sscratch,t0
+    0x10200073, // sret
+    0x342022f3, // machine: csrr t0,mcause
+    0x00200313, // li t1,2
+    0x02629863, // bne t0,t1,10110 <fail>
+    0x07b00313, // li t1,123
+    0x02651463, // bne a0,t1,10110 <fail>
+    0x140022f3, // csrr t0,sscratch
+    0x05b00313, // li t1,91
+    0x00629e63, // bne t0,t1,10110 <fail>
+    0x341022f3, // csrr t0,mepc
+    0x00000317, // auipc t1,0x0
+    0xf9030313, // addi t1,t1,-112
+    0x00830313, // addi t1,t1,8
+    0x00629463, // bne t0,t1,10110 <fail>
+    0x0000006f, // success: j 1010c <success>
+    0x0000006f, // fail: j 10110 <fail>
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+  )
+  const tile = image<C=C, WORDS=64>(clk=clk, rst=rst, program=program, successPC=0x1010c)
+  reg sawUserCall:Bool = false
+  reg sawIllegal:Bool = false
+  const userCall = tile.tracePC == 0x1008c and tile.privilege == 0 and tile.cause == 8
+  const illegal = tile.tracePC == 0x10094 and tile.privilege == 0 and tile.cause == 2
+  if tile.trap != 0 and userCall { sawUserCall = true }
+  if tile.trap != 0 and illegal and sawUserCall { sawIllegal = true }
+  bad = tile.trap != 0 and !userCall and !illegal
+  done = tile.success and tile.privilege == 3 and sawIllegal
+}
+pub mod supervisor_program(clk:Clock, rst:Reset) -> (a:Bool@[], b:Bool@[], bad:Bool@[]) {
+  const a32 = check<narrow>(clk=clk, rst=rst)
+  const b64 = check<wide>(clk=clk, rst=rst)
+  a = a32.done
+  b = b64.done
+  bad = a32.bad or b64.bad
+}
+test supervisor_program.delegation_and_return {
+  mut d = supervisor_program
+  mut a = false
+  mut b = false
+  tick 500 {
+    d.rst = clock < 4
+    step
+    if clock > 4 {
+      assert(!d.bad, "unexpected trap during U/S/M handoff")
+      if d.a { a = true }
+      if d.b { b = true }
+      if a and b { break }
+    }
+  }
+  assert(a and b, "both machine handlers checked the results of sret")
+}

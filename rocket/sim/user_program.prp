@@ -1,0 +1,59 @@
+const configs = import("../pyrope2/RocketConfig")
+const boot = import("BootROM.BootROM")
+comptime const rv32u = configs.params(useUser=true)
+comptime const rv64u = configs.params(xLen=64, useUser=true)
+
+mod check<C>(clk:Clock, rst:Reset, row:U4) -> (passed:Bool@[], wrong:Bool@[]) {
+  const pmp = if row == 2 { 0x0b } elif row == 3 { 0x0c } else { 0x0f }
+  const first = match row {
+    == 1 { 0x34002373 } // csrr t1,mscratch is machine-only
+    == 3 { 0x0002a303 } // lw t1,0(t0) on an execute-only page
+    == 4 { 0x30200073 } // mret is privileged
+    == 5 { 0xc0002373 } // rdcycle with mcounteren.CY clear
+    == 6 { 0xc0002373 } // rdcycle with mcounteren.CY set
+    else { 0x00000073 } // ecall
+  }
+  const program:[16]U32 = (
+    0xfff00293, 0x3b029073,                // pmpaddr0 = top of physical memory
+    (pmp << 20) | 0x293, 0x3a029073,       // pmpcfg0 = TOR and permissions
+    (if row == 6 { 0x100293 } else { 0x293 }), 0x30629073, // mcounteren
+    0x00000297, 0x01828293,                // point t0 at the user entry (word 12)
+    0x34129073, 0x30001073,                // mepc = t0, mstatus.MPP = U
+    0x30200073, 0x00100073,                // mret; guard
+    first, 0x00000073, 0x00100073, 0x13    // user code
+  )
+  const tile = boot<C>(clk=clk, rst=rst, program=program, successPC=0x10070)
+  const pc = if row == 6 { 0x10074 } else { 0x10070 }
+  const cause = match row {
+    == 1 { 2 } == 2 { 1 } == 3 { 5 } == 4 { 2 } == 5 { 2 } else { 8 }
+  }
+  reg sawTrap:Bool = false
+  passed = tile.trap != 0 and tile.tracePC == pc and tile.cause == cause and tile.privilege == 0
+  wrong = tile.trap != 0 and !sawTrap and !passed
+  if passed { sawTrap = true }
+}
+pub mod user_program(clk:Clock, rst:Reset, row:U4) -> (a:Bool@[], b:Bool@[], wrong:Bool@[]) {
+  const narrow = check<rv32u>(clk=clk, rst=rst, row=row)
+  const wide = check<rv64u>(clk=clk, rst=rst, row=row)
+  a = narrow.passed
+  b = wide.passed
+  wrong = narrow.wrong or wide.wrong
+}
+test user_program.enter_and_trap {
+  mut d = user_program
+  mut a = false
+  mut b = false
+  tick 700 {
+    const cycle = clock % 100
+    d.rst = cycle < 4
+    d.row = clock / 100
+    if cycle == 0 { a = false; b = false }
+    step
+    if cycle > 4 {
+      assert(!d.wrong, "first trap has user privilege, expected PC and cause")
+      if d.a { a = true }
+      if d.b { b = true }
+      if cycle == 99 { assert(a and b, "RV32 and RV64 both enter user mode") }
+    }
+  }
+}

@@ -1,0 +1,67 @@
+const cfg = import("../pyrope2/RocketConfig")
+const scan = import("../pyrope2/BranchDecode.packet")
+const predictor = import("../pyrope2/BranchPredictor.BranchPredictor")
+comptime const p32 = cfg.params(branchPredictionModeCSR=true, btbEntries=4)
+comptime const p64 = cfg.params(xLen=64, branchPredictionModeCSR=true, btbEntries=4, bhtEntries=4,
+    bhtHistoryBits=0, bhtCounterLength=2)
+comptime const noC = cfg.params(useCompressed=false, btbEntries=4, branchPredictionModeCSR=true)
+
+mod lookup<C>(row:U4) -> (ok:Bool@[]) {
+  // Place the fetch at 4 GiB to check XLEN wraparound on both sides of zero.
+  const base = if C.xLen == 64 { 1 << 32 } else { 0 }
+  const pc = base + (if row == 3 or row == 6 { 2 } else { 0 })
+  const word:U32 = match row {
+    == 0 { 0x80000063 } // BEQ -4096
+    == 1 { 0x7e000fe3 } // BEQ +4094
+    == 2 { 0xc0018000 } // previous word contains the start of BEQ -4096
+    in (3,4) { 0xd001c001 } // C.BEQZ 0 and C.BEQZ -256
+    == 5 { 0xc001a001 } // C.J precedes C.BEQZ
+    == 6 { 0x0063c001 } // direct entry in upper slot, starts an incomplete BEQ
+    == 7 { 0xc0018082 } // C.JR precedes C.BEQZ
+    == 8 { 0xc0012401 } // C.JAL on RV32, C.ADDIW s0,0 on RV64
+    == 9 { 0x00002063 } // reserved branch funct3
+    else { 0xc0010001 } // C.NOP precedes C.BEQZ
+  }
+  const d = scan<C>(pc=pc#[0..<C.xLen], data=word, previous=0x0063, partial=row == 2)
+  const expected = row <= 2 or (C.useCompressed and (row == 3 or row == 4 or row == 10 or (row == 8 and C.xLen == 64)))
+  const high = row == 0 or row == 1 or row == 3 or row == 8 or row == 10
+  const offset = match row { == 0 { -4096 } == 1 { 4094 } == 2 { -4098 } == 3 { -254 } == 4 { 0 } else { 2 } }
+  ok = d.branch == expected and (!expected or (d.slot == U1(high) and d.target == (base+offset)#[0..<C.xLen]))
+}
+
+pub mod static_decode(row:U4) -> (ok:Bool@[]) {
+  ok = lookup<p32>(row=row) and lookup<p64>(row=row) and lookup<noC>(row=row)
+}
+
+test static_decode.instruction_boundaries {
+  mut d = static_decode
+  tick 11 {
+    d.row = clock
+    step
+    assert(d.ok, "earliest complete conditional branch and signed target")
+  }
+}
+
+// Train a two-bit counter to strongly taken, switch modes, and resolve five
+// fall-throughs while static. The first dynamic miss must still predict taken.
+pub mod mode_table(clk:Clock, phase:U5) -> (ok:Bool@[]) {
+  const train = phase >= 1 and phase <= 3
+  const forced = phase >= 5 and phase <= 12
+  const reinstall = phase == 14
+  const d = predictor<p64>(`clock`=clk, clear=U1(phase == 0), pc=0x40, replace=U1(phase == 1 or reinstall),
+      install=1, branchPC=0x40, destination=0x80, resolve=U1(train or (phase >= 6 and phase <= 10) or reinstall),
+      taken=U1(train), branchIndex=0, advance=false, direction=0, restore=false, forceTaken=forced,
+      invalidate=phase == 4 or phase == 12, learn=phase == 5, learnedPC=0x40, learnedTarget=0x90)
+  ok = if phase == 3 or phase == 15 { d.predict != 0 and d.target == 0x80 }
+       elif phase >= 6 and phase <= 11 { d.predict != 0 and d.target == 0x90 }
+       elif phase == 13 { d.predict == 0 } else { true }
+}
+
+test mode_table.preserve_dynamic_counters {
+  mut d = mode_table
+  tick 16 {
+    d.phase = clock
+    step
+    assert(d.ok)
+  }
+}

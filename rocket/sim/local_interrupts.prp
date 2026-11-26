@@ -1,0 +1,156 @@
+const cfg = import("../pyrope2/RocketConfig")
+const image = import("BootROM.Image")
+comptime const narrow = cfg.params(useSupervisor=true, nLocalInterrupts=16, clockGate=true)
+comptime const wide = cfg.params(xLen=64, useSupervisor=true, nLocalInterrupts=48, clockGate=true)
+
+comptime const machine = cfg.params(xLen=64, nLocalInterrupts=48, clockGate=true)
+
+// The same firmware serves RV32 and RV64. The last local interrupt is cause
+// 31 or 63. Machine and supervisor vectors each have a slot for both widths.
+comb firmware() -> (rom:[240]U32) {
+  const code:[100]U32 = (
+    0x00000413, // li s0,0
+    0xfff00293, // li t0,-1
+    0x0012d493, // srli s1,t0,0x1
+    0xfff4c493, // not s1,s1
+    0x00100913, // li s2,1
+    0x01091913, // slli s2,s2,0x10
+    0x08000993, // li s3,128
+    0x01f00a13, // li s4,31
+    0x01f2d293, // srli t0,t0,0x1f
+    0xfff28293, // addi t0,t0,-1
+    0x00028463, // beqz t0,10070 <setup>
+    0x03f00a13, // li s4,63
+    0x00000297, // auipc t0,0x0
+    0x19028293, // addi t0,t0,400 # 10200 <mvec>
+    0x07d28313, // addi t1,t0,125
+    0x30531073, // csrw mtvec,t1
+    0x30502373, // csrr t1,mtvec
+    0x00128293, // addi t0,t0,1
+    0x0a531263, // bne t1,t0,1012c <fail>
+    0x0124e2b3, // or t0,s1,s2
+    0x0132e2b3, // or t0,t0,s3
+    0x30429073, // csrw mie,t0
+    0x30402373, // csrr t1,mie
+    0x08629863, // bne t0,t1,1012c <fail>
+    0x7c137073, // csrci 0x7c1,6
+    0x30046073, // csrsi mstatus,8
+    0x10500073, // wfi
+    0x00300313, // li t1,3
+    0xfe641ee3, // bne s0,t1,100ac <wait_m>
+    0x30047073, // csrci mstatus,8
+    0x30102373, // csrr t1,misa
+    0x000402b7, // lui t0,0x40
+    0x00537333, // and t1,t1,t0
+    0x06030263, // beqz t1,10128 <success>
+    0xfff00293, // li t0,-1
+    0x3b029073, // csrw pmpaddr0,t0
+    0x00f00293, // li t0,15
+    0x3a029073, // csrw pmpcfg0,t0
+    0x30349073, // csrw mideleg,s1
+    0x30302373, // csrr t1,mideleg
+    0x04931663, // bne t1,s1,1012c <fail>
+    0x10449073, // csrw sie,s1
+    0x30492073, // csrs mie,s2
+    0x00000297, // auipc t0,0x0
+    0x21428293, // addi t0,t0,532 # 10300 <svec>
+    0x0012e293, // ori t0,t0,1
+    0x10529073, // csrw stvec,t0
+    0x00000297, // auipc t0,0x0
+    0x01c28293, // addi t0,t0,28 # 10118 <supervisor>
+    0x34129073, // csrw mepc,t0
+    0x000012b7, // lui t0,0x1
+    0x80228293, // addi t0,t0,-2046 # 802 <_start-0xf83e>
+    0x30029073, // csrw mstatus,t0
+    0x30200073, // mret
+    0x00500313, // li t1,5
+    0x00641863, // bne s0,t1,1012c <fail>
+    0x10402373, // csrr t1,sie
+    0x00031463, // bnez t1,1012c <fail>
+    0x0000006f, // j 10128 <success>
+    0x00100073, // ebreak
+    0xffdff06f, // j 1012c <fail>
+    0xfe041ce3, // bnez s0,1012c <fail>
+    0x34202373, // csrr t1,mcause
+    0x0144e3b3, // or t2,s1,s4
+    0xfe7316e3, // bne t1,t2,1012c <fail>
+    0x34402373, // csrr t1,mip
+    0x0124e3b3, // or t2,s1,s2
+    0x0133e3b3, // or t2,t2,s3
+    0xfc731ee3, // bne t1,t2,1012c <fail>
+    0x3044b073, // csrc mie,s1
+    0x0400006f, // j 10198 <ret_m>
+    0x00100313, // li t1,1
+    0x00640663, // beq s0,t1,1016c <check_low>
+    0x00300313, // li t1,3
+    0xfc6412e3, // bne s0,t1,1012c <fail>
+    0x34202373, // csrr t1,mcause
+    0x0104e393, // ori t2,s1,16
+    0xfa731ce3, // bne t1,t2,1012c <fail>
+    0x30493073, // csrc mie,s2
+    0x01c0006f, // j 10198 <ret_m>
+    0x00200313, // li t1,2
+    0xfa6414e3, // bne s0,t1,1012c <fail>
+    0x34202373, // csrr t1,mcause
+    0x0074e393, // ori t2,s1,7
+    0xf8731ee3, // bne t1,t2,1012c <fail>
+    0x3049b073, // csrc mie,s3
+    0x00140413, // addi s0,s0,1
+    0x30200073, // mret
+    0x00400313, // li t1,4
+    0xf86414e3, // bne s0,t1,1012c <fail>
+    0x14202373, // csrr t1,scause
+    0x0144e3b3, // or t2,s1,s4
+    0xf6731ee3, // bne t1,t2,1012c <fail>
+    0x14402373, // csrr t1,sip
+    0xf6931ae3, // bne t1,s1,1012c <fail>
+    0x10402373, // csrr t1,sie
+    0xf69316e3, // bne t1,s1,1012c <fail>
+    0x1044b073, // csrc sie,s1
+    0x00140413, // addi s0,s0,1
+    0x10200073 // sret
+  )
+  rom = 0
+  for i in 0..<100 { rom[i] = code[i] }
+  rom[119] = 0xf65ff06f // j 10180 <timer_m>
+  rom[128] = 0xf1dff06f // j 1015c <low_m>
+  rom[143] = 0xeb9ff06f // j 10134 <high_m>
+  rom[175] = 0xe39ff06f // j 10134 <high_m>
+  rom[207] = 0xe25ff06f // j 101a0 <high_s>
+  rom[239] = 0xda5ff06f // j 101a0 <high_s>
+}
+
+mod run<C>(clk:Clock,rst:Reset,raise:Bool) -> (done:U1@[], asleep:U1@[], bad:Bool@[]) {
+  const pins:Unsigned(bits=C.nLocalInterrupts) = if raise { (1 << (C.nLocalInterrupts-1)) | 1 } else { 0 }
+  const t = image<C=C, WORDS=240>(clk=clk,rst=rst,program=firmware(),successPC=0x10128,localInterrupts=pins,timer=U1(raise))
+  done = U1(t.success and t.privilege == (if C.useSupervisor { 1 } else { 3 }))
+  asleep = U1(t.traceValid and t.tracePC == 0x100a8)
+  bad = t.trap != 0 and t.cause#[C.xLen-1] == 0
+}
+
+pub mod local_interrupts(clk:Clock,rst:Reset,raise:Bool) -> (done:U3@[], asleep:U3@[], bad:Bool@[]) {
+  const a = run<narrow>(clk=clk,rst=rst,raise=raise)
+  const b = run<wide>(clk=clk,rst=rst,raise=raise)
+  const m = run<machine>(clk=clk,rst=rst,raise=raise)
+  done = (m.done << 2) | (b.done << 1) | a.done
+  asleep = (m.asleep << 2) | (b.asleep << 1) | a.asleep
+  bad = a.bad or b.bad or m.bad
+}
+
+test local_interrupts.priority_and_delegation {
+  mut d = local_interrupts
+  mut finished:U3 = 0
+  mut waited:U3 = 0
+  tick 1800 {
+    d.rst = clock < 4
+    d.raise = clock >= 250
+    step
+    if clock > 4 {
+      waited |= d.asleep
+      finished |= d.done
+      assert(!d.bad, "unexpected synchronous trap")
+      if clock == 248 { assert(waited == 7 and finished == 0, "all tiles must retire WFI before the interrupt") }
+    }
+  }
+  assert(finished == 7, "each tile must handle the interrupts in priority order and resume in its expected privilege")
+}

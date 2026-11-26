@@ -1,0 +1,58 @@
+const cfg = import("../pyrope2/RocketConfig")
+const predictor = import("../pyrope2/BranchPredictor.BranchPredictor")
+comptime const one = cfg.params(btbEntries=4, nRAS=1)
+comptime const three = cfg.params(xLen=64, btbEntries=4, nRAS=3)
+
+mod check<C>(clk:Clock, phase:U5) -> (correct:Bool@[]) {
+  comptime const high = if C.xLen == 64 { 1 << 38 } else { 0 }
+  // Train one return, push four addresses, replace the top on a coroutine
+  // switch, then unwind past empty. An empty stack falls back to the BTB.
+  const action = match phase {
+    in (1, 8, 9, 10, 11, 15) { 2 }
+    in (2, 3, 4, 5, 13) { 1 }
+    in (6, 12) { 3 }
+    else { 0 }
+  }
+  const install = phase == 1 or phase == 15
+  const endPC = if install { 0x40 } else { high | (phase << 2) }
+  // The second sequence speculates on a wrong-path call, restores while an older
+  // call resolves, and restores again after a speculative pop.
+  const resolved = if phase == 17 or phase == 19 { 1 } elif phase == 22 { 2 }
+                   elif phase < 17 { action } else { 0 }
+  const ahead = if phase == 18 or phase == 19 or phase == 22 { 1 } elif phase == 20 { 2 }
+                elif phase < 17 { action } else { 0 }
+  const replay = phase == 19 or phase == 21 or phase == 22
+  const fetchLink = if phase >= 17 { 0xaa } else { (endPC+2)#[0..<C.xLen] }
+  const b = predictor<C>(`clock`=clk, clear=U1(phase == 0 or phase == 14), pc=0x40, replace=U1(install),
+      install=1, branchPC=endPC, destination=0x80, resolve=0, taken=1, branchIndex=0,
+      advance=false, direction=0, restore=replay, rasAction=resolved,
+      fetchAction=ahead, fetchLink=fetchLink)
+  const want = match phase {
+    in (2, 3, 4, 5, 6, 12, 13) { high | ((phase << 2)+2) }
+    == 7 { high | 26 }
+    == 8 { if C.nRAS == 1 { 0x80 } else { high | 18 } }
+    == 9 { if C.nRAS == 1 { 0x80 } else { high | 14 } }
+    == 18 { 0xaa }
+    in (19,21) { high | 78 }
+    in (20,22,23) { if C.nRAS > 1 { high | 70 } else { 0x80 } }
+    else { 0x80 }
+  }
+  // Sample on the active edge to check the target offered to the concurrent fetch.
+  reg result:Bool = false
+  if phase != 0 and !install and phase != 14 { result = b.predict != 0 and b.target == want }
+  else { result = true }
+  correct = result
+}
+
+pub mod return_stack(clk:Clock, phase:U5) -> (correct:Bool@[]) {
+  correct = check<one>(clk=clk, phase=phase) and check<three>(clk=clk, phase=phase)
+}
+
+test return_stack.wrap_and_exchange {
+  mut d = return_stack
+  tick 24 {
+    d.phase = clock
+    step
+    assert(d.correct, "same-cycle stack target, wraparound or fallback")
+  }
+}

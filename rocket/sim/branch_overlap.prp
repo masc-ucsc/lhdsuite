@@ -1,0 +1,38 @@
+const boot = import("BootROM.BootROM")
+const configs = import("../pyrope2/RocketConfig")
+comptime const cfg = configs.params(btbEntries=16)
+
+// The JALR at 0x10052 and the ADDI at 0x10054 share a halfword. Executing
+// the JALR trains a taken prediction for slot zero of the next fetch word.
+pub mod branch_overlap(clk:Clock, rst:Reset) -> (success:Bool@[], trap:U1@[]) {
+  const program:[16]U32 = (
+    0x00000317, // auipc t1,0
+    0x01c30313, // addi t1,t1,28
+    0x00a0006f, // jump to the straddling JALR
+    0x00100073, // ebreak
+    0x00670001, // c.nop / JALR first half
+    0x02a00093, // JALR last half / ADDI upper immediate
+    0x02a00113, // li sp,42
+    0x00209663, // bne ra,sp,fail
+    0x0000006f, // success
+    0xff1ff06f, // jump to ADDI at 0x10054
+    0x00100073, // ebreak
+    0, 0, 0, 0, 0
+  )
+  const tile = boot<cfg>(clk=clk, rst=rst, program=program, successPC=0x10060)
+  success = tile.success
+  trap = tile.trap
+}
+test branch_overlap.realign {
+  mut d = branch_overlap
+  mut completed = false
+  tick 100 {
+    d.rst = clock < 4
+    step
+    if clock > 4 {
+      assert(d.trap == 0, "overlapping decode must retire ADDI with its original immediate")
+      if d.success { completed = true }
+    }
+  }
+  assert(completed, "ADDI wrote 42")
+}
