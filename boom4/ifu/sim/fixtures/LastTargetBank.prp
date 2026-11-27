@@ -1,0 +1,39 @@
+const stages = import("../../pyrope/PredictorResponse")
+
+// Learn the supplied destination and return the saved training metadata on lookup.
+pub mod lastTarget<C>(clock:Clock, reset:Reset, fetch:U1, pc:Unsigned(bits=C.addrBits), mask:U4,
+    history:Unsigned(bits=C.globalHistoryLength), fire:U1, update:stages.Update<C.addrBits>,
+    updateHistory:Unsigned(bits=C.globalHistoryLength), updateMeta:Unsigned(bits=C.bankMetaBits)) ->
+    (metadata:Unsigned(bits=C.bankMetaBits)@[], f1:stages.Prediction<C.addrBits>@[], f2:stages.Prediction<C.addrBits>@[],
+     f3:stages.Prediction<C.addrBits>@[], jumps:U4@[]) {
+  reg tag:Unsigned(bits=C.addrBits-3) = nil
+  reg dest:Unsigned(bits=C.addrBits) = nil
+  reg lane:U2 = nil
+  reg trained:U1 = nil
+  reg saved:Unsigned(bits=C.bpdMaxMetaLength) = nil
+  if reset { trained = 0 }
+  elif (update.valid & update.cfiValid & update.branch & update.taken) != 0 {
+    tag = update.pc#[3..<C.addrBits]
+    lane = update.cfi
+    dest = update.target
+    saved = updateMeta#[0..+C.bpdMaxMetaLength]
+    trained = 1
+  }
+  reg hit1:U4 = nil
+  reg hit2:U4 = nil
+  reg hit3:U4 = nil
+  reg target1:Unsigned(bits=4*C.addrBits) = nil
+  reg target2:Unsigned(bits=4*C.addrBits) = nil
+  reg target3:Unsigned(bits=4*C.addrBits) = nil
+  hit1 = if (fetch & trained) != 0 and pc#[3..<C.addrBits] == tag { mask & (1 << lane) } else { 0 }
+  hit2 = hit1
+  hit3 = hit2
+  target1 = dest << (C.addrBits*lane)
+  target2 = target1
+  target3 = target2
+  f1 = (taken=0, branch=0, valid=0, target=0)
+  f2 = f1
+  f3 = (taken=hit3, branch=hit3, valid=hit3, target=target3)
+  jumps = 0
+  metadata = saved
+}

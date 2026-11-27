@@ -1,0 +1,52 @@
+const pool = import("PhysicalFreeList.PhysicalFreeList")
+
+// Physical register low bits select the bank. Rotate the bank-to-lane mapping
+// each cycle, including stalls, as in BOOM's column-based rename allocator.
+pub mod BankedPhysicalFreeList<width, physical, branches>(clock:Clock, reset:U1, initial:Unsigned(bits=physical),
+    requests:Unsigned(bits=width), releaseValid:Unsigned(bits=width), releaseRegs:Unsigned(bits=width*std.clog2(physical)),
+    commitValid:Unsigned(bits=width), commitRegs:Unsigned(bits=width*std.clog2(physical)),
+    snap:Unsigned(bits=width+1), tags:Unsigned(bits=(width+1)*std.clog2(branches)),
+    mispredict:U1, recover:Unsigned(bits=std.clog2(branches)), rollback:U1) ->
+    (valid:Unsigned(bits=width)@[], regs:Unsigned(bits=width*std.clog2(physical))@[], debug:Unsigned(bits=physical)@[]) {
+  cassert(width > 1 and width == 1 << std.clog2(width) and physical%width == 0 and physical > width)
+  comptime const bankBits = std.clog2(width)
+  comptime const localSize = physical/width
+  comptime const localBits = std.clog2(localSize)
+  comptime const p = std.clog2(physical)
+  comptime const b = std.clog2(branches)
+  reg rotation:Unsigned(bits=bankBits) = nil
+  wrap rotation = if reset != 0 { 0 } else { rotation+1 }
+  assert(snap#+[0..=width] <= 1, "banked rename takes one branch checkpoint per group")
+  mut tag:Unsigned(bits=b) = 0
+  for i in 0..=width { if snap#[i] != 0 { tag = tags#[(i*b)..+b] } }
+  valid = 0
+  regs = 0
+  debug = 0
+  for bank in 0..<width {
+    const lane = (rotation-bank)#[0..+bankBits]
+    mut startup:Unsigned(bits=localSize) = 0
+    for i in 0..<localSize { startup#[i] = initial#[(i*width)+bank] }
+    mut releaseEn:Unsigned(bits=width) = 0
+    mut commitEn:Unsigned(bits=width) = 0
+    mut releases:Unsigned(bits=width*localBits) = 0
+    mut commits:Unsigned(bits=width*localBits) = 0
+    for i in 0..<width {
+      const returning = releaseRegs#[(i*p)..+p]
+      const retiring = commitRegs#[(i*p)..+p]
+      releaseEn#[i] = releaseValid#[i] & U1(returning#[0..+bankBits] == bank)
+      commitEn#[i] = commitValid#[i] & U1(retiring#[0..+bankBits] == bank)
+      releases#[(i*localBits)..+localBits] = returning#[bankBits..+localBits]
+      commits#[(i*localBits)..+localBits] = retiring#[bankBits..+localBits]
+    }
+    // A snapshot after any earlier lane includes this lane's allocation.
+    const younger = (snap & (((1 << lane)-1) << 1)) != 0
+    const checkpoint = if snap == 0 { 0 } elif younger { 1 } else { 2 }
+    const result = pool<width=1, returns=width, physical=localSize, branches=branches>(clock=clock, reset=reset,
+        initial=startup, requests=requests#[lane], releaseValid=releaseEn, releaseRegs=releases,
+        commitValid=commitEn, commitRegs=commits, snap=checkpoint, tags=(tag << b) | tag,
+        mispredict=mispredict, recover=recover, rollback=rollback)
+    valid#[lane] = result.valid
+    regs#[(lane*p)..+p] = (result.regs << bankBits) | bank
+    for i in 0..<localSize { debug#[(i*width)+bank] = result.debug#[i] }
+  }
+}

@@ -1,0 +1,177 @@
+const device = import("../pyrope/PlatformInterrupts.PlatformInterrupts")
+
+// Two harts, with an S context on hart one. Device 33 exercises a second enable word.
+pub mod interrupt_mmio(
+  clock:Clock,
+  reset:Reset,
+  tickRtc:Bool,
+  levels:U33,
+  valid:Bool,
+  packet:U40,
+  address:U32,
+  data:U64,
+  take:Bool,
+) -> (irq:U64@[], meta:U40@[], ready:Bool@[], response:U64@[], validOut:Bool@[]) {
+  const d = device<harts=2, sources=33, supervisors=2>(
+    clock,
+    reset,
+    tickRtc,
+    devices=levels,
+    valid,
+    packet,
+    address,
+    data,
+    readyOut=take,
+  )
+  irq      = d.interrupts
+  response = d.dataOut
+  meta     = d.packetOut
+  validOut = d.validOut
+  ready    = d.ready
+}
+
+test interrupt_mmio.shared {
+  mut d = interrupt_mmio
+  tick 60 {
+    d.reset   = clock < 2
+    d.tickRtc = false
+    d.levels  = if clock >= 9 and clock < 23 { (1 << 32) | 1 } elif clock >= 41 { 1 } else { 0 }
+    d.take    = clock != 14 and clock != 15
+    d.valid   = false
+    d.address = 0
+    d.data    = 0
+    mut read:U1   = 0
+    mut mask:U8   = 15
+    mut origin:U5 = 1
+    if clock == 3 {
+      d.address = 0x02000004
+      d.data    = 1
+      d.valid   = true
+    }
+    if clock == 5 {
+      d.address = 0x0c000004
+      d.data    = 2
+      d.valid   = true
+    }
+    if clock == 7 {
+      d.address = 0x0c000084
+      d.data    = 2
+      d.valid   = true
+    }
+    if clock == 9 {
+      d.address = 0x0c002100
+      d.data    = 2
+      d.valid   = true
+    }
+    if clock == 11 {
+      d.address = 0x0c002104
+      d.data    = 2
+      d.valid   = true
+    }
+    if clock == 13 or clock == 18 or clock == 21 or clock == 27 {
+      d.address = 0x0c202004
+      read      = 1
+      d.valid   = true
+    }
+    if clock == 24 {
+      d.address = 0x0c202004
+      d.data    = 1
+      d.valid   = true
+    }
+    if clock == 30 {
+      d.address = 0x02004008
+      d.data    = 0x123456789abcdeff
+      mask      = 255
+      origin    = 13
+      d.valid   = true
+    }
+    if clock == 32 {
+      d.address = 0x02004009
+      d.data    = 0xab00
+      mask      = 2
+      origin    = 13
+      d.valid   = true
+    }
+    if clock == 34 {
+      d.address = 0x02004008
+      read      = 1
+      mask      = 255
+      origin    = 13
+      d.valid   = true
+    }
+    if clock == 36 {
+      d.address = 0x0200bff8
+      d.data    = 0x123456789abcabff
+      mask      = 255
+      origin    = 13
+      d.valid   = true
+    }
+    if clock == 38 {
+      d.address = 0x02000004
+      d.data    = 0
+      d.valid   = true
+    }
+    if clock == 40 {
+      d.address = 0x0c202000
+      d.data    = 2
+      d.valid   = true
+    }
+    if clock == 44 or clock == 49 or clock == 54 {
+      d.address = 0x0c202004
+      read      = 1
+      d.valid   = true
+    }
+    if clock == 46 or clock == 51 {
+      d.address = if clock == 46 { 0x0c201004 } else { 0x0c202004 }
+      d.data    = 1
+      d.valid   = true
+    }
+    if clock == 57 {
+      d.address = 0x02000004
+      read      = 1
+      d.valid   = true
+    }
+    d.packet = (origin << 35)
+      | (17 << 30)
+      | (read << 25)
+      | ((if mask == 255 { 3 } elif mask == 2 { 0 } else { 2 }) << 19)
+      | (5 << 13)
+      | (mask << 2)
+      | (U1(clock == 57) << 1)
+    step
+    if clock == 4 {
+      assert(d.irq#[4] == 1 and d.irq#[0] == 0, "RV32 store to hart one's MSIP")
+    }
+    if clock == 12 {
+      assert(d.irq#[7] == 1 and (d.irq & 0x44) == 0, "only the configured supervisor context receives IRQ")
+    }
+    if clock >= 13 and clock <= 15 {
+      assert(d.validOut and not d.ready and d.response == 1, "stalled claim retains the lowest ID on a tie")
+      assert(d.meta#[30..+5] == 1 and d.meta#[13..+3] == 5 and d.meta#[23..+4] == 1)
+    }
+    if clock == 18 {
+      assert(d.response == 33, "second enable word claims device 33")
+    }
+    if clock == 21 or clock == 27 {
+      assert(d.response == 0, "in-flight devices cannot be claimed twice")
+    }
+    if clock == 34 {
+      assert(d.response == 0x123456789abcabff, "byte write preserved the rest of mtimecmp")
+    }
+    if clock == 37 {
+      assert(d.irq#[5] == 1, "MTIP when shared time reaches the deadline")
+    }
+    if clock == 44 or clock == 54 {
+      assert(d.irq#[7] == 0 and d.response == 1, "equal threshold masks notification and permits claim")
+    }
+    if clock == 49 {
+      assert(d.response == 0, "a disabled context cannot rearm the device")
+    }
+    if clock == 57 {
+      assert(d.validOut and d.meta#[0..+2] == 3, "a denied Get returns corrupt data")
+    }
+    if clock == 39 {
+      assert(d.irq#[4] == 0, "clear hart one's MSIP")
+    }
+  }
+}

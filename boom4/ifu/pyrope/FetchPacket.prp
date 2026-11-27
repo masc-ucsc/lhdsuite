@@ -1,0 +1,67 @@
+const expand = import("RVCExpander.RVCExpander")
+
+pub comb address<banks=1, addrBits=40>(pc:Unsigned(bits=addrBits)) -> (bankMask:Unsigned(bits=banks), mask:Unsigned(bits=4*banks), nextPc:Unsigned(bits=addrBits)) {
+  cassert(banks == 1 or banks == 2)
+  const single = banks == 1 or pc#[3..+3] == 7
+  bankMask = if single { 1 } else { 3 }
+  wrap mask   = (if single { 15 } else { 255 }) & ((-1) << pc#[1..+2])
+  wrap nextPc = (pc & ~7) + (if single { 8 } else { 16 })
+}
+
+// A full-length instruction beginning at the last halfword of a bank is
+// delivered in lane zero of the next bank, with the original PC.
+pub comb unpack<banks=1, useCompressed=true, addrBits=40>(
+  data:Unsigned(bits=64*banks),
+  pc:Unsigned(bits=addrBits),
+  previousHalf:U16,
+  previousValid:U1,
+  valid:U1,
+) -> (
+  edges:Unsigned(bits=banks),
+  endHalf:U16,
+  endValid:U1,
+  expanded:Unsigned(bits=128*banks),
+  mask:Unsigned(bits=4*banks),
+  pcs:Unsigned(bits=4*addrBits*banks),
+  raw:Unsigned(bits=128*banks),
+) {
+  const fetch = address<banks=banks, addrBits=addrBits>(pc)
+  endValid = previousValid
+  endHalf  = previousHalf
+  mask     = 0
+  raw      = 0
+  expanded = 0
+  pcs      = 0
+  edges    = 0
+  for bank in 0..<banks {
+    const edge = endValid
+    edges#[bank] = edge
+    mut consumed:Bool = false
+    for w in 0..<4 {
+      const i   = 4*bank + w
+      const low = data#[(16*i)..+16]
+      mut inst:U32 = low
+      if w != 3 {
+        inst = data#[(16*i)..+32]
+      }
+      if w == 0 and edge != 0 {
+        inst = (low << 16) | endHalf
+      }
+      const full     = inst#[0..+2] == 3
+      const trailing = w == 3 and full
+      const start    = valid != 0 and fetch.mask#[i] != 0 and not consumed and not trailing
+      mask#[i]          = U1(start)
+      raw#[(32*i)..+32] = inst
+      if useCompressed {
+        const decoded = expand(io_in=inst)
+        expanded#[(32*i)..+32] = if decoded.io_rvc != 0 { decoded.io_out_bits } else { inst }
+      } else { expanded#[(32*i)..+32] = inst }
+      wrap pcs#[(addrBits*i)..+addrBits] = (pc & ~7) + 2*i - (if w == 0 and edge != 0 { 2 } else { 0 })
+      if w == 3 and fetch.bankMask#[bank] != 0 {
+        endHalf  = low
+        endValid = U1(trailing and not consumed)
+      }
+      consumed = start and full and (w != 0 or edge == 0)
+    }
+  }
+}

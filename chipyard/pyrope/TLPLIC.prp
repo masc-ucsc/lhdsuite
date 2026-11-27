@@ -1,184 +1,160 @@
-const Fifo = import("../../rocket/pyrope2/Queue.Queue")
-const LevelGateway = import("LevelGateway.LevelGateway")
-const PLICFanIn = import("PLICFanIn.PLICFanIn")
+const mmio      = import("InterruptMMIO")
+const arbitrate = import("PLICFanIn.winner")
+const gateway   = import("LevelGateway.LevelGateway")
 
-type Request = (read:U1, index:U24, data:U32, mask:U4, extra_tlrr_extra_source:U10, extra_tlrr_extra_size:U2)
-
-pub mod TLPLIC::[timecheck=false](clock:u1, reset:u1, auto_int_in_0:u1, auto_int_in_1:u1, auto_in_a_valid:u1, auto_in_a_bits_opcode:u4, auto_in_a_bits_param:u3, auto_in_a_bits_size:u2, auto_in_a_bits_source:u10, auto_in_a_bits_address:u28, auto_in_a_bits_mask:u4, auto_in_a_bits_data:u32, auto_in_a_bits_corrupt:u1, auto_in_d_ready:u1) -> (auto_int_out_0:u1@[], auto_in_a_ready:u1@[], auto_in_d_valid:u1@[], auto_in_d_bits_opcode:u4@[], auto_in_d_bits_size:u2@[], auto_in_d_bits_source:u10@[], auto_in_d_bits_data:u32@[]) {
-  reg priority_0:u2
-  reg priority_1:u2
-  reg threshold_0:u2
-  reg pending_0:u1
-  reg pending_1:u1
-  reg enables_0_0:u2
-  reg maxDevs_0:u2
-  reg intnodeOut_0_REG:u2
-  reg ep2:u2
-  const nodeIn_a_valid__w1 = auto_in_a_valid
-  const nodeIn_a_bits_opcode__w1 = auto_in_a_bits_opcode
-  const nodeIn_a_bits_size__w1 = auto_in_a_bits_size
-  const nodeIn_a_bits_source__w1 = auto_in_a_bits_source
-  const nodeIn_a_bits_address__w1 = auto_in_a_bits_address
-  const nodeIn_a_bits_mask__w1 = auto_in_a_bits_mask
-  const nodeIn_a_bits_data__w1 = auto_in_a_bits_data
-  const nodeIn_d_ready__w1 = auto_in_d_ready
-  const in_valid__w1 = nodeIn_a_valid__w1
-  const out_ready__w1 = nodeIn_d_ready__w1
-  const enableVec_0__w1 = enables_0_0
-  const pendingUInt__w1 = ((pending_1 & 1) << 1) | (pending_0 & 1)
-  mut _b2i_1 = if intnodeOut_0_REG > threshold_0 { 1 } else { 0 }
-  const out_front_bits_mask__w1 = nodeIn_a_bits_mask__w1
-  mut _rep_3:u8 = if ((out_front_bits_mask__w1 >> 1) & 1) != 0 { 0xff } else { 0 }
-  mut _rep_4:u8 = if (out_front_bits_mask__w1 & 1) != 0 { 0xff } else { 0 }
-  mut _rep_5:u8 = if ((out_front_bits_mask__w1 >> 3) & 1) != 0 { 0xff } else { 0 }
-  mut _rep_6:u8 = if ((out_front_bits_mask__w1 >> 2) & 1) != 0 { 0xff } else { 0 }
-  const out_frontMask__w1 = (((_rep_5 << 8) | _rep_6) << 16) | ((_rep_3 << 8) | _rep_4)
-  mut _b2i_7 = if out_frontMask__w1#[0..=1] != 0 { 1 } else { 0 }
-  mut _b2i_8 = if out_frontMask__w1#[0..=1] == 3 { 1 } else { 0 }
-  mut _b2i_9 = if out_frontMask__w1#[0..=1] != 0 { 1 } else { 0 }
-  mut _b2i_10 = if out_frontMask__w1#[0..=1] == 3 { 1 } else { 0 }
-  mut _b2i_11 = if out_frontMask__w1#[2..=31] != 0 { 1 } else { 0 }
-  mut _b2i_12 = if out_frontMask__w1#[2..=31] == 0x3fffffff { 1 } else { 0 }
-  mut _b2i_13 = if out_frontMask__w1#[1..=2] != 0 { 1 } else { 0 }
-  mut _b2i_14 = if out_frontMask__w1#[1..=2] == 3 { 1 } else { 0 }
-  mut _b2i_15 = if out_frontMask__w1 != 0 { 1 } else { 0 }
-  mut _b2i_16 = if out_frontMask__w1 == 0xffffffff { 1 } else { 0 }
-  mut _b2i_17 = if out_frontMask__w1#[0..=1] != 0 { 1 } else { 0 }
-  mut _b2i_18 = if out_frontMask__w1#[0..=1] == 3 { 1 } else { 0 }
-  const ep__w1 = enables_0_0 & pendingUInt__w1
-  mut fanin = PLICFanIn::[name=fanin](io_prio_0 = priority_0, io_prio_1 = priority_1, io_ip = enableVec_0__w1 & pendingUInt__w1)
-  const out_front_bits_read__w1 = unsigned(nodeIn_a_bits_opcode__w1 == 4)
-  const out_front_bits_index__w1 = nodeIn_a_bits_address__w1#[2..=25]
-  const out_findex__w1 = out_front_bits_index__w1 & 0xf7f3fe
-  const _out_T_10__w1 = unsigned(out_findex__w1 == 0)
-  const _out_T_2__w1 = unsigned(out_findex__w1 == 2)
-  const out_iindex__w1 = (((((out_front_bits_index__w1 >> 19) & 1) << 1) | ((out_front_bits_index__w1 >> 11) & 1)) << 2) | ((((out_front_bits_index__w1 >> 10) & 1) << 1) | (out_front_bits_index__w1 & 1))
-  const out_frontSel_0__w1 = unsigned(out_iindex__w1 == 0)
-  const out_frontSel_1__w1 = unsigned(out_iindex__w1 == 1)
-  const out_frontSel_2__w1 = unsigned(out_iindex__w1 == 2)
-  const out_frontSel_4__w1 = unsigned(out_iindex__w1 == 4)
-  const out_frontSel_8__w1 = unsigned(out_iindex__w1 == 8)
-  const out_frontSel_9__w1 = unsigned(out_iindex__w1 == 9)
-  const out_back_q = Fifo<Request, DEPTH=1>(clk=clock, rst=reset, offer=in_valid__w1,
-      take=out_ready__w1,
-      payload=(read=out_front_bits_read__w1, index=out_front_bits_index__w1, data=nodeIn_a_bits_data__w1,
-      mask=out_front_bits_mask__w1, extra_tlrr_extra_source=nodeIn_a_bits_source__w1,
-      extra_tlrr_extra_size=nodeIn_a_bits_size__w1))
-  const nodeIn_d_valid__w1 = out_back_q.valid
-  const out_bindex__w1 = out_back_q.head.index & 0xf7f3fe
-  const _out_T_11__w1 = unsigned(out_bindex__w1 == 0)
-  const _out_T_3__w1 = unsigned(out_bindex__w1 == 2)
-  mut _rep_39:u8 = if ((out_back_q.head.mask >> 1) & 1) != 0 { 0xff } else { 0 }
-  mut _rep_40:u8 = if (out_back_q.head.mask & 1) != 0 { 0xff } else { 0 }
-  mut _rep_41:u8 = if ((out_back_q.head.mask >> 3) & 1) != 0 { 0xff } else { 0 }
-  mut _rep_42:u8 = if ((out_back_q.head.mask >> 2) & 1) != 0 { 0xff } else { 0 }
-  const out_backMask__w1 = (((_rep_41 << 8) | _rep_42) << 16) | ((_rep_39 << 8) | _rep_40)
-  mut _b2i_43 = if out_backMask__w1#[0..=1] != 0 { 1 } else { 0 }
-  mut _b2i_44 = if out_backMask__w1#[0..=1] == 3 { 1 } else { 0 }
-  mut _b2i_45 = if out_backMask__w1#[0..=1] != 0 { 1 } else { 0 }
-  mut _b2i_46 = if out_backMask__w1#[0..=1] == 3 { 1 } else { 0 }
-  mut _b2i_47 = if out_backMask__w1#[2..=31] != 0 { 1 } else { 0 }
-  mut _b2i_48 = if out_backMask__w1#[2..=31] == 0x3fffffff { 1 } else { 0 }
-  mut _b2i_49 = if out_backMask__w1#[1..=2] != 0 { 1 } else { 0 }
-  mut _b2i_50 = if out_backMask__w1#[1..=2] == 3 { 1 } else { 0 }
-  mut _b2i_51 = if out_backMask__w1 != 0 { 1 } else { 0 }
-  mut _b2i_52 = if out_backMask__w1 == 0xffffffff { 1 } else { 0 }
-  const completerDev__w1 = out_back_q.head.data#[0..=1]
-  mut _b2i_53 = if out_backMask__w1#[0..=1] != 0 { 1 } else { 0 }
-  mut _b2i_54 = if out_backMask__w1#[0..=1] == 3 { 1 } else { 0 }
-  const out_oindex__w1 = (((((out_back_q.head.index >> 19) & 1) << 1) | ((out_back_q.head.index >> 11) & 1)) << 2) | ((((out_back_q.head.index >> 10) & 1) << 1) | (out_back_q.head.index & 1))
-  const out_backSel_0__w1 = unsigned(out_oindex__w1 == 0)
-  const out_backSel_1__w1 = unsigned(out_oindex__w1 == 1)
-  const out_backSel_2__w1 = unsigned(out_oindex__w1 == 2)
-  const out_backSel_4__w1 = unsigned(out_oindex__w1 == 4)
-  const out_backSel_8__w1 = unsigned(out_oindex__w1 == 8)
-  const out_backSel_9__w1 = unsigned(out_oindex__w1 == 9)
-  const _out_wifireMux_T__w1 = in_valid__w1 & out_back_q.ready & 1
-  const _out_rifireMux_T_1__w1 = _out_wifireMux_T__w1 & out_front_bits_read__w1 & 1
-  const _out_rifireMux_T_11__w1 = _out_rifireMux_T_1__w1 & out_frontSel_2__w1 & 1 & _out_T_10__w1 & 1
-  const _out_rifireMux_T_19__w1 = _out_rifireMux_T_1__w1 & out_frontSel_4__w1 & 1 & _out_T_10__w1 & 1
-  const _out_rifireMux_T_35__w1 = _out_rifireMux_T_1__w1 & out_frontSel_8__w1 & 1 & _out_T_10__w1 & 1
-  const _out_wifireMux_T_2__w1 = _out_wifireMux_T__w1 & (~out_front_bits_read__w1) & 1 & 1
-  const _out_wifireMux_T_12__w1 = _out_wifireMux_T_2__w1 & out_frontSel_2__w1 & 1 & _out_T_10__w1 & 1
-  const _out_wifireMux_T_20__w1 = _out_wifireMux_T_2__w1 & out_frontSel_4__w1 & 1 & _out_T_10__w1 & 1
-  const _out_wifireMux_T_36__w1 = _out_wifireMux_T_2__w1 & out_frontSel_8__w1 & 1 & _out_T_10__w1 & 1
-  const _out_wofireMux_T__w1 = out_back_q.valid & out_ready__w1 & 1
-  const _out_rofireMux_T_1__w1 = _out_wofireMux_T__w1 & out_back_q.head.read & 1
-  const _out_rofireMux_T_11__w1 = _out_rofireMux_T_1__w1 & out_backSel_2__w1 & 1 & _out_T_11__w1 & 1
-  const _out_rofireMux_T_19__w1 = _out_rofireMux_T_1__w1 & out_backSel_4__w1 & 1 & _out_T_11__w1 & 1
-  const _out_rofireMux_T_35__w1 = _out_rofireMux_T_1__w1 & out_backSel_8__w1 & 1 & _out_T_11__w1 & 1
-  const _out_wofireMux_T_2__w1 = _out_wofireMux_T__w1 & (~out_back_q.head.read) & 1 & 1
-  const _out_wofireMux_T_12__w1 = _out_wofireMux_T_2__w1 & out_backSel_2__w1 & 1 & _out_T_11__w1 & 1
-  const _out_wofireMux_T_20__w1 = _out_wofireMux_T_2__w1 & out_backSel_4__w1 & 1 & _out_T_11__w1 & 1
-  const _out_wofireMux_T_36__w1 = _out_wofireMux_T_2__w1 & out_backSel_8__w1 & 1 & _out_T_11__w1 & 1
-  const _out_out_bits_data_T_6__w1 = unsigned(out_oindex__w1 == 0)
-  mut _mux_77:u1 = if _out_out_bits_data_T_6__w1 != 0 { _out_T_3__w1 & 1 } else { (((~((((((((unsigned(out_oindex__w1 == 1) | unsigned(out_oindex__w1 == 2)) & 1) | unsigned(out_oindex__w1 == 4)) & 1) | unsigned(out_oindex__w1 == 8)) & 1) | unsigned(out_oindex__w1 == 9)) & 1)) & 1) | _out_T_11__w1) & 1 }
-  mut _mux_78:u32 = if out_oindex__w1 == 9 { maxDevs_0 } else { 0 }
-  mut _mux_79:u32 = if out_oindex__w1 == 8 { threshold_0 } else { _mux_78 }
-  mut _mux_80:u32 = if out_oindex__w1 == 4 { (enables_0_0 << 1) } else { _mux_79 }
-  mut _mux_81:u32 = if out_oindex__w1 == 2 { (((pending_1 & 1) << 2) | ((pending_0 & 1) << 1)) } else { _mux_80 }
-  mut _mux_82:u32 = if out_oindex__w1 == 1 { priority_0 } else { _mux_81 }
-  mut _mux_83:u32 = if _out_out_bits_data_T_6__w1 != 0 { priority_1 } else { _mux_82 }
-  mut _mux_84:u32 = if _mux_77 != 0 { _mux_83 } else { 0 }
-  const nodeIn_d_bits_size__w1 = out_back_q.head.extra_tlrr_extra_size
-  const nodeIn_d_bits_source__w1 = out_back_q.head.extra_tlrr_extra_source
-  const nodeIn_d_bits_opcode__w1 = (out_back_q.head.read & 1)
-  const nodeIn_a_ready__w1 = out_back_q.ready
-  const nodeIn_d_bits_data__w1 = _mux_84
-  const claimer_0__w1 = (_out_rofireMux_T_1__w1 & out_backSel_9__w1 & 1 & _out_T_11__w1 & 1) & _b2i_51 & 1
-  const completer_0__w1 = ((_out_wofireMux_T_2__w1 & out_backSel_9__w1 & 1 & _out_T_11__w1 & 1) & _b2i_52 & 1) & ((enableVec_0__w1 << 1) >> completerDev__w1) & 1 & 1
-  mut _b2i_85 = if maxDevs_0 != 0 { 1 } else { 0 }
-  const claimed__w1 = claimer_0__w1 & _b2i_85 & 1
-  mut _mux_86:u2 = if claimer_0__w1 != 0 { maxDevs_0 } else { 0 }
-  const claimedDevs_shiftAmount__w1 = _mux_86
-  mut _b2i_87 = if claimedDevs_shiftAmount__w1 == 0 { 1 } else { 0 }
-  mut _b2i_88 = if claimedDevs_shiftAmount__w1 == 1 { 1 } else { 0 }
-  const claimedDevs_1__w1 = _b2i_88
-  mut _b2i_89 = if claimedDevs_shiftAmount__w1 == 2 { 1 } else { 0 }
-  const claimedDevs_2__w1 = _b2i_89
-  mut _mux_90:u3 = if completer_0__w1 != 0 { (1 << completerDev__w1)#[0..=3]#[0..=2] } else { 0 }
-  const completedDevs__w1 = _mux_90
-  mut gateways_gateway = LevelGateway::[name=gateways_gateway](clock = clock, reset = reset, io_interrupt = auto_int_in_0, io_plic_ready = (~pending_0) & 1, io_plic_complete = (completedDevs__w1 >> 1) & 1)
-  mut gateways_gateway_1 = LevelGateway::[name=gateways_gateway_1](clock = clock, reset = reset, io_interrupt = auto_int_in_1, io_plic_ready = (~pending_1) & 1, io_plic_complete = (completedDevs__w1 >> 2) & 1)
-  if reset != 0 {
-    priority_0 = 0
-    priority_1 = 0
-    threshold_0 = 0
-    pending_0 = 0
-    pending_1 = 0
-    enables_0_0 = 0
-    maxDevs_0 = 0
-    intnodeOut_0_REG = 0
-  } else {
-    if ((_out_wofireMux_T_2__w1 & out_backSel_1__w1 & 1 & _out_T_11__w1 & 1) & _b2i_54 & 1) != 0 {
-      priority_0 = out_back_q.head.data#[0..=1]
-    }
-    if ((_out_wofireMux_T_2__w1 & out_backSel_0__w1 & 1 & _out_T_3__w1 & 1) & _b2i_44 & 1) != 0 {
-      priority_1 = out_back_q.head.data#[0..=1]
-    }
-    if (_out_wofireMux_T_36__w1 & _b2i_46 & 1) != 0 {
-      threshold_0 = out_back_q.head.data#[0..=1]
-    }
-    if ((claimedDevs_1__w1 | gateways_gateway) & 1) != 0 {
-      pending_0 = (~claimedDevs_1__w1) & 1
-    }
-    if ((claimedDevs_2__w1 | gateways_gateway_1) & 1) != 0 {
-      pending_1 = (~claimedDevs_2__w1) & 1
-    }
-    if (_out_wofireMux_T_20__w1 & _b2i_50 & 1) != 0 {
-      enables_0_0 = out_back_q.head.data#[1..=2]
-    }
-    maxDevs_0 = fanin.io_dev
-    intnodeOut_0_REG = fanin.io_max
-    if ((claimed__w1 | completer_0__w1) & 1) != 0 {
+mod target<sources, priorityBits>(
+  address:U32,
+  bus:mmio.Access,
+  c:U32,
+  clock:Clock,
+  pending:Unsigned(bits=sources),
+  priorities:Unsigned(bits=sources*priorityBits),
+  reset:Reset,
+) -> (claimed:U32@[], completed:Unsigned(bits=sources)@[], interrupt:U1@[], readData:U64@[]) {
+  readData  = 0
+  claimed   = 0
+  completed = 0
+  reg enabled:Unsigned(bits=sources)        = 0
+  reg threshold:Unsigned(bits=priorityBits) = 0
+  const best = arbitrate<bits=priorityBits, sources=sources>(eligible=enabled & pending, priorities)
+  reg irqPriority:Unsigned(bits=priorityBits) = 0
+  irqPriority = best.priority
+  interrupt   = U1(irqPriority > threshold)
+  for i in 0..<sources {
+    const id = i + 1
+    if address == 0x2000 + 128*c + (id/64)*8 {
+      readData#[id%64] = enabled#[i]
+      if bus.writeMask#[(id%64)/8] != 0 {
+        enabled#[i] = bus.data#[id%64]
+      }
     }
   }
-  ep2 = ep__w1
-  auto_int_out_0 = _b2i_1
-  auto_in_a_ready = nodeIn_a_ready__w1
-  auto_in_d_valid = nodeIn_d_valid__w1
-  auto_in_d_bits_opcode = nodeIn_d_bits_opcode__w1
-  auto_in_d_bits_size = nodeIn_d_bits_size__w1
-  auto_in_d_bits_source = nodeIn_d_bits_source__w1
-  auto_in_d_bits_data = nodeIn_d_bits_data__w1
+  if address == 0x200000 + 4096*c {
+    readData = (U64(best.id) << 32) | threshold
+    if bus.writeMask#[0] != 0 {
+      threshold = bus.data#[0..+priorityBits]
+    }
+    if bus.readMask#[4..+4] == 15 {
+      claimed = best.id
+    }
+    if bus.writeMask#[4..+4] == 15 {
+      for i in 0..<sources {
+        if bus.data#[32..+32] == i + 1 {
+          completed#[i] = enabled#[i]
+        }
+      }
+    }
+  }
+}
+
+pub mod registers<contexts=1, sources=2, priorityBits=2>(
+  bus:mmio.Access,
+  clock:Clock,
+  levels:Unsigned(bits=sources),
+  reset:Reset,
+) -> (data:U64@[], irq:Unsigned(bits=contexts)@[]) {
+  cassert(sources >= 1 and sources <= 1023 and contexts >= 1 and contexts <= 15872)
+  cassert(priorityBits >= 1 and priorityBits <= 8)
+  const address = bus.address & 0x3fffff8
+  reg pending:Unsigned(bits=sources) = 0
+  mut priorities:Unsigned(bits=sources*priorityBits) = 0
+  mut claimed:U32                                    = 0
+  mut completed:Unsigned(bits=sources)               = 0
+  data = 0
+  for i in 0..<sources {
+    const id   = i + 1
+    const lane = (id%2)*32
+    reg priority:Unsigned(bits=priorityBits) = 0
+    if address == ((4*id) & ~7) {
+      data#[lane..+priorityBits] = priority
+      if bus.writeMask#[(id%2)*4] != 0 {
+        priority = bus.data#[lane..+priorityBits]
+      }
+    }
+    if address == 0x1000 + (id/64)*8 {
+      data#[id%64] = pending#[i]
+    }
+    priorities#[(i*priorityBits)..+priorityBits] = priority
+  }
+  for c in 0..<contexts {
+    const dest = target<priorityBits=priorityBits, sources=sources>(address, bus, c, clock, pending, priorities, reset)
+    irq#[c]   = dest.interrupt
+    data      = data | dest.readData
+    claimed   = claimed | dest.claimed
+    completed = completed | dest.completed
+  }
+  for i in 0..<sources {
+    const request = gateway(
+      clock,
+      reset,
+      io_interrupt=levels#[i],
+      io_plic_ready=~pending#[i],
+      io_plic_complete=completed#[i],
+    )
+    if claimed == i + 1 {
+      pending#[i] = 0
+    } elif request != 0 {
+      pending#[i] = 1
+    }
+  }
+}
+
+pub mod TLPLIC::[
+  timecheck=false
+](
+  auto_in_a_bits_address:U28,
+  auto_in_a_bits_corrupt:U1,
+  auto_in_a_bits_data:U32,
+  auto_in_a_bits_mask:U4,
+  auto_in_a_bits_opcode:U4,
+  auto_in_a_bits_param:U3,
+  auto_in_a_bits_size:U2,
+  auto_in_a_bits_source:U10,
+  auto_in_a_valid:U1,
+  auto_in_d_ready:U1,
+  auto_int_in_0:U1,
+  auto_int_in_1:U1,
+  clock:Clock,
+  reset:U1,
+) -> (
+  auto_in_a_ready:U1@[],
+  auto_in_d_bits_data:U32@[],
+  auto_in_d_bits_opcode:U4@[],
+  auto_in_d_bits_size:U2@[],
+  auto_in_d_bits_source:U10@[],
+  auto_in_d_valid:U1@[],
+  auto_int_out_0:U1@[],
+) {
+  reg full:Bool:[async=false, initial=false, reset_pin=reset] = nil
+  reg result:U32                                              = nil
+  reg source:U10                                              = nil
+  reg size:U2                                                 = nil
+  reg opcode:U4                                               = nil
+  auto_in_a_ready = U1(not full or auto_in_d_ready != 0)
+  const fire   = auto_in_a_valid != 0 and auto_in_a_ready != 0 and reset == 0
+  const read   = auto_in_a_bits_opcode == 4
+  const bus    = mmio.fromWord(
+    address=auto_in_a_bits_address,
+    data=auto_in_a_bits_data,
+    mask=auto_in_a_bits_mask,
+    read=fire and read,
+    write=fire and auto_in_a_bits_opcode <= 1 and auto_in_a_bits_corrupt == 0,
+  )
+  const device = registers(bus, clock, levels=(auto_int_in_1 << 1) | auto_int_in_0, reset=Bool(reset))
+  auto_int_out_0 = device.irq
+
+  if fire {
+    full   = true
+    source = auto_in_a_bits_source
+    size   = auto_in_a_bits_size
+    opcode = U1(read)
+    result = if auto_in_a_bits_address#[2] != 0 { device.data#[32..+32] } else { device.data#[0..+32] }
+  } elif auto_in_d_ready != 0 {
+    full = false
+  }
+  auto_in_d_valid       = U1(full)
+  auto_in_d_bits_data   = result
+  auto_in_d_bits_source = source
+  auto_in_d_bits_size   = size
+  auto_in_d_bits_opcode = opcode
 }

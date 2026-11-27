@@ -1,0 +1,60 @@
+// virtual_memory.S transfers from the boot ROM to the high supervisor mapping.
+const tile = import("lg:BoomTile")
+test tile.virtual(levels:U3=4) {
+  const shift = if levels == 4 { 42 } else { 50 }
+  const leaf = 0x80010000 + (levels-1)*4096
+  mut d = tile
+  mut beats:U4 = 0
+  mut line:U32 = 0
+  mut source:U8 = 0
+  mut op:U3 = 0
+  mut size:U4 = 0
+  mut success:Bool = false
+  tick 3000 {
+    d.reset = clock < 4
+    d.auto_hartid_in = shift
+    d.auto_buffer_out_a_ready = U1(beats == 0)
+    d.auto_buffer_out_c_ready = 1
+    d.auto_buffer_out_e_ready = 1
+    d.auto_buffer_out_d_valid = U1(beats != 0)
+    d.auto_buffer_out_d_bits_opcode = if op == 4 { 1 } else { 5 }
+    d.auto_buffer_out_d_bits_size = size
+    d.auto_buffer_out_d_bits_source = source
+    d.auto_buffer_out_d_bits_param = 0
+    const address = line + ((if size == 6 { 8 } else { 1 })-beats)*8
+    d.auto_buffer_out_d_bits_data = if address == 0x80000000 { 0x0802b20300000297 }
+      elif address == 0x80000008 { 0x0000006f00120313 }
+      elif address == 0x80000080 { 41 }
+      elif address >= 0x80010000 and address < leaf { (((address >> 12)+1) << 10) | 1 }
+      elif address >= leaf and address < leaf+4096 { (0x80000 << 10) | 0xcf }
+      elif address == 65536 { 0x3b029073fff00293 }
+      elif address == 65544 { 0x3a02907300f00293 }
+      elif address == 65552 { 0x00100293f1402373 }
+      elif address == 65560 { 0x3002907300b29293 }
+      elif address == 65568 { 0x006292b300100293 }
+      elif address == 65576 { 0x02a0039334129073 }
+      elif address == 65584 { 0x0073046300900293 }
+      elif address == 65592 { 0x03c2929300a00293 }
+      elif address == 65600 { 0x0103031b00080337 }
+      elif address == 65608 { 0x180290730062e2b3 }
+      elif address == 65616 { 0x3020007312000073 }
+      else { 0x0000001300000013 }
+    if beats == 0 and d.auto_buffer_out_a_valid != 0 {
+      line = d.auto_buffer_out_a_bits_address
+      op = d.auto_buffer_out_a_bits_opcode
+      source = d.auto_buffer_out_a_bits_source
+      size = d.auto_buffer_out_a_bits_size
+      beats = if size == 6 { 8 } else { 1 }
+    } elif beats != 0 and d.auto_buffer_out_d_ready != 0 { wrap beats = beats - 1 }
+    step
+    if d.traceEvents#[0] != 0 {
+      const pc = d.traceEvents#[1..+64]
+      const result = d.traceEvents#[97..+64]
+      if pc == (1 << shift)+8 and result == 42 {
+        assert(d.traceStatus.privilege == 1, "high-address retirement must be in supervisor mode")
+        success = true
+      }
+    }
+  }
+  assert(success,"supervisor load and dependent add must retire at the high virtual address")
+}

@@ -1,0 +1,24 @@
+// A branch can predicate its shadow when both fetch packets contain only
+// shadowable instructions under its mask and its target starts an instruction.
+pub comb ShortForwardBranch<width=4, enabled=true>(
+  current:Unsigned(bits=width), following:Unsigned(bits=width), possible:Unsigned(bits=width),
+  masks:Unsigned(bits=2*width*width), targets:Unsigned(bits=width*std.clog2(4*width)),
+  predicted:U1, predictedLane:Unsigned(bits=std.clog2(width)), currentHalf:U1, followingHalf:U1,
+) -> (eligible:Unsigned(bits=width), selected:Unsigned(bits=std.clog2(width)), shadow:Unsigned(bits=2*width)) {
+  comptime const targetBits = std.clog2(4*width)
+  eligible = 0
+  selected = width-1
+  shadow = masks#[((width-1)*2*width)..+(2*width)]
+  for i in 0..<width {
+    const lane = width-1-i
+    const mask = masks#[(lane*2*width)..+(2*width)]
+    const target = targets#[(lane*targetBits)..+targetBits]
+    const startsInstruction = (target != 0 or followingHalf == 0) and (target != 2*width or currentHalf == 0)
+    if enabled and possible#[lane] != 0 and (predicted == 0 or predictedLane != lane) and startsInstruction and
+       (mask#[0..+width] & ~current) == 0 and (mask#[width..+width] & ~following) == 0 {
+      eligible#[lane] = 1
+      selected = lane
+      shadow = mask
+    }
+  }
+}

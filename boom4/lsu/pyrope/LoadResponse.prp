@@ -1,0 +1,27 @@
+// Both integer writeback and its non-speculative wakeup use the same
+// completion. The five-cycle load-use path resolves branches at its register.
+pub mod LoadResponse<fast=false, branches=8, robBits=5, pregBits=6>(
+    clock:Clock, valid:U1, mask:Unsigned(bits=branches), rob:Unsigned(bits=robBits),
+    dst:Unsigned(bits=pregBits), kind:U2, data:U64, mispredict:Unsigned(bits=branches),
+    resolve:Unsigned(bits=branches), exception:U1) ->
+    (done:U1@[], live:Unsigned(bits=branches)@[], tag:Unsigned(bits=robBits)@[],
+     pdst:Unsigned(bits=pregBits)@[], rtype:U2@[], value:U64@[]) {
+  if fast {
+    done = valid
+    live = mask
+    tag = rob
+    pdst = dst
+    rtype = kind
+    value = data
+  } else {
+    reg result:(valid:U1, mask:Unsigned(bits=branches), rob:Unsigned(bits=robBits), dst:Unsigned(bits=pregBits), kind:U2, data:U64) = nil
+    result = (valid=valid & U1((mask & mispredict) == 0 and exception == 0), mask=mask & ~resolve,
+              rob=rob, dst=dst, kind=kind, data=data)
+    done = result.valid
+    live = result.mask
+    tag = result.rob
+    pdst = result.dst
+    rtype = result.kind
+    value = result.data
+  }
+}

@@ -1,0 +1,70 @@
+// Conditional branches that remain branches after SFB folding, and JALR,
+// allocate snapshots. Direct jumps have a known target at decode.
+pub comb allocating<width>(brType:Unsigned(bits=4*width), sfb:Unsigned(bits=width)) -> (lanes:Unsigned(bits=width)) {
+  lanes = 0
+  for i in 0..<width {
+    const kind = brType#[(4*i)..+4]
+    lanes#[i] = U1((kind >= 1 and kind <= 6 and sfb#[i] == 0) or kind == 8)
+  }
+}
+
+pub mod BranchMaskGenerationLogic<width=1, tags=8>(
+  branches:Unsigned(bits=width),
+  clock:Clock,
+  fire:Unsigned(bits=width),
+  flush:U1,
+  mispredict:U1,
+  reset:U1,
+  resolved:Unsigned(bits=tags),
+  surviving:Unsigned(bits=tags),
+) -> (tag:Unsigned(bits=width*std.clog2(tags))@[], mask:Unsigned(bits=width*tags)@[], full:Unsigned(bits=width)@[]) {
+  cassert(width > 0 and tags >= 2)
+  comptime const tagBits = std.clog2(tags)
+  reg active:Unsigned(bits=tags) = nil
+  mut reserved = active
+  mut accepted = active
+  tag  = 0
+  mask = 0
+  full = 0
+  if width == 1 {
+    const bit = (~active) & (active + 1)
+    for i in 0..<tags {
+      if bit#[i] != 0 {
+        tag = i
+      }
+    }
+    mask = active & ~resolved
+    full = branches & U1(active == (1 << tags) - 1)
+    if fire != 0 {
+      accepted = active | bit#[0..+tags]
+    }
+  } else {
+    mut choices:Unsigned(bits=width*tags) = 0
+    for lane in 0..<width {
+      // Reservation considers every predicted branch. The downstream mask
+      // includes only the branches that actually fire.
+      mut chosen:Unsigned(bits=tagBits) = 0
+      mut bit:Unsigned(bits=tags)       = 0
+      for i in 0..<tags {
+        if bit == 0 and reserved#[i] == 0 {
+          chosen  = i
+          bit#[i] = 1
+        }
+      }
+      tag#[(lane*tagBits)..+tagBits] = chosen
+      choices#[(lane*tags)..+tags]   = bit
+      full#[lane]                    = branches#[lane] & U1(bit == 0)
+      if branches#[lane] != 0 {
+        reserved = reserved | bit
+      }
+    }
+    for lane in 0..<width {
+      mask#[(lane*tags)..+tags] = accepted & ~resolved
+      if fire#[lane] != 0 {
+        accepted = accepted | choices#[(lane*tags)..+tags]
+      }
+    }
+  }
+  const unresolved = accepted & ~resolved
+  active = if reset != 0 or flush != 0 { 0 } elif mispredict != 0 { unresolved & surviving } else { unresolved }
+}

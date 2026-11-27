@@ -1,0 +1,38 @@
+const decode = import("../pyrope/DecodeFetchPacket.DecodeFetchPacket")
+
+pub mod banked_branch_decode(active:U8, lane:U3, kind:U2, lastBank:U1, edge:U1) -> (ok:Bool@[0]) {
+  const base:U58 = if lastBank != 0 { 0x100000000001038 } else { 0x100000000001018 }
+  const inst = if kind == 0 { 0x00000013 } elif kind == 1 { 0x00000463 } elif kind == 2 { 0x008000ef } else { 0x00008067 }
+  mut words:U256 = 0
+  mut pcs:U464 = 0
+  for i in 0..<8 {
+    words#[(32*i)..+32] = if i == lane { inst } else { 0x13 }
+    pcs#[(58*i)..+58] = base + 2*i - (if edge != 0 and i%4 == 0 { 2 } else { 0 })
+  }
+  const mask = if lastBank != 0 { active & 15 } else { active }
+  const decoded = decode<width=8, banks=2, addrBits=58>(valid=1, mask, pc=base, nextFetch=base+16, edges=if edge != 0 { 3 } else { 0 },
+      raw=words, expanded=words, pcs, predictedTaken=255, predictedValid=255, predictedTargets=0, fault=0)
+  const jump = mask#[lane] != 0 and kind != 0
+  const selected = if jump { lane } else { 7 }
+  const fullPc = base + 2*lane - (if edge != 0 and lane%4 == 0 { 2 } else { 0 })
+  const next = if not jump { base+16 } elif kind == 3 { 0 } else { fullPc+8 }
+  const through = if jump { mask & ((2 << lane)-1) } else { mask }
+  const one = 1 << lane
+  ok = decoded.redirected == U1(jump) and decoded.cfi == selected and decoded.nextPc == next and decoded.lanes == through and
+       decoded.call == U1((jump or lane == 7) and kind == 2) and decoded.ret == U1((jump or lane == 7) and kind == 3) and
+       decoded.corrections == (if jump and kind == 2 { one } else { 0 }) and
+       decoded.branches == (if jump and kind == 1 { one } else { 0 })
+}
+
+test banked_branch_decode.priority {
+  mut d = banked_branch_decode
+  tick 32768 {
+    d.active = clock#[0..+8]
+    d.lane = clock#[8..+3]
+    d.kind = clock#[11..+2]
+    d.lastBank = clock#[13]
+    d.edge = clock#[14]
+    step
+    assert(d.ok, "branch decode produced a wrong redirect, lane mask, link action or BTB correction")
+  }
+}

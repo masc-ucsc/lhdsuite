@@ -1,0 +1,25 @@
+const scoreboard = import("../pyrope/RenameBusy.RenameBusy")
+
+pub mod busy_rows(clock:Clock, reset:U1, allocate:U4, wake:U4, rebusy:U4, cancel:U3) -> (busy:U4@[]) {
+  // Ports 2 and 3 both address p128. Port 0 depends on speculative ALU 2.
+  const table = scoreboard<width=4, physical=144, ports=4, sources=1, aluWidth=3>(
+      clock=clock, reset=reset, readers=0x81807f2a, claims=allocate, dest=0x81807f2a,
+      wake=wake, wakeDest=0x80807f2a, rebusy=rebusy, speculative=4, children=cancel)
+  busy = table.busy
+}
+
+test busy_rows.wake {
+  mut d = busy_rows
+  tick 15 {
+    d.reset = U1(clock < 2)
+    d.allocate = if clock == 3 { 15 } elif clock == 8 { 2 } else { 0 }
+    d.wake = if clock == 5 { 15 } elif clock == 7 { 7 } else { 0 }
+    d.rebusy = if clock == 5 { 8 } else { 0 }
+    d.cancel = if clock == 5 or clock == 6 { 4 } else { 0 }
+    step
+    if clock == 4 { assert(d.busy == 15, "four destinations allocated together") }
+    if clock == 5 { assert(d.busy == 13, "cancelled wake and rebusy winning a collision") }
+    if clock == 7 { assert(d.busy == 8, "uncancelled writes forward before table update") }
+    if clock == 9 { assert(d.busy == 10, "allocation takes priority over writeback") }
+  }
+}

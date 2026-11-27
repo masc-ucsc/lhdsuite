@@ -1,0 +1,28 @@
+const forward = import("../pyrope/ForwardingAgeLogic.ForwardingAgeLogic")
+pub mod forwarding_age(clock:Clock, matches:U32, tail:U5) -> (idx:U5@[], idx24:U5@[], valid:U1@[], valid24:U1@[]) {
+  const full  = forward<entries=32>(clock, matches, youngest=tail)
+  const large = forward<entries=24>(clock, matches=matches#[0..+24], youngest=tail)
+  idx     = full.io_found_idx
+  idx24   = large.io_found_idx
+  valid   = full.io_found
+  valid24 = large.io_found
+}
+test forwarding_age.priority {
+  mut d = forwarding_age
+  tick 769 {
+    const tail = clock%32
+    const high = (clock/32)%24
+    const low  = (high + 17)%24
+    const mask = if clock == 768 { 0 } else { (1 << high) | (1 << low) | (1 << 31) }
+    d.tail    = tail
+    d.matches = mask
+    step
+    const ageHigh    = (31 + tail - high)%32
+    const ageLow     = (31 + tail - low)%32
+    const pick       = if ageHigh < ageLow { high } else { low }
+    const youngest24 = if mask == 0 { 0 } else { pick }
+    const youngest   = if mask == 0 { 0 } elif tail < ageHigh and tail < ageLow { 31 } else { pick }
+    assert(d.idx == youngest and d.idx24 == youngest24, "youngest matching store, including circular wrap")
+    assert(d.valid == U1(mask != 0) and d.valid24 == U1(mask != 0), "empty queue has no match")
+  }
+}

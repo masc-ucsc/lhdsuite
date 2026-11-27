@@ -1,0 +1,34 @@
+const allocator = import("../pyrope/BranchMaskGenerationLogic.BranchMaskGenerationLogic")
+
+pub mod branch_rows(clock:Clock, reset:U1, branches:U4, fire:U4, resolved:U3, mispredict:U1, flush:U1) ->
+    (tags:U8@[], masks:U12@[], full:U4@[]) {
+  const group = allocator<width=4, tags=3>(clock=clock, reset=reset, branches=branches, fire=fire,
+      resolved=resolved, surviving=1, mispredict=mispredict, flush=flush)
+  reg sampled:(tags:U8, masks:U12, full:U4) = nil
+  sampled = (tags=group.tag, masks=group.mask, full=group.full)
+  tags = sampled.tags
+  masks = sampled.masks
+  full = sampled.full
+}
+
+test branch_rows.allocate {
+  mut d = branch_rows
+  tick 12 {
+    d.reset = U1(clock < 2)
+    d.branches = if clock == 3 { 15 } elif clock == 4 { 3 } else { 0 }
+    d.fire = if clock == 3 { 5 } elif clock == 4 { 1 } else { 0 }
+    d.resolved = if clock == 4 { 4 } else { 0 }
+    d.mispredict = U1(clock == 6)
+    d.flush = U1(clock == 8)
+    step
+    if clock == 3 {
+      assert(d.tags == 0x24 and d.full == 8, "reserve tags in lane order")
+      assert(d.masks == ((5 << 9) | (1 << 6) | (1 << 3)), "only fired branches reach younger masks")
+    } elif clock == 4 {
+      assert(d.tags#[0..+2] == 1 and d.full == 2, "a resolving tag becomes allocatable next cycle")
+      assert(d.masks#[0..+3] == 1, "resolution immediately clears the outgoing mask")
+    } elif clock == 5 { assert(d.masks#[0..+3] == 3, "accepted allocation persists") }
+    elif clock == 7 { assert(d.masks#[0..+3] == 1, "mispredict discards younger branches") }
+    elif clock == 9 { assert(d.masks == 0, "flush clears branch state") }
+  }
+}

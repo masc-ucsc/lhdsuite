@@ -1,0 +1,99 @@
+const queue = import("../pyrope/IssueUnitCollapsing_1.IssueUnitCollapsing_1")
+const configs = import("../../common/pyrope/BoomConfig")
+
+mod trial<Q>(clk:Clock, rst:Reset, pattern:U5, enable:U1, drain:U1) -> (ok:Bool@[]) {
+  comptime const ports = Q.issueWidth
+  comptime const w = Q.dispatchWidth
+  reg sent:U16 = nil
+  reg retired:U16 = nil
+  reg sawAllPorts:Bool = nil
+  reg sawFull:Bool = nil
+  reg sawGroup:Bool = nil
+  wire ready:Unsigned(bits=w) = nil
+  const submit = ready & pattern#[0..+w]
+  mut physical:Unsigned(bits=w*8) = 0
+  mut labels:Unsigned(bits=w*5) = 0
+  mut masks:Unsigned(bits=w*20) = 0
+  mut next = sent
+  for lane in 0..<w {
+    masks#[(lane*20)..+20] = 1 << (next%20)
+    physical#[(lane*8)..+8] = (next + 128)#[0..+8]
+    labels#[(lane*5)..+5] = next#[0..+5]
+    if submit#[lane] != 0 { wrap next = next+1 }
+  }
+  // Wake the row one cycle after dispatch through the high-numbered ALU buses.
+  reg lastTags:U40 = nil
+  reg lastValid:U5 = nil
+  lastTags = physical << ((5-w)*8)
+  lastValid = submit << (5-w)
+  mut portMask:Unsigned(bits=ports*10) = 0
+  for port in 0..<ports {
+    // Disable port zero for part of the run; younger ports can still issue.
+    if enable != 0 and (port != 0 or sent#[2] == 0 or pattern == 0) {
+      portMask#[(port*10)..+10] = 2
+    }
+  }
+  const q = queue<Q, CoreWidth=w, branches=20, alus=5, pregBits=8>(
+    `clock`=clk, `reset`=rst, disValid=submit,
+    dis_fu_code_1=(1 << w)-1, dis_fu_code_2=0, dis_iw_p1_speculative_child=0,
+    dis_iw_p2_speculative_child=0, dis_br_mask=masks, dis_is_fence=0,
+    dis_is_fencei=0, dis_imm_sel=0, dis_pimm=labels,
+    dis_ldq_idx=0, dis_stq_idx=0, dis_pdst=physical,
+    dis_prs1=physical, dis_prs2=0, dis_prs1_busy=submit,
+    dis_prs2_busy=0, dis_ppred_busy=0, dis_exception=0,
+    dis_uses_ldq=0, dis_uses_stq=0, dis_dst_rtype=0,
+    dis_lrs1_rtype=0, dis_lrs2_rtype=0, dis_fp_val=0,
+    io_wakeup_ports_0_valid=0, io_wakeup_ports_0_bits_uop_pdst=0, io_wakeup_ports_0_bits_bypassable=0,
+    io_wakeup_ports_0_bits_rebusy=0, io_wakeup_ports_1_valid=0, io_wakeup_ports_1_bits_uop_pdst=0,
+    io_wakeup_ports_2_valid=lastValid, io_wakeup_ports_2_bits_uop_pdst=lastTags, io_child_rebusys=0,
+    fuMask=portMask, io_brupdate_b1_resolve_mask=0, io_brupdate_b1_mispredict_mask=0,
+    io_flush_pipeline=0, io_squash_grant=0)
+  ready = q.disReady
+  ok = true
+  mut nextRetired = retired
+  for port in 0..<ports {
+    if q.issValid#[port] != 0 {
+      ok = ok and portMask#[(port*10)..+10] != 0 and nextRetired < sent and q.iss_pimm#[(port*5)..+5] == nextRetired#[0..+5]
+      ok = ok and q.iss_br_mask#[(port*20)..+20] == (1 << (nextRetired%20))
+      const expected = (nextRetired + 128)#[0..+8]
+      ok = ok and q.iss_pdst#[(port*8)..+8] == expected and q.iss_prs1#[(port*8)..+8] == expected
+      wrap nextRetired = nextRetired+1
+    }
+  }
+  if drain != 0 { ok = ok and retired == sent and sawFull and sawGroup and sawAllPorts and sent > 40 }
+  if rst {
+    sent = 0
+    retired = 0
+    sawAllPorts = false
+    sawFull = false
+    sawGroup = false
+  } else {
+    sent = next
+    retired = nextRetired
+    if q.issValid == (1 << ports)-1 { sawAllPorts = true }
+    if ready == 0 and sent >= w { sawFull = true }
+    if submit == (1 << w)-1 { sawGroup = true }
+  }
+}
+
+pub mod wide_mem_queue(clk:Clock, rst:Reset, pattern:U5, enable:U1, drain:U1) -> (ok:Bool@[]) {
+  mut good = true
+  for width in 2..=5 {
+    comptime const q = configs.queue(issueWidth=if width < 4 { 2 } else { 3 }, numEntries=width*6, numSlowEntries=width*2, dispatchWidth=width)
+    const testQueue = trial<Q=q>(clk=clk, rst=rst, pattern=pattern, enable=enable, drain=drain)
+    good = good and testQueue.ok
+  }
+  ok = good
+}
+
+test wide_mem_queue.order {
+  mut dut = wide_mem_queue
+  tick 250 {
+    dut.rst = clock < 3
+    dut.pattern = if clock < 5 or clock >= 180 { 0 } elif clock < 30 { 31 } else { (clock*13)#[0..+5] }
+    dut.enable = U1(clock >= 35 and (clock%17 < 11 or clock >= 180))
+    dut.drain = U1(clock == 247)
+    step
+    if clock >= 4 { assert(dut.ok, "memory queue lost, duplicated, or reordered a dispatched uop") }
+  }
+}

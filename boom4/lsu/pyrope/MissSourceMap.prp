@@ -1,0 +1,47 @@
+// Native BOOM assigns one cached TileLink source per MSHR. A narrower fabric
+// can negotiate fewer IDs, which are held through the last grant beat.
+pub mod MissSourceMap<entries=2, sources=2, sourceBits=2, indexBits=1>(
+    clock:Clock, reset:U1, acquire:U1, requester:Unsigned(bits=indexBits),
+    grant:U1, source:Unsigned(bits=sourceBits), opcode:U3, size:U4)
+    -> (available:U1@[], allocated:Unsigned(bits=sourceBits)@[], owners:Unsigned(bits=entries)@[]) {
+  cassert(sources >= 1 and sources <= entries)
+  if entries == sources {
+    available = 1
+    allocated = requester
+    owners = if source < entries { (1 << source)#[0..+entries] } else { 0 }
+  } else {
+    reg busy:Unsigned(bits=sources) = nil
+    reg owner:Unsigned(bits=sources*indexBits) = nil
+    reg remaining:Unsigned(bits=sources*4) = nil
+    mut next:Unsigned(bits=sourceBits) = 0
+    for pos in 0..<sources {
+      const i = sources-pos-1
+      if busy#[i] == 0 { next = i }
+    }
+    available = U1(busy != (1 << sources)-1)
+    allocated = next
+    const id = owner#[(source*indexBits)..+indexBits]
+    owners = if source < sources and busy#[source] != 0 { (1 << id)#[0..+entries] } else { 0 }
+    if reset != 0 {
+      busy = 0
+      remaining = 0
+    } else {
+      if acquire != 0 {
+        busy#[next] = 1
+        owner#[(next*indexBits)..+indexBits] = requester
+      }
+      if grant != 0 and source < sources {
+        const count = remaining#[(source*4)..+4]
+        const last = opcode#[0] == 0 or size <= 3 or count == 1
+        if last {
+          busy#[source] = 0
+          remaining#[(source*4)..+4] = 0
+        } elif count != 0 {
+          remaining#[(source*4)..+4] = (count-1)#[0..+4]
+        } else {
+          remaining#[(source*4)..+4] = ((1 << (size-3)#[0..+4])-1)#[0..+4]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,82 @@
+// Each architectural entry holds an RV64 pmpcfg byte and a 30-bit physical address.
+pub comb napotMask(encoded:U30, mode:U2) -> (mask:U32) {
+  const low = ((encoded << 1) | mode#[0])#[0..+30]
+  mask = ((low & ~(low+1)#[0..+30]) << 2) | 3
+}
+
+pub mod registers<count=8>(clock:Clock, reset:U1, address:U12, cmd:U3, data:U64) -> (table:U608@[], value:U64@[]) {
+  cassert(count >= 0 and count <= 16)
+  table = 0
+  value = 0
+  if count > 0 {
+    reg config:[count]U8 = nil
+    reg encoded:[count]U30 = nil
+    for i in 0..<count {
+      table#[(38*i)..+8] = config[i]
+      table#[(38*i+8)..+30] = encoded[i]
+      if address == 0x3a0 + 2*(i/8) { value#[(8*(i%8))..+8] = config[i] }
+      if address == 0x3b0+i { value = encoded[i] }
+    }
+    const writeData = if cmd == 6 { value | data } elif cmd == 7 { value & ~data } else { data }
+    for i in 0..<count {
+      const next = if i+1 < count { i+1 } else { i }
+      const nextTorLocked = config[next]#[7] != 0 and config[next]#[3..+2] == 1
+      const writable = cmd >= 5 and config[i]#[7] == 0
+      const cfgWrite = writable and address == 0x3a0+2*(i/8)
+      const byte = writeData#[(8*(i%8))..+8]
+      const permissions = (byte & 5) | ((byte#[0] & byte#[1]) << 1)
+      if reset != 0 { config[i] = if cfgWrite { permissions } else { config[i] & 7 } }
+      elif cfgWrite { config[i] = (byte & 0x98) | permissions }
+      if writable and !nextTorLocked and address == 0x3b0+i { encoded[i] = writeData#[0..+30] }
+    }
+  }
+}
+
+pub comb check<count=8>(table:U608, address:U32, privilege:U2, size:U2) -> (io_r:U1, io_w:U1, io_x:U1) {
+  const machine = privilege > 1
+  const accessMask:U3 = ((1 << size)-1)#[0..+3]
+  const last = address | accessMask
+  mut permissions:U3 = if count == 0 or machine { 7 } else { 0 }
+  mut matched = false
+  mut lower:U32 = 0
+  for i in 0..<count {
+    const cfg = table#[(38*i)..+8]
+    const mode = cfg#[3..+2]
+    const encoded = table#[(38*i+8)..+30]
+    const upper:U32 = encoded << 2
+    const mask:U32 = napotMask(encoded, mode)
+    const napot = mode#[1] != 0
+    const hits = if napot { ((address ^ upper) & ~(mask | accessMask)#[0..+32]) == 0 }
+        else { mode == 1 and address < upper and last >= lower }
+    if hits and !matched {
+      matched = true
+      const fits = if napot { (accessMask & ~mask) == 0 } else { address >= lower and last < upper }
+      permissions = if !fits { 0 } elif machine and cfg#[7] == 0 { 7 } else { cfg#[0..+3] }
+    }
+    lower = upper
+  }
+  io_r = permissions#[0]
+  io_w = permissions#[1]
+  io_x = permissions#[2]
+}
+
+pub comb homogeneous<count=8>(table:U608, ppn:U44, level:U2) -> (uniform:U1) {
+  uniform = 1
+  const shift = if level == 0 { 30 } elif level == 1 { 21 } else { 12 }
+  const address = ppn << 12
+  mut lower:U32 = 0
+  for i in 0..<count {
+    const mode = table#[(38*i+3)..+2]
+    const encoded = table#[(38*i+8)..+30]
+    const upper:U32 = encoded << 2
+    const mask:U32 = napotMask(encoded, mode)
+    if mode#[1] != 0 {
+      uniform = uniform & U1(mask#[shift-1] != 0 or (address >> shift) != (upper >> shift))
+    } elif mode == 1 {
+      const beforeLower = (address >> shift) < (lower >> shift)
+      const beforeUpper = (address >> shift) < (upper >> shift)
+      uniform = uniform & U1(beforeLower or address >= upper or (address >= lower and beforeUpper))
+    }
+    lower = upper
+  }
+}

@@ -1,0 +1,27 @@
+const traces = import("../pyrope/TraceIngress")
+
+pub mod trace_ingress(clock:Clock, reset:Reset, n:U4, trap:U1, interrupt:U1) -> (groups:U92@[], observed:U64@[]) {
+  const row = n#[0..+2]
+  const previous = (row - 1)#[0..+2]
+  const trace = traces.TraceIngress<rows=4, width=2>(clock, reset, tail=row, head=previous, dispatch=3, retire=3, pc=(n << 40) | n, branch=(8 << 4) | n, taken=1, compressed=2, returning=U1(n == 9), trap, trapCause=interrupt << 63, context=(cause=0, context=0, privilege=3, time=n, tval=0))
+  groups = trace.groups
+  observed = trace.state.time
+}
+
+test trace_ingress.retire {
+  mut d = trace_ingress
+  tick 64 {
+    d.n = clock#[0..+4]
+    d.reset = clock < 2
+    d.trap = U1(clock%16 >= 12)
+    d.interrupt = U1(clock%2 != 0)
+    step
+    if clock >= 4 {
+      const previous = (clock - 1)#[0..+4]
+      const kind = if clock%16 >= 12 { if clock%2 != 0 { 2 } else { 1 } } elif previous == 9 { 13 } elif previous >= 1 and previous <= 6 { 5 } elif previous == 7 { 15 } elif previous == 8 { 14 } else { 0 }
+      assert(d.observed == clock%16)
+      assert(d.groups#[0..+46] == ((previous << 6) | (kind << 2) | 3))
+      assert(d.groups#[46..+46] == ((previous << 6) | (14 << 2) | 1))
+    }
+  }
+}

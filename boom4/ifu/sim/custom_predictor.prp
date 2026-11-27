@@ -1,0 +1,33 @@
+const config = import("../../common/pyrope/BoomConfig")
+const lastTarget = import("fixtures/LastTargetBank.lastTarget")
+const predict = import("../pyrope/BranchPredictor.BranchPredictor")
+
+comptime const withCustom = config.params(branchPredictor=lastTarget, bpdMaxMetaLength=3)
+
+pub mod custom_predictor(clock:Clock, reset:Reset, train:U1, target:U40, meta:U3) ->
+    (valid:U4@[], dest:U40@[], metadata:U3@[]) {
+  const p = predict<C=withCustom>(clock, reset, io_f0_req_valid=1, io_f0_req_bits_pc=0x1000,
+      io_f0_req_bits_ghist_old_history=0, fetchNextHistory=0, io_f3_fire=1, io_update_valid=train,
+      io_update_bits_is_mispredict_update=0, io_update_bits_is_repair_update=0, io_update_bits_btb_mispredicts=0,
+      io_update_bits_pc=0x1000, io_update_bits_br_mask=1, io_update_bits_cfi_idx_valid=1,
+      io_update_bits_cfi_idx_bits=0, io_update_bits_cfi_taken=1, io_update_bits_cfi_mispredicted=0,
+      io_update_bits_cfi_is_br=1, io_update_bits_cfi_is_jal=0, io_update_bits_cfi_is_jalr=0,
+      io_update_bits_ghist_old_history=0, updateNextHistory=0, io_update_bits_target=target, io_update_bits_meta=meta)
+  valid = p.f3_valid
+  dest = p.f3_target#[0..+40]
+  metadata = p.metadata
+}
+
+test custom_predictor.install {
+  mut dut = custom_predictor
+  tick 20 {
+    dut.reset = clock < 2
+    dut.train = U1(clock == 4 or clock == 12)
+    dut.target = 0x800+clock*8
+    dut.meta = clock#[1..+3]
+    step
+    if clock == 3 { assert(dut.valid == 0) }
+    elif clock == 10 { assert(dut.valid == 1 and dut.dest == 0x820 and dut.metadata == 2) }
+    elif clock == 19 { assert(dut.valid == 1 and dut.dest == 0x860 and dut.metadata == 6) }
+  }
+}

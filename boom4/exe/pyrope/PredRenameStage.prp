@@ -1,0 +1,85 @@
+// A short forward branch names its predicate by its fetch-target queue entry.
+// Younger shadow instructions depend on the most recent such branch.
+pub mod PredRenameStage<width=1, entries=16, pregBits=6, wakePorts=1>(
+  clock:Clock, reset:U1, io_kill:U1,
+  io_dec_fire_0:Unsigned(bits=width), io_dec_uops_0_br_type:Unsigned(bits=4*width),
+  io_dec_uops_0_is_sfb:Unsigned(bits=width), io_dec_uops_0_ftq_idx:Unsigned(bits=width*std.clog2(entries)),
+  io_dec_uops_0_lrs1:Unsigned(bits=6*width), io_dec_uops_0_lrs2:Unsigned(bits=6*width),
+  io_dec_uops_0_lrs1_rtype:Unsigned(bits=2*width), io_dec_uops_0_lrs2_rtype:Unsigned(bits=2*width),
+  io_dis_fire_0:Unsigned(bits=width), io_dis_ready:U1,
+  io_wakeups_0_valid:Unsigned(bits=wakePorts), io_wakeups_0_bits_uop_pdst:Unsigned(bits=wakePorts*pregBits),
+) -> (
+  io_ren2_uops_0_pdst:Unsigned(bits=width*pregBits)@[],
+  io_ren2_uops_0_ppred:Unsigned(bits=width*std.clog2(entries))@[],
+  io_ren2_uops_0_ppred_busy:Unsigned(bits=width)@[],
+) {
+  comptime const bits = std.clog2(entries)
+  cassert(entries > 1 and pregBits >= bits)
+  type Tags = Unsigned(bits=width*bits)
+  type Mask = Unsigned(bits=width)
+  type Table = Unsigned(bits=entries)
+  reg current:Unsigned(bits=bits) = nil
+  reg valid:Mask = nil
+  reg branch:Mask = nil
+  reg shadow:Mask = nil
+  reg destination:Tags = nil
+  reg predicate:Tags = nil
+  reg busy:Table = nil
+
+  mut woken:Table = 0
+  for port in 0..<wakePorts {
+    if io_wakeups_0_valid#[port] != 0 {
+      const tag = io_wakeups_0_bits_uop_pdst#[(port*pregBits)..+bits]
+      woken#[tag] = 1
+    }
+  }
+
+  mut allocated:Table = 0
+  mut hasOlder = false
+  mut older:Unsigned(bits=bits) = 0
+  mut dispatched = false
+  mut latest:Unsigned(bits=bits) = 0
+  for lane in 0..<width {
+    const dst = destination#[(lane*bits)..+bits]
+    const src = predicate#[(lane*bits)..+bits]
+    io_ren2_uops_0_pdst#[(lane*pregBits)..+pregBits] = if branch#[lane] != 0 { dst } else { 0 }
+    io_ren2_uops_0_ppred#[(lane*bits)..+bits] = if hasOlder { older } else { src }
+    io_ren2_uops_0_ppred_busy#[lane] = U1(shadow#[lane] != 0 and (hasOlder or (busy#[src] != 0 and woken#[src] == 0)))
+    if valid#[lane] != 0 and branch#[lane] != 0 {
+      older = dst
+      hasOlder = true
+      if io_dis_fire_0#[lane] != 0 {
+        allocated#[dst] = 1
+        dispatched = true
+        latest = dst
+      }
+    }
+  }
+
+  mut next = current
+  const accept = io_kill == 0 and io_dis_ready != 0
+  for lane in 0..<width {
+    const decoded = io_dec_uops_0_ftq_idx#[(lane*bits)..+bits]
+    const isBranch = io_dec_uops_0_br_type#[(lane*4)..+4] != 0
+    const isSfb = io_dec_uops_0_is_sfb#[lane] != 0
+    if accept {
+      branch#[lane] = U1(isSfb and isBranch)
+      shadow#[lane] = U1(isSfb and !isBranch)
+      destination#[(lane*bits)..+bits] = decoded
+    }
+    if dispatched {
+      predicate#[(lane*bits)..+bits] = latest
+    } elif accept {
+      predicate#[(lane*bits)..+bits] = next
+    }
+    if isBranch and isSfb and io_dec_fire_0#[lane] != 0 { next = decoded }
+  }
+  current = next
+  if reset != 0 {
+    valid = 0
+    busy = 0
+  } else {
+    valid = if io_kill != 0 { 0 } elif accept { io_dec_fire_0 } else { valid & ~io_dis_fire_0 }
+    busy = (busy | allocated) & ~woken
+  }
+}

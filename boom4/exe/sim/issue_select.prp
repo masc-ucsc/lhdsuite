@@ -1,0 +1,31 @@
+const select = import("../pyrope/IssueSelect.select")
+const configs = import("../../common/pyrope/BoomConfig")
+comptime const full = configs.queue(numEntries=3, issueWidth=3)
+comptime const split = configs.queue(numEntries=3, issueWidth=3, useFullIssueSel=false)
+// A second formulation chooses a one-hot grant from each row of the matrix.
+comb expected<splitPorts>(matrix:U9) -> (grants:U9) {
+  mut ports:U3 = 0
+  grants = 0
+  for slot in 0..<3 {
+    const allowed = if not splitPorts or slot == 0 { 7 } elif slot == 1 { 2 } else { 5 }
+    const candidates = matrix#[(slot*3)..+3] & allowed & ~ports
+    const grant = candidates & -candidates
+    grants#[(slot*3)..+3] = grant#[0..+3]
+    ports = ports | grant#[0..+3]
+  }
+}
+
+pub mod issue_select(requests:U9) -> (ok:Bool@[]) {
+  const a = select<full>(requests=requests)
+  const b = select<split>(requests=requests)
+  ok = a.grants == expected<splitPorts=false>(matrix=requests) and b.grants == expected<splitPorts=true>(matrix=requests)
+}
+
+test issue_select.everyMatrix {
+  mut d = issue_select
+  tick 512 {
+    d.requests = clock
+    step
+    assert(d.ok, "slot age, per-port availability and partition rules")
+  }
+}

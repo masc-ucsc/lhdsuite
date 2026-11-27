@@ -1,0 +1,164 @@
+const control = import("IssueSchedule")
+const permitted = import("IssueSelect.permitted")
+const IssueSlot_16 = import("IssueSlot_16.IssueSlot_16")
+const format = import("IssuePayload")
+
+pub mod AluIssueColumn<sni=false, Q, alus, ftqBits, pregBits, robBits, branches=8, ldBits=4, stBits=4, immBits=5, addrBits=40>::[timecheck=false](
+  clock:Clock, robHead:Unsigned(bits=robBits)=0, robPnr:Unsigned(bits=robBits)=0,
+  io_brupdate_b1_mispredict_mask:Unsigned(bits=branches),
+  io_brupdate_b1_resolve_mask:Unsigned(bits=branches),
+  io_child_rebusys:Unsigned(bits=alus),
+  io_flush_pipeline:U1,
+  io_pred_wakeup_port_bits:Unsigned(bits=ftqBits),
+  io_pred_wakeup_port_valid:U1,
+  io_squash_grant:U1,
+  io_wakeup_ports_0_bits_bypassable:U1,
+  io_wakeup_ports_0_bits_rebusy:U1,
+  io_wakeup_ports_0_bits_uop_pdst:Unsigned(bits=pregBits),
+  io_wakeup_ports_0_valid:U1,
+  io_wakeup_ports_1_bits_uop_pdst:Unsigned(bits=2*pregBits),
+  io_wakeup_ports_1_valid:U2,
+  io_wakeup_ports_2_bits_uop_pdst:Unsigned(bits=alus*pregBits),
+  io_wakeup_ports_2_valid:Unsigned(bits=alus),
+  reset:Reset,
+  disValid:Unsigned(bits=Q.dispatchWidth), fuMask:Unsigned(bits=Q.issueWidth*10),
+  payloads:Unsigned(bits=Q.dispatchWidth*((format.fixedBits+addrBits+immBits) + ldBits + stBits + branches + std.clog2(branches) + 2*alus + 2*ftqBits + 5*pregBits + robBits)),
+  kept:Unsigned(bits=Q.dispatchWidth),
+) -> (
+  disReady:Unsigned(bits=Q.dispatchWidth)@[],
+  issValid:Unsigned(bits=Q.issueWidth)@[],
+  iss_br_mask:Unsigned(bits=Q.issueWidth*branches)@[],
+  iss_br_tag:Unsigned(bits=Q.issueWidth*std.clog2(branches))@[],
+  iss_br_type:Unsigned(bits=Q.issueWidth*4)@[],
+  iss_csr_cmd:Unsigned(bits=Q.issueWidth*3)@[],
+  iss_dst_rtype:Unsigned(bits=Q.issueWidth*2)@[],
+  iss_edge_inst:Unsigned(bits=Q.issueWidth*1)@[],
+  iss_fcn_dw:Unsigned(bits=Q.issueWidth*1)@[],
+  iss_fcn_op:Unsigned(bits=Q.issueWidth*5)@[],
+  iss_ftq_idx:Unsigned(bits=Q.issueWidth*ftqBits)@[],
+  iss_fu_code_0:Unsigned(bits=Q.issueWidth*1)@[],
+  iss_imm_sel:Unsigned(bits=Q.issueWidth*3)@[],
+  iss_is_mov:Unsigned(bits=Q.issueWidth*1)@[],
+  iss_is_rvc:Unsigned(bits=Q.issueWidth*1)@[],
+  iss_is_sfb:Unsigned(bits=Q.issueWidth*1)@[],
+  iss_iw_p1_bypass_hint:Unsigned(bits=Q.issueWidth*1)@[],
+  iss_iw_p2_bypass_hint:Unsigned(bits=Q.issueWidth*1)@[],
+  iss_ldst_is_rs1:Unsigned(bits=Q.issueWidth*1)@[],
+  iss_lrs1_rtype:Unsigned(bits=Q.issueWidth*2)@[],
+  iss_lrs2_rtype:Unsigned(bits=Q.issueWidth*2)@[],
+  iss_op1_sel:Unsigned(bits=Q.issueWidth*2)@[],
+  iss_op2_sel:Unsigned(bits=Q.issueWidth*3)@[],
+  iss_pc_lob:Unsigned(bits=Q.issueWidth*6)@[],
+  iss_pdst:Unsigned(bits=Q.issueWidth*pregBits)@[],
+  iss_pimm:Unsigned(bits=Q.issueWidth*immBits)@[],
+  iss_ppred:Unsigned(bits=Q.issueWidth*ftqBits)@[],
+  iss_prs1:Unsigned(bits=Q.issueWidth*pregBits)@[],
+  iss_prs2:Unsigned(bits=Q.issueWidth*pregBits)@[],
+  iss_rob_idx:Unsigned(bits=Q.issueWidth*robBits)@[],
+  iss_taken:Unsigned(bits=Q.issueWidth*1)@[],
+) {
+  comptime const ports = Q.issueWidth
+  comptime const n = Q.numEntries
+  comptime const uopBits = (format.fixedBits+addrBits+immBits) + ldBits + stBits + branches + std.clog2(branches) + 2*alus + 2*ftqBits + 5*pregBits + robBits
+  comptime const w = Q.dispatchWidth
+  mut candidates:Unsigned(bits=w*uopBits) = payloads
+  mut survives:Unsigned(bits=n + w) = kept << n
+  wire live:Unsigned(bits=n) = nil
+  wire requests:Unsigned(bits=n*ports) = nil
+  mut liveOut:Unsigned(bits=n) = 0
+  mut requestOut:Unsigned(bits=n*ports) = 0
+  mut freeNext:Unsigned(bits=n) = 0
+
+  iss_is_rvc = 0
+  iss_fu_code_0 = 0
+  iss_iw_p1_bypass_hint = 0
+  iss_iw_p2_bypass_hint = 0
+  iss_br_mask = 0
+  iss_br_tag = 0
+  iss_br_type = 0
+  iss_is_sfb = 0
+  iss_is_mov = 0
+  iss_ftq_idx = 0
+  iss_edge_inst = 0
+  iss_pc_lob = 0
+  iss_taken = 0
+  iss_imm_sel = 0
+  iss_pimm = 0
+  iss_op1_sel = 0
+  iss_op2_sel = 0
+  iss_rob_idx = 0
+  iss_pdst = 0
+  iss_prs1 = 0
+  iss_prs2 = 0
+  iss_ppred = 0
+  iss_csr_cmd = 0
+  iss_ldst_is_rs1 = 0
+  iss_dst_rtype = 0
+  iss_lrs1_rtype = 0
+  iss_lrs2_rtype = 0
+  iss_fcn_dw = 0
+  iss_fcn_op = 0
+  wire remaining:Unsigned(bits=n) = nil
+  wire vacantNext:Unsigned(bits=n) = nil
+  const incomingPayloads = candidates
+  const plan = control.schedule<Q>(clock, reset, live, requests, surviving=remaining, vacantNext,
+      dispatch=disValid, keep=survives#[n..+w])
+  disReady = plan.ready
+  issValid = if io_squash_grant != 0 { 0 } else { plan.valid }
+  for j in 0..<n {
+    const i = n - 1 - j
+    const move = control.incoming<Q=Q, slot=i, bits=uopBits>(lanes=plan.allocations, distance=plan.distance,
+        surviving=survives, moving=candidates, dispatch=incomingPayloads)
+    const shift = move.shift
+    const fill = move.fill
+    const incoming = format.unpack<addrBits=addrBits, ldBits=ldBits, stBits=stBits, branches=branches, alus=alus, ftqBits=ftqBits, pregBits=pregBits, robBits=robBits, immBits=immBits>(value=move.payload)
+    const granted = plan.grants#[(i*ports)..+ports]
+    const slot = IssueSlot_16<addrBits=addrBits, ldBits=ldBits, stBits=stBits, branches=branches, alus=alus, ftqBits=ftqBits, pregBits=pregBits, robBits=robBits, immBits=immBits>(clock=clock, reset=reset, io_grant=U1(granted != 0), io_in_uop_valid=U1(fill), io_in_uop_bits_inst=incoming.inst, io_in_uop_bits_debug_inst=incoming.debug_inst, io_in_uop_bits_is_rvc=incoming.is_rvc, io_in_uop_bits_debug_pc=incoming.debug_pc, io_in_uop_bits_iq_type_0=incoming.iq_type_0, io_in_uop_bits_iq_type_1=incoming.iq_type_1, io_in_uop_bits_iq_type_2=incoming.iq_type_2, io_in_uop_bits_iq_type_3=incoming.iq_type_3, io_in_uop_bits_fu_code_0=incoming.fu_code_0, io_in_uop_bits_fu_code_1=incoming.fu_code_1, io_in_uop_bits_fu_code_2=incoming.fu_code_2, io_in_uop_bits_fu_code_3=incoming.fu_code_3, io_in_uop_bits_fu_code_4=incoming.fu_code_4, io_in_uop_bits_fu_code_5=incoming.fu_code_5, io_in_uop_bits_fu_code_6=incoming.fu_code_6, io_in_uop_bits_fu_code_7=incoming.fu_code_7, io_in_uop_bits_fu_code_8=incoming.fu_code_8, io_in_uop_bits_fu_code_9=incoming.fu_code_9, io_in_uop_bits_iw_issued=incoming.iw_issued, io_in_uop_bits_iw_p1_speculative_child=incoming.iw_p1_speculative_child, io_in_uop_bits_iw_p2_speculative_child=incoming.iw_p2_speculative_child, io_in_uop_bits_iw_p1_bypass_hint=incoming.iw_p1_bypass_hint, io_in_uop_bits_iw_p2_bypass_hint=incoming.iw_p2_bypass_hint, io_in_uop_bits_iw_p3_bypass_hint=incoming.iw_p3_bypass_hint, io_in_uop_bits_dis_col_sel=incoming.dis_col_sel, io_in_uop_bits_br_mask=incoming.br_mask, io_in_uop_bits_br_tag=incoming.br_tag, io_in_uop_bits_br_type=incoming.br_type, io_in_uop_bits_is_sfb=incoming.is_sfb, io_in_uop_bits_is_fence=incoming.is_fence, io_in_uop_bits_is_fencei=incoming.is_fencei, io_in_uop_bits_is_sfence=incoming.is_sfence, io_in_uop_bits_is_amo=incoming.is_amo, io_in_uop_bits_is_eret=incoming.is_eret, io_in_uop_bits_is_sys_pc2epc=incoming.is_sys_pc2epc, io_in_uop_bits_is_rocc=incoming.is_rocc, io_in_uop_bits_is_mov=incoming.is_mov, io_in_uop_bits_ftq_idx=incoming.ftq_idx, io_in_uop_bits_edge_inst=incoming.edge_inst, io_in_uop_bits_pc_lob=incoming.pc_lob, io_in_uop_bits_taken=incoming.taken, io_in_uop_bits_imm_rename=incoming.imm_rename, io_in_uop_bits_imm_sel=incoming.imm_sel, io_in_uop_bits_pimm=incoming.pimm, io_in_uop_bits_imm_packed=incoming.imm_packed, io_in_uop_bits_op1_sel=incoming.op1_sel, io_in_uop_bits_op2_sel=incoming.op2_sel, io_in_uop_bits_fp_ctrl_ldst=incoming.fp_ctrl_ldst, io_in_uop_bits_fp_ctrl_wen=incoming.fp_ctrl_wen, io_in_uop_bits_fp_ctrl_ren1=incoming.fp_ctrl_ren1, io_in_uop_bits_fp_ctrl_ren2=incoming.fp_ctrl_ren2, io_in_uop_bits_fp_ctrl_ren3=incoming.fp_ctrl_ren3, io_in_uop_bits_fp_ctrl_swap12=incoming.fp_ctrl_swap12, io_in_uop_bits_fp_ctrl_swap23=incoming.fp_ctrl_swap23, io_in_uop_bits_fp_ctrl_typeTagIn=incoming.fp_ctrl_typeTagIn, io_in_uop_bits_fp_ctrl_typeTagOut=incoming.fp_ctrl_typeTagOut, io_in_uop_bits_fp_ctrl_fromint=incoming.fp_ctrl_fromint, io_in_uop_bits_fp_ctrl_toint=incoming.fp_ctrl_toint, io_in_uop_bits_fp_ctrl_fastpipe=incoming.fp_ctrl_fastpipe, io_in_uop_bits_fp_ctrl_fma=incoming.fp_ctrl_fma, io_in_uop_bits_fp_ctrl_div=incoming.fp_ctrl_div, io_in_uop_bits_fp_ctrl_sqrt=incoming.fp_ctrl_sqrt, io_in_uop_bits_fp_ctrl_wflags=incoming.fp_ctrl_wflags, io_in_uop_bits_fp_ctrl_vec=incoming.fp_ctrl_vec, io_in_uop_bits_rob_idx=incoming.rob_idx, io_in_uop_bits_ldq_idx=incoming.ldq_idx, io_in_uop_bits_stq_idx=incoming.stq_idx, io_in_uop_bits_rxq_idx=incoming.rxq_idx, io_in_uop_bits_pdst=incoming.pdst, io_in_uop_bits_prs1=incoming.prs1, io_in_uop_bits_prs2=incoming.prs2, io_in_uop_bits_prs3=incoming.prs3, io_in_uop_bits_ppred=incoming.ppred, io_in_uop_bits_prs1_busy=incoming.prs1_busy, io_in_uop_bits_prs2_busy=incoming.prs2_busy, io_in_uop_bits_prs3_busy=incoming.prs3_busy, io_in_uop_bits_ppred_busy=incoming.ppred_busy, io_in_uop_bits_stale_pdst=incoming.stale_pdst, io_in_uop_bits_exception=incoming.exception, io_in_uop_bits_exc_cause=incoming.exc_cause, io_in_uop_bits_mem_cmd=incoming.mem_cmd, io_in_uop_bits_mem_size=incoming.mem_size, io_in_uop_bits_mem_signed=incoming.mem_signed, io_in_uop_bits_uses_ldq=incoming.uses_ldq, io_in_uop_bits_uses_stq=incoming.uses_stq, io_in_uop_bits_is_unique=incoming.is_unique, io_in_uop_bits_flush_on_commit=incoming.flush_on_commit, io_in_uop_bits_csr_cmd=incoming.csr_cmd, io_in_uop_bits_ldst_is_rs1=incoming.ldst_is_rs1, io_in_uop_bits_ldst=incoming.ldst, io_in_uop_bits_lrs1=incoming.lrs1, io_in_uop_bits_lrs2=incoming.lrs2, io_in_uop_bits_lrs3=incoming.lrs3, io_in_uop_bits_dst_rtype=incoming.dst_rtype, io_in_uop_bits_lrs1_rtype=incoming.lrs1_rtype, io_in_uop_bits_lrs2_rtype=incoming.lrs2_rtype, io_in_uop_bits_frs3_en=incoming.frs3_en, io_in_uop_bits_fcn_dw=incoming.fcn_dw, io_in_uop_bits_fcn_op=incoming.fcn_op, io_in_uop_bits_fp_val=incoming.fp_val, io_in_uop_bits_xcpt_pf_if=incoming.xcpt_pf_if, io_in_uop_bits_xcpt_ae_if=incoming.xcpt_ae_if, io_in_uop_bits_xcpt_ma_if=incoming.xcpt_ma_if, io_in_uop_bits_bp_debug_if=incoming.bp_debug_if, io_in_uop_bits_bp_xcpt_if=incoming.bp_xcpt_if, io_in_uop_bits_debug_fsrc=incoming.debug_fsrc, io_in_uop_bits_debug_tsrc=incoming.debug_tsrc, io_brupdate_b1_resolve_mask=io_brupdate_b1_resolve_mask, io_brupdate_b1_mispredict_mask=io_brupdate_b1_mispredict_mask, io_kill=io_flush_pipeline, io_clear=U1(shift), io_squash_grant=io_squash_grant, io_wakeup_ports_0_valid=io_wakeup_ports_0_valid, io_wakeup_ports_0_bits_uop_pdst=io_wakeup_ports_0_bits_uop_pdst, io_wakeup_ports_0_bits_bypassable=io_wakeup_ports_0_bits_bypassable, io_wakeup_ports_0_bits_rebusy=io_wakeup_ports_0_bits_rebusy, io_wakeup_ports_1_valid=io_wakeup_ports_1_valid, io_wakeup_ports_1_bits_uop_pdst=io_wakeup_ports_1_bits_uop_pdst, io_wakeup_ports_2_valid=io_wakeup_ports_2_valid, io_wakeup_ports_2_bits_uop_pdst=io_wakeup_ports_2_bits_uop_pdst, io_pred_wakeup_port_valid=io_pred_wakeup_port_valid, io_pred_wakeup_port_bits=io_pred_wakeup_port_bits, io_child_rebusys=io_child_rebusys)
+    const functions = slot.io_iss_uop_fu_code_0 << 0
+    const allowed = if sni { permitted<bits=robBits>(tag=slot.io_iss_uop_rob_idx, head=robHead, pnr=robPnr, waitForPnr=slot.io_iss_uop_br_type != 0, address=false) } else { 1 }
+    for port in 0..<ports {
+      requestOut#[((i*ports) + port)] = allowed & slot.io_request & U1((functions & fuMask#[(port*10)..+10]) != 0)
+    }
+    liveOut#[i] = slot.io_valid
+    freeNext#[i] = U1((slot.io_will_be_valid == 0 or shift) and not fill)
+    survives#[i] = slot.io_will_be_valid
+    wrap candidates = (candidates << uopBits) | format.pack<addrBits=addrBits, ldBits=ldBits, stBits=stBits, branches=branches, alus=alus, ftqBits=ftqBits, pregBits=pregBits, robBits=robBits, immBits=immBits>(uop=(bp_debug_if=slot.io_out_uop_bp_debug_if, bp_xcpt_if=slot.io_out_uop_bp_xcpt_if, br_mask=slot.io_out_uop_br_mask, br_tag=slot.io_out_uop_br_tag, br_type=slot.io_out_uop_br_type, csr_cmd=slot.io_out_uop_csr_cmd, debug_fsrc=slot.io_out_uop_debug_fsrc, debug_inst=slot.io_out_uop_debug_inst, debug_pc=slot.io_out_uop_debug_pc, debug_tsrc=slot.io_out_uop_debug_tsrc, dis_col_sel=slot.io_out_uop_dis_col_sel, dst_rtype=slot.io_out_uop_dst_rtype, edge_inst=slot.io_out_uop_edge_inst, exc_cause=slot.io_out_uop_exc_cause, exception=slot.io_out_uop_exception, fcn_dw=slot.io_out_uop_fcn_dw, fcn_op=slot.io_out_uop_fcn_op, flush_on_commit=slot.io_out_uop_flush_on_commit, fp_ctrl_div=slot.io_out_uop_fp_ctrl_div, fp_ctrl_fastpipe=slot.io_out_uop_fp_ctrl_fastpipe, fp_ctrl_fma=slot.io_out_uop_fp_ctrl_fma, fp_ctrl_fromint=slot.io_out_uop_fp_ctrl_fromint, fp_ctrl_ldst=slot.io_out_uop_fp_ctrl_ldst, fp_ctrl_ren1=slot.io_out_uop_fp_ctrl_ren1, fp_ctrl_ren2=slot.io_out_uop_fp_ctrl_ren2, fp_ctrl_ren3=slot.io_out_uop_fp_ctrl_ren3, fp_ctrl_sqrt=slot.io_out_uop_fp_ctrl_sqrt, fp_ctrl_swap12=slot.io_out_uop_fp_ctrl_swap12, fp_ctrl_swap23=slot.io_out_uop_fp_ctrl_swap23, fp_ctrl_toint=slot.io_out_uop_fp_ctrl_toint, fp_ctrl_typeTagIn=slot.io_out_uop_fp_ctrl_typeTagIn, fp_ctrl_typeTagOut=slot.io_out_uop_fp_ctrl_typeTagOut, fp_ctrl_vec=slot.io_out_uop_fp_ctrl_vec, fp_ctrl_wen=slot.io_out_uop_fp_ctrl_wen, fp_ctrl_wflags=slot.io_out_uop_fp_ctrl_wflags, fp_rm=0, fp_typ=0, fp_val=slot.io_out_uop_fp_val, frs3_en=slot.io_out_uop_frs3_en, ftq_idx=slot.io_out_uop_ftq_idx, fu_code_0=slot.io_out_uop_fu_code_0, fu_code_1=slot.io_out_uop_fu_code_1, fu_code_2=slot.io_out_uop_fu_code_2, fu_code_3=slot.io_out_uop_fu_code_3, fu_code_4=slot.io_out_uop_fu_code_4, fu_code_5=slot.io_out_uop_fu_code_5, fu_code_6=slot.io_out_uop_fu_code_6, fu_code_7=slot.io_out_uop_fu_code_7, fu_code_8=slot.io_out_uop_fu_code_8, fu_code_9=slot.io_out_uop_fu_code_9, imm_packed=slot.io_out_uop_imm_packed, imm_rename=slot.io_out_uop_imm_rename, imm_sel=slot.io_out_uop_imm_sel, inst=slot.io_out_uop_inst, iq_type_0=slot.io_out_uop_iq_type_0, iq_type_1=slot.io_out_uop_iq_type_1, iq_type_2=slot.io_out_uop_iq_type_2, iq_type_3=slot.io_out_uop_iq_type_3, is_amo=slot.io_out_uop_is_amo, is_eret=slot.io_out_uop_is_eret, is_fence=slot.io_out_uop_is_fence, is_fencei=slot.io_out_uop_is_fencei, is_mov=slot.io_out_uop_is_mov, is_rocc=slot.io_out_uop_is_rocc, is_rvc=slot.io_out_uop_is_rvc, is_sfb=slot.io_out_uop_is_sfb, is_sfence=slot.io_out_uop_is_sfence, is_sys_pc2epc=slot.io_out_uop_is_sys_pc2epc, is_unique=slot.io_out_uop_is_unique, iw_issued=slot.io_out_uop_iw_issued, iw_p1_bypass_hint=slot.io_out_uop_iw_p1_bypass_hint, iw_p1_speculative_child=slot.io_out_uop_iw_p1_speculative_child, iw_p2_bypass_hint=slot.io_out_uop_iw_p2_bypass_hint, iw_p2_speculative_child=slot.io_out_uop_iw_p2_speculative_child, iw_p3_bypass_hint=slot.io_out_uop_iw_p3_bypass_hint, ldq_idx=slot.io_out_uop_ldq_idx, ldst=slot.io_out_uop_ldst, ldst_is_rs1=slot.io_out_uop_ldst_is_rs1, lrs1=slot.io_out_uop_lrs1, lrs1_rtype=slot.io_out_uop_lrs1_rtype, lrs2=slot.io_out_uop_lrs2, lrs2_rtype=slot.io_out_uop_lrs2_rtype, lrs3=slot.io_out_uop_lrs3, mem_cmd=slot.io_out_uop_mem_cmd, mem_signed=slot.io_out_uop_mem_signed, mem_size=slot.io_out_uop_mem_size, op1_sel=slot.io_out_uop_op1_sel, op2_sel=slot.io_out_uop_op2_sel, pc_lob=slot.io_out_uop_pc_lob, pdst=slot.io_out_uop_pdst, pimm=slot.io_out_uop_pimm, ppred=slot.io_out_uop_ppred, ppred_busy=slot.io_out_uop_ppred_busy, prs1=slot.io_out_uop_prs1, prs1_busy=slot.io_out_uop_prs1_busy, prs2=slot.io_out_uop_prs2, prs2_busy=slot.io_out_uop_prs2_busy, prs3=slot.io_out_uop_prs3, prs3_busy=slot.io_out_uop_prs3_busy, rob_idx=slot.io_out_uop_rob_idx, rxq_idx=slot.io_out_uop_rxq_idx, stale_pdst=slot.io_out_uop_stale_pdst, stq_idx=slot.io_out_uop_stq_idx, taken=slot.io_out_uop_taken, uses_ldq=slot.io_out_uop_uses_ldq, uses_stq=slot.io_out_uop_uses_stq, xcpt_ae_if=slot.io_out_uop_xcpt_ae_if, xcpt_ma_if=slot.io_out_uop_xcpt_ma_if, xcpt_pf_if=slot.io_out_uop_xcpt_pf_if))
+    for port in 0..<ports {
+      if granted#[port] != 0 or (i == 0 and plan.valid#[port] == 0) {
+        iss_is_rvc#[(port*1)..+1] = slot.io_iss_uop_is_rvc
+        iss_fu_code_0#[(port*1)..+1] = slot.io_iss_uop_fu_code_0
+        iss_iw_p1_bypass_hint#[(port*1)..+1] = slot.io_iss_uop_iw_p1_bypass_hint
+        iss_iw_p2_bypass_hint#[(port*1)..+1] = slot.io_iss_uop_iw_p2_bypass_hint
+        iss_br_mask#[(port*branches)..+branches] = slot.io_iss_uop_br_mask
+        iss_br_tag#[(port*std.clog2(branches))..+std.clog2(branches)] = slot.io_iss_uop_br_tag
+        iss_br_type#[(port*4)..+4] = slot.io_iss_uop_br_type
+        iss_is_sfb#[(port*1)..+1] = slot.io_iss_uop_is_sfb
+        iss_is_mov#[(port*1)..+1] = slot.io_iss_uop_is_mov
+        iss_ftq_idx#[(port*ftqBits)..+ftqBits] = slot.io_iss_uop_ftq_idx
+        iss_edge_inst#[(port*1)..+1] = slot.io_iss_uop_edge_inst
+        iss_pc_lob#[(port*6)..+6] = slot.io_iss_uop_pc_lob
+        iss_taken#[(port*1)..+1] = slot.io_iss_uop_taken
+        iss_imm_sel#[(port*3)..+3] = slot.io_iss_uop_imm_sel
+        iss_pimm#[(port*immBits)..+immBits] = slot.io_iss_uop_pimm
+        iss_op1_sel#[(port*2)..+2] = slot.io_iss_uop_op1_sel
+        iss_op2_sel#[(port*3)..+3] = slot.io_iss_uop_op2_sel
+        iss_rob_idx#[(port*robBits)..+robBits] = slot.io_iss_uop_rob_idx
+        iss_pdst#[(port*pregBits)..+pregBits] = slot.io_iss_uop_pdst
+        iss_prs1#[(port*pregBits)..+pregBits] = slot.io_iss_uop_prs1
+        iss_prs2#[(port*pregBits)..+pregBits] = slot.io_iss_uop_prs2
+        iss_ppred#[(port*ftqBits)..+ftqBits] = slot.io_iss_uop_ppred
+        iss_csr_cmd#[(port*3)..+3] = slot.io_iss_uop_csr_cmd
+        iss_ldst_is_rs1#[(port*1)..+1] = slot.io_iss_uop_ldst_is_rs1
+        iss_dst_rtype#[(port*2)..+2] = slot.io_iss_uop_dst_rtype
+        iss_lrs1_rtype#[(port*2)..+2] = slot.io_iss_uop_lrs1_rtype
+        iss_lrs2_rtype#[(port*2)..+2] = slot.io_iss_uop_lrs2_rtype
+        iss_fcn_dw#[(port*1)..+1] = slot.io_iss_uop_fcn_dw
+        iss_fcn_op#[(port*5)..+5] = slot.io_iss_uop_fcn_op
+      }
+    }
+  }
+  requests = requestOut
+  remaining = survives#[0..+n]
+  live = liveOut
+  vacantNext = freeNext
+}

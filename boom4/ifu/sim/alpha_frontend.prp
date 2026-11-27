@@ -1,0 +1,68 @@
+const config    = import("../../common/pyrope/BoomConfig")
+const predictor = import("../pyrope/BranchPredictor.BranchPredictor")
+comptime const alpha = config.params(alpha21264BPD=true, bpdMaxMetaLength=25, localHistoryLength=104, globalHistoryLength=80)
+
+pub mod alpha_frontend(
+  clock:Clock,
+  reset:Reset,
+  update:U1,
+  repair:U1,
+  fire:U1,
+  meta:U136,
+) -> (info:U136@[], taken:U1@[], target:U40@[], valid:U1@[]) {
+  const p = predictor<C=alpha>(
+    clock,
+    reset,
+    io_f0_req_valid=1,
+    io_f0_req_bits_pc=0x1008,
+    io_f0_req_bits_ghist_old_history=0,
+    io_f3_fire=fire,
+    io_update_valid=update,
+    io_update_bits_is_mispredict_update=0,
+    io_update_bits_is_repair_update=repair,
+    io_update_bits_btb_mispredicts=0,
+    io_update_bits_pc=0x1008,
+    io_update_bits_br_mask=1,
+    io_update_bits_cfi_idx_valid=1,
+    io_update_bits_cfi_idx_bits=0,
+    io_update_bits_cfi_taken=1,
+    io_update_bits_cfi_mispredicted=1,
+    io_update_bits_cfi_is_br=1,
+    io_update_bits_cfi_is_jal=0,
+    io_update_bits_cfi_is_jalr=0,
+    io_update_bits_ghist_old_history=0,
+    io_update_bits_target=0x1108,
+    fetchNextHistory=0, updateNextHistory=0, io_update_bits_meta=meta,
+  )
+  info   = p.metadata
+  taken  = p.f3_taken#[0]
+  valid  = p.f3_valid#[0]
+  target = p.f3_target#[0..+40]
+}
+
+test alpha_frontend.target {
+  mut d          = alpha_frontend
+  mut saved:U136 = 0
+  tick 2090 {
+    d.reset  = clock < 2
+    d.update = U1(clock == 2060 or clock == 2076)
+    d.repair = U1(clock == 2076)
+    d.fire   = U1(clock == 2069)
+    d.meta   = if clock == 2076 { saved | (41 << 32) | (1 << 134) } else { saved }
+    step
+    if clock == 2058 {
+      assert(
+        d.info#[0..+8] == 0xaa and d.info#[8..+8] == 0xaa and d.info#[17..+8] == 0xaa,
+        "all three counter tables reset",
+      )
+      saved = d.info
+    } elif clock == 2068 {
+      assert(d.taken == 1 and d.valid == 1 and d.target == 0x1108, "trained conditional branch has the BTB target")
+      assert(d.info#[0..+2] == 1 and d.info#[8..+2] == 3, "BTB and direction trainers share the update")
+    } elif clock == 2075 {
+      assert(d.info#[32..+32] == 1, "BTB hit advances speculative local history")
+    } elif clock == 2088 {
+      assert(d.info#[32..+104] == (41 | (1 << 102)), "FTQ repair snapshot restores the local history")
+    }
+  }
+}

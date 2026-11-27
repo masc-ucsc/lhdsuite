@@ -1,0 +1,77 @@
+const cache = import("../pyrope/PageTableCache.PageTableCache")
+
+pub mod page_table_cache(clock:Clock, reset:U1, read:U1, write:U1, vpn:U27, data:U26, global:U1,
+    fence:U1, byAddress:U1, byAsid:U1) -> (hits:U3@[], misses:U3@[], values:U78@[], shared:U3@[], errors:U3@[]) {
+  comptime const capacities = (0, 4, 16)
+  comptime const ways = (1, 4, 4)
+  for i in 0..<3 {
+    comptime const n = capacities[i]
+    comptime const w = ways[i]
+    const q = cache<entries=n, ways=w>(clock, reset, read, suitable=1, readVpn=vpn, vpn, write,
+        pte=data, global, fence, byAddress, byAsid, fenceVpn=vpn)
+    hits#[i] = q.hit
+    misses#[i] = q.miss
+    values#[(i*26)..+26] = q.data
+    shared#[i] = q.shared
+    errors#[i] = q.error
+  }
+}
+
+test page_table_cache.associativity {
+  mut dut = page_table_cache
+  tick 96 {
+    const phase = clock%4
+    const group = clock/4
+    const line = if group < 2 { 0 } elif group < 14 { (group-2)%4 } elif group < 16 { 0 } else { (group-16)%4 }
+    dut.reset = U1(group < 2)
+    dut.vpn = 0x10000 + 4*line
+    dut.data = 0x2000+line
+    dut.global = U1(line == 1)
+    dut.write = U1(group >= 2 and group < 6 and phase == 2)
+    dut.read = U1(((group >= 6 and group < 14) or group >= 16) and phase == 0)
+    dut.fence = U1((group == 10 or group == 14 or group == 20) and phase == 3)
+    dut.byAddress = U1(group == 14)
+    dut.byAsid = U1(group == 10)
+    step
+    if dut.read != 0 { assert(dut.errors == 0, "clean cache entries pass parity") }
+    if phase == 1 and ((group >= 6 and group < 14) or group >= 16) {
+      const present = group <= 10 or (group < 14 and line == 1)
+      assert(dut.hits == (if present { 6 } else { 0 }) and dut.misses == (if present { 0 } else { 6 }),
+          "zero-entry bypass and four colliding VPNs in the one-set and four-set caches")
+      if present {
+        assert(dut.values#[26..+26] == 0x2000+line and dut.values#[52..+26] == 0x2000+line and
+            dut.shared == (if line == 1 { 6 } else { 0 }), "selected way restores PTE and global flags")
+      }
+    }
+  }
+}
+
+test page_table_cache.replacement {
+  mut dut = page_table_cache
+  tick 56 {
+    const group = clock/4
+    const phase = clock%4
+    // Fill ways 0..3, touch ways 0 and 2, then insert VPN 4 into way 1.
+    const line = if group < 2 { 0 } elif group < 6 { group-2 } elif group == 6 { 0 }
+        elif group == 7 { 2 } elif group == 8 { 4 } else { group-9 }
+    dut.reset = U1(group < 2)
+    dut.vpn = 4*line
+    dut.data = 0x400+line
+    dut.global = 0
+    dut.fence = 0
+    dut.byAddress = 0
+    dut.byAsid = 0
+    dut.write = U1(((group >= 2 and group < 6) or group == 8) and phase == 2)
+    dut.read = U1(group >= 6 and group != 8 and phase == 0)
+    step
+    if group >= 9 and phase == 1 {
+      const present = line != 1
+      assert(dut.hits == (if present { 6 } else { 0 }) and dut.misses == (if present { 0 } else { 6 }),
+          "PLRU replaces the untouched sibling in the older half")
+      if present {
+        assert(dut.values#[26..+26] == 0x400+line and dut.values#[52..+26] == 0x400+line,
+            "replacement preserves the other colliding translations")
+      }
+    }
+  }
+}

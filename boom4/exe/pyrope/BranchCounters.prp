@@ -1,0 +1,19 @@
+// BOOM's optional predictor counters overlay HPM16 through HPM30 in both CSR spaces.
+pub mod BranchCounters<width>(clock:Clock, reset:Reset, address:U12, fallback:U64,
+    retire:Unsigned(bits=width), source:Unsigned(bits=3*width), branch:Unsigned(bits=4*width)) -> (data:U64@[]) {
+  data = fallback
+  for predictor in 0..<5 {
+    for kind in 0..<3 {
+      reg total:U64 = 0
+      mut increment = 0
+      for lane in 0..<width {
+        const operation = branch#[(4*lane)..+4]
+        const matches = if kind == 0 { operation >= 1 and operation <= 6 } else { operation == 6+kind }
+        increment = increment + U1(matches and retire#[lane] != 0 and source#[(3*lane)..+3] == predictor)
+      }
+      wrap total = total + increment
+      const index = 16 + 3*predictor + kind
+      if address == 0xb00+index or address == 0xc00+index { data = total }
+    }
+  }
+}

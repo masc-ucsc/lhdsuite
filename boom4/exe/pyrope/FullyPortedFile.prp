@@ -1,0 +1,22 @@
+// Every reader has a registered address and every writer has its own port.
+pub mod FullyPortedFile<entries, bits, reads, writes>(
+  clock:Clock,
+  addr:Unsigned(bits=reads*std.clog2(entries)),
+  write:Unsigned(bits=writes),
+  writeAddr:Unsigned(bits=writes*std.clog2(entries)),
+  writeData:Unsigned(bits=writes*bits),
+) -> (data:Unsigned(bits=reads*bits)@[]) {
+  comptime const p = std.clog2(entries)
+  reg memory:[entries]Unsigned(bits=bits):[ordering="old"] = nil
+  reg addresses:Unsigned(bits=reads*p)                     = nil
+  addresses = addr
+  data      = 0
+  for port in 0..<reads {
+    data#[(port*bits)..+bits] = memory[addresses#[(port*p)..+p]%entries]
+  }
+  for port in 0..<writes {
+    if write#[port] != 0 {
+      memory[writeAddr#[(port*p)..+p]%entries] = writeData#[(port*bits)..+bits]
+    }
+  }
+}

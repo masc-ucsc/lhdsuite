@@ -1,0 +1,29 @@
+// A stall blocks every younger slot, including slots after holes in the row.
+pub comb hazards<width, superscalarSnapshots>(
+  blocked:Unsigned(bits=width),
+  enableOOO:U1,
+  flush:U1,
+  pipelineEmpty:U1,
+  takesTag:Unsigned(bits=width),
+  uniqueOp:Unsigned(bits=width),
+  valid:Unsigned(bits=width),
+) -> (fence:U1, fire:Unsigned(bits=width), stalled:U1) {
+  mut olderValid:U1  = 0
+  mut olderUnique:U1 = 0
+  mut olderTag:U1    = 0
+  stalled = 0
+  fence   = 0
+  fire    = 0
+  for lane in 0..<width {
+    if valid#[lane] != 0 {
+      const drain        = (uniqueOp#[lane] | ~enableOOO) & (~pipelineEmpty | olderValid)
+      const snapshotBusy = if superscalarSnapshots { 0 } else { olderTag & takesTag#[lane] }
+      fence       = fence | drain
+      stalled     = stalled | blocked#[lane] | flush | drain | olderUnique | snapshotBusy
+      fire#[lane] = ~stalled
+      olderValid  = 1
+      olderUnique = olderUnique | uniqueOp#[lane]
+      olderTag    = olderTag | takesTag#[lane]
+    }
+  }
+}

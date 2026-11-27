@@ -1,0 +1,34 @@
+const control = import("../pyrope/DecodeControl.DecodeControl")
+
+pub mod decode_control(clock:Clock, reset:U1, lanes:U4, branchFull:U4, exceptions:U4,
+    stall:U1, exceptionStall:U1, redirect:U1) -> (fire:U4@[], ready:U1@[]) {
+  reg finished:U4 = nil
+  const row = control<width=4>(packet=1, lanes=lanes, finished=finished, exceptions=exceptions,
+      branchFull=branchFull, stall=stall, exceptionStall=exceptionStall, redirect=redirect)
+  finished = if reset != 0 { 0 } else { row.nextFinished }
+  reg accepted:U4 = nil
+  reg dequeued:U1 = nil
+  accepted = row.fire
+  dequeued = row.ready
+  fire = accepted
+  ready = dequeued
+}
+
+test decode_control.retries {
+  mut dut = decode_control
+  tick 11 {
+    dut.reset = U1(clock < 2)
+    dut.lanes = if clock < 3 { 0 } else { 15 }
+    dut.branchFull = if clock == 3 or clock == 8 { 2 } else { 0 }
+    dut.exceptions = if clock >= 4 and clock <= 6 { 4 } else { 0 }
+    dut.exceptionStall = U1(clock == 5)
+    dut.stall = U1(clock == 7)
+    dut.redirect = U1(clock == 9)
+    step
+    if clock == 3 or clock == 8 { assert(dut.fire == 1 and dut.ready == 0, "branch tag stalls younger lanes") }
+    if clock == 4 { assert(dut.fire == 2 and dut.ready == 0, "exception waits for older lane") }
+    if clock == 5 or clock == 7 or clock == 9 { assert(dut.fire == 0, "pipeline stall or redirect") }
+    if clock == 6 { assert(dut.fire == 12 and dut.ready == 1, "retry exception and finish row") }
+    if clock == 10 { assert(dut.fire == 15 and dut.ready == 1, "redirect clears finished lanes") }
+  }
+}

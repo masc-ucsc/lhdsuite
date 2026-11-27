@@ -1,0 +1,47 @@
+const row = import("../pyrope/DispatchRow")
+
+pub comb dispatch_row(
+  valid:U5,
+  exceptions:U5,
+  tail:U8,
+  base:U3,
+) -> (count:U3, data:U40, fault:U4, imm:U5, jalr:U1, narrow:U20, tags:U40) {
+  mut selectors:U15 = 0
+  for lane in 0..<5 {
+    selectors#[(lane*3)..+3] = (base + lane)#[0..+3]
+  }
+  const target = row.decodeTargets<bits=4, width=5>(valid=valid, exceptions=exceptions, branchTypes=0x81828, ftq=0x54321)
+  const write  = row.fileWrites<width=5>(fire=valid, selectors=selectors, loadTags=0x54321, storeTags=0xabcde)
+  count  = valid#+[0..<5]
+  fault  = target.exceptionTarget
+  jalr   = target.anyJalr
+  imm    = write.immediates
+  data   = write.branchData
+  tags   = row.robTags<bits=8, width=5>(tail=tail)
+  narrow = row.narrowTags<dstBits=4, srcBits=8, width=5>(tags=tags)
+}
+
+test dispatch_row.sparse {
+  mut d = dispatch_row
+  tick 8192 {
+    const v = clock#[0..+5]
+    const e = clock#[5..+5]
+    const b = clock#[10..+3]
+    const t = (clock*173)#[0..+8]
+    d.valid      = v
+    d.exceptions = e
+    d.base       = b
+    d.tail       = t
+    step
+    const n      = v#[0] + v#[1] + v#[2] + v#[3] + v#[4]
+    const mask   = v & ((0xffb9999dff >> (5*b)) & 31)
+    const first  = (v & e) & -(v & e)
+    const target = if first == 16 { 5 } elif first == 8 { 4 } elif first == 4 { 3 } elif first == 2 { 2 } else { 1 }
+    const tags   = (t & 248)*0x0101010101 + 0x0403020100
+    const narrow = (t & 8)*0x11111 + 0x43210
+    assert(d.tags == tags and d.narrow == narrow, "ROB bank and physical tag stride")
+    assert(d.count == n and d.imm == mask, "row retirement and immediate writes")
+    assert(d.data == 0xa5b4c3d2e1, "paired load and store tags for each branch")
+    assert(d.fault == target and d.jalr == U1((v & 21) != 0), "oldest fault and JALR reduction")
+  }
+}

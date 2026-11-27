@@ -1,0 +1,26 @@
+const cfg = import("../pyrope/BoomConfig")
+const presets = import("../pyrope/BoomPresets")
+comptime const large = cfg.params<B=presets.large>(nPMPs=16, dcacheMSHRs=8, ftq=cfg.fetchTargetQueue(nEntries=48))
+comptime const narrow = cfg.params<B=large>(nPMPs=0, cachedSourceIds=2, alpha21264BPD=true)
+comptime const list = (
+  cfg.queue(iqType=cfg.IQ_FP, numEntries=11),
+  cfg.queue(iqType=cfg.IQ_ALU, numEntries=21, useMatrixIssue=true),
+  cfg.queue(iqType=cfg.IQ_MEM, numEntries=19, issueWidth=2),
+  cfg.queue(iqType=cfg.IQ_UNQ, numEntries=8),
+)
+comptime const queued = cfg.params(issueParams=list)
+comptime const roundTrip = cfg.params<B=large>(issueParams=large.issueParams)
+pub mod compose(x:U8) -> (y:U8@[0]) {
+  cassert(large.decodeWidth == 3 and large.coreWidth == 3 and large.numRobEntries == 96 and large.ftqEntries == 48)
+  cassert(large.nPMPs == 16 and large.cachedSourceIds == 8 and narrow.cachedSourceIds == 2 and narrow.nPMPs == 0 and narrow.ftq.nEntries == 48)
+  cassert(narrow.globalHistoryLength == 32 and narrow.localHistoryNSets == 128 and narrow.bpdMaxMetaLength == 64)
+  cassert(queued.alu.useMatrixIssue and queued.mem.numEntries == 19 and queued.fp.numEntries == 11)
+  cassert(roundTrip.alu.iqType == cfg.IQ_ALU and roundTrip.mem.issueWidth == large.mem.issueWidth)
+  wrap y = x + narrow.alu.issueWidth
+}
+test compose.overrides {
+  mut dut = compose
+  dut.x = 9
+  step
+  assert(dut.y == 12)
+}

@@ -1,0 +1,110 @@
+const software = import("SoftwarePredictor.SoftwarePredictor")
+const configs = import("../../common/pyrope/BoomConfig")
+comptime const defaultConfig = configs.small
+
+comb order<banks, bits>(packed:Unsigned(bits=banks*bits), start:U1) -> (out:Unsigned(bits=banks*bits)) {
+  if banks == 2 and start != 0 {
+    wrap out = (packed << bits) | (packed >> bits)
+  } else {
+    out = packed
+  }
+}
+
+pub mod BranchPredictor<C=defaultConfig>::[timecheck=false](clock:Clock, reset:Reset, io_f0_req_valid:U1, io_f0_req_bits_pc:Unsigned(bits=C.addrBits), io_f0_req_bits_ghist_old_history:Unsigned(bits=C.globalHistoryLength), io_f3_fire:U1, io_update_valid:U1, io_update_bits_is_mispredict_update:U1, io_update_bits_is_repair_update:U1, io_update_bits_btb_mispredicts:Unsigned(bits=C.fetchWidth), io_update_bits_pc:Unsigned(bits=C.addrBits), io_update_bits_br_mask:Unsigned(bits=C.fetchWidth), io_update_bits_cfi_idx_valid:U1, io_update_bits_cfi_idx_bits:Unsigned(bits=std.clog2(C.fetchWidth)), io_update_bits_cfi_taken:U1, io_update_bits_cfi_mispredicted:U1, io_update_bits_cfi_is_br:U1, io_update_bits_cfi_is_jal:U1, io_update_bits_cfi_is_jalr:U1, io_update_bits_ghist_old_history:Unsigned(bits=C.globalHistoryLength), io_update_bits_target:Unsigned(bits=C.addrBits), io_update_bits_meta:Unsigned(bits=C.ftqBankBits*C.fetchBanks), fetchNextHistory:Unsigned(bits=C.globalHistoryLength), updateNextHistory:Unsigned(bits=C.globalHistoryLength)) -> (f1_branch:Unsigned(bits=1*C.fetchWidth)@[], f1_taken:Unsigned(bits=1*C.fetchWidth)@[], f1_target:Unsigned(bits=C.addrBits*C.fetchWidth)@[], f1_valid:Unsigned(bits=1*C.fetchWidth)@[], f2_branch:Unsigned(bits=1*C.fetchWidth)@[], f2_taken:Unsigned(bits=1*C.fetchWidth)@[], f2_target:Unsigned(bits=C.addrBits*C.fetchWidth)@[], f2_valid:Unsigned(bits=1*C.fetchWidth)@[], f3_branch:Unsigned(bits=1*C.fetchWidth)@[], f3_jal:Unsigned(bits=1*C.fetchWidth)@[], f3_taken:Unsigned(bits=1*C.fetchWidth)@[], f3_target:Unsigned(bits=C.addrBits*C.fetchWidth)@[], f3_valid:Unsigned(bits=1*C.fetchWidth)@[], io_resp_f3_pc:Unsigned(bits=C.addrBits)@[], metadata:Unsigned(bits=C.ftqBankBits*C.fetchBanks)@[]) {
+  reg pc1:Unsigned(bits=C.addrBits) = nil
+  reg pc2:Unsigned(bits=C.addrBits) = nil
+  reg pc3:Unsigned(bits=C.addrBits) = nil
+  reg history1:Unsigned(bits=C.globalHistoryLength) = nil
+  reg nextHistory1:Unsigned(bits=C.globalHistoryLength) = nil
+  reg v1:U1 = nil
+  reg v2:U1 = nil
+  reg v3:U1 = nil
+  history1 = io_f0_req_bits_ghist_old_history
+  nextHistory1 = fetchNextHistory
+  v1 = io_f0_req_valid
+  v2 = v1
+  v3 = v2
+  pc1 = io_f0_req_bits_pc
+  pc2 = pc1
+  pc3 = pc2
+  io_resp_f3_pc = pc3
+  metadata = 0
+  mut raw1_taken:Unsigned(bits=1*C.fetchWidth) = 0
+  mut raw1_branch:Unsigned(bits=1*C.fetchWidth) = 0
+  mut raw1_valid:Unsigned(bits=1*C.fetchWidth) = 0
+  mut raw1_target:Unsigned(bits=C.addrBits*C.fetchWidth) = 0
+  mut raw2_taken:Unsigned(bits=1*C.fetchWidth) = 0
+  mut raw2_branch:Unsigned(bits=1*C.fetchWidth) = 0
+  mut raw2_valid:Unsigned(bits=1*C.fetchWidth) = 0
+  mut raw2_target:Unsigned(bits=C.addrBits*C.fetchWidth) = 0
+  mut raw3_taken:Unsigned(bits=1*C.fetchWidth) = 0
+  mut raw3_branch:Unsigned(bits=1*C.fetchWidth) = 0
+  mut raw3_valid:Unsigned(bits=1*C.fetchWidth) = 0
+  mut raw3_target:Unsigned(bits=C.addrBits*C.fetchWidth) = 0
+  mut raw3_jal:Unsigned(bits=1*C.fetchWidth) = 0
+  if C.enableBranchPrediction and C.swBPD {
+    const sw = software<addrBits=C.addrBits, width=C.fetchWidth>(clock=clock, reset=reset, fetch1=v1, pc1=pc1,
+      train=io_update_valid, updatePc=io_update_bits_pc,
+      repair=io_update_bits_is_mispredict_update | io_update_bits_is_repair_update,
+      btbMiss=io_update_bits_btb_mispredicts, branches=io_update_bits_br_mask,
+      cfi=io_update_bits_cfi_idx_bits, cfiValid=io_update_bits_cfi_idx_valid, taken=io_update_bits_cfi_taken,
+      branch=io_update_bits_cfi_is_br, jump=io_update_bits_cfi_is_jal, target=io_update_bits_target)
+    raw2_taken = sw.direction
+    raw2_valid = sw.valid
+    raw2_branch = sw.kind
+    raw2_target = sw.targets
+    raw3_taken = sw.late
+    raw3_branch = sw.late
+  } elif C.enableBranchPrediction {
+    const buildBank = C.branchPredictor
+    for i in 0..<C.fetchBanks {
+      const second = C.fetchBanks == 2 and io_f0_req_bits_pc#[3] != i
+      const fetchValid = io_f0_req_valid & U1(not second or io_f0_req_bits_pc#[3..+3] != 7)
+      const fetchPc:Unsigned(bits=C.addrBits) = if second { ((io_f0_req_bits_pc & ~7) + 8)#[0..+C.addrBits] } else { io_f0_req_bits_pc }
+      const mask:U4 = if second { 15 } else { (15 << io_f0_req_bits_pc#[1..+2])#[0..+4] }
+      const history = if C.fetchBanks == 2 and pc1#[3] != i { nextHistory1 } else { history1 }
+      const fire = io_f3_fire & U1(C.fetchBanks == 1 or (v3 != 0 and (pc3#[3] == i or pc3#[3..+3] != 7)))
+
+      const updateSecond = C.fetchBanks == 2 and io_update_bits_pc#[3] != i
+      const upperCfi = io_update_bits_cfi_idx_bits >= 4
+      const train = io_update_valid & U1(not updateSecond or (io_update_bits_pc#[3..+3] != 7 and (io_update_bits_cfi_idx_valid == 0 or upperCfi)))
+      const updatePc:Unsigned(bits=C.addrBits) = if updateSecond { ((io_update_bits_pc & ~7) + 8)#[0..+C.addrBits] } else { io_update_bits_pc }
+      const offset = if updateSecond { 4 } else { 0 }
+      const bank = buildBank<C>(clock, reset, fetch=fetchValid, pc=fetchPc, mask, history, fire,
+          update=(valid=train, mispredict=io_update_bits_is_mispredict_update, repair=io_update_bits_is_repair_update,
+              wrongTargets=(io_update_bits_btb_mispredicts >> offset)#[0..+4], pc=updatePc,
+              branches=(io_update_bits_br_mask >> offset)#[0..+4], cfiValid=io_update_bits_cfi_idx_valid & U1(upperCfi == updateSecond),
+              cfi=io_update_bits_cfi_idx_bits#[0..+2], taken=io_update_bits_cfi_taken, missed=io_update_bits_cfi_mispredicted,
+              branch=io_update_bits_cfi_is_br, jal=io_update_bits_cfi_is_jal, jalr=io_update_bits_cfi_is_jalr, target=io_update_bits_target),
+          updateHistory=if updateSecond { updateNextHistory } else { io_update_bits_ghist_old_history },
+          updateMeta=io_update_bits_meta#[(i*C.ftqBankBits)..+C.ftqBankBits]#[0..+C.bankMetaBits])
+      metadata#[(i*C.ftqBankBits)..+C.ftqBankBits] = bank.metadata#[0..+C.ftqBankBits]
+      raw1_taken#[(i*4)..+4] = bank.f1.taken
+      raw1_branch#[(i*4)..+4] = bank.f1.branch
+      raw1_valid#[(i*4)..+4] = bank.f1.valid
+      raw1_target#[(i*4*C.addrBits)..+(4*C.addrBits)] = bank.f1.target
+      raw2_taken#[(i*4)..+4] = bank.f2.taken
+      raw2_branch#[(i*4)..+4] = bank.f2.branch
+      raw2_valid#[(i*4)..+4] = bank.f2.valid
+      raw2_target#[(i*4*C.addrBits)..+(4*C.addrBits)] = bank.f2.target
+      raw3_taken#[(i*4)..+4] = bank.f3.taken
+      raw3_branch#[(i*4)..+4] = bank.f3.branch
+      raw3_valid#[(i*4)..+4] = bank.f3.valid
+      raw3_target#[(i*4*C.addrBits)..+(4*C.addrBits)] = bank.f3.target
+      raw3_jal#[(i*4)..+4] = bank.jumps
+    }
+  }
+  f1_taken = order<banks=C.fetchBanks, bits=4>(packed=raw1_taken, start=pc1#[3])
+  f1_branch = order<banks=C.fetchBanks, bits=4>(packed=raw1_branch, start=pc1#[3])
+  f1_valid = order<banks=C.fetchBanks, bits=4>(packed=raw1_valid, start=pc1#[3])
+  f1_target = order<banks=C.fetchBanks, bits=(4*C.addrBits)>(packed=raw1_target, start=pc1#[3])
+  f2_taken = order<banks=C.fetchBanks, bits=4>(packed=raw2_taken, start=pc2#[3])
+  f2_branch = order<banks=C.fetchBanks, bits=4>(packed=raw2_branch, start=pc2#[3])
+  f2_valid = order<banks=C.fetchBanks, bits=4>(packed=raw2_valid, start=pc2#[3])
+  f2_target = order<banks=C.fetchBanks, bits=(4*C.addrBits)>(packed=raw2_target, start=pc2#[3])
+  f3_taken = order<banks=C.fetchBanks, bits=4>(packed=raw3_taken, start=pc3#[3])
+  f3_branch = order<banks=C.fetchBanks, bits=4>(packed=raw3_branch, start=pc3#[3])
+  f3_valid = order<banks=C.fetchBanks, bits=4>(packed=raw3_valid, start=pc3#[3])
+  f3_target = order<banks=C.fetchBanks, bits=(4*C.addrBits)>(packed=raw3_target, start=pc3#[3])
+  f3_jal = order<banks=C.fetchBanks, bits=4>(packed=raw3_jal, start=pc3#[3])
+}

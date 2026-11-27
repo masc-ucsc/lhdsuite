@@ -1,0 +1,55 @@
+// BOOM2 is a one-table TAGE predictor. Weak counters defer to the BTB/BIM
+// direction. With one table there is no alternate tagged provider.
+const TageTable = import("TageTable.TageTable")
+pub mod GShareBank<T, period=2048, single=false, fetchShift=3, historyBits=64, pcBits=40>(baseTaken:U4, branches:U4, cfi:U2, cfiValid:U1, clock:Clock, fetch:U1, history:Unsigned(bits=historyBits), meta:U32, mispredict:U1, pc:Unsigned(bits=pcBits), reset:Reset, taken:U1, update:U1, updateHistory:Unsigned(bits=historyBits), updatePc:Unsigned(bits=pcBits)) -> (info:U32@[], prediction:U4@[]) {
+  reg f1Valid:U1 = nil
+  reg f1Pc:Unsigned(bits=pcBits) = nil
+  f1Valid = fetch
+  f1Pc = pc
+  reg s1:(valid:U1, pc:Unsigned(bits=pcBits), hist:Unsigned(bits=historyBits), branches:U4, cfiValid:U1, cfi:U2, taken:U1, mispredict:U1, meta:U32) = nil
+  s1 = (valid=update, pc=updatePc, hist=updateHistory, branches=branches, cfiValid=cfiValid, cfi=cfi, taken=taken, mispredict=mispredict, meta=meta)
+  reg writePc:Unsigned(bits=pcBits) = nil
+  reg writeHistory:Unsigned(bits=historyBits) = nil
+  writePc = s1.pc
+  writeHistory = s1.hist
+  reg mask:U4 = nil
+  reg direction:U4 = nil
+  reg allocate:U4 = nil
+  reg oldCtr:U12 = nil
+  reg usefulness:U8 = nil
+  for w in 0..<4 {
+    const selected = s1.cfiValid != 0 and s1.cfi == w
+    const alloc = selected and s1.mispredict != 0 and s1.meta#[w] != 0
+    const hit = s1.branches#[w] != 0 and s1.meta#[28 + w] != 0
+    mask#[w] = s1.valid & U1(alloc or hit)
+    allocate#[w] = U1(alloc)
+    direction#[w] = U1(selected) & s1.taken
+    oldCtr#[(3*w)..+3] = s1.meta#[(4 + (3*w))..+3]
+    usefulness#[(2*w)..+2] = if alloc { 0 } else { s1.meta#[(16 + (2*w))..+2] }
+  }
+  const tbl = TageTable<pcBits=pcBits, historyBits=historyBits, T=T, fetchShift=fetchShift, period=period, single=single>(clock=clock, reset=reset, io_f1_req_valid=f1Valid, io_f1_req_pc=f1Pc, io_f1_req_ghist=history, io_update_pc=writePc, io_update_hist=writeHistory, io_update_mask_0=mask#[0], io_update_mask_1=mask#[1], io_update_mask_2=mask#[2], io_update_mask_3=mask#[3], io_update_taken_0=direction#[0], io_update_taken_1=direction#[1], io_update_taken_2=direction#[2], io_update_taken_3=direction#[3], io_update_alloc_0=allocate#[0], io_update_alloc_1=allocate#[1], io_update_alloc_2=allocate#[2], io_update_alloc_3=allocate#[3], io_update_old_ctr_0=oldCtr#[0..+3], io_update_old_ctr_1=oldCtr#[3..+3], io_update_old_ctr_2=oldCtr#[6..+3], io_update_old_ctr_3=oldCtr#[9..+3], io_update_u_mask_0=mask#[0], io_update_u_mask_1=mask#[1], io_update_u_mask_2=mask#[2], io_update_u_mask_3=mask#[3], io_update_u_0=(e0=usefulness#[0], e1=usefulness#[1]), io_update_u_1=(e0=usefulness#[2], e1=usefulness#[3]), io_update_u_2=(e0=usefulness#[4], e1=usefulness#[5]), io_update_u_3=(e0=usefulness#[6], e1=usefulness#[7]))
+  reg hits:U4 = nil
+  hits#[0..+1] = tbl.io_f2_resp_0_valid
+  hits#[1..+1] = tbl.io_f2_resp_1_valid
+  hits#[2..+1] = tbl.io_f2_resp_2_valid
+  hits#[3..+1] = tbl.io_f2_resp_3_valid
+  reg counters:U12 = nil
+  counters#[0..+3] = tbl.io_f2_resp_0_bits_ctr
+  counters#[3..+3] = tbl.io_f2_resp_1_bits_ctr
+  counters#[6..+3] = tbl.io_f2_resp_2_bits_ctr
+  counters#[9..+3] = tbl.io_f2_resp_3_bits_ctr
+  reg use:U8 = nil
+  use#[0..+2] = tbl.io_f2_resp_0_bits_u
+  use#[2..+2] = tbl.io_f2_resp_1_bits_u
+  use#[4..+2] = tbl.io_f2_resp_2_bits_u
+  use#[6..+2] = tbl.io_f2_resp_3_bits_u
+  info = (hits << 28) | (use << 16) | (counters << 4)
+  prediction = baseTaken
+  for w in 0..<4 {
+    const ctr = counters#[(3*w)..+3]
+    if hits#[w] != 0 and ctr != 3 and ctr != 4 {
+      prediction#[w] = ctr#[2]
+    }
+    info#[w] = U1(hits#[w] == 0 and use#[(2*w)..+2] == 0)
+  }
+}

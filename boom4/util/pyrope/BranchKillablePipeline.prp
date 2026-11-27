@@ -1,0 +1,19 @@
+pub mod BranchKillablePipeline<stages=3, pregBits=6, robBits=5, branches=8>::[timecheck=false](clock:Clock, io_brupdate_b1_mispredict_mask:Unsigned(bits=branches), io_brupdate_b1_resolve_mask:Unsigned(bits=branches), io_flush:U1, io_req_bits_uop_br_mask:Unsigned(bits=branches), io_req_bits_uop_dst_rtype:U2, io_req_bits_uop_pdst:Unsigned(bits=pregBits), io_req_bits_uop_rob_idx:Unsigned(bits=robBits), io_req_valid:U1, reset:U1) -> (io_resp_bits_uop_br_mask:Unsigned(bits=branches)@[], io_resp_bits_uop_dst_rtype:U2@[], io_resp_bits_uop_pdst:Unsigned(bits=pregBits)@[], io_resp_bits_uop_rob_idx:Unsigned(bits=robBits)@[], io_resp_valid:U1@[]) {
+  cassert(stages >= 1)
+  reg live:Unsigned(bits=stages) = nil
+  reg masks:[stages]Unsigned(bits=branches):[ordering="old"]
+  reg tags:[stages]Unsigned(bits=robBits+pregBits+2):[ordering="old"]
+  const request:Unsigned(bits=robBits+pregBits+2) = (io_req_bits_uop_rob_idx, io_req_bits_uop_pdst, io_req_bits_uop_dst_rtype)#[..]
+  for i in 0..<stages {
+    const mask = if i == 0 { io_req_bits_uop_br_mask } else { masks[i-1] }
+    const active = if i == 0 { io_req_valid } else { live#[i-1] }
+    live#[i] = active & U1(reset == 0 and io_flush == 0 and (mask & io_brupdate_b1_mispredict_mask) == 0)
+    masks[i] = mask & ~io_brupdate_b1_resolve_mask
+    tags[i] = if i == 0 { request } else { tags[i-1] }
+  }
+  io_resp_valid = live#[stages-1]
+  io_resp_bits_uop_br_mask = masks[stages-1]
+  io_resp_bits_uop_rob_idx = tags[stages-1]#[0..+robBits]
+  io_resp_bits_uop_pdst = tags[stages-1]#[robBits..+pregBits]
+  io_resp_bits_uop_dst_rtype = tags[stages-1]#[(robBits+pregBits)..+2]
+}

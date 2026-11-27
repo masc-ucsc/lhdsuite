@@ -1,0 +1,67 @@
+// Each lane holds a registered allocation until rename consumes it. Branch
+// checkpoints track younger allocations so recovery can return them together.
+pub mod PhysicalFreeList<width, returns, physical, branches, immediate=false>(
+    clock:Clock, reset:U1, initial:Unsigned(bits=physical), requests:Unsigned(bits=width),
+    releaseValid:Unsigned(bits=returns), releaseRegs:Unsigned(bits=returns*std.clog2(physical)),
+    commitValid:Unsigned(bits=returns), commitRegs:Unsigned(bits=returns*std.clog2(physical)),
+    snap:Unsigned(bits=width+1), tags:Unsigned(bits=(width+1)*std.clog2(branches)),
+    mispredict:U1, recover:Unsigned(bits=std.clog2(branches)), rollback:U1) ->
+    (valid:Unsigned(bits=width)@[], regs:Unsigned(bits=width*std.clog2(physical))@[], debug:Unsigned(bits=physical)@[]) {
+  comptime const p = std.clog2(physical)
+  comptime const b = std.clog2(branches)
+  reg free:Unsigned(bits=physical) = nil
+  reg speculative:Unsigned(bits=physical) = nil
+  reg checkpoints:Unsigned(bits=branches*physical) = nil
+  reg held:Unsigned(bits=width) = nil
+  reg selected:Unsigned(bits=width*p) = nil
+  reg delayed:Unsigned(bits=physical) = nil
+  valid = held
+  regs = selected
+  debug = free
+  mut choices = free
+  mut claimed:Unsigned(bits=physical) = 0
+  mut allocated:Unsigned(bits=physical) = 0
+  mut nextHeld = held
+  for lane in 0..<width {
+    const first:Unsigned(bits=physical) = choices & -choices
+    choices = choices & ~first
+    const index = selected#[(lane*p)..+p]
+    if held#[lane] != 0 { debug#[index] = 1 }
+    if requests#[lane] != 0 { allocated#[index] = 1 }
+    if requests#[lane] != 0 or held#[lane] == 0 {
+      nextHeld#[lane] = U1(first != 0)
+      if first != 0 {
+        claimed = claimed | first
+        mut id:Unsigned(bits=p) = 0
+        for i in 0..<physical { if first#[i] != 0 { id = i } }
+        selected#[(lane*p)..+p] = id
+      }
+    }
+  }
+  mut returning:Unsigned(bits=physical) = 0
+  mut committed:Unsigned(bits=physical) = 0
+  for lane in 0..<returns {
+    if releaseValid#[lane] != 0 { returning#[releaseRegs#[(lane*p)..+p]] = 1 }
+    if commitValid#[lane] != 0 { committed#[commitRegs#[(lane*p)..+p]] = 1 }
+  }
+  delayed = returning
+  const killed:Unsigned(bits=physical) = if mispredict != 0 { checkpoints#[(recover*physical)..+physical] } else { 0 }
+  const returned:Unsigned(bits=physical) = delayed | killed | (if rollback != 0 { speculative } else { 0 })
+  const recycled:Unsigned(bits=physical) = if immediate { delayed } else { 0 }
+  for tag in 0..<branches {
+    const prev = checkpoints#[(tag*physical)..+physical]
+    mut updated = (prev & ~killed & ~recycled) | allocated
+    mut younger:Unsigned(bits=physical) = 0
+    for j in 0..=width {
+      const lane = width-j
+      if lane < width {
+        if requests#[lane] != 0 { younger#[selected#[(lane*p)..+p]] = 1 }
+      }
+      if snap#[lane] != 0 and tags#[(lane*b)..+b] == tag { updated = younger }
+    }
+    checkpoints#[(tag*physical)..+physical] = updated
+  }
+  held = if reset != 0 { 0 } else { nextHeld }
+  free = if reset != 0 { initial } else { (free & ~claimed) | returned }
+  speculative = if reset != 0 { 0 } else { (speculative | allocated) & ~returned & ~committed }
+}

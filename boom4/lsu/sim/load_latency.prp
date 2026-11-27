@@ -1,0 +1,26 @@
+const response = import("../pyrope/LoadResponse.LoadResponse")
+mod check<fast>(clock:Clock, cycle:U4) -> (ok:Bool@[]) {
+  const valid = U1(cycle == 2 or cycle == 4 or cycle == 6)
+  const kill = if cycle == 4 { 8 } else { 0 }
+  const r = response<fast=fast, robBits=8, pregBits=8>(clock, valid, mask=10, rob=177, dst=138, kind=0,
+      data=cycle+0x1000, mispredict=kill, resolve=2, exception=U1(cycle == 6))
+  ok = if fast {
+    r.done == valid and r.live == 10 and r.value == 0x1000+cycle
+  } else {
+    r.done == U1(cycle == 3) and r.live == 8 and r.value == 0xfff+cycle
+  }
+  ok = ok and r.tag == 177 and r.pdst == 138 and r.rtype == 0
+}
+pub mod load_latency(clock:Clock, reset:Reset) -> (ok:Bool@[]) {
+  reg cycle:U4 = 0
+  wrap cycle = cycle+1
+  ok = check<fast=true>(clock, cycle) and check<fast=false>(clock, cycle)
+}
+test load_latency.completion {
+  mut d = load_latency
+  tick 10 {
+    d.reset = clock == 0
+    step
+    if clock >= 2 { assert(d.ok, "integer writeback and wakeup timing, branch recovery, and exception cancellation") }
+  }
+}

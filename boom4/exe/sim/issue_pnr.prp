@@ -1,0 +1,22 @@
+const permit = import("../pyrope/IssueSelect.permitted")
+
+pub comb issue_pnr(head:U3, tag:U3, pnr:U3) -> (alu:U1, branch:U1, address:U1) {
+  alu = permit<bits=3>(tag, head, pnr, waitForPnr=false, address=false)
+  branch = permit<bits=3>(tag, head, pnr, waitForPnr=true, address=false)
+  address = permit<bits=3>(tag, head, pnr, waitForPnr=false, address=true)
+}
+
+test issue_pnr.circular_order {
+  mut dut = issue_pnr
+  tick 512 {
+    const head = clock#[0..+3]
+    const tag = clock#[3..+3]
+    const pnr = clock#[6..+3]
+    dut.head = head
+    dut.tag = tag
+    dut.pnr = pnr
+    step
+    assert(dut.alu == 1 and dut.address == U1(tag == head))
+    assert(dut.branch == U1((tag+8-head)%8 <= (pnr+8-head)%8), "issue through the PNR in program order")
+  }
+}

@@ -1,0 +1,96 @@
+const counters  = import("HistoryCounterBank.HistoryCounterBank")
+const localBank = import("LocalHistory.LocalHistory")
+
+pub mod AlphaDirection<globalRows=2048, localCounterRows=2048, chooserRows=128, localRows=128, fetchShift=3, localBits=32, globalBits=32, pcBits=40, victimBits=1, historyOffset=32>(
+  branches:U4,
+  cfi:U2,
+  cfiValid:U1,
+  clock:Clock,
+  commit:U1,
+  fetch:U1,
+  fire:U1,
+  global:Unsigned(bits=globalBits),
+  isBranch:U1,
+  isJal:U1,
+  meta:Unsigned(bits=historyOffset+localBits),
+  missed:U1,
+  pc:Unsigned(bits=pcBits),
+  predictedTakenBranch:U1,
+  recover:U1,
+  reset:Reset,
+  taken:U1,
+  updateGlobal:Unsigned(bits=globalBits),
+  updatePc:Unsigned(bits=pcBits),
+) -> (info:Unsigned(bits=historyOffset+localBits)@[], prediction:U4@[]) {
+  wire f1Local:Unsigned(bits=localBits) = nil
+  wire f3Local:Unsigned(bits=localBits) = nil
+  if localRows == 0 {
+    f1Local = 0
+    f3Local = 0
+  } else {
+    const local = localBank<pcBits=pcBits, bits=localBits, fetchShift=fetchShift, sets=localRows>(
+      clock,
+      reset,
+      fetch,
+      pc,
+      fire,
+      taken=predictedTakenBranch,
+      recover=U1(branches != 0) & recover,
+      recoverPc=updatePc,
+      history=meta#[historyOffset..+localBits],
+    )
+    f1Local = local.f1
+    f3Local = local.f3
+  }
+  const cfiMask:U4 = if cfiValid != 0 { 1 << cfi } else { 0 }
+  const outcomes   = cfiMask & ((if isBranch != 0 and taken != 0 { branches } else { 0 }) | (if isJal != 0 { 15 } else { 0 }))
+  const g          = counters<pcBits=pcBits, bits=globalBits, fetchShift=fetchShift, sets=globalRows>(
+    clock,
+    reset,
+    fetch,
+    pc,
+    hist=global,
+    commit=commit,
+    updatePc=updatePc,
+    updateHist=updateGlobal,
+    branchMask=branches,
+    cfiMask=cfiMask,
+    takenMask=outcomes,
+    missed=missed,
+    meta=meta#[8..+8],
+  )
+  const l          = counters<pcBits=pcBits, bits=localBits, fetchShift=fetchShift, sets=localCounterRows>(
+    clock,
+    reset,
+    fetch,
+    pc,
+    hist=f1Local,
+    commit=commit,
+    updatePc=updatePc,
+    updateHist=meta#[historyOffset..+localBits],
+    branchMask=branches,
+    cfiMask=cfiMask,
+    takenMask=outcomes,
+    missed=missed,
+    meta=meta#[(16+victimBits)..+8],
+  )
+  const c          = counters<pcBits=pcBits, bits=globalBits, fetchShift=fetchShift, selector=true, sets=chooserRows>(
+    clock,
+    reset,
+    fetch,
+    pc,
+    hist=global,
+    commit=commit,
+    updatePc=updatePc,
+    updateHist=updateGlobal,
+    branchMask=branches,
+    cfiMask=cfiMask,
+    takenMask=outcomes,
+    missed=missed,
+    meta=meta#[0..+8],
+  )
+  prediction = if c.active { (l.result & c.result) | (g.result & (15 ^ c.result)) } else { 0 }
+  // The FTQ carries both the prediction metadata and the speculative history
+  // snapshot. Bit 16 belongs to the BTB, between local and global counters.
+  info = (f3Local << historyOffset) | (l.info << (16+victimBits)) | (g.info << 8) | c.info
+}

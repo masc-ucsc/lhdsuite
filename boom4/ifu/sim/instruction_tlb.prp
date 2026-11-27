@@ -1,0 +1,85 @@
+const tlb = import("../pyrope/ITLB.ITLB")
+
+mod table<sets, ways, sectors, superpages, levels=3>(clock:Clock, reset:Reset, page:Unsigned(bits=1+9*levels), fill:U1, fence:U1, level:Unsigned(bits=std.clog2(levels)), mode:U4=8) ->
+    (miss:U1@[], ppn:U20@[], walk:U1@[], fault:U1@[]) {
+  const translation = tlb<pgLevels=levels, sets=sets, ways=ways, sectors=sectors, superpages=superpages>(clock, reset=U1(reset),
+      pmpTable=0, io_ptw_ptbr_mode=mode, io_req_valid=1, io_req_bits_vaddr=page << 12,
+      `io_req_bits_prv.e0`=1, `io_req_bits_prv.e1`=0, io_ptw_req_ready=1, io_ptw_resp_valid=fill,
+      io_ptw_resp_bits_homogeneous=1, io_ptw_resp_bits_level=level,
+      io_ptw_resp_bits_pte_ppn=0x80000 | page#[0..+12], io_ptw_resp_bits_pte_v=1, io_ptw_resp_bits_pte_r=1,
+      io_ptw_resp_bits_pte_a=1, io_ptw_resp_bits_pte_x=1, io_ptw_resp_bits_pte_g=0,
+      io_ptw_resp_bits_pte_d=0, io_ptw_resp_bits_pte_u=0, io_ptw_resp_bits_pte_w=0,
+      io_ptw_resp_bits_ae_final=0, io_ptw_resp_bits_ae_ptw=0, io_ptw_resp_bits_pf=0, io_ptw_resp_bits_gf=0,
+      io_ptw_resp_bits_hr=1, io_ptw_resp_bits_hw=1, io_ptw_resp_bits_hx=1, io_ptw_status_debug=0,
+      io_sfence_valid=fence, io_sfence_bits_addr=page#[0..+(9*levels)] << 12, io_sfence_bits_rs1=1, io_sfence_bits_rs2=0)
+  miss = translation.io_resp_miss
+  ppn = translation.io_resp_paddr#[12..+20]
+  fault = translation.io_resp_pf_inst
+  walk = translation.io_ptw_req_valid
+}
+
+pub mod instruction_tlb(clock:Clock, reset:Reset, page:U12, fill:U1, fence:U1, level:U2) ->
+    (miss:U1@[], ppn:U20@[], walk:U1@[], directMiss:U1@[]) {
+  const multi = table<sets=2, ways=6, sectors=2, superpages=3>(clock, reset, page, fill, fence, level)
+  const direct = table<sets=1, ways=1, sectors=1, superpages=1>(clock, reset, page, fill, fence, level)
+  miss = multi.miss
+  ppn = multi.ppn
+  walk = multi.walk
+  directMiss = direct.miss
+}
+
+test instruction_tlb.translations {
+  mut d = instruction_tlb
+  tick 100 {
+    d.reset = Bool(clock == 0 or clock == 76)
+    d.fill = 0
+    d.fence = 0
+    d.level = 2
+    d.page = 0
+    if clock >= 1 and clock < 61 {
+      const i = (clock-1)/5
+      d.page = i#[0..+12]
+      d.fill = U1((clock-1)%5 == 2)
+    } elif clock < 73 and clock >= 61 {
+      d.page = (clock-61)#[0..+12]
+    } elif clock >= 74 and clock <= 75 {
+      d.page = 4
+      d.fence = U1(clock == 74)
+    } elif clock >= 77 and clock < 92 {
+      const i = (clock-77)/5
+      d.page = ((i+1) << 9)#[0..+12]
+      d.fill = U1((clock-77)%5 == 2)
+      d.level = 1
+    } elif clock >= 92 {
+      d.page = ((((clock-92)%3 + 1) << 9) | 7)#[0..+12]
+    }
+    step
+    if clock >= 61 and clock < 73 {
+      assert(d.miss == 0 and d.ppn == (0x80000 | (clock-61)))
+      if clock < 72 { assert(d.directMiss != 0) }
+    }
+    if clock == 75 { assert(d.miss != 0) }
+    if clock >= 92 { assert(d.miss == 0 and d.ppn == (0x80000 | d.page)) }
+  }
+}
+
+pub mod wide_instruction_tlb(clock:Clock, reset:Reset, page:U46, mode:U4, fill:U1) ->
+    (miss:U1@[], ppn:U20@[], fault:U1@[]) {
+  const bank = table<levels=5, sets=2, ways=6, sectors=2, superpages=3>(clock, reset, page, mode, fill, fence=0, level=2)
+  miss = bank.miss
+  ppn = bank.ppn
+  fault = bank.fault
+}
+test wide_instruction_tlb.superpage {
+  mut d = wide_instruction_tlb
+  tick 25 {
+    d.reset = clock < 3
+    d.mode = if clock >= 20 { 8 } else { 10 }
+    d.page = if clock >= 17 { 0x11000040000 } elif clock >= 12 { 0x10000040007 } else { 0x10000040000 }
+    d.fill = U1(clock == 6)
+    step
+    if clock == 15 { assert(d.miss == 0 and d.ppn == 0x80007) }
+    if clock == 18 { assert(d.miss != 0 and d.fault == 0) }
+    if clock >= 21 { assert(d.fault != 0 and d.miss == 0) }
+  }
+}

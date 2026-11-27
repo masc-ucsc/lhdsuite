@@ -1,0 +1,38 @@
+// Wakeups arrive one cycle before issue. A cancelled speculative wakeup has
+// no effect. Matched rebusy broadcasts win over clears to the same register.
+pub mod RenameBusy<width, physical, ports, sources, aluWidth>(clock:Clock, reset:U1,
+    readers:Unsigned(bits=width*sources*std.clog2(physical)), claims:Unsigned(bits=width),
+    dest:Unsigned(bits=width*std.clog2(physical)), wake:Unsigned(bits=ports),
+    wakeDest:Unsigned(bits=ports*std.clog2(physical)), rebusy:Unsigned(bits=ports),
+    speculative:Unsigned(bits=ports*aluWidth), children:Unsigned(bits=aluWidth)) ->
+    (busy:Unsigned(bits=width*sources)@[]) {
+  comptime const p = std.clog2(physical)
+  reg table:Unsigned(bits=physical) = nil
+  reg valid:Unsigned(bits=ports) = nil
+  reg regs:Unsigned(bits=ports*p) = nil
+  reg again:Unsigned(bits=ports) = nil
+  reg masks:Unsigned(bits=ports*aluWidth) = nil
+  valid = wake
+  regs = wakeDest
+  again = rebusy
+  masks = speculative
+  mut released:Unsigned(bits=physical) = 0
+  mut reclaimed:Unsigned(bits=physical) = 0
+  for port in 0..<ports {
+    const cancelled = (masks#[(port*aluWidth)..+aluWidth] & children) != 0
+    if valid#[port] != 0 and not cancelled {
+      const addr = regs#[(port*p)..+p]
+      if again#[port] != 0 { reclaimed#[addr] = 1 } else { released#[addr] = 1 }
+    }
+  }
+  const forwarded = (table & ~released) | reclaimed
+  busy = 0
+  for i in 0..<(width*sources) {
+    busy#[i] = forwarded#[readers#[(i*p)..+p]]
+  }
+  mut updated = forwarded
+  for lane in 0..<width {
+    if claims#[lane] != 0 { updated#[dest#[(lane*p)..+p]] = 1 }
+  }
+  table = if reset != 0 { 0 } else { updated }
+}

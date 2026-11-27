@@ -1,0 +1,21 @@
+const trial = import("wide_issue_queues.trial")
+const configs = import("../../common/pyrope/BoomConfig")
+
+pub mod column_issue(clk:Clock, rst:Reset, pattern:U5, enable:U1, drain:U1) -> (ok:Bool@[]) {
+  comptime const four = configs.queue(dispatchWidth=4, issueWidth=4, numEntries=8, numSlowEntries=2)
+  comptime const three = configs.queue(dispatchWidth=3, issueWidth=3, numEntries=8, numSlowEntries=2)
+  const fixed = trial<Q=four, kind=2, branches=20, banked=true, narrow=true>(clk, rst, pattern, enable, drain)
+  const rotating = trial<Q=three, kind=2, branches=12, banked=true>(clk, rst, pattern, enable, drain)
+  ok = fixed.ok and rotating.ok
+}
+test column_issue.drain {
+  mut d = column_issue
+  tick 500 {
+    d.rst = clock < 3
+    d.pattern = if clock < 5 or clock >= 390 { 0 } elif clock < 60 { 31 } else { (clock*13)#[0..+5] }
+    d.enable = U1(clock >= 65 and (clock%17 < 11 or clock >= 390))
+    d.drain = U1(clock == 497)
+    step
+    if clock >= 4 { assert(d.ok, "fixed and rotating columns preserve every dispatched ALU operation") }
+  }
+}

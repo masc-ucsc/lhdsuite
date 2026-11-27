@@ -1,0 +1,70 @@
+// CSR accessibility is evaluated separately for every instruction in the row.
+// All lanes see the same privilege and counter-enable state.
+pub comb counterAddress(addr:U12) -> (selected:Bool) {
+  selected = addr == 0x306 or addr == 0x320 or (addr >= 0x323 and addr <= 0x33f) or
+      addr#[5..+7] == 0x58 or addr#[5..+7] == 0x60
+}
+
+pub comb check<useNMI=false, useDebug=true, nPMPs=8, mcontextWidth=0, scontextWidth=0, haveBasicCounters=true>(
+  debug:U1,
+  fs:U2,
+  inst:U32,
+  mcounter:U32,
+  privilege:U2,
+  scounter:U32,
+  tsr:U1,
+  tvm:U1,
+  tw:U1,
+  virtualized:U1,
+) -> (fpIllegal:U1, readIllegal:U1, systemIllegal:U1, writeFlush:U1, writeIllegal:U1) {
+  const addr         = inst#[20..+12]
+  const machine      = privilege#[1] != 0
+  const privFault    = privilege < addr#[8..+2]
+  const vmFault      = not machine and virtualized == 0 and tvm != 0
+  const counter      = addr#[0..+5]
+  const counterFault = (not machine and (mcounter >> counter)#[0] == 0) or (privilege == 0 and (scounter >> counter)#[0] == 0)
+  const implemented  = (addr >= 1 and addr <= 3)
+    or addr == 0x100
+    or (addr >= 0x104 and addr <= 0x106)
+    or addr == 0x10a
+    or (addr >= 0x140 and addr <= 0x144)
+    or addr == 0x180
+    or (addr >= 0x300 and addr <= 0x306)
+    or (useNMI and addr >= 0x350 and addr <= 0x353)
+    or addr == 0x30a
+    or addr == 0x320
+    or (addr >= 0x323 and addr <= 0x344)
+    or (nPMPs > 0 and (addr == 0x3a0 or addr == 0x3a2 or addr#[4..+8] == 0x3b))
+    or (addr >= 0x7a0 and addr <= 0x7a3)
+    or (useDebug and addr >= 0x7b0 and addr <= 0x7b2)
+    or (mcontextWidth > 0 and addr == 0x7a8)
+    or (scontextWidth > 0 and addr == 0x5a8)
+    or addr == 0x7c1
+    or addr == 0x800
+    or addr == 0x808
+    or addr == 0xb00
+    or (addr >= 0xb02 and addr <= 0xb1f)
+    or addr == 0xc00
+    or (addr >= 0xc02 and addr <= 0xc1f)
+    or (addr >= 0xf11 and addr <= 0xf15)
+  fpIllegal    = U1(fs == 0)
+  readIllegal  = U1(
+    privFault or not implemented or (!haveBasicCounters and counterAddress(addr)) or (
+        (addr == 0x180 or addr == 0x680) and vmFault
+      ) or (
+        (addr#[5..+7] == 0x60 or addr#[5..+7] == 0x64) and counterFault
+      ) or (addr#[4..+8] == 0x7b and (!useDebug or debug == 0)) or (addr#[8..+4] == 0 and fs == 0)
+  )
+  writeIllegal = U1(addr#[10..+2] == 3)
+  writeFlush   = U1((addr & 0xcfc) != 0x040)
+  const isReturn = (inst & 0xdfc00001) == 0x10000001 or (inst & 0xc0000000) == 0x40000000
+  const isWait   = (inst & 0xffc00000) == 0x10400000
+  const isFence  = (inst & 0xfe0003ff) == 0x12000073
+  systemIllegal = U1(
+    privFault or (
+        isWait and not machine and tw != 0
+      ) or (
+        isReturn and not machine and virtualized == 0 and tsr != 0
+      ) or (isReturn and inst#[30] != 0 and inst#[27] != 0 and (!useDebug or debug == 0)) or (isFence and vmFault)
+  )
+}

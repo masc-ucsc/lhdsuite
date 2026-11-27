@@ -1,0 +1,53 @@
+const rf = import("../pyrope/PhysicalRegisterFile.PhysicalRegisterFile")
+
+// Four adjacent rows are populated through two independent write ports.
+// Address 0 and address 'banks' contend for the same port, while a read in
+// another bank proceeds. Replay the losing request and check the stored data.
+mod check<physical, banks, dedicated>(clock:Clock, cycle:U4) -> (ok:Bool@[]) {
+  comptime const p = std.clog2(physical)
+  const index = if cycle < 4 { physical - 2*banks } else { physical - banks }
+  mut waddr:Unsigned(bits=2*p) = 0
+  waddr#[0..+p] = index
+  waddr#[p..+p] = index + 1
+  const value = if cycle < 4 { 0x02110210 } else { 0x04110410 }
+  const a     = physical - 2*banks
+  const b     = physical - banks
+  mut addr:Unsigned(bits=3*p) = 0
+  addr#[0..+p]     = a
+  addr#[p..+p]     = b
+  addr#[(2*p)..+p] = if cycle == 7 { b + 1 } else { a + 1 }
+  const req = if cycle == 6 { 7 } elif cycle == 7 { 6 } else { 0 }
+  const dut = rf<banks=banks, bits=16, dedicated=dedicated, logical=3, physical=physical, reads=1, writes=2>(
+    clock=clock,
+    valid=req,
+    addr=addr,
+    write=if cycle == 3 or cycle == 4 { 3 } else { 0 },
+    writeAddr=waddr,
+    writeData=value,
+  )
+  reg accepted:U3 = nil
+  accepted = req & dut.ready
+  ok       = true
+  if cycle == 6 {
+    ok = accepted == 5 and dut.data#[0..+16] == 0x210 and dut.data#[32..+16] == 0x211
+  } elif cycle == 7 {
+    ok = accepted == 6 and dut.data#[16..+16] == 0x410 and dut.data#[32..+16] == 0x411
+  }
+}
+
+pub mod register_file(clock:Clock, cycle:U4) -> (ok:Bool@[]) {
+  const medium = check<banks=2, dedicated=0, physical=80>(clock, cycle)
+  const mega   = check<banks=4, dedicated=0x21, physical=144>(clock, cycle)
+  ok = medium.ok and mega.ok
+}
+
+test register_file.conflicts {
+  mut d = register_file
+  tick 10 {
+    d.cycle = clock
+    step
+    if clock >= 2 {
+      assert(d.ok, "bank arbitration, one-cycle response and dedicated writes")
+    }
+  }
+}

@@ -1,0 +1,32 @@
+pub comb byteMask(offset:U3, size:U2) -> (mask:U8) {
+  mask = if size == 0 { 1 << offset } elif size == 1 { 3 << (offset & 6) } elif size == 2 { 15 << (offset & 4) } else { 255 }
+}
+
+// The youngest partial overlap blocks an older complete forward. Return
+// both masks so the caller can compare the two youngest matching entries.
+pub comb StoreSearch<entries, addrBits=32>(
+  address:Unsigned(bits=addrBits),
+  addresses:Unsigned(bits=entries*addrBits),
+  atomic:Unsigned(bits=entries),
+  bytes:U8,
+  fence:Unsigned(bits=entries),
+  older:Unsigned(bits=entries),
+  physical:Unsigned(bits=entries),
+  ready:Unsigned(bits=entries),
+  sizes:Unsigned(bits=entries*2),
+  valid:Unsigned(bits=entries),
+) -> (barriers:Unsigned(bits=entries), forwards:Unsigned(bits=entries), overlaps:Unsigned(bits=entries)) {
+  cassert(addrBits > 3)
+  const eligible = older & valid & physical & ~atomic
+  barriers = older & (atomic | fence)
+  overlaps = 0
+  forwards = 0
+  for i in 0..<entries {
+    const addr     = addresses#[(i*addrBits)..+addrBits]
+    const hits     = bytes & byteMask(offset=addr#[0..+3], size=sizes#[(i*2)..+2])
+    const sameWord = (addr >> 3) == (address >> 3)
+    const hit      = eligible#[i] != 0 and sameWord and hits != 0
+    overlaps#[i] = U1(hit)
+    forwards#[i] = U1(hit and hits == bytes) & ready#[i]
+  }
+}

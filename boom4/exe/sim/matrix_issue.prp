@@ -1,0 +1,31 @@
+const config = import("../../common/pyrope/BoomConfig")
+const matrix = import("../pyrope/IssueAgeMatrix.IssueAgeMatrix")
+
+pub mod matrix_issue(clock:Clock, reset:Reset, dispatch:U2, remove:U4, requests:U8)
+    -> (entries:U4@[], full:U8@[], restricted:U8@[]) {
+  comptime const ideal = config.queue(dispatchWidth=2, issueWidth=2, numEntries=4, useMatrixIssue=true)
+  comptime const partial = config.queue(dispatchWidth=2, issueWidth=2, numEntries=4, useMatrixIssue=true, useFullIssueSel=false)
+  reg live:U4 = nil
+  const surviving = live & ~remove
+  const a = matrix<Q=ideal>(clock, reset, live, surviving, dispatch, requests)
+  const b = matrix<Q=partial>(clock, reset, live, surviving, dispatch, requests)
+  if reset { live = 0 } else { live = surviving | a.allocations#[0..+4] | a.allocations#[4..+4] }
+  entries = live
+  full = a.grants
+  restricted = b.grants
+}
+
+test matrix_issue.slot_reuse {
+  mut d = matrix_issue
+  tick 12 {
+    d.reset = clock < 2
+    d.dispatch = if clock == 2 or clock == 3 { 3 } elif clock == 5 { 1 } else { 0 }
+    d.remove = if clock == 4 { 1 } elif clock == 8 { 6 } else { 0 }
+    d.requests = 0xff
+    step
+    if clock == 3 { assert(d.entries == 15 and d.full == 9) }
+    elif clock >= 5 and clock < 8 {
+      assert(d.entries == 15 and d.full == 36 and d.restricted == 132, "reusing slot zero preserves age order")
+    } elif clock >= 8 { assert(d.entries == 9 and d.full == 66) }
+  }
+}

@@ -1,0 +1,60 @@
+const queue = import("../pyrope/IssueUnitCollapsing_1.IssueUnitCollapsing_1")
+const configs = import("../../common/pyrope/BoomConfig")
+comptime const fast = configs.memory
+comptime const mixed = configs.halfSlowMemory
+comptime const twelve = configs.queue(issueWidth=2, numEntries=12)
+comptime const thirtyTwo = configs.queue(issueWidth=2, numEntries=32, useFullIssueSel=false)
+mod trial<Q>(clk:Clock, rst:Reset, submit:U1, enable:U1) -> (ready:U1@[0]) {
+  const q = queue<Q>(
+    `clock`=clk, `reset`=rst, disValid=submit,
+    dis_fu_code_1=1, dis_fu_code_2=0, dis_iw_p1_speculative_child=0,
+    dis_iw_p2_speculative_child=0, dis_br_mask=0, dis_is_fence=0,
+    dis_is_fencei=0, dis_imm_sel=0, dis_pimm=0,
+    dis_ldq_idx=0, dis_stq_idx=0, dis_pdst=0,
+    dis_prs1=0, dis_prs2=0, dis_prs1_busy=0,
+    dis_prs2_busy=0, dis_ppred_busy=0, dis_exception=0,
+    dis_uses_ldq=0, dis_uses_stq=0, dis_dst_rtype=0,
+    dis_lrs1_rtype=0, dis_lrs2_rtype=0, dis_fp_val=0,
+    io_wakeup_ports_0_valid=0, io_wakeup_ports_0_bits_uop_pdst=0, io_wakeup_ports_0_bits_bypassable=0,
+    io_wakeup_ports_0_bits_rebusy=0, io_wakeup_ports_1_valid=0, io_wakeup_ports_1_bits_uop_pdst=0,
+    io_wakeup_ports_2_valid=0, io_wakeup_ports_2_bits_uop_pdst=0, io_child_rebusys=0,
+    fuMask=4 | (4 << 10) | (enable << 11), io_brupdate_b1_resolve_mask=0, io_brupdate_b1_mispredict_mask=0,
+    io_flush_pipeline=0, io_squash_grant=0)
+  ready = q.disReady
+}
+pub mod queue_profiles(clk:Clock, rst:Reset, submit:U1, enable:U1) -> (allFast:U1@[0], halfFast:U1@[0], mediumReady:U1@[0], largeReady:U1@[0]) {
+  allFast = trial<fast>(clk=clk,rst=rst,submit=submit,enable=enable)
+  mediumReady = trial<twelve>(clk=clk,rst=rst,submit=submit,enable=enable)
+  largeReady = trial<thirtyTwo>(clk=clk,rst=rst,submit=submit,enable=enable)
+  halfFast = trial<mixed>(clk=clk,rst=rst,submit=submit,enable=enable)
+}
+test queue_profiles.ready {
+  mut d = queue_profiles
+  tick 20 {
+    d.rst = clock < 2
+    d.submit = U1(clock >= 4 and clock <= 7)
+    d.enable = U1(clock >= 10)
+    step
+    if clock > 1 {
+      assert(d.allFast == 1, "the eight fast slots absorb the burst")
+      assert(d.halfFast == U1(clock < 7 or clock > 8), "four fast slots backpressure until the tail compacts")
+    }
+  }
+}
+
+test queue_profiles.depth {
+  mut d = queue_profiles
+  mut accepted12 = 0
+  mut accepted32 = 0
+  tick 64 {
+    d.rst = clock < 2
+    d.submit = U1(clock >= 4)
+    d.enable = 0
+    if clock >= 4 {
+      accepted12 = accepted12 + d.mediumReady
+      accepted32 = accepted32 + d.largeReady
+    }
+    step
+  }
+  assert(accepted12 == 12 and accepted32 == 32, "a stalled issue port fills exactly the configured capacity")
+}

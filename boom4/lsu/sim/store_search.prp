@@ -1,0 +1,51 @@
+const search = import("../pyrope/StoreSearch.StoreSearch")
+pub mod store_search(
+  slot:U5,
+  offset:U3,
+  size:U2,
+  mask:U8,
+  flags:U7,
+) -> (barriers:U24@[], forwarding:U24@[], overlap:U24@[]) {
+  const bit   = (1 << slot)#[0..+24]
+  const same  = if flags#[6] == 0 { 0xabc000 } else { 0xabc008 }
+  const store = search<addrBits=32, entries=24>(
+    address=0xabc000,
+    bytes=mask,
+    older=if flags#[0] != 0 { bit } else { 0 },
+    valid=if flags#[1] != 0 { bit } else { 0 },
+    physical=if flags#[2] != 0 { bit } else { 0 },
+    ready=if flags#[3] != 0 { bit } else { 0 },
+    atomic=if flags#[4] != 0 { bit } else { 0 },
+    fence=if flags#[5] != 0 { bit } else { 0 },
+    addresses=((same | offset) << (slot*32))#[0..+768],
+    sizes=(size << (slot*2))#[0..+48],
+  )
+  overlap    = store.overlaps
+  forwarding = store.forwards
+  barriers   = store.barriers
+}
+test store_search.bytes {
+  mut d = store_search
+  tick 16384 {
+    const offset = clock%8
+    const size   = (clock/8)%4
+    const mask   = (clock/32)%256
+    const slot   = clock%24
+    const flags  = if clock < 8192 { 15 } else { (clock ^ (clock/64))%128 }
+    d.slot   = slot
+    d.offset = offset
+    d.size   = size
+    d.mask   = mask
+    d.flags  = flags
+    step
+    const width      = 1 << size
+    const storeBytes = ((1 << width) - 1) << ((offset/width)*width)
+    const hit        = (flags & 87) == 7 and (mask & storeBytes) != 0
+    assert(d.overlap == (U1(hit) << slot), "only physical older stores overlapping the same word match")
+    assert(
+      d.forwarding == (U1(hit and (flags & 8) != 0 and (mask & storeBytes) == mask) << slot),
+      "complete data coverage is required for forwarding",
+    )
+    assert(d.barriers == (U1((flags & 1) != 0 and (flags & 48) != 0) << slot), "older atomics and fences serialize")
+  }
+}

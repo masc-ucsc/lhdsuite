@@ -1,0 +1,30 @@
+const tlb = import("../pyrope/NBDTLB.NBDTLB")
+
+pub mod data_tlb_levels(clock:Clock, reset:Reset, cycle:U8) -> (ok:U1@[]) {
+  const base = 0x10000040000
+  const page = if cycle >= 20 { base | (1 << 36) } elif cycle >= 12 { base | 7 } else { base }
+  const d = tlb<pgLevels=5, ways=12, ports=2>(clock, reset, pmpTable=0,
+      io_ptw_ptbr_mode=10, io_ptw_req_ready=1, io_ptw_resp_valid=U1(cycle == 8),
+      io_ptw_resp_bits_level=3, io_ptw_resp_bits_homogeneous=1, io_ptw_resp_bits_pte_ppn=0x80000,
+      io_ptw_resp_bits_pte_v=1, io_ptw_resp_bits_pte_r=1, io_ptw_resp_bits_pte_a=1,
+      io_ptw_resp_bits_pte_d=1, io_ptw_resp_bits_pte_w=1, io_ptw_resp_bits_pte_g=0,
+      io_ptw_resp_bits_pte_u=0, io_ptw_resp_bits_pte_x=0, io_ptw_resp_bits_ae_final=0,
+      io_ptw_status_debug=0, io_ptw_status_dprv=(e0=1, e1=0), io_ptw_status_sum=0, io_ptw_status_mxr=0,
+      otherAddress=(page << 12) | 16, otherValid=1, otherSize=3, io_kill=0,
+      io_req_0_bits_vaddr=page << 12, io_req_0_bits_cmd=0, io_req_0_bits_passthrough=0,
+      io_req_0_bits_size=3, io_req_0_valid=U1(cycle >= 5), io_sfence_valid=0,
+      io_sfence_bits_addr=0, io_sfence_bits_rs1=0, io_sfence_bits_rs2=0)
+  ok = 1
+  if cycle == 5 { ok = U1(d.io_ptw_req_valid != 0 and d.io_ptw_req_bits_bits_addr == base) }
+  elif cycle == 15 { ok = U1(d.io_resp_0_miss == 0 and d.io_resp_0_paddr == 0x80007000 and d.otherPhysical == 0x80007010) }
+  elif cycle == 22 { ok = U1(d.io_resp_0_miss != 0) }
+}
+test data_tlb_levels.translate {
+  mut d = data_tlb_levels
+  tick 25 {
+    d.reset = clock < 4
+    d.cycle = clock
+    step
+    if clock > 3 { assert(d.ok != 0, "Sv57 superpage lookup and high VPN tags on both memory ports") }
+  }
+}

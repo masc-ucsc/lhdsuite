@@ -1,0 +1,57 @@
+const matrix = import("IssueAgeMatrix.IssueAgeMatrix")
+const select = import("IssueSelect.select")
+const shifts = import("IssueCompaction.shifts")
+
+pub mod schedule<Q>(clock:Clock, reset:Reset, live:Unsigned(bits=Q.numEntries), surviving:Unsigned(bits=Q.numEntries),
+    vacantNext:Unsigned(bits=Q.numEntries), dispatch:Unsigned(bits=Q.dispatchWidth), keep:Unsigned(bits=Q.dispatchWidth),
+    requests:Unsigned(bits=Q.numEntries*Q.issueWidth)) ->
+    (ready:Unsigned(bits=Q.dispatchWidth)@[], allocations:Unsigned(bits=Q.dispatchWidth*Q.numEntries)@[],
+     valid:Unsigned(bits=Q.issueWidth)@[], grants:Unsigned(bits=Q.numEntries*Q.issueWidth)@[],
+     distance:Unsigned(bits=(Q.numEntries+Q.dispatchWidth)*std.clog2(Q.dispatchWidth+1))@[]) {
+  if Q.useMatrixIssue {
+    const result = matrix<Q=Q>(clock, reset, live, surviving, dispatch=keep, requests)
+    ready = result.ready
+    allocations = result.allocations
+    valid = result.valid
+    grants = result.grants
+    distance = 0
+  } else {
+    reg vacant:Unsigned(bits=Q.numEntries) = nil
+    reg admit:Unsigned(bits=Q.dispatchWidth) = nil
+    vacant = vacantNext
+    const accepted = (admit & dispatch)#+[0..<Q.dispatchWidth]
+    const count = (vacant >> Q.numSlowEntries)#+[0..<Q.numEntries]
+    for lane in 0..<Q.dispatchWidth { admit#[lane] = U1(count > lane+accepted) }
+    const result = select<Q=Q>(requests)
+    ready = admit
+    allocations = 0
+    valid = result.valid
+    grants = result.grants
+    distance = shifts<Q=Q>(live, dispatch)
+  }
+}
+
+pub comb incoming<Q, slot, bits>(lanes:Unsigned(bits=Q.numEntries*Q.dispatchWidth),
+    distance:Unsigned(bits=(Q.numEntries+Q.dispatchWidth)*std.clog2(Q.dispatchWidth+1)),
+    surviving:Unsigned(bits=Q.numEntries+Q.dispatchWidth),
+    moving:Unsigned(bits=Q.dispatchWidth*bits), dispatch:Unsigned(bits=Q.dispatchWidth*bits))
+    -> (payload:Unsigned(bits=bits), fill:Bool, shift:Bool) {
+  comptime const b = std.clog2(Q.dispatchWidth+1)
+  payload = moving#[0..+bits]
+  fill = false
+  shift = distance#[(slot*b)..+b] != 0
+  for lane in 0..<Q.dispatchWidth {
+    if Q.useMatrixIssue {
+      if lanes#[lane*Q.numEntries+slot] != 0 {
+        payload = dispatch#[(lane*bits)..+bits]
+        fill = true
+      }
+    } else {
+      const src = slot+lane+1
+      if distance#[(src*b)..+b] == lane+1 {
+        payload = moving#[(lane*bits)..+bits]
+        fill = surviving#[src] != 0
+      }
+    }
+  }
+}

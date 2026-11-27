@@ -1,0 +1,40 @@
+// Every integer unit sees the same writeback buses. The register file supplies
+// the operand when no destination matches. BOOM combines matching buses with OR.
+pub comb operand<ports, bits, dataBits=64>(
+  data:Unsigned(bits=ports*dataBits),
+  destinations:Unsigned(bits=ports*bits),
+  file:Unsigned(bits=dataBits),
+  source:Unsigned(bits=bits),
+  valid:Unsigned(bits=ports),
+) -> (value:Unsigned(bits=dataBits)) {
+  mut hits:Unsigned(bits=ports)         = 0
+  mut forwarded:Unsigned(bits=dataBits) = 0
+  for port in 0..<ports {
+    if valid#[port] != 0 and destinations#[(port*bits)..+bits] == source {
+      hits#[port] = 1
+      forwarded   = forwarded | data#[(port*dataBits)..+dataBits]
+    }
+  }
+  value = if hits != 0 { forwarded } else { file }
+}
+
+// In execution-unit order, assign the first two requests to the two FTQ reads.
+pub comb fetchReads<requests, bits>(
+  tags:Unsigned(bits=requests*bits),
+  valid:Unsigned(bits=requests),
+) -> (addresses:Unsigned(bits=2*bits), first:Unsigned(bits=requests), ready:Unsigned(bits=requests)) {
+  first = valid & -valid
+  const remaining = valid & ~first
+  const second    = remaining & -remaining
+  ready     = first | second
+  addresses = 0
+  for i in 0..<requests {
+    const tag = tags#[(i*bits)..+bits]
+    if first#[i] != 0 {
+      addresses#[0..+bits] = tag
+    }
+    if second#[i] != 0 {
+      addresses#[bits..+bits] = tag
+    }
+  }
+}

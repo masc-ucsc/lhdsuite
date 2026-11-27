@@ -1,0 +1,38 @@
+const array = import("../pyrope/CacheDataArray.CacheDataArray")
+pub mod cache_banks(clock:Clock, read:U2, address:U24, write:U1, dest:U12, mask:U2, data:U128)
+    -> (nack:U2@[], dualNack:U2@[], duplicatedNack:U2@[], response:U512@[], duplicated:U512@[]) {
+  const a = array<ways=2, ports=2, banks=4, rowBits=128, single=true>(
+    clock, read, readAddress=address, readWays=15, write, writeAddress=dest, writeWays=2, writeWords=mask, data)
+  const b = array<ways=2, ports=2, banks=4, rowBits=128>(
+    clock, read, readAddress=address, readWays=15, write, writeAddress=dest, writeWays=2, writeWords=mask, data)
+  const c = array<ways=2, ports=2, rowBits=128>(
+    clock, read, readAddress=address, readWays=15, write, writeAddress=dest, writeWays=2, writeWords=mask, data)
+  nack = a.nack
+  response = a.response
+  dualNack = b.nack
+  duplicatedNack = c.nack
+  duplicated = c.response
+}
+test cache_banks.arbitration {
+  mut d = cache_banks
+  tick 22 {
+    const lo = 100 + clock%4
+    const hi = 200 + clock%4
+    d.write = U1(clock < 8 or clock == 16)
+    d.mask = if clock < 4 { 1 } else { 2 }
+    d.dest = (clock%4)*16
+    d.data = if clock < 4 { lo } else { hi << 64 }
+    d.read = if clock < 8 { 0 } else { 3 }
+    d.address = if clock == 14 { 64 << 12 } else { 16 << 12 }
+    step
+    if clock >= 10 and clock <= 13 {
+      assert(d.response#[128..+64] == 100 and d.response#[192..+64] == 200, "first bank masked writes")
+      assert(d.response#[384..+64] == 101 and d.response#[448..+64] == 201, "second bank parallel read")
+      assert(d.duplicated == d.response, "duplicated read ports see masked writes")
+    }
+    const conflict = if clock == 14 { 2 } elif clock == 16 { 1 } else { 0 }
+    assert(d.nack == conflict, "bank priority and single-port write exclusion")
+    assert(d.dualNack == U2(if clock == 14 { 2 } else { 0 }), "dual-port concurrent write")
+    assert(d.duplicatedNack == 0, "duplicated array independent read ports")
+  }
+}

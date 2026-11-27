@@ -1,0 +1,564 @@
+const btb = import("../../ifu/pyrope/BTBBranchPredictorBank")
+const micro = import("../../ifu/pyrope/FA2MicroBTBBranchPredictorBank")
+const bim = import("../../ifu/pyrope/BimCounters")
+const standardBank = import("../../ifu/pyrope/ComposedBranchPredictorBank.ComposedBranchPredictorBank")
+
+// BOOM issue queue and front-end parameters. Defaults follow WithNSmallBooms.
+pub const defaultQueue = (const iqType=-1, const useMatrixIssue=false, const dispatchWidth=1,
+    const issueWidth=1, const numEntries=8, const numSlowEntries=0, const useFullIssueSel=true)
+
+pub comb queue<B=defaultQueue>(iqType=B.iqType, useMatrixIssue=B.useMatrixIssue, dispatchWidth=B.dispatchWidth,
+    issueWidth=B.issueWidth, numEntries=B.numEntries, numSlowEntries=B.numSlowEntries, useFullIssueSel=B.useFullIssueSel) -> (cfg) {
+  cfg = (
+    const iqType=iqType,
+    const useMatrixIssue=useMatrixIssue,
+    const issueWidth=issueWidth,
+    const numEntries=numEntries,
+    const numSlowEntries=numSlowEntries,
+    const dispatchWidth=dispatchWidth,
+    const useFullIssueSel=useFullIssueSel,
+  )
+}
+
+pub const IQ_MEM = 0
+pub const IQ_UNQ = 1
+pub const IQ_ALU = 2
+pub const IQ_FP = 3
+
+comb selectQueue(entries, kind, fallback) -> (q) {
+  q = queue<B=fallback>(iqType=kind)
+  if entries.[size] != 0 {
+    cassert(entries.[size] == 4, "BOOM needs one issue queue of each type")
+    mut found = 0
+    for entry in entries {
+      if entry.iqType == kind {
+        q = entry
+        found = found+1
+      }
+    }
+    cassert(found == 1, "BOOM needs exactly one queue of each type")
+  }
+}
+
+pub const fast           = queue()
+pub const memory         = queue(issueWidth=2)
+pub const halfSlowMemory = queue(issueWidth=2, numSlowEntries=4)
+pub const halfSlow       = queue(numSlowEntries=4)
+
+pub const tageLTables = (
+  (const history=2, const rows=128, const tag=7),
+  (const history=4, const rows=128, const tag=7),
+  (const history=8, const rows=256, const tag=8),
+  (const history=16, const rows=256, const tag=8),
+  (const history=32, const rows=128, const tag=9),
+  (const history=64, const rows=128, const tag=9),
+)
+
+pub const fastTageTables = (
+  (const history=2, const rows=128, const tag=8),
+  (const history=4, const rows=128, const tag=8),
+  (const history=8, const rows=128, const tag=8),
+  (const history=16, const rows=128, const tag=8),
+  (const history=32, const rows=128, const tag=8),
+  (const history=64, const rows=128, const tag=8),
+)
+
+pub const alphaTables = (const globalSets=2048, const localSets=2048, const chooserSets=128, const historySets=128)
+
+pub const boom2Table = (const history=16, const rows=256, const tag=7)
+
+pub comb floatingPoint(sfmaLatency=4, dfmaLatency=4, divSqrt=true) -> (cfg) {
+  cassert(sfmaLatency == dfmaLatency and dfmaLatency >= 3, "BOOM FP write ports share one latency with three issue stages")
+  cfg = (const sfmaLatency=sfmaLatency, const dfmaLatency=dfmaLatency, const divSqrt=divSqrt)
+}
+
+pub comb integerDivide(divUnroll=1, divEarlyOut=true, divEarlyOutGranularity=1) -> (cfg) {
+  cassert(divUnroll >= 1 and divUnroll <= 64 and divEarlyOutGranularity >= 1 and divEarlyOutGranularity <= 64)
+  cfg = (const divUnroll=divUnroll, const divEarlyOut=divEarlyOut, const divEarlyOutGranularity=divEarlyOutGranularity)
+}
+
+pub comb fetchTargetQueue(nEntries=16) -> (cfg) {
+  cfg = (const nEntries=nEntries,)
+}
+
+pub const defaultMulDiv = integerDivide()
+pub const defaultFPU = floatingPoint()
+
+// Unspecified widths and capacities are resolved after a profile is composed.
+pub comb instructionTLB(nSets=1, nWays=32, nSectors=4, nSuperpageEntries=4) -> (cfg) {
+  cassert(nSets >= 1 and nSets == 1 << std.clog2(nSets))
+  cassert(nSectors >= 1 and nSectors == 1 << std.clog2(nSectors))
+  cassert(nWays >= nSectors and nWays%nSectors == 0 and nSuperpageEntries >= 1)
+  cfg = (const nSets=nSets, const nWays=nWays, const nSectors=nSectors, const nSuperpageEntries=nSuperpageEntries)
+}
+
+pub const defaults = (
+  const branchPredictor=standardBank,
+  const alu=fast,
+  const boom2BPD=false,
+  const fastTageBPD=false,
+  const swBPD=false,
+  const alpha21264BPD=false,
+  const alphaGeometry=alphaTables,
+  const localHistoryLength=32,
+  const decodeWidth=1,
+  const fetchWidth=4,
+  const enableBTBFastRepair=true,
+  const enableSlowBTBRedirect=false,
+  const enableGHistStallRepair=true,
+  const enableBankedFPFreelist=false,
+  const enableBranchPrediction=true,
+  const enableColumnALUIssue=false,
+  const enableALUSingleWideDispatch=false,
+  const enableFastPNR=false,
+  const enableFastLoadUse=false,
+  const enableAgenStage=false,
+  const enableBPDHPMs=false,
+  const enableConservativeSNI=false,
+  const enablePrefetching=false,
+  const enableStLdForwarding=false,
+  const enableLoadToStoreForwarding=true,
+  const enableCompactingLSUDuringDispatch=true,
+  const enableICacheDelay=false,
+  const enableRasTopRepair=true,
+  const enableSFBOpt=true,
+  const enableSuperscalarSnapshots=true,
+  const fp=fast,
+  const fpu=defaultFPU,
+  const gshareTable=boom2Table,
+  const icacheSets=64,
+  const icacheSinglePorted=true,
+  const icacheWays=4,
+  const mem=memory,
+  const maxBrCount=8,
+  const numFetchBufferEntries=8,
+  const numLdqEntries=8,
+  const lsuWidth=1,
+  const dcacheMSHRs=2,
+  const iTLB=instructionTLB(),
+  const dTLBSets=1,
+  const dTLBWays=8,
+  const nPMPs=8,
+  const nLocalInterrupts=0,
+  const mcontextWidth=0,
+  const scontextWidth=0,
+  const nL2TLBEntries=512,
+  const nL2TLBWays=1,
+  const dcacheRowBits=64,
+  const dcacheSets=64,
+  const dcacheWays=4,
+  const numDCacheBanks=1,
+  const dcacheSinglePorted=false,
+  const numStqEntries=8,
+  const numFpPhysRegisters=48,
+  const numFrfBanks=1,
+  const numFrfReadPorts=3,
+  const numIntPhysRegisters=52,
+  const numImmPhysRegisters=32,
+  const numIrfBanks=1,
+  const numIrfReadPorts=3,
+  const ftq=fetchTargetQueue(),
+  const ftqEntries=16,
+  const nPerfCounters=2,
+  const haveBasicCounters=true,
+  const useAtomics=true,
+  const nBreakpoints=0,
+  const useBPWatch=false,
+  const useNMI=false,
+  const usingRoCC=false,
+  const numRXQEntries=4,
+  const numRCQEntries=8,
+  const haveCFlush=false,
+  const useDebug=true,
+  const enableTraceCoreIngress=false,
+  const trace=false,
+  const enableCommitLogPrintf=false,
+  const enableBranchPrintf=false,
+  const enableMemtracePrintf=false,
+  const useCompressed=true,
+  const useRVE=false,
+  const useSCIE=false,
+  const pgLevels=3,
+  const clockGate=false,
+  const dcacheClockGate=false,
+  const useFetchMonitor=true,
+  const bootFreqHz=0,
+  const useVM=true,
+  const useUser=true,
+  const useSupervisor=false,
+  const misaWritable=false,
+  const useAtomicsOnlyForIO=false,
+  const usingFPU=true,
+  const mtvecInit=0,
+  const mtvecWritable=true,
+  const intToFpLatency=2,
+  const imulLatency=3,
+  const mulDiv=defaultMulDiv,
+  const numRasEntries=32,
+  const numRobEntries=32,
+  const tageSinglePorted=false,
+  const slowBTBSinglePorted=false,
+  const fastBTB=btb.fastGeometry,
+  const slowBTB=btb.standard,
+  const fastMicroWays=24,
+  const fastMicroTagBits=12,
+  const btbTable=btb.standard,
+  const microBTB=micro.standard,
+  const bimTable=bim.standard,
+  const fastBimTable=bim.fast,
+  const slowBimTable=bim.late,
+  const tageTables=tageLTables,
+  const fastTables=fastTageTables,
+  const tageUBitPeriod=2048,
+  const unq=fast,
+  const requested=(const enableColumnALUWrites=false, const globalHistoryLength=0, const localHistoryNSets=-1, const bpdMaxMetaLength=0, const cachedSourceIds=0),
+)
+
+pub comb params<B=defaults>(
+  issueParams=(),
+  branchPredictor=B.branchPredictor,
+  alu=B.alu,
+  boom2BPD=B.boom2BPD,
+  fastTageBPD=B.fastTageBPD,
+  swBPD=B.swBPD,
+  alpha21264BPD=B.alpha21264BPD,
+  alphaGeometry=B.alphaGeometry,
+  globalHistoryLength=B.requested.globalHistoryLength,
+  bpdMaxMetaLength=B.requested.bpdMaxMetaLength,
+  localHistoryLength=B.localHistoryLength,
+  localHistoryNSets=B.requested.localHistoryNSets,
+  decodeWidth=B.decodeWidth,
+  fetchWidth=B.fetchWidth,
+  enableBTBFastRepair=B.enableBTBFastRepair,
+  enableSlowBTBRedirect=B.enableSlowBTBRedirect,
+  enableGHistStallRepair=B.enableGHistStallRepair,
+  enableBankedFPFreelist=B.enableBankedFPFreelist,
+  enableBranchPrediction=B.enableBranchPrediction,
+  enableColumnALUWrites=B.requested.enableColumnALUWrites,
+  enableColumnALUIssue=B.enableColumnALUIssue,
+  enableALUSingleWideDispatch=B.enableALUSingleWideDispatch,
+  enableFastPNR=B.enableFastPNR,
+  enableFastLoadUse=B.enableFastLoadUse,
+  enableAgenStage=B.enableAgenStage,
+  enableBPDHPMs=B.enableBPDHPMs,
+  enableConservativeSNI=B.enableConservativeSNI,
+  enablePrefetching=B.enablePrefetching,
+  enableStLdForwarding=B.enableStLdForwarding,
+  enableLoadToStoreForwarding=B.enableLoadToStoreForwarding,
+  enableCompactingLSUDuringDispatch=B.enableCompactingLSUDuringDispatch,
+  enableICacheDelay=B.enableICacheDelay,
+  enableRasTopRepair=B.enableRasTopRepair,
+  enableSFBOpt=B.enableSFBOpt,
+  enableSuperscalarSnapshots=B.enableSuperscalarSnapshots,
+  fp=B.fp,
+  fpu=B.fpu,
+  gshareTable=B.gshareTable,
+  icacheSets=B.icacheSets,
+  icacheSinglePorted=B.icacheSinglePorted,
+  icacheWays=B.icacheWays,
+  mem=B.mem,
+  maxBrCount=B.maxBrCount,
+  numFetchBufferEntries=B.numFetchBufferEntries,
+  numLdqEntries=B.numLdqEntries,
+  lsuWidth=B.lsuWidth,
+  dcacheMSHRs=B.dcacheMSHRs,
+  cachedSourceIds=B.requested.cachedSourceIds,
+  iTLB=B.iTLB,
+  dTLBSets=B.dTLBSets,
+  dTLBWays=B.dTLBWays,
+  nPMPs=B.nPMPs,
+  nLocalInterrupts=B.nLocalInterrupts,
+  mcontextWidth=B.mcontextWidth,
+  scontextWidth=B.scontextWidth,
+  nL2TLBEntries=B.nL2TLBEntries,
+  nL2TLBWays=B.nL2TLBWays,
+  dcacheRowBits=B.dcacheRowBits,
+  dcacheSets=B.dcacheSets,
+  dcacheWays=B.dcacheWays,
+  numDCacheBanks=B.numDCacheBanks,
+  dcacheSinglePorted=B.dcacheSinglePorted,
+  numStqEntries=B.numStqEntries,
+  numFpPhysRegisters=B.numFpPhysRegisters,
+  numFrfBanks=B.numFrfBanks,
+  numFrfReadPorts=B.numFrfReadPorts,
+  numIntPhysRegisters=B.numIntPhysRegisters,
+  numImmPhysRegisters=B.numImmPhysRegisters,
+  numIrfBanks=B.numIrfBanks,
+  numIrfReadPorts=B.numIrfReadPorts,
+  ftq=B.ftq,
+  ftqEntries=ftq.nEntries,
+  nPerfCounters=B.nPerfCounters,
+  haveBasicCounters=B.haveBasicCounters,
+  useAtomics=B.useAtomics,
+  nBreakpoints=B.nBreakpoints,
+  useBPWatch=B.useBPWatch,
+  useNMI=B.useNMI,
+  usingRoCC=B.usingRoCC,
+  numRXQEntries=B.numRXQEntries,
+  numRCQEntries=B.numRCQEntries,
+  haveCFlush=B.haveCFlush,
+  useDebug=B.useDebug,
+  enableTraceCoreIngress=B.enableTraceCoreIngress,
+  trace=B.trace,
+  enableCommitLogPrintf=B.enableCommitLogPrintf,
+  enableBranchPrintf=B.enableBranchPrintf,
+  enableMemtracePrintf=B.enableMemtracePrintf,
+  useCompressed=B.useCompressed,
+  useRVE=B.useRVE,
+  useSCIE=B.useSCIE,
+  pgLevels=B.pgLevels,
+  clockGate=B.clockGate,
+  dcacheClockGate=B.dcacheClockGate,
+  useFetchMonitor=B.useFetchMonitor,
+  bootFreqHz=B.bootFreqHz,
+  useVM=B.useVM,
+  useUser=B.useUser,
+  useSupervisor=B.useSupervisor,
+  misaWritable=B.misaWritable,
+  useAtomicsOnlyForIO=B.useAtomicsOnlyForIO,
+  usingFPU=B.usingFPU,
+  mtvecInit=B.mtvecInit,
+  mtvecWritable=B.mtvecWritable,
+  intToFpLatency=B.intToFpLatency,
+  imulLatency=B.imulLatency,
+  mulDiv=B.mulDiv,
+  numRasEntries=B.numRasEntries,
+  numRobEntries=B.numRobEntries,
+  tageSinglePorted=B.tageSinglePorted,
+  slowBTBSinglePorted=B.slowBTBSinglePorted,
+  fastBTB=B.fastBTB,
+  slowBTB=B.slowBTB,
+  fastMicroWays=B.fastMicroWays,
+  fastMicroTagBits=B.fastMicroTagBits,
+  btbTable=B.btbTable,
+  microBTB=B.microBTB,
+  bimTable=B.bimTable,
+  fastBimTable=B.fastBimTable,
+  slowBimTable=B.slowBimTable,
+  tageTables=B.tageTables,
+  fastTables=B.fastTables,
+  tageUBitPeriod=B.tageUBitPeriod,
+  unq=B.unq,
+) -> (cfg) {
+  comptime const memQueue = selectQueue(entries=issueParams, kind=IQ_MEM, fallback=mem)
+  comptime const unqQueue = selectQueue(entries=issueParams, kind=IQ_UNQ, fallback=unq)
+  comptime const aluQueue = selectQueue(entries=issueParams, kind=IQ_ALU, fallback=alu)
+  comptime const fpQueue = selectQueue(entries=issueParams, kind=IQ_FP, fallback=fp)
+  cassert(!(boom2BPD and alpha21264BPD) and !(fastTageBPD and (boom2BPD or alpha21264BPD)) and !(swBPD and (fastTageBPD or boom2BPD or alpha21264BPD)), "select one branch predictor composition")
+  cassert(!usingRoCC or (numRXQEntries >= 2 and numRCQEntries >= 2), "RoCC queues reserve one entry for full detection")
+  cassert(dTLBSets >= 1 and dTLBWays >= 1 and (dTLBSets*dTLBWays)%4 == 0, "D-TLB capacity must contain complete four-page sectors")
+  cassert(pgLevels >= 3 and pgLevels <= 5)
+  cassert(useVM, "BOOM v4 instruction cache requires virtual memory")
+  cassert(bootFreqHz >= 0)
+  cassert(nPerfCounters >= 0 and nPerfCounters <= 29)
+  cassert(mtvecInit >= -1 and mtvecInit <= 0xffffffff, "mtvecInit is a physical address or -1 for no reset value")
+  cassert(intToFpLatency >= 1 and imulLatency >= 1)
+  comptime const pregBits = std.clog2(if numIntPhysRegisters >= numFpPhysRegisters { numIntPhysRegisters } else { numFpPhysRegisters })
+  cassert(ftqEntries >= 3 and std.clog2(ftqEntries) <= pregBits, "predicate destinations must fit the writeback tag")
+  cassert(nBreakpoints >= 0)
+  cassert(nPMPs >= 0 and nPMPs <= 16)
+  cassert(nLocalInterrupts >= 0 and nLocalInterrupts <= 48)
+  cassert(mcontextWidth >= 0 and mcontextWidth <= 64 and scontextWidth >= 0 and scontextWidth <= 64)
+  cassert(numRasEntries >= 0)
+  cassert(fetchWidth == 4 or fetchWidth == 8)
+  cassert(decodeWidth >= 1 and decodeWidth <= fetchWidth)
+  cassert(numLdqEntries > decodeWidth+1 and numStqEntries > decodeWidth+1, "LSU queues need room beyond the dispatch row")
+  cassert(maxBrCount >= 2, "branch recovery needs at least two tags")
+  cassert(numIntPhysRegisters >= 32+decodeWidth and numFpPhysRegisters >= 32+decodeWidth, "rename needs a free register for each dispatch lane")
+  cassert(numImmPhysRegisters >= 5 and std.clog2(numImmPhysRegisters) <= 32, "the immediate operand carries funct3 or a signed RV32 immediate")
+  cassert(numIrfBanks > 0 and numIrfBanks == 1 << std.clog2(numIrfBanks) and numIntPhysRegisters%numIrfBanks == 0)
+  cassert(numFrfBanks > 0 and numFrfBanks == 1 << std.clog2(numFrfBanks) and numFpPhysRegisters%numFrfBanks == 0)
+  cassert(numIrfReadPorts > 0 and numFrfReadPorts > 0)
+  cassert(numRobEntries >= 2*decodeWidth and numRobEntries%decodeWidth == 0)
+  comptime const coreWidth = decodeWidth
+  cassert(
+    memQueue.dispatchWidth > 0 and memQueue.dispatchWidth <= coreWidth,
+    "BOOM mem queue dispatchWidth must be in 1..=coreWidth",
+  )
+  cassert(
+    aluQueue.dispatchWidth > 0 and aluQueue.dispatchWidth <= coreWidth,
+    "BOOM alu queue dispatchWidth must be in 1..=coreWidth",
+  )
+  cassert(
+    fpQueue.dispatchWidth > 0 and fpQueue.dispatchWidth <= coreWidth,
+    "BOOM fp queue dispatchWidth must be in 1..=coreWidth",
+  )
+  cassert(
+    unqQueue.dispatchWidth > 0 and unqQueue.dispatchWidth <= coreWidth,
+    "BOOM unq queue dispatchWidth must be in 1..=coreWidth",
+  )
+  const sourceIds = if cachedSourceIds == 0 { dcacheMSHRs } else { cachedSourceIds }
+  cassert(sourceIds >= 1 and sourceIds <= dcacheMSHRs)
+  cassert(dcacheSets >= 2 and dcacheSets == 1 << std.clog2(dcacheSets))
+  cassert(lsuWidth >= 1 and lsuWidth <= 2 and lsuWidth <= memQueue.issueWidth)
+  cassert(dcacheWays >= 1 and dcacheWays == 1 << std.clog2(dcacheWays))
+  cassert(icacheSets >= 2 and icacheSets <= 64 and icacheSets == 1 << std.clog2(icacheSets))
+  cassert(icacheWays > 0 and icacheWays == 1 << std.clog2(icacheWays) and std.clog2(icacheWays) <= 16)
+  cassert(tageTables.[size] > 0 and fastTables.[size] > 0)
+  cassert(globalHistoryLength >= 0)
+  comptime const globalBits = if globalHistoryLength > 0 { globalHistoryLength } elif boom2BPD { 16 } elif alpha21264BPD or swBPD { 32 } else { 64 }
+  comptime const historySets = if localHistoryNSets < 0 { if alpha21264BPD { alphaGeometry.historySets } else { 0 } } else { localHistoryNSets }
+  cassert(localHistoryNSets >= -1 and historySets >= 0)
+  cassert(localHistoryLength >= 1)
+  comptime const tageMetaBits = 32+8*std.clog2(tageTables.[size])
+  comptime const fastMetaBits = 32+8*std.clog2(fastTables.[size])
+  comptime const metaBits = if bpdMaxMetaLength != 0 { bpdMaxMetaLength } elif swBPD { 1 } elif boom2BPD { 45 } elif alpha21264BPD { 64 } else { 120 }
+  comptime const targetWayBits = std.clog2(btbTable.nWays)
+  comptime const alphaHistoryOffset = if targetWayBits <= 8 { 32 } else { 24+targetWayBits }
+  comptime const ftqBankBits = if alpha21264BPD and historySets > 0 and metaBits < alphaHistoryOffset+localHistoryLength { alphaHistoryOffset+localHistoryLength } else { metaBits }
+  cassert(metaBits >= 1)
+  cfg = (
+    const decodeWidth=decodeWidth,
+    const requested=(const enableColumnALUWrites=enableColumnALUWrites, const globalHistoryLength=globalHistoryLength, const localHistoryNSets=localHistoryNSets, const bpdMaxMetaLength=bpdMaxMetaLength, const cachedSourceIds=cachedSourceIds),
+    const branchPredictor=branchPredictor,
+    const robBits=std.clog2(numRobEntries/decodeWidth)+std.clog2(decodeWidth),
+    const pregBits=pregBits,
+    const numIntPhysRegisters=numIntPhysRegisters,
+    const numImmPhysRegisters=numImmPhysRegisters,
+    const immBits=std.clog2(numImmPhysRegisters),
+    const numFpPhysRegisters=numFpPhysRegisters,
+    const numIrfBanks=numIrfBanks,
+    const numFrfBanks=numFrfBanks,
+    const numIrfReadPorts=numIrfReadPorts,
+    const numFrfReadPorts=numFrfReadPorts,
+    const enableColumnALUIssue=enableColumnALUIssue,
+    const enableALUSingleWideDispatch=enableALUSingleWideDispatch,
+    const enableColumnALUWrites=enableColumnALUWrites or (enableColumnALUIssue and aluQueue.issueWidth > 1 and aluQueue.issueWidth == (1 << std.clog2(aluQueue.issueWidth))),
+    const enableBankedFPFreelist=enableBankedFPFreelist,
+    const enableCompactingLSUDuringDispatch=enableCompactingLSUDuringDispatch,
+    const enableFastLoadUse=enableFastLoadUse,
+    const enablePrefetching=enablePrefetching,
+    const enableAgenStage=enableAgenStage,
+    const enableConservativeSNI=enableConservativeSNI,
+    const enableBPDHPMs=enableBPDHPMs,
+    const enableStLdForwarding=enableStLdForwarding,
+    const enableLoadToStoreForwarding=enableLoadToStoreForwarding,
+    const enableFastPNR=enableFastPNR,
+    const enableGHistStallRepair=enableGHistStallRepair,
+    const enableSlowBTBRedirect=enableSlowBTBRedirect,
+    const enableSuperscalarSnapshots=enableSuperscalarSnapshots,
+    const enableSFBOpt=enableSFBOpt,
+    const nPerfCounters=nPerfCounters,
+    const haveBasicCounters=haveBasicCounters,
+    const useAtomics=useAtomics,
+    const nBreakpoints=nBreakpoints,
+    const useBPWatch=useBPWatch,
+    const useNMI=useNMI,
+    const usingRoCC=usingRoCC,
+    const numRXQEntries=numRXQEntries,
+    const numRCQEntries=numRCQEntries,
+    const haveCFlush=haveCFlush,
+    const useDebug=useDebug,
+    const enableTraceCoreIngress=enableTraceCoreIngress,
+    const trace=trace,
+    const enableCommitLogPrintf=enableCommitLogPrintf,
+    const enableBranchPrintf=enableBranchPrintf,
+    const enableMemtracePrintf=enableMemtracePrintf,
+    const useCompressed=useCompressed,
+    const useRVE=useRVE,
+    const useSCIE=useSCIE,
+    const pgLevels=pgLevels,
+    const vaddrBits=12 + 9*pgLevels,
+    const addrBits=13 + 9*pgLevels,
+    const clockGate=clockGate,
+    const dcacheClockGate=dcacheClockGate,
+    const useFetchMonitor=useFetchMonitor,
+    const bootFreqHz=bootFreqHz,
+    const useVM=useVM,
+    const useUser=useUser,
+    const useSupervisor=useSupervisor,
+    const misaWritable=misaWritable,
+    const useAtomicsOnlyForIO=useAtomicsOnlyForIO,
+    const usingFPU=usingFPU,
+    const mtvecInit=mtvecInit,
+    const mtvecWritable=mtvecWritable,
+    const intToFpLatency=intToFpLatency,
+    const imulLatency=imulLatency,
+    const mulDiv=mulDiv,
+    const ftq=fetchTargetQueue(nEntries=ftqEntries),
+    const ftqEntries=ftqEntries,
+    const numRasEntries=numRasEntries,
+    const rasDepth=if numRasEntries < 2 { 2 } else { numRasEntries },
+    const numRobEntries=numRobEntries,
+    const maxBrCount=maxBrCount,
+    const numLdqEntries=numLdqEntries,
+    const lsuWidth=lsuWidth,
+    const dcacheMSHRs=dcacheMSHRs,
+    const cachedSourceIds=sourceIds,
+    const dataSourceBits=std.clog2(sourceIds+2),
+    const tileSourceBits=1+std.clog2(sourceIds+2),
+    const iTLB=iTLB,
+    const dTLBSets=dTLBSets,
+    const dTLBWays=dTLBWays,
+    const nPMPs=nPMPs,
+    const nLocalInterrupts=nLocalInterrupts,
+    const localInterruptBits=if nLocalInterrupts > 0 { nLocalInterrupts } else { 1 },
+    const mcontextWidth=mcontextWidth,
+    const scontextWidth=scontextWidth,
+    const nL2TLBEntries=nL2TLBEntries,
+    const nL2TLBWays=nL2TLBWays,
+    const dcacheRowBits=dcacheRowBits,
+    const dcacheSets=dcacheSets,
+    const dcacheWays=dcacheWays,
+    const numDCacheBanks=numDCacheBanks,
+    const dcacheSinglePorted=dcacheSinglePorted,
+    const numStqEntries=numStqEntries,
+    const ldBits=1+std.clog2(numLdqEntries),
+    const stBits=1+std.clog2(numStqEntries),
+    const numFetchBufferEntries=numFetchBufferEntries,
+    const gshareTable=gshareTable,
+    const boom2BPD=boom2BPD,
+    const fastTageBPD=fastTageBPD,
+    const swBPD=swBPD,
+    const alpha21264BPD=alpha21264BPD,
+    const alphaGeometry=alphaGeometry,
+    const bpdMaxMetaLength=metaBits,
+    const ftqBankBits=ftqBankBits,
+    const alphaHistoryOffset=alphaHistoryOffset,
+    const bankMetaBits=if ftqBankBits < 120 { 120 } else { ftqBankBits },
+    const globalHistoryLength=globalBits,
+    const localHistoryLength=localHistoryLength,
+    const localHistoryNSets=historySets,
+    const tageMetaBits=tageMetaBits,
+    const fastMetaBits=fastMetaBits,
+    const fastBTB=fastBTB,
+    const slowBTB=slowBTB,
+    const fastMicroWays=fastMicroWays,
+    const fastMicroTagBits=fastMicroTagBits,
+    const btbTable=btbTable,
+    const microBTB=microBTB,
+    const bimTable=bimTable,
+    const fastBimTable=fastBimTable,
+    const slowBimTable=slowBimTable,
+    const tageTables=tageTables,
+    const fastTables=fastTables,
+    const tageUBitPeriod=tageUBitPeriod,
+    const tageSinglePorted=tageSinglePorted,
+    const slowBTBSinglePorted=slowBTBSinglePorted,
+    const coreWidth=coreWidth,
+    const fetchWidth=fetchWidth,
+    const fetchBanks=if fetchWidth == 8 { 2 } else { 1 },
+    const fp=fpQueue,
+    const fpu=fpu,
+    const issueParams=(memQueue, unqQueue, aluQueue, fpQueue),
+    const mem=memQueue,
+    const unq=unqQueue,
+    const alu=aluQueue,
+    const enableBranchPrediction=enableBranchPrediction,
+    const enableRasTopRepair=enableRasTopRepair,
+    const enableBTBFastRepair=enableBTBFastRepair,
+    const enableICacheDelay=enableICacheDelay,
+    const icacheSinglePorted=icacheSinglePorted,
+    const icacheSets=icacheSets,
+    const icacheWays=icacheWays,
+    const setBits=std.clog2(icacheSets),
+  )
+}
+
+pub const small       = params()
+pub const mixedQueues = params(alu=halfSlow, mem=halfSlowMemory)
+
+// WithNCS152BaselineBooms inherits the Rocket Chip D-cache default of 32 TLB ways.
+pub const cs152BaselineCore = params(
+    enableBranchPrintf=true, dTLBWays=32, numRobEntries=4, numIntPhysRegisters=33, numRasEntries=0, enableBranchPrediction=false,
+    alu=queue(numEntries=16), fp=queue(numEntries=4))

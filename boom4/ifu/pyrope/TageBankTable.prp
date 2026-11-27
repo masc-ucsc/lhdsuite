@@ -1,0 +1,48 @@
+const TageTable = import("TageTable.TageTable")
+
+pub mod TageBankTable<geometry, i, choice, tableBits, fetchShift, period, single, historyBits=64, metaBits=120, pcBits=40>(clock:Clock, reset:Reset, f1Valid:U1, f1Pc:Unsigned(bits=pcBits), history:Unsigned(bits=historyBits),
+  writePc:Unsigned(bits=pcBits), writeHistory:Unsigned(bits=historyBits), train:(commit:U1, pc:Unsigned(bits=pcBits), history:Unsigned(bits=historyBits), branches:U4, cfi:U2, cfiValid:U1, taken:U1, missed:U1, meta:Unsigned(bits=metaBits)))
+  -> (hits:U4@[], counters:U12@[], useful:U8@[]) {
+  comptime const indexMask = (1 << tableBits)-1
+  comptime const ctrOffset = 4*choice
+  comptime const useOffset = ctrOffset+12
+  comptime const altOffset = useOffset+8
+  comptime const providerOffset = altOffset+4
+  reg mask:U4 = nil
+  reg direction:U4 = nil
+  reg allocate:U4 = nil
+  reg oldCtr:U12 = nil
+  reg useMask:U4 = nil
+  reg usefulness:U8 = nil
+  for w in 0..<4 {
+    const provider = train.meta#[(providerOffset+w*choice)..+choice]
+    const slot = train.meta#[(w*choice)..+choice]
+    const wasProvider = provider#[tableBits] != 0 and (provider & indexMask) == i
+    const updateHit = train.commit != 0 and train.branches#[w] != 0 and wasProvider
+    const selected = train.cfiValid != 0 and train.cfi == w
+    const replace = train.commit != 0 and selected and train.missed != 0
+    const insert = replace and slot#[tableBits] != 0 and (slot & indexMask) == i
+    const age = replace and slot#[tableBits] == 0 and provider#[tableBits] != 0 and i > (provider & indexMask)
+    const prior = train.meta#[(useOffset+2*w)..+2]
+    const wrong = train.missed != 0 and train.cfi == w
+    mask#[w] = U1(updateHit or insert)
+    useMask#[w] = U1(updateHit or insert or age)
+    allocate#[w] = U1(insert)
+    direction#[w] = U1(selected) & train.taken
+    oldCtr#[(3*w)..+3] = train.meta#[(ctrOffset+3*w)..+3]
+    usefulness#[(2*w)..+2] = if insert or age { 0 }
+      elif train.meta#[altOffset+w] == 0 { prior }
+      elif wrong { if prior == 0 { 0 } else { (prior-1)#[0..+2] } }
+      else { if prior == 3 { 3 } else { (prior+1)#[0..+2] } }
+  }
+  const tbl = TageTable<pcBits=pcBits, historyBits=historyBits, T=geometry, fetchShift=fetchShift, period=period, single=single>(clock=clock, reset=reset, io_f1_req_valid=f1Valid, io_f1_req_pc=f1Pc, io_f1_req_ghist=history, io_update_pc=writePc, io_update_hist=writeHistory,
+    io_update_mask_0=mask#[0], io_update_mask_1=mask#[1], io_update_mask_2=mask#[2], io_update_mask_3=mask#[3],
+    io_update_taken_0=direction#[0], io_update_taken_1=direction#[1], io_update_taken_2=direction#[2], io_update_taken_3=direction#[3],
+    io_update_alloc_0=allocate#[0], io_update_alloc_1=allocate#[1], io_update_alloc_2=allocate#[2], io_update_alloc_3=allocate#[3],
+    io_update_old_ctr_0=oldCtr#[0..+3], io_update_old_ctr_1=oldCtr#[3..+3], io_update_old_ctr_2=oldCtr#[6..+3], io_update_old_ctr_3=oldCtr#[9..+3],
+    io_update_u_mask_0=useMask#[0], io_update_u_mask_1=useMask#[1], io_update_u_mask_2=useMask#[2], io_update_u_mask_3=useMask#[3],
+    io_update_u_0=(e0=usefulness#[0], e1=usefulness#[1]), io_update_u_1=(e0=usefulness#[2], e1=usefulness#[3]), io_update_u_2=(e0=usefulness#[4], e1=usefulness#[5]), io_update_u_3=(e0=usefulness#[6], e1=usefulness#[7]))
+  hits = (tbl.io_f2_resp_0_valid << 0) | (tbl.io_f2_resp_1_valid << 1) | (tbl.io_f2_resp_2_valid << 2) | (tbl.io_f2_resp_3_valid << 3)
+  counters = (tbl.io_f2_resp_0_bits_ctr << 0) | (tbl.io_f2_resp_1_bits_ctr << 3) | (tbl.io_f2_resp_2_bits_ctr << 6) | (tbl.io_f2_resp_3_bits_ctr << 9)
+  useful = (tbl.io_f2_resp_0_bits_u << 0) | (tbl.io_f2_resp_1_bits_u << 2) | (tbl.io_f2_resp_2_bits_u << 4) | (tbl.io_f2_resp_3_bits_u << 6)
+}

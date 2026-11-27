@@ -1,0 +1,35 @@
+const rename = import("../pyrope/PredRenameStage.PredRenameStage")
+
+pub mod predicate_rows(clock:Clock, reset:U1, phase:U4) -> (dst:U18@[], pred:U18@[], waiting:U3@[]) {
+  const first = phase == 2
+  const second = phase == 5
+  const dut = rename<width=3, entries=40, pregBits=6, wakePorts=2>(clock=clock, reset=reset,
+      io_kill=U1(phase == 8), io_dec_fire_0=if first { 7 } elif second { 4 } else { 0 },
+      io_dec_uops_0_br_type=if first { 0x011 } else { 0 },
+      io_dec_uops_0_is_sfb=if first { 7 } else { 4 },
+      io_dec_uops_0_ftq_idx=34 | (39 << 6), io_dec_uops_0_lrs1=0, io_dec_uops_0_lrs2=0,
+      io_dec_uops_0_lrs1_rtype=0, io_dec_uops_0_lrs2_rtype=0,
+      io_dis_fire_0=if phase == 3 { 1 } elif phase == 4 { 2 } else { 0 },
+      io_dis_ready=U1(first or second), io_wakeups_0_valid=if phase == 7 { 3 } else { 0 },
+      io_wakeups_0_bits_uop_pdst=34 | (39 << 6))
+  dst = dut.io_ren2_uops_0_pdst
+  pred = dut.io_ren2_uops_0_ppred
+  waiting = dut.io_ren2_uops_0_ppred_busy
+}
+
+test predicate_rows.bypass {
+  mut d = predicate_rows
+  tick 12 {
+    d.reset = U1(clock < 2)
+    d.phase = clock
+    step
+    if clock == 2 {
+      assert(d.dst == 34 + (39 << 6), "independent predicate destinations")
+      assert(d.pred#[6..+6] == 34 and d.pred#[12..+6] == 39 and d.waiting == 4, "youngest older branch")
+    }
+    if clock >= 4 and clock <= 6 {
+      assert(d.pred#[12..+6] == 39 and d.waiting == 4, "partial dispatch preserves predicate mapping")
+    }
+    if clock == 7 { assert(d.waiting == 0, "both wakeup ports clear busy predicates") }
+  }
+}

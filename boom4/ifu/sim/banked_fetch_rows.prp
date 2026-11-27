@@ -1,0 +1,27 @@
+const buffer = import("../pyrope/FetchBuffer.FetchBuffer")
+
+pub mod banked_fetch_rows(clock:Clock, reset:U1, push:U1) -> (ok:Bool@[]) {
+  // Fetch starts in the second bank of an aligned 16-byte block. Both
+  // bank-front instructions straddle their preceding 8-byte bank boundary.
+  const raw:U256 = (0x12345673 << 224) | (0x0401 << 128) | 0x00033283
+  const expanded:U256 = (0x12345673 << 224) | (0x10413 << 128) | 0x00033283
+  const q = buffer<fetchWidth=8, banks=2, entries=24, decodeWidth=3, ftqBits=6>(
+    clock=clock, reset=reset, io_enq_valid=push, io_deq_ready=0, io_clear=0, pcBase=0x10e,
+    bankEdges=3, mask=0x91, raw=raw, expanded=expanded, sfbs=0, shadowed=0x80,
+    debug=0x10, exceptions=1, cfiValid=1, cfiLane=7, ftqIdx=39, pageFault=0, accessFault=0, source=2,
+  )
+  ok = q.lanes == 7 and q.row_edge_inst == 3 and q.row_is_rvc == 2 and q.row_taken == 4 and
+       q.row_debug_pc == ((0x116 << 80) | (0x10e << 40) | 0x106) and q.row_pc_lob == ((0x16 << 12) | (0x10 << 6) | 8) and
+       q.row_inst#[(1*32)..+32] == 0x10413 and q.row_debug_inst#[(1*32)..+32] == 0x401 and
+       q.row_ftq_idx == (39 | (39 << 6) | (39 << 12)) and q.row_is_sfb == 4 and q.row_bp_debug_if == 2 and q.row_bp_xcpt_if == 1
+}
+
+test banked_fetch_rows.boundaries {
+  mut dut = banked_fetch_rows
+  tick 8 {
+    dut.reset = U1(clock < 2)
+    dut.push = U1(clock == 3)
+    step
+    if clock >= 5 { assert(dut.ok, "bank-edge PCs, tags, compressed expansion or exception lane mismatch") }
+  }
+}

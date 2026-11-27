@@ -1,0 +1,695 @@
+const triggers = import("../../common/pyrope/BoomTriggers.registers")
+const protection = import("../../common/pyrope/BoomPMP")
+const counterAddress = import("CSRDecode.counterAddress")
+const laneDecode = import("CSRDecode.check")
+
+pub mod CSRFile<pgLevels=3, usingRoCC=false, useNMI=false, nBreakpoints=0, useBPWatch=false, clockGate=false, dcacheClockGate=false,
+    useCompressed=true, useRVE=false, misaWritable=false, useDebug=true, nLocalInterrupts=0,
+    nPMPs=8, mcontextWidth=0, scontextWidth=0, useAtomics=true, usingFPU=true,
+    haveBasicCounters=true, width=1, nPerfCounters=2, mtvecInit=0, mtvecWritable=true>::[timecheck=false](
+    clock:Clock, io_cause:U64, increments:Unsigned(bits=nPerfCounters+1), io_decode_0_inst:Unsigned(bits=32*width),
+    io_exception:U1, io_fcsr_flags_bits:U5, io_fcsr_flags_valid:U1, io_hartid:U64,
+    localInterrupts:Unsigned(bits=if nLocalInterrupts > 0 { nLocalInterrupts } else { 1 })=0,
+    roccIRQ:U1=0, nmiRequest:U1=0, nmiVector:Unsigned(bits=13+9*pgLevels)=0, nmiExceptionVector:Unsigned(bits=13+9*pgLevels)=0, io_interrupts_debug:U1, io_interrupts_meip:U1, io_interrupts_msip:U1, io_interrupts_mtip:U1,
+    io_interrupts_seip:U1, io_pc:Unsigned(bits=13+9*pgLevels), io_retire:Unsigned(bits=std.clog2(width + 1)),
+    address:U12, io_rw_cmd:U3, io_rw_wdata:U64, io_set_fs_dirty:U1, io_tval:Unsigned(bits=13+9*pgLevels),
+    io_ungated_clock:Clock, reset:U1) -> (
+    cycleCount:U64@[], triggerTable:Unsigned(bits=(29+9*pgLevels)*nBreakpoints+1)@[], atomicISA:U1@[], eventSelect:Unsigned(bits=14*nPerfCounters+1)@[],
+    io_csr_stall:U1@[], io_customCSRs_0_value:U64@[], io_customCSRs_1_value:U64@[],
+    io_customCSRs_2_value:U64@[], io_decode_0_fp_illegal:Unsigned(bits=width)@[],
+    io_decode_0_read_illegal:Unsigned(bits=width)@[], io_decode_0_system_illegal:Unsigned(bits=width)@[],
+    io_decode_0_write_flush:Unsigned(bits=width)@[], io_decode_0_write_illegal:Unsigned(bits=width)@[],
+    io_evec:Unsigned(bits=13+9*pgLevels)@[], io_fcsr_rm:U3@[], io_interrupt:U1@[], io_interrupt_cause:U64@[],
+    pmpTable:U608@[], io_ptbr_mode:U4@[], io_ptbr_ppn:U44@[], io_rw_rdata:U64@[],
+    io_singleStep:U1@[], io_status_debug:U1@[], io_status_dprv:U2@[], io_status_mxr:U1@[],
+    io_status_prv:U2@[], io_status_sum:U1@[]) {
+  reg io_status_cease_r:U1:[clock_pin=clock]
+  reg reg_mstatus_prv:U2:[clock_pin=clock]
+  reg reg_mstatus_v:U1:[clock_pin=clock]
+  reg reg_mstatus_mpv:U1:[clock_pin=clock]
+  reg reg_mstatus_gva:U1:[clock_pin=clock]
+  reg reg_mstatus_tsr:U1:[clock_pin=clock]
+  reg reg_mstatus_tw:U1:[clock_pin=clock]
+  reg reg_mstatus_tvm:U1:[clock_pin=clock]
+  reg reg_mstatus_mxr:U1:[clock_pin=clock]
+  reg reg_mstatus_sum:U1:[clock_pin=clock]
+  reg reg_mstatus_mprv:U1:[clock_pin=clock]
+  reg reg_mstatus_fs:U2:[clock_pin=clock]
+  reg reg_mstatus_mpp:U2:[clock_pin=clock]
+  reg reg_mstatus_spp:U1:[clock_pin=clock]
+  reg reg_mstatus_mpie:U1:[clock_pin=clock]
+  reg reg_mstatus_spie:U1:[clock_pin=clock]
+  reg reg_mstatus_mie:U1:[clock_pin=clock]
+  reg reg_mstatus_sie:U1:[clock_pin=clock]
+  reg reg_dcsr_ebreakm:U1:[clock_pin=clock]
+  reg reg_dcsr_ebreaks:U1:[clock_pin=clock]
+  reg reg_dcsr_ebreaku:U1:[clock_pin=clock]
+  reg reg_dcsr_cause:U3:[clock_pin=clock]
+  reg reg_dcsr_v:U1:[clock_pin=clock]
+  reg reg_dcsr_step:U1:[clock_pin=clock]
+  reg reg_dcsr_prv:U2:[clock_pin=clock]
+  reg reg_debug:U1:[clock_pin=clock]
+  reg reg_dpc:Unsigned(bits=13+9*pgLevels):[clock_pin=clock]
+  reg reg_dscratch0:U64:[clock_pin=clock]
+  reg reg_singleStepped:U1:[clock_pin=clock]
+  reg reg_mie:U64:[clock_pin=clock]
+  reg reg_mideleg:U64:[clock_pin=clock]
+  reg reg_medeleg:U64:[clock_pin=clock]
+  reg reg_mip_seip:U1:[clock_pin=clock]
+  reg reg_mip_stip:U1:[clock_pin=clock]
+  reg reg_mip_ssip:U1:[clock_pin=clock]
+  comptime const vaBits = 12+9*pgLevels
+  comptime const extBits = vaBits+1
+  reg reg_mepc:Unsigned(bits=13+9*pgLevels):[clock_pin=clock]
+  reg reg_mcause:U64:[clock_pin=clock]
+  reg reg_mtval:Unsigned(bits=13+9*pgLevels):[clock_pin=clock]
+  reg reg_mscratch:U64:[clock_pin=clock]
+  reg reg_mtvec:U32:[clock_pin=clock]
+  reg reg_menvcfg_fiom:U1:[clock_pin=clock]
+  reg reg_senvcfg_fiom:U1:[clock_pin=clock]
+  reg reg_mcounteren:U32:[clock_pin=clock]
+  reg reg_scounteren:U32:[clock_pin=clock]
+  reg reg_vsstatus_spp:U1:[clock_pin=clock]
+  reg reg_vsepc:Unsigned(bits=13+9*pgLevels):[clock_pin=clock]
+  reg reg_sepc:Unsigned(bits=13+9*pgLevels):[clock_pin=clock]
+  reg reg_scause:U64:[clock_pin=clock]
+  reg reg_stval:Unsigned(bits=13+9*pgLevels):[clock_pin=clock]
+  reg reg_sscratch:U64:[clock_pin=clock]
+  reg reg_stvec:Unsigned(bits=12+9*pgLevels):[clock_pin=clock]
+  reg reg_satp_mode:U4:[clock_pin=clock]
+  reg reg_satp_ppn:U44:[clock_pin=clock]
+  reg reg_wfi:U1:[async=false, clock_pin=io_ungated_clock, initial=0, reset_pin=reset]
+  reg reg_fflags:U5:[clock_pin=clock]
+  reg reg_frm:U3:[clock_pin=clock]
+  reg reg_mcountinhibit:Unsigned(bits=3+nPerfCounters):[clock_pin=clock]
+  reg small_0:U6:[clock_pin=clock]
+  reg large_0:U58:[clock_pin=clock]
+  reg small_1:U6:[async=false, clock_pin=io_ungated_clock, initial=0, reset_pin=reset]
+  reg large_1:U58:[async=false, clock_pin=io_ungated_clock, initial=0, reset_pin=reset]
+  reg reg_custom_0:U64:[clock_pin=clock]
+  reg reg_custom_1:U64:[clock_pin=clock]
+  comptime const clockGateMask = U1(dcacheClockGate) | (U1(clockGate)*6)
+  reg reg_custom_2:U64:[clock_pin=clock]
+  comptime const roccMask = U1(usingRoCC) << 12
+  comptime const localMask = ((1 << nLocalInterrupts)-1) << 16
+  const delegated:U64 = reg_mideleg & (localMask | roccMask | 0x222)
+  const _GEN_2__w1 = (reg_medeleg#[0..<16] & 0xb15d)#[0..<16]
+  const _GEN_3__w1 = reg_mcounteren#[0..+(3+nPerfCounters)]
+  const _GEN_4__w1 = reg_scounteren#[0..+(3+nPerfCounters)]
+  const value__w1 = (large_0#[0..<58] << 6) | small_0#[0..<6]
+  const value_1__w1 = (large_1#[0..<58] << 6) | small_1#[0..<6]
+  cycleCount = value_1__w1
+  const pending = ((roccIRQ << 12) & roccMask) | ((localInterrupts << 16) & localMask) | ((io_interrupts_meip & 1) << 11) | (((reg_mip_seip | io_interrupts_seip) & 1) << 9) | ((io_interrupts_mtip & 1) << 7) | ((reg_mip_stip & 1) << 5) | ((io_interrupts_msip & 1) << 3) | ((reg_mip_ssip & 1) << 1)
+  reg nmiEnable:U1:[clock_pin=clock] = nil
+  reg nmiPrivilege:U2:[clock_pin=clock] = nil
+  reg nmiEpc:Unsigned(bits=13+9*pgLevels):[clock_pin=clock] = nil
+  reg nmiCause:U64:[clock_pin=clock] = nil
+  reg nmiScratch:U64:[clock_pin=clock] = nil
+  const allowInterrupt = !useNMI or nmiEnable != 0
+  const nmiPending = useNMI and nmiRequest != 0 and allowInterrupt
+  const enabled = reg_mie & pending
+  const machinePending = if reg_mstatus_prv < 2 or reg_mstatus_mie != 0 { enabled & ~delegated } else { 0 }
+  const supervisorPending = if reg_mstatus_v != 0 or reg_mstatus_prv == 0 or (reg_mstatus_prv == 1 and reg_mstatus_sie != 0) {
+    enabled & delegated
+  } else { 0 }
+  mut _mux_5:U8 = if (reg_mtvec & 1) != 0 { 0xfe } else { 2 }
+  const _read_mtvec_T_5__w1 = (reg_mtvec & ((0xffffff << 8) | (~_mux_5#[0..=7])))#[0..<32]
+  mut _mux_6:U8 = if (reg_stvec & 1) != 0 { 0xfe } else { 2 }
+  const _read_stvec_T_5__w1 = (reg_stvec & (((((1 << vaBits)-1) >> 8) << 8) | (~_mux_6#[0..=7])))#[0..+vaBits]
+  comptime const supportedISA = 0x1000 | (U1(useCompressed) << 2) | U1(useAtomics) | (U1(usingFPU) << 3) | (U1(usingFPU) << 5)
+  reg extensions:U13:[clock_pin=clock]
+  const isa = if misaWritable { extensions } else { supportedISA }
+  const epcMask:Unsigned(bits=13+9*pgLevels) = if isa#[2] != 0 { ((1 << extBits)-2) } else { ((1 << extBits)-4) }
+  atomicISA = isa#[0]
+  mut _mux_7:U64 = if io_rw_cmd#[0..<2] == 3 { io_rw_wdata#[0..<0x40] } else { 0 }
+  const _wdata_T_6__w1 = ~_mux_7#[0..=63]
+  const system_insn__w1 = U1(io_rw_cmd == 4)
+  const debugRequest = U1(useDebug and io_interrupts_debug != 0)
+  const insn_call__w1 = system_insn__w1 & U1(address == 0)
+  const insn_break__w1 = system_insn__w1 & U1(address == 1)
+  const nmiReturn = useNMI and system_insn__w1 != 0 and address == 0x702
+  const insn_ret__w1 = U1(!nmiReturn) & system_insn__w1 & U1((address & 0xdfc) == 0x100 or (address & 0xc00) == 0x400)
+  mut _mux_170:U2 = if (reg_mstatus_prv & 1 & reg_mstatus_v & 1) != 0 { 2 } else { reg_mstatus_prv#[0..<2] }
+  mut _mux_171:U64 = if insn_break__w1 != 0 { 3 } else { io_cause#[0..<0x40] }
+  mut cause:U64 = if insn_call__w1 != 0 { (_mux_170#[0..<2] - 8)#[0..<4] } else { _mux_171#[0..<0x40] }
+  mut _b2i_173 = U1(cause#[0..<8] == 14)
+  const causeIsDebugInt__w1 = cause#[63..<0x40] & _b2i_173 & 1
+  const causeIsDebugTrigger__w1 = (~cause#[63..<0x40]) & _b2i_173 & 1
+  const breakMask = (reg_dcsr_ebreakm << 3) | (reg_dcsr_ebreaks << 1) | reg_dcsr_ebreaku
+  const debugBreak = insn_break__w1 & U1(cause#[63] == 0) & (breakMask >> reg_mstatus_prv)#[0]
+  const trapToDebug__w1 = U1(useDebug) & (reg_singleStepped | causeIsDebugInt__w1 | causeIsDebugTrigger__w1 | debugBreak | reg_debug)
+  const _GEN_20__w1 = cause#[0..<6]
+  mut _mux_174:U1 = if cause#[63..<0x40] != 0 { (delegated >> _GEN_20__w1) & 1 } else { (_GEN_2__w1 >> _GEN_20__w1) & 1 }
+  const nmiInterrupt = useNMI and cause#[62..+2] == 3 and (cause#[0..+8] == 12 or cause#[0..+8] == 13)
+  const nmiTrap = nmiInterrupt and io_exception != 0 and trapToDebug__w1 == 0
+  const delegate__w1 = U1(allowInterrupt) & (~reg_mstatus_prv#[1..<2]) & _mux_174 & 1
+  mut _mux_175:U1 = if cause#[63..<0x40] != 0 { (0 >> _GEN_20__w1) & 1 } else { (0 >> _GEN_20__w1) & 1 }
+  const delegateVS__w1 = reg_mstatus_v & delegate__w1 & 1 & _mux_175 & 1
+  mut _mux_176:Unsigned(bits=13+9*pgLevels) = if delegateVS__w1 != 0 { 0 } else { (reg_stvec#[vaBits-1] << vaBits) | _read_stvec_T_5__w1#[0..+vaBits] }
+  mut _mux_177:Unsigned(bits=13+9*pgLevels) = if delegate__w1 != 0 { _mux_176#[0..+extBits] } else { _read_mtvec_T_5__w1#[0..<32] }
+  const io_singleStep_0__w1 = U1(useDebug) & reg_dcsr_step & (~reg_debug) & 1
+  const exception__w1 = (((insn_call__w1 | insn_break__w1) & 1) | (io_exception & U1(!nmiTrap))) & 1
+  const _GEN_21__w1 = (delegateVS__w1 | delegate__w1) & 1
+  const _GEN_22__w1 = ((~_GEN_21__w1#[0]) << 1) | 1
+  const _GEN_23__w1 = U1(useDebug) & address#[10] & address#[7] & 1
+  mut _mux_178:U2 = if _GEN_23__w1 != 0 { reg_dcsr_prv#[0..<2] } else { reg_mstatus_mpp#[0..<2] }
+  mut _mux_179:U1 = if reg_mstatus_v != 0 { reg_vsstatus_spp & 1 } else { reg_mstatus_spp & 1 }
+  mut _mux_180:U2 = if address#[9] != 0 { _mux_178#[0..<2] } else { _mux_179 & 1 }
+  const io_csr_stall_0__w1 = (reg_wfi | io_status_cease_r) & 1
+  const regions = protection.registers<count=nPMPs>(clock, reset, address, cmd=io_rw_cmd, data=io_rw_wdata)
+  pmpTable = regions.table
+  mut csrRead:U64 = regions.value
+  comptime const baseISA = if useRVE { 0x10 } else { 0x100 }
+  if address == 0x301 { csrRead = 0x8000000000140000 | (U1(usingRoCC) << 23) | baseISA | isa }
+  elif address == 0x300 { csrRead = (U1(usingRoCC or reg_mstatus_fs == 3) << 63) | ((reg_mstatus_mpv & 1) << 39) | ((reg_mstatus_gva & 1) << 38) | (0x1400 << 23) | ((reg_mstatus_tsr & 1) << 22) | ((reg_mstatus_tw & 1) << 21) | ((reg_mstatus_tvm & 1) << 20) | ((reg_mstatus_mxr & 1) << 19) | ((reg_mstatus_sum & 1) << 18) | ((reg_mstatus_mprv & 1) << 17) | ((U1(usingRoCC)*3) << 15) | (reg_mstatus_fs#[0..<2] << 13) | (reg_mstatus_mpp#[0..<2] << 11) | ((reg_mstatus_spp & 1) << 8) | ((reg_mstatus_mpie & 1) << 7) | ((reg_mstatus_spie & 1) << 5) | ((reg_mstatus_mie & 1) << 3) | ((reg_mstatus_sie & 1) << 1) }
+  elif address == 0x305 { csrRead = _read_mtvec_T_5__w1#[0..<32] }
+  elif address == 0x304 { csrRead = reg_mie }
+  elif address == 0x340 { csrRead = reg_mscratch }
+  elif address == 0x341 { csrRead = (reg_mepc & epcMask)#sext[0..<extBits]#[0..+64] }
+  elif address == 0x343 { csrRead = reg_mtval#[0..+extBits]#sext[0..<extBits]#[0..<0x40] }
+  elif address == 0x342 { csrRead = reg_mcause }
+  elif address == 0x7b0 { csrRead = (0x4000 << 16) | ((reg_dcsr_ebreakm & 1) << 15) | ((reg_dcsr_ebreaks & 1) << 13) | ((reg_dcsr_ebreaku & 1) << 12) | (reg_dcsr_cause#[0..<3] << 6) | ((reg_dcsr_v & 1) << 5) | ((reg_dcsr_step & 1) << 2) | reg_dcsr_prv#[0..<2] }
+  elif address == 0x7b1 { csrRead = (reg_dpc & epcMask)#sext[0..<extBits]#[0..+64] }
+  elif (address & 0xffe) == 0x7b2 { csrRead = reg_dscratch0 }
+  elif (address & 0xffe) == 0x000 { csrRead = reg_fflags#[0..<5] }
+  elif address == 0x002 { csrRead = reg_frm#[0..<3] }
+  elif address == 0x003 { csrRead = (reg_frm#[0..<3] << 5) | reg_fflags#[0..<5] }
+  elif (address & 0xffe) == 0xb00 { csrRead = value_1__w1 }
+  elif address == 0xb02 { csrRead = value__w1 }
+  elif (address & 0xffe) == 0x306 { csrRead = _GEN_3__w1#[0..<32] }
+  elif (address & 0xffe) == 0xc00 { csrRead = value_1__w1 }
+  elif address == 0xc02 { csrRead = value__w1 }
+  elif (address & 0xff8) == 0x308 { csrRead = reg_menvcfg_fiom & 1 }
+  elif (address & 0xffc) == 0x100 { csrRead = (U1(usingRoCC or reg_mstatus_fs == 3) << 63) | (0x2000 << 20) | ((reg_mstatus_mxr & 1) << 19) | ((reg_mstatus_sum & 1) << 18) | ((U1(usingRoCC)*3) << 15) | (reg_mstatus_fs#[0..<2] << 13) | ((reg_mstatus_spp & 1) << 8) | ((reg_mstatus_spie & 1) << 5) | ((reg_mstatus_sie & 1) << 1) }
+  elif address == 0x140 { csrRead = reg_sscratch }
+  elif address == 0x142 { csrRead = reg_scause }
+  elif address == 0x143 { csrRead = reg_stval#[0..+extBits]#sext[0..<extBits]#[0..<0x40] }
+  elif (address & 0xf80) == 0x180 { csrRead = (reg_satp_mode#[0..<4] << 60) | reg_satp_ppn#[0..<44] }
+  elif address == 0x141 { csrRead = (reg_sepc & epcMask)#sext[0..<extBits]#[0..+64] }
+  elif address == 0x105 { csrRead = _read_stvec_T_5__w1#sext[0..<vaBits]#[0..+64] }
+  elif (address & 0xffe) == 0x106 { csrRead = _GEN_4__w1#[0..<32] }
+  elif address == 0x303 { csrRead = delegated#[0..<0x40] }
+  elif address == 0x302 { csrRead = _GEN_2__w1#[0..<0x40] }
+  elif (address & 0xff8) == 0x108 { csrRead = reg_senvcfg_fiom & 1 }
+  elif (address & 0xff8) == 0x800 { csrRead = reg_custom_0 }
+  elif (address & 0xff8) == 0x808 { csrRead = reg_custom_1 }
+  elif (address & 0xfc0) == 0x7c0 { csrRead = reg_custom_2 }
+  elif address == 0xf12 { csrRead = 2 }
+  elif address == 0xf14 { csrRead = io_hartid }
+  mut machineContext:U64 = 0
+  mut supervisorContext:U64 = 0
+  if mcontextWidth > 0 {
+    reg mcontext:Unsigned(bits=mcontextWidth):[clock_pin=clock]
+    machineContext = mcontext
+    if address == 0x7a8 { csrRead = mcontext }
+    if reset != 0 { mcontext = 0 } elif address == 0x7a8 {
+      const operand = io_rw_wdata#[0..+mcontextWidth]
+      if io_rw_cmd == 5 { mcontext = operand }
+      elif io_rw_cmd == 6 { mcontext = mcontext | operand }
+      elif io_rw_cmd == 7 { mcontext = mcontext & ~operand }
+    }
+  }
+  if scontextWidth > 0 {
+    reg scontext:Unsigned(bits=scontextWidth):[clock_pin=clock]
+    supervisorContext = scontext
+    if address == 0x5a8 { csrRead = scontext }
+    if reset != 0 { scontext = 0 } elif address == 0x5a8 {
+      const operand = io_rw_wdata#[0..+scontextWidth]
+      if io_rw_cmd == 5 { scontext = operand }
+      elif io_rw_cmd == 6 { scontext = scontext | operand }
+      elif io_rw_cmd == 7 { scontext = scontext & ~operand }
+    }
+  }
+  const bp = triggers<vaddrBits=(12+9*pgLevels), count=nBreakpoints, machineBits=mcontextWidth, supervisorBits=scontextWidth, watch=useBPWatch>(
+      clk=clock, rst=reset, index=address, cmd=io_rw_cmd, data=io_rw_wdata, debug=reg_debug,
+      privilege=reg_mstatus_prv, mcontext=machineContext, scontext=supervisorContext)
+  triggerTable = bp.table
+  if nBreakpoints > 0 and address >= 0x7a0 and address <= 0x7a3 { csrRead = bp.read }
+  if address == 0x344 { csrRead = pending }
+  elif address == 0x144 { csrRead = pending & delegated }
+  elif address == 0x104 { csrRead = reg_mie & delegated }
+  reg selectors:Unsigned(bits=14*nPerfCounters+1):[clock_pin=clock]
+  reg counters:Unsigned(bits=40*nPerfCounters+1):[clock_pin=clock]
+  eventSelect = selectors & ((1 << (14*nPerfCounters))-1)
+  if address == 0x320 { csrRead = reg_mcountinhibit }
+  for i in 0..<nPerfCounters {
+    if address == 0x323+i { csrRead = selectors#[(14*i)..+14] }
+    if address == 0xb03+i or address == 0xc03+i { csrRead = counters#[(40*i)..+40] }
+  }
+
+  if useNMI {
+    if address == 0x350 { csrRead = nmiScratch }
+    elif address == 0x351 { csrRead = (nmiEpc & epcMask)#sext[0..<extBits]#[0..+64] }
+    elif address == 0x352 { csrRead = nmiCause }
+    elif address == 0x353 { csrRead = (nmiPrivilege << 11) | (nmiEnable << 3) }
+  }
+  if !useDebug and address#[4..+8] == 0x7b { csrRead = 0 }
+  const maskedCounter = !haveBasicCounters and counterAddress(address)
+  if maskedCounter { csrRead = 0 }
+  const csrWrite = U1(!maskedCounter and (io_rw_cmd == 5 or io_rw_cmd == 6 or io_rw_cmd == 7))
+  mut _mux_245:U1 = if csrWrite != 0 {
+    (((((((U1(address == 0x003) | U1(address == 0x002)) & 1) | U1((address & 0xffe) == 0x000)) & 1) | io_fcsr_flags_valid) & 1) | io_set_fs_dirty) & 1
+  } else {
+    (io_fcsr_flags_valid | io_set_fs_dirty) & 1
+  }
+  const nextSmall__w1 = (small_0#[0..<6] + io_retire)#[0..<7]
+  const _GEN_30__w1 = insn_ret__w1 & (~address#[9]#[0]) & 1 & (~reg_mstatus_v) & 1
+  const _GEN_31__w1 = ((~address#[9]#[0]) | _GEN_23__w1) & 1
+  const _GEN_32__w1 = ((~insn_ret__w1#[0]) | _GEN_31__w1) & 1
+  const _GEN_33__w1 = csrWrite & U1(address == 0x300) & 1
+  const epc__w1 = io_pc#[1..<extBits] << 1
+  mut _mux_247:Unsigned(bits=13+9*pgLevels) = if insn_break__w1 != 0 { epc__w1#[0..+extBits] } else { io_tval#[0..+extBits] }
+  const _GEN_36__w1 = exception__w1 & trapToDebug__w1 & 1 & (~reg_debug) & 1
+  const _GEN_37__w1 = ((((~exception__w1#[0]) | trapToDebug__w1) & 1) | (~delegateVS__w1#[0])) & 1
+  const _GEN_38__w1 = ((((((~exception__w1#[0]) | trapToDebug__w1) & 1) | delegateVS__w1) & 1) | (~delegate__w1#[0])) & 1
+  const _GEN_39__w1 = ((((~exception__w1#[0]) | trapToDebug__w1) & 1) | _GEN_21__w1) & 1
+  mut _mux_248:U9 = if io_rw_cmd#[1..<2] != 0 { ((reg_mip_seip & 1) << 8) | ((reg_mip_stip & 1) << 4) | (reg_mip_ssip & 1) } else { 0 }
+  mut _mux_249:U9 = if io_rw_cmd#[0..<2] == 3 { io_rw_wdata#[1..<10] } else { 0 }
+  const _new_mip_WIRE__w1 = ((_mux_248 | io_rw_wdata#[1..<10])#[0..<9] & (~_mux_249#[0..=8]))#[0..<9]
+  mut _mux_258:U1 = if _GEN_30__w1 != 0 { reg_mstatus_spie & 1 } else { _GEN_38__w1 & reg_mstatus_sie & 1 }
+  mut _mux_259:U1 = if _GEN_38__w1 != 0 { reg_mstatus_spie & 1 } else { reg_mstatus_sie & 1 }
+  const _GEN_55__w1 = (_GEN_30__w1 | _mux_259) & 1
+  mut _mux_260:U1 = if _GEN_38__w1 != 0 { reg_mstatus_spp & 1 } else { reg_mstatus_prv & 1 }
+  const _GEN_56__w1 = (~_GEN_30__w1#[0]) & _mux_260 & 1
+  const nextSmall_1__w1 = (small_1#[0..<6] + (~io_csr_stall_0__w1#[0]))#[0..<7]
+  const io_status_debug__w1 = reg_debug
+  mut _mux_276:U2 = if (reg_mstatus_mprv & (~reg_debug) & 1) != 0 { reg_mstatus_mpp#[0..<2] } else { reg_mstatus_prv#[0..<2] }
+  const io_status_prv__w1 = reg_mstatus_prv
+  const io_status_mxr__w1 = reg_mstatus_mxr
+  const io_status_sum__w1 = reg_mstatus_sum
+  const io_ptbr_mode__w1 = reg_satp_mode
+  const io_ptbr_ppn__w1 = reg_satp_ppn
+  const _mux_277 = (if _GEN_23__w1 != 0 { reg_dpc } else { reg_mepc }) & epcMask
+  const _mux_278 = (if reg_mstatus_v != 0 { reg_vsepc } else { reg_sepc }) & epcMask
+  mut _mux_279:Unsigned(bits=13+9*pgLevels) = if address#[9] != 0 { _mux_277#[0..+extBits] } else { _mux_278#[0..+extBits] }
+  mut _mux_280:U12 = if reg_debug != 0 { (0x80 << 4) | ((~insn_break__w1#[0]) << 3) } else { 0x800 }
+  mut _b2i_281 = U1(cause#[6..<8] == 0)
+  mut _mux_282:Unsigned(bits=extBits-2) = if (_mux_177 & 1 & cause#[63..<0x40] & 1 & _b2i_281 & 1) != 0 { (_mux_177#[8..<extBits] << 6) | cause#[0..<6] }
+    else { _mux_177#[2..<extBits] }
+  mut _mux_283:Unsigned(bits=13+9*pgLevels) = if trapToDebug__w1 != 0 { _mux_280#[0..<12] } else { _mux_282#[0..<(extBits-2)] << 2 }
+  mut _mux_284:Unsigned(bits=13+9*pgLevels) = if insn_ret__w1 != 0 { _mux_279#[0..+extBits] } else { _mux_283#[0..+extBits] }
+  const io_fcsr_rm__w1 = reg_frm
+  const candidates = if !allowInterrupt { 0 } elif machinePending != 0 { machinePending } else { supervisorPending }
+  mut interruptCode:U6 = 4
+  for i in (0, 8, 6, 2, 10, 5, 1, 9, 7, 3, 11) {
+    if candidates#[i] != 0 { interruptCode = i }
+  }
+  if candidates#[12] != 0 { interruptCode = 12 }
+  for i in 16..<(16+nLocalInterrupts) {
+    if candidates#[i] != 0 { interruptCode = i }
+  }
+  if nmiPending { interruptCode = 13 }
+  if debugRequest != 0 { interruptCode = 14 }
+  const requestedInterrupt = candidates != 0 or debugRequest != 0 or nmiPending
+  const io_customCSRs_0_value__w1 = reg_custom_0
+  const io_customCSRs_1_value__w1 = reg_custom_1
+  const io_customCSRs_2_value__w1 = reg_custom_2
+  const t2866 = csrRead#[0..<0x40]
+  mut _mux_316:U64 = if io_rw_cmd#[1..<2] != 0 { t2866 } else { 0 }
+  const _wdata_T_2__w1 = (_mux_316 | io_rw_wdata)#[0..<0x40]
+  const _GEN_29__w1 = (_wdata_T_2__w1#[0..<6] & _wdata_T_6__w1#[0..<6])#[0..<6]
+  const _GEN_35__w1 = (_wdata_T_2__w1#[0..<16] & _wdata_T_6__w1#[0..<16])#[0..<16]
+  const wdata__w1 = (_wdata_T_2__w1 & _wdata_T_6__w1)#[0..<0x40]
+  if misaWritable {
+    if reset != 0 { extensions = supportedISA }
+    elif csrWrite != 0 and address == 0x301 and (!useCompressed or io_pc#[1] == 0 or wdata__w1#[2] != 0) {
+      const enabledMask = if wdata__w1#[5] != 0 { supportedISA } else { supportedISA & 0x1ff7 }
+      extensions = wdata__w1#[0..+13] & enabledMask
+    }
+  }
+  const _GEN_40__w1 = wdata__w1#[1..<extBits] << 1
+  const _new_dcsr_WIRE__w1 = (_wdata_T_2__w1#[0..<32] & _wdata_T_6__w1#[0..<32])#[0..<32]
+  const _GEN_41__w1 = (_wdata_T_2__w1#[0..+extBits] & _wdata_T_6__w1#[0..+extBits])#[0..+extBits]
+  const _GEN_42__w1 = (_wdata_T_2__w1#[0..<5] & _wdata_T_6__w1#[0..<5])#[0..<5]
+  const requestedMode = wdata__w1#[60..+4]
+  const validMode = requestedMode == 0 or (requestedMode >= 8 and requestedMode <= pgLevels+5)
+  const writeSatp = csrWrite != 0 and (address & 0xf80) == 0x180 and validMode
+  const _newCfg_T_49__w1 = (_wdata_T_2__w1#[56..<0x40] & _wdata_T_6__w1#[56..<0x40])#[0..<8]
+  if reset != 0 {
+    reg_mstatus_prv = 3
+    reg_mstatus_v = 0
+    reg_mstatus_mpv = 0
+    reg_mstatus_gva = 0
+    reg_mstatus_tsr = 0
+    reg_mstatus_tw = 0
+    reg_mstatus_tvm = 0
+    reg_mstatus_mxr = 0
+    reg_mstatus_sum = 0
+    reg_mstatus_mprv = 0
+    reg_mstatus_fs = 0
+    reg_mstatus_mpp = 3
+    reg_mstatus_spp = 0
+    reg_mstatus_mpie = 0
+    reg_mstatus_spie = 0
+    reg_mstatus_mie = 0
+    reg_mstatus_sie = 0
+    reg_dcsr_ebreakm = 0
+    reg_dcsr_ebreaks = 0
+    reg_dcsr_ebreaku = 0
+    reg_dcsr_cause = 0
+    reg_dcsr_v = 0
+    reg_dcsr_step = 0
+    reg_dcsr_prv = 3
+    reg_debug = 0
+    reg_mcause = 0
+    if mtvecInit >= 0 { reg_mtvec = mtvecInit#[0..+32] }
+    reg_menvcfg_fiom = 0
+    reg_senvcfg_fiom = 0
+    reg_satp_mode = 0
+    reg_mcountinhibit = 0
+    small_0 = 0
+    large_0 = 0
+    selectors = 0
+    reg_custom_0 = 1
+    reg_custom_1 = 1
+    reg_custom_2 = clockGateMask
+    io_status_cease_r = 0
+  } else {
+    const _mux_320:U2 = if reg_debug != 0 { reg_mstatus_prv#[0..<2] } else { 3 }
+    const _mux_321:U2 = if trapToDebug__w1 != 0 { _mux_320#[0..<2] } else { _GEN_22__w1#[0..<2] }
+    const _mux_322:U2 = if exception__w1 != 0 { _mux_321#[0..<2] } else { reg_mstatus_prv#[0..<2] }
+    const _mux_323:U2 = if insn_ret__w1 != 0 { _mux_180#[0..<2] } else { _mux_322#[0..<2] }
+    if nmiReturn { reg_mstatus_prv = nmiPrivilege }
+    elif nmiTrap and allowInterrupt { reg_mstatus_prv = 3 }
+    elif _mux_323 == 2 {
+      reg_mstatus_prv = 0
+    } elif insn_ret__w1 != 0 {
+      reg_mstatus_prv = _mux_180
+    } elif exception__w1 != 0 {
+      if trapToDebug__w1 != 0 {
+        const t2963 = reg_debug != 0
+        if not t2963 {
+          reg_mstatus_prv = 3
+        }
+      } else {
+        reg_mstatus_prv = _GEN_22__w1
+      }
+    }
+    const _mux_324:U1 = if trapToDebug__w1 != 0 { reg_debug & reg_mstatus_v & 1 } else { delegateVS__w1 & 1 }
+    const _mux_325:U1 = if exception__w1 != 0 { _mux_324 & 1 } else { reg_mstatus_v & 1 }
+    reg_mstatus_v = (~insn_ret__w1#[0]) & _mux_325 & 1
+    const _mux_326:U1 = if _GEN_39__w1 != 0 { reg_mstatus_mpv & 1 } else { reg_mstatus_v & 1 }
+    reg_mstatus_mpv = _GEN_32__w1 & _mux_326 & 1
+    reg_mstatus_gva = _GEN_39__w1 & reg_mstatus_gva & 1
+    if _GEN_33__w1 != 0 {
+      reg_mstatus_tsr = wdata__w1#[22..<23]
+      reg_mstatus_tw = wdata__w1#[21..<22]
+      reg_mstatus_tvm = wdata__w1#[20..<21]
+      const _mux_327:U2 = if wdata__w1#[11..<13] == 2 { 0 } else { wdata__w1#[11..<13] }
+      reg_mstatus_mpp = _mux_327
+    } elif _GEN_32__w1 != 0 {
+      const t2990 = _GEN_39__w1 != 0
+      if not t2990 {
+        reg_mstatus_mpp = reg_mstatus_prv
+      }
+    } else {
+      reg_mstatus_mpp = 0
+    }
+    if csrWrite != 0 {
+      if (address & 0xffc) == 0x100 {
+        reg_mstatus_mxr = wdata__w1#[19..<20]
+        reg_mstatus_sum = wdata__w1#[18..<19]
+        reg_mstatus_fs = if usingFPU { wdata__w1#[13..<15] } else { 0 }
+      } elif address == 0x300 {
+        reg_mstatus_mxr = wdata__w1#[19..<20]
+        reg_mstatus_sum = wdata__w1#[18..<19]
+        reg_mstatus_fs = if usingFPU { wdata__w1#[13..<15] } else { 0 }
+      } elif _mux_245 != 0 {
+        reg_mstatus_fs = if usingFPU { 3 } else { 0 }
+      }
+    } elif _mux_245 != 0 {
+      reg_mstatus_fs = if usingFPU { 3 } else { 0 }
+    }
+    const _mux_328:U1 = if _GEN_33__w1 != 0 { wdata__w1#[17..<18] } else { (~(insn_ret__w1 & (~_mux_180#[1..<2]) & 1)#[0]) & reg_mstatus_mprv & 1 }
+    reg_mstatus_mprv = if nmiReturn and nmiPrivilege != 3 { 0 } else { _mux_328 }
+    const _mux_329:U1 = if address == 0x300 { wdata__w1#[8..<9] } else { _GEN_56__w1 & 1 }
+    const _mux_330:U1 = if (address & 0xffc) == 0x100 { wdata__w1#[8..<9] } else { _mux_329 & 1 }
+    const _mux_331:U1 = if csrWrite != 0 { _mux_330 & 1 } else { _GEN_56__w1 & 1 }
+    reg_mstatus_spp = _mux_331
+    const _mux_332:U1 = if _GEN_39__w1 != 0 { reg_mstatus_mpie & 1 } else { reg_mstatus_mie & 1 }
+    const _mux_333:U1 = if _GEN_33__w1 != 0 { wdata__w1#[7..<8] } else { ((insn_ret__w1 & (~_GEN_31__w1#[0]) & 1) | _mux_332) & 1 }
+    reg_mstatus_mpie = _mux_333
+    const _mux_334:U1 = if address == 0x300 { wdata__w1#[5..<6] } else { _GEN_55__w1 & 1 }
+    const _mux_335:U1 = if (address & 0xffc) == 0x100 { wdata__w1#[5..<6] } else { _mux_334 & 1 }
+    const _mux_336:U1 = if csrWrite != 0 { _mux_335 & 1 } else { _GEN_55__w1 & 1 }
+    reg_mstatus_spie = _mux_336
+    const _mux_337:U1 = if _GEN_32__w1 != 0 { _GEN_39__w1 & reg_mstatus_mie & 1 } else { reg_mstatus_mpie & 1 }
+    const _mux_338:U1 = if _GEN_33__w1 != 0 { wdata__w1#[3..<4] } else { _mux_337 & 1 }
+    reg_mstatus_mie = _mux_338
+    const _mux_339:U1 = if address == 0x300 { wdata__w1#[1..<2] } else { _mux_258 & 1 }
+    const _mux_340:U1 = if (address & 0xffc) == 0x100 { wdata__w1#[1..<2] } else { _mux_339 & 1 }
+    const _mux_341:U1 = if csrWrite != 0 { _mux_340 & 1 } else { _mux_258 & 1 }
+    reg_mstatus_sie = _mux_341
+    if (U1(useDebug) & csrWrite & U1(address == 0x7b0) & 1) != 0 {
+      reg_dcsr_ebreakm = _new_dcsr_WIRE__w1#[15..<16]
+      reg_dcsr_ebreaks = _new_dcsr_WIRE__w1#[13..<14]
+      reg_dcsr_ebreaku = _new_dcsr_WIRE__w1#[12..<13]
+      reg_dcsr_step = _new_dcsr_WIRE__w1#[2..<3]
+      const _mux_343:U2 = if _new_dcsr_WIRE__w1#[0..<2] == 2 { 0 } else { _new_dcsr_WIRE__w1#[0..<2] }
+      reg_dcsr_prv = _mux_343
+    } elif _GEN_36__w1 != 0 {
+      reg_dcsr_prv = reg_mstatus_prv
+    }
+    if _GEN_36__w1 != 0 {
+      const _mux_344:U2 = if causeIsDebugTrigger__w1 != 0 { 2 } else { 1 }
+      const _mux_345:U2 = if causeIsDebugInt__w1 != 0 { 3 } else { _mux_344#[0..<2] }
+      const _mux_346:U3 = if reg_singleStepped != 0 { 4 } else { _mux_345#[0..<2] }
+      reg_dcsr_cause = _mux_346
+      reg_dcsr_v = reg_mstatus_v
+    }
+    reg_debug = ((((~insn_ret__w1#[0]) | (~address#[9]#[0])) & 1) | (~_GEN_23__w1#[0])) & 1 & (_GEN_36__w1 | reg_debug) & 1
+    if (csrWrite & U1(address == 0x342) & 1) != 0 {
+      reg_mcause = (wdata__w1 & (0x8000000000000000 | ((1 << std.clog2(16+nLocalInterrupts))-1)))#[0..<0x40]
+    } else {
+      const t3117 = _GEN_39__w1 != 0
+      if not t3117 {
+        reg_mcause = cause
+      }
+    }
+    if mtvecWritable and csrWrite != 0 and address == 0x305 {
+      reg_mtvec = _new_dcsr_WIRE__w1
+    }
+    if (csrWrite & U1((address & 0xff8) == 0x308) & 1) != 0 {
+      reg_menvcfg_fiom = wdata__w1 & 1
+    }
+    if (csrWrite & U1((address & 0xff8) == 0x108) & 1) != 0 {
+      reg_senvcfg_fiom = wdata__w1 & 1
+    }
+    if writeSatp {
+      reg_satp_mode = requestedMode
+    }
+    if (csrWrite & U1((address & 0xffe) == 0x320) & 1) != 0 {
+      reg_mcountinhibit = (wdata__w1 & ~2)#[0..+(3+nPerfCounters)]
+    }
+    if (csrWrite & U1(address == 0xb02) & 1) != 0 {
+      small_0 = _GEN_29__w1
+      large_0 = (_wdata_T_2__w1#[6..<0x40] & _wdata_T_6__w1#[6..<0x40])#[0..<58]
+    } else {
+      const t3151 = reg_mcountinhibit#[2..<3] != 0
+      if not t3151 {
+        small_0 = nextSmall__w1#[0..<6]
+      }
+      if (nextSmall__w1#[6..<7] & (~reg_mcountinhibit#[2..<3]) & 1) != 0 {
+        large_0 = (large_0 + 1)#[0..<58]
+      }
+    }
+    if (csrWrite & U1((address & 0xff8) == 0x800) & 1) != 0 {
+      reg_custom_0 = ((wdata__w1 & 1)#[0..<0x40] | (reg_custom_0 & 0xfffffffffffffffe)#[0..<0x40])#[0..<0x40]
+    }
+    if (csrWrite & U1((address & 0xff8) == 0x808) & 1) != 0 {
+      reg_custom_1 = ((wdata__w1 & 1)#[0..<0x40] | (reg_custom_1 & 0xfffffffffffffffe)#[0..<0x40])#[0..<0x40]
+    }
+    if (csrWrite & U1((address & 0xfc0) == 0x7c0) & 1) != 0 {
+      reg_custom_2 = wdata__w1 & (8 | clockGateMask)
+    }
+    io_status_cease_r = io_status_cease_r | (system_insn__w1 & U1((address & 0xffc) == 0x304))
+  }
+  if (U1(useDebug) & csrWrite & U1(address == 0x7b1) & 1) != 0 {
+    reg_dpc = _GEN_40__w1
+  } elif _GEN_36__w1 != 0 {
+    reg_dpc = epc__w1
+  }
+  if (U1(useDebug) & csrWrite & U1((address & 0xffe) == 0x7b2) & 1) != 0 {
+    reg_dscratch0 = wdata__w1
+  }
+  reg_singleStepped = io_singleStep_0__w1 & ((U1(io_retire != 0) | exception__w1) | reg_singleStepped) & 1
+  if csrWrite != 0 {
+    if address == 0x104 {
+      reg_mie = (reg_mie & ~delegated) | (wdata__w1 & delegated)
+    } elif address == 0x304 {
+      reg_mie = wdata__w1 & (0xaaa | localMask | roccMask)
+    }
+    if (address & 0xffc) == 0x144 {
+      reg_mip_ssip = (((~reg_mideleg#[1..<2]) & reg_mip_ssip & 1) | (_GEN_35__w1#[1..<2] & reg_mideleg#[1..<2] & 1)) & 1
+    } elif (address & 0xffc) == 0x344 {
+      reg_mip_ssip = _new_mip_WIRE__w1 & 1
+    }
+    if address == 0x003 {
+      reg_frm = (_wdata_T_2__w1#[5..<8] & _wdata_T_6__w1#[5..<8])#[0..<3]
+    } elif address == 0x002 {
+      reg_frm = (_wdata_T_2__w1#[0..<3] & _wdata_T_6__w1#[0..<3])#[0..<3]
+    }
+  }
+  if (csrWrite & U1(address == 0x303) & 1) != 0 {
+    reg_mideleg = wdata__w1
+  }
+  if (csrWrite & U1(address == 0x302) & 1) != 0 {
+    reg_medeleg = wdata__w1
+  }
+  if (csrWrite & U1((address & 0xffc) == 0x344) & 1) != 0 {
+    reg_mip_seip = _new_mip_WIRE__w1#[8..<9]
+    reg_mip_stip = _new_mip_WIRE__w1#[4..<5]
+  }
+  if (csrWrite & U1(address == 0x341) & 1) != 0 {
+    reg_mepc = _GEN_40__w1
+  } else {
+    const t3462 = _GEN_39__w1 != 0
+    if not t3462 {
+      reg_mepc = epc__w1
+    }
+  }
+  if (csrWrite & U1(address == 0x343) & 1) != 0 {
+    reg_mtval = _GEN_41__w1
+  } else {
+    const t3468 = _GEN_39__w1 != 0
+    if not t3468 {
+      reg_mtval = _mux_247
+    }
+  }
+  if (csrWrite & U1(address == 0x340) & 1) != 0 {
+    reg_mscratch = wdata__w1
+  }
+  if (csrWrite & U1((address & 0xffe) == 0x306) & 1) != 0 {
+    reg_mcounteren = _new_dcsr_WIRE__w1
+  }
+  if (csrWrite & U1((address & 0xffe) == 0x106) & 1) != 0 {
+    reg_scounteren = _new_dcsr_WIRE__w1
+  }
+  mut _mux_377:U1 = if _GEN_37__w1 != 0 { reg_vsstatus_spp & 1 } else { reg_mstatus_prv & 1 }
+  reg_vsstatus_spp = ((~(insn_ret__w1 & (~address#[9]#[0]) & 1)#[0]) | (~reg_mstatus_v)) & 1 & _mux_377 & 1
+  const t3495 = _GEN_37__w1 != 0
+  if not t3495 {
+    reg_vsepc = epc__w1
+  }
+  if (csrWrite & U1(address == 0x141) & 1) != 0 {
+    reg_sepc = _GEN_40__w1
+  } else {
+    const t3501 = _GEN_38__w1 != 0
+    if not t3501 {
+      reg_sepc = epc__w1
+    }
+  }
+  if (csrWrite & U1(address == 0x142) & 1) != 0 {
+    reg_scause = (wdata__w1 & 0x800000000000001f)#[0..<0x40]
+  } else {
+    const t3509 = _GEN_38__w1 != 0
+    if not t3509 {
+      reg_scause = cause
+    }
+  }
+  if (csrWrite & U1(address == 0x143) & 1) != 0 {
+    reg_stval = _GEN_41__w1
+  } else {
+    const t3515 = _GEN_38__w1 != 0
+    if not t3515 {
+      reg_stval = _mux_247
+    }
+  }
+  if (csrWrite & U1(address == 0x140) & 1) != 0 {
+    reg_sscratch = wdata__w1
+  }
+  if (csrWrite & U1(address == 0x105) & 1) != 0 {
+    reg_stvec = (_wdata_T_2__w1#[0..+vaBits] & _wdata_T_6__w1#[0..+vaBits])#[0..+vaBits]
+  }
+  if writeSatp {
+    reg_satp_ppn = wdata__w1#[0..<20]
+  }
+  mut _rep_385:U5 = if (io_fcsr_flags_valid & 1) != 0 { 31 } else { 0 }
+  mut _mux_386:U5 = if (csrWrite & (U1(address == 0x003) | U1((address & 0xffe) == 0x000)) & 1) != 0 {
+    _GEN_42__w1#[0..<5]
+  } else {
+    ((_rep_385 & io_fcsr_flags_bits)#[0..<5] | reg_fflags)#[0..<5]
+  }
+  reg_fflags = _mux_386
+  for i in 0..<nPerfCounters {
+    if reset == 0 and csrWrite != 0 and address == 0x323+i {
+      selectors#[(14*i)..+14] = wdata__w1#[0..+14] & 0x3f03
+    }
+    if csrWrite != 0 and address == 0xb03+i {
+      counters#[(40*i)..+40] = wdata__w1#[0..+40]
+    } elif increments#[i] != 0 and reg_mcountinhibit#[3+i] == 0 {
+      counters#[(40*i)..+40] = (counters#[(40*i)..+40]+1)#[0..+40]
+    }
+  }
+  if not (reset != 0) {
+    const enterWfi = system_insn__w1 != 0 and (address & 0xffc) == 0x104 and io_singleStep_0__w1 == 0 and reg_debug == 0
+    reg_wfi = U1(enabled == 0 and (!useNMI or nmiRequest == 0) and debugRequest == 0 and exception__w1 == 0 and (enterWfi or reg_wfi != 0))
+    if (csrWrite & U1((address & 0xffe) == 0xb00) & 1) != 0 {
+      small_1 = _GEN_29__w1
+      large_1 = (_wdata_T_2__w1#[6..<0x40] & _wdata_T_6__w1#[6..<0x40])#[0..<58]
+    } else {
+      const t3637 = (reg_mcountinhibit & 1) != 0
+      if not t3637 {
+        small_1 = nextSmall_1__w1#[0..<6]
+      }
+      if (nextSmall_1__w1#[6..<7] & (~(reg_mcountinhibit & 1)#[0]) & 1) != 0 {
+        large_1 = (large_1 + 1)#[0..<58]
+      }
+    }
+  }
+  io_rw_rdata = csrRead
+  io_csr_stall = io_csr_stall_0__w1
+  io_singleStep = io_singleStep_0__w1
+  io_status_debug = io_status_debug__w1
+  io_status_dprv = _mux_276
+  io_status_prv = io_status_prv__w1
+  io_status_mxr = io_status_mxr__w1
+  io_status_sum = io_status_sum__w1
+  io_ptbr_mode = io_ptbr_mode__w1
+  io_ptbr_ppn = io_ptbr_ppn__w1
+  io_decode_0_fp_illegal = 0
+  io_decode_0_read_illegal = 0
+  io_decode_0_write_illegal = 0
+  io_decode_0_write_flush = 0
+  io_decode_0_system_illegal = 0
+  for lane in 0..<width {
+    const flags = laneDecode<useNMI=useNMI, useDebug=useDebug, nPMPs=nPMPs, mcontextWidth=mcontextWidth, scontextWidth=scontextWidth, haveBasicCounters=haveBasicCounters>(inst=io_decode_0_inst#[(32*lane)..+32], privilege=reg_mstatus_prv, virtualized=reg_mstatus_v, tvm=reg_mstatus_tvm, tw=reg_mstatus_tw, tsr=reg_mstatus_tsr, debug=reg_debug, fs=reg_mstatus_fs, mcounter=_GEN_3__w1, scounter=_GEN_4__w1)
+    io_decode_0_fp_illegal#[lane] = flags.fpIllegal | U1(isa#[5] == 0)
+    io_decode_0_read_illegal#[lane] = flags.readIllegal
+    io_decode_0_write_illegal#[lane] = flags.writeIllegal
+    io_decode_0_write_flush#[lane] = flags.writeFlush
+    io_decode_0_system_illegal#[lane] = flags.systemIllegal
+  }
+  io_evec = if nmiReturn { nmiEpc & epcMask }
+      elif useNMI and insn_ret__w1 == 0 and trapToDebug__w1 == 0 and (nmiInterrupt or !allowInterrupt) {
+        (if nmiInterrupt { nmiVector } else { nmiExceptionVector }) & ((1 << extBits)-2)
+      } else { _mux_284 }
+  if useNMI {
+    if reset != 0 {
+      nmiEnable = 1
+      nmiPrivilege = 3
+      nmiCause = 0
+    } elif nmiTrap and allowInterrupt {
+      nmiEnable = 0
+      nmiEpc = epc__w1
+      nmiCause = 0x8000000000000000 | (if cause#[0..+8] == 12 { 3 } else { 2 })
+      nmiPrivilege = reg_mstatus_prv
+    } elif nmiReturn { nmiEnable = 1 }
+    elif csrWrite != 0 {
+      if address == 0x350 { nmiScratch = wdata__w1 }
+      elif address == 0x351 { nmiEpc = wdata__w1#[0..+extBits] & (if useCompressed { ((1 << extBits)-2) } else { ((1 << extBits)-4) }) }
+      elif address == 0x352 { nmiCause = wdata__w1 & 0x8000000000000003 }
+      elif address == 0x353 {
+        const requested = wdata__w1#[11..+2]
+        nmiPrivilege = if requested == 2 { 0 } else { requested }
+        nmiEnable = nmiEnable | wdata__w1#[3]
+      }
+    }
+  }
+  io_fcsr_rm = io_fcsr_rm__w1
+  io_interrupt = U1((reg_debug | io_status_cease_r) == 0 and ((requestedInterrupt and io_singleStep_0__w1 == 0) or reg_singleStepped != 0))
+  io_interrupt_cause = 0x8000000000000000 | (U1(nmiPending and debugRequest == 0) << 62) | interruptCode
+  io_customCSRs_0_value = io_customCSRs_0_value__w1
+  io_customCSRs_1_value = io_customCSRs_1_value__w1
+  io_customCSRs_2_value = io_customCSRs_2_value__w1
+}

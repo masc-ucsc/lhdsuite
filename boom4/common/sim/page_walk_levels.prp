@@ -1,0 +1,53 @@
+const walker = import("../pyrope/PTW.PTW")
+
+mod walk<levels, mode>(clock:Clock, reset:Reset, cycle:U8) -> (ok:U1@[]) {
+  comptime const steps = mode-5
+  mut vpn:Unsigned(bits=9*levels) = 0
+  for i in 0..<steps { vpn#[(9*i)..+9] = i+1 }
+  reg requests:U3 = nil
+  reg response:U3 = nil
+  reg pte:U64 = nil
+  reg done:U1 = nil
+  reg failed:U1 = nil
+  const d = walker<pgLevels=levels, entries=0>(clock, reset, pmpTable=0,
+      io_dpath_ptbr_mode=mode, io_dpath_ptbr_ppn=1, io_dpath_sfence_valid=0,
+      io_dpath_sfence_bits_addr=0, io_dpath_sfence_bits_rs1=0, io_dpath_sfence_bits_rs2=0,
+      io_dpath_status_debug=0, io_dpath_status_dprv=1, io_dpath_status_prv=1,
+      io_dpath_status_mxr=0, io_dpath_status_sum=0, io_mem_req_ready=1,
+      io_mem_resp_valid=response#[2], io_mem_resp_bits_data=pte, io_mem_s2_nack=0, io_mem_s2_xcpt_ae_ld=0,
+      io_requestor_0_req_bits_bits_addr=vpn, io_requestor_0_req_bits_valid=1, io_requestor_0_req_valid=U1(cycle == 6),
+      io_requestor_1_req_bits_bits_addr=0, io_requestor_1_req_bits_bits_need_gpa=0, io_requestor_1_req_valid=0)
+  wrap response = (response << 1) | d.io_mem_req_valid
+  if reset {
+    requests = 0
+    response = 0
+    done = 0
+    failed = 0
+  } else {
+    if d.io_mem_req_valid != 0 {
+      const expected = ((requests+1) << 12) | ((steps-requests) << 3)
+      if d.io_mem_req_bits_addr != expected { failed = 1 }
+      pte = if requests == steps-1 { (0x80000 << 10) | 0xc7 } else { ((requests+2) << 10) | 1 }
+      wrap requests = requests+1
+    }
+    if d.io_requestor_0_resp_valid != 0 {
+      done = 1
+      if requests != steps or d.io_requestor_0_resp_bits_level != levels-1 or
+          d.io_requestor_0_resp_bits_pte_v == 0 or d.io_requestor_0_resp_bits_pte_ppn != 0x80000 { failed = 1 }
+    }
+  }
+  ok = U1(cycle < 70 or (done != 0 and failed == 0))
+}
+pub mod page_walk_levels(clock:Clock, reset:Reset, cycle:U8) -> (ok:U1@[]) {
+  ok = walk<levels=3, mode=8>(clock, reset, cycle) & walk<levels=4, mode=9>(clock, reset, cycle) &
+       walk<levels=5, mode=10>(clock, reset, cycle) & walk<levels=5, mode=8>(clock, reset, cycle)
+}
+test page_walk_levels.translate {
+  mut d = page_walk_levels
+  tick 80 {
+    d.reset = clock < 4
+    d.cycle = clock
+    step
+    if clock > 4 { assert(d.ok != 0, "select every VPN index and return a valid leaf at the configured level") }
+  }
+}

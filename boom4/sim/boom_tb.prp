@@ -1,0 +1,264 @@
+// Free-running simulation driver for chipyard SmallBoomV4 `BoomTile` (BOOM v4 core + L1 I/D caches + PTW).
+//
+// This driver checks the bus checksum and prints optional Pyrope retirement records.
+// The generated Chisel RTL uses ../boom/sim/boom_tb.prp, which checks the same bus
+// checksum without accessing the Pyrope logging ports.
+//
+// The TileLink-C master port (auto_buffer_out_*) is answered by a one-message-at-a-time responder:
+//   A Get (4)                    -> D AccessAckData (1), 2^size/8 beats of LFSR data
+//   A PutFull/PutPartial (0/1)   -> D AccessAck (0), after the last A beat
+//   A AcquireBlock (6)           -> D GrantData (5), cap toT, 2^size/8 beats of LFSR data
+//   A AcquirePerm (7)            -> D Grant (4), cap toT
+//   C Release/ReleaseData (6/7)  -> D ReleaseAck (6), after the last C beat
+// E (GrantAck) is always ready, B (probes) is never driven.
+// Data: the boot line 0x10000..0x1003f returns a fixed RV64 loop, everything else LFSR data. The loop walks memory from
+// 0x80000000 one cache line per iteration (x1 = 1 << 31; loop: ld x2,0(x1); add x3,x3,x2; sd x3,8(x1); addi x1,x1,64;
+// j loop), so the core keeps missing in the D-cache: AcquireBlock/GrantData refills and, once the cache is full,
+// ReleaseData writebacks. (With random instruction words alone the core traps to mtvec = 0 and spins with no bus traffic.)
+const tile = import("lg:BoomTile")
+
+test tile.free_run(cycles:U32 = 1000, checkWalk:U1 = 0, checkFloat:U1 = 0, checkPair:U1 = 0, checkAhead:U1 = 0, checkISA:U1 = 0, isaBits:U6 = 41, checkPMP:U1 = 0, pmpLine:U4 = 0, checkAtomicIO:U1 = 0, ioOnly:U1 = 0, checkTrigger:U1 = 0, triggerLine:U2 = 0) {
+  mut acc = tile
+
+  mut lfsr:U64 = 0x123456789abcdef
+  mut sum:U64  = 0
+  mut obs:U64  = 0
+  // D channel: one response in flight
+  mut dv:U1    = 0
+  mut dop:U3   = 0
+  mut dsize:U4 = 0
+  mut dsrc:U8  = 0
+  mut dleft:U8 = 0
+  mut dbeats:U8 = 0
+  mut dprog:U1 = 0
+  // A side: a multi-beat Put in progress, and a response waiting for D
+  mut aleft:U8 = 0
+  mut ap:U1    = 0
+  mut apop:U3  = 0
+  mut apsize:U4 = 0
+  mut apsrc:U8 = 0
+  mut apbeats:U8 = 0
+  mut approg:U1 = 0
+  // C side: a Release(Data) in progress, and a ReleaseAck waiting for D
+  mut cleft:U8 = 0
+  mut rp:U1    = 0
+  mut rpsize:U4 = 0
+  mut rpsrc:U8 = 0
+
+  mut sawAhead:U1 = 0
+  mut sawPair:U1 = 0
+  mut sawConfiguredLoad:Bool = false
+  mut sawFloat:U1 = 0
+  mut visited:U256 = 0
+  tick cycles {
+    acc.reset = clock < 4
+
+    acc.auto_hartid_in        = 0
+    acc.auto_int_local_in_0_0 = 0
+    acc.auto_int_local_in_1_0 = 0
+    acc.auto_int_local_in_1_1 = 0
+    acc.auto_int_local_in_2_0 = 0
+    acc.auto_int_local_in_3_0 = 0
+
+    const aready = ~(ap | rp | dv)
+    const cready = ~rp
+    acc.auto_buffer_out_a_ready = aready
+    acc.auto_buffer_out_b_valid        = 0
+    acc.auto_buffer_out_b_bits_opcode  = 0
+    acc.auto_buffer_out_b_bits_param   = 0
+    acc.auto_buffer_out_b_bits_size    = 0
+    acc.auto_buffer_out_b_bits_source  = 0
+    acc.auto_buffer_out_b_bits_address = 0
+    acc.auto_buffer_out_b_bits_mask    = 0
+    acc.auto_buffer_out_b_bits_data    = 0
+    acc.auto_buffer_out_b_bits_corrupt = 0
+    acc.auto_buffer_out_c_ready = cready
+    acc.auto_buffer_out_d_valid        = dv
+    acc.auto_buffer_out_d_bits_opcode  = dop
+    acc.auto_buffer_out_d_bits_param   = 0
+    acc.auto_buffer_out_d_bits_size    = dsize
+    acc.auto_buffer_out_d_bits_source  = dsrc
+    acc.auto_buffer_out_d_bits_sink    = 0
+    acc.auto_buffer_out_d_bits_denied  = 0
+    const beat = dbeats - dleft
+    const pdata:U64 = if beat == 0 { 0x01F0909300100093 } elif beat == 1 { 0x002181B30000B103 } elif beat == 2 { 0x040080930030B423 } elif beat == 3 { 0x00000013FF1FF06F } else { 0x0000001300000013 }
+    // Enable mstatus.FS, convert 3 and 5 to double and compute (3+5)+(3*5).
+    // Convert the result to an integer and load that cache line.
+    const fpProgram:U64 = if beat == 0 { 0x3003207300002337 }
+      elif beat == 1 { 0xd20280d300300293 }
+      elif beat == 2 { 0xd202815300500293 }
+      elif beat == 3 { 0x1220f2530220f1d3 }
+      elif beat == 4 { 0xc20292d30241f2d3 }
+      elif beat == 5 { 0x0010031300629293 }
+      elif beat == 6 { 0x006282b301f31313 }
+      else { 0x0000006f0002b583 }
+    // parallel_loads.S reads four words, sums 1+3+5+7 and addresses line 16.
+    const pairProgram:U64 = if beat == 0 { 0x1f0909300100093 }
+      elif beat == 1 { 0xb18304000113 }
+      elif beat == 2 { 0x200b2830100b203 }
+      elif beat == 3 { 0xfff101130300b303 }
+      elif beat == 4 { 0x418533fe0116e3 }
+      elif beat == 5 { 0x65053300550533 }
+      elif beat == 6 { 0x15053300651513 }
+      else { 0x6f00053583 }
+    // isa_extensions.S uses the A, D and F bits of misa to address a data line.
+    const isaProgram:U64 = if beat == 0 { 0x0291711330102173 }
+      elif beat == 1 { 0x0010009300611113 }
+      elif beat == 2 { 0x002080b301f09093 }
+      else { 0x0000006f0000b183 }
+    // pmp_window.S selects a data line by PMP readback or an illegal-instruction trap.
+    const pmpProgram:U64 = if beat == 0 { 0x0302829300000297 }
+      elif beat == 1 { 0x00f0051330529073 }
+      elif beat == 2 { 0x3bf025733bf51073 }
+      elif beat == 3 { 0x01f5959300100593 }
+      elif beat == 4 { 0x00a585b300651513 }
+      elif beat == 5 { 0x0000006f0005b603 }
+      elif beat == 6 { 0xfe5ff06f00300513 }
+      else { 0x0000000000000000 }
+    // atomic_region.S probes whether LR.D can use cacheable memory.
+    // atomic_region.S attempts to clear misa.A before LR.D.
+    const atomicProgram:U64 = if beat == 0 { 0x0202829300000297 }
+      elif beat == 1 { 0x0010051330529073 }
+      elif beat == 2 { 0x3010f07301f51513 }
+      elif beat == 3 { 0x0000006f100535af }
+      else { 0xff9ff06f04053583 }
+    // fetch_trigger.S programs trigger one to trap on the first load.
+    const triggerProgram:U64 = if beat == 0 { 0x0342831300000297 }
+      elif beat == 1 { 0x0010051330531073 }
+      elif beat == 2 { 0x0010039301f51513 }
+      elif beat == 3 { 0x02c283137a039073 }
+      elif beat == 4 { 0x044003937a231073 }
+      elif beat == 5 { 0x000535837a139073 }
+      elif beat == 6 { 0x0c0535830000006f }
+      else { 0x00000000ff9ff06f }
+    acc.auto_buffer_out_d_bits_data = if dprog != 0 {
+      if checkTrigger != 0 { triggerProgram } elif checkAtomicIO != 0 { atomicProgram } elif checkPMP != 0 { pmpProgram } elif checkISA != 0 { isaProgram } elif checkFloat != 0 { fpProgram } elif checkPair != 0 { pairProgram } else { pdata }
+    } elif checkPair != 0 { beat+1 } else { lfsr }
+    acc.auto_buffer_out_d_bits_corrupt = 0
+    acc.auto_buffer_out_e_ready = 1
+
+    // The boundary queues drive valid, payload and D-ready from registered state.
+    // Sample those signals before the edge that consumes them.
+    // D: a beat retires when the core takes it
+    if (dv & acc.auto_buffer_out_d_ready) != 0 {
+      wrap dleft = dleft - 1
+      if dleft == 0 { dv = 0 }
+    }
+    // C: count Release(Data) beats; the ReleaseAck is owed after the last one
+    if (acc.auto_buffer_out_c_valid & cready) != 0 {
+      if cleft == 0 {
+        mut cbeats:U8 = 1
+        if acc.auto_buffer_out_c_bits_opcode == 7 and acc.auto_buffer_out_c_bits_size >= 3 {
+          cbeats = 1 << (acc.auto_buffer_out_c_bits_size - 3)
+        }
+        cleft = cbeats
+      }
+      wrap cleft = cleft - 1
+      if cleft == 0 and (acc.auto_buffer_out_c_bits_opcode == 6 or acc.auto_buffer_out_c_bits_opcode == 7) {
+        rp = 1
+        rpsize = acc.auto_buffer_out_c_bits_size
+        rpsrc = acc.auto_buffer_out_c_bits_source
+      }
+    }
+    // A: count Put beats; every other request is one beat
+    if (acc.auto_buffer_out_a_valid & aready) != 0 {
+      const op = acc.auto_buffer_out_a_bits_opcode
+      if (checkPMP | checkISA | checkAtomicIO | checkTrigger) != 0 and op == 6 {
+        const line = if checkTrigger != 0 { triggerLine } elif checkPMP != 0 { pmpLine } elif checkISA != 0 { isaBits } else { ioOnly }
+        assert(acc.auto_buffer_out_a_bits_address == 0x80000000+64*line, "the configured core must acquire the expected data line")
+        sawConfiguredLoad = true
+      }
+      if checkFloat != 0 and op == 6 {
+        // Only the dependent demand can issue the first acquire. An enabled
+        // next-line prefetcher may subsequently acquire the adjacent line.
+        if sawFloat == 0 {
+          assert(acc.auto_buffer_out_a_bits_address == 0x800005c0, "dependent FP result must select line 23")
+        } else {
+          assert(acc.auto_buffer_out_a_bits_address == 0x800005c0 or acc.auto_buffer_out_a_bits_address == 0x80000600,
+                 "only the demanded line and its immediate successor are allowed")
+        }
+        sawFloat = 1
+      }
+      if checkWalk != 0 and op == 6 {
+        const addr = acc.auto_buffer_out_a_bits_address
+        assert(addr >= 0x80000000 and (addr & 63) == 0, "load/store walk issued an invalid block address")
+        if addr < 0x80004000 {
+          wrap visited = visited | (U256(1) << addr#[6..+8])
+        }
+      }
+      const sz = acc.auto_buffer_out_a_bits_size
+      if aleft == 0 {
+        mut abeats:U8 = 1
+        if op <= 1 and sz >= 3 { abeats = 1 << (sz - 3) }
+        aleft = abeats
+      }
+      wrap aleft = aleft - 1
+      if aleft == 0 {
+        ap = 1
+        apsize = sz
+        if op == 6 and acc.auto_buffer_out_a_bits_address == 0x80000040 { sawAhead = 1 }
+        if op == 6 and acc.auto_buffer_out_a_bits_address == 0x80000400 { sawPair = 1 }
+        apsrc = acc.auto_buffer_out_a_bits_source
+        approg = if acc.auto_buffer_out_a_bits_address#[6..=31] == 0x400 { 1 } else { 0 }
+        mut rbeats:U8 = 1
+        if (op == 4 or op == 6) and sz >= 3 { rbeats = 1 << (sz - 3) }
+        apbeats = rbeats
+        apop = if op == 4 { 1 } elif op == 6 { 5 } elif op == 7 { 4 } else { 0 }
+      }
+    }
+    // start the next D response: a ReleaseAck first, then an A response
+    if dv == 0 {
+      if rp != 0 {
+        dv = 1
+        dop = 6
+        dsize = rpsize
+        dsrc = rpsrc
+        dleft = 1
+        dbeats = 1
+        dprog = 0
+        rp = 0
+      } elif ap != 0 {
+        dv = 1
+        dop = apop
+        dsize = apsize
+        dsrc = apsrc
+        dleft = apbeats
+        dbeats = apbeats
+        dprog = approg
+        ap = 0
+      }
+    }
+
+    step
+
+    if acc.logLanes != 0 {
+      const stamp = acc.traceTime - 1
+      puts("BOOMLOG {stamp:x} {acc.logMode} {acc.logLanes} {acc.logEvents:x} {acc.memEvents:x}")
+    }
+
+    obs = acc.auto_buffer_out_a_valid
+    wrap obs = obs | (acc.auto_buffer_out_a_bits_opcode << 1)
+    wrap obs = obs | (acc.auto_buffer_out_a_bits_size << 4)
+    wrap obs = obs | (acc.auto_buffer_out_d_ready << 8)
+    wrap obs = obs | (acc.auto_buffer_out_c_valid << 9)
+    wrap obs = obs | (acc.auto_buffer_out_c_bits_opcode << 10)
+    wrap obs = obs | (acc.auto_buffer_out_e_valid << 13)
+    wrap obs = obs | (acc.auto_buffer_out_a_bits_address << 16)
+    wrap sum = ((sum << 1) + obs) & 0x7fffffffffffffff
+    wrap sum = (sum ^ acc.auto_buffer_out_c_bits_address) & 0x7fffffffffffffff
+
+    // xorshift64, right shift spelled as a bit slice (see xiangshan/Backend/sim/xs_rob_tb.prp for why)
+    wrap lfsr = lfsr ^ (lfsr << 13)
+    wrap lfsr = lfsr ^ lfsr#[7..=63]
+    wrap lfsr = lfsr ^ (lfsr << 17)
+  }
+
+  if checkAhead != 0 { assert(checkPair != 0 and sawAhead != 0, "acquire the adjacent line that the program never loads") }
+  if checkPair != 0 { assert(sawPair != 0, "dependent sum of four cached load results") }
+  if checkFloat != 0 { assert(sawFloat != 0, "FP program must complete the dependent load") }
+  if checkWalk != 0 {
+    assert(visited == (1 << 256) - 1, "memory walk must reach all 256 cache lines")
+  }
+  if (checkISA | checkPMP | checkAtomicIO | checkTrigger) != 0 { assert(sawConfiguredLoad, "the CSR program must acquire its dependent data line") }
+  puts("boom: cycles={cycles} sum={sum}")
+}

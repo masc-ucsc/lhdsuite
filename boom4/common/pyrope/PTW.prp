@@ -1,0 +1,324 @@
+const protection = import("BoomPMP")
+const Arbiter3_Valid_PTWReq = import("Arbiter3_Valid_PTWReq.Arbiter3_Valid_PTWReq")
+const pageCache = import("PageTableCache.PageTableCache")
+
+pub mod PTW<pgLevels=3, nPMPs=8, entries=512, ways=1>::[timecheck=false](clock:Clock, pmpTable:U608, io_dpath_ptbr_mode:U4, io_dpath_ptbr_ppn:U44, io_dpath_sfence_bits_addr:Unsigned(bits=12+9*pgLevels), io_dpath_sfence_bits_rs1:U1, io_dpath_sfence_bits_rs2:U1, io_dpath_sfence_valid:U1, io_dpath_status_debug:U1, io_dpath_status_dprv:U2, io_dpath_status_mxr:U1, io_dpath_status_prv:U2, io_dpath_status_sum:U1, io_mem_req_ready:U1, io_mem_resp_bits_data:U64, io_mem_resp_valid:U1, io_mem_s2_nack:U1, io_mem_s2_xcpt_ae_ld:U1, io_requestor_0_req_bits_bits_addr:Unsigned(bits=9*pgLevels), io_requestor_0_req_bits_valid:U1, io_requestor_0_req_valid:U1, io_requestor_1_req_bits_bits_addr:Unsigned(bits=9*pgLevels), io_requestor_1_req_bits_bits_need_gpa:U1, io_requestor_1_req_valid:U1, reset:U1) -> (io_dpath_perf_l2miss:U1@[], io_mem_req_bits_addr:U40@[], io_mem_req_valid:U1@[], io_mem_s1_kill:U1@[], io_requestor_0_ptbr_mode:U4@[], io_requestor_0_req_ready:U1@[], io_requestor_0_resp_bits_ae_final:U1@[], io_requestor_0_resp_bits_homogeneous:U1@[], io_requestor_0_resp_bits_level:Unsigned(bits=std.clog2(pgLevels))@[], io_requestor_0_resp_bits_pte_a:U1@[], io_requestor_0_resp_bits_pte_d:U1@[], io_requestor_0_resp_bits_pte_g:U1@[], io_requestor_0_resp_bits_pte_ppn:U44@[], io_requestor_0_resp_bits_pte_r:U1@[], io_requestor_0_resp_bits_pte_u:U1@[], io_requestor_0_resp_bits_pte_v:U1@[], io_requestor_0_resp_bits_pte_w:U1@[], io_requestor_0_resp_bits_pte_x:U1@[], io_requestor_0_resp_valid:U1@[], io_requestor_0_status_debug:U1@[], io_requestor_0_status_dprv:U2@[], io_requestor_0_status_mxr:U1@[], io_requestor_0_status_sum:U1@[], io_requestor_1_ptbr_mode:U4@[], io_requestor_1_req_ready:U1@[], io_requestor_1_resp_bits_ae_final:U1@[], io_requestor_1_resp_bits_ae_ptw:U1@[], io_requestor_1_resp_bits_gf:U1@[], io_requestor_1_resp_bits_homogeneous:U1@[], io_requestor_1_resp_bits_hr:U1@[], io_requestor_1_resp_bits_hw:U1@[], io_requestor_1_resp_bits_hx:U1@[], io_requestor_1_resp_bits_level:Unsigned(bits=std.clog2(pgLevels))@[], io_requestor_1_resp_bits_pf:U1@[], io_requestor_1_resp_bits_pte_a:U1@[], io_requestor_1_resp_bits_pte_d:U1@[], io_requestor_1_resp_bits_pte_g:U1@[], io_requestor_1_resp_bits_pte_ppn:U44@[], io_requestor_1_resp_bits_pte_r:U1@[], io_requestor_1_resp_bits_pte_u:U1@[], io_requestor_1_resp_bits_pte_v:U1@[], io_requestor_1_resp_bits_pte_w:U1@[], io_requestor_1_resp_bits_pte_x:U1@[], io_requestor_1_resp_valid:U1@[], io_requestor_1_status_debug:U1@[], io_requestor_1_status_prv:U2@[]) {
+  reg l2_refill:U1
+  reg state:U3
+  reg resp_valid_0:U1
+  reg resp_valid_1:U1
+  reg invalidated:U1
+  cassert(pgLevels >= 3 and pgLevels <= 5)
+  comptime const vpnBits = 9*pgLevels
+  reg count:Unsigned(bits=std.clog2(pgLevels))
+  reg resp_ae_ptw:U1
+  reg resp_ae_final:U1
+  reg resp_pf:U1
+  reg resp_gf:U1
+  reg resp_hr:U1
+  reg resp_hw:U1
+  reg resp_hx:U1
+  reg r_req_addr:Unsigned(bits=vpnBits)
+  reg r_req_need_gpa:U1
+  reg r_req_dest:U2
+  reg r_pte_ppn:U44
+  reg r_pte_d:U1
+  reg r_pte_a:U1
+  reg r_pte_g:U1
+  reg r_pte_u:U1
+  reg r_pte_x:U1
+  reg r_pte_w:U1
+  reg r_pte_r:U1
+  reg r_pte_v:U1
+  reg stage2:U1
+  reg mem_resp_valid:U1
+  reg mem_resp_data:U64
+  mut _b2i_1 = U1(state == 0)
+  const arb_io_out_ready__w1 = _b2i_1 & (~l2_refill) & 1
+  const lastLevel = U1(count >= pgLevels-1)
+  const penultimate = U1(count == pgLevels-2)
+  mut vpnIndex:U9 = r_req_addr#[0..+9]
+  mut offsetMask:U44 = 0
+  for level in 0..<(pgLevels-1) {
+    const tailBits = 9*(pgLevels-level-1)
+    if count == level {
+      vpnIndex = r_req_addr#[tailBits..+9]
+      offsetMask = (1 << tailBits)-1
+    }
+  }
+  const ppn = mem_resp_data#[10..+44]
+  const leaf = mem_resp_data#[1..+3] != 0
+  const pte_v__w1 = mem_resp_data#[0] & U1(!leaf or (ppn & offsetMask) == 0)
+  const _resp_ae_ptw_T_13__w1 = U1(mem_resp_data#[54..+10] == 0)
+  const pointer = !leaf and mem_resp_data#[6..+2] == 0 and mem_resp_data#[4] == 0
+  const traverse__w1 = pte_v__w1 & U1(pointer and ppn >> 20 == 0) & _resp_ae_ptw_T_13__w1 & ~lastLevel
+  mut _b2i_10 = U1(state == 1)
+  const writeEnable__w1 = l2_refill & (~invalidated) & 1
+  wire l2_error__w1:U1 = nil
+  wire l2_hit__w1:U1 = nil
+  const _GEN_0__w1 = (r_pte_ppn#[16..<44] << 2) | (~r_pte_ppn#[14..<16])
+  const _GEN_2__w1 = (r_pte_ppn#[20..<44] << 4) | (r_pte_ppn#[16..<20] ^ 8)#[0..<4]
+  mut _mux_40:U1 = if lastLevel != 0 {
+    (((((((((((((((((U1(r_pte_ppn#[1..<44] == 0) | U1(((r_pte_ppn#[2..<44] << 2) | (~r_pte_ppn#[0..<2])) == 0)) & 1) | U1(((r_pte_ppn#[5..<44] << 1) | (~r_pte_ppn#[4..<5])) == 0)) & 1) | U1(((r_pte_ppn#[9..<44] << 8) | ((r_pte_ppn#[5..<9] ^ 8)#[0..<4] << 4) | r_pte_ppn#[0..<4]) == 0)) & 1) | U1(((r_pte_ppn#[14..<44] << 10) | (r_pte_ppn#[4..<14] ^ 0x200)#[0..<10]) == 0)) & 1) | U1(((r_pte_ppn#[14..<44] << 14) | (r_pte_ppn#[0..<14] ^ 0x2010)#[0..<14]) == 0)) & 1) | U1(((r_pte_ppn#[16..<44] << 12) | (r_pte_ppn#[4..<16] ^ 0x800)#[0..<12]) == 0)) & 1) | U1(_GEN_0__w1 == 0)) & 1) | U1(((r_pte_ppn#[17..<44] << 17) | (r_pte_ppn#[0..<17] ^ 0x10020)#[0..<17]) == 0)) & 1) | U1(_GEN_2__w1 == 0)) & 1
+  } else {
+    penultimate & (U1(_GEN_0__w1 == 0) | U1(_GEN_2__w1 == 0)) & 1
+  }
+  const homogeneous__w1 = _mux_40 & protection.homogeneous<count=nPMPs>(table=pmpTable, ppn=r_pte_ppn, level=if lastLevel != 0 { 2 } elif penultimate != 0 { 1 } else { 0 })
+  mut _b2i_135 = U1(state == 2)
+  mut _b2i_136 = U1(state == 4)
+  const _r_pte_T_3__w1 = l2_hit__w1 & (~l2_error__w1#[0]) & 1 & (~resp_gf) & 1
+  const _GEN_21__w1 = l2_hit__w1 & (~l2_error__w1#[0]) & 1 & (~resp_gf) & 1
+  const _GEN_23__w1 = U1(r_req_dest == 0)
+  const _GEN_24__w1 = U1(r_req_dest == 1)
+  mut _b2i_139 = U1(state == 7)
+  mut _mux_140:U1 = if _b2i_136 != 0 { io_mem_s2_xcpt_ae_ld & _GEN_23__w1 & 1 } else { _b2i_139 & _GEN_23__w1 & 1 }
+  mut _mux_141:U1 = if _b2i_10 != 0 { resp_gf & _GEN_23__w1 & 1 } else { (~_b2i_135#[0]) & _mux_140 & 1 }
+  const _GEN_25__w1 = (~_b2i_1#[0]) & _mux_141 & 1
+  mut _b2i_142 = U1(state == 7)
+  mut _mux_143:U1 = if _b2i_136 != 0 { io_mem_s2_xcpt_ae_ld & _GEN_24__w1 & 1 } else { _b2i_142 & _GEN_24__w1 & 1 }
+  mut _mux_144:U1 = if _b2i_10 != 0 { resp_gf & _GEN_24__w1 & 1 } else { (~_b2i_135#[0]) & _mux_143 & 1 }
+  const _GEN_26__w1 = (~_b2i_1#[0]) & _mux_144 & 1
+  const _GEN_27__w1 = _GEN_21__w1 & _GEN_23__w1 & 1
+  const _GEN_28__w1 = _GEN_21__w1 & _GEN_24__w1 & 1
+  const _gf_T_10__w1 = stage2 & (~(pte_v__w1 & (mem_resp_data#[1..<2] | (mem_resp_data#[3..<4] & (~mem_resp_data#[2..<3]) & 1)) & 1 & mem_resp_data#[6..<7] & 1 & mem_resp_data#[1..<2] & 1 & mem_resp_data#[4..<5] & 1)#[0]) & 1
+  const _ae_T__w1 = pte_v__w1 & U1(mem_resp_data#[30..<54] != 0) & 1
+  const pf__w1 = pte_v__w1 & U1(mem_resp_data#[54..<0x40] != 0) & 1
+  const _GEN_29__w1 = ((~mem_resp_valid) | traverse__w1) & 1
+  mut arb = Arbiter3_Valid_PTWReq<vpnBits=vpnBits>(io_in_0_valid=io_requestor_0_req_valid, io_in_0_bits_valid=io_requestor_0_req_bits_valid, io_in_0_bits_bits_addr=io_requestor_0_req_bits_bits_addr, io_in_1_valid=io_requestor_1_req_valid, io_in_1_bits_bits_addr=io_requestor_1_req_bits_bits_addr, io_in_1_bits_bits_need_gpa=io_requestor_1_req_bits_bits_need_gpa, io_out_ready=arb_io_out_ready__w1)
+  const io_requestor_0_resp_valid__w1 = resp_valid_0
+  const io_requestor_0_resp_bits_ae_final__w1 = resp_ae_final
+  const io_requestor_0_resp_bits_pte_ppn__w1 = r_pte_ppn
+  const io_requestor_0_resp_bits_pte_d__w1 = r_pte_d
+  const io_requestor_0_resp_bits_pte_a__w1 = r_pte_a
+  const io_requestor_0_resp_bits_pte_g__w1 = r_pte_g
+  const io_requestor_0_resp_bits_pte_u__w1 = r_pte_u
+  const io_requestor_0_resp_bits_pte_x__w1 = r_pte_x
+  const io_requestor_0_resp_bits_pte_w__w1 = r_pte_w
+  const io_requestor_0_resp_bits_pte_r__w1 = r_pte_r
+  const io_requestor_0_resp_bits_pte_v__w1 = r_pte_v
+  const io_requestor_0_resp_bits_level__w1 = count
+  const io_requestor_1_resp_valid__w1 = resp_valid_1
+  const io_requestor_1_resp_bits_ae_ptw__w1 = resp_ae_ptw
+  const io_requestor_1_resp_bits_ae_final__w1 = resp_ae_final
+  const io_requestor_1_resp_bits_pf__w1 = resp_pf
+  const io_requestor_1_resp_bits_gf__w1 = resp_gf
+  const io_requestor_1_resp_bits_hr__w1 = resp_hr
+  const io_requestor_1_resp_bits_hw__w1 = resp_hw
+  const io_requestor_1_resp_bits_hx__w1 = resp_hx
+  const io_requestor_1_resp_bits_pte_ppn__w1 = r_pte_ppn
+  const io_requestor_1_resp_bits_pte_d__w1 = r_pte_d
+  const io_requestor_1_resp_bits_pte_a__w1 = r_pte_a
+  const io_requestor_1_resp_bits_pte_g__w1 = r_pte_g
+  const io_requestor_1_resp_bits_pte_u__w1 = r_pte_u
+  const io_requestor_1_resp_bits_pte_x__w1 = r_pte_x
+  const io_requestor_1_resp_bits_pte_w__w1 = r_pte_w
+  const io_requestor_1_resp_bits_pte_r__w1 = r_pte_r
+  const io_requestor_1_resp_bits_pte_v__w1 = r_pte_v
+  const io_requestor_1_resp_bits_level__w1 = count
+  mut _b2i_147 = U1(state == 3)
+  const io_mem_req_bits_addr__w1 = (r_pte_ppn#[0..+20] << 12) | (vpnIndex << 3)
+  mut _b2i_150 = U1(state != 2)
+  const io_mem_s1_kill__w1 = (((l2_hit__w1 | _b2i_150) & 1) | resp_gf) & 1
+  const _r_pte_T_25__w1 = arb_io_out_ready__w1 & arb.io_out_valid & 1
+  const readEnable__w1 = (~l2_refill) & _r_pte_T_25__w1 & 1
+  mut _mux_151:U3 = if io_mem_s2_xcpt_ae_ld != 0 { 0 } else { 5 }
+  mut _mux_152:U3 = if l2_hit__w1 != 0 { 1 } else { 4 }
+  mut _mux_153:U3 = if io_mem_req_ready != 0 { 2 } else { 1 }
+  mut _mux_154:U3 = if resp_gf != 0 { 0 } else { _mux_153#[0..<3] }
+  mut _mux_155:U3 = if _r_pte_T_25__w1 != 0 { arb.io_out_bits_valid & 1 } else { state#[0..<3] }
+  const cache = pageCache<vpnBits=vpnBits, entries=entries, ways=ways>(clock, reset, read=readEnable__w1,
+      suitable=arb.io_out_bits_valid & ~arb.io_out_bits_bits_need_gpa, readVpn=arb.io_out_bits_bits_addr,
+      vpn=r_req_addr, write=writeEnable__w1, pte=(r_pte_ppn#[0..<20] << 6) | (r_pte_d << 5) |
+          (r_pte_a << 4) | (r_pte_u << 3) | (r_pte_x << 2) | (r_pte_w << 1) | r_pte_r,
+      global=r_pte_g, fence=io_dpath_sfence_valid, byAddress=io_dpath_sfence_bits_rs1,
+      byAsid=io_dpath_sfence_bits_rs2, fenceVpn=io_dpath_sfence_bits_addr#[12..+vpnBits])
+  l2_hit__w1 = cache.hit
+  l2_error__w1 = cache.error
+  mut _mux_157:U3 = if _GEN_21__w1 != 0 {
+    0
+  } else {
+    ((((state#[0..<3] << 18) | (state#[0..<3] << 15) | (_mux_151#[0..<3] << 12) | (state#[0..<3] << 9) | (_mux_152#[0..<3] << 6) | (_mux_154#[0..<3] << 3) | _mux_155#[0..<3]) << 3) >> ((state*3) + 3))#[0..<3]
+  }
+  mut _mux_158:U3 = if mem_resp_valid != 0 { traverse__w1 & 1 } else { _mux_157#[0..<3] }
+  mut _mux_159:U3 = if io_mem_s2_nack != 0 { 1 } else { _mux_158#[0..<3] }
+  const nextState = _mux_159
+  mut _b2i_160 = U1(state == 7)
+  const translatedPPN:U44 = (r_pte_ppn & ~offsetMask) | (r_req_addr & offsetMask)
+  mut _mux_163:U44 = if _r_pte_T_25__w1 != 0 { io_dpath_ptbr_ppn#[0..<44] } else { r_pte_ppn#[0..<44] }
+  mut _mux_164:U44 = if (_b2i_160 & (~homogeneous__w1#[0]) & 1 & (~lastLevel) & 1) != 0 { translatedPPN } else { _mux_163#[0..<44] }
+  mut _mux_165:U44 = if mem_resp_valid != 0 { mem_resp_data#[10..<30] } else { _mux_164#[0..<44] }
+  mut _mux_166:U44 = if _r_pte_T_3__w1 != 0 { cache.data#[6..<26] } else { _mux_165#[0..<44] }
+  mut _mux_167:U1 = if mem_resp_valid != 0 { mem_resp_data#[7..<8] } else { r_pte_d & 1 }
+  mut _mux_168:U1 = if _r_pte_T_3__w1 != 0 { cache.data#[5..<6] } else { _mux_167 & 1 }
+  mut _mux_169:U1 = if mem_resp_valid != 0 { mem_resp_data#[6..<7] } else { r_pte_a & 1 }
+  mut _mux_170:U1 = if _r_pte_T_3__w1 != 0 { cache.data#[4..<5] } else { _mux_169 & 1 }
+  mut _mux_171:U1 = if mem_resp_valid != 0 { mem_resp_data#[5..<6] } else { r_pte_g & 1 }
+  mut _mux_172:U1 = if _r_pte_T_3__w1 != 0 { cache.shared & 1 } else { _mux_171 & 1 }
+  mut _mux_173:U1 = if mem_resp_valid != 0 { mem_resp_data#[4..<5] } else { r_pte_u & 1 }
+  mut _mux_174:U1 = if _r_pte_T_3__w1 != 0 { cache.data#[3..<4] } else { _mux_173 & 1 }
+  mut _mux_175:U1 = if mem_resp_valid != 0 { mem_resp_data#[3..<4] } else { r_pte_x & 1 }
+  mut _mux_176:U1 = if _r_pte_T_3__w1 != 0 { cache.data#[2..<3] } else { _mux_175 & 1 }
+  mut _mux_177:U1 = if mem_resp_valid != 0 { mem_resp_data#[2..<3] } else { r_pte_w & 1 }
+  mut _mux_178:U1 = if _r_pte_T_3__w1 != 0 { cache.data#[1..<2] } else { _mux_177 & 1 }
+  mut _mux_179:U1 = if mem_resp_valid != 0 { mem_resp_data#[1..<2] } else { r_pte_r & 1 }
+  mut _mux_180:U1 = if _r_pte_T_3__w1 != 0 { cache.data & 1 } else { _mux_179 & 1 }
+  mut _mux_181:U1 = if mem_resp_valid != 0 { pte_v__w1 & 1 } else { r_pte_v & 1 }
+  if reset != 0 {
+    state = 0
+  } else {
+    state = nextState
+  }
+  const t2593 = _GEN_29__w1 != 0
+  mut _mux_187:U1 = if t2593 { (_GEN_27__w1 | _GEN_25__w1) & 1 } else { (((_GEN_23__w1 | _GEN_27__w1) & 1) | _GEN_25__w1) & 1 }
+  resp_valid_0 = _mux_187
+  const t2600 = _GEN_29__w1 != 0
+  mut _mux_188:U1 = if t2600 { (_GEN_28__w1 | _GEN_26__w1) & 1 } else { (((_GEN_24__w1 | _GEN_28__w1) & 1) | _GEN_26__w1) & 1 }
+  resp_valid_1 = _mux_188
+  mut _b2i_189 = U1(state != 0)
+  invalidated = (io_dpath_sfence_valid | (invalidated & _b2i_189 & 1)) & 1
+  if mem_resp_valid != 0 {
+    if traverse__w1 != 0 {
+      wrap count = count + 1
+    }
+  } elif _GEN_21__w1 != 0 {
+    count = pgLevels-1
+  } elif _b2i_1 != 0 {
+    if _r_pte_T_25__w1 != 0 {
+      count = if io_dpath_ptbr_mode >= 8 and io_dpath_ptbr_mode < pgLevels+6 { (pgLevels+5-io_dpath_ptbr_mode)#[0..+std.clog2(pgLevels)] } else { 0 }
+    }
+  } else {
+    const _b2i_190 = U1(state == 7)
+    const t2630 = ((((((_b2i_10 | _b2i_135) & 1) | _b2i_136) & 1) | (~(_b2i_190 & (~homogeneous__w1#[0]) & 1)#[0])) & 1) != 0
+    if not t2630 {
+      count = pgLevels-1
+    }
+  }
+  const t2632 = _GEN_29__w1 != 0
+  mut _mux_191:U1 = if _b2i_1 != 0 { (~_r_pte_T_25__w1#[0]) & resp_ae_ptw & 1 }
+    else { (((~((_b2i_10 | _b2i_135) & 1)#[0]) & _b2i_136 & 1 & io_mem_s2_xcpt_ae_ld & 1) | resp_ae_ptw) & 1 }
+  mut _mux_192:U1 = if t2632 {
+    _mux_191 & 1
+  } else {
+    _ae_T__w1 & (~lastLevel) & 1 & (~mem_resp_data#[1..<2]) & 1 & (~mem_resp_data#[2..<3]) & 1 & (~mem_resp_data#[3..<4]) & 1 & (~mem_resp_data#[7..<8]) & 1 & (~mem_resp_data#[6..<7]) & 1 & (~mem_resp_data#[4..<5]) & 1 & _resp_ae_ptw_T_13__w1 & 1
+  }
+  resp_ae_ptw = _mux_192
+  const t2675 = _GEN_29__w1 != 0
+  mut _mux_193:U1 = if t2675 {
+    (~_r_pte_T_25__w1#[0]) & resp_ae_final & 1
+  } else {
+    _ae_T__w1 & (mem_resp_data#[1..<2] | (mem_resp_data#[3..<4] & (~mem_resp_data#[2..<3]) & 1)) & 1 & mem_resp_data#[6..<7] & 1
+  }
+  resp_ae_final = _mux_193
+  const t2692 = _GEN_29__w1 != 0
+  mut _mux_194:U1 = if t2692 { (~_r_pte_T_25__w1#[0]) & resp_pf & 1 } else { pf__w1 & (~stage2) & 1 }
+  resp_pf = _mux_194
+  const t2699 = _GEN_29__w1 != 0
+  mut _mux_195:U1 = if t2699 { (~_r_pte_T_25__w1#[0]) & resp_gf & 1 } else { (_gf_T_10__w1 | (pf__w1 & stage2 & 1)) & 1 }
+  resp_gf = _mux_195
+  const t2707 = _GEN_29__w1 != 0
+  const t2731 = (~pf__w1#[0]) & (~_gf_T_10__w1#[0]) & 1 & pte_v__w1 & 1 & (mem_resp_data#[1..<2] | (mem_resp_data#[3..<4] & (~mem_resp_data#[2..<3]) & 1)) & 1 & mem_resp_data#[6..<7] & 1 & mem_resp_data#[1..<2]
+  const t2732 = t2731 & 1
+  const t2734 = t2732 & mem_resp_data#[4..<5]
+  const t2735 = t2734 & 1
+  const t2736 = (~stage2) | t2735
+  const t2737 = t2736 & 1
+  mut _mux_196:U1 = if t2707 { (_r_pte_T_25__w1 | resp_hr) & 1 } else { t2737 }
+  resp_hr = _mux_196
+  const t2738 = _GEN_29__w1 != 0
+  const t2762 = (~pf__w1#[0]) & (~_gf_T_10__w1#[0]) & 1 & pte_v__w1 & 1 & (mem_resp_data#[1..<2] | (mem_resp_data#[3..<4] & (~mem_resp_data#[2..<3]) & 1)) & 1 & mem_resp_data#[6..<7] & 1 & mem_resp_data#[2..<3]
+  const t2763 = t2762 & 1
+  const t2765 = t2763 & mem_resp_data#[7..<8]
+  const t2766 = t2765 & 1
+  const t2768 = t2766 & mem_resp_data#[4..<5]
+  const t2769 = t2768 & 1
+  const t2770 = (~stage2) | t2769
+  const t2771 = t2770 & 1
+  mut _mux_197:U1 = if t2738 { (_r_pte_T_25__w1 | resp_hw) & 1 } else { t2771 }
+  resp_hw = _mux_197
+  const t2772 = _GEN_29__w1 != 0
+  const t2796 = (~pf__w1#[0]) & (~_gf_T_10__w1#[0]) & 1 & pte_v__w1 & 1 & (mem_resp_data#[1..<2] | (mem_resp_data#[3..<4] & (~mem_resp_data#[2..<3]) & 1)) & 1 & mem_resp_data#[6..<7] & 1 & mem_resp_data#[3..<4]
+  const t2797 = t2796 & 1
+  const t2799 = t2797 & mem_resp_data#[4..<5]
+  const t2800 = t2799 & 1
+  const t2801 = (~stage2) | t2800
+  const t2802 = t2801 & 1
+  mut _mux_198:U1 = if t2772 { (_r_pte_T_25__w1 | resp_hx) & 1 } else { t2802 }
+  resp_hx = _mux_198
+  if _r_pte_T_25__w1 != 0 {
+    r_req_addr = arb.io_out_bits_bits_addr
+    r_req_need_gpa = arb.io_out_bits_bits_need_gpa
+    r_req_dest = arb.io_chosen
+  }
+  r_pte_ppn = _mux_166
+  r_pte_d = _mux_168
+  r_pte_a = _mux_170
+  r_pte_g = _mux_172
+  r_pte_u = _mux_174
+  r_pte_x = _mux_176
+  r_pte_w = _mux_178
+  r_pte_r = _mux_180
+  r_pte_v = (_r_pte_T_3__w1 | _mux_181) & 1
+  stage2 = (~_r_pte_T_25__w1#[0]) & stage2 & 1
+  mem_resp_valid = io_mem_resp_valid
+  mem_resp_data = io_mem_resp_bits_data
+  const t2809 = mem_resp_valid & (~traverse__w1#[0]) & 1
+  const t2810 = t2809 & pte_v__w1
+  const t2811 = t2810 & 1
+  const t2813 = t2811 & (~_ae_T__w1#[0])
+  const t2814 = t2813 & 1
+  const t2816 = t2814 & (~pf__w1#[0])
+  const t2817 = t2816 & 1
+  const t2819 = t2817 & (~_gf_T_10__w1#[0])
+  const t2820 = t2819 & 1
+  const t2821 = t2820 & lastLevel
+  const t2822 = t2821 & 1
+  const t2824 = t2822 & (~r_req_need_gpa)
+  const t2825 = t2824 & 1
+  l2_refill = t2825
+  io_requestor_0_req_ready = arb.io_in_0_ready
+  io_requestor_0_resp_valid = io_requestor_0_resp_valid__w1
+  io_requestor_0_resp_bits_ae_final = io_requestor_0_resp_bits_ae_final__w1
+  io_requestor_0_resp_bits_pte_ppn = io_requestor_0_resp_bits_pte_ppn__w1
+  io_requestor_0_resp_bits_pte_d = io_requestor_0_resp_bits_pte_d__w1
+  io_requestor_0_resp_bits_pte_a = io_requestor_0_resp_bits_pte_a__w1
+  io_requestor_0_resp_bits_pte_g = io_requestor_0_resp_bits_pte_g__w1
+  io_requestor_0_resp_bits_pte_u = io_requestor_0_resp_bits_pte_u__w1
+  io_requestor_0_resp_bits_pte_x = io_requestor_0_resp_bits_pte_x__w1
+  io_requestor_0_resp_bits_pte_w = io_requestor_0_resp_bits_pte_w__w1
+  io_requestor_0_resp_bits_pte_r = io_requestor_0_resp_bits_pte_r__w1
+  io_requestor_0_resp_bits_pte_v = io_requestor_0_resp_bits_pte_v__w1
+  io_requestor_0_resp_bits_level = io_requestor_0_resp_bits_level__w1
+  io_requestor_0_resp_bits_homogeneous = homogeneous__w1
+  io_requestor_0_ptbr_mode = io_dpath_ptbr_mode
+  io_requestor_0_status_debug = io_dpath_status_debug
+  io_requestor_0_status_dprv = io_dpath_status_dprv
+  io_requestor_0_status_mxr = io_dpath_status_mxr
+  io_requestor_0_status_sum = io_dpath_status_sum
+  io_requestor_1_req_ready = arb.io_in_1_ready
+  io_requestor_1_resp_valid = io_requestor_1_resp_valid__w1
+  io_requestor_1_resp_bits_ae_ptw = io_requestor_1_resp_bits_ae_ptw__w1
+  io_requestor_1_resp_bits_ae_final = io_requestor_1_resp_bits_ae_final__w1
+  io_requestor_1_resp_bits_pf = io_requestor_1_resp_bits_pf__w1
+  io_requestor_1_resp_bits_gf = io_requestor_1_resp_bits_gf__w1
+  io_requestor_1_resp_bits_hr = io_requestor_1_resp_bits_hr__w1
+  io_requestor_1_resp_bits_hw = io_requestor_1_resp_bits_hw__w1
+  io_requestor_1_resp_bits_hx = io_requestor_1_resp_bits_hx__w1
+  io_requestor_1_resp_bits_pte_ppn = io_requestor_1_resp_bits_pte_ppn__w1
+  io_requestor_1_resp_bits_pte_d = io_requestor_1_resp_bits_pte_d__w1
+  io_requestor_1_resp_bits_pte_a = io_requestor_1_resp_bits_pte_a__w1
+  io_requestor_1_resp_bits_pte_g = io_requestor_1_resp_bits_pte_g__w1
+  io_requestor_1_resp_bits_pte_u = io_requestor_1_resp_bits_pte_u__w1
+  io_requestor_1_resp_bits_pte_x = io_requestor_1_resp_bits_pte_x__w1
+  io_requestor_1_resp_bits_pte_w = io_requestor_1_resp_bits_pte_w__w1
+  io_requestor_1_resp_bits_pte_r = io_requestor_1_resp_bits_pte_r__w1
+  io_requestor_1_resp_bits_pte_v = io_requestor_1_resp_bits_pte_v__w1
+  io_requestor_1_resp_bits_level = io_requestor_1_resp_bits_level__w1
+  io_requestor_1_resp_bits_homogeneous = homogeneous__w1
+  io_requestor_1_ptbr_mode = io_dpath_ptbr_mode
+  io_requestor_1_status_debug = io_dpath_status_debug
+  io_requestor_1_status_prv = io_dpath_status_prv
+  io_mem_req_valid = (_b2i_10 | _b2i_147) & 1
+  io_mem_req_bits_addr = io_mem_req_bits_addr__w1
+  io_mem_s1_kill = io_mem_s1_kill__w1
+  io_dpath_perf_l2miss = cache.miss
+}

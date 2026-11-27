@@ -1,0 +1,118 @@
+const stages = import("PredictorResponse")
+const fastBase = import("FastTageBase.FastTageBase")
+const alpha = import("AlphaDirection.AlphaDirection")
+const directionBank = import("BIMBranchPredictorBank.BIMBranchPredictorBank")
+const targetBank = import("BTBBranchPredictorBank.BTBBranchPredictorBank")
+const microBank = import("FA2MicroBTBBranchPredictorBank.FA2MicroBTBBranchPredictorBank")
+const loopBank = import("LoopBranchPredictorBank.LoopBranchPredictorBank")
+const tageBank = import("TageBranchPredictorBank.TageBranchPredictorBank")
+const gshare = import("GShareBank.GShareBank")
+
+pub mod ComposedBranchPredictorBank<C>::[timecheck=false](clock:Clock, reset:Reset, fetch:U1,
+    pc:Unsigned(bits=C.addrBits), mask:U4,
+    history:Unsigned(bits=C.globalHistoryLength), fire:U1, update:stages.Update<C.addrBits>,
+    updateHistory:Unsigned(bits=C.globalHistoryLength), updateMeta:Unsigned(bits=C.bankMetaBits)) ->
+    (metadata:Unsigned(bits=C.bankMetaBits)@[], f1:stages.Prediction<C.addrBits>@[], f2:stages.Prediction<C.addrBits>@[],
+     f3:stages.Prediction<C.addrBits>@[], jumps:U4@[]) {
+  const empty:stages.BankStage<C.addrBits> = (taken=0, branch=0, jumps=0, valid=0, target=0)
+  comptime const wayBits = std.clog2(C.btbTable.nWays)
+  comptime const fastBaseBits = 17+std.clog2(C.fastBTB.nWays)+std.clog2(C.slowBTB.nWays)
+  comptime const tageOffset = 9+wayBits
+  comptime const requiredMeta = if C.boom2BPD { 40+wayBits } elif C.alpha21264BPD { 24+wayBits }
+      elif C.fastTageBPD { C.fastMetaBits+fastBaseBits } else { C.tageMetaBits+40+tageOffset }
+  cassert(C.bpdMaxMetaLength >= requiredMeta, "the FTQ metadata must hold the selected predictor's training state")
+  comptime const fetchShift = std.clog2(2*C.fetchWidth)
+  const commit = U1(update.valid != 0 and update.mispredict == 0 and update.repair == 0 and update.wrongTargets == 0)
+  if C.fastTageBPD {
+    const base = fastBase<fastBTB=C.fastBTB, slowBTB=C.slowBTB, microWays=C.fastMicroWays,
+        microTagBits=C.fastMicroTagBits, pcBits=C.addrBits, shift=fetchShift, fastBIM=C.fastBimTable,
+        slowBIM=C.slowBimTable, singlePorted=C.slowBTBSinglePorted>(
+      clock, reset, fetch, pc,
+      update=(pc=update.pc, target=update.target, valid=update.valid,
+        commit=commit,
+        invalidate=update.wrongTargets, branches=update.branches,
+        lane=update.cfi, cfi=update.cfiValid,
+        taken=update.taken, isBr=update.branch, jal=update.jal,
+        jalr=update.jalr, meta=updateMeta#[0..<120]))
+    const tage = tageBank<C=C, tables=C.fastTables>(clock, reset, fetch, pc,
+      history, baseTaken=base.f3.taken,
+      update=(commit=commit,
+              pc=update.pc, history=updateHistory, branches=update.branches,
+              cfi=update.cfi, cfiValid=update.cfiValid, taken=update.taken,
+              missed=update.missed, meta=updateMeta >> fastBaseBits))
+    f1 = (taken=base.f1.taken, branch=base.f1.branch, valid=base.f1.valid, target=base.f1.target)
+    f2 = (taken=base.f2.taken, branch=base.f2.branch, valid=base.f2.valid, target=base.f2.target)
+    f3 = (taken=tage.prediction, branch=base.f3.branch, valid=base.f3.valid, target=base.f3.target)
+    jumps = base.f3.jal
+    metadata = (tage.info#[0..+C.fastMetaBits] << fastBaseBits) | base.info
+  } elif C.boom2BPD or C.alpha21264BPD {
+    wire f2Taken:U4 = nil
+    wire f3Taken:U4 = nil
+    wire baseMeta:Unsigned(bits=C.bankMetaBits) = nil
+    wire feedback:U1 = nil
+    if C.alpha21264BPD {
+      comptime const geometry = C.alphaGeometry
+      const a = alpha<historyOffset=C.alphaHistoryOffset, victimBits=wayBits, pcBits=C.addrBits,
+          globalBits=C.globalHistoryLength, chooserRows=geometry.chooserSets, fetchShift=fetchShift,
+          globalRows=geometry.globalSets, localCounterRows=geometry.localSets, localRows=C.localHistoryNSets,
+          localBits=C.localHistoryLength>(clock, reset, fetch, pc, global=history, fire,
+          predictedTakenBranch=feedback, commit=commit, recover=update.valid & (update.mispredict | update.repair),
+          updatePc=update.pc, updateGlobal=updateHistory, branches=update.branches, cfiValid=update.cfiValid,
+          cfi=update.cfi, taken=update.taken, isBranch=update.branch, isJal=update.jal, missed=update.missed,
+          meta=updateMeta#[0..+(C.alphaHistoryOffset+C.localHistoryLength)])
+      f2Taken = 0
+      f3Taken = a.prediction
+      baseMeta = a.info
+    } else {
+      const bim = directionBank<pcBits=C.addrBits, fetchShift=fetchShift, geometry=C.bimTable>(clock, reset, fetch,
+          pc, base1=empty, base2=empty, base3=empty, update, updateMeta=(updateMeta >> (32+wayBits))#[0..+8])
+      f2Taken = bim.f2.taken
+      f3Taken = bim.f3.taken
+      baseMeta = bim.metadata#[0..+8] << (32+wayBits)
+    }
+    const btb = targetBank<addrBits=C.addrBits, geometry=C.btbTable, fetchShift=fetchShift>(clock, reset, fetch, pc,
+        base1=empty, base2=stages.direction<addrBits=C.addrBits>(incoming=empty, taken=f2Taken),
+        base3=stages.direction<addrBits=C.addrBits>(incoming=empty, taken=f3Taken), update,
+        updateMeta=(if C.alpha21264BPD { updateMeta >> 16 } else { updateMeta >> 32 }))
+    feedback = U1((btb.f3.taken & btb.f3.branch & btb.f3.valid) != 0)
+    wire predictions:U4 = nil
+    if C.alpha21264BPD {
+      predictions = btb.f3.taken
+      metadata = baseMeta | ((btb.metadata & ((1 << wayBits)-1)) << 16)
+    } else {
+      comptime const table = C.gshareTable
+      const g = gshare<pcBits=C.addrBits, historyBits=C.globalHistoryLength, T=table, fetchShift=fetchShift,
+          period=C.tageUBitPeriod, single=C.tageSinglePorted>(clock, reset, fetch, pc, history,
+          baseTaken=btb.f3.taken, update=commit, updatePc=update.pc, updateHistory=updateHistory,
+          branches=update.branches, cfiValid=update.cfiValid, cfi=update.cfi, taken=update.taken,
+          mispredict=update.missed, meta=updateMeta#[0..+32])
+      predictions = g.prediction
+      metadata = baseMeta | ((btb.metadata & ((1 << wayBits)-1)) << 32) | g.info
+    }
+    f1 = stages.response<addrBits=C.addrBits>(incoming=btb.f1)
+    f2 = stages.response<addrBits=C.addrBits>(incoming=btb.f2)
+    f3 = stages.response<addrBits=C.addrBits>(incoming=btb.f3)
+    f3.taken = predictions
+    jumps = btb.f3.jumps
+  } else {
+    const ubtb = microBank<addrBits=C.addrBits, geometry=C.microBTB, fetchShift=fetchShift>(clock, reset, fetch, pc, update)
+    const bim = directionBank<pcBits=C.addrBits, fetchShift=fetchShift, geometry=C.bimTable>(clock, reset, fetch, pc,
+        base1=ubtb.f1, base2=ubtb.f2, base3=ubtb.f3, update, updateMeta=updateMeta#[0..<120])
+    const btb = targetBank<addrBits=C.addrBits, geometry=C.btbTable, fetchShift=fetchShift>(clock, reset, fetch, pc,
+        base1=bim.f1, base2=bim.f2, base3=bim.f3, update, updateMeta=updateMeta >> 9)
+    const tage = tageBank<C=C, tables=C.tageTables>(clock, reset, fetch, pc,
+      history, baseTaken=btb.f3.taken,
+      update=(commit=commit,
+              pc=update.pc, history=updateHistory, branches=update.branches,
+              cfi=update.cfi, cfiValid=update.cfiValid, taken=update.taken,
+              missed=update.missed, meta=updateMeta >> tageOffset))
+    const loops = loopBank<pcBits=C.addrBits, fetchShift=fetchShift>(clock, reset, fetch, pc, mask, base1=btb.f1,
+        base2=btb.f2, base3=stages.direction<addrBits=C.addrBits>(incoming=btb.f3, taken=tage.prediction),
+        io_f3_fire=fire, update, updateMeta=updateMeta >> (tageOffset+C.tageMetaBits))
+    f1 = stages.response<addrBits=C.addrBits>(incoming=loops.f1)
+    f2 = stages.response<addrBits=C.addrBits>(incoming=loops.f2)
+    f3 = stages.response<addrBits=C.addrBits>(incoming=loops.f3)
+    jumps = loops.f3.jumps
+    metadata = (loops.metadata#[0..<40] << (tageOffset+C.tageMetaBits)) | (tage.info#[0..+C.tageMetaBits] << tageOffset) | ((btb.metadata & ((1 << wayBits)-1)) << 9) | ((ubtb.metadata & 1) << 8) | bim.metadata#[0..<8]
+  }
+}

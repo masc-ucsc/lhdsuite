@@ -1,0 +1,54 @@
+// BOOM's non-pipelined BranchKillableQueue. Killed rows drain in order even
+// when the consumer stalls. The read side observes the old head for this cycle.
+pub mod BranchQueue<entries, Payload, branches=8>(
+  clock:Clock, reset:U1, enqueue:U1, input:Payload, mask:Unsigned(bits=branches),
+  flushable:U1, consume:U1, resolve:Unsigned(bits=branches), mispredict:Unsigned(bits=branches), flush:U1,
+) -> (ready:U1@[], valid:U1@[], empty:U1@[], count:Unsigned(bits=std.clog2(entries))@[], output:Payload@[], outMask:Unsigned(bits=branches)@[]) {
+  cassert(entries > 1)
+  type Index = Unsigned(bits=std.clog2(entries))
+  type BrMask = Unsigned(bits=branches)
+  reg head:Index = nil
+  reg tail:Index = nil
+  reg wasEnqueue:U1 = nil
+  reg live:Unsigned(bits=entries) = nil
+  reg canFlush:Unsigned(bits=entries) = nil
+  reg rows:[entries]Payload:[ordering="old"] = nil
+  reg masks:[entries]BrMask:[ordering="old"] = nil
+
+  empty = U1(head == tail and wasEnqueue == 0)
+  ready = U1(head != tail or wasEnqueue == 0)
+  // The upstream count port has clog2(entries) bits, including for a full power-of-two queue.
+  wrap count = if tail == head { if wasEnqueue != 0 { entries } else { 0 } }
+               elif tail > head { tail-head } else { entries+tail-head }
+  valid = (1 ^ empty) & live#[head]
+  output = rows[head%entries]
+  outMask = masks[head%entries]
+  const push = ready != 0 and enqueue != 0 and (mispredict & mask) == 0 and (flush & flushable) == 0
+  const pop = empty == 0 and (consume != 0 or live#[head] == 0)
+  for slot in 0..<entries {
+    if live#[slot] != 0 {
+      masks[slot] = masks[slot] & ~resolve
+    }
+    if reset != 0 or (pop and head == slot) {
+      live#[slot] = 0
+    } elif push and tail == slot {
+      live#[slot] = 1
+    } elif (mispredict & masks[slot]) != 0 or (flush & canFlush#[slot]) != 0 {
+      live#[slot] = 0
+    }
+  }
+  if push {
+    rows[tail%entries] = input
+    masks[tail%entries] = mask & ~resolve
+    canFlush#[tail] = flushable
+  }
+  if reset != 0 {
+    head = 0
+    tail = 0
+    wasEnqueue = 0
+  } else {
+    if push { tail = (tail + 1)%entries }
+    if pop { head = (head + 1)%entries }
+    if push != pop { wasEnqueue = U1(push) }
+  }
+}

@@ -1,0 +1,15 @@
+// A slot advances once for each older vacancy, up to the shift limit at its
+// position. The slow prefix ramps from a single shift to full dispatch width.
+pub comb shifts<Q>(live:Unsigned(bits=Q.numEntries), dispatch:Unsigned(bits=Q.dispatchWidth)) ->
+    (distance:Unsigned(bits=(Q.numEntries+Q.dispatchWidth)*std.clog2(Q.dispatchWidth+1))) {
+  comptime const w = Q.dispatchWidth
+  comptime const b = std.clog2(w+1)
+  const occupied = (dispatch << Q.numEntries) | live
+  mut count:Unsigned(bits=b) = 0
+  distance = 0
+  for pos in 1..<(Q.numEntries+w) {
+    const limit = if pos < Q.numSlowEntries { 1+((pos*(w-1))/(if Q.numSlowEntries > 0 { Q.numSlowEntries } else { 1 })) } else { w }
+    if occupied#[pos-1] == 0 and count < limit { count = (count+1)#[0..+b] }
+    distance#[(pos*b)..+b] = count
+  }
+}

@@ -1,0 +1,80 @@
+const branchDecode = import("../../exe/pyrope/BranchDecode.BranchDecode")
+
+pub mod DecodeFetchPacket<width=4, banks=1, useBPD=true, addrBits=40>(
+  edges:Unsigned(bits=banks),
+  expanded:Unsigned(bits=32*width),
+  fault:U1,
+  mask:Unsigned(bits=width),
+  nextFetch:Unsigned(bits=addrBits),
+  pc:Unsigned(bits=addrBits),
+  pcs:Unsigned(bits=addrBits*width),
+  predictedTaken:Unsigned(bits=width),
+  predictedTargets:Unsigned(bits=addrBits*width),
+  predictedValid:Unsigned(bits=width),
+  raw:Unsigned(bits=32*width),
+  valid:U1,
+) -> (
+  lanes:Unsigned(bits=width)@[0],
+  branches:Unsigned(bits=width)@[0],
+  corrections:Unsigned(bits=width)@[0],
+  redirected:U1@[0],
+  cfi:Unsigned(bits=std.clog2(width))@[0],
+  cfiType:U3@[0],
+  call:U1@[0],
+  ret:U1@[0],
+  plus4:U1@[0],
+  nextPc:Unsigned(bits=addrBits)@[0],
+  possible:Unsigned(bits=width)@[0],
+  shadowable:Unsigned(bits=width)@[0],
+  masks:Unsigned(bits=width*2*width)@[0],
+  targets:Unsigned(bits=width*std.clog2(4*width))@[0],
+) {
+  cassert(width == 4*banks)
+  comptime const targetBits = std.clog2(4*width)
+  const lastBank = banks == 2 and pc#[3..+3] == 7
+  redirected  = 0
+  nextPc      = nextFetch
+  lanes       = 0
+  branches    = 0
+  corrections = 0
+  possible    = 0
+  shadowable  = 0
+  masks       = 0
+  targets     = 0
+  cfi         = width - 1
+  cfiType     = 0
+  call        = 0
+  ret         = 0
+  plus4       = 0
+  for i in 0..<width {
+    const dec      = branchDecode<addrBits=addrBits>(io_inst=expanded#[(32*i)..+32], io_pc=pcs#[(addrBits*i)..+addrBits])
+    const target   = predictedTargets#[(addrBits*i)..+addrBits]
+    const isBranch = dec.io_out_cfi_type == 1
+    const jal      = dec.io_out_cfi_type == 2
+    const jalr     = dec.io_out_cfi_type == 3
+    const active   = valid != 0 and mask#[i] != 0 and redirected == 0
+    const jump     = active and (jal or jalr or (useBPD and isBranch and predictedTaken#[i] != 0))
+    const edge     = i%4 == 0 and edges#[i/4] != 0
+    lanes#[i]       = U1(active)
+    branches#[i]    = U1(active and isBranch)
+    corrections#[i] = U1(jal and mask#[i] != 0 and predictedValid#[i] != 0 and target != dec.io_out_target)
+    if jump or (i == width - 1 and redirected == 0) {
+      cfi     = i
+      cfiType = dec.io_out_cfi_type
+      call    = dec.io_out_is_call
+      ret     = dec.io_out_is_ret
+      plus4   = U1(raw#[(32*i)..+2] == 3 and not edge)
+    }
+    if jump {
+      redirected = 1
+      nextPc     = if jalr { target } else { dec.io_out_target }
+    }
+    const offset:U7 = (2*i + dec.io_out_sfb_offset_bits - (if edge { 2 } else { 0 }))#[0..+7]
+    const endLane   = offset#[1..+targetBits] + (if lastBank { 4 } else { 0 })
+    const interior  = ((1 << endLane) - 1) & ((-2) << i)
+    possible#[i] = U1(active and dec.io_out_sfb_offset_valid != 0 and offset <= (if lastBank { 2*width + 8 } else { 4*width }))
+    masks#[(i*2*width)..+(2*width)] = interior#[0..+(2*width)]
+    targets#[(i*targetBits)..+targetBits] = offset#[0..+targetBits]
+    shadowable#[i] = U1(fault == 0 and (i < 4 or not lastBank) and (dec.io_out_shadowable != 0 or not active))
+  }
+}

@@ -1,0 +1,38 @@
+const multiply = import("../pyrope/PipelinedMulUnit.PipelinedMulUnit")
+
+pub mod multiply_latency(clk:Clock, rst:Reset, fn:U2, word:U1, valid:U1, label:U8, flush:U1) -> (ok:Bool@[]) {
+  ok = true
+  for latency in 1..=5 {
+    const product = multiply<latency=latency, robBits=8, pregBits=8>(
+      clock=clk, reset=rst, io_req_valid=valid, io_kill=flush, io_brupdate_b1_mispredict_mask=0,
+      io_brupdate_b1_resolve_mask=0, io_req_bits_uop_br_mask=0, io_req_bits_uop_dst_rtype=0,
+      io_req_bits_uop_pdst=label, io_req_bits_uop_rob_idx=label, io_req_bits_uop_fcn_op=fn,
+      io_req_bits_uop_fcn_dw=1 ^ word, io_req_bits_rs1_data=0xfffffffffffffffe,
+      io_req_bits_rs2_data=0xfffffffffffffffd)
+    reg live:Unsigned(bits=latency) = nil
+    reg history:Unsigned(bits=latency*10) = nil
+    live = if rst or flush != 0 { 0 } else { ((live << 1) | valid)#[0..+latency] }
+    wrap history = (history << 10) | (label << 2) | fn
+    const expected = history#[((latency-1)*10)..+10]
+    const result:U64 = if expected#[0..+2] == 0 { 6 } elif expected#[0..+2] == 1 { 0 }
+      elif expected#[0..+2] == 2 { 0xfffffffffffffffe } else { 0xfffffffffffffffb }
+    ok = ok and product.io_resp_valid == live#[latency-1]
+    if product.io_resp_valid != 0 {
+      ok = ok and product.io_resp_bits_uop_rob_idx == expected#[2..+8] and product.io_resp_bits_data == result
+    }
+  }
+}
+
+test multiply_latency.products {
+  mut d = multiply_latency
+  tick 2048 {
+    d.rst = clock < 3
+    d.fn = clock%4
+    d.word = (clock/4)%2
+    d.valid = U1(clock%7 != 0)
+    d.flush = U1(clock%17 == 6)
+    d.label = clock%256
+    step
+    if clock > 7 { assert(d.ok, "multiply high/low value, operation tag and valid must share the configured latency") }
+  }
+}

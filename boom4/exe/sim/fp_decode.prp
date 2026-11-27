@@ -1,0 +1,31 @@
+const decode = import("../pyrope/DecodeUnit.DecodeUnit")
+
+pub mod fp_decode(clock:Clock, inst:U32) -> (correct:Bool@[]) {
+  correct = true
+  for enabled in (false, true) {
+    const decoded = decode<divSqrt=enabled>(
+      io_csr_decode_fp_illegal=0, io_csr_decode_read_illegal=0, io_csr_decode_system_illegal=0,
+      io_csr_decode_write_flush=0, io_csr_decode_write_illegal=0, io_enq_uop_bp_debug_if=0,
+      io_enq_uop_bp_xcpt_if=0, io_enq_uop_debug_fsrc=0, io_enq_uop_debug_inst=inst,
+      io_enq_uop_debug_pc=0, io_enq_uop_edge_inst=0, io_enq_uop_ftq_idx=0,
+      io_enq_uop_inst=inst, io_enq_uop_is_rvc=0, io_enq_uop_is_sfb=0,
+      io_enq_uop_pc_lob=0, io_enq_uop_taken=0, io_enq_uop_xcpt_ae_if=0,
+      io_enq_uop_xcpt_pf_if=0, io_fcsr_rm=0, io_interrupt=0,
+      io_interrupt_cause=0,
+    )
+    const divides = inst == 0x1a2081d3 or inst == 0x5a0081d3
+    const illegal = divides and !enabled
+    correct = correct and decoded.io_deq_uop_exception == U1(illegal) and
+      decoded.io_deq_uop_fu_code_7 == U1(divides and enabled) and
+      (!illegal or decoded.io_deq_uop_exc_cause == 2)
+  }
+}
+
+test fp_decode.capability {
+  mut dut = fp_decode
+  tick 3 {
+    dut.inst = if clock == 0 { 0x1a2081d3 } elif clock == 1 { 0x5a0081d3 } else { 0x022081d3 }
+    step
+    assert(dut.correct, "FDIV.D and FSQRT.D require the divider, FADD.D remains legal")
+  }
+}

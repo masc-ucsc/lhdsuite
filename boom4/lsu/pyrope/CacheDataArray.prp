@@ -1,0 +1,81 @@
+// A single bank duplicates the read store per pipe. Multiple banks arbitrate
+// in pipe order, with a write taking priority on a single-ported bank.
+mod wayMemory<rows, rowBits>(clock:Clock, read:U1, r:Unsigned(bits=std.clog2(rows)),
+    write:U1, w:Unsigned(bits=std.clog2(rows)), mask:Unsigned(bits=rowBits/64), data:Unsigned(bits=rowBits))
+    -> (value:Unsigned(bits=rowBits)@[]) {
+  type Row = Unsigned(bits=rowBits)
+  reg ram:[rows]Row:[ordering="old"]
+  reg address:Unsigned(bits=std.clog2(rows)) = nil
+  reg result:Row = nil
+  if read != 0 { address = r }
+  result = ram[address]
+  if write != 0 {
+    mut row:Row = ram[w]
+    for word in 0..<(rowBits/64) {
+      if mask#[word] != 0 { row#[(word*64)..+64] = data#[(word*64)..+64] }
+    }
+    ram[w] = row
+  }
+  value = result
+}
+
+pub mod CacheDataArray<sets=64, ways=4, ports=1, banks=1, rowBits=64, single=false>(
+  clock:Clock, read:Unsigned(bits=ports), readAddress:Unsigned(bits=ports*(6+std.clog2(sets))),
+  readWays:Unsigned(bits=ports*ways), write:U1, writeAddress:Unsigned(bits=6+std.clog2(sets)),
+  writeWays:Unsigned(bits=ways), writeWords:Unsigned(bits=rowBits/64), data:Unsigned(bits=rowBits),
+) -> (nack:Unsigned(bits=ports)@[], response:Unsigned(bits=ports*ways*rowBits)@[]) {
+  cassert(sets > 0 and sets == 1 << std.clog2(sets))
+  cassert(banks == 1 or (banks >= ports and banks == 1 << std.clog2(banks)))
+  cassert(rowBits >= 64 and rowBits <= 512 and rowBits == 1 << std.clog2(rowBits))
+  comptime const addrBits = 6+std.clog2(sets)
+  comptime const rows = sets*512/rowBits/banks
+  comptime const rowShift = std.clog2(rowBits/8)
+  cassert(rows > 1)
+  type Index = Unsigned(bits=std.clog2(rows))
+  reg rejected:Unsigned(bits=ports) = nil
+  rejected = 0
+  response = 0
+  comptime const copies = if banks == 1 { ports } else { 1 }
+  for copy in 0..<copies {
+    for bank in 0..<banks {
+      const wr = write != 0 and ((writeAddress >> rowShift)%banks) == bank
+      const widx = writeAddress#[(rowShift+std.clog2(banks))..+std.clog2(rows)]
+      mut grant = false
+      mut r:Index = 0
+      mut readEnable:Unsigned(bits=ways) = 0
+      for port in 0..<ports {
+        const address = readAddress#[(port*addrBits)..+addrBits]
+        const requested = read#[port] != 0 and ((address >> rowShift)%banks) == bank
+        if (banks != 1 or copy == port) and requested {
+          if grant or (banks != 1 and single and wr) {
+            rejected#[port] = 1
+          } else {
+            grant = true
+            r = address#[(rowShift+std.clog2(banks))..+std.clog2(rows)]
+            readEnable = if banks == 1 and single { readWays#[(port*ways)..+ways] } else { (1 << ways)-1 }
+          }
+        }
+      }
+      mut outputs:Unsigned(bits=ways*rowBits) = 0
+      for way in 0..<ways {
+        const memory = wayMemory<rows=rows, rowBits=rowBits>(clock=clock,
+          read=readEnable#[way], r=r, write=U1(wr and writeWays#[way] != 0),
+          w=widx, mask=writeWords, data=data)
+        outputs#[(way*rowBits)..+rowBits] = memory.value
+      }
+      for port in 0..<ports {
+        if banks == 1 {
+          if port == copy { response#[(port*ways*rowBits)..+(ways*rowBits)] = outputs }
+        } else {
+          const addr = readAddress#[(port*addrBits)..+addrBits]
+          reg selected1:U1 = nil
+          reg selected2:U1 = nil
+          selected1 = U1(((addr >> rowShift)%banks) == bank)
+          selected2 = selected1
+          if selected2 != 0 { response#[(port*ways*rowBits)..+(ways*rowBits)] = outputs }
+        }
+      }
+    }
+  }
+  nack = rejected
+}

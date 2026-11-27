@@ -1,0 +1,73 @@
+const tile = import("../../boom4/pyrope/BoomTile.BoomTile")
+const tl = import("mixed_packet")
+
+pub mod BoomEndpoint<C, hart, enabled=true, host=17, accelerator=16, acceptProbes=true>(
+    clock:Clock, reset:U1, irq:U4=0, txr:U1, rxv:U1, rx:tl.Packet) -> (txv:U1@[], tx:tl.Packet@[], rxr:U1@[]) {
+  if enabled {
+    reg buffered:U1:[initial=0, reset_pin=reset, async=false]
+    reg held:tl.Packet = nil
+    txv = buffered
+    tx = held
+    const canSend = U1(reset == 0 and buffered == 0)
+    wire acceptC:U1 = nil
+    wire acceptA:U1 = nil
+    const core = tile<C>(
+        clock, reset, auto_buffer_out_a_ready=acceptA, auto_buffer_out_b_valid=U1(rxv != 0 and rx.ch == tl.B), auto_buffer_out_b_bits_opcode=rx.opcode#[0..<3], auto_buffer_out_b_bits_param=rx.param#[0..<2],
+        auto_buffer_out_b_bits_size=rx.size, auto_buffer_out_b_bits_source=rx.tl_source,
+        auto_buffer_out_b_bits_address=rx.addr, auto_buffer_out_b_bits_mask=rx.mask,
+        auto_buffer_out_b_bits_data=rx.data, auto_buffer_out_b_bits_corrupt=rx.corrupt,
+        auto_buffer_out_c_ready=acceptC, auto_buffer_out_d_valid=U1(rxv != 0 and rx.ch == tl.D),
+        auto_buffer_out_d_bits_opcode=rx.opcode#[0..<3], auto_buffer_out_d_bits_param=rx.param#[0..<2],
+        auto_buffer_out_d_bits_size=rx.size, auto_buffer_out_d_bits_source=rx.tl_source,
+        auto_buffer_out_d_bits_sink=rx.sink, auto_buffer_out_d_bits_denied=rx.denied,
+        auto_buffer_out_d_bits_data=rx.data, auto_buffer_out_d_bits_corrupt=rx.corrupt,
+        auto_buffer_out_e_ready=canSend, auto_int_local_in_3_0=irq#[3], auto_int_local_in_2_0=irq#[2],
+        auto_int_local_in_1_0=irq#[0], auto_int_local_in_1_1=irq#[1], auto_int_local_in_0_0=0, auto_hartid_in=hart
+    )
+    const grantAck = core.auto_buffer_out_e_valid
+    const release = core.auto_buffer_out_c_valid
+    acceptC = canSend & ~grantAck
+    acceptA = acceptC & ~release
+    rxr = if rx.ch == tl.D { core.auto_buffer_out_d_ready }
+          else { U1(acceptProbes and rx.ch == tl.B and core.auto_buffer_out_b_ready != 0) }
+    if reset == 0 {
+      if buffered != 0 {
+        if txr != 0 { buffered = 0 }
+      } elif (grantAck | release | core.auto_buffer_out_a_valid) != 0 {
+        buffered = 1
+        mut packet:tl.Packet = tl.idle
+        packet.target = host
+        if grantAck != 0 {
+          packet.ch = tl.E
+          packet.sink = core.auto_buffer_out_e_bits_sink
+        } elif release != 0 {
+          packet.ch = tl.C
+          packet.opcode = core.auto_buffer_out_c_bits_opcode
+          packet.size = core.auto_buffer_out_c_bits_size
+          packet.param = core.auto_buffer_out_c_bits_param
+          packet.tl_source = core.auto_buffer_out_c_bits_source
+          packet.addr = core.auto_buffer_out_c_bits_address
+          packet.data = core.auto_buffer_out_c_bits_data
+          packet.corrupt = core.auto_buffer_out_c_bits_corrupt
+        } else {
+          const addr = core.auto_buffer_out_a_bits_address
+          if addr >= tl.ACC_BASE and addr < tl.ACC_BASE+tl.ACC_SIZE { packet.target = accelerator }
+          packet.ch = tl.A
+          packet.opcode = core.auto_buffer_out_a_bits_opcode
+          packet.size = core.auto_buffer_out_a_bits_size
+          packet.param = core.auto_buffer_out_a_bits_param
+          packet.tl_source = core.auto_buffer_out_a_bits_source
+          packet.addr = addr
+          packet.mask = core.auto_buffer_out_a_bits_mask
+          packet.data = core.auto_buffer_out_a_bits_data
+          packet.corrupt = core.auto_buffer_out_a_bits_corrupt
+        }
+        held = packet
+      }
+    }
+  } else {
+    txv = 0
+    tx = tl.idle
+    rxr = 0
+  }
+}

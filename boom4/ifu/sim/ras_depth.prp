@@ -1,0 +1,51 @@
+const stack = import("../pyrope/BoomRAS.BoomRAS")
+const indices = import("../pyrope/RasIndex.RasIndex")
+
+mod trial<depth>(clock:Clock, address:U5, write:U1, data:U40) -> (
+  push:U5@[], pop:U5@[], top:U40@[],
+) {
+  type Index = Unsigned(bits=std.clog2(depth))
+  const slot = Index(address%depth)
+  const neighbor = indices<entries=depth>(index=slot)
+  push = neighbor.push
+  pop = neighbor.pop
+  const ras = stack<nRasEntries=depth, IdxT=Index>(clock=clock, io_read_idx=slot,
+      io_write_valid=write, io_write_idx=slot, io_write_addr=data)
+  top = ras.io_read_addr
+}
+
+pub mod ras_depth(clock:Clock, address:U5, write:U1, data:U40) -> (
+  good:Bool@[], two:U40@[], twelve:U40@[], sixteen:U40@[], thirtyTwo:U40@[],
+) {
+  good = true
+  for depth in (2, 12, 16, 32) {
+    const result = trial<depth>(clock=clock, address=address, write=write, data=data)
+    if address < depth {
+      good = good and result.push == (address + 1)%depth and result.pop == (address + depth - 1)%depth
+    }
+    if depth == 2 { two = result.top }
+    if depth == 12 { twelve = result.top }
+    if depth == 16 { sixteen = result.top }
+    if depth == 32 { thirtyTwo = result.top }
+  }
+}
+
+test ras_depth.contents {
+  mut dut = ras_depth
+  tick 64 {
+    const slot = if clock < 32 { clock } else { 63 - clock }
+    dut.address = slot
+    dut.write = U1(clock < 32)
+    dut.data = 4096 + slot
+    step
+    assert(dut.good, "wrap on call and return")
+    if clock < 32 {
+      assert(dut.thirtyTwo == 4096 + slot, "read/write bypass")
+    } else {
+      assert(dut.thirtyTwo == 4096 + slot, "32-entry stack")
+      if slot < 2 { assert(dut.two == 4126 + slot, "two-entry stack") }
+      if slot < 12 { assert(dut.twelve == 4096 + (if slot < 8 { 24 } else { 12 }) + slot, "12-entry stack") }
+      if slot < 16 { assert(dut.sixteen == 4112 + slot, "16-entry stack") }
+    }
+  }
+}

@@ -1,0 +1,67 @@
+// The integer and FP rename maps have independent tag widths. Widen each
+// operand inside its lane before assembling the common execution payload.
+pub comb merge<width, intBits, fpBits, pregBits>(
+  brType:Unsigned(bits=width*4),
+  dstType:Unsigned(bits=width*2),
+  fp1:Unsigned(bits=width*fpBits),
+  fp2:Unsigned(bits=width*fpBits),
+  fp3:Unsigned(bits=width*fpBits),
+  fpBusy1:Unsigned(bits=width),
+  fpBusy2:Unsigned(bits=width),
+  fpBusy3:Unsigned(bits=width),
+  fpDst:Unsigned(bits=width*fpBits),
+  fpOld:Unsigned(bits=width*fpBits),
+  frs3En:Unsigned(bits=width),
+  int1:Unsigned(bits=width*intBits),
+  int2:Unsigned(bits=width*intBits),
+  intBusy1:Unsigned(bits=width),
+  intBusy2:Unsigned(bits=width),
+  intDst:Unsigned(bits=width*intBits),
+  intOld:Unsigned(bits=width*intBits),
+  logical1:Unsigned(bits=width*6),
+  predBusy:Unsigned(bits=width),
+  predDst:Unsigned(bits=width*pregBits),
+  randomDst:Unsigned(bits=width*pregBits),
+  sfb:Unsigned(bits=width),
+  src1Type:Unsigned(bits=width*2),
+  src2Type:Unsigned(bits=width*2),
+) -> (
+  busy1:Unsigned(bits=width),
+  busy2:Unsigned(bits=width),
+  busy3:Unsigned(bits=width),
+  busyPred:Unsigned(bits=width),
+  dst:Unsigned(bits=width*pregBits),
+  old:Unsigned(bits=width*pregBits),
+  src1:Unsigned(bits=width*pregBits),
+  src2:Unsigned(bits=width*pregBits),
+  src3:Unsigned(bits=width*pregBits),
+) {
+  dst      = 0
+  old      = 0
+  src1     = 0
+  src2     = 0
+  src3     = 0
+  busy1    = 0
+  busy2    = 0
+  busy3    = fpBusy3 & frs3En
+  busyPred = 0
+  for lane in 0..<width {
+    const d      = dstType#[(lane*2)..+2]
+    const a      = src1Type#[(lane*2)..+2]
+    const b      = src2Type#[(lane*2)..+2]
+    const branch = brType#[(lane*4)..+4] != 0
+    dst#[(lane*pregBits)..+pregBits]  = if d == 1 { fpDst#[(lane*fpBits)..+fpBits] }
+      elif d == 0 { intDst#[(lane*intBits)..+intBits] }
+      elif branch and sfb#[lane] != 0 { predDst#[(lane*pregBits)..+pregBits] }
+      else { randomDst#[(lane*pregBits)..+pregBits] }
+    old#[(lane*pregBits)..+pregBits]  = if d == 1 { fpOld#[(lane*fpBits)..+fpBits] } else { intOld#[(lane*intBits)..+intBits] }
+    src1#[(lane*pregBits)..+pregBits] = if a == 1 { fp1#[(lane*fpBits)..+fpBits] }
+      elif a == 0 { int1#[(lane*intBits)..+intBits] }
+      else { logical1#[(lane*6)..+6] }
+    src2#[(lane*pregBits)..+pregBits] = if b == 1 { fp2#[(lane*fpBits)..+fpBits] } else { int2#[(lane*intBits)..+intBits] }
+    src3#[(lane*pregBits)..+pregBits] = fp3#[(lane*fpBits)..+fpBits]
+    busy1#[lane]                      = (intBusy1#[lane] & U1(a == 0)) | (fpBusy1#[lane] & U1(a == 1))
+    busy2#[lane]                      = (intBusy2#[lane] & U1(b == 0)) | (fpBusy2#[lane] & U1(b == 1))
+    busyPred#[lane]                   = predBusy#[lane] & sfb#[lane] & U1(not branch)
+  }
+}

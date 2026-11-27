@@ -1,0 +1,176 @@
+// Serialized TileLink-C memory manager. A line has at most one caching client.
+// Recalling to N before transferring ownership avoids a sharer vector per line.
+// A and ReleaseAck FIFOs let C and E drain while an acquire waits for a probe.
+const tl = import("mixed_packet")
+const layout = import("mixed_layout")
+pub const sinkId = 7
+
+comb meta(target:U5, channel:U3, op:U4, size:U4, param:U3, source:U3, sink:U3) -> (bits:U40) {
+  bits = (layout.HOST << 35) | (target << 30) | (channel << 27) | (op << 23) | (size << 19) | (param << 16) | (source << 13) | (sink << 10) | (255 << 2)
+}
+
+pub mod CoherentRAM<lines=64>(clock:Clock, reset:Reset, valid:Bool, packet:U40, addr:U32, data:U64, readyOut:Bool) ->
+  (ready:Bool@[], validOut:Bool@[], packetOut:U40@[], addrOut:U32@[], dataOut:U64@[]) {
+  cassert(lines >= 2 and lines == 1 << std.clog2(lines))
+  comptime const indexBits = std.clog2(lines)
+  reg words:[lines*8]U64:[ordering="old"] = nil
+  reg owned:Unsigned(bits=lines) = 0
+  reg owner:[lines]U5 = nil
+  reg requests:[512]U136 = nil
+  reg head:U10 = 0
+  reg tail:U10 = 0
+  reg acks:[64]U40 = nil
+  reg ackHead:U7 = 0
+  reg ackTail:U7 = 0
+  reg cBeat:[16]U4 = nil
+  reg cBurst:U16 = 0
+  reg putBeat:[128]U4 = nil
+  reg putBurst:U128 = 0
+
+  reg state:U3 = 0
+  reg beat:U4 = 0
+  // Rocket can acknowledge the first grant beat while later beats are still in flight.
+  reg earlyAck:Bool = false
+  reg victim:U5 = nil
+  reg send:Bool = false
+  reg payload:U40 = nil
+  reg address:U32 = nil
+  reg value:U64 = nil
+  validOut = send
+  packetOut = payload
+  addrOut = address
+  dataOut = value
+
+  const origin = packet#[35..+5]
+  const client = origin#[0..+4]
+  const chan = packet#[27..+3]
+  const opcode = packet#[23..+4]
+  const length = packet#[19..+4]
+  const src = packet#[13..+3]
+  const arrivingLine = addr#[6..+indexBits]
+  const queue = requests[head#[0..+9]]
+  const req = queue#[96..+40]
+  const loc = queue#[64..+32]
+  const body = queue#[0..+64]
+  const requester = req#[35..+5]
+  const command = req#[23..+4]
+  const size = req#[19..+4]
+  const source = req#[13..+3]
+  const line = loc#[6..+indexBits]
+  const wide = layout.BOOMS#[requester] != 0
+  const lgBeat = if wide { 3 } else { 2 }
+  const beats = if size > lgBeat { 1 << (size-lgBeat) } else { 1 }
+  const acquire = command == 6 or command == 7
+  const put = command <= 1
+  const slot = (requester << 3) | source
+  const writeBeat = if putBurst#[slot] != 0 { putBeat[slot] } else { 0 }
+  const offset = if put { writeBeat } else { beat }
+  const byteAddr = loc + (offset << lgBeat)
+  const wordIdx = byteAddr#[3..+(indexBits+3)]
+  const responseWord = words[wordIdx]
+  const canIssue = not send or readyOut
+  if readyOut { send = false }
+  ready = if chan == tl.A { (tail-head)#[0..+10] < 512 }
+          elif chan == tl.C and opcode >= 6 { (ackTail-ackHead)#[0..+7] < 64 } else { true }
+
+  const grantAck = valid and ready and chan == tl.E
+  if valid and ready {
+    if chan == tl.A {
+      requests[tail#[0..+9]] = (packet << 96) | (addr << 64) | data
+      wrap tail = tail+1
+    } elif chan == tl.C {
+      const dirty = opcode == 5 or opcode == 7
+      const release = opcode == 6 or opcode == 7
+      const cb = if cBurst#[client] != 0 { cBeat[client] } else { 0 }
+      const wideClient = layout.BOOMS#[origin] != 0
+      const cWord = (arrivingLine << 3) | (if wideClient { cb } else { cb >> 1 })
+      if dirty {
+        if wideClient { words[cWord] = data } else {
+          mut merged = words[cWord]
+          merged#[(cb%2)*32..+32] = data#[0..+32]
+          words[cWord] = merged
+        }
+      }
+      if not dirty or cb == (if wideClient { 7 } else { 15 }) {
+        cBurst#[client] = 0
+        const shrink = packet#[16..+3]
+        const dropped = shrink == 1 or shrink == 2 or shrink == 5
+        if dropped and owner[arrivingLine] == origin { owned#[arrivingLine] = 0 }
+        if release {
+          assert((ackTail-ackHead)#[0..+7] < 64, "release acknowledgement FIFO full")
+          acks[ackTail#[0..+6]] = meta(target=origin, channel=tl.D, op=6, size=length, param=0, source=src, sink=0)
+          wrap ackTail = ackTail+1
+        } else {
+          assert(dropped and state == 2 and victim == origin and arrivingLine == line, "unexpected probe acknowledgement")
+          state = 3
+        }
+      } else {
+        cBurst#[client] = 1
+        cBeat[client] = (cb+1)#[0..+4]
+      }
+    } elif chan == tl.E {
+      assert((state == 4 or (state == 3 and acquire and beat != 0)) and requester == origin and packet#[10..+3] == sinkId, "unexpected grant acknowledgement")
+      if state == 4 {
+        wrap head = head+1
+        state = 0
+      } else { earlyAck = true }
+    }
+  }
+  // Avoid inserting a ReleaseAck into the middle of a multibeat GrantData.
+  if canIssue and ackHead != ackTail and (state != 3 or beat == 0) {
+    payload = acks[ackHead#[0..+6]]
+    address = 0
+    value = 0
+    send = true
+    wrap ackHead = ackHead+1
+  } elif state == 0 and head != tail {
+    beat = 0
+    if owned#[line] != 0 and (owner[line] != requester or not acquire) {
+      victim = owner[line]
+      state = 1
+    } else { state = 3 }
+  } elif state == 1 and canIssue {
+    address = loc#[6..<32] << 6
+    value = 0
+    payload = meta(target=victim, channel=tl.B, op=6, size=6, param=2, source=0, sink=0)
+    send = true
+    state = 2
+  } elif state == 3 and canIssue {
+    assert(acquire or command == 4 or put, "unsupported SRAM request opcode")
+    if put {
+      mut merged:U64 = responseWord
+      for i in 0..<8 {
+        const lane = if wide { i } else { i % 4 }
+        if req#[2+lane] != 0 and (wide or (i/4) == byteAddr#[2]) {
+          merged#[i*8..+8] = body#[lane*8..+8]
+        }
+      }
+      words[wordIdx] = merged
+    }
+    if not put or writeBeat+1 == beats {
+      const op = if command == 6 { 5 } elif command == 7 { 4 } elif put { 0 } else { 1 }
+      payload = meta(target=requester, channel=tl.D, op=op, size=size, param=0, source=source, sink=if acquire { sinkId } else { 0 })
+      address = loc
+      value = if wide { responseWord } else { (responseWord >> (32*byteAddr#[2]))#[0..+32] }
+      send = true
+    }
+    if put {
+      putBeat[slot] = (writeBeat+1)#[0..+4]
+      putBurst#[slot] = U1(writeBeat+1 != beats)
+    }
+    if put or command == 7 or beat+1 == beats {
+      if acquire {
+        owner[line] = requester
+        owned#[line] = 1
+        if earlyAck or grantAck {
+          earlyAck = false
+          wrap head = head+1
+          state = 0
+        } else { state = 4 }
+      } else {
+        wrap head = head+1
+        state = 0
+      }
+    } else { wrap beat = beat+1 }
+  }
+}

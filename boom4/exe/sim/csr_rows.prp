@@ -1,0 +1,335 @@
+const csr = import("../pyrope/CSRFile.CSRFile")
+
+pub mod csr_rows<pgLevels=3, useNMI=false, useRVE=false, clockGate=false, dcacheClockGate=false, useCompressed=true, misaWritable=false, useDebug=true, nLocalInterrupts=0, mcontextWidth=0, scontextWidth=0, haveBasicCounters=true, nPerfCounters=2, mtvecInit=0, mtvecWritable=true>(
+  clock:Clock,
+  reset:U1,
+  instructions:U160,
+  retire:U3,
+  pc:Unsigned(bits=13+9*pgLevels)=0, nmi:U1=0, localInterrupts:U48=0, debugLine:U1=0, trap:U1=0, trapCause:U64=0,
+  increments:Unsigned(bits=nPerfCounters+1)=0, address:U12=0xb02, cmd:U3=0, data:U64=0,
+) -> (vector:Unsigned(bits=13+9*pgLevels)@[], inDebug:U1@[], interrupt:U1@[], cause:U64@[], flush:U5@[], fpFault:U5@[], instret:U64@[], readFault:U5@[], writeFault:U5@[]) {
+  const file = csr<pgLevels=pgLevels, useNMI=useNMI, useRVE=useRVE, clockGate=clockGate, dcacheClockGate=dcacheClockGate, useCompressed=useCompressed, misaWritable=misaWritable, useDebug=useDebug, nLocalInterrupts=nLocalInterrupts, mcontextWidth=mcontextWidth, scontextWidth=scontextWidth, haveBasicCounters=haveBasicCounters, width=5, nPerfCounters=nPerfCounters, mtvecInit=mtvecInit, mtvecWritable=mtvecWritable>(
+    clock=clock,
+    io_ungated_clock=clock,
+    localInterrupts=localInterrupts#[0..+(if nLocalInterrupts > 0 { nLocalInterrupts } else { 1 })],
+    reset=reset,
+    io_hartid=0,
+    io_cause=trapCause,
+    increments=increments,
+    io_decode_0_inst=instructions,
+    io_exception=trap,
+    io_fcsr_flags_bits=0,
+    io_fcsr_flags_valid=0,
+    io_interrupts_debug=debugLine,
+    io_interrupts_meip=0,
+    io_interrupts_msip=0,
+    io_interrupts_mtip=0,
+    io_interrupts_seip=0,
+    nmiRequest=nmi, nmiVector=0x2001, nmiExceptionVector=0x3001, io_pc=pc,
+    io_retire=retire,
+    address=address,
+    io_rw_cmd=cmd,
+    io_rw_wdata=data,
+    io_set_fs_dirty=0,
+    io_tval=0,
+  )
+  vector = file.io_evec
+  inDebug = file.io_status_debug
+  interrupt = file.io_interrupt
+  cause = file.io_interrupt_cause
+  instret    = file.io_rw_rdata
+  readFault  = file.io_decode_0_read_illegal
+  writeFault = file.io_decode_0_write_illegal
+  flush      = file.io_decode_0_write_flush
+  fpFault    = file.io_decode_0_fp_illegal
+}
+
+test csr_rows.independent {
+  mut d = csr_rows
+  // mtvec, frm, dpc, mhartid, mscratch with FS disabled in machine mode.
+  const row = (0x340 << 148) | (0xf14 << 116) | (0x7b1 << 84) | (2 << 52) | (0x305 << 20)
+  mut retired = 0
+  tick 160 {
+    d.increments = 0
+    d.address = 0xb02
+    d.cmd = 0
+    d.data = 0
+    d.reset = U1(clock < 2)
+    const amount = clock%6
+    d.retire = amount
+    if clock >= 2 {
+      retired = retired + amount
+    }
+    const shift = if clock == 6 { 32 } else { 0 }
+    d.instructions = ((row << shift) | (row >> (160 - shift)))#[0..+160]
+    step
+    if clock >= 2 {
+      assert(d.instret == retired, "minstret counts every lane across low-counter wrap")
+      if clock == 6 {
+        assert(d.readFault == 12 and d.writeFault == 16 and d.flush == 30, "lane rotation preserves independent flags")
+      } else {
+        assert(d.readFault == 6 and d.writeFault == 8 and d.flush == 15, "five simultaneous CSR access checks")
+      }
+      assert(d.fpFault == 31, "shared FS state reaches every decoder")
+    }
+  }
+}
+
+
+pub mod vector_pair(clock:Clock, reset:U1, cmd:U3) -> (fixed:U64@[], changing:U64@[]) {
+  const a = csr_rows<mtvecInit=0x80000100, mtvecWritable=false>(clock=clock, reset=reset, address=0x305,
+    cmd=cmd, data=0x80000200, retire=0, instructions=0)
+  const b = csr_rows<mtvecInit=0x80000100>(clock=clock, reset=reset, address=0x305,
+    cmd=cmd, data=0x80000200, retire=0, instructions=0)
+  fixed = a.instret
+  changing = b.instret
+}
+
+test vector_pair.trap_vector {
+  mut d = vector_pair
+  tick 8 {
+    d.reset = U1(clock < 2)
+    d.cmd = if clock == 3 { 5 } else { 0 }
+    step
+    assert(d.fixed == 0x80000100, "fixed trap vector holds through a CSR write")
+    const expected = if clock >= 3 { 0x80000200 } else { 0x80000100 }
+    assert(d.changing == expected, "writable trap vector")
+  }
+}
+
+pub mod counter_sizes(clock:Clock, reset:U1, address:U12, cmd:U3, data:U64, inc:U29)
+    -> (none:U64@[], six:U64@[], allCounters:U64@[]) {
+  const a = csr_rows<nPerfCounters=0>(clock, reset, address, cmd, data, instructions=0, retire=0)
+  const b = csr_rows<nPerfCounters=6>(clock, reset, address, cmd, data, increments=inc#[0..+6], instructions=0, retire=0)
+  const c = csr_rows<nPerfCounters=29>(clock, reset, address, cmd, data, increments=inc, instructions=0, retire=0)
+  none = a.instret
+  six = b.instret
+  allCounters = c.instret
+}
+
+test counter_sizes.count_and_inhibit {
+  mut d = counter_sizes
+  tick 150 {
+    d.reset = U1(clock < 2)
+    d.inc = if clock >= 4 { (1 << 28) | (1 << 5) } else { 0 }
+    d.address = if clock == 2 or clock == 140 { 0xb1f } elif clock == 80 or clock == 81 { 0x320 }
+                elif clock == 141 or clock == 142 { 0x328 } else { 0xb08 }
+    d.cmd = if clock == 2 or clock == 3 or clock == 80 or clock == 141 { 5 } else { 0 }
+    d.data = if clock == 80 { 1 << 8 } elif clock == 141 { 0xffff } else { 0 }
+    step
+    if clock == 81 { assert(d.six == 256 and d.allCounters == 256 and d.none == 0, "implemented inhibit mask") }
+    if clock == 139 { assert(d.six == 77 and d.allCounters == 77, "sixth counter crosses 64 and stops") }
+    if clock == 140 { assert(d.allCounters == 137 and d.six == 0, "highest architectural counter advances") }
+    if clock == 142 { assert(d.allCounters == 0x3f03 and d.six == 0x3f03 and d.none == 0, "sixth event selector") }
+  }
+}
+
+
+pub mod counterless(clock:Clock, reset:U1, index:U4) -> (data:U64@[], denied:U1@[]) {
+  const addresses = (0x306, 0x320, 0x323, 0xb00, 0xb02, 0xb03, 0xc00, 0xc02, 0xc03, 0xf14)
+  const address = addresses[index%10]
+  const result = csr_rows<haveBasicCounters=false>(clock, reset, address, cmd=5, data=511, retire=1,
+      instructions=address << 20)
+  denied = result.readFault#[0]
+  data = result.instret
+}
+
+test counterless.access {
+  mut dut = counterless
+  tick 12 {
+    dut.reset = U1(clock < 2)
+    dut.index = (clock+8)%10
+    step
+    if clock >= 2 {
+      assert(dut.denied == U1(clock < 11) and dut.data == 0, "counter CSRs disappear while mhartid stays accessible")
+    }
+  }
+}
+
+pub mod contexts(clock:Clock, reset:U1, address:U12, cmd:U3, data:U64)
+    -> (value:U64@[], present:U5@[], absent:U5@[]) {
+  const row = (0x5a8 << 52) | (0x7a8 << 20)
+  const configured = csr_rows<mcontextWidth=5, scontextWidth=17>(clock, reset, address, cmd, data, instructions=row, retire=0)
+  const disabled = csr_rows(clock, reset, address, cmd, data, instructions=row, retire=0)
+  value = configured.instret
+  present = configured.readFault
+  absent = disabled.readFault
+}
+
+test contexts.access {
+  mut d = contexts
+  tick 10 {
+    d.reset = U1(clock < 2)
+    d.address = if (clock & 1) == 0 { 0x7a8 } else { 0x5a8 }
+    d.cmd = if clock == 2 or clock == 3 { 5 } elif clock == 4 { 7 } elif clock == 5 { 6 } else { 0 }
+    d.data = if clock == 2 { 0xff } elif clock == 3 { 0x40001 } elif clock == 4 { 6 } else { 0x10008 }
+    step
+    if clock >= 2 {
+      assert((d.present & 3) == 0 and (d.absent & 3) == 3)
+      const expected = if clock == 2 { 31 } elif clock == 3 { 1 } elif (clock & 1) == 0 { 25 } else { 0x10009 }
+      assert(d.value == expected)
+    }
+  }
+}
+
+pub mod local_irqs(clock:Clock, reset:U1, address:U12, cmd:U3, data:U64, lines:U48)
+    -> (readback:U64@[], cause:U64@[], irq:U1@[]) {
+  const file = csr_rows<nLocalInterrupts=48>(clock, reset, address, cmd, data, localInterrupts=lines, instructions=0, retire=0)
+  readback = file.instret
+  irq = file.interrupt
+  cause = file.cause
+}
+
+test local_irqs.priority {
+  mut d = local_irqs
+  tick 55 {
+    d.reset = U1(clock < 2)
+    d.address = if clock == 2 { 0x300 } elif clock == 3 { 0x304 } elif clock == 52 { 0x303 } else { 0x344 }
+    d.cmd = if clock == 2 or clock == 3 or clock == 52 { 5 } else { 0 }
+    d.data = if clock == 2 { 8 } else { 0xffffffffffffffff }
+    const index = if clock >= 4 and clock < 52 { clock-4 } else { 0 }
+    d.lines = ((1 << index) | 1)#[0..+48]
+    step
+    if clock >= 4 and clock < 52 {
+      assert(d.irq == 1 and d.cause == (0x8000000000000000 | (16+index)))
+      assert(d.readback == (((1 << index) | 1) << 16))
+    } elif clock >= 52 {
+      assert(d.irq == 0, "a delegated interrupt is masked in machine mode")
+    }
+  }
+}
+
+pub mod debug_pair(clock:Clock, reset:U1, request:U1, trap:U1)
+    -> (irq:U2@[], active:U2@[], denied:U2@[]) {
+  const inst = 0x7b100073
+  const cause = 0x800000000000000e
+  const withDebug = csr_rows(clock, reset, instructions=inst, retire=0, debugLine=request, trap, trapCause=cause)
+  const without = csr_rows<useDebug=false>(clock, reset, instructions=inst, retire=0, debugLine=request, trap, trapCause=cause)
+  irq = (without.interrupt << 1) | withDebug.interrupt
+  active = (without.inDebug << 1) | withDebug.inDebug
+  denied = (without.readFault#[0] << 1) | withDebug.readFault#[0]
+}
+
+test debug_pair.debug_entry {
+  mut d = debug_pair
+  tick 10 {
+    d.reset = U1(clock < 2)
+    d.request = U1(clock == 3)
+    d.trap = U1(clock == 4)
+    step
+    if clock == 3 { assert(d.irq == 1 and d.denied == 3) }
+    elif clock >= 4 { assert(d.active == 1 and d.denied == 2) }
+  }
+}
+
+pub mod misa_pair(clock:Clock, reset:U1, pc:U40, address:U12, data:U64, cmd:U3)
+    -> (fixed:U64@[], writable:U64@[]) {
+  const a = csr_rows(clock, reset, pc, address, cmd, data, instructions=0, retire=0)
+  const b = csr_rows<misaWritable=true>(clock, reset, pc, address, cmd, data, instructions=0, retire=0)
+  fixed = a.instret
+  writable = b.instret
+}
+
+test misa_pair.extensions {
+  mut d = misa_pair
+  tick 12 {
+    d.reset = U1(clock < 2)
+    d.address = if clock == 2 or clock == 6 or clock == 9 { 0x341 } else { 0x301 }
+    d.pc = if clock == 3 { 2 } else { 0 }
+    d.cmd = if clock == 2 or clock == 3 or clock == 4 or clock == 7 { 5 } else { 0 }
+    d.data = if clock == 2 { 0x86 } elif clock == 7 { 0xffffffffffffffff } else { 8 }
+    step
+    if clock == 2 or clock == 9 { assert(d.writable == 0x86) }
+    elif clock == 6 { assert(d.fixed == 0x86 and d.writable == 0x84) }
+    elif clock == 4 or clock == 5 { assert(d.writable == 0x8000000000140100) }
+    elif clock >= 2 { assert(d.fixed == 0x800000000014112d and d.writable == d.fixed) }
+  }
+}
+
+pub mod platform(clock:Clock, reset:U1, address:U12, cmd:U3, data:U64)
+    -> (plain:U64@[], gated:U64@[]) {
+  const a = csr_rows(clock, reset, address, cmd, data, instructions=0, retire=0)
+  const b = csr_rows<clockGate=true, dcacheClockGate=true, useCompressed=false, useRVE=true>(
+      clock, reset, address, cmd, data, instructions=0, retire=0)
+  plain = a.instret
+  gated = b.instret
+}
+
+test platform.controls {
+  mut d = platform
+  tick 8 {
+    d.reset = U1(clock < 2)
+    d.address = if clock == 2 { 0x301 } else { 0x7c1 }
+    d.cmd = if clock == 4 or clock == 5 { 5 } else { 0 }
+    d.data = if clock == 4 { 9 } else { 0xffffffffffffffff }
+    step
+    if clock == 2 { assert((d.gated ^ d.plain) == 0x114) }
+    elif clock == 3 { assert(d.gated == 7 and d.plain == 0) }
+    elif clock == 4 { assert(d.gated == 9 and d.plain == 8) }
+    elif clock > 4 { assert(d.gated == 15 and d.plain == 8) }
+  }
+}
+
+pub mod nmi_rows(clock:Clock, reset:U1, request:U1, debug:U1, trap:U1, cmd:U3, address:U12, data:U64)
+    -> (irq:U1@[], code:U64@[], value:U64@[], vector:U40@[], illegal:U5@[]) {
+  const file = csr_rows<useNMI=true>(clock, reset, nmi=request, debugLine=debug, trap, trapCause=0xc00000000000000d,
+      pc=0x5556, cmd, address, data, instructions=0x35302073, retire=0)
+  irq = file.interrupt
+  code = file.cause
+  value = file.instret
+  vector = file.vector
+  illegal = file.readFault
+}
+
+test nmi_rows.resumable {
+  mut d = nmi_rows
+  tick 17 {
+    d.reset = U1(clock < 2)
+    d.request = U1(clock >= 2)
+    d.debug = U1(clock == 3)
+    d.trap = U1(clock == 5)
+    d.cmd = if clock == 10 { 5 } elif clock == 12 { 4 } else { 0 }
+    d.address = if clock == 7 { 0x351 } elif clock == 8 { 0x352 } elif clock == 10 or clock == 11 { 0x350 }
+        elif clock == 12 { 0x702 } else { 0x353 }
+    d.data = 0x32f
+    step
+    if clock >= 2 {
+      assert(d.illegal#[0] == 0)
+      if clock == 3 { assert(d.code == 0x800000000000000e) }
+      elif clock < 5 or clock >= 12 { assert(d.irq == 1 and d.code == 0xc00000000000000d) }
+      else { assert(d.irq == 0) }
+      if clock == 4 { assert(d.vector == 0x2000 and d.value == 0x1808) }
+      elif clock == 6 { assert(d.value == 0x1800) }
+      elif clock == 7 { assert(d.value == 0x5556) }
+      elif clock == 8 { assert(d.value == 0x8000000000000002) }
+      elif clock == 11 { assert(d.value == 0x32f) }
+      elif clock == 12 { assert(d.vector == 0x5556) }
+    }
+  }
+}
+
+pub mod satp_modes(clock:Clock, reset:U1, write:U1, mode:U4) -> (sv39:U64@[], sv48:U64@[], sv57:U64@[]) {
+  const data = (mode << 60) | mode
+  const cmd = if write != 0 { 5 } else { 0 }
+  const a = csr_rows<pgLevels=3>(clock, reset, instructions=0, retire=0, address=0x180, cmd, data)
+  const b = csr_rows<pgLevels=4>(clock, reset, instructions=0, retire=0, address=0x180, cmd, data)
+  const c = csr_rows<pgLevels=5>(clock, reset, instructions=0, retire=0, address=0x180, cmd, data)
+  sv39 = a.instret
+  sv48 = b.instret
+  sv57 = c.instret
+}
+test satp_modes.warl {
+  mut d = satp_modes
+  tick 12 {
+    d.reset = U1(clock < 2)
+    d.write = U1(clock >= 2 and clock%2 == 0)
+    d.mode = (7+clock/2)#[0..+4]
+    step
+    if clock >= 3 and clock%2 != 0 {
+      const mode = 7+clock/2
+      const b = if mode < 9 { mode } else { 9 }
+      const c = if mode < 10 { mode } else { 10 }
+      assert(d.sv39 == (8 << 60) + 8 and d.sv48 == (b << 60) + b and d.sv57 == (c << 60) + c)
+    }
+  }
+}

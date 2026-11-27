@@ -1,0 +1,35 @@
+const array = import("../pyrope/L1MetadataArray.L1MetadataArray")
+pub mod cache_metadata(clock:Clock, reset:U1, read:U1, readSet:U7, write:U1, writeSet:U7,
+    way:U3, mask:U8, tag:U19, state:U2) -> (ready:U1@[], readReady:U1@[], tagOut:U19@[], stateOut:U2@[]) {
+  const m = array<sets=128, ways=8, tagBits=19>(clock, reset, read, readSet, write, writeSet,
+    writeWays=mask, tag, state)
+  ready = m.writeReady
+  readReady = m.readReady
+  tagOut = m.tags#[(way*19)..+19]
+  stateOut = m.states#[(way*2)..+2]
+}
+test cache_metadata.sets_and_ways {
+  mut d = cache_metadata
+  tick 2184 {
+    d.reset = U1(clock == 0)
+    d.read = 1
+    const way = clock%8
+    const index = if clock >= 136 { ((clock-136)/8)%128 } else { 0 }
+    d.write = U1(clock >= 136 and clock < 1160)
+    d.writeSet = if clock >= 136 { index } else { 0 }
+    d.mask = 1 << way
+    d.tag = (7 << 16) | (index << 3) | way
+    d.state = 1 + way%3
+    const selected = clock%128
+    const w = if clock >= 1160 { ((clock-1160)/128)%8 } else { 0 }
+    d.way = w
+    d.readSet = selected
+    step
+    if clock < 128 { assert(d.ready == 0, "reset invalidates every cache set") }
+    if clock >= 136 and clock < 1160 { assert(d.ready != 0 and d.readReady == 0, "metadata write priority") }
+    if clock >= 1160 {
+      assert(d.tagOut == ((7 << 16) | (selected << 3) | w), "independent tag in every set and way")
+      assert(d.stateOut == 1+w%3, "coherence state follows tag")
+    }
+  }
+}

@@ -1,0 +1,42 @@
+const ports = import("../pyrope/ExecutionPorts")
+
+pub comb execution_ports(valid:U8, source:U8) -> (addresses:U12, data:U64, first:U8, ready:U8) {
+  const ftq = ports.fetchReads<bits=6, requests=8>(
+    valid=valid,
+    tags=(61 << 42) | (56 << 36) | (51 << 30) | (46 << 24) | (41 << 18) | (36 << 12) | (31 << 6) | 26,
+  )
+  ready     = ftq.ready
+  first     = ftq.first
+  addresses = ftq.addresses
+  data      = ports.operand<bits=8, ports=5>(
+    source=source,
+    file=0xff,
+    valid=valid#[0..+5],
+    destinations=0x0302030201,
+    data=(16 << 256) | (8 << 192) | (4 << 128) | (2 << 64) | 1,
+  )
+}
+
+test execution_ports.all_masks {
+  mut d = execution_ports
+  tick 1024 {
+    const v   = clock#[0..+8]
+    const src = clock#[8..+2]
+    d.valid  = v
+    d.source = src
+    step
+    const low  = v & -v
+    const rest = v ^ low
+    const high = rest & -rest
+    const tag0 = if low == 0 { 0 }
+      else { 26 + (U1(low > 1) + U1(low > 2) + U1(low > 4) + U1(low > 8) + U1(low > 16) + U1(low > 32) + U1(low > 64))*5 }
+    const tag1 = if high == 0 { 0 }
+      else { 26 + (U1(high > 1) + U1(high > 2) + U1(high > 4) + U1(high > 8) + U1(high > 16) + U1(high > 32) + U1(high > 64))*5 }
+    const hits = v & (if src == 1 { 1 } elif src == 2 { 10 } elif src == 3 { 20 } else { 0 })
+    assert(
+      d.first == low and d.ready == (low | high) and d.addresses == (tag0 | (tag1 << 6)),
+      "oldest two requests retain full FTQ tags",
+    )
+    assert(d.data == (if hits == 0 { 255 } else { hits }), "writeback data and register fallback")
+  }
+}

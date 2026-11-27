@@ -1,0 +1,24 @@
+// One-entry pipeline queue. The prediction queue also flows through while empty.
+pub mod FetchQueue<T, flow=false>(
+  clock:Clock,
+  deqReady:U1,
+  enq:T,
+  enqValid:U1,
+  reset:Reset,
+) -> (deq:T@[], deqValid:U1@[], enqReady:U1@[]) {
+  reg full:U1:[reset_pin=reset] = 0
+  reg stored:T                  = nil
+  enqReady = (1 ^ full) | deqReady
+  deqValid = full | (if flow { enqValid } else { 0 })
+  deq      = if flow and full == 0 { enq } else { stored }
+  const bypass = flow and full == 0 and deqReady != 0
+  const write  = enqValid != 0 and enqReady != 0 and not bypass
+  if write {
+    stored = enq
+  }
+  if write {
+    full = 1
+  } elif deqReady != 0 {
+    full = 0
+  }
+}

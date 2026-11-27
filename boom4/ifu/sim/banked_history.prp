@@ -1,0 +1,38 @@
+const advance = import("../pyrope/GlobalHistory.update")
+
+pub mod banked_history(branches:U8, lane:U3, flags:U8) -> (ok:Bool@[0]) {
+  const valid = flags#[0]
+  const taken = flags#[1]
+  const isBranch = flags#[2]
+  const currentMiss = flags#[3]
+  const pendingTaken = flags#[4]
+  const pendingMiss = flags#[5]
+  const last = flags#[6]
+  const prior:U8 = 0x93
+  const next = advance<width=8, banks=2, historyBits=8>(old=prior, branches=branches, valid=valid, lane=lane,
+    taken=taken, isBranch=isBranch, currentMiss=currentMiss, pendingTaken=pendingTaken, pendingMiss=pendingMiss, lastBank=last)
+
+  mut anyMiss:U2 = currentMiss
+  for i in 0..<8 {
+    if branches#[i] != 0 and (valid == 0 or i <= lane) and !(valid != 0 and i == lane and taken != 0 and isBranch != 0) {
+      anyMiss#[i/4] = 1
+    }
+  }
+  const onlyFirst = last != 0 or (valid != 0 and taken != 0 and lane < 4)
+  const bank = if onlyFirst { 0 } else { 1 }
+  const prev = if pendingTaken != 0 { 0x27 } elif pendingMiss != 0 { 0x26 } else { prior }
+  const expected = if !onlyFirst and anyMiss#[0] != 0 { (prev << 1)#[0..+8] } else { prev }
+  ok = next.history == expected and next.nextMiss == anyMiss#[bank] and
+       next.nextTaken == U1(valid != 0 and taken != 0 and isBranch != 0 and lane/4 == bank)
+}
+
+test banked_history.outcomes {
+  mut dut = banked_history
+  tick 262144 {
+    dut.branches = clock#[0..+8]
+    dut.lane = clock#[8..+3]
+    dut.flags = clock#[11..+7]
+    step
+    assert(dut.ok, "global history or pending bank outcome mismatch")
+  }
+}

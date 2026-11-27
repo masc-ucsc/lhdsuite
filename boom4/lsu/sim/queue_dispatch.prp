@@ -1,0 +1,43 @@
+const queue = import("../pyrope/QueueDispatch.QueueDispatch")
+pub mod queue_dispatch(
+  wrapped:U1,
+  slot:U5,
+  valid:U5,
+  occupied:U24,
+) -> (allocated:U24@[], compactFull:U5@[], fixedFull:U5@[], nextTag:U6@[], tags:U30@[]) {
+  const tail:U6 = (wrapped << 5) | slot
+  const c       = queue<entries=24, lanes=5>(tail, occupied, valid, uses=29, exceptions=4)
+  const f       = queue<compact=false, entries=24, lanes=5>(tail, occupied, valid, uses=29, exceptions=4)
+  tags        = c.tags
+  compactFull = c.full
+  fixedFull   = f.full
+  allocated   = c.allocated
+  nextTag     = c.nextTail
+}
+
+test queue_dispatch.rows {
+  mut d = queue_dispatch
+  tick 1536 {
+    const slot    = clock%24
+    const epoch   = (clock/24)%2
+    const accepts = clock/48
+    const a       = accepts & 1
+    const b       = (accepts >> 3) & 1
+    const c       = (accepts >> 4) & 1
+    const linear  = epoch*24 + slot
+    d.wrapped  = epoch
+    d.slot     = slot
+    d.valid    = accepts
+    d.occupied = 1 << ((slot + 2)%24)
+    step
+    const t0  = slot | (epoch << 5)
+    const t1  = ((linear + a)%24) | ((((linear + a)/24)%2) << 5)
+    const t4  = ((linear + a + b)%24) | ((((linear + a + b)/24)%2) << 5)
+    const end = ((linear + a + b + c)%24) | ((((linear + a + b + c)/24)%2) << 5)
+    assert(d.tags == (t0 | (t1 << 6) | (t1 << 12) | (t1 << 18) | (t4 << 24)), "each lane sees the accepted prefix")
+    assert(d.nextTag == end, "next tag wraps at 24 and toggles its generation")
+    assert(d.compactFull == 16 and d.fixedFull == 4, "compact and fixed lookahead include stalled lanes")
+    const mask = (a << slot) | (b << ((slot + a)%24)) | (c << ((slot + a + b)%24))
+    assert(d.allocated == mask, "only accepted non-exception users allocate")
+  }
+}

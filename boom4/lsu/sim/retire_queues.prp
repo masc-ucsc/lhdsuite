@@ -1,0 +1,29 @@
+const retire = import("../pyrope/QueueDispatch.retire")
+
+pub mod retire_queues(loadHead:U5, storeHead:U6, valid:U5) -> (loads:U12@[], stores:U24@[], nextLoad:U5@[], nextStore:U6@[]) {
+  const row = retire<loadEntries=12, storeEntries=24, lanes=5>(loadHead, storeHead, valid, loads=21, stores=26)
+  loads     = row.loadMask
+  stores    = row.storeMask
+  nextLoad  = row.nextLoad
+  nextStore = row.nextStore
+}
+
+test retire_queues.exhaustive {
+  mut d = retire_queues
+  tick 36864 {
+    const l = clock%24
+    const s = (clock/24)%48
+    const v = clock/(24*48)
+    d.loadHead = (l%12) | ((l/12) << 4)
+    d.storeHead = (s%24) | ((s/24) << 5)
+    d.valid = v
+    step
+    const load = l + v#[0] + v#[2] + v#[4]
+    const store = s + v#[1] + v#[3] + v#[4]
+    const lm = (v#[0] << (l%12)) | (v#[2] << ((l + v#[0])%12))
+    const sm = (v#[1] << (s%24)) | (v#[3] << ((s + v#[1])%24)) | (v#[4] << ((s + v#[1] + v#[3])%24))
+    assert(d.loads == lm and d.stores == sm, "retirement masks count accepted users in program order")
+    assert(d.nextLoad == ((load%12) | (((load/12)%2) << 4)), "load queue wraps at twelve")
+    assert(d.nextStore == ((store%24) | (((store/24)%2) << 5)), "store queue wraps at twenty-four")
+  }
+}

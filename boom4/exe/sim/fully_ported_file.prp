@@ -1,0 +1,34 @@
+const file = import("../pyrope/FullyPortedFile.FullyPortedFile")
+
+pub mod fully_ported_file(clock:Clock, write:U5, reversed:U1) -> (data:U40@[]) {
+  const forward = (47 << 24) | (34 << 18) | (27 << 12) | (13 << 6) | 1
+  const reverse = (1 << 24) | (13 << 18) | (27 << 12) | (34 << 6) | 47
+  data = file<bits=8, entries=48, reads=5, writes=5>(
+    clock=clock,
+    write=write,
+    writeAddr=forward,
+    addr=if reversed != 0 { reverse } else { forward },
+    writeData=if reversed != 0 { 0x123456789a } else { 0xfedcba9876 },
+  )
+}
+
+test fully_ported_file.rows {
+  mut d = fully_ported_file
+  tick 8 {
+    d.write    = if clock == 1 { 31 } elif clock == 4 { 0ub01010 } else { 0 }
+    d.reversed = U1(clock >= 3 and clock <= 5)
+    step
+    if clock == 2 {
+      assert(d.data == 0xfedcba9876, "all five writes survived")
+    }
+    if clock == 3 {
+      assert(d.data == 0x7698badcfe, "independent read addresses")
+    }
+    if clock == 5 {
+      assert(d.data == 0x7678ba34fe, "masked writes reach the requested ports")
+    }
+    if clock == 6 {
+      assert(d.data == 0xfe34ba7876, "independent data and address per lane")
+    }
+  }
+}

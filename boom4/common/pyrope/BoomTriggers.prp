@@ -1,0 +1,127 @@
+comb hits<W>(address:Unsigned(bits=W), mode:U2, value:Unsigned(bits=W)) -> (hit:U1) {
+  mut mask:U4 = 0
+  mask#[0] = mode#[0]
+  for bit in 1..<4 {
+    mask#[bit] = mask#[bit - 1] & address#[bit - 1]
+  }
+  hit = match mode {
+    == 2 { U1(value >= address) }
+    == 3 { U1(value < address) }
+    else { U1((value | mask) == (address | mask)) }
+  }
+}
+
+// Each row carries the programmed virtual address, control bits and context/privilege match.
+pub comb lookup<count, vaddrBits=39>(table:Unsigned(bits=(vaddrBits+17)*count+1), value:Unsigned(bits=vaddrBits+1), access:U3)
+    -> (exception:U3, enterDebug:U3) {
+  exception = 0
+  enterDebug = 0
+  mut chain:U3 = 7
+  for i in 0..<count {
+    const row = table#[((vaddrBits+17)*i)..+(vaddrBits+17)]
+    const flags = row#[vaddrBits..+16]
+    const hit = hits<W=vaddrBits>(address=row#[0..+vaddrBits], mode=flags#[7..+2], value=value#[0..+vaddrBits])
+    const matched = if (hit & row#[vaddrBits+16]) != 0 { flags#[0..+3] & access } else { 0 }
+    if flags#[11] != 0 { chain = matched }
+    else {
+      const fire:U3 = matched & chain
+      const action = flags#[12..+3]
+      exception = (exception & ~fire) | (if action == 0 { fire } else { 0 })
+      enterDebug = (enterDebug & ~fire) | (if action == 1 { fire } else { 0 })
+      chain = 7
+    }
+  }
+}
+
+pub mod registers<count=0, machineBits=0, supervisorBits=0, watch=false, vaddrBits=39>(clk:Clock, rst:Reset,
+    cmd:U3, data:U64, debug:U1, index:U12, privilege:U2, mcontext:U64, scontext:U64)
+    -> (read:U64@[], table:Unsigned(bits=(vaddrBits+17)*count+1)@[]) {
+  read = 0
+  table = 0
+  if count > 0 {
+    comptime const idBits = if count == 1 { 1 } else { std.clog2(count) }
+    comptime const mSelect = 50
+    comptime const mMask = ((1 << machineBits) - 1) & 0x1fff
+    comptime const sMask = ((1 << supervisorBits) - 1) & 0x3ffffffff
+    comptime const extraMask = (mMask << (mSelect + 1)) | (U1(machineBits > 0) << mSelect) | (sMask << 2) | U1(supervisorBits > 0)
+    wire contextHits:Unsigned(bits=count) = nil
+    wire contextData:U64 = nil
+    wire id:Unsigned(bits=idBits) = nil
+    reg control:[count]U16:[clock_pin=clk, ordering="old"] = nil
+    reg address:[count]Unsigned(bits=vaddrBits):[clock_pin=clk, ordering="old"] = nil
+    const write = cmd >= 5
+    read = if index == 0x7a0 { id } elif index == 0x7a3 { contextData } else { 0 }
+    for i in 0..<count {
+      const flags = control[i]
+      const enables = flags#[3..<7]
+      const enabled = ~debug & enables#[privilege] & contextHits#[i]
+      table#[((vaddrBits+17)*i)..+(vaddrBits+17)] = (enabled << (vaddrBits+16)) | (flags << vaddrBits) | address[i]
+      if id == i {
+        if index == 0x7a1 {
+          read = (2 << (64 - 4)) | (flags#[15] << (64 - 5)) | (4 << (64 - 11)) | flags#[0..<15]
+        } elif index == 0x7a2 {
+          read = address[i]#sext[0..<vaddrBits]#[0..<64]
+        }
+      }
+    }
+    const value = match cmd#[0..<2] {
+      == 2 { read | data }
+      == 3 { read & ~data }
+      else { data }
+    }
+    if count > 1 {
+      reg selected:Unsigned(bits=idBits):[clock_pin=clk] = nil
+      id = selected
+      if rst {
+        selected = 0
+      } elif write and index == 0x7a0 {
+        selected = value#[0..<idBits]
+      }
+    } else {
+      id = 0
+    }
+    if extraMask != 0 {
+      reg extra:[count]U64:[clock_pin=clk, ordering="old"] = nil
+      mut matches:Unsigned(bits=count) = 0
+      mut selectedTag:U64 = 0
+      for i in 0..<count {
+        const tag = extra[i]
+        const mHit = tag#[mSelect] == 0 or ((tag >> (mSelect + 1)) & mMask) == (mcontext & mMask)
+        const sHit = tag#[0] == 0 or ((tag >> 2) & sMask) == (scontext & sMask)
+        matches#[i] = U1(mHit and sHit)
+        if id == i {
+          selectedTag = tag
+        }
+        if rst {
+          extra[i] = 0
+        } elif write and index == 0x7a3 and id == i and (control[i]#[15] == 0 or debug != 0) {
+          extra[i] = value & extraMask
+        }
+      }
+      contextHits = matches
+      contextData = selectedTag
+    } else {
+      contextHits = (1 << count) - 1
+      contextData = 0
+    }
+    for i in 0..<count {
+      const writable = write and id == i and (control[i]#[15] == 0 or debug != 0)
+      const prev = if i == 0 { i } else { i - 1 }
+      const next = if i + 1 < count { i + 1 } else { i }
+      const prevChain = i > 0 and control[prev]#[11] != 0
+      const dmode = value#[64 - 5] != 0 and debug != 0 and (!prevChain or control[prev]#[15] != 0)
+      const chain = i + 1 < count and value#[11] != 0 and !prevChain and control[next]#[11] == 0 and (dmode or control[next]#[15] == 0)
+      const requested = if watch { value#[12..<15] } else { value#[12] }
+      const action = if dmode or requested > 1 { requested } else { 0 }
+      const modes = value & 0x58
+      if rst {
+        control[i] = 0x40
+      } elif writable and index == 0x7a1 {
+        control[i] = (U1(dmode) << 15) | (action << 12) | (U1(chain) << 11) | (value & 0x187) | modes
+      }
+      if writable and index == 0x7a2 {
+        address[i] = value#[0..<vaddrBits]
+      }
+    }
+  }
+}

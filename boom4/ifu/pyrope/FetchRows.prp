@@ -1,0 +1,38 @@
+// Each accepted packet appends its enabled lanes in program order. The reader
+// can see a partial row immediately, but only advances past a complete row.
+pub mod FetchRows<entries, fetchWidth, decodeWidth, bits>(clock:Clock, reset:U1, clear:U1,
+    enq:U1, mask:Unsigned(bits=fetchWidth), packet:Unsigned(bits=fetchWidth*bits), deq:U1) ->
+    (ready:U1@[], valid:U1@[], lanes:Unsigned(bits=decodeWidth)@[], row:Unsigned(bits=decodeWidth*bits)@[]) {
+  cassert(entries > fetchWidth and decodeWidth > 0 and entries%decodeWidth == 0)
+  reg ram:[entries]Unsigned(bits=bits):[ordering="old"] = nil
+  reg head:Unsigned(bits=std.clog2(entries)) = nil
+  reg tail:Unsigned(bits=std.clog2(entries)) = nil
+  reg used:Unsigned(bits=std.clog2(entries+1)) = nil
+  ready = U1(used <= entries-fetchWidth)
+  valid = U1(used != 0)
+  lanes = 0
+  row = 0
+  for i in 0..<decodeWidth {
+    lanes#[i] = U1(used > i and reset == 0)
+    row#[(bits*i)..+bits] = ram[(head+i)%entries]
+  }
+  mut append = 0
+  for i in 0..<fetchWidth {
+    if enq != 0 and ready != 0 and mask#[i] != 0 {
+      const pos = tail+append
+      ram[pos%entries] = packet#[(bits*i)..+bits]
+      append = append+1
+    }
+  }
+  const pop = deq != 0 and used >= decodeWidth
+  const end = tail+append
+  if reset != 0 or clear != 0 {
+    used = 0
+    head = 0
+    tail = 0
+  } else {
+    wrap tail = if end >= entries { end-entries } else { end }
+    wrap used = used+append-(if pop { decodeWidth } else { 0 })
+    if pop { wrap head = if head == entries-decodeWidth { 0 } else { head+decodeWidth } }
+  }
+}

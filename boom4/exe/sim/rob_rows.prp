@@ -1,0 +1,159 @@
+const presets = import("../../common/pyrope/BoomPresets")
+const rob     = import("../pyrope/Rob.Rob")
+
+mod check<width, rows, fast=false>(clock:Clock, cycle:U8, reset:U1) -> (ok:Bool@[]) {
+  comptime const lb   = std.clog2(width)
+  comptime const ab   = std.clog2(rows) + lb
+  comptime const mask = (1 << width) - 1
+  comptime const last = 1 << (width - 1)
+  const stream = cycle >= 16 and cycle < 80
+  const fill   = cycle >= 90 and cycle < 90 + rows - 1
+  const enq    = if cycle == 3 { 1 }
+    elif cycle == 4 { mask - 1 }
+    elif cycle == 8 or stream or fill or cycle == 150 or cycle == 151 or cycle == 170 { mask }
+    else { 0 }
+  const faults = if cycle == 8 { last } else { 0 }
+  mut indices:Unsigned(bits=width*ab) = 0
+  mut tags:Unsigned(bits=width*6)     = 0
+  mut pcs:Unsigned(bits=width*6)      = 0
+  mut causes:Unsigned(bits=width*64)  = 0
+  for i in 0..<width {
+    indices#[(i*ab)..+ab] = if cycle == 8 { (1 << lb) | i } else { i }
+    tags#[(i*6)..+6]      = i + 33
+    pcs#[(i*6)..+6]       = 2*i
+    causes#[(i*64)..+64]  = 13
+  }
+  const dut = rob<fastPNR=fast, ftqBits=6, rows=rows, wbPorts=1, width=width>(
+    clock=clock,
+    reset=U1(reset != 0 or cycle == 85 or cycle == 147 or cycle == 167),
+    enq=enq,
+    predictedTaken=mask,
+    resolvedTaken=0,
+    enq_is_rvc=0,
+    enq_br_mask=0,
+    enq_br_type=0,
+    enq_is_fence=if cycle == 3 or cycle == 150 or cycle == 151 or cycle == 170 { 0 } else { mask },
+    enq_is_fencei=0,
+    enq_is_eret=0,
+    enq_is_sys_pc2epc=0,
+    enq_ftq_idx=tags,
+    enq_edge_inst=0,
+    enq_pc_lob=pcs,
+    enq_rob_idx=indices,
+    enq_pdst=tags,
+    enq_stale_pdst=0,
+    enq_exception=faults,
+    enq_exc_cause=causes,
+    enq_uses_ldq=U1(cycle == 3),
+    enq_uses_stq=0,
+    enq_is_unique=0,
+    enq_flush_on_commit=0,
+    enq_ldst=0,
+    enq_dst_rtype=0,
+    enq_debug_fsrc=0,
+    partial=U1(cycle == 3),
+    fetchPC=0x140,
+    resolve=0,
+    killed=0,
+    branchIdx=(1 << lb) | (width - 2),
+    mispredict=U1(cycle == 138),
+    wb=U1(cycle == 5),
+    wbIdx=0,
+    pred=1,
+    flagged=1,
+    fflags=5,
+    clear=0,
+    clearIdx=0,
+    late=U1(cycle == 153),
+    lateMask=0,
+    lateIdx=0,
+    lateCause=15,
+    lateAddr=0x8000000010,
+    replay=U1(cycle == 152 or cycle == 171),
+    replayIdx=if cycle == 152 { 1 << lb } else { 0 },
+    csrStall=U1(cycle >= 90 and cycle <= 140),
+  )
+  mut good = true
+  if cycle == 4 {
+    good = dut.io_rob_tail_idx == 1 and dut.io_rob_pnr_idx == 0 and dut.io_commit_valids_0 == 0
+  } elif cycle == 5 {
+    good = dut.io_rob_tail_idx == (1 << lb) and dut.io_commit_valids_0 == 0
+  } elif cycle == 6 {
+    good = dut.io_commit_valids_0 == mask
+      and dut.io_commit_arch_valids_0 == mask - 1
+      and dut.io_commit_fflags_valid != 0
+      and dut.io_commit_fflags_bits == 5
+      and dut.io_commit_uops_0_pdst == tags
+      and dut.io_commit_uops_0_ftq_idx == tags
+  } elif cycle == 7 {
+    good = dut.io_empty != 0 and dut.io_rob_head_idx == (1 << lb)
+  } elif cycle == 9 {
+    good = dut.io_commit_valids_0 == last - 1 and dut.io_com_xcpt_valid == 0
+  } elif cycle == 10 {
+    good = dut.io_rob_pnr_idx == ((1 << lb) | (width - 1))
+      and dut.io_commit_valids_0 == 0
+      and dut.io_com_xcpt_valid != 0
+      and dut.io_com_xcpt_bits_ftq_idx == 32 + width
+      and dut.io_flush_bits_ftq_idx == 32 + width
+      and dut.io_com_xcpt_bits_cause == 13
+      and dut.io_com_xcpt_bits_badvaddr == 0x140 + (width - 1)*2
+      and dut.io_flush_bits_flush_typ == 1
+  } elif cycle == 15 {
+    good = dut.io_empty != 0 and dut.io_ready != 0
+  } elif cycle >= 17 and cycle <= 80 {
+    good = dut.io_commit_valids_0 == mask
+      and dut.io_commit_uops_0_pdst == tags
+      and dut.io_commit_uops_0_ftq_idx == tags
+      and dut.io_rob_head_idx == (((cycle - 16)%rows) << lb)
+  } elif cycle == 130 {
+    good = dut.io_ready == 0 and dut.io_empty == 0 and dut.io_commit_valids_0 == 0 and dut.io_rob_tail_idx == ((rows - 1) << lb)
+  } elif cycle == 139 {
+    good = dut.io_ready != 0 and dut.io_rob_tail_idx == (2 << lb)
+  } elif cycle == 141 {
+    good = dut.io_commit_valids_0 == mask and dut.io_rob_head_idx == 0
+  } elif cycle == 142 {
+    good = dut.io_commit_valids_0 == mask - last
+      and (dut.retiredTaken & (mask - last)) == (mask - last - (1 << (width - 2)))
+      and dut.io_rob_head_idx == (1 << lb)
+      and dut.io_commit_uops_0_debug_fsrc#[(3*(width - 2))..+3] == 4
+  } elif cycle == 143 {
+    good = dut.io_empty != 0 and dut.io_rob_head_idx == dut.io_rob_tail_idx
+  } elif cycle == 154 {
+    good = dut.io_com_xcpt_valid != 0
+      and dut.io_commit_valids_0 == 0
+      and dut.io_com_xcpt_bits_cause == 15
+      and dut.io_com_xcpt_bits_badvaddr == 0xffffff8000000010
+      and dut.io_flush_bits_flush_typ == 1
+  } elif cycle == 172 {
+    good = dut.io_flush_valid != 0 and dut.io_com_xcpt_valid == 0 and dut.io_flush_bits_flush_typ == 2
+  }
+  reg checked:U1 = nil
+  checked = U1(good)
+  ok      = checked != 0
+}
+
+pub mod rob_rows(clock:Clock, reset:Reset, cycle:U8) -> (ok:Bool@[]) {
+  mut good = true
+  comptime const configs = (presets.medium, presets.large, presets.mega, presets.giga)
+  for index in 0..<4 {
+    comptime const cfg  = configs[index]
+    comptime const w    = cfg.coreWidth
+    comptime const r    = cfg.numRobEntries/w
+    comptime const fast = w == 2 or w == 5
+    const q = check<fast=fast, rows=r, width=w>(clock, cycle, reset)
+    good = good and q.ok
+  }
+  ok = good
+}
+
+test rob_rows.upstreamGeometries {
+  mut d = rob_rows
+  tick 174 {
+    d.reset = clock < 2
+    d.cycle = clock
+    step
+    if clock >= 2 {
+      assert(d.ok, "ROB partial dispatch, ordered commit, exception, flag or index wrap")
+    }
+  }
+}

@@ -1,0 +1,28 @@
+const model = import("../pyrope/SoftwarePredictor.SoftwarePredictor")
+
+pub mod software_training(clock:Clock, reset:U1, valid:U1, pc:U40, train:U1, taken:U1, repair:U1)
+    -> (dirs:U8@[], hits:U8@[], target:U40@[], late:U8@[]) {
+  const p = model<width=8>(clock=clock, reset=reset, fetch1=valid, pc1=pc,
+    train=train, updatePc=0x10008, repair=repair, btbMiss=0, branches=32,
+    cfi=5, cfiValid=1, taken=taken, branch=1, jump=0, target=0x33330)
+  dirs = p.direction
+  hits = p.valid
+  target = p.targets#[40..+40]
+  late = p.late
+}
+test software_training.direction {
+  mut d = software_training
+  tick 25 {
+    d.reset = U1(clock < 2)
+    d.valid = 1
+    d.pc = if clock == 20 { 0x10108 } else { 0x10008 }
+    d.train = U1((clock >= 3 and clock <= 6) or (clock >= 12 and clock <= 15))
+    d.taken = U1(clock <= 6)
+    d.repair = U1(clock == 12 or clock == 13)
+    step
+    if clock == 8 or clock == 14 {
+      assert(d.dirs == 2 and d.late == 2 and d.hits == 2 and d.target == 0x33330, "upper fetch bank trains shared BTB and counter")
+    } elif clock == 17 { assert(d.dirs == 0 and d.hits == 2, "saturating counter decrements twice") }
+    elif clock == 20 { assert(d.hits == 0, "BTB compares full addresses") }
+  }
+}

@@ -1,0 +1,90 @@
+// The execute queue holds speculative instructions until their ROB tags pass the PNR.
+// The response queue associates in-order accelerator responses with physical destinations.
+pub type Input = (ready:U1, valid:U1, rd:U5, data:U64, busy:U1, interrupt:U1)
+pub type Output = (valid:U1, inst:U32, rs1:U64, rs2:U64, privilege:U2, ready:U1, exception:U1)
+pub const idle:Input = (busy=0, data=0, interrupt=0, rd=0, ready=0, valid=0)
+pub const inactive:Output = (exception=0, inst=0, privilege=0, ready=0, rs1=0, rs2=0, valid=0)
+
+pub mod RoCCShim<rx, rc, robBits, pregBits, branches, width>(clock:Clock, destinations:Unsigned(bits=width*pregBits), dispatched:Unsigned(bits=width), exception:U1, external:Input, flush:U1, insts:Unsigned(bits=width*32), issue:U1, issueTag:Unsigned(bits=robBits), killed:Unsigned(bits=branches), masks:Unsigned(bits=width*branches), operand1:U64, operand2:U64, pnr:Unsigned(bits=robBits), privilege:U2, reset:Reset, resolve:Unsigned(bits=branches), robHead:Unsigned(bits=robBits), tags:Unsigned(bits=width*robBits), wbReady:U1) -> (bus:Output@[], busy:U1@[], full:U1@[], wbData:U64@[], wbDst:Unsigned(bits=pregBits)@[], wbKind:U2@[], wbRob:Unsigned(bits=robBits)@[], wbValid:U1@[]) {
+  type Entry = (rob:Unsigned(bits=robBits), pdst:Unsigned(bits=pregBits), inst:U32)
+  reg queue:[rx]Entry:[ordering="old"] = nil
+  reg mask:[rx]Unsigned(bits=branches):[ordering="old"] = nil
+  reg operands:[rx]U128:[ordering="old"] = nil
+  reg live:Unsigned(bits=rx) = nil
+  reg have:Unsigned(bits=rx) = nil
+  reg safe:Unsigned(bits=rx) = nil
+  reg responses:[rc]Unsigned(bits=robBits + pregBits + 5):[ordering="old"] = nil
+  reg head:Unsigned(bits=std.clog2(rc)) = nil
+  reg tail:Unsigned(bits=std.clog2(rc)) = nil
+  const nextTail = if tail == rc - 1 { 0 } else { tail + 1 }
+  const room = nextTail != head
+  const vacant = ~live
+  const slot = vacant & -vacant
+  full = U1(live#+[0..<rx] >= rx - 1)
+  busy = U1(live != 0)
+  mut oldest:Unsigned(bits=std.clog2(rx)) = 0
+  mut least:Unsigned(bits=robBits) = (1 << robBits) - 1
+  const boundary = (pnr - robHead)#[0..+robBits]
+  for i in 0..<rx {
+    const distance = (queue[i].rob - robHead)#[0..+robBits]
+    if live#[i] != 0 and distance <= least {
+      least = distance
+      oldest = i
+    }
+  }
+  const current = queue[oldest%rx]
+  const wantsResult = current.inst#[14] != 0 and current.inst#[7..+5] != 0
+  const command = live#[oldest] != 0 and safe#[oldest] != 0 and have#[oldest] != 0 and wbReady != 0 and room
+  const send = command and external.ready != 0
+  const immediate = send and !wantsResult
+  const response = head != tail and external.valid != 0 and !immediate
+  const awaited = responses[head%rc]
+  bus = (valid=U1(command), inst=current.inst, rs1=operands[oldest%rx]#[0..+64], rs2=operands[oldest%rx]#[64..+64], privilege=privilege, ready=U1(head != tail and !immediate and wbReady != 0), exception=exception)
+  wbValid = U1(immediate or response)
+  wbRob = if immediate { current.rob } else { awaited#[pregBits..+robBits] }
+  wbDst = if immediate { current.pdst } else { awaited#[0..+pregBits] }
+  wbKind = if immediate { 2 } else { 0 }
+  wbData = external.data
+  if reset {
+    head = 0
+    tail = 0
+    live = 0
+    have = 0
+    safe = 0
+  } else {
+    if send and wantsResult {
+      responses[tail%rc] = (current.inst#[7..+5] << (robBits + pregBits)) | (current.rob << pregBits) | current.pdst
+      wrap tail = nextTail
+    }
+    if response and wbReady != 0 {
+      assert(external.rd == awaited#[(robBits + pregBits)..+5])
+      wrap head = if head == rc - 1 { 0 } else { head + 1 }
+    }
+    for i in 0..<rx {
+      if live#[i] != 0 {
+        mask[i] = mask[i] & ~resolve
+        if (mask[i] & killed) != 0 or (flush != 0 and safe#[i] == 0) or (send and oldest == i) {
+          live#[i] = 0
+        } else {
+          if (queue[i].rob - robHead)#[0..+robBits] < boundary {
+            safe#[i] = 1
+          }
+          if issue != 0 and issueTag == queue[i].rob {
+            operands[i] = (operand2 << 64) | operand1
+            have#[i] = 1
+          }
+        }
+      } elif slot#[i] != 0 {
+        for lane in 0..<width {
+          if dispatched#[lane] != 0 {
+            queue[i] = (inst=insts#[(lane*32)..+32], pdst=destinations#[(lane*pregBits)..+pregBits], rob=tags#[(lane*robBits)..+robBits])
+            mask[i] = masks#[(lane*branches)..+branches] & ~resolve
+            live#[i] = 1
+            have#[i] = 0
+            safe#[i] = 0
+          }
+        }
+      }
+    }
+  }
+}

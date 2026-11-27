@@ -1,0 +1,138 @@
+const MaxPeriodFibonacciLFSR = import("../../util/pyrope/MaxPeriodFibonacciLFSR.MaxPeriodFibonacciLFSR")
+const configs = import("../../common/pyrope/BoomConfig")
+comptime const small = configs.small
+
+// One data bank in one way. Both bank configurations use an eight-byte bank.
+mod dataBank<C, rowBits, depth>(beat:U64, clock:Clock, read:Bool, row:Unsigned(bits=rowBits), write:Bool) -> (data:U64@[]) {
+  reg beats:[depth]U64:[ordering="old"]
+  reg index:Unsigned(bits=rowBits) = nil
+  if write {
+    beats[row] = beat
+  }
+  if C.enableICacheDelay {
+    reg request:Unsigned(bits=rowBits) = nil
+    reg valid:Bool = nil
+    request = row
+    valid = read
+    if valid {
+      index = request
+    }
+    data = beats[index]
+  } else {
+    if read {
+      index = row
+    }
+    reg response:U64 = nil
+    response = beats[index]
+    data = response
+  }
+}
+
+mod tagBank<C>(clock:Clock, fillSet:Unsigned(bits=C.setBits), fillTag:Unsigned(bits=26 - C.setBits), read:Bool, readSet:Unsigned(bits=C.setBits), write:Bool) -> (tag:Unsigned(bits=26 - C.setBits)@[]) {
+  reg tags:[C.icacheSets]Unsigned(bits=26 - C.setBits):[ordering="old"]
+  reg index:Unsigned(bits=C.setBits) = nil
+  if read {
+    index = readSet
+  }
+  if write {
+    tags[fillSet] = fillTag
+  }
+  tag = tags[index]
+}
+
+pub mod ICache<C=small>::[timecheck=false](auto_master_out_a_ready:U1, auto_master_out_d_bits_data:Unsigned(bits=16*C.fetchWidth), auto_master_out_d_bits_opcode:(e2:U1, e1:U1, e0:U1), auto_master_out_d_bits_size:U4, auto_master_out_d_valid:U1, clock:Clock, io_invalidate:U1, io_req_bits_addr:Unsigned(bits=C.vaddrBits), io_req_valid:U1, io_s1_kill:U1, io_s1_paddr:U32, io_s2_kill:U1, reset:U1) -> (auto_master_out_a_bits_address:U32@[], auto_master_out_a_valid:U1@[], io_perf_acquire:U1@[], io_resp_bits_data:Unsigned(bits=16*C.fetchWidth)@[], io_resp_valid:U1@[]) {
+  comptime const banks = C.fetchBanks
+  comptime const beatShift = std.clog2(2*C.fetchWidth)
+  comptime const refillBits = 6 - beatShift
+  comptime const rowBits = C.setBits + refillBits
+  comptime const depth = C.icacheSets*(1 << refillBits)
+  reg bank1:U1 = nil
+  reg bank2:U1 = nil
+  bank1 = io_req_bits_addr#[3]
+  bank2 = bank1
+  reg s1Valid:Bool = nil
+  reg s2Valid:Bool = nil
+  reg s2Hit:Bool = nil
+  reg invalidated:Bool = nil
+  reg refilling:Bool = nil
+  reg wasRefilling:Bool = nil
+  reg fillAddress:U32 = nil
+  reg remaining:U9 = nil
+  reg validLines:Unsigned(bits=C.icacheSets*C.icacheWays) = nil
+
+  const hasData = Bool(auto_master_out_d_bits_opcode.e0)
+  const refill = Bool(auto_master_out_d_valid) and hasData
+  const accepted = Bool(io_req_valid) and not refill
+  const miss = s2Valid and not s2Hit and not wasRefilling
+  const acquire = miss and not refilling and io_s2_kill == 0
+  const issued = acquire and Bool(auto_master_out_a_ready)
+  const beatsMinusOne:U9 = if hasData { ~((0xfff << auto_master_out_d_bits_size)#[beatShift..+(12 - beatShift)]) } else { 0 }
+  const nextCount = (remaining - 1)#[0..<9]
+  const last = refill and (remaining == 1 or beatsMinusOne == 0)
+  const fillSet = fillAddress#[6..+C.setBits]
+  const write = refill and not invalidated
+  const refillRow:Unsigned(bits=rowBits) = ((fillSet << refillBits) | (beatsMinusOne & ~nextCount))#[0..+rowBits]
+  const readRow = io_req_bits_addr#[beatShift..+rowBits]
+  const random = MaxPeriodFibonacciLFSR(clock=clock, reset=reset, io_increment=U1(issued))
+  const chosen = random & (C.icacheWays - 1)
+  const tagRead = if C.icacheSinglePorted { accepted and not last } else { Bool(io_req_valid) }
+  const dataRead = if C.icacheSinglePorted { accepted and not write } elif C.enableICacheDelay { accepted } else { Bool(io_req_valid) }
+
+  mut hit:Bool = false
+  mut selected:Unsigned(bits=16*C.fetchWidth) = 0
+  reg selectedWays:Unsigned(bits=C.icacheWays) = nil
+  mut hits:Unsigned(bits=C.icacheWays) = 0
+  for i in 0..<C.icacheWays {
+    const tag = tagBank<C>(clock, fillSet, fillTag=fillAddress#[(6 + C.setBits)..<32], read=tagRead, readSet=io_req_bits_addr#[6..+C.setBits], write=last and chosen == i)
+    const matches = validLines#[(i << C.setBits) | io_s1_paddr#[6..+C.setBits]] != 0 and tag == io_s1_paddr#[(6 + C.setBits)..<32]
+    mut word:Unsigned(bits=16*C.fetchWidth) = 0
+    for b in 0..<banks {
+      const advance = U1(banks == 2 and b == 0 and io_req_bits_addr#[3] != 0)
+      const row = if refill { refillRow } else { (readRow + advance)#[0..+rowBits] }
+      const bank = dataBank<C, rowBits=rowBits, depth=depth>(beat=auto_master_out_d_bits_data#[(64*b)..+64], clock, read=dataRead, row, write=write and chosen == i)
+      if banks == 2 and bank2 != 0 {
+        word#[((1 - b)*64)..+64] = bank
+      } else {
+        word#[(64*b)..+64] = bank
+      }
+    }
+    hits#[i] = U1(matches)
+    assert(reset != 0 or not s1Valid or not (hit and matches), "multiple instruction cache ways hit")
+    hit = hit or matches
+    if selectedWays#[i] != 0 {
+      selected = selected | word
+    }
+  }
+
+  if reset != 0 {
+    s1Valid = false
+    s2Valid = false
+    refilling = false
+    remaining = 0
+    validLines = 0
+  } else {
+    s1Valid = accepted
+    s2Valid = s1Valid and io_s1_kill == 0
+    refilling = not last and (issued or refilling)
+    if auto_master_out_d_valid != 0 {
+      remaining = if remaining == 0 { beatsMinusOne } else { nextCount }
+    }
+    if io_invalidate != 0 {
+      validLines = 0
+    } elif refill {
+      validLines#[(chosen << C.setBits) | fillSet] = U1(last and not invalidated)
+    }
+  }
+  selectedWays = hits
+  s2Hit = hit
+  invalidated = refilling and (io_invalidate != 0 or invalidated)
+  wasRefilling = refilling
+  if s1Valid and not (refilling or miss) {
+    fillAddress = io_s1_paddr
+  }
+  auto_master_out_a_valid = U1(acquire)
+  auto_master_out_a_bits_address = fillAddress#[6..<32] << 6
+  io_resp_valid = U1(s2Valid and s2Hit)
+  io_resp_bits_data = selected
+  io_perf_acquire = U1(issued)
+}

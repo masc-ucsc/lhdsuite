@@ -1,0 +1,28 @@
+const banked = import("../pyrope/BankedPhysicalFreeList.BankedPhysicalFreeList")
+pub mod banked_free_rows(clock:Clock, reset:U1, allocate:U2, save:U1, recover:U1) ->
+    (valid:U2@[], regs:U8@[], free:U16@[]) {
+  const result = banked<width=2, physical=16, branches=4>(clock=clock, reset=reset, initial=0xfff0,
+      requests=allocate, releaseValid=0, releaseRegs=0, commitValid=0, commitRegs=0,
+      snap=save << 1, tags=2 << 2, mispredict=recover, recover=2, rollback=0)
+  valid = result.valid
+  regs = result.regs
+  free = result.debug
+}
+test banked_free_rows.recover {
+  mut d = banked_free_rows
+  mut before:U8 = 0
+  tick 12 {
+    d.reset = U1(clock < 2)
+    d.allocate = if clock == 5 { 3 } else { 0 }
+    d.save = U1(clock == 5)
+    d.recover = U1(clock == 8)
+    step
+    if clock == 3 { before = d.regs }
+    if clock == 4 {
+      assert(d.valid == 3 and ((d.regs << 4) | (d.regs >> 4))#[0..+8] == before, "banks rotate while lanes are stalled")
+      before = d.regs
+    }
+    if clock == 6 { assert(d.free == 0xffc0, "consume p4 and p5 from separate banks") }
+    if clock == 9 { assert(d.free == (0xffc0 | (1 << before#[4..+4])), "recover only the younger lane's bank") }
+  }
+}

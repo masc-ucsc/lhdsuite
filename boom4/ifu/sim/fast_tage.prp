@@ -1,0 +1,46 @@
+const base = import("../pyrope/FastTageBase.FastTageBase")
+
+pub mod fast_tage(clock:Clock, reset:U1, fetch:U1, pc:U40, commit:U1, clear:U1,
+    target:U40, meta:U120) -> (early:U4@[], fast:U4@[], late:U4@[],
+    earlyTarget:U40@[], fastTarget:U40@[], lateTarget:U40@[], taken:U4@[], info:U19@[]) {
+  const p = base(clock=clock, reset=reset, pc=pc, fetch=fetch,
+    update=(pc=0x12000, target=target, valid=commit | clear, commit=commit,
+      invalidate=if clear != 0 { 2 } else { 0 }, branches=2, lane=1, cfi=1,
+      taken=1, isBr=1, jal=0, jalr=0, meta=meta))
+  early = p.f1.valid
+  fast = p.f2.valid
+  late = p.f3.valid
+  earlyTarget = p.f1.target#[120..+40]
+  fastTarget = p.f2.target#[40..+40]
+  lateTarget = p.f3.target#[40..+40]
+  taken = p.f3.taken
+  info = p.info
+}
+
+test fast_tage.train {
+  mut d = fast_tage
+  mut meta:U120 = 0
+  tick 1100 {
+    d.reset = U1(clock < 2)
+    d.fetch = U1(clock < 1033 or (clock >= 1045 and clock < 1055) or
+      (clock >= 1068 and clock < 1078) or clock >= 1090)
+    d.pc = 0x12000
+    d.commit = U1(clock == 1039 or clock == 1041 or clock == 1060 or clock == 1062)
+    d.clear = U1(clock == 1085)
+    d.target = if clock < 1055 { 0x12072 } else { 0x34008 }
+    d.meta = meta
+    step
+    if clock == 1031 { meta = d.info }
+    if clock == 1051 or clock == 1075 {
+      const expected:U40 = if clock == 1051 { 0x12072 } else { 0x34008 }
+      assert(d.early == 8 and d.earlyTarget == expected, "micro-BTB supplies the last fetch lane")
+      assert(d.fast == 2 and d.fastTarget == expected, "fast BTB supplies the trained branch lane")
+      assert(d.late == 2 and d.lateTarget == expected, "late BTB selects local and extended targets")
+      assert(d.taken#[1] != 0 and d.info#[0] != 0, "both counter banks and the micro-BTB trained")
+      meta = d.info
+    }
+    if clock == 1098 {
+      assert(d.fast == 0 and d.late == 0, "target misprediction invalidates both BTB tags")
+    }
+  }
+}

@@ -1,0 +1,45 @@
+// A ROB address encodes the bank in its low bits even for odd widths.
+pub comb robTags<width, bits>(tail:Unsigned(bits=bits)) -> (tags:Unsigned(bits=width*bits)) {
+  comptime const bankBits = std.clog2(width)
+  for lane in 0..<width {
+    tags#[(lane*bits)..+bits] = ((tail >> bankBits) << bankBits) | lane
+  }
+}
+
+pub comb fileWrites<width, ldBits=4, stBits=4>(
+  fire:Unsigned(bits=width),
+  loadTags:Unsigned(bits=width*ldBits),
+  selectors:Unsigned(bits=width*3),
+  storeTags:Unsigned(bits=width*stBits),
+) -> (branchData:Unsigned(bits=width*(ldBits+stBits)), immediates:Unsigned(bits=width)) {
+  for lane in 0..<width {
+    const sel = selectors#[(lane*3)..+3]
+    immediates#[lane]         = fire#[lane] & U1(sel != 5 and sel != 6)
+    branchData#[(lane*(ldBits+stBits))..+(ldBits+stBits)] = (storeTags#[(lane*stBits)..+stBits] << ldBits) | loadTags#[(lane*ldBits)..+ldBits]
+  }
+}
+
+pub comb decodeTargets<width, bits>(
+  branchTypes:Unsigned(bits=width*4),
+  exceptions:Unsigned(bits=width),
+  ftq:Unsigned(bits=width*bits),
+  valid:Unsigned(bits=width),
+) -> (anyJalr:U1, exceptionTarget:Unsigned(bits=bits)) {
+  anyJalr         = 0
+  exceptionTarget = ftq#[0..+bits]
+  for slot in 0..<width {
+    const lane = width - 1 - slot
+    if valid#[lane] != 0 {
+      anyJalr = anyJalr | U1(branchTypes#[(lane*4)..+4] == 8)
+      if exceptions#[lane] != 0 {
+        exceptionTarget = ftq#[(lane*bits)..+bits]
+      }
+    }
+  }
+}
+
+pub comb narrowTags<width, srcBits, dstBits>(tags:Unsigned(bits=width*srcBits)) -> (result:Unsigned(bits=width*dstBits)) {
+  for lane in 0..<width {
+    result#[(lane*dstBits)..+dstBits] = tags#[(lane*srcBits)..+dstBits]
+  }
+}

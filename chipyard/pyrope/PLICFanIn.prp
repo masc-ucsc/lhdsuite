@@ -1,14 +1,21 @@
-pub comb PLICFanIn::[timecheck=false](io_prio_0:u2, io_prio_1:u2, io_ip:u2) -> (io_dev:u2, io_max:u2) {
-  const io_ip_0__w1 = io_ip
-  const effectivePriority_1__w1 = ((io_ip_0__w1 & 1) << 2) | io_prio_0
-  const effectivePriority_2__w1 = (((io_ip_0__w1 >> 1) & 1) << 2) | io_prio_1
-  const _GEN__w1 = unsigned(effectivePriority_1__w1 < 5)
-  mut _mux_2:u3 = if _GEN__w1 != 0 { 4 } else { effectivePriority_1__w1 }
-  const _GEN_0__w1 = _mux_2
-  mut _b2i_3 = if _GEN_0__w1 >= effectivePriority_2__w1 { 1 } else { 0 }
-  const _GEN_1__w1 = _b2i_3
-  mut _mux_4:u3 = if _GEN_1__w1 != 0 { _GEN_0__w1 } else { effectivePriority_2__w1 }
-  mut _mux_5:u2 = if _GEN_1__w1 != 0 { ((~_GEN__w1) & 1) } else { 2 }
-  io_dev = _mux_5
-  io_max = _mux_4#[0..=1]
+// Equal priorities select the lowest numbered source. Source zero means none.
+pub comb winner<sources, bits>(
+  eligible:Unsigned(bits=sources),
+  priorities:Unsigned(bits=sources*bits),
+) -> (id:U32, priority:Unsigned(bits=bits)) {
+  id       = 0
+  priority = 0
+  for i in 0..<sources {
+    const p = priorities#[(i*bits)..+bits]
+    if eligible#[i] != 0 and p > priority {
+      id       = i + 1
+      priority = p
+    }
+  }
+}
+
+pub comb PLICFanIn(io_ip:U2, io_prio_0:U2, io_prio_1:U2) -> (io_dev:U2, io_max:U2) {
+  const best = winner<bits=2, sources=2>(eligible=io_ip, priorities=(io_prio_1 << 2) | io_prio_0)
+  io_dev = best.id#[0..+2]
+  io_max = best.priority
 }

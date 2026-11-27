@@ -1,0 +1,151 @@
+const control = import("IssueSchedule")
+const permitted = import("IssueSelect.permitted")
+const wake = import("IssueWakeup.source")
+const configs = import("../../common/pyrope/BoomConfig")
+comptime const fastQueue = configs.memory
+const IssueSlot_8 = import("IssueSlot_8.IssueSlot_8")
+type Uop<pregBits, alus, branches, ldBits, stBits, immBits> = (fu_code_1:U1, fu_code_2:U1, iw_issued:U1, iw_issued_partial_agen:U1, iw_issued_partial_dgen:U1, iw_p1_speculative_child:Unsigned(bits=alus), iw_p2_speculative_child:Unsigned(bits=alus), iw_p1_bypass_hint:U1, iw_p2_bypass_hint:U1, br_mask:Unsigned(bits=branches), imm_sel:U3, pimm:Unsigned(bits=immBits), ldq_idx:Unsigned(bits=ldBits), stq_idx:Unsigned(bits=stBits), pdst:Unsigned(bits=pregBits), prs1:Unsigned(bits=pregBits), prs2:Unsigned(bits=pregBits), prs1_busy:U1, prs2_busy:U1, ppred_busy:U1, uses_ldq:U1, uses_stq:U1, dst_rtype:U2, lrs1_rtype:U2, lrs2_rtype:U2, fp_val:U1)
+
+comb pack<pregBits, alus, branches=8, ldBits=4, stBits=4, immBits=5>(uop:Uop<pregBits, alus, branches, ldBits, stBits, immBits>) -> (bits:Unsigned(bits=22+immBits + ldBits + stBits + branches + 2*alus + 3*pregBits)) {
+  bits = (uop.fu_code_1, uop.fu_code_2, uop.iw_issued, uop.iw_issued_partial_agen, uop.iw_issued_partial_dgen, uop.iw_p1_bypass_hint, uop.iw_p2_bypass_hint, uop.imm_sel, uop.prs1_busy, uop.prs2_busy, uop.ppred_busy, uop.uses_ldq, uop.uses_stq, uop.dst_rtype, uop.lrs1_rtype, uop.lrs2_rtype, uop.fp_val, uop.pimm, uop.iw_p1_speculative_child, uop.iw_p2_speculative_child, uop.pdst, uop.prs1, uop.prs2, uop.br_mask, uop.ldq_idx, uop.stq_idx)#[..]
+}
+comb unpack<pregBits, alus, branches=8, ldBits=4, stBits=4, immBits=5>(bits:Unsigned(bits=22+immBits + ldBits + stBits + branches + 2*alus + 3*pregBits)) -> (uop:Uop<pregBits, alus, branches, ldBits, stBits, immBits>) {
+  uop.fu_code_1 = bits#[0..+1]
+  uop.fu_code_2 = bits#[1..+1]
+  uop.iw_issued = bits#[2..+1]
+  uop.iw_issued_partial_agen = bits#[3..+1]
+  uop.iw_issued_partial_dgen = bits#[4..+1]
+  uop.iw_p1_speculative_child = bits#[(22+immBits)..+alus]
+  uop.iw_p2_speculative_child = bits#[(22+immBits+alus)..+alus]
+  uop.iw_p1_bypass_hint = bits#[5..+1]
+  uop.iw_p2_bypass_hint = bits#[6..+1]
+  uop.br_mask = bits#[(22+immBits + 2*alus + 3*pregBits)..+branches]
+  uop.imm_sel = bits#[7..+3]
+  uop.pimm = bits#[22..+immBits]
+  uop.ldq_idx = bits#[(22+immBits + 2*alus + 3*pregBits + branches)..+ldBits]
+  uop.stq_idx = bits#[(22+immBits + 2*alus + 3*pregBits + branches + ldBits)..+stBits]
+  uop.pdst = bits#[(22+immBits + 2*alus + 0*pregBits)..+pregBits]
+  uop.prs1 = bits#[(22+immBits + 2*alus + 1*pregBits)..+pregBits]
+  uop.prs2 = bits#[(22+immBits + 2*alus + 2*pregBits)..+pregBits]
+  uop.prs1_busy = bits#[10..+1]
+  uop.prs2_busy = bits#[11..+1]
+  uop.ppred_busy = bits#[12..+1]
+  uop.uses_ldq = bits#[13..+1]
+  uop.uses_stq = bits#[14..+1]
+  uop.dst_rtype = bits#[15..+2]
+  uop.lrs1_rtype = bits#[17..+2]
+  uop.lrs2_rtype = bits#[19..+2]
+  uop.fp_val = bits#[21..+1]
+}
+
+pub mod IssueUnitCollapsing_1<sni=false, robBits=5, Q=fastQueue, CoreWidth=1, alus=1, pregBits=6, branches=8, ldBits=4, stBits=4, immBits=5>::[timecheck=false](clock:Clock, robHead:Unsigned(bits=robBits)=0, robPnr:Unsigned(bits=robBits)=0, dispatchRob:Unsigned(bits=Q.dispatchWidth*robBits)=0, disValid:Unsigned(bits=Q.dispatchWidth), dis_br_mask:Unsigned(bits=Q.dispatchWidth*branches), dis_dst_rtype:Unsigned(bits=Q.dispatchWidth*2), dis_exception:Unsigned(bits=Q.dispatchWidth*1), dis_fp_val:Unsigned(bits=Q.dispatchWidth*1), dis_fu_code_1:Unsigned(bits=Q.dispatchWidth*1), dis_fu_code_2:Unsigned(bits=Q.dispatchWidth*1), dis_imm_sel:Unsigned(bits=Q.dispatchWidth*3), dis_is_fence:Unsigned(bits=Q.dispatchWidth*1), dis_is_fencei:Unsigned(bits=Q.dispatchWidth*1), dis_iw_p1_speculative_child:Unsigned(bits=Q.dispatchWidth*alus), dis_iw_p2_speculative_child:Unsigned(bits=Q.dispatchWidth*alus), dis_ldq_idx:Unsigned(bits=Q.dispatchWidth*ldBits), dis_lrs1_rtype:Unsigned(bits=Q.dispatchWidth*2), dis_lrs2_rtype:Unsigned(bits=Q.dispatchWidth*2), dis_pdst:Unsigned(bits=Q.dispatchWidth*pregBits), dis_pimm:Unsigned(bits=Q.dispatchWidth*immBits), dis_ppred_busy:Unsigned(bits=Q.dispatchWidth*1), dis_prs1:Unsigned(bits=Q.dispatchWidth*pregBits), dis_prs1_busy:Unsigned(bits=Q.dispatchWidth*1), dis_prs2:Unsigned(bits=Q.dispatchWidth*pregBits), dis_prs2_busy:Unsigned(bits=Q.dispatchWidth*1), dis_stq_idx:Unsigned(bits=Q.dispatchWidth*stBits), dis_uses_ldq:Unsigned(bits=Q.dispatchWidth*1), dis_uses_stq:Unsigned(bits=Q.dispatchWidth*1), fuMask:Unsigned(bits=10*Q.issueWidth), io_brupdate_b1_mispredict_mask:Unsigned(bits=branches), io_brupdate_b1_resolve_mask:Unsigned(bits=branches), io_child_rebusys:Unsigned(bits=alus), io_flush_pipeline:U1, io_squash_grant:U1, io_wakeup_ports_0_bits_bypassable:U1, io_wakeup_ports_0_bits_rebusy:U1, io_wakeup_ports_0_bits_uop_pdst:Unsigned(bits=pregBits), io_wakeup_ports_0_valid:U1, io_wakeup_ports_1_bits_uop_pdst:Unsigned(bits=2*pregBits), io_wakeup_ports_1_valid:U2, io_wakeup_ports_2_bits_uop_pdst:Unsigned(bits=alus*pregBits), io_wakeup_ports_2_valid:Unsigned(bits=alus), reset:Reset) -> (disReady:Unsigned(bits=Q.dispatchWidth)@[], issValid:Unsigned(bits=Q.issueWidth)@[], iss_br_mask:Unsigned(bits=Q.issueWidth*branches)@[], iss_dst_rtype:Unsigned(bits=Q.issueWidth*2)@[], iss_fp_val:Unsigned(bits=Q.issueWidth*1)@[], iss_fu_code_1:Unsigned(bits=Q.issueWidth*1)@[], iss_fu_code_2:Unsigned(bits=Q.issueWidth*1)@[], iss_imm_sel:Unsigned(bits=Q.issueWidth*3)@[], iss_iw_p1_bypass_hint:Unsigned(bits=Q.issueWidth*1)@[], iss_ldq_idx:Unsigned(bits=Q.issueWidth*ldBits)@[], iss_lrs1_rtype:Unsigned(bits=Q.issueWidth*2)@[], iss_pdst:Unsigned(bits=Q.issueWidth*pregBits)@[], iss_pimm:Unsigned(bits=Q.issueWidth*immBits)@[], iss_prs1:Unsigned(bits=Q.issueWidth*pregBits)@[], iss_stq_idx:Unsigned(bits=Q.issueWidth*stBits)@[], iss_uses_ldq:Unsigned(bits=Q.issueWidth*1)@[], iss_uses_stq:Unsigned(bits=Q.issueWidth*1)@[]) {
+  cassert(Q.dispatchWidth > 0 and Q.dispatchWidth <= CoreWidth, "BOOM mem queue dispatchWidth must be in 1..=coreWidth")
+  cassert(Q.numSlowEntries >= 0 and (Q.useMatrixIssue or Q.numEntries - Q.numSlowEntries >= Q.dispatchWidth), "BOOM mem queue needs enough fast issue slots")
+  cassert(Q.issueWidth >= 1 and Q.issueWidth <= Q.numEntries, "issue ports must fit in the queue")
+  comptime const payloadBits = 22+immBits + ldBits + stBits + branches + 2*alus + 3*pregBits
+  comptime const uopBits = payloadBits + (if sni { robBits } else { 0 })
+  comptime const ports = Q.issueWidth
+  comptime const n = Q.numEntries
+  comptime const w = Q.dispatchWidth
+  wire live:Unsigned(bits=n) = nil
+  wire requests:Unsigned(bits=n*ports) = nil
+  mut liveOut:Unsigned(bits=n) = 0
+  mut requestOut:Unsigned(bits=n*ports) = 0
+  mut candidates:Unsigned(bits=w*uopBits) = 0
+  mut survives:Unsigned(bits=n + w) = 0
+  for lane in 0..<w {
+    const src1 = wake<alus=alus, bits=pregBits, dispatch=true>(
+      tag=dis_prs1#[(lane*pregBits)..+pregBits], wasBusy=dis_prs1_busy#[lane], integer=U1(dis_lrs1_rtype#[(lane*2)..+2] == 0),
+      loadTag=io_wakeup_ports_0_bits_uop_pdst, loadValid=io_wakeup_ports_0_valid,
+      loadBypass=io_wakeup_ports_0_bits_bypassable, loadRebusy=io_wakeup_ports_0_bits_rebusy,
+      longTag=io_wakeup_ports_1_bits_uop_pdst, longValid=io_wakeup_ports_1_valid,
+      aluTags=io_wakeup_ports_2_bits_uop_pdst, aluValid=io_wakeup_ports_2_valid,
+      parents=dis_iw_p1_speculative_child#[(lane*alus)..+alus], failed=io_child_rebusys,
+    )
+    const src2 = wake<alus=alus, bits=pregBits, dispatch=true>(
+      tag=dis_prs2#[(lane*pregBits)..+pregBits], wasBusy=dis_prs2_busy#[lane], integer=U1(dis_lrs2_rtype#[(lane*2)..+2] == 0),
+      loadTag=io_wakeup_ports_0_bits_uop_pdst, loadValid=io_wakeup_ports_0_valid,
+      loadBypass=io_wakeup_ports_0_bits_bypassable, loadRebusy=io_wakeup_ports_0_bits_rebusy,
+      longTag=io_wakeup_ports_1_bits_uop_pdst, longValid=io_wakeup_ports_1_valid,
+      aluTags=io_wakeup_ports_2_bits_uop_pdst, aluValid=io_wakeup_ports_2_valid,
+      parents=dis_iw_p2_speculative_child#[(lane*alus)..+alus], failed=io_child_rebusys,
+    )
+    const storeFP = dis_uses_stq#[lane] & U1(dis_lrs2_rtype#[(lane*2)..+2] == 1)
+    survives#[n + lane] = disValid#[lane] & U1(dis_exception#[lane] == 0 and dis_is_fence#[lane] == 0 and dis_is_fencei#[lane] == 0)
+    candidates#[(lane*uopBits)..+uopBits] = pack<ldBits=ldBits, stBits=stBits, branches=branches, alus=alus, pregBits=pregBits, immBits=immBits>(uop=(br_mask=dis_br_mask#[(lane*branches)..+branches], dst_rtype=dis_dst_rtype#[(lane*2)..+2], fp_val=dis_fp_val#[lane], fu_code_1=dis_fu_code_1#[lane], fu_code_2=dis_fu_code_2#[lane], imm_sel=dis_imm_sel#[(lane*3)..+3], iw_issued=0, iw_issued_partial_agen=0, iw_issued_partial_dgen=0, iw_p1_bypass_hint=src1.bypass, iw_p1_speculative_child=src1.speculative, iw_p2_bypass_hint=src2.bypass, iw_p2_speculative_child=src2.speculative, ldq_idx=dis_ldq_idx#[(lane*ldBits)..+ldBits], lrs1_rtype=dis_lrs1_rtype#[(lane*2)..+2], lrs2_rtype=if storeFP != 0 { 2 } else { dis_lrs2_rtype#[(lane*2)..+2] }, pdst=dis_pdst#[(lane*pregBits)..+pregBits], pimm=dis_pimm#[(lane*immBits)..+immBits], ppred_busy=0, prs1=dis_prs1#[(lane*pregBits)..+pregBits], prs1_busy=src1.busy, prs2=dis_prs2#[(lane*pregBits)..+pregBits], prs2_busy=src2.busy & ~storeFP, stq_idx=dis_stq_idx#[(lane*stBits)..+stBits], uses_ldq=dis_uses_ldq#[lane], uses_stq=dis_uses_stq#[lane]))
+    if sni { candidates#[(lane*uopBits+payloadBits)..+robBits] = dispatchRob#[(lane*robBits)..+robBits] }
+  }
+  mut freeNext:Unsigned(bits=n) = 0
+  iss_fu_code_1 = 0
+  iss_fu_code_2 = 0
+  iss_iw_p1_bypass_hint = 0
+  iss_br_mask = 0
+  iss_imm_sel = 0
+  iss_pimm = 0
+  iss_stq_idx = 0
+  iss_prs1 = 0
+  iss_lrs1_rtype = 0
+  iss_ldq_idx = 0
+  iss_pdst = 0
+  iss_uses_ldq = 0
+  iss_uses_stq = 0
+  iss_dst_rtype = 0
+  iss_fp_val = 0
+  wire remaining:Unsigned(bits=n) = nil
+  wire vacantNext:Unsigned(bits=n) = nil
+  const incomingPayloads = candidates
+  const plan = control.schedule<Q>(clock, reset, live, requests, surviving=remaining, vacantNext,
+      dispatch=disValid, keep=survives#[n..+w])
+  disReady = plan.ready
+  issValid = if io_squash_grant != 0 { 0 } else { plan.valid }
+  for j in 0..<n {
+    const i = n - 1 - j
+    const move = control.incoming<Q=Q, slot=i, bits=uopBits>(lanes=plan.allocations, distance=plan.distance,
+        surviving=survives, moving=candidates, dispatch=incomingPayloads)
+    const shift = move.shift
+    const fill = move.fill
+    const incoming = unpack<ldBits=ldBits, stBits=stBits, branches=branches, alus=alus, pregBits=pregBits, immBits=immBits>(bits=move.payload#[0..+payloadBits])
+    const granted = plan.grants#[(i*ports)..+ports]
+    const slot = IssueSlot_8<ldBits=ldBits, stBits=stBits, branches=branches, alus=alus, pregBits=pregBits, immBits=immBits>(clock=clock, reset=reset, io_grant=U1(granted != 0), io_in_uop_valid=U1(fill), io_in_uop_bits_fu_code_1=incoming.fu_code_1, io_in_uop_bits_fu_code_2=incoming.fu_code_2, io_in_uop_bits_iw_issued=incoming.iw_issued, io_in_uop_bits_iw_issued_partial_agen=incoming.iw_issued_partial_agen, io_in_uop_bits_iw_issued_partial_dgen=incoming.iw_issued_partial_dgen, io_in_uop_bits_iw_p1_speculative_child=incoming.iw_p1_speculative_child, io_in_uop_bits_iw_p2_speculative_child=incoming.iw_p2_speculative_child, io_in_uop_bits_iw_p1_bypass_hint=incoming.iw_p1_bypass_hint, io_in_uop_bits_iw_p2_bypass_hint=incoming.iw_p2_bypass_hint, io_in_uop_bits_br_mask=incoming.br_mask, io_in_uop_bits_imm_sel=incoming.imm_sel, io_in_uop_bits_pimm=incoming.pimm, io_in_uop_bits_ldq_idx=incoming.ldq_idx, io_in_uop_bits_stq_idx=incoming.stq_idx, io_in_uop_bits_pdst=incoming.pdst, io_in_uop_bits_prs1=incoming.prs1, io_in_uop_bits_prs2=incoming.prs2, io_in_uop_bits_prs1_busy=incoming.prs1_busy, io_in_uop_bits_prs2_busy=incoming.prs2_busy, io_in_uop_bits_ppred_busy=incoming.ppred_busy, io_in_uop_bits_uses_ldq=incoming.uses_ldq, io_in_uop_bits_uses_stq=incoming.uses_stq, io_in_uop_bits_dst_rtype=incoming.dst_rtype, io_in_uop_bits_lrs1_rtype=incoming.lrs1_rtype, io_in_uop_bits_lrs2_rtype=incoming.lrs2_rtype, io_in_uop_bits_fp_val=incoming.fp_val, io_brupdate_b1_resolve_mask=io_brupdate_b1_resolve_mask, io_brupdate_b1_mispredict_mask=io_brupdate_b1_mispredict_mask, io_kill=io_flush_pipeline, io_clear=U1(shift), io_squash_grant=io_squash_grant, io_wakeup_ports_0_valid=io_wakeup_ports_0_valid, io_wakeup_ports_0_bits_uop_pdst=io_wakeup_ports_0_bits_uop_pdst, io_wakeup_ports_0_bits_bypassable=io_wakeup_ports_0_bits_bypassable, io_wakeup_ports_0_bits_rebusy=io_wakeup_ports_0_bits_rebusy, io_wakeup_ports_1_valid=io_wakeup_ports_1_valid, io_wakeup_ports_1_bits_uop_pdst=io_wakeup_ports_1_bits_uop_pdst, io_wakeup_ports_2_valid=io_wakeup_ports_2_valid, io_wakeup_ports_2_bits_uop_pdst=io_wakeup_ports_2_bits_uop_pdst, io_child_rebusys=io_child_rebusys)
+    liveOut#[i] = slot.io_valid
+    freeNext#[i] = U1((slot.io_will_be_valid == 0 or shift) and not fill)
+    survives#[i] = slot.io_will_be_valid
+    const functions = (slot.io_iss_uop_fu_code_1 << 1) | (slot.io_iss_uop_fu_code_2 << 2)
+    mut allowed:U1 = 1
+    mut tag:Unsigned(bits=robBits) = 0
+    if sni {
+      reg slotRob:Unsigned(bits=robBits) = nil
+      if fill { slotRob = move.payload#[payloadBits..+robBits] }
+      tag = slotRob
+      allowed = permitted<bits=robBits>(tag=slotRob, head=robHead, pnr=robPnr, waitForPnr=false, address=functions#[1] != 0)
+    }
+    for port in 0..<ports {
+      requestOut#[((i*ports) + port)] = allowed & slot.io_request & U1((functions & fuMask#[(port*10)..+10]) != 0)
+    }
+    for port in 0..<ports {
+      if granted#[port] != 0 or (i == 0 and plan.valid#[port] == 0) {
+        iss_fu_code_1#[(port*1)..+1] = slot.io_iss_uop_fu_code_1
+        iss_fu_code_2#[(port*1)..+1] = slot.io_iss_uop_fu_code_2
+        iss_iw_p1_bypass_hint#[(port*1)..+1] = slot.io_iss_uop_iw_p1_bypass_hint
+        iss_br_mask#[(port*branches)..+branches] = slot.io_iss_uop_br_mask
+        iss_imm_sel#[(port*3)..+3] = slot.io_iss_uop_imm_sel
+        iss_pimm#[(port*immBits)..+immBits] = slot.io_iss_uop_pimm
+        iss_stq_idx#[(port*stBits)..+stBits] = slot.io_iss_uop_stq_idx
+        iss_prs1#[(port*pregBits)..+pregBits] = slot.io_iss_uop_prs1
+        iss_lrs1_rtype#[(port*2)..+2] = slot.io_iss_uop_lrs1_rtype
+        iss_ldq_idx#[(port*ldBits)..+ldBits] = slot.io_iss_uop_ldq_idx
+        iss_pdst#[(port*pregBits)..+pregBits] = slot.io_iss_uop_pdst
+        iss_uses_ldq#[(port*1)..+1] = slot.io_iss_uop_uses_ldq
+        iss_uses_stq#[(port*1)..+1] = slot.io_iss_uop_uses_stq
+        iss_dst_rtype#[(port*2)..+2] = slot.io_iss_uop_dst_rtype
+        iss_fp_val#[(port*1)..+1] = slot.io_iss_uop_fp_val
+      }
+    }
+    wrap candidates = (candidates << uopBits) | pack<ldBits=ldBits, stBits=stBits, branches=branches, alus=alus, pregBits=pregBits, immBits=immBits>(uop=(br_mask=slot.io_out_uop_br_mask, dst_rtype=slot.io_out_uop_dst_rtype, fp_val=slot.io_out_uop_fp_val, fu_code_1=slot.io_out_uop_fu_code_1, fu_code_2=slot.io_out_uop_fu_code_2, imm_sel=slot.io_out_uop_imm_sel, iw_issued=slot.io_out_uop_iw_issued, iw_issued_partial_agen=slot.io_out_uop_iw_issued_partial_agen, iw_issued_partial_dgen=slot.io_out_uop_iw_issued_partial_dgen, iw_p1_bypass_hint=slot.io_out_uop_iw_p1_bypass_hint, iw_p1_speculative_child=slot.io_out_uop_iw_p1_speculative_child, iw_p2_bypass_hint=slot.io_out_uop_iw_p2_bypass_hint, iw_p2_speculative_child=slot.io_out_uop_iw_p2_speculative_child, ldq_idx=slot.io_out_uop_ldq_idx, lrs1_rtype=slot.io_out_uop_lrs1_rtype, lrs2_rtype=slot.io_out_uop_lrs2_rtype, pdst=slot.io_out_uop_pdst, pimm=slot.io_out_uop_pimm, ppred_busy=slot.io_out_uop_ppred_busy, prs1=slot.io_out_uop_prs1, prs1_busy=slot.io_out_uop_prs1_busy, prs2=slot.io_out_uop_prs2, prs2_busy=slot.io_out_uop_prs2_busy, stq_idx=slot.io_out_uop_stq_idx, uses_ldq=slot.io_out_uop_uses_ldq, uses_stq=slot.io_out_uop_uses_stq))
+    if sni { candidates#[payloadBits..+robBits] = tag }
+  }
+  remaining = survives#[0..+n]
+  live = liveOut
+  requests = requestOut
+  vacantNext = freeNext
+}

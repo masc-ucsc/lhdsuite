@@ -3,15 +3,14 @@
 The design instantiates **12 Rocket tiles, four BOOM tiles, and one full 16×16 Gemmini
 accelerator** on a shared **6×3 mesh**, with one external gateway. The checked-in
 [Pyrope glue](pyrope/MixedSocTop.prp) imports the existing
-[Rocket](../rocket/pyrope2/RocketTile.prp), [BOOM](../boom/pyrope2/BoomTile.prp), and
-[Gemmini](../gemmini/Mesh16/pyrope2/GemminiTPU.prp) trees: the maintained `pyrope2/`
-version of each core, which is the source for `lhd sim`, `lhd synth` and the floorplan.
+[Rocket](../rocket/pyrope2/RocketTile.prp), [BOOM](../boom4/pyrope/BoomTile.prp), and
+[Gemmini](../gemmini/Mesh16/pyrope2/GemminiTPU.prp) trees, which supply the source for `lhd sim`, `lhd synth` and the floorplan.
 The cores' original Verilog (`rocket/verilog`, `boom/verilog`, `gemmini/Mesh16/verilog`)
 is only staged for the Verilator comparison. The checksums of the `pyrope/` and
 `pyrope2/` closures are identical (cycle-exact; checked at 12,000 cycles). There are no copied CPU
 or accelerator implementations in this package. Custom adapters bridge their
 TileLink ports and Gemmini accumulator interfaces to the shared request/response
-network. All instances remain in the design when only a subset is enabled.
+network. The runtime enable mask controls reset on each populated tile.
 
 The `scripts/` directory holds the simulation runners, source generators,
 shared topology, and floorplan generator/validator. Simulation drivers stay in
@@ -19,20 +18,35 @@ shared topology, and floorplan generator/validator. Simulation drivers stay in
 
 ### Tile configurations
 
-The concrete `MixedSocTop` uses the `selected` record in
-[TileProfiles.prp](pyrope/TileProfiles.prp). The default `uniform` preset
-matches the pinned RTL. Set `selected = heterogeneous` to give Rocket tiles
-1 and 2 early-out multipliers and BOOM tiles 13 and 14 four slow entries in
-each memory and integer ALU issue queue. A parent can also bind its own
-16-entry record to `mixed_soc<Tiles>`. Each tile owns its register state.
+The default `heterogeneous` preset binds four configurations to the same BOOM4
+tile implementation. Rocket harts 1 and 2 use early-out multiplication.
 
-The supported Rocket option is `mulEarlyOut` on the RV32 radix-256
-multiplier. BOOM supports per-queue `numSlowEntries` with eight entries and
-one physical dispatch lane. The compiler checks each queue against the core
-width. This workload exercises connectivity. Separate tests check multiplier
-latency and the cycle when dispatch backpressure begins.
+| BOOM hart | Configuration changes from Small |
+|---|---|
+| 12 | Default Small |
+| 13 | Two-wide dispatch, 48-entry return stack, 12 immediate physical registers, 32-entry FTQ, one-cycle integer-to-FP conversion, three-cycle FMA, FP division disabled, six performance counters, short forward branch predication disabled, 80 integer and 64 FP physical registers, two integer register banks, BOOM2 predictor (BIM, BTB, gshare), 64 ROB entries, 16 fetch-buffer entries, 12 memory issue slots, four slow slots, direct-mapped 32-set I-cache, BTB fast repair disabled, conservative issue, an age-matrix memory queue, no PMP or L2 TLB, three-step divider |
+| 14 | Five-wide dispatch, eight-lane fetch, 40-entry fetch buffer, return prediction disabled, 48 immediate physical registers, 40-entry FTQ, four-cycle integer-to-FP conversion, six-cycle FMA, next-line data prefetching, 144 integer and 128 FP physical registers, 130 ROB entries, Alpha21264 tournament predictor, 12 FP and unique-function issue slots, 12 memory slots and 32 ALU slots, each queue with four slow slots and restricted selection on the ALU queue, sixteen PMP regions, four-way L2 TLB, four-step divider |
+| 15 | Three-wide dispatch, 12-entry return stack and fetch-target queue, four-cycle load-use path, noncompacting dispatch lookahead, 64 integer registers in four banks with four read ports per bank, 56 FP registers in two banks, 24 ROB entries, 30 fetch-buffer entries, 32 memory issue slots, four slow slots, restricted issue selection, single-ported TAGE, slow-BTB redirect, history-only stall repair disabled, delayed dual-port I-cache, RAS top repair disabled |
 
-From lhdsuite, run both presets, both unit tests and the invalid-width control:
+Each Rocket and BOOM reads its physical hart ID through `mhartid`. A parent can bind its
+own 16-tile record to `MixedSocTop<Tiles>` or `CoherentMixedSoc<Tiles=...>`. The `uniform` record uses the default
+BOOM and Rocket at every respective position. The heterogeneous BOOMs use one, two, five and three dispatch lanes respectively. Each has one integer ALU per dispatch lane. Hart 13 uses six branch snapshots and fixed ALU columns. Hart 14 uses rotating ALU columns, three memory issue ports and two FP issue ports. [TileProfiles.prp](pyrope/TileProfiles.prp)
+
+Both Pyrope tops attach a TileLink-C memory manager at the gateway. The 12 RV32 Rocket tiles use two-way, 64-set data caches in both presets. Both Rocket and BOOM cache 64-byte lines. Rocket transfers a line in sixteen 32-bit beats and BOOM transfers it in eight 64-bit beats. The
+default SRAM spans 4 KiB from `0x80000000`. It tracks one holder per line,
+recalls that holder before transferring the line, and reserves sink ID 7 for
+its grants. Boot memory remains external. The four-hart regression runs the same ROM on all four BOOM configurations.
+Each core first executes 127 uncompressed NOPs and jumps to the coherence program. Harts 12 and 13 write different jump targets to adjacent cache lines. Harts 14
+and 15 load those targets and jump through them. The driver checks both dirty
+transfers and both dependent instruction fetches. The ROM selects the pair and
+the reader/writer role from `mhartid`. [Boot program](sim/coherent_harts.S)
+Run `bazel test //mixed_soc:coherent_harts --override_module=livehd=../livehd`.
+[CoherentMixedSoc.prp](pyrope/CoherentMixedSoc.prp)
+
+The four BOOM harts use 8, 6, 20 and 12 branch tags respectively. Their load/store queue depths are 8/8, 16/16, 32/32 and 24/12.
+The `boomHarts` parameter on `MixedSocTop` and `CoherentMixedSoc` selects zero to four BOOM sockets at elaboration, starting at hart 12. The remaining sockets drive idle mesh ports. Each populated socket binds its own tile configuration to the same TileLink endpoint. The runtime `core_enable` mask releases the populated harts from reset.
+
+The profile checker also runs the coherent program with the CS152 baseline core geometry on writer hart 12. Run both SoC presets, the coherent teaching-core variant, the subsystem tests and the invalid-width check from the suite root.
 
 ```sh
 python3 mixed_soc/scripts/check_profiles.py --lhd ../livehd/bazel-bin/lhd/lhd
@@ -40,6 +54,36 @@ python3 mixed_soc/scripts/check_profiles.py --lhd ../livehd/bazel-bin/lhd/lhd
 
 For Bazel runs below, add `--override_module=livehd=../livehd` while the
 suite's pinned LiveHD predates package-relative imports and record bindings.
+
+### Shared interrupt controllers
+
+Both Pyrope tops instantiate one Chipyard CLINT and one PLIC at the mesh gateway.
+Each hart has its own 32-bit software-interrupt register at `0x02000000 + 4*hart`
+and 64-bit timer compare at `0x02004000 + 8*hart`. The shared 64-bit time
+register at `0x0200bff8` increments on `rtcTick`, which defaults high.
+Program each timer compare before enabling timer interrupts.
+
+The PLIC starts at `0x0c000000`. Input bit `i` of `deviceInterrupts` drives
+level-sensitive source ID `i+1`. Priorities and pending bits are shared.
+Enables, threshold, claim and completion are per context. Each populated hart has a
+machine context and each supervisor-capable hart also has a supervisor context.
+In the default profile, Rocket harts 0–11 use contexts 0–11 and the four BOOM
+harts use M/S pairs 12/13, 14/15, 16/17 and 18/19. The gateway adapts
+32-bit Rocket and 64-bit BOOM accesses to the same register file.
+[Gateway](pyrope/PlatformInterrupts.prp) · [CLINT](../chipyard/pyrope/CLINT.prp) · [PLIC](../chipyard/pyrope/TLPLIC.prp)
+
+```sh
+bazel test //mixed_soc:interrupt_mmio //mixed_soc:interrupt_harts --override_module=livehd=../livehd
+```
+
+The MMIO test exercises supervisor routing, a stalled claim, a device ID above
+31 and partial timer writes. The firmware test runs Rocket hart 3 and two
+differently configured BOOM harts, 12 and 13. It checks interprocessor software
+interrupts, timer traps, and external claims and completions. The three harts pass
+one dirty cache line from Rocket 3 to BOOM 12 to BOOM 13 and back to Rocket 3.
+Each recipient checks two words in different beats before signaling the next
+hart through the CLINT. The driver checks that all three reach their own completion
+addresses, issue their completion stores, and return 16, 8, and 8 dirty beats respectively. SRAM and interrupt requests must stay on-chip. [Firmware](sim/interrupt_harts.S)
 
 ### Matched Pyrope and Verilator simulation
 
@@ -62,7 +106,7 @@ first writes eight pairs of distinct branch destinations into row 60 of the real
 Gemmini accumulator memory through the mesh. Then **Rocket0, Rocket3, BOOM0,
 and BOOM2 perform the connectivity test** (working mask `0x5009`). All 16 CPUs
 leave reset together after the preload (`core_enable=0xffff`); the other 12
-execute `park: wfi; j park` with interrupts held low. They remain ordinary
+execute `park: wfi; j park` with interrupt delivery disabled by firmware. They remain ordinary
 clocked instances and are not held in reset.
 Each active CPU fetches its own tiny program, loads its pointer from the Gemmini
 accumulator, and branches to its unique destination. Assertions require all four
@@ -113,7 +157,7 @@ before building when access is denied. The development host currently has
 `perf_event_paranoid=3`, so no host instruction-count or IPC result is available
 from this session. Wall times above were measured without perf.
 
-The [SystemVerilog glue](rtl/soc.sv) implements the same network and ports.
+The [SystemVerilog glue](rtl/soc.sv) provides the reference mesh for the Gemmini connectivity workload. The shared interrupt controllers and coherent SRAM are exercised by the Pyrope regressions.
 `scripts/generate_rtl.py` assembles a temporary Verilator input from the original vendor
 files, qualifying conflicting Chisel module names only in that build directory.
 No vendor RTL is checked in here. To regenerate Pyrope glue deliberately:
@@ -143,7 +187,7 @@ read-back, read-only and write-only registers, and denied host accesses. Their e
 
 The gateway exposes `mem_req`/`mem_rsp` for external memory and
 `host_req`/`host_rsp` for MMIO. The network tags packets with the physical tile
-ID; the vendored CPUs' one-bit hart ID cannot identify all 16 copies. The single
+ID. The reference Verilog uses the original narrow hart-ID port. The single
 Gemmini (tile 16) owns the 8 KiB window `0x18000..0x19fff` ([acc.sv](rtl/acc.sv)):
 
 | Offset | Contents |
@@ -158,8 +202,8 @@ Gemmini (tile 16) owns the 8 KiB window `0x18000..0x19fff` ([acc.sv](rtl/acc.sv)
 Automatic write-back lands one cycle after the result, from the held copy, so the
 TPU's inputs never depend on its outputs. Other CPU memory traffic goes to the gateway.
 The request and response lanes each admit one packet at a time with registered
-XY hops and round-robin injection. This is a connectivity fixture, not a
-coherent shared-memory manager.
+XY hops and round-robin injection. In Pyrope the gateway routes cacheable SRAM
+requests to the shared coherence manager and peripheral requests to the CLINT or PLIC.
 
 ### Floorplan
 

@@ -1,0 +1,86 @@
+const policy = import("../../util/pyrope/ReplacementPolicy.replacementPolicy")
+const types = import("TLBTypes")
+const sectored = import("SectoredTLB.SectoredTLB")
+const lookup = import("TLBLookup.TLBLookup")
+
+pub mod NBDTLB<pgLevels=3, haveCFlush=false, atomics=true, atomicsOnlyForIO=false, nPMPs=8, ways=8, ports=1>::[timecheck=false](clock:Clock, otherAddress:Unsigned(bits=13+9*pgLevels)=0, otherSize:U2=0, otherValid:U1=0, io_kill:U1, pmpTable:U608, io_ptw_ptbr_mode:U4, io_ptw_req_ready:U1, io_ptw_resp_bits_ae_final:U1, io_ptw_resp_bits_homogeneous:U1, io_ptw_resp_bits_level:Unsigned(bits=std.clog2(pgLevels)), io_ptw_resp_bits_pte_a:U1, io_ptw_resp_bits_pte_d:U1, io_ptw_resp_bits_pte_g:U1, io_ptw_resp_bits_pte_ppn:U44, io_ptw_resp_bits_pte_r:U1, io_ptw_resp_bits_pte_u:U1, io_ptw_resp_bits_pte_v:U1, io_ptw_resp_bits_pte_w:U1, io_ptw_resp_bits_pte_x:U1, io_ptw_resp_valid:U1, io_ptw_status_debug:U1, io_ptw_status_dprv:(e1:U1, e0:U1), io_ptw_status_mxr:U1, io_ptw_status_sum:U1, io_req_0_bits_cmd:U5, io_req_0_bits_passthrough:U1, io_req_0_bits_size:U2, io_req_0_bits_vaddr:Unsigned(bits=13+9*pgLevels), io_req_0_valid:U1, io_sfence_bits_addr:Unsigned(bits=12+9*pgLevels), io_sfence_bits_rs1:U1, io_sfence_bits_rs2:U1, io_sfence_valid:U1, reset:U1) -> (otherAllowed:U1@[], otherPhysical:U32@[], io_ptw_req_bits_bits_addr:Unsigned(bits=9*pgLevels)@[], io_ptw_req_bits_valid:U1@[], io_ptw_req_valid:U1@[], io_resp_0_ae_ld:U1@[], io_resp_0_ae_st:U1@[], io_resp_0_cacheable:U1@[], io_resp_0_ma_ld:U1@[], io_resp_0_ma_st:U1@[], io_resp_0_miss:U1@[], io_resp_0_paddr:U32@[], io_resp_0_pf_ld:U1@[], io_resp_0_pf_st:U1@[]) {
+  comptime const vpnBits = 9*pgLevels
+  comptime const levelBits = std.clog2(pgLevels)
+  reg tags:Unsigned(bits=5*vpnBits) = nil
+  reg levels:Unsigned(bits=5*levelBits) = nil
+  reg payload:U170 = nil
+  reg valid:U5 = nil
+  reg state:U2 = nil
+  reg refillTag:Unsigned(bits=vpnBits) = nil
+  reg victim:U2 = nil
+  reg tree:U3 = nil
+  wire ordinary:(hit:U1, multiple:U1, data:U34) = nil
+  wire otherPage:(hit:U1, multiple:U1, data:U34) = nil
+  const protection:types.Protection = (pmpTable=pmpTable, ptbr_mode=io_ptw_ptbr_mode, resp_bits_pte_ppn=io_ptw_resp_bits_pte_ppn, resp_valid=io_ptw_resp_valid, status_debug=io_ptw_status_debug, status_dprv=(io_ptw_status_dprv.e1 << 1) | io_ptw_status_dprv.e0, status_mxr=io_ptw_status_mxr, status_sum=io_ptw_status_sum)
+  const entries:(tags:Unsigned(bits=5*vpnBits), levels:Unsigned(bits=5*levelBits), data:U170, valid:U5) = (tags=tags, levels=levels, data=payload, valid=valid)
+  const first = lookup<pgLevels=pgLevels, haveCFlush=haveCFlush, atomics=atomics, atomicsOnlyForIO=atomicsOnlyForIO, nPMPs=nPMPs>(protection, entries, ordinary, command=io_req_0_bits_cmd, passthrough=io_req_0_bits_passthrough, size=io_req_0_bits_size, address=io_req_0_bits_vaddr)
+  mut translateSecond:U1 = 0
+  if ports == 2 {
+    const second = lookup<pgLevels=pgLevels, haveCFlush=haveCFlush, atomics=atomics, atomicsOnlyForIO=atomicsOnlyForIO, nPMPs=nPMPs>(protection, entries, ordinary=otherPage, address=otherAddress, size=otherSize, command=0, passthrough=0)
+    translateSecond = otherValid & second.translationEnabled
+    otherAllowed = U1(second.miss == 0 and second.pf_ld == 0 and second.ae_ld == 0 and second.ma_ld == 0 and second.cacheable != 0)
+    otherPhysical = second.paddr
+  } else {
+    otherAllowed = 0
+    otherPhysical = 0
+  }
+  const request = io_req_0_valid & first.translationEnabled
+  const start = U1(state == 0) & io_req_0_valid & first.needsRefill
+  const leaf = U1(io_ptw_resp_bits_level >= pgLevels-1)
+  const fill = io_ptw_resp_valid & io_ptw_resp_bits_homogeneous
+  const newEntry_sr__w1 = io_ptw_resp_bits_pte_v & (io_ptw_resp_bits_pte_r | (io_ptw_resp_bits_pte_x & (~io_ptw_resp_bits_pte_w) & 1)) & 1 & io_ptw_resp_bits_pte_a & 1 & io_ptw_resp_bits_pte_r & 1
+  const newEntry_sw__w1 = io_ptw_resp_bits_pte_v & (io_ptw_resp_bits_pte_r | (io_ptw_resp_bits_pte_x & (~io_ptw_resp_bits_pte_w) & 1)) & 1 & io_ptw_resp_bits_pte_a & 1 & io_ptw_resp_bits_pte_w & 1 & io_ptw_resp_bits_pte_d & 1
+  const newEntry_sx__w1 = io_ptw_resp_bits_pte_v & (io_ptw_resp_bits_pte_r | (io_ptw_resp_bits_pte_x & (~io_ptw_resp_bits_pte_w) & 1)) & 1 & io_ptw_resp_bits_pte_a & 1 & io_ptw_resp_bits_pte_x & 1
+  const refillData = (io_ptw_resp_bits_pte_ppn#[0..<20] << 14) | ((io_ptw_resp_bits_pte_u & 1) << 13) | ((io_ptw_resp_bits_pte_g & 1) << 12) | ((io_ptw_resp_bits_ae_final & 1) << 11) | ((newEntry_sw__w1 & 1) << 10) | ((newEntry_sx__w1 & 1) << 9) | ((newEntry_sr__w1 & 1) << 8) | ((first.writable & 1) << 7) | ((first.executable & 1) << 6) | ((first.readable & 1) << 5) | ((first.atomicLogical & 1) << 4) | ((first.atomicArithmetic & 1) << 3) | ((first.sideEffects & 1) << 2) | ((first.cacheableRefill & 1) << 1)
+  const pages = sectored<ways=ways, ports=ports, vpnBits=vpnBits>(clock=clock, reset=reset, vpn=io_req_0_bits_vaddr#[12..+vpnBits],
+    secondVpn=otherAddress#[12..+vpnBits], secondValid=translateSecond, lookup=request, miss=start, refill=fill & leaf,
+    refillVpn=refillTag, refillData=refillData, fence=io_sfence_valid,
+    byAddress=io_sfence_bits_rs1, byAsid=io_sfence_bits_rs2, flush=first.multipleHits)
+  otherPage = (hit=pages.secondHit, multiple=pages.secondMultiple, data=pages.secondData)
+  ordinary = (hit=pages.hit, multiple=pages.multiple, data=pages.data)
+  for i in 0..<5 {
+    const replace = if i == 4 { io_ptw_resp_valid & ~io_ptw_resp_bits_homogeneous }
+                    else { fill & ~leaf & U1(victim == i) }
+    if replace != 0 {
+      tags#[(i*vpnBits)..+vpnBits] = refillTag
+      levels#[(i*levelBits)..+levelBits] = io_ptw_resp_bits_level
+      payload#[(i*34)..+34] = refillData
+    }
+    const invalidate = if io_sfence_bits_rs1 != 0 { first.pageHits#[i] }
+                       else { 1 ^ (io_sfence_bits_rs2 & payload#[i*34+12]) }
+    valid#[i] = (replace | valid#[i]) & ~reset & ~first.multipleHits & ~(io_sfence_valid & invalidate)#[0]
+  }
+  const hits = first.pageHits#[0..+4]
+  const touched:U2 = (U1(hits#[2..+2] != 0) << 1) | U1((hits & 10) != 0)
+  const replacement = policy<count=4, depth=2, indexBits=2, treeBits=3>(tree, touch=touched, empty=~valid#[0..+4])
+  if start != 0 {
+    refillTag = io_req_0_bits_vaddr#[12..+vpnBits]
+    victim = replacement.victim
+  }
+  if reset != 0 { tree = 0 }
+  elif request != 0 and hits != 0 { tree = replacement.updated }
+  if reset != 0 or io_ptw_resp_valid != 0 { state = 0 }
+  elif state == 2 and io_sfence_valid != 0 { state = 3 }
+  elif state == 1 {
+    if io_kill != 0 { state = 0 }
+    elif io_ptw_req_ready != 0 { state = 2 | io_sfence_valid }
+    elif io_sfence_valid != 0 { state = 0 }
+  } elif start != 0 { state = 1 }
+  io_ptw_req_valid = U1(state == 1)
+  io_ptw_req_bits_valid = ~io_kill
+  io_ptw_req_bits_bits_addr = refillTag
+  io_resp_0_ae_ld = first.ae_ld
+  io_resp_0_ae_st = first.ae_st
+  io_resp_0_cacheable = first.cacheable
+  io_resp_0_ma_ld = first.ma_ld
+  io_resp_0_ma_st = first.ma_st
+  io_resp_0_miss = first.miss
+  io_resp_0_paddr = first.paddr
+  io_resp_0_pf_ld = first.pf_ld
+  io_resp_0_pf_st = first.pf_st
+}

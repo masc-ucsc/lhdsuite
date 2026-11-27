@@ -1,0 +1,34 @@
+const prediction = import("../pyrope/FetchPrediction.predict")
+const global = import("../pyrope/GlobalHistory")
+pub mod fetch_prediction(hits:U8, oldTaken:U1, oldMiss:U1, newTaken:U1, newMiss:U1, expected:U64) ->
+    (fastPc:U40@[0], slowPc:U40@[0], lane:U3@[0], valid:U1@[0], repairOn:U1@[0], repairOff:U1@[0]) {
+  const targets = 1 | (2 << 40) | (4 << 80) | (8 << 120) | (16 << 160) | (32 << 200) | (64 << 240) | (128 << 280)
+  const fast = prediction<width=8, banks=2, fast=true>(mask=255, taken=hits, valid=255, branch=255, targets, enabled=1,
+      old=0, currentMiss=0, pendingTaken=0, pendingMiss=0, pc=0)
+  const slow = prediction<width=8, banks=2>(mask=255, taken=hits, valid=255, branch=255, targets, enabled=1,
+      old=0, currentMiss=0, pendingTaken=0, pendingMiss=0, pc=0)
+  fastPc = fast.target
+  slowPc = slow.target
+  lane = slow.lane
+  valid = slow.redirect
+  repairOn = global.matches(old=0, taken=oldTaken, missed=oldMiss, expected, expectedTaken=newTaken, expectedMiss=newMiss)
+  repairOff = global.matches<repair=false>(old=0, taken=oldTaken, missed=oldMiss, expected, expectedTaken=newTaken, expectedMiss=newMiss)
+}
+test fetch_prediction.selection {
+  mut d = fetch_prediction
+  tick 256 {
+    d.hits = clock
+    d.oldTaken = clock#[0]
+    d.oldMiss = clock#[1]
+    d.newTaken = clock#[2]
+    d.newMiss = clock#[3]
+    d.expected = clock#[4]
+    step
+    const bankHits = if (clock & 15) != 0 { clock & 15 } else { clock }
+    const first = if clock != 0 { clock & -clock } else { 128 }
+    assert(d.fastPc == bankHits, "F1 combines targets within the earliest matching bank")
+    assert(d.slowPc == first and (1 << d.lane) == first and d.valid == U1(clock != 0), "F2 and F3 select the earliest lane")
+    const matched = clock#[4] == 0 and clock#[0] == clock#[2] and (clock#[0] != 0 or clock#[1] == clock#[3])
+    assert(d.repairOff == 1 and d.repairOn == U1(matched), "history-only stall repair follows the configured policy")
+  }
+}

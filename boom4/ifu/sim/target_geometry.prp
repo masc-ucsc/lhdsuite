@@ -1,0 +1,55 @@
+const btb = import("../pyrope/BTBBranchPredictorBank")
+const micro = import("../pyrope/FA2MicroBTBBranchPredictorBank")
+const bankedTarget = import("../pyrope/BTBBranchPredictorBank.BTBBranchPredictorBank")
+const fullyAssociative = import("../pyrope/FA2MicroBTBBranchPredictorBank.FA2MicroBTBBranchPredictorBank")
+const stages = import("../pyrope/PredictorResponse")
+
+comptime const ram = btb.params(nSets=8, nWays=3, offsetSz=7, extendedNSets=2)
+comptime const flops = btb.params(nSets=8, nWays=3, offsetSz=7, extendedNSets=2, useFlops=true)
+comptime const oneWay = btb.params(nSets=1, nWays=1, offsetSz=7, extendedNSets=1)
+comptime const dual = micro.params(nWays=4, tagSz=8, useDualEntries=true)
+comptime const single = micro.params(nWays=4, tagSz=8, useDualEntries=false)
+
+mod setAssociative<G>(clock:Clock, reset:Reset, cycle:U8) -> (ok:Bool@[]) {
+  const index = if G.nWays == 1 { 2 } elif cycle < 32 { cycle#[0..+2] } else { cycle#[3..+2] }
+  const pc:U58 = 0x100000000010000 + (index << 6)
+  const dest:U58 = if index == 2 { 0x120000000080008 } else { pc + 32 }
+  const u:stages.Update<58> = (valid=U1(cycle >= 16 and cycle <= 18), mispredict=0, repair=0, wrongTargets=0,
+      pc=pc, branches=0, cfiValid=1, cfi=1, taken=1, missed=0, branch=0, jal=1, jalr=0, target=dest)
+  const empty:stages.BankStage<58> = (taken=0, branch=0, jumps=0, valid=0, target=0)
+  const bank = bankedTarget<addrBits=58, geometry=G>(clock, reset, fetch=1, update=u, pc,
+      base1=empty, base2=empty, base3=empty, updateMeta=index)
+  ok = true
+  if cycle >= 32 and cycle < 56 and cycle#[0..+3] == 5 {
+    ok = bank.f2.valid == 2 and bank.f3.valid == 2 and bank.f2.target#[58..+58] == dest and bank.f3.target#[58..+58] == dest and bank.metadata == (if G.nWays == 1 { 0 } else { index })
+  }
+}
+
+mod associative<G>(clock:Clock, reset:Reset, cycle:U8) -> (ok:Bool@[]) {
+  const pc:U58 = 0x100000000000080
+  const branch = cycle == 12
+  const u:stages.Update<58> = (valid=U1(cycle == 8 or branch), mispredict=0, repair=0, wrongTargets=0,
+      pc=pc, branches=if branch { 2 } else { 0 }, cfiValid=1, cfi=if branch { 1 } else { 3 },
+      taken=1, missed=0, branch=U1(branch), jal=U1(not branch), jalr=0, target=pc + (if branch { 128 } else { 32 }))
+  const bank = fullyAssociative<addrBits=58, geometry=G>(clock, reset=U1(reset), pc, fetch=1, update=u)
+  ok = cycle < 20 or (bank.f3.valid == 10 and bank.f3.jumps == 8 and bank.f3.branch == 2 and
+      bank.f3.target#[58..+58] == pc+128 and bank.f3.target#[174..+58] == pc + (if G.useDualEntries { 32 } else { 128 }))
+}
+
+pub mod target_geometry(clock:Clock, reset:Reset, cycle:U8) -> (ok:Bool@[]) {
+  const a = setAssociative<G=ram>(clock, reset, cycle)
+  const b = setAssociative<G=flops>(clock, reset, cycle)
+  const c = associative<G=dual>(clock, reset, cycle)
+  const d = associative<G=single>(clock, reset, cycle)
+  const e = setAssociative<G=oneWay>(clock, reset, cycle)
+  ok = a and b and c and d and e
+}
+test target_geometry.targets {
+  mut dut = target_geometry
+  tick 64 {
+    dut.cycle = clock
+    dut.reset = clock < 2
+    step
+    assert(dut.ok)
+  }
+}

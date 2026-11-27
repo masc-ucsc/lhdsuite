@@ -1,0 +1,95 @@
+// The walker holds its request VPN through the synchronous lookup and refill.
+pub mod PageTableCache<vpnBits=27, entries=512, ways=1>(clock:Clock, reset:U1, read:U1, suitable:U1,
+    readVpn:Unsigned(bits=vpnBits), vpn:Unsigned(bits=vpnBits), write:U1, pte:U26, global:U1,
+    fence:U1, byAddress:U1, byAsid:U1, fenceVpn:Unsigned(bits=vpnBits)) ->
+    (hit:U1@[], miss:U1@[], error:U1@[], data:U26@[], shared:U1@[]) {
+  hit = 0
+  miss = 0
+  error = 0
+  data = 0
+  shared = 0
+  if entries > 0 {
+    comptime const sets = entries/ways
+    comptime const indexBits = std.clog2(sets)
+    comptime const tagBits = vpnBits-indexBits
+    comptime const levels = std.clog2(ways)
+    cassert(entries == 1 << std.clog2(entries) and ways == 1 << levels and ways <= entries)
+    type Index = Unsigned(bits=if sets == 1 { 1 } else { indexBits })
+    type Way = Unsigned(bits=if ways == 1 { 1 } else { levels })
+    type Word = Unsigned(bits=tagBits+27)
+    const idx:Index = vpn%sets
+    const tag = vpn >> indexBits
+    reg readIdx:Index = nil
+    reg s1:U1 = nil
+    reg s2:U1 = nil
+    if read != 0 { readIdx = readVpn%sets }
+    s1 = read & suitable
+    s2 = s1
+    wire victim:Way = nil
+    wire flush:U1 = nil
+    mut selected:Way = 0
+    mut occupied:Unsigned(bits=ways) = 0
+    mut matches:Unsigned(bits=ways) = 0
+    for way in 0..<ways {
+      reg ram:[sets]Word:[ordering="old"] = nil
+      reg valid:Unsigned(bits=sets) = nil
+      reg globals:Unsigned(bits=sets) = nil
+      occupied#[way] = valid#[idx]
+      const fill = write != 0 and victim == way
+      if fill {
+        const payload = (tag << 26) | pte
+        ram[idx] = (Unsigned(payload#^[..]) << (tagBits+26)) | payload
+        globals#[idx] = global
+      }
+      if reset != 0 or flush != 0 { valid = 0 }
+      elif fence != 0 {
+        if byAddress != 0 { valid#[fenceVpn%sets] = 0 }
+        elif byAsid != 0 { valid = valid & globals }
+        else { valid = 0 }
+      } elif fill { valid#[idx] = 1 }
+      reg word:Word = nil
+      reg present:U1 = nil
+      reg isGlobal:U1 = nil
+      if s1 != 0 {
+        word = ram[readIdx]
+        present = valid#[idx]
+        isGlobal = globals#[idx]
+      }
+      matches#[way] = present & U1(word#[26..+tagBits] == tag)
+      error = error | (present & word#^[..])
+      if matches#[way] != 0 {
+        data = data | word#[0..+26]
+        shared = shared | isGlobal
+        selected = way
+      }
+    }
+    hit = s2 & U1(matches != 0)
+    miss = s2 & U1(matches == 0)
+    flush = s2 & error
+    mut victimWay:Way = 0
+    if ways > 1 {
+      type Tree = Unsigned(bits=ways-1)
+      reg trees:[sets]Tree = nil
+      const tree = trees[idx]
+      mut updated:Tree = tree
+      for depth in 0..<levels {
+        for branch in 0..<(1 << depth) {
+          if victimWay >> (levels-depth) == branch {
+            victimWay#[levels-depth-1] = tree#[(1 << depth)-1+branch]
+          }
+          if selected >> (levels-depth) == branch {
+            updated#[(1 << depth)-1+branch] = selected#[levels-depth-1] ^ 1
+          }
+        }
+      }
+      if hit != 0 { trees[idx] = updated }
+    }
+    for offset in 0..<ways {
+      const way = ways-1-offset
+      if occupied#[way] == 0 { victimWay = way }
+    }
+    reg saved:Way = nil
+    saved = victimWay
+    victim = saved
+  }
+}

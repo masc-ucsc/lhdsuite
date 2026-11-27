@@ -1,0 +1,61 @@
+// Integer-to-FP and floating-point execution carry the same micro-op through
+// their arithmetic pipeline. Each stage resolves and kills speculative branches.
+type Uop<ftqBits, pregBits, robBits, branches, ldBits, stBits, immBits, addrBits> = (
+  inst:U32, debug_inst:U32, is_rvc:U1, debug_pc:Unsigned(bits=addrBits), iq_type_0:U1,
+  iq_type_1:U1, iq_type_2:U1, iq_type_3:U1, fu_code_0:U1, fu_code_1:U1,
+  fu_code_2:U1, fu_code_3:U1, fu_code_4:U1, fu_code_5:U1, fu_code_6:U1,
+  fu_code_7:U1, fu_code_8:U1, fu_code_9:U1, iw_issued:U1, iw_issued_partial_agen:U1,
+  iw_issued_partial_dgen:U1, iw_p1_speculative_child:U1, iw_p2_speculative_child:U1, iw_p1_bypass_hint:U1, iw_p2_bypass_hint:U1,
+  iw_p3_bypass_hint:U1, dis_col_sel:U1, br_mask:Unsigned(bits=branches), br_tag:Unsigned(bits=std.clog2(branches)), br_type:U4,
+  is_sfb:U1, is_fence:U1, is_fencei:U1, is_sfence:U1, is_amo:U1,
+  is_eret:U1, is_sys_pc2epc:U1, is_rocc:U1, is_mov:U1, ftq_idx:Unsigned(bits=ftqBits),
+  edge_inst:U1, pc_lob:U6, taken:U1, imm_rename:U1, imm_sel:U3,
+  pimm:Unsigned(bits=immBits), imm_packed:U20, op1_sel:U2, op2_sel:U3, fp_ctrl_ldst:U1,
+  fp_ctrl_wen:U1, fp_ctrl_ren1:U1, fp_ctrl_ren2:U1, fp_ctrl_ren3:U1, fp_ctrl_swap12:U1,
+  fp_ctrl_swap23:U1, fp_ctrl_typeTagIn:U2, fp_ctrl_typeTagOut:U2, fp_ctrl_fromint:U1, fp_ctrl_toint:U1,
+  fp_ctrl_fastpipe:U1, fp_ctrl_fma:U1, fp_ctrl_div:U1, fp_ctrl_sqrt:U1, fp_ctrl_wflags:U1,
+  fp_ctrl_vec:U1, rob_idx:Unsigned(bits=robBits), ldq_idx:Unsigned(bits=ldBits), stq_idx:Unsigned(bits=stBits), rxq_idx:U2,
+  pdst:Unsigned(bits=pregBits), prs1:Unsigned(bits=pregBits), prs2:Unsigned(bits=pregBits), prs3:Unsigned(bits=pregBits), ppred:Unsigned(bits=ftqBits),
+  prs1_busy:U1, prs2_busy:U1, prs3_busy:U1, ppred_busy:U1, stale_pdst:Unsigned(bits=pregBits),
+  exception:U1, exc_cause:U64, mem_cmd:U5, mem_size:U2, mem_signed:U1,
+  uses_ldq:U1, uses_stq:U1, is_unique:U1, flush_on_commit:U1, csr_cmd:U3,
+  ldst_is_rs1:U1, ldst:U6, lrs1:U6, lrs2:U6, lrs3:U6,
+  dst_rtype:U2, lrs1_rtype:U2, lrs2_rtype:U2, frs3_en:U1, fcn_dw:U1,
+  fcn_op:U5, fp_val:U1, fp_rm:U3, fp_typ:U2, xcpt_pf_if:U1,
+  xcpt_ae_if:U1, xcpt_ma_if:U1, bp_debug_if:U1, bp_xcpt_if:U1, debug_fsrc:U3,
+  debug_tsrc:U3,
+)
+
+pub mod shift<stages, Payload, branches>(
+  clock:Clock, reset:U1, valid:U1, uop:Payload, flush:U1, resolve:Unsigned(bits=branches), mispredict:Unsigned(bits=branches),
+) -> (outValid:U1@[], out:Payload@[]) {
+  cassert(stages > 0)
+  reg live:Unsigned(bits=stages)
+  reg rows:[stages]Payload:[ordering="old"]
+  reg masks:[stages]Unsigned(bits=branches):[ordering="old"]
+  for i in 0..<stages {
+    if i == 0 {
+      rows[i] = uop
+      masks[i] = uop.br_mask & ~resolve
+      live#[i] = U1(reset == 0 and flush == 0 and valid != 0 and (uop.br_mask & mispredict) == 0)
+    } else {
+      rows[i] = rows[i-1]
+      masks[i] = masks[i-1] & ~resolve
+      live#[i] = U1(reset == 0 and flush == 0 and live#[i-1] != 0 and (masks[i-1] & mispredict) == 0)
+    }
+  }
+  out = rows[stages-1]
+  out.br_mask = masks[stages-1]
+  outValid = live#[stages-1]
+}
+
+pub mod BranchUopPipeline<stages, ftqBits=4, pregBits=6, robBits=5, branches=8, ldBits=4, stBits=4, immBits=5, addrBits=40>(
+  clock:Clock, reset:U1, valid:U1, uop:Uop<ftqBits, pregBits, robBits, branches, ldBits, stBits, immBits, addrBits>, flush:U1, resolve:Unsigned(bits=branches), mispredict:Unsigned(bits=branches),
+) -> (outValid:U1@[], out:Uop<ftqBits, pregBits, robBits, branches, ldBits, stBits, immBits, addrBits>@[]) {
+  type Payload = Uop<ftqBits, pregBits, robBits, branches, ldBits, stBits, immBits, addrBits>
+  const result = shift<branches=branches, stages=stages, Payload=Payload>(clock=clock, reset=reset, valid=valid, uop=uop,
+    flush=flush, resolve=resolve, mispredict=mispredict)
+  outValid = result.outValid
+  out = result.out
+}
+

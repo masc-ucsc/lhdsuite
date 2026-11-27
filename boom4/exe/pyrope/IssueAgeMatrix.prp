@@ -1,0 +1,59 @@
+// An occupied slot stays in place. Row i records the slots older than i.
+pub mod IssueAgeMatrix<Q>(clock:Clock, reset:Reset, live:Unsigned(bits=Q.numEntries),
+    surviving:Unsigned(bits=Q.numEntries), dispatch:Unsigned(bits=Q.dispatchWidth),
+    requests:Unsigned(bits=Q.numEntries*Q.issueWidth)) ->
+    (ready:Unsigned(bits=Q.dispatchWidth)@[], allocations:Unsigned(bits=Q.dispatchWidth*Q.numEntries)@[],
+     valid:Unsigned(bits=Q.issueWidth)@[], grants:Unsigned(bits=Q.issueWidth*Q.numEntries)@[]) {
+  comptime const n = Q.numEntries
+  reg older:Unsigned(bits=n*n) = nil
+  mut vacant:Unsigned(bits=n) = ~live
+  mut allocated:Unsigned(bits=n) = 0
+  mut preceding:Unsigned(bits=n*n) = 0
+  ready = 0
+  const freeCount = (~live)#+[0..<n]
+  for lane in 0..<Q.dispatchWidth { ready#[lane] = U1(freeCount > lane) }
+  allocations = 0
+  for lane in 0..<Q.dispatchWidth {
+    const first = vacant & -vacant
+    if dispatch#[lane] != 0 {
+      allocations#[(lane*n)..+n] = first
+      for slot in 0..<n {
+        if first#[slot] != 0 { preceding#[(slot*n)..+n] = allocated }
+      }
+      allocated = allocated | first
+    }
+    vacant = vacant ^ first
+  }
+  for slot in 0..<n {
+    if reset { older#[(slot*n)..+n] = 0 }
+    elif allocated#[slot] != 0 { older#[(slot*n)..+n] = (surviving & live) | preceding#[(slot*n)..+n] }
+    elif surviving#[slot] == 0 { older#[(slot*n)..+n] = 0 }
+    else { older#[(slot*n)..+n] = older#[(slot*n)..+n] & surviving & live }
+  }
+
+  valid = 0
+  grants = 0
+  mut issued:Unsigned(bits=n) = 0
+  for port in 0..<Q.issueWidth {
+    mut eligible:Unsigned(bits=n) = 0
+    for slot in 0..<n { eligible#[slot] = live#[slot] & requests#[slot*Q.issueWidth+port] }
+    const available = eligible & ~issued
+    const compare = if Q.useFullIssueSel { available } else { eligible }
+    mut oldest:Unsigned(bits=n) = 0
+    for slot in 0..<n {
+      if compare#[slot] != 0 and (older#[(slot*n)..+n] & compare) == 0 { oldest#[slot] = 1 }
+    }
+    mut chosen:Unsigned(bits=n) = oldest & available
+    if !Q.useFullIssueSel and chosen == 0 {
+      if port%2 == 0 { chosen = available & -available }
+      else {
+        for slot in 0..<n {
+          if available#[slot] != 0 { chosen = 1 << slot }
+        }
+      }
+    }
+    valid#[port] = U1(chosen != 0)
+    for slot in 0..<n { grants#[slot*Q.issueWidth+port] = chosen#[slot] }
+    issued = issued | chosen
+  }
+}

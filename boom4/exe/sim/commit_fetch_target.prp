@@ -1,0 +1,46 @@
+const fetchTarget = import("../pyrope/CommitFetchTarget.CommitFetchTarget")
+
+pub mod commit_fetch_target(
+  clock:Clock,
+  dispatched:U5,
+  valid:U5,
+  systemPC:U5,
+  retired:U5,
+  exception:U1,
+) -> (release:U1@[], tag:U6@[]) {
+  const ftq = fetchTarget<bits=6, width=5>(
+    clock=clock,
+    dispatched=dispatched,
+    valid=valid,
+    systemPC=systemPC,
+    dispatchTags=(17 << 24) | (29 << 18) | (35 << 12) | (3 << 6) | 11,
+    retired=retired,
+    retireTags=(39 << 24) | (27 << 18) | (33 << 12) | (5 << 6) | 9,
+    exception=exception,
+    exceptionTag=37,
+  )
+  release = ftq.release
+  tag     = ftq.tag
+}
+
+test commit_fetch_target.arbitration {
+  mut d = commit_fetch_target
+  tick 2050 {
+    const retired = clock#[0..+5]
+    const fire    = clock#[5..+5]
+    d.dispatched = fire
+    d.valid      = fire
+    d.systemPC   = 0ub10110
+    d.retired    = retired
+    d.exception  = clock#[10]
+    step
+    const first    = fire & -fire
+    const early    = (first & 0ub10110) != 0
+    const earlyTag = if first == 2 { 3 } elif first == 4 { 35 } else { 17 }
+    const last     = if retired >= 16 { 39 } elif retired >= 8 { 27 } elif retired >= 4 { 33 } elif retired >= 2 { 5 } else { 9 }
+    assert(d.release == U1(early or retired != 0 or clock#[10] != 0), "FTQ release qualifier")
+    if d.release != 0 {
+      assert(d.tag == (if early { earlyTag } elif clock#[10] != 0 { 37 } else { last }), "system, exception and youngest commit priority")
+    }
+  }
+}

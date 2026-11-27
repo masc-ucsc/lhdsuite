@@ -1,0 +1,44 @@
+const mulSingle = import("MulAddRecFNPipe_l2_e8_s24.MulAddRecFNPipe_l2_e8_s24")
+const mulDouble = import("MulAddRecFNPipe_l2_e11_s53.MulAddRecFNPipe_l2_e11_s53")
+const delay = import("../../util/pyrope/EnabledPipe.ValidPipe")
+
+pub mod FmaPipe<bits, latency>(clock:Clock, io_in_bits_fmaCmd:U2, io_in_bits_in1:U65, io_in_bits_in2:U65,
+    io_in_bits_in3:U65, io_in_bits_ren3:U1, io_in_bits_rm:U3, io_in_bits_swap23:U1, io_in_valid:U1, reset:U1)
+    -> (io_out_bits_data:U65@[], io_out_bits_exc:U5@[], io_out_valid:U1@[]) {
+  comptime const resultStages = latency-3
+  cassert((bits == 32 or bits == 64) and latency >= 3)
+  type Operand = Unsigned(bits=bits+1)
+  reg valid:U1
+  reg rounding:U3
+  reg command:U2
+  reg a:Operand
+  reg b:Operand
+  reg c:Operand
+  valid = io_in_valid
+  if io_in_valid != 0 {
+    rounding = io_in_bits_rm
+    command = io_in_bits_fmaCmd
+    a = io_in_bits_in1#[0..+(bits+1)]
+    b = if io_in_bits_swap23 != 0 { 1 << (bits-1) } else { io_in_bits_in2#[0..+(bits+1)] }
+    c = if (io_in_bits_ren3 | io_in_bits_swap23) != 0 { io_in_bits_in3#[0..+(bits+1)] }
+        else { (io_in_bits_in1 ^ io_in_bits_in2) & (1 << bits) }
+  }
+  mut result:U65 = 0
+  mut flags:U5 = 0
+  mut ready:U1 = 0
+  if bits == 32 {
+    const fma = mulSingle(clock, reset, io_validin=valid, io_op=command, io_a=a, io_b=b, io_c=c, io_roundingMode=rounding)
+    result = fma.io_out
+    flags = fma.io_exceptionFlags
+    ready = fma.io_validout
+  } else {
+    const fma = mulDouble(clock, reset, io_validin=valid, io_op=command, io_a=a, io_b=b, io_c=c, io_roundingMode=rounding)
+    result = if fma.io_out#[61..+3] == 7 { fma.io_out & 0x1efefffffffffffff } else { fma.io_out }
+    flags = fma.io_exceptionFlags
+    ready = fma.io_validout
+  }
+  const response = delay<bits=70, stages=resultStages>(clock, reset, valid=ready, data=(flags << 65) | result)
+  io_out_bits_data = response.out#[0..+65]
+  io_out_bits_exc = response.out#[65..+5]
+  io_out_valid = response.outValid
+}

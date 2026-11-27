@@ -1,0 +1,51 @@
+const oldest = import("../pyrope/QueueAge.oldest")
+const age    = import("../pyrope/QueueAge.QueueAge")
+mod check<entries>(cycle:U12) -> (ok:Bool@[]) {
+  comptime const bits = std.clog2(entries)
+  const start   = cycle%entries
+  const length  = (cycle/entries)%(entries + 1)
+  const epoch   = (cycle/(entries*(entries + 1)))%2
+  const end     = start + length
+  const head    = (epoch << bits) | start
+  const tail    = ((epoch ^ (end/entries)) << bits) | (end%entries)
+  const older   = age<entries=entries>(head, tail)
+  const younger = age<entries=entries, excludeHead=true>(head, tail)
+  const run     = ((1 << length) - 1) << start
+  const rotated = (run | (run >> entries))#[0..+entries]
+  ok = older == rotated and younger == (rotated - (if length > 0 { 1 << start } else { 0 }))
+}
+pub mod queue_age(cycle:U12) -> (ok:Bool@[], tag:U4@[]) {
+  tag = oldest<entries=8>(candidates=cycle#[0..+8], head=cycle#[8..+4])
+  ok = check<entries=8>(cycle) and check<entries=16>(cycle) and check<entries=24>(cycle) and check<entries=32>(
+      cycle
+    )
+}
+test queue_age.circular {
+  mut d = queue_age
+  tick 2112 {
+    d.cycle = clock
+    step
+    assert(d.ok, "load and store age masks must match the occupied circular interval")
+  }
+}
+
+test queue_age.exhaustive {
+  mut d = queue_age
+  tick 4096 {
+    const mask = clock%256
+    const head = clock/256
+    d.cycle = clock
+    step
+    mut best         = 7
+    if mask != 0 {
+      const rotated     = ((mask | (mask << 8)) >> (head%8))%256
+      const distanceBit = rotated & -rotated
+      const bestDistance = U1((distanceBit & 170) != 0) | (U1((distanceBit & 204) != 0) << 1) | (
+          U1((distanceBit & 240) != 0) << 2
+        )
+      best         = ((head%8) + bestDistance)%8
+    }
+    const expected = best | (((head/8) ^ U1(best < (head%8))) << 3)
+    assert(d.tag == expected, "oldest candidate and its generation")
+  }
+}

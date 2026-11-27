@@ -1,0 +1,67 @@
+const control = import("../pyrope/DispatchHazards.hazards")
+
+pub mod dispatch_hazards(
+  clock:Clock,
+  valid:U5,
+  uniqueOp:U5,
+  tag:U5,
+  blocked:U5,
+  ooo:U1,
+  empty:U1,
+  flush:U1,
+) -> (fence:U1@[], multi:U5@[], single:U5@[], stalled:U1@[]) {
+  const m = control<superscalarSnapshots=true, width=5>(
+    valid=valid,
+    uniqueOp=uniqueOp,
+    takesTag=tag,
+    blocked=blocked,
+    enableOOO=ooo,
+    pipelineEmpty=empty,
+    flush=flush,
+  )
+  const s = control<superscalarSnapshots=false, width=5>(
+    valid=valid,
+    uniqueOp=uniqueOp,
+    takesTag=tag,
+    blocked=blocked,
+    enableOOO=ooo,
+    pipelineEmpty=empty,
+    flush=flush,
+  )
+  multi   = m.fire
+  single  = s.fire
+  fence   = s.fence
+  stalled = s.stalled
+}
+
+test dispatch_hazards.rows {
+  mut d = dispatch_hazards
+  tick 65536 {
+    const valid    = clock#[0..+5]
+    const tag      = clock#[5..+5]
+    const uniqueOp = U5(1 << clock#[10..+3])
+    const blocked  = U5(1 << ((clock#[8..+3] + 3) & 7))
+    d.valid    = valid
+    d.tag      = tag
+    d.uniqueOp = uniqueOp
+    d.blocked  = blocked
+    d.ooo      = clock#[13]
+    d.empty    = clock#[14]
+    d.flush    = clock#[15]
+    step
+    const firstValid  = valid & -valid
+    const serial      = if clock#[13] != 0 { uniqueOp } else { 31 }
+    const drain       = (valid & serial) & ~(if clock#[14] != 0 { firstValid } else { 0 })
+    const firstUnique = valid & uniqueOp
+    const afterUnique = if firstUnique != 0 { -(firstUnique << 1) } else { 0 }
+    const tags        = valid & tag
+    const laterTags   = tags & (tags - 1)
+    const common      = valid & (blocked | drain | afterUnique | (if clock#[15] != 0 { 31 } else { 0 }))
+    const limited     = common | laterTags
+    const multi       = if common != 0 { valid & ((common & -common) - 1) } else { valid }
+    const single      = if limited != 0 { valid & ((limited & -limited) - 1) } else { valid }
+    const fence       = U1(drain != 0)
+    assert(d.multi == multi and d.single == single, "dispatch in age order with both snapshot policies")
+    assert(d.stalled == U1(single != valid) and fence == d.fence, "row backpressure and pipeline drain")
+  }
+}

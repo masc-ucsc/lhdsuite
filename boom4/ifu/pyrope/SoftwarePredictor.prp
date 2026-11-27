@@ -1,0 +1,73 @@
+// BOOM's reference software model (predictor_sw.cc and btb_sw.cc). The
+// fetch banks in one tile share the 256 counters and 32-entry FIFO BTB.
+pub mod SoftwarePredictor<width=4, addrBits=40>(
+  clock:Clock, reset:U1, fetch1:U1, pc1:Unsigned(bits=addrBits), train:U1, updatePc:Unsigned(bits=addrBits),
+  repair:U1, btbMiss:Unsigned(bits=width), branches:Unsigned(bits=width),
+  cfi:Unsigned(bits=std.clog2(width)), cfiValid:U1, taken:U1, branch:U1, jump:U1, target:Unsigned(bits=addrBits),
+) -> (direction:Unsigned(bits=width)@[], late:Unsigned(bits=width)@[],
+    valid:Unsigned(bits=width)@[], kind:Unsigned(bits=width)@[], targets:Unsigned(bits=width*addrBits)@[]) {
+  cassert(width == 4 or width == 8)
+  type Mask = Unsigned(bits=width)
+  type Target = (pc:Unsigned(bits=addrBits), target:Unsigned(bits=addrBits), branch:U1)
+  reg counters:U512 = nil
+  reg entries:[32]Target:[ordering="old"] = nil
+  reg victim:U5 = nil
+  reg dirs:Mask = nil
+  reg hits:Mask = nil
+  reg kinds:Mask = nil
+  reg addresses:Unsigned(bits=width*addrBits) = nil
+  reg dirs3:Mask = nil
+  dirs3 = dirs
+
+  for lane in 0..<width {
+    const second = width == 8 and pc1#[3] != lane/4
+    const fetchPc:Unsigned(bits=addrBits) = ((pc1 & ~7) + (if second { 8 } else { 0 }) + (lane%4)*2)#[0..+addrBits]
+    if reset != 0 {
+      dirs#[lane] = 0
+      hits#[lane] = 0
+      kinds#[lane] = 0
+      addresses#[(lane*addrBits)..+addrBits] = 0
+    } elif fetch1 != 0 and (not second or pc1#[3..+3] != 7) {
+      dirs#[lane] = counters#[fetchPc#[0..+8]*2+1]
+      hits#[lane] = 0
+      for stepIdx in 0..<32 {
+        const readSlot = 31-stepIdx
+        if entries[readSlot].pc == fetchPc {
+          hits#[lane] = 1
+          kinds#[lane] = entries[readSlot].branch
+          addresses#[(lane*addrBits)..+addrBits] = entries[readSlot].target
+        }
+      }
+    }
+  }
+  // Training fields are in fetch order. A CFI in the first bank stops updates
+  // in the second; a bank at the end of a cache line cannot update its neighbor.
+  for lane in 0..<width {
+    const upper = lane >= 4
+    const eligible = not upper or (updatePc#[3..+3] != 7 and (cfiValid == 0 or cfi >= 4))
+    const bankMiss = btbMiss#[((lane/4)*4)..+4]
+    if train != 0 and reset == 0 and repair == 0 and bankMiss == 0 and eligible and branches#[lane] != 0 {
+      const idx = ((updatePc & ~7)+lane*2)#[0..+8]
+      const old = counters#[(idx*2)..+2]
+      if cfiValid != 0 and cfi == lane and taken != 0 {
+        if old != 3 { counters#[(idx*2)..+2] = (old+1)#[0..+2] }
+      } elif old != 0 { counters#[(idx*2)..+2] = (old-1)#[0..+2] }
+    }
+  }
+  const pc:Unsigned(bits=addrBits) = ((updatePc & ~7)+(cfi << 1))#[0..+addrBits]
+  if reset == 0 and train != 0 and repair == 0 and cfiValid != 0 and (branch | jump) != 0 and
+      (cfi < 4 or updatePc#[3..+3] != 7) and btbMiss#[((cfi/4)*4)..+4] == 0 {
+    mut slot = victim
+    mut matched = false
+    for i in 0..<32 {
+      if entries[31-i].pc == pc { slot = 31-i; matched = true }
+    }
+    entries[slot] = (pc=pc, target=target, branch=branch)
+    if not matched { wrap victim = victim+1 }
+  }
+  direction = dirs
+  late = dirs3
+  valid = hits
+  kind = kinds & hits
+  targets = addresses
+}

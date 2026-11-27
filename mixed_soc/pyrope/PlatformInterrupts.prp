@@ -1,0 +1,102 @@
+const clint  = import("../../chipyard/pyrope/CLINT.registers")
+const plic   = import("../../chipyard/pyrope/TLPLIC.registers")
+const mmio   = import("../../chipyard/pyrope/InterruptMMIO")
+const tl     = import("mixed_packet")
+const layout = import("mixed_layout")
+
+// Chipyard assigns an M context then an optional S context in hart order.
+pub comb contextIndex(hart, supervisors) -> (index) {
+  mut count:U6 = hart
+  for i in 0..<16 {
+    if i < hart {
+      wrap count = count + ((supervisors >> i) & 1)
+    }
+  }
+  index = count
+}
+
+pub comb mapped(address:U32) -> (hit:Bool) {
+  hit = address#[16..+16] == 0x200 or address#[26..+6] == 3
+}
+
+pub mod PlatformInterrupts<harts=16, supervisors=0xf000, sources=2>(
+  address:U32,
+  clock:Clock,
+  data:U64,
+  devices:Unsigned(bits=sources),
+  packet:U40,
+  readyOut:Bool,
+  reset:Reset,
+  tickRtc:Bool,
+  valid:Bool,
+) -> (addrOut:U32@[], dataOut:U64@[], interrupts:U64@[], packetOut:U40@[], ready:Bool@[], validOut:Bool@[]) {
+  cassert(harts >= 1 and harts <= 16)
+  comptime const contexts     = contextIndex(hart=harts, supervisors)
+  comptime const priorityBits = if sources >= 4 { 3 } elif sources >= 2 { 2 } else { 1 }
+  const isClint = address#[16..+16] == 0x200
+  const origin  = packet#[35..+5]
+  const mask    = packet#[2..+8]
+  const op      = packet#[23..+4]
+  const size    = packet#[19..+4]
+  const read    = op == 4
+  const legal   = (op <= 1 or read) and size <= 3 and packet#[1] == 0
+  // RV32 endpoints place each four-byte word on the low half of a mesh beat.
+  const high  = origin < 12 and address#[2] != 0
+  const lanes = if high { (mask << 4)#[0..+8] } else { mask }
+  const word  = if high { (data << 32)#[0..+64] } else { data }
+  reg full:Bool = false
+  ready = not full
+  const access         = valid and ready and legal
+  const rm             = if access and read { lanes } else { 0 }
+  const wm             = if access and not read { lanes } else { 0 }
+  const cb:mmio.Access = (
+    address=address,
+    data=word,
+    readMask=if isClint { rm } else { 0 },
+    writeMask=if isClint { wm } else { 0 },
+  )
+  const pb:mmio.Access = (
+    address=address,
+    data=word,
+    readMask=if isClint { 0 } else { rm },
+    writeMask=if isClint { 0 } else { wm },
+  )
+  const timer          = clint<harts=harts>(clock, reset, tickRtc, bus=cb)
+  const external       = plic<contexts=contexts, priorityBits=priorityBits, sources=sources>(
+    clock,
+    reset,
+    levels=devices,
+    bus=pb,
+  )
+  interrupts = 0
+  for h in 0..<harts {
+    const m = contextIndex(hart=h, supervisors)
+    interrupts#[(4*h)..+3] = (external.irq#[m] << 2) | (timer.timer#[h] << 1) | timer.software#[h]
+    if ((supervisors >> h) & 1) != 0 {
+      interrupts#[4*h + 3] = external.irq#[m + 1]
+    }
+  }
+  reg response:U40 = nil
+  reg saved:U32    = nil
+  reg result:U64   = nil
+  if valid and ready {
+    full     = true
+    response = (layout.HOST << 35)
+      | (origin << 30)
+      | (tl.D << 27)
+      | (U1(read) << 23)
+      | (size << 19)
+      | (packet#[13..+3] << 13)
+      | (U1(read and not legal) << 1)
+      | U1(not legal)
+    saved    = address
+    const value = if isClint { timer.data } else { external.data }
+    result = if high { value >> 32 } else { value }
+  } elif readyOut {
+    full = false
+  }
+  validOut  = full
+  packetOut = response
+  addrOut   = saved
+  dataOut   = result
+}

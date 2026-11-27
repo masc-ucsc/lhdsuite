@@ -1,0 +1,66 @@
+const queue = import("../pyrope/FetchTargetQueue.FetchTargetQueue")
+
+mod trial<entries, width=4, banks=1>(clock:Clock, reset:U1, write:U1, commit:U1, slot:U6, serial:U8, redirect:U1) -> (
+  ready:U1@[], tail:U6@[], pc:U58@[], branchMask:Unsigned(bits=width)@[], startBank:U1@[], cfi:Unsigned(bits=std.clog2(width))@[], history:U80@[], ras:U7@[],
+) {
+  const q = queue<addrBits=58, historyBits=80, rasDepth=96, entries=entries, fetchWidth=width, banks=banks>(clock=clock, reset=reset, io_enq_valid=write,
+      io_enq_bits_pc=0x100000000001000 + serial*8, io_enq_bits_cfi_idx_valid=1, io_enq_bits_cfi_idx_bits=serial#[0..+std.clog2(width)],
+      io_enq_bits_cfi_type=1, io_enq_bits_cfi_is_call=0, io_enq_bits_cfi_is_ret=0,
+      io_enq_bits_ras_top=0, io_enq_bits_mask=(1 << width)-1, io_enq_bits_br_mask=serial#[0..+width],
+      io_enq_bits_ghist_old_history=(1 << 78) + 0x8000 + serial, io_enq_bits_ghist_current_saw_branch_not_taken=1,
+      io_enq_bits_ghist_new_saw_branch_not_taken=0, io_enq_bits_ghist_new_saw_branch_taken=0,
+      io_enq_bits_ghist_ras_idx=(serial+32)#[0..<7], io_enq_bits_bpd_meta_0=serial,
+      io_deq_valid=commit, io_deq_bits=slot%entries, io_arb_ftq_reqs_0=slot%entries,
+      io_arb_ftq_reqs_1=slot%entries, io_arb_ftq_reqs_2=slot%entries,
+      io_redirect_valid=redirect, io_redirect_bits=slot%entries, io_brupdate_b2_uop_ftq_idx=slot%entries,
+      io_brupdate_b2_uop_pc_lob=0, io_brupdate_b2_mispredict=0, io_brupdate_b2_taken=0)
+  ready = q.io_enq_ready
+  tail = q.io_enq_idx
+  pc = q.io_rrd_ftq_resps_0_pc
+  startBank = q.io_rrd_ftq_resps_0_entry_start_bank
+  cfi = q.io_rrd_ftq_resps_0_entry_cfi_idx_bits
+  branchMask = q.io_rrd_ftq_resps_0_entry_br_mask
+  ras = q.io_rrd_ftq_resps_0_ghist_ras_idx
+  history = q.io_rrd_ftq_resps_0_ghist_old_history
+}
+
+pub mod ftq_depth(clock:Clock, reset:U1, write:U1, commit:U1, readback:U1, redirect:U1,
+    slot:U6, serial:U8) -> (advanced:Bool@[], correct:Bool@[], stored:Bool@[], wrapped:Bool@[]) {
+  advanced = true
+  stored = true
+  correct = true
+  wrapped = true
+  for depth in (12, 16, 32, 40) {
+    comptime const banks = if depth > 16 { 2 } else { 1 }
+    comptime const width = 4*banks
+    const q = trial<depth, width=width, banks=banks>(clock=clock, reset=reset, write=write, commit=commit, slot=slot, serial=serial, redirect=redirect)
+    advanced = advanced and q.ready != 0 and q.tail == (serial + 2)%depth
+    const last = 62 - (63 + depth - slot%depth)%depth
+    stored = stored and q.pc == 0x100000000001000 + last*8 and q.branchMask == last#[0..+width] and q.history == (1 << 78) + 0x8000 + last and q.ras == last+32
+    stored = stored and q.cfi == last#[0..+std.clog2(width)] and q.startBank == (if banks == 2 { last#[0] } else { 0 })
+    if readback != 0 {
+      correct = correct and q.pc == 0x100000000001000 + serial*8 and q.branchMask == serial#[0..+width] and q.history == (1 << 78) + 0x8000 + serial and q.ras == serial+32
+    }
+    wrapped = wrapped and q.tail == (slot%depth + 1)%depth
+  }
+}
+
+test ftq_depth.wrap_and_read {
+  mut dut = ftq_depth
+  tick 324 {
+    const phase = clock%3
+    const serial = if clock < 3 { 0 } else { clock/3 - 1 }
+    dut.reset = U1(clock < 3)
+    dut.serial = serial
+    dut.slot = if clock < 192 { (serial + 1)%64 } else { (clock - 192)%64 }
+    dut.write = U1(clock >= 3 and phase == 0 and clock < 192)
+    dut.commit = U1(clock >= 3 and phase == 2 and clock < 192)
+    dut.readback = U1(clock >= 3 and phase == 1 and clock < 192)
+    dut.redirect = U1(clock >= 256)
+    step
+    if clock >= 3 and phase == 1 and clock < 192 { assert(dut.correct, "FTQ PC, branch mask and history") }
+    if clock >= 3 and phase == 2 and clock < 192 { assert(dut.advanced, "enqueue and commit across wrap") }
+    if clock >= 192 and clock < 256 { assert(dut.stored, "all resident entries retain distinct snapshots") }
+    if clock >= 256 { assert(dut.wrapped, "redirect restores the next FTQ index") }
+  }
+}

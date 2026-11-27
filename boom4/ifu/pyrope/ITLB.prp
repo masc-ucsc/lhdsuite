@@ -1,0 +1,226 @@
+const replacementPolicy = import("../../util/pyrope/ReplacementPolicy.replacementPolicy")
+const geometry = import("../../common/pyrope/PageGeometry")
+const PMAChecker = import("PMAChecker.PMAChecker")
+const regions = import("../../common/pyrope/BoomPMP")
+
+// Fields consumed by the instruction-side permission and address checks.
+comb entry(data:U42) -> (ppn:U20, u:U1, ae_ptw:U1, ae_final:U1, pf:U1, gf:U1, sx:U1, px:U1) {
+  ppn = data#[22..+20]
+  u = data#[21]
+  ae_ptw = data#[19]
+  ae_final = data#[18]
+  pf = data#[16]
+  gf = data#[15]
+  sx = data#[13]
+  px = data#[7]
+}
+
+pub mod ITLB<pgLevels=3, nPMPs=8, ways=32, sets=1, sectors=4, superpages=4>::[timecheck=false](clock:Clock, pmpTable:U608, io_ptw_ptbr_mode:U4, io_ptw_req_ready:U1, io_ptw_resp_bits_ae_final:U1, io_ptw_resp_bits_ae_ptw:U1, io_ptw_resp_bits_gf:U1, io_ptw_resp_bits_homogeneous:U1, io_ptw_resp_bits_hr:U1, io_ptw_resp_bits_hw:U1, io_ptw_resp_bits_hx:U1, io_ptw_resp_bits_level:Unsigned(bits=std.clog2(pgLevels)), io_ptw_resp_bits_pf:U1, io_ptw_resp_bits_pte_a:U1, io_ptw_resp_bits_pte_d:U1, io_ptw_resp_bits_pte_g:U1, io_ptw_resp_bits_pte_ppn:U44, io_ptw_resp_bits_pte_r:U1, io_ptw_resp_bits_pte_u:U1, io_ptw_resp_bits_pte_v:U1, io_ptw_resp_bits_pte_w:U1, io_ptw_resp_bits_pte_x:U1, io_ptw_resp_valid:U1, io_ptw_status_debug:U1, io_req_bits_prv:(e1:U1, e0:U1), io_req_bits_vaddr:Unsigned(bits=13+9*pgLevels), io_req_valid:U1, io_sfence_bits_addr:Unsigned(bits=12+9*pgLevels), io_sfence_bits_rs1:U1, io_sfence_bits_rs2:U1, io_sfence_valid:U1, reset:U1) -> (io_ptw_req_bits_bits_addr:Unsigned(bits=9*pgLevels)@[], io_ptw_req_bits_bits_need_gpa:U1@[], io_ptw_req_valid:U1@[], io_resp_ae_inst:U1@[], io_resp_miss:U1@[], io_resp_paddr:U32@[], io_resp_pf_inst:U1@[]) {
+  cassert(pgLevels >= 3 and pgLevels <= 5)
+  comptime const vpnBits = 9*pgLevels
+  comptime const levelBits = std.clog2(pgLevels)
+  type VPN = Unsigned(bits=vpnBits)
+  type Level = Unsigned(bits=levelBits)
+  comptime const rows = ways/sectors
+  comptime const depth = std.clog2(rows)
+  comptime const laneBits = std.clog2(sectors)
+  comptime const totalRows = rows*sets
+  cassert(sets >= 1 and sets == 1 << std.clog2(sets))
+  cassert(sectors >= 1 and sectors == 1 << laneBits)
+  cassert(rows >= 1 and rows*sectors == ways)
+  comptime const rowBits = if depth == 0 { 1 } else { depth }
+  comptime const rowTreeBits = if rows == 1 { 1 } else { (1 << depth)-1 }
+  type Way = Unsigned(bits=rowBits)
+  type Tree = Unsigned(bits=rowTreeBits)
+  reg rowTags:[totalRows]VPN:[ordering="old"] = nil
+  reg sectorData:[ways*sets]U42:[ordering="old"] = nil
+  reg validSectors:Unsigned(bits=ways*sets) = nil
+  reg replacement:[sets]Tree:[ordering="old"] = nil
+  comptime const superDepth = std.clog2(superpages)
+  cassert(superpages >= 1)
+  comptime const superBits = if superDepth == 0 { 1 } else { superDepth }
+  comptime const superTreeBits = if superpages == 1 { 1 } else { (1 << superDepth)-1 }
+  type SuperWay = Unsigned(bits=superBits)
+  type SuperTree = Unsigned(bits=superTreeBits)
+  reg superTags:[superpages]VPN:[ordering="old"] = nil
+  reg superData:[superpages]U42:[ordering="old"] = nil
+  reg superLevels:Unsigned(bits=superpages*levelBits) = nil
+  reg superValid:Unsigned(bits=superpages) = nil
+  reg superTree:SuperTree = nil
+  reg specialLevel:Level
+  reg specialTag:VPN
+  reg specialData:U42
+  reg specialValid:U1
+  reg state:U2
+  reg refillTag:VPN
+  reg superVictim:SuperWay
+  reg victimWay:Way
+  reg partialHit:U1
+  reg partialWay:Way
+  reg needGPA:U1
+  const vmEnabled:U1 = io_ptw_ptbr_mode#[3..<4] & (~io_req_bits_prv.e1#[0]) & 1
+  mut privilege:U3 = if io_ptw_resp_valid != 0 { 1 }
+    else { ((io_ptw_status_debug & 1) << 2) | ((io_req_bits_prv.e1 << 1) | io_req_bits_prv.e0)#[0..<2] }
+  const vpn = io_req_bits_vaddr#[12..+vpnBits]
+  const set = (vpn >> laneBits)%sets
+  const requestedSector = vpn%sectors
+  mut sectorHits:Unsigned(bits=rows) = 0
+  mut matchingRows:Unsigned(bits=rows) = 0
+  mut vacant:Unsigned(bits=rows) = 0
+  mut touched:Way = 0
+  mut sectorPPN:U20 = 0
+  mut sectorPF:U1 = 0
+  mut sectorAE:U1 = 0
+  for way in 0..<rows {
+    const row = set*rows + way
+    const mask = validSectors#[(row*sectors)..+sectors]
+    const hit = mask != 0 and (rowTags[row%totalRows] >> laneBits) == (vpn >> laneBits)
+    matchingRows#[way] = U1(hit)
+    vacant#[way] = U1(mask == 0)
+    if hit {
+      touched = touched | way
+      if mask#[requestedSector] != 0 and vmEnabled != 0 {
+        const e = entry(sectorData[(row*sectors + requestedSector)%(ways*sets)])
+        sectorHits#[way] = 1
+        sectorPPN = sectorPPN | e.ppn
+        sectorPF = sectorPF | (~e.gf & (e.pf | (~e.ae_ptw & ~(e.sx & (e.u ^ io_req_bits_prv.e0)))))
+        sectorAE = sectorAE | ~e.px | e.ae_ptw | e.ae_final
+      }
+    }
+  }
+  mut superHits:Unsigned(bits=superpages) = 0
+  mut superWay:SuperWay = 0
+  mut superPPN:U20 = 0
+  mut superPF:U1 = 0
+  mut superAE:U1 = 0
+  for i in 0..<superpages {
+    const tag = superTags[i%superpages]
+    const offset = geometry.pageMask<levels=pgLevels>(level=superLevels#[(i*levelBits)..+levelBits])
+    const same = (tag & ~offset) == (vpn & ~offset)
+    if same and superValid#[i] != 0 and vmEnabled != 0 {
+      const e = entry(superData[i%superpages])
+      superHits#[i] = 1
+      superWay = superWay | i
+      const pageOffset = vpn#[0..+20] & offset#[0..+20]
+      superPPN = superPPN | e.ppn | pageOffset
+      superPF = superPF | (~e.gf & (e.pf | (~e.ae_ptw & ~(e.sx & (e.u ^ io_req_bits_prv.e0)))))
+      superAE = superAE | ~e.px | e.ae_ptw | e.ae_final
+    }
+  }
+  const specialMask = geometry.pageMask<levels=pgLevels>(level=specialLevel)
+  const specialMatch = specialValid != 0 and (specialTag & ~specialMask) == (vpn & ~specialMask)
+  const specialHit = U1(specialMatch) & vmEnabled
+  const realHits = (specialHit << (rows+superpages)) | (superHits << rows) | sectorHits
+  const badVA = vmEnabled & ~geometry.canonical<levels=pgLevels>(address=io_req_bits_vaddr, mode=io_ptw_ptbr_mode)
+  const miss = vmEnabled & ~badVA#[0] & U1(realHits == 0)
+  const multiple = U1((realHits & (realHits-1)) != 0)
+  const lookup = io_req_valid & vmEnabled
+  const cancelRefill:U1 = U1(state == 1 or state == 3 or io_sfence_valid != 0)
+  const leaf = io_ptw_resp_bits_pte_v & (io_ptw_resp_bits_pte_r | (io_ptw_resp_bits_pte_x & ~io_ptw_resp_bits_pte_w)) & io_ptw_resp_bits_pte_a
+  const refillSpecial = io_ptw_resp_valid & ~io_ptw_resp_bits_homogeneous
+  const refillWay = if partialHit != 0 { partialWay } else { victimWay }
+  const startWalk = U1(state == 0) & io_req_valid & miss
+  const invalidateAll:U1 = multiple | reset
+  const specialPage = entry(specialData)
+  const pageOffset = vpn#[0..+20] & specialMask#[0..+20]
+  const specialPPN = specialPage.ppn | pageOffset
+  const bypassPPN:U20 = if vmEnabled == 0 { vpn#[0..+20] } else { 0 }
+  const physicalPage:U28 = if io_ptw_resp_valid != 0 { io_ptw_resp_bits_pte_ppn#[0..+20] }
+                           elif vmEnabled != 0 { specialPPN } else { io_req_bits_vaddr#[12..+28] }
+  const denyDebug = U1(privilege#[2] == 0 and physicalPage == 0)
+  mut pmp = regions.check<count=nPMPs>(table=pmpTable, privilege=privilege#[0..+2], address=(physicalPage#[0..<20] << 12) | io_req_bits_vaddr#[0..<12], size=3)
+  mut pma = PMAChecker::[name=pma](io_paddr=(physicalPage#[0..<28] << 12) | io_req_bits_vaddr#[0..<12])
+  const execute:U1 = pma.io_resp_x & ~denyDebug & pmp.io_x
+  // Only instruction permissions, the global bit, and the PPN feed an I-TLB lookup.
+  const refillData:U42 = (io_ptw_resp_bits_pte_ppn#[0..+20] << 22) | (io_ptw_resp_bits_pte_u << 21) |
+      ((io_ptw_resp_bits_pte_g & io_ptw_resp_bits_pte_v) << 20) | (io_ptw_resp_bits_ae_ptw << 19) |
+      (io_ptw_resp_bits_ae_final << 18) | (io_ptw_resp_bits_pf << 16) | (io_ptw_resp_bits_gf << 15) |
+      ((leaf & io_ptw_resp_bits_pte_x) << 13) | (execute << 7)
+  const refillSector = refillTag%sectors
+  const refillRow = (((refillTag >> laneBits)%sets)*rows) + refillWay
+  for row in 0..<totalRows {
+    const refill = io_ptw_resp_valid != 0 and io_ptw_resp_bits_homogeneous != 0 and
+                   io_ptw_resp_bits_level >= pgLevels-1 and refillRow == row
+    if refill {
+      rowTags[row%totalRows] = refillTag
+      sectorData[(row*sectors + refillSector)%(ways*sets)] = refillData
+    }
+    const tag = rowTags[row%totalRows]
+    const samePage = (tag >> laneBits) == (vpn >> laneBits)
+    const sameGigapage = tag#[(vpnBits-9)..+9] == vpn#[(vpnBits-9)..+9]
+    for slot in 0..<sectors {
+      const i = row*sectors + slot
+      const data = sectorData[i%(ways*sets)]
+      const keep = if refill { ~cancelRefill & (U1(refillSector == slot) | (partialHit & validSectors#[i])) }
+                   else { validSectors#[i] }
+      const matches = if io_sfence_bits_rs1 != 0 {
+        (samePage and requestedSector == slot) or (sameGigapage and data#[0] != 0)
+      } else { io_sfence_bits_rs2 == 0 or data#[20] == 0 }
+      validSectors#[i] = keep & ~invalidateAll & ~U1(io_sfence_valid != 0 and matches)
+    }
+  }
+  for i in 0..<superpages {
+    const refill = io_ptw_resp_valid != 0 and io_ptw_resp_bits_homogeneous != 0 and
+                   io_ptw_resp_bits_level < pgLevels-1 and superVictim == i
+    const tag = superTags[i%superpages]
+    const data = superData[i%superpages]
+    const gigapage = tag#[(vpnBits-9)..+9] == vpn#[(vpnBits-9)..+9]
+    const offsetMask = geometry.pageMask<levels=pgLevels>(level=superLevels#[(i*levelBits)..+levelBits])
+    const invalidated = if io_sfence_bits_rs1 != 0 {
+      gigapage and (data#[0] != 0 or (superValid#[i] != 0 and ((tag ^ vpn) & ~offsetMask) == 0))
+    } else { io_sfence_bits_rs2 == 0 or data#[20] == 0 }
+    const keep = if refill { U1(cancelRefill == 0) } else { superValid#[i] }
+    superValid#[i] = keep & ~invalidateAll & ~U1(io_sfence_valid != 0 and invalidated)
+    if refill {
+      superTags[i%superpages] = refillTag
+      superData[i%superpages] = refillData
+      superLevels#[(i*levelBits)..+levelBits] = io_ptw_resp_bits_level
+    }
+  }
+  if refillSpecial != 0 {
+    specialLevel = io_ptw_resp_bits_level
+    specialTag = refillTag
+    specialData = refillData
+  }
+  const clearSpecial = if io_sfence_bits_rs1 != 0 { specialMatch }
+                       else { io_sfence_bits_rs2 == 0 or specialData#[20] == 0 }
+  specialValid = (refillSpecial | specialValid) & ~invalidateAll & ~U1(io_sfence_valid != 0 and clearSpecial)
+  const rowPolicy = replacementPolicy<count=rows, depth=depth, indexBits=rowBits, treeBits=rowTreeBits>(
+      tree=replacement[set], touch=touched, empty=vacant)
+  const superPolicy = replacementPolicy<count=superpages, depth=superDepth, indexBits=superBits, treeBits=superTreeBits>(
+      tree=superTree, touch=superWay, empty=~superValid)
+  if startWalk != 0 {
+    refillTag = vpn
+    superVictim = superPolicy.victim
+    victimWay = rowPolicy.victim
+    partialHit = U1(matchingRows != 0)
+    partialWay = touched
+    needGPA = U1(realHits != 0)
+  }
+  if reset != 0 {
+    state = 0
+    for bank in 0..<sets { replacement[bank] = 0 }
+    superTree = 0
+  } else {
+    if io_ptw_resp_valid != 0 { state = 0 }
+    elif state == 2 and io_sfence_valid != 0 { state = 3 }
+    elif state == 1 and io_ptw_req_ready != 0 { state = 2 | io_sfence_valid }
+    elif state == 1 and io_sfence_valid != 0 { state = 0 }
+    elif startWalk != 0 { state = 1 }
+    if lookup != 0 and matchingRows != 0 {
+      replacement[set] = rowPolicy.updated
+    }
+    if io_req_valid != 0 and superHits != 0 { superTree = superPolicy.updated }
+  }
+  const specialPF = ~specialPage.gf & (specialPage.pf | (~specialPage.ae_ptw & ~(specialPage.sx & (specialPage.u ^ io_req_bits_prv.e0))))
+  const specialAE = specialPage.ae_ptw | specialPage.ae_final | ~execute
+  const pf = badVA | sectorPF | superPF | (specialPF & specialHit)
+  const ae = (~vmEnabled & ~execute) | sectorAE | superAE | (specialAE & specialHit)
+  io_resp_miss = io_ptw_resp_valid | miss | multiple
+  io_resp_paddr = ((sectorPPN | superPPN | (if specialHit != 0 { specialPPN } else { 0 }) | bypassPPN) << 12) | io_req_bits_vaddr#[0..+12]
+  io_resp_pf_inst = pf
+  io_resp_ae_inst = ae
+  io_ptw_req_valid = U1(state == 1)
+  io_ptw_req_bits_bits_addr = refillTag
+  io_ptw_req_bits_bits_need_gpa = needGPA
+}

@@ -1,0 +1,23 @@
+const types = import("../pyrope/TLBTypes")
+const lookup = import("../pyrope/TLBLookup.TLBLookup")
+pub mod flush_permission(cmd:U5) -> (flush:U1@[], misaligned:U1@[], plain:U1@[]) {
+  const protection:types.Protection = (pmpTable=0, ptbr_mode=8, resp_bits_pte_ppn=0, resp_valid=0, status_debug=0, status_dprv=1, status_mxr=0, status_sum=0)
+  const entries:(tags:U135, levels:U10, data:U170, valid:U5) = (tags=0, levels=0, data=0, valid=0)
+  const a = lookup(protection, entries, ordinary=(data=0, hit=0, multiple=0), command=cmd, passthrough=0, size=3, address=0x8000000001)
+  const b = lookup<haveCFlush=true>(protection, entries, ordinary=(data=0, hit=0, multiple=0), command=cmd, passthrough=0, size=3, address=0x8000000001)
+  plain = a.pf_st
+  flush = b.pf_st
+  misaligned = b.ma_st
+}
+test flush_permission.commands {
+  mut d = flush_permission
+  tick 32 {
+    d.cmd = clock#[0..+5]
+    step
+    if clock == 5 {
+      assert(d.flush == 1 and d.plain == 0 and d.misaligned == 0)
+    } else {
+      assert(d.flush == d.plain)
+    }
+  }
+}

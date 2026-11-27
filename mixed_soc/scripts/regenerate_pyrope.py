@@ -12,22 +12,31 @@ from gen_mesh import generate
 def configure_tiles(stem, source):
     """Restore the compile-time tile parameters on freshly emitted boundary glue."""
     if stem == 'MixedSocTop':
-        header = 'const profiles = import("TileProfiles")\n'
-        return header + re.sub(r'( = mixed_soc)::\[name=\w+\]\(', r'\1<profiles.selected>(', source)
+        header = 'const profiles = import("TileProfiles")\ncomptime const defaultTiles = profiles.selected\n'
+        source = source.replace('pub mod MixedSocTop::', 'pub mod MixedSocTop<Tiles=defaultTiles, boomHarts=4>::')
+        return header + re.sub(r'( = mixed_soc)::\[name=\w+\]\(', r'\1<Tiles=Tiles, boomHarts=boomHarts>(', source)
     if stem == 'mixed_soc':
         header = 'const profiles = import("TileProfiles")\ncomptime const defaultTiles = profiles.uniform\n'
-        source = source.replace('pub mod mixed_soc::', 'pub mod mixed_soc<Tiles=defaultTiles>::')
+        source = source.replace('pub mod mixed_soc::', 'pub mod mixed_soc<Tiles=defaultTiles, boomHarts=4>::')
+        start = source.index('\n', source.index('pub mod mixed_soc'))
+        source = source[:start] + '\n  cassert(boomHarts >= 0 and boomHarts <= 4, "the mixed mesh has four BOOM sockets")' + source[start:]
+
         def connect(match):
             tile = int(match.group(2) or 0)
-            return f' = {match.group(1)}<C=Tiles.tile{tile}>('
+            enabled = f', enabled=(boomHarts > {tile-12})' if tile >= 12 else ''
+            return f' = {match.group(1)}<C=Tiles.tile{tile}{enabled}>('
         return header + re.sub(r' = (mixed_cpu(?:_p(\d+))?)::\[name=\w+\]\(', connect, source)
-    if re.fullmatch(r'mixed_cpu(?:_p\d+)?', stem):
-        tile = 'Rocket' if ' = RocketTile::' in source else 'Boom'
-        preset = 'rv32' if tile == 'Rocket' else 'small'
-        header = f'const configs = import("../../{tile.lower()}/pyrope2/{tile}Config")\ncomptime const defaultTile = configs.{preset}\n'
-        # The generated endpoint already carries its ID and network parameters.
-        source = source.replace('>::[timecheck=false]', ', C=defaultTile>::[timecheck=false]', 1)
-        return header + re.sub(rf'( = {tile}Tile)::\[name=\w+\]\(', r'\1<C>(', source)
+    return source
+
+
+def wire_interrupts(stem, source):
+    """Carry each hart's MSIP, MTIP, MEIP and SEIP through generated mesh glue."""
+    if stem in ('MixedSocTop', 'mixed_soc'):
+        source = source.replace('core_enable:', 'interrupts:U64=0, core_enable:', 1)
+        if stem == 'MixedSocTop':
+            return source.replace(' = mixed_soc<Tiles=Tiles, boomHarts=boomHarts>(', ' = mixed_soc<Tiles=Tiles, boomHarts=boomHarts>(interrupts, ')
+        return re.sub(r'( = mixed_cpu(?:_p\d+)?<C=Tiles.tile(\d+).*?>)\(',
+                      lambda m: f'{m[1]}(irq=interrupts#[{4*int(m[2])}..+4], ', source)
     return source
 
 
@@ -51,12 +60,19 @@ def main():
                  and not path.stem.startswith('mixed_router'))
                 or path.stem in ('MixedSocTop', 'GemminiSimTop')):
             continue
+        # The maintained CPU sockets bind the shared, parameterized TileLink endpoint.
+        if path.stem == 'mixed_packet' or re.fullmatch(r'mixed_cpu(?:_p\d+)?', path.stem):
+            continue
         source = path.read_text()
         # The imported cores come from their maintained pyrope2/ trees (the same top modules and ports as pyrope/).
-        for name, family in [('RocketTile', 'rocket'), ('BoomTile', 'boom'), ('GemminiTPU', 'gemmini/Mesh16')]:
+        for name, family in [('RocketTile', 'rocket/pyrope2'), ('BoomTile', 'boom4/pyrope'), ('GemminiTPU', 'gemmini/Mesh16/pyrope2')]:
             source = source.replace(f'import("{name}.{name}")',
-                                    f'import("../../{family}/pyrope2/{name}.{name}")')
-        (destination/path.name).write_text(configure_tiles(path.stem, source))
+                                    f'import("../../{family}/{name}.{name}")')
+        source = wire_interrupts(path.stem, configure_tiles(path.stem, source))
+        if path.stem == 'MixedSocTop':
+            (destination/'MeshFabric.prp').write_text(source.replace('pub mod MixedSocTop', 'pub mod MeshFabric'))
+        else:
+            (destination/path.name).write_text(source)
     (destination/'mixed_mesh.prp').write_text(generate())
 
 

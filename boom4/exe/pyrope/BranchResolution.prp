@@ -1,0 +1,127 @@
+// Branch resolutions are registered before the ROB and frontend consume them.
+// The dependent mask excludes branches younger than a misprediction in the same cycle.
+pub mod BranchResolution<addrBits=40, ports=1, branches=8, ftqBits=4, robBits=5, ldBits=4, stBits=4>(
+  clock:Clock,
+  flush:U1,
+  valid:Unsigned(bits=ports),
+  isRvc:Unsigned(bits=ports*1),
+  mask:Unsigned(bits=ports*branches),
+  tag:Unsigned(bits=ports*std.clog2(branches)),
+  ftq:Unsigned(bits=ports*ftqBits),
+  edge:Unsigned(bits=ports*1),
+  pcLow:Unsigned(bits=ports*6),
+  rob:Unsigned(bits=ports*robBits),
+  load:Unsigned(bits=ports*ldBits),
+  store:Unsigned(bits=ports*stBits),
+  miss:Unsigned(bits=ports*1),
+  taken:Unsigned(bits=ports*1),
+  cfiType:Unsigned(bits=ports*3),
+  pcSelect:Unsigned(bits=ports*2),
+  target:Unsigned(bits=ports*addrBits),
+  offset:Unsigned(bits=ports*21),
+) -> (
+  resolved:Unsigned(bits=branches)@[],
+  killed:Unsigned(bits=branches)@[],
+  redirect:U1@[],
+  selectedIsRvc:U1@[],
+  selectedMask:Unsigned(bits=branches)@[],
+  selectedTag:Unsigned(bits=std.clog2(branches))@[],
+  selectedFtq:Unsigned(bits=ftqBits)@[],
+  selectedEdge:U1@[],
+  selectedPcLow:U6@[],
+  selectedRob:Unsigned(bits=robBits)@[],
+  selectedLoad:Unsigned(bits=ldBits)@[],
+  selectedStore:Unsigned(bits=stBits)@[],
+  selectedTaken:U1@[],
+  selectedCfiType:U3@[],
+  selectedPcSelect:U2@[],
+  selectedTarget:Unsigned(bits=addrBits)@[],
+  selectedOffset:U21@[],
+) {
+  reg flushed:U1                                    = nil
+  reg pending:Unsigned(bits=ports)                  = nil
+  reg isRvcQ:Unsigned(bits=ports*1)                 = nil
+  reg maskQ:Unsigned(bits=ports*branches)           = nil
+  reg tagQ:Unsigned(bits=ports*std.clog2(branches)) = nil
+  reg ftqQ:Unsigned(bits=ports*ftqBits)             = nil
+  reg edgeQ:Unsigned(bits=ports*1)                  = nil
+  reg pcLowQ:Unsigned(bits=ports*6)                 = nil
+  reg robQ:Unsigned(bits=ports*robBits)             = nil
+  reg loadQ:Unsigned(bits=ports*ldBits)                  = nil
+  reg storeQ:Unsigned(bits=ports*stBits)                 = nil
+  reg missQ:Unsigned(bits=ports*1)                  = nil
+  reg takenQ:Unsigned(bits=ports*1)                 = nil
+  reg cfiTypeQ:Unsigned(bits=ports*3)               = nil
+  reg pcSelectQ:Unsigned(bits=ports*2)              = nil
+  reg targetQ:Unsigned(bits=ports*addrBits)               = nil
+  reg offsetQ:Unsigned(bits=ports*21)               = nil
+  flushed  = flush
+  resolved = 0
+  killed   = 0
+  for port in 0..<ports {
+    const branch = tagQ#[(port*std.clog2(branches))..+std.clog2(branches)]
+    if pending#[port] != 0 {
+      resolved#[branch] = 1
+      if missQ#[port] != 0 {
+        killed#[branch] = 1
+      }
+    }
+  }
+  mut live:Unsigned(bits=ports) = 0
+  for port in 0..<ports {
+    const maskIn = mask#[(port*branches)..+branches]
+    pending#[port]                     = valid#[port] & ~flush & ~flushed & U1((killed & maskIn) == 0)
+    maskQ#[(port*branches)..+branches] = maskIn & ~resolved
+    live#[port]                        = pending#[port] & missQ#[port] & ~flushed & U1((maskQ#[(port*branches)..+branches] & killed) == 0)
+  }
+  redirect  = U1(live != 0)
+  isRvcQ    = isRvc
+  tagQ      = tag
+  ftqQ      = ftq
+  edgeQ     = edge
+  pcLowQ    = pcLow
+  robQ      = rob
+  loadQ     = load
+  storeQ    = store
+  missQ     = miss
+  takenQ    = taken
+  cfiTypeQ  = cfiType
+  pcSelectQ = pcSelect
+  targetQ   = target
+  offsetQ   = offset
+  const oldest = live & -live
+  selectedIsRvc    = isRvcQ#[((ports - 1)*1)..+1]
+  selectedMask     = maskQ#[((ports - 1)*branches)..+branches]
+  selectedTag      = tagQ#[((ports - 1)*std.clog2(branches))..+std.clog2(branches)]
+  selectedFtq      = ftqQ#[((ports - 1)*ftqBits)..+ftqBits]
+  selectedEdge     = edgeQ#[((ports - 1)*1)..+1]
+  selectedPcLow    = pcLowQ#[((ports - 1)*6)..+6]
+  selectedRob      = robQ#[((ports - 1)*robBits)..+robBits]
+  selectedLoad     = loadQ#[((ports - 1)*ldBits)..+ldBits]
+  selectedStore    = storeQ#[((ports - 1)*stBits)..+stBits]
+  selectedTaken    = 0
+  selectedCfiType  = 0
+  selectedPcSelect = 0
+  selectedTarget   = 0
+  selectedOffset   = 0
+  for port in 0..<ports {
+    if oldest#[port] != 0 {
+      selectedIsRvc = isRvcQ#[port]
+      selectedMask  = maskQ#[(port*branches)..+branches]
+      selectedTag   = tagQ#[(port*std.clog2(branches))..+std.clog2(branches)]
+      selectedFtq   = ftqQ#[(port*ftqBits)..+ftqBits]
+      selectedEdge  = edgeQ#[port]
+      selectedPcLow = pcLowQ#[(port*6)..+6]
+      selectedRob   = robQ#[(port*robBits)..+robBits]
+      selectedLoad  = loadQ#[(port*ldBits)..+ldBits]
+      selectedStore = storeQ#[(port*stBits)..+stBits]
+    }
+    if ports == 1 or live#[port] != 0 {
+      selectedTaken    = selectedTaken | takenQ#[port]
+      selectedCfiType  = selectedCfiType | cfiTypeQ#[(port*3)..+3]
+      selectedPcSelect = selectedPcSelect | pcSelectQ#[(port*2)..+2]
+      selectedTarget   = selectedTarget | targetQ#[(port*addrBits)..+addrBits]
+      selectedOffset   = selectedOffset | offsetQ#[(port*21)..+21]
+    }
+  }
+}

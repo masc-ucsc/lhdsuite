@@ -1,0 +1,27 @@
+// chisel3.util.Pipe holds a stage's payload through bubbles.
+pub mod ValidPipe<stages, bits>(clock:Clock, reset:U1, valid:U1, data:Unsigned(bits=bits)) -> (outValid:U1@[], out:Unsigned(bits=bits)@[]) {
+  if stages == 0 {
+    outValid = valid
+    out = data
+  } else {
+    reg live:Unsigned(bits=stages)
+    reg rows:[stages]Unsigned(bits=bits):[ordering="old"]
+    for i in 0..<stages {
+      if i == 0 {
+        live#[i] = valid & ~reset
+        if valid != 0 { rows[i] = data }
+      } else {
+        live#[i] = live#[i-1] & ~reset
+        if live#[i-1] != 0 { rows[i] = rows[i-1] }
+      }
+    }
+    outValid = live#[stages-1]
+    out = rows[stages-1]
+  }
+}
+
+
+pub mod EnabledPipe<stages, bits>(clock:Clock, reset:U1, valid:U1, data:Unsigned(bits=bits)) -> (out:Unsigned(bits=bits)@[]) {
+  const delayed = ValidPipe<stages=stages, bits=bits>(clock, reset, valid, data)
+  out = delayed.out
+}

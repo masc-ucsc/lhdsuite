@@ -1,0 +1,76 @@
+// One direct-mapped loop table for a halfword in the fetch bank.
+pub mod LoopBranchPredictorColumn<indexBits=37>(clock:Clock, reset:Reset,
+    io_f2_req_idx:Unsigned(bits=indexBits), io_f3_pred_in:U1, io_f3_req_fire:U1,
+    io_update_idx:Unsigned(bits=indexBits), io_update_meta_s_cnt:U10, io_update_mispredict:U1, io_update_repair:U1)
+    -> (io_f3_pred:U1@[], io_f3_meta_s_cnt:U10@[]) {
+  type Entry = (tag:U10, confidence:U3, age:U3, previous:U10, count:U10)
+  reg entries:[16]Entry:[ordering="old"] = nil
+  reg clearing:U1 = nil
+  reg cursor:U4 = nil
+  if reset { clearing = 1; cursor = 0 }
+  elif clearing != 0 {
+    wrap cursor = cursor+1
+    if cursor == 15 { clearing = 0 }
+  }
+
+  reg index3:Unsigned(bits=indexBits) = nil
+  reg stage3:Entry = nil
+  index3 = io_f2_req_idx
+  stage3 = entries[io_f2_req_idx#[0..+4]]
+  if io_f2_req_idx == io_update_idx {
+    if io_update_repair != 0 { stage3.count = io_update_meta_s_cnt }
+    elif io_update_mispredict != 0 { stage3.count = 0 }
+  }
+  const count = if io_update_repair != 0 and io_update_idx == index3 { io_update_meta_s_cnt } else { stage3.count }
+  const hit = U1(stage3.tag == index3#[4..+10])
+  const last = U1(stage3.confidence == 7 and count == stage3.previous)
+  io_f3_meta_s_cnt = count
+  io_f3_pred = io_f3_pred_in ^ (hit & last)
+
+  reg fire4:U1 = nil
+  reg hit4:U1 = nil
+  reg last4:U1 = nil
+  reg count4:U10 = nil
+  reg age4:U3 = nil
+  reg index4:Unsigned(bits=indexBits) = nil
+  fire4 = io_f3_req_fire
+  hit4 = hit
+  last4 = last
+  count4 = count
+  age4 = stage3.age
+  index4 = index3
+
+  const write = io_update_idx#[0..+4]
+  const tag = io_update_idx#[4..+10]
+  const old = entries[write]
+  const same = old.tag == tag
+  const matched = old.previous == io_update_meta_s_cnt
+  for slot in 0..<16 {
+    if clearing != 0 and cursor == slot {
+      entries[slot] = (tag=0, confidence=0, age=0, previous=0, count=0)
+    } elif clearing == 0 and write == slot and io_update_mispredict != 0 {
+      mut next:Entry = (tag=old.tag, confidence=old.confidence, age=old.age, previous=old.previous, count=old.count)
+      if same {
+        next.count = 0
+        if old.confidence == 7 { next.confidence = 6 }
+        elif matched { next.confidence = (old.confidence+1)#[0..+3] }
+        else { next.confidence = 0; next.previous = io_update_meta_s_cnt }
+        if old.confidence == 0 { next.age = 7 }
+      } elif old.confidence != 7 {
+        if old.confidence == 0 or old.age == 0 {
+          next.tag = tag
+          next.confidence = 1
+          next.count = 0
+          next.previous = io_update_meta_s_cnt
+          if old.confidence == 0 { next.age = 7 }
+        } else { next.age = (old.age-1)#[0..+3] }
+      }
+      entries[slot] = next
+    } elif clearing == 0 and write == slot and io_update_repair != 0 and same and (fire4 == 0 or io_update_idx != index4) {
+      entries[slot].count = io_update_meta_s_cnt
+    } elif (fire4 & hit4) != 0 and index4#[0..+4] == slot {
+      entries[slot].count = if last4 != 0 { 0 } else { (count4+1)#[0..+10] }
+      entries[slot].age = if last4 != 0 or age4 == 7 { 7 } else { (age4+1)#[0..+3] }
+    }
+  }
+}

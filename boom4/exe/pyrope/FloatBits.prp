@@ -1,0 +1,17 @@
+// Convert HardFloat's recoded sign, exponent and fraction to IEEE bits.
+comb ieee<e, f>(x:Unsigned(bits=e + f + 2)) -> (bits:Unsigned(bits=e + f + 1)) {
+  const exp = x#[f..+(e + 1)]
+  const fraction = x#[0..+f]
+  const category = exp#[(e - 2)..+3]
+  const subnormal = exp < (1 << (e - 1)) + 2
+  const encoded = if category >= 6 { (1 << e) - 1 } elif subnormal { 0 } else { (exp + (1 << (e - 1)) - 1)#[0..+e] }
+  const shift = (1 - exp)#[0..+std.clog2(f)]
+  const significand = if subnormal { ((U1(category != 0) << (f - 1)) | (fraction >> 1)) >> shift } elif category == 6 { 0 } else { fraction }
+  bits = (x#[e + f + 1] << (e + f)) | (encoded << f) | significand
+}
+
+pub comb unbox(value:U65) -> (bits:U64) {
+  const d = ieee<e=11, f=52>(x=value)
+  const s = ieee<e=8, f=23>(x=(value#[31] << 32) | (value#[52] << 31) | value#[0..+31])
+  bits = if value#[61..+3] == 7 { (d#[32..+32] << 32) | s } else { d }
+}

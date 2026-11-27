@@ -1,0 +1,71 @@
+// Harts 12 and 13 write distinct jump targets to adjacent cache lines.
+// Harts 14 and 15 start later, load those pointers and jump through them.
+const top = import("lg:CoherentMixedSoc")
+test top.dirty_transfer(harts:U3=4) {
+  mut dut = top
+  mut left:U8 = 0
+  mut beat:U8 = 0
+  mut saved:U32 = 0
+  mut response:U40 = 0
+  mut probes:U32 = 0
+  mut dirty:U32 = 0
+  mut delivered:U32 = 0
+  mut arrived:U32 = 0
+  mut granted:U4 = 0
+  mut walked:U4 = 0
+  tick 12000 {
+    dut.reset = clock < 8
+    dut.core_enable = if clock < 8 { 0 } elif clock < 4000 { 0x3000 } else { 0xf000 }
+    dut.mem_req_ready = left == 0
+    dut.mem_rsp_valid = left != 0
+    dut.mem_rsp_meta = response
+    dut.mem_rsp_addr = saved
+    mut rom:U64 = 0x0000006f0000006f
+    // Execute 128 uncompressed instructions before the coherence program.
+    // The last JAL skips the two dependent-fetch targets at 0x10200 and 0x10240.
+    if saved >= 0x10000 and saved < 0x10200 {
+      rom = 0x0000001300000013
+      if saved == 0x101c0 and beat == 7 { rom = 0x2040006f00000013 }
+    } elif saved == 0x10400 {
+      if beat == 0 { rom = 0x0012f313f14022f3 }
+      elif beat == 1 { rom = 0x0010039300631313 }
+      elif beat == 2 { rom = 0x006383b301f39393 }
+      elif beat == 3 { rom = 0x00029c630022f293 }
+      elif beat == 4 { rom = 0x200e0e1300010e37 }
+      elif beat == 5 { rom = 0x01c3b023006e0e33 }
+      elif beat == 6 { rom = 0x0003be030000006f }
+      elif beat == 7 { rom = 0x000e0067fe0e0ee3 }
+    }
+    dut.mem_rsp_data = rom
+    step
+    if dut.externalResponse {
+      left = left-1
+      beat = beat+1
+    }
+    if dut.externalRequest {
+      const origin = dut.externalMeta#[35..+5]
+      saved = dut.externalAddress
+      if saved == 0x101c0 and origin >= 12 and origin <= 15 { walked = walked | (1 << (origin-12)) }
+      if saved == 0x10200 and origin == 14 { arrived = arrived | 1 }
+      if saved == 0x10240 and origin == 15 { arrived = arrived | 2 }
+      const size = dut.externalMeta#[19..+4]
+      const src = dut.externalMeta#[13..+3]
+      response = (17 << 35) | (origin << 30) | (3 << 27) | (1 << 23) | (size << 19) | (src << 13)
+      left = if size > 3 { 1 << (size-3) } else { 1 }
+      beat = 0
+    }
+    if dut.grantBeat and dut.grantTarget >= 12 and dut.grantTarget <= 15 { granted = granted | (1 << (dut.grantTarget-12)) }
+    if dut.probe { probes = probes+1 }
+    if dut.dirtyBeat { dirty = dirty+1 }
+    if dut.grantBeat and dut.grantTarget == 14 and dut.grantData == 0x10200 { delivered = delivered | 1 }
+    if dut.grantBeat and dut.grantTarget == 15 and dut.grantData == 0x10240 { delivered = delivered | 2 }
+  }
+  puts("coherence: probes={probes} dirtyBeats={dirty} delivered={delivered} arrived={arrived}")
+  const active = (1 << harts)-1
+  assert(walked == active and granted == active, "only populated harts fetched the program and acquired data")
+  if harts == 4 {
+    assert(probes >= 2 and dirty >= 16 and delivered == 3 and arrived == 3, "two dirty transfers and dependent fetches")
+  } elif harts == 3 {
+    assert(probes >= 1 and dirty >= 8 and delivered == 1 and arrived == 1, "one dirty transfer and dependent fetch")
+  }
+}

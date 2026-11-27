@@ -1,0 +1,26 @@
+const oldest = import("QueueAge.oldest")
+
+// Select the first younger store consuming this load's integer destination.
+// The following cycle the writeback tag must still identify the searched load.
+pub mod LoadToStore<entries, pregBits, loadBits>(
+  clock:Clock, search:U1, boundary:Unsigned(bits=1+std.clog2(entries)),
+  eligible:Unsigned(bits=entries), sources:Unsigned(bits=entries*pregBits),
+  destination:Unsigned(bits=pregBits), searchedLoad:Unsigned(bits=loadBits),
+  writeback:U1, completedLoad:Unsigned(bits=loadBits),
+) -> (write:Unsigned(bits=entries)@[]) {
+  mut matches:Unsigned(bits=entries) = 0
+  for entry in 0..<entries {
+    matches#[entry] = eligible#[entry] & U1(sources#[(entry*pregBits)..+pregBits] == destination)
+  }
+  const selected = oldest<entries=entries>(candidates=matches, head=boundary)
+  reg pending:U1 = nil
+  reg slot:Unsigned(bits=std.clog2(entries))
+  reg load:Unsigned(bits=loadBits)
+  pending = search & U1(matches != 0)
+  slot = selected#[0..+std.clog2(entries)]
+  load = searchedLoad
+  write = 0
+  if (writeback & pending) != 0 and completedLoad == load {
+    write#[slot] = 1
+  }
+}

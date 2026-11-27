@@ -28,7 +28,7 @@ sh_test(
 # tree would break the explicit cross-package imports and duplicate the CPUs.
 filegroup(
     name = "pyrope",
-    srcs = glob(["pyrope/*.prp"]) + ["//rocket:pyrope2", "//boom:pyrope2", "//gemmini/Mesh16:pyrope2"],
+    srcs = glob(["pyrope/*.prp"]) + ["//chipyard:interrupts", "//rocket:pyrope2", "//boom4:pyrope", "//gemmini/Mesh16:pyrope2"],
     visibility = ["//visibility:public"],
 )
 filegroup(
@@ -62,3 +62,14 @@ test_suite(
     tests = [":sim_pyrope", ":sim_verilator"],
     visibility = ["//visibility:public"],
 )
+
+[
+    sh_test(
+        name = mode,
+        size = "small" if mode == "interrupt_mmio" else "large",
+        srcs = ["scripts/test.sh"],
+        args = [mode, "$(rlocationpath @livehd//lhd:lhd)"],
+        data = [":pyrope", "sim/" + mode + ".prp", "@livehd//lhd:lhd"],
+    )
+    for mode in ["coherent_harts", "interrupt_harts", "interrupt_mmio"]
+]

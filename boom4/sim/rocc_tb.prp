@@ -1,0 +1,64 @@
+// CUSTOM0 with two source registers and a delayed response, then a no-destination command.
+const tile = import("lg:BoomTile")
+test tile.accelerator {
+  mut d = tile
+  mut beats:U4 = 0
+  mut source:U8 = 0
+  mut boot:Bool = false
+  mut sent:U3 = 0
+  mut pending:U1 = 0
+  mut result:U64 = 0
+  mut delay:U4 = 0
+  mut retired:Bool = false
+  tick 2000 {
+    d.reset = clock < 4
+    d.rocc.ready = U1(clock%4 == 0)
+    d.rocc.valid = U1(pending != 0 and delay == 0)
+    d.rocc.rd = 3
+    d.rocc.data = result
+    d.rocc.busy = pending
+    d.rocc.interrupt = 0
+    d.auto_buffer_out_a_ready = U1(beats == 0)
+    d.auto_buffer_out_c_ready = 1
+    d.auto_buffer_out_e_ready = 1
+    d.auto_buffer_out_d_valid = U1(beats != 0)
+    d.auto_buffer_out_d_bits_opcode = 1
+    d.auto_buffer_out_d_bits_size = 6
+    d.auto_buffer_out_d_bits_source = source
+    d.auto_buffer_out_d_bits_data = if !boot { 0x0000001300000013 }
+      elif beats == 8 { 0x0090011300700093 }
+      elif beats == 7 { 0x001182130020f18b }
+      elif beats == 6 { 0x0000006f0002200b }
+      else { 0x0000001300000013 }
+    if beats == 0 and d.auto_buffer_out_a_valid != 0 {
+      assert(d.auto_buffer_out_a_bits_opcode == 4)
+      boot = d.auto_buffer_out_a_bits_address == 0x10000
+      source = d.auto_buffer_out_a_bits_source
+      beats = 8
+    } elif beats != 0 and d.auto_buffer_out_d_ready != 0 {
+      wrap beats = beats - 1
+    }
+    if pending != 0 and delay != 0 {
+      wrap delay = delay - 1
+    } elif pending != 0 and d.roccBus.ready != 0 {
+      pending = 0
+    }
+    if d.roccBus.valid != 0 and clock%4 == 0 {
+      if sent == 0 {
+        assert(d.roccBus.rs1 == 7 and d.roccBus.rs2 == 9)
+        result = d.roccBus.rs1 + d.roccBus.rs2
+        pending = 1
+        delay = 5
+      } else {
+        assert(sent == 1 and d.roccBus.rs1 == 17)
+      }
+      wrap sent = sent + 1
+    }
+    step
+    if d.traceEvents#[0] != 0 and d.traceEvents#[1..+64] == 0x1000c {
+      assert(d.traceEvents#[97..+64] == 17)
+      retired = true
+    }
+  }
+  assert(sent == 2 and retired, "both accelerator requests issued and the dependent result retired")
+}

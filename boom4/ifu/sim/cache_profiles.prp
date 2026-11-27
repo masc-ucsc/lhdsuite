@@ -1,0 +1,36 @@
+const cache = import("../pyrope/ICache.ICache")
+const configs = import("../../common/pyrope/BoomConfig")
+comptime const single = configs.params(icacheSets=4, icacheWays=1)
+comptime const delayed = configs.params(enableICacheDelay=true, icacheSets=8, icacheWays=2)
+comptime const dual = configs.params(icacheSinglePorted=false, icacheSets=8, icacheWays=2)
+comptime const both = configs.params(enableICacheDelay=true, icacheSinglePorted=false, icacheSets=4, icacheWays=1)
+
+mod trial<C>(clock:Clock, reset:Reset, request:Bool, grant:Bool, beat:U64) -> (valid:Bool@[], data:U64@[]) {
+  const dut = cache<C>(clock=clock, reset=U1(reset), auto_master_out_a_ready=1,
+    auto_master_out_d_valid=U1(grant), auto_master_out_d_bits_opcode=(e2=U1(1), e1=U1(0), e0=U1(1)),
+    auto_master_out_d_bits_size=6, auto_master_out_d_bits_data=beat, io_req_valid=U1(request), io_req_bits_addr=0x10018,
+    io_s1_paddr=0x10018, io_s1_kill=0, io_s2_kill=0, io_invalidate=0)
+  valid = Bool(dut.io_resp_valid)
+  data = dut.io_resp_bits_data
+}
+
+pub mod cache_profiles(clock:Clock, reset:Reset, request:Bool, grant:Bool, beat:U64) -> (good:Bool@[]) {
+  mut allHit = true
+  for cfg in (single, delayed, dual, both) {
+    const result = trial<cfg>(clock=clock, reset=reset, request=request, grant=grant, beat=beat)
+    allHit = allHit and result.valid and result.data == 0x103
+  }
+  good = allHit
+}
+
+test cache_profiles.refill {
+  mut dut = cache_profiles
+  tick 24 {
+    dut.reset = clock < 2
+    dut.request = (clock >= 3 and clock < 6) or clock >= 18
+    dut.grant = clock >= 8 and clock < 16
+    dut.beat = U64(0x100 + clock - 8)
+    step
+    if clock >= 21 { assert(dut.good, "all four cache implementations must hit on refill beat three") }
+  }
+}

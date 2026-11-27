@@ -1,0 +1,364 @@
+const bank            = import("RobBank.RobBank")
+const pointOfNoReturn = import("RobPNR.RobPNR")
+const retire          = import("RobCommit.select")
+
+pub mod Rob<pgLevels=3, width=1, rows=32, pregBits=6, branches=8, wbPorts=5, lsPorts=1, fastPNR=false, ftqBits=4>(
+  clock:Clock,
+  reset:U1,
+  enq:Unsigned(bits=width),
+  enq_is_rvc:Unsigned(bits=width),
+  enq_br_mask:Unsigned(bits=width*branches),
+  predictedTaken:Unsigned(bits=width)=0,
+  resolvedTaken:U1=0,
+  enq_br_type:Unsigned(bits=width*4),
+  enq_is_fence:Unsigned(bits=width),
+  enq_is_fencei:Unsigned(bits=width),
+  enq_is_eret:Unsigned(bits=width),
+  enq_is_sys_pc2epc:Unsigned(bits=width),
+  enq_ftq_idx:Unsigned(bits=width*ftqBits),
+  enq_edge_inst:Unsigned(bits=width),
+  enq_pc_lob:Unsigned(bits=width*6),
+  enq_rob_idx:Unsigned(bits=width*(std.clog2(rows) + std.clog2(width))),
+  enq_pdst:Unsigned(bits=width*pregBits),
+  enq_stale_pdst:Unsigned(bits=width*pregBits),
+  enq_exception:Unsigned(bits=width),
+  enq_exc_cause:Unsigned(bits=width*64),
+  enq_uses_ldq:Unsigned(bits=width),
+  enq_uses_stq:Unsigned(bits=width),
+  enq_is_unique:Unsigned(bits=width),
+  enq_flush_on_commit:Unsigned(bits=width),
+  enq_ldst:Unsigned(bits=width*6),
+  enq_dst_rtype:Unsigned(bits=width*2),
+  enq_debug_fsrc:Unsigned(bits=width*3),
+  partial:U1,
+  fetchPC:Unsigned(bits=13+9*pgLevels),
+  resolve:Unsigned(bits=branches),
+  killed:Unsigned(bits=branches),
+  branchIdx:Unsigned(bits=std.clog2(rows) + std.clog2(width)),
+  mispredict:U1,
+  wb:Unsigned(bits=wbPorts),
+  wbIdx:Unsigned(bits=wbPorts*(std.clog2(rows) + std.clog2(width))),
+  pred:Unsigned(bits=wbPorts),
+  flagged:Unsigned(bits=wbPorts),
+  fflags:Unsigned(bits=5*wbPorts),
+  clear:Unsigned(bits=lsPorts),
+  clearIdx:Unsigned(bits=lsPorts*(std.clog2(rows) + std.clog2(width))),
+  late:U1,
+  lateMask:Unsigned(bits=branches),
+  lateIdx:Unsigned(bits=std.clog2(rows) + std.clog2(width)),
+  lateCause:U64,
+  lateAddr:Unsigned(bits=13+9*pgLevels),
+  csrStall:U1,
+  replay:U1=0,
+  replayIdx:Unsigned(bits=std.clog2(rows) + std.clog2(width))=0,
+  replayMask:Unsigned(bits=branches)=0,
+  clearUnsafe:Unsigned(bits=lsPorts)=0,
+  unsafeIdx:Unsigned(bits=lsPorts*(std.clog2(rows) + std.clog2(width)))=0,
+  traceStall:U1=0,
+) -> (
+  io_rob_tail_idx:Unsigned(bits=std.clog2(rows) + std.clog2(width))@[],
+  io_rob_pnr_idx:Unsigned(bits=std.clog2(rows) + std.clog2(width))@[],
+  io_rob_head_idx:Unsigned(bits=std.clog2(rows) + std.clog2(width))@[],
+  io_commit_valids_0:Unsigned(bits=width)@[],
+  io_commit_arch_valids_0:Unsigned(bits=width)@[],
+  retiredTaken:Unsigned(bits=width)@[],
+  io_commit_uops_0_br_type:Unsigned(bits=width*4)@[],
+  io_commit_uops_0_is_fencei:Unsigned(bits=width)@[],
+  io_commit_uops_0_ftq_idx:Unsigned(bits=width*ftqBits)@[],
+  io_commit_uops_0_pdst:Unsigned(bits=width*pregBits)@[],
+  io_commit_uops_0_stale_pdst:Unsigned(bits=width*pregBits)@[],
+  io_commit_uops_0_uses_ldq:Unsigned(bits=width)@[],
+  io_commit_uops_0_uses_stq:Unsigned(bits=width)@[],
+  io_commit_uops_0_ldst:Unsigned(bits=width*6)@[],
+  io_commit_uops_0_dst_rtype:Unsigned(bits=width*2)@[],
+  io_commit_uops_0_debug_fsrc:Unsigned(bits=width*3)@[],
+  io_commit_fflags_valid:U1@[],
+  io_commit_fflags_bits:U5@[],
+  io_rollback:U1@[],
+  io_com_load_is_at_rob_head:U1@[],
+  io_com_xcpt_valid:U1@[],
+  io_com_xcpt_bits_ftq_idx:Unsigned(bits=ftqBits)@[],
+  io_com_xcpt_bits_edge_inst:U1@[],
+  io_com_xcpt_bits_pc_lob:U6@[],
+  io_com_xcpt_bits_cause:U64@[],
+  io_com_xcpt_bits_badvaddr:U64@[],
+  io_flush_valid:U1@[],
+  io_flush_bits_ftq_idx:Unsigned(bits=ftqBits)@[],
+  io_flush_bits_edge_inst:U1@[],
+  io_flush_bits_is_rvc:U1@[],
+  io_flush_bits_pc_lob:U6@[],
+  io_flush_bits_flush_typ:U3@[],
+  io_empty:U1@[],
+  io_ready:U1@[],
+  io_flush_frontend:U1@[],
+) {
+  cassert(rows >= 2 and width > 0)
+  comptime const laneBits    = std.clog2(width)
+  comptime const rowBits     = std.clog2(rows)
+  comptime const addrBits    = laneBits + rowBits
+  comptime const bankBits    = if width == 1 { 1 } else { laneBits }
+  comptime const ftqStart = 29 + 2*pregBits
+  comptime const payloadBits = 29 + pregBits + pregBits + ftqBits
+  reg head:Unsigned(bits=rowBits)       = nil
+  reg tail:Unsigned(bits=rowBits)       = nil
+  reg headLane:Unsigned(bits=bankBits)  = nil
+  reg tailLane:Unsigned(bits=bankBits)  = nil
+  reg partialRow:U1                     = nil
+  reg state:U2                          = nil
+  reg faultDelay:U1                     = nil
+  reg faultDelay2:U1                    = nil
+  reg pending:U1                        = nil
+  reg faultIdx:Unsigned(bits=addrBits)  = nil
+  reg faultMask:Unsigned(bits=branches) = nil
+  reg cause:U64                         = nil
+  reg badAddr:Unsigned(bits=13+9*pgLevels)                       = nil
+  reg headLoad:U1                       = nil
+  wire committing:Unsigned(bits=width) = nil
+  mut valid:Unsigned(bits=width)            = 0
+  mut busy:Unsigned(bits=width)             = 0
+  mut faults:Unsigned(bits=width)           = 0
+  mut predicated:Unsigned(bits=width)       = 0
+  mut flagValid:Unsigned(bits=width)        = 0
+  mut flags:Unsigned(bits=width*5)          = 0
+  mut tailValid:Unsigned(bits=width)        = 0
+  mut risks:Unsigned(bits=rows*width)       = 0
+  mut data:Unsigned(bits=width*payloadBits) = 0
+  for lane in 0..<width {
+    mut payload:Unsigned(bits=payloadBits) = 0
+    payload#[0..+1]                      = enq_is_fencei#[lane]
+    payload#[1..+1]                      = enq_uses_ldq#[lane]
+    payload#[2..+1]                      = enq_uses_stq#[lane]
+    payload#[3..+2]                      = enq_dst_rtype#[(lane*2)..+2]
+    payload#[5..+6]                      = enq_ldst#[(lane*6)..+6]
+    payload#[ftqStart..+ftqBits]                     = enq_ftq_idx#[(lane*ftqBits)..+ftqBits]
+    payload#[11..+4]                     = enq_br_type#[(lane*4)..+4]
+    payload#[15..+3]                     = enq_debug_fsrc#[(lane*3)..+3]
+    payload#[18..+1]                     = enq_edge_inst#[lane]
+    payload#[19..+1]                     = enq_is_rvc#[lane]
+    payload#[20..+6]                     = enq_pc_lob#[(lane*6)..+6]
+    payload#[26..+1]                     = enq_is_eret#[lane]
+    payload#[27..+1]                     = enq_is_sys_pc2epc#[lane]
+    payload#[28..+1]                     = enq_flush_on_commit#[lane]
+    payload#[29..+pregBits]              = enq_pdst#[(lane*pregBits)..+pregBits]
+    payload#[(29 + pregBits)..+pregBits] = enq_stale_pdst#[(lane*pregBits)..+pregBits]
+    const branch       = enq_br_type#[(lane*4)..+4]
+    const startsUnsafe = enq_uses_ldq#[lane] != 0
+      or (enq_uses_stq#[lane] != 0 and enq_is_fence#[lane] == 0)
+      or (branch >= 1 and branch <= 6)
+      or branch == 8
+    const entry        = bank<
+      lane=lane,
+      lsPorts=lsPorts,
+      payloadBits=payloadBits,
+      rows=rows,
+      wbPorts=wbPorts,
+      width=width,
+    >(
+      clock=clock,
+      reset=reset,
+      head=head,
+      tail=tail,
+      enqueue=enq#[lane],
+      startsBusy=U1((enq_is_fence#[lane] | enq_is_fencei#[lane]) == 0),
+      startsUnsafe=U1(startsUnsafe),
+      clearUnsafe=clearUnsafe,
+      unsafeIdx=unsafeIdx,
+      fault=enq_exception#[lane],
+      payload=payload,
+      commit=committing#[lane],
+      rollback=U1(state == 3),
+      predictedTaken=predictedTaken#[lane], resolvedTaken=resolvedTaken,
+      mispredict=mispredict,
+      branchIdx=branchIdx,
+      wb=wb,
+      wbIdx=wbIdx,
+      wbPred=pred,
+      wbFlagsValid=flagged,
+      wbFlags=fflags,
+      clearBusy=clear,
+      clearIdx=clearIdx,
+      lateFault=late,
+      lateIdx=lateIdx,
+      replay=replay,
+      replayIdx=replayIdx,
+    )
+    tailValid#[lane] = entry.tailValid
+    for r in 0..<rows {
+      risks#[(r*width) + lane] = entry.risks#[r]
+    }
+    retiredTaken#[lane] = entry.taken
+    valid#[lane]                                             = entry.valid
+    busy#[lane]                                              = entry.busy
+    faults#[lane]                                            = entry.exception
+    predicated#[lane]                                        = entry.predicated
+    flagValid#[lane]                                         = entry.flagsValid
+    flags#[(lane*5)..+5]                                     = entry.flags
+    data#[(lane*payloadBits)..+payloadBits]                  = entry.data
+    io_commit_uops_0_br_type#[(lane*4)..+4]                  = entry.data#[11..+4]
+    io_commit_uops_0_is_fencei#[lane]                        = entry.data#[0..+1]
+    io_commit_uops_0_ftq_idx#[(lane*ftqBits)..+ftqBits]                  = entry.data#[ftqStart..+ftqBits]
+    io_commit_uops_0_pdst#[(lane*pregBits)..+pregBits]       = entry.data#[29..+pregBits]
+    io_commit_uops_0_stale_pdst#[(lane*pregBits)..+pregBits] = entry.data#[(29 + pregBits)..+pregBits]
+    io_commit_uops_0_uses_ldq#[lane]                         = entry.data#[1..+1]
+    io_commit_uops_0_uses_stq#[lane]                         = entry.data#[2..+1]
+    io_commit_uops_0_ldst#[(lane*6)..+6]                     = entry.data#[5..+6]
+    io_commit_uops_0_dst_rtype#[(lane*2)..+2]                = entry.data#[3..+2]
+    io_commit_uops_0_debug_fsrc#[(lane*3)..+3]               = if entry.corrected != 0 { 4 } else { entry.data#[15..+3] }
+  }
+  const decision = retire<width=width>(
+    valid=valid,
+    busy=busy,
+    exceptions=faults,
+    stall=csrStall | mispredict | traceStall,
+    hold=U1((state != 1 and state != 2) or faultDelay != 0 or faultDelay2 != 0),
+  )
+  committing              = decision.commit
+  io_commit_valids_0      = committing
+  io_commit_arch_valids_0 = committing & ~predicated
+  io_commit_fflags_valid  = U1((committing & flagValid) != 0)
+  io_commit_fflags_bits   = 0
+  mut first:Unsigned(bits=bankBits)        = 0
+  mut firstFault:Unsigned(bits=bankBits)   = 0
+  mut afterEnq:Unsigned(bits=bankBits)     = 0
+  mut flushData:Unsigned(bits=payloadBits) = 0
+  mut flushCommit:U1                       = 0
+  for i in 0..<width {
+    comptime const lane = width - 1 - i
+    if valid#[lane] != 0 {
+      first = lane
+    }
+    if (enq & enq_exception)#[lane] != 0 {
+      firstFault = lane
+    }
+    if enq#[i] != 0 {
+      wrap afterEnq = i + 1
+    }
+    const uop = data#[(i*payloadBits)..+payloadBits]
+    if (committing & flagValid)#[i] != 0 {
+      io_commit_fflags_bits = io_commit_fflags_bits | flags#[(i*5)..+5]
+    }
+    if committing#[i] != 0 and uop#[28..+1] != 0 {
+      flushData   = uop
+      flushCommit = 1
+    }
+  }
+  const oldest   = data#[(first*payloadBits)..+payloadBits]
+  const thrown   = decision.thrown
+  const flush    = thrown | flushCommit
+  const flushUop = if width == 1 or thrown != 0 { oldest } else { flushData }
+  const mini     = cause == 16 or cause == 17
+  io_com_xcpt_valid          = U1(thrown != 0 and not mini)
+  io_com_xcpt_bits_cause     = cause
+  io_com_xcpt_bits_badvaddr  = badAddr#sext[0..<(13+9*pgLevels)]#[0..+64]
+  io_flush_valid             = flush
+  io_flush_bits_flush_typ    = if flush == 0 { 0 }
+    elif flushCommit != 0 and flushUop#[26..+1] != 0 { 3 }
+    elif thrown != 0 and not mini { 1 }
+    elif thrown != 0 or (valid != 0 and oldest#[27..+1] != 0) { 2 }
+    else { 4 }
+  io_com_xcpt_bits_ftq_idx   = oldest#[ftqStart..+ftqBits]
+  io_com_xcpt_bits_edge_inst = oldest#[18..+1]
+  io_com_xcpt_bits_pc_lob    = oldest#[20..+6]
+  io_flush_bits_ftq_idx      = flushUop#[ftqStart..+ftqBits]
+  io_flush_bits_edge_inst    = flushUop#[18..+1]
+  io_flush_bits_pc_lob       = flushUop#[20..+6]
+  io_flush_bits_is_rvc       = flushUop#[19..+1]
+  const nextTail  = if tail == rows - 1 { 0 } else { tail + 1 }
+  const branchRow = branchIdx >> laneBits
+  const drained   = committing != 0 and committing == valid and not (
+      partialRow != 0 and head == tail and mispredict == 0
+    )
+  io_rob_head_idx = (head << laneBits) | headLane
+  io_rob_tail_idx = if width == 1 { tail } else { (tail << laneBits) | tailLane }
+  io_empty        = U1(head == tail and valid == 0)
+  io_ready        = U1(state == 1 and nextTail != head and pending == 0)
+  io_rollback     = U1(state == 3)
+  const pnr = pointOfNoReturn<fast=fastPNR, rows=rows, width=width>(
+    clock=clock,
+    reset=reset,
+    head=io_rob_head_idx,
+    tail=tail,
+    tailValid=tailValid,
+    unsafe=risks,
+    enq=enq,
+    empty=io_empty,
+    full=U1(nextTail == head),
+    normal=U1(state == 1 or state == 2),
+    rollback=io_rollback,
+    mispredict=mispredict,
+  )
+  io_rob_pnr_idx             = pnr.idx
+  io_flush_frontend          = pending
+  io_com_load_is_at_rob_head = headLoad
+  headLoad                   = U1(oldest#[1..+1] != 0 and committing == 0)
+  faultDelay                 = thrown
+  faultDelay2                = faultDelay
+
+  // Track the oldest outstanding fault across dispatch, LSU and CSR replay.
+  const lateOlder = if (lateIdx < io_rob_head_idx) == (replayIdx < io_rob_head_idx) { lateIdx < replayIdx }
+    else { replayIdx < io_rob_head_idx }
+  const useLate   = replay == 0 or (late != 0 and lateOlder)
+  const newIdx    = if useLate { lateIdx } else { replayIdx }
+  const older     = if (newIdx < io_rob_head_idx) == (faultIdx < io_rob_head_idx) { newIdx < faultIdx }
+    else { faultIdx < io_rob_head_idx }
+  mut nextPending = pending
+  mut nextMask    = faultMask
+  if flush == 0 {
+    if late != 0 or replay != 0 {
+      if pending == 0 or older {
+        nextPending = 1
+        nextMask    = if useLate { lateMask } else { replayMask }
+        faultIdx    = newIdx
+        cause       = if useLate { lateCause } else { 17 }
+        badAddr     = if useLate { lateAddr } else { 0 }
+      }
+    } elif pending == 0 and (enq & enq_exception) != 0 {
+      nextPending = 1
+      nextMask    = enq_br_mask#[(firstFault*branches)..+branches]
+      faultIdx    = enq_rob_idx#[(firstFault*addrBits)..+addrBits]
+      cause       = enq_exc_cause#[(firstFault*64)..+64]
+      badAddr     = (fetchPC & ~63) | enq_pc_lob#[(firstFault*6)..+6]
+    }
+  }
+  faultMask = nextMask & ~resolve
+  pending   = if reset != 0 or flush != 0 or (nextMask & killed) != 0 { 0 } else { nextPending }
+  if reset != 0 {
+    state      = 0
+    head       = 0
+    tail       = 0
+    headLane   = 0
+    tailLane   = 0
+    partialRow = 0
+  } else {
+    if drained {
+      wrap head = if head == rows - 1 { 0 } else { head + 1 }
+      headLane = 0
+    } else {
+      headLane = if state == 3 { 0 } else { first }
+    }
+    if mispredict != 0 {
+      wrap tail = if branchRow == rows - 1 { 0 } else { branchRow + 1 }
+      tailLane   = 0
+      partialRow = 0
+    } elif enq != 0 {
+      partialRow = partial
+      if partial == 0 {
+        wrap tail = nextTail
+      }
+      tailLane = if partial != 0 { afterEnq } else { 0 }
+    }
+    if state == 3 {
+      tail     = head
+      tailLane = 0
+      state    = 1
+    } elif state == 0 {
+      state = 1
+    } elif faultDelay2 != 0 {
+      state = 3
+    } elif state == 1 and (enq & enq_is_unique) != 0 {
+      state = 2
+    } elif state == 2 and io_empty != 0 {
+      state = 1
+    }
+  }
+}

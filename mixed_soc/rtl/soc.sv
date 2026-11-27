@@ -19,7 +19,7 @@ module mixed_soc import mixed_packet::*; import mixed_layout::*; (
       assign host_rsp_valid=sov[i]; assign host_rsp=so[i]; assign sor[i]=host_rsp_ready;
       assign mem_req_valid=qov[i]; assign mem_req=qo[i]; assign qor[i]=mem_req_ready;
       wire cpu_dest=mem_rsp.target<5'(N) && !(mem_rsp.target>=5'(ACC) && mem_rsp.target<5'(ACC+ACC_COUNT)) && mem_rsp.target!=5'(HOST);
-      wire allowed=cpu_dest && (mem_rsp.ch==D || (mem_rsp.ch==B && BOOMS[mem_rsp.target]));
+      wire allowed=cpu_dest && (mem_rsp.ch==D || mem_rsp.ch==B);
       assign sv[i]=mem_rsp_valid && allowed; assign s[i]=mem_rsp; assign mem_rsp_ready=sr[i] && allowed;
     end else if(i>=ACC && i<ACC+ACC_COUNT) begin
       mixed_acc accelerator(.clock,.reset,.rxv(qov[i]),.rxr(qor[i]),.rx(qo[i]),.txv(sv[i]),.txr(sr[i]),.tx(s[i]));

@@ -1,0 +1,42 @@
+const classify = import("../pyrope/ShortForwardBranch.ShortForwardBranch")
+
+comb check<width>(slot:U3, scenario:U3) -> (ok:Bool) {
+  comptime const dstBits = std.clog2(4*width)
+  const lane = slot%width
+  const successor = (lane+1)%width
+  mut local:Unsigned(bits=width) = 1 << lane
+  mut next:Unsigned(bits=width) = 1 << successor
+  mut masks:Unsigned(bits=width*width*2) = 0
+  mut targets:Unsigned(bits=width*dstBits) = 0
+  masks#[(lane*width*2)..+(width*2)] = (1 << lane) | (1 << (width+successor))
+  targets#[(lane*dstBits)..+dstBits] = if scenario == 4 { 0 } elif scenario == 5 { 2*width } else { 2 }
+  if scenario == 1 { local = 0 }
+  if scenario == 2 { next = 0 }
+  mut good = true
+  for on in 0..<2 {
+    const result = classify<width=width, enabled=(on != 0)>(
+      current=local, following=next, possible=1 << lane, masks=masks, targets=targets,
+      predicted=U1(scenario == 3), predictedLane=lane, currentHalf=U1(scenario == 5), followingHalf=U1(scenario == 4),
+    )
+    if on != 0 and scenario == 0 {
+      good = good and result.eligible == 1 << lane and result.selected == lane and result.shadow == ((1 << lane) | (1 << (width+successor)))
+    } else {
+      good = good and result.eligible == 0
+    }
+  }
+  ok = good
+}
+
+pub mod short_forward_branch(slot:U3, scenario:U3) -> (ok:Bool@[0]) {
+  ok = check<width=4>(slot=slot, scenario=scenario) and check<width=8>(slot=slot, scenario=scenario)
+}
+
+test short_forward_branch.shadows {
+  mut dut = short_forward_branch
+  tick 48 {
+    dut.slot = clock%8
+    dut.scenario = (clock/8)#[0..+3]
+    step
+    assert(dut.ok, "incorrect short forward branch eligibility or shadow mask")
+  }
+}

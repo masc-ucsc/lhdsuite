@@ -1,0 +1,55 @@
+const buffer = import("../pyrope/FetchBuffer.FetchBuffer")
+const decode = import("../../exe/pyrope/DecodeUnit.DecodeUnit")
+
+// Append a load and store in separate sparse fetch packets. The first packet
+// remains visible until the second completes the decode row.
+pub mod fetch_decode(clock:Clock, reset:U1, load:U1, store:U1, consume:U1) ->
+    (lanes:U2@[], ld:U2@[], st:U2@[], dest:U6@[], firstBase:U6@[], secondBase:U6@[],
+     firstPC:U40@[], secondPC:U40@[], ftq:U12@[], faults:U2@[]) {
+  const packet:U128 = (0x00943023 << 64) | (0x00033283 << 32)
+  const q = buffer<entries=16, decodeWidth=2, ftqBits=6>(clock=clock, reset=reset,
+    io_enq_valid=load|store, io_deq_ready=consume, io_clear=0, pcBase=if load != 0 { 0x100 } else { 0x108 },
+    bankEdges=0, mask=(store << 2) | (load << 1), raw=packet, expanded=packet, sfbs=0, shadowed=0,
+    debug=0, exceptions=0, cfiValid=0, cfiLane=0, ftqIdx=if load != 0 { 34 } else { 39 },
+    pageFault=store, accessFault=0, source=0,
+  )
+  const d = decode<width=2, ftqBits=6>(io_enq_uop_inst=q.row_inst, io_enq_uop_debug_inst=q.row_debug_inst,
+      io_enq_uop_debug_pc=q.row_debug_pc, io_enq_uop_xcpt_pf_if=q.row_xcpt_pf_if,
+      io_enq_uop_is_rvc=0, io_enq_uop_is_sfb=0, io_enq_uop_ftq_idx=q.row_ftq_idx,
+      io_enq_uop_edge_inst=0, io_enq_uop_pc_lob=0, io_enq_uop_taken=0,
+      io_enq_uop_xcpt_ae_if=0, io_enq_uop_bp_debug_if=0, io_enq_uop_bp_xcpt_if=0,
+      io_enq_uop_debug_fsrc=0, io_csr_decode_fp_illegal=0, io_csr_decode_read_illegal=0,
+      io_csr_decode_write_illegal=0, io_csr_decode_write_flush=0, io_csr_decode_system_illegal=0,
+      io_fcsr_rm=0, io_interrupt=0, io_interrupt_cause=0)
+  ftq = d.io_deq_uop_ftq_idx
+  lanes = q.lanes
+  ld = d.io_deq_uop_uses_ldq
+  st = d.io_deq_uop_uses_stq
+  dest = d.io_deq_uop_ldst#[0..+6]
+  firstBase = d.io_deq_uop_lrs1#[0..+6]
+  secondBase = d.io_deq_uop_lrs1#[6..+6]
+  firstPC = d.io_deq_uop_debug_pc#[0..+40]
+  secondPC = d.io_deq_uop_debug_pc#[40..+40]
+  faults = d.io_deq_uop_exception
+}
+
+test fetch_decode.twoLanes {
+  mut dut = fetch_decode
+  tick 12 {
+    dut.reset = U1(clock < 2)
+    dut.load = U1(clock == 3)
+    dut.store = U1(clock == 6)
+    dut.consume = U1(clock < 6 or clock >= 9)
+    step
+    if clock == 5 {
+      assert(dut.lanes == 1 and dut.firstPC == 0x102, "partial row must survive dequeue")
+    }
+    if clock == 8 {
+      assert(dut.lanes == 3 and dut.ld == 1 and dut.st == 2, "independent load and store decodes")
+      assert(dut.ftq == 34 + (39 << 6), "six-bit FTQ tags survive independent lanes")
+      assert(dut.dest == 5 and dut.firstBase == 6 and dut.secondBase == 8, "lane register operands")
+      assert(dut.firstPC == 0x102 and dut.secondPC == 0x10c and dut.faults == 2, "lane PC and page fault")
+    }
+    if clock == 11 { assert(dut.lanes == 0, "complete row dequeued") }
+  }
+}

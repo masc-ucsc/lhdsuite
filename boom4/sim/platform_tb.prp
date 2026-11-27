@@ -1,0 +1,58 @@
+// Run a register-only loop, interrupt it at a retired instruction and return via MNRET.
+// The BOOM-specific trace ports report register writes and the retirement PC.
+const tile = import("lg:BoomTile")
+test tile.nmi_trace {
+  mut d = tile
+  mut beats:U4 = 0
+  mut source:U8 = 0
+  mut boot:Bool = false
+  mut phase:U3 = 0
+  tick 2000 {
+    d.reset = clock < 4
+    d.nmiRequest = U1(phase == 1)
+    d.nmiVector = 0x10020
+    d.nmiExceptionVector = 0x10030
+    d.auto_buffer_out_a_ready = U1(beats == 0)
+    d.auto_buffer_out_c_ready = 1
+    d.auto_buffer_out_e_ready = 1
+    d.auto_buffer_out_d_valid = U1(beats != 0)
+    d.auto_buffer_out_d_bits_opcode = 1
+    d.auto_buffer_out_d_bits_size = 6
+    d.auto_buffer_out_d_bits_source = source
+    d.auto_buffer_out_d_bits_data = if !boot { 0x0000001300000013 }
+      elif beats == 8 { 0x0010809300100093 }
+      elif beats == 7 { 0x00000013ffdff06f }
+      elif beats == 4 { 0x7020007302a00113 }
+      else { 0x0000001300000013 }
+    if beats == 0 and d.auto_buffer_out_a_valid != 0 {
+      assert(d.auto_buffer_out_a_bits_opcode == 4)
+      boot = d.auto_buffer_out_a_bits_address == 0x10000
+      source = d.auto_buffer_out_a_bits_source
+      beats = 8
+    } elif beats != 0 and d.auto_buffer_out_d_ready != 0 {
+      wrap beats = beats - 1
+    }
+    step
+    if d.traceEvents#[0] != 0 {
+      const pc = d.traceEvents#[1..+64]
+      const inst = d.traceEvents#[65..+32]
+      const value = d.traceEvents#[97..+64]
+      assert(d.traceGroups#[0] != 0 and d.traceGroups#[6..+40] == pc)
+      if pc == 0x10004 {
+        assert(inst == 0x00108093 and value >= 2)
+        if phase == 0 {
+          phase = 1
+        } elif phase == 3 {
+          phase = 4
+        }
+      } elif pc == 0x10020 {
+        assert(phase == 1 and inst == 0x02a00113 and value == 42)
+        phase = 2
+      } elif pc == 0x10024 {
+        assert(phase == 2 and inst == 0x70200073 and d.traceGroups#[2..+4] == 13)
+        phase = 3
+      }
+    }
+  }
+  assert(phase == 4, "the interrupted program resumed after MNRET")
+}

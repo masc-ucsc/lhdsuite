@@ -1,0 +1,101 @@
+const configs = import("../../common/pyrope/BoomConfig")
+comb highestBit(value:U64) -> (index:U6) {
+  mut word:U64 = value
+  index = 0
+  for i in 0..<6 {
+    const shift = 1 << (5-i)
+    if word >> shift != 0 {
+      word = word >> shift
+      index = index | shift
+    }
+  }
+}
+
+pub mod MulDiv<cfg=configs.defaultMulDiv>::[timecheck=false](clock:Clock, io_kill:U1, io_req_bits_dw:U1, io_req_bits_fn:U5, io_req_bits_in1:U64, io_req_bits_in2:U64, io_req_valid:U1, io_resp_ready:U1, reset:U1) -> (io_req_ready:U1@[], io_resp_bits_data:U64@[], io_resp_valid:U1@[]) {
+  reg state:U3
+  reg req_dw:U1
+  reg count:U7
+  reg neg_out:U1
+  reg isHi:U1
+  reg resHi:U1
+  reg divisor:U65
+  reg remainder:U130
+  const result = if resHi != 0 { remainder#[65..+64] } else { remainder#[0..+64] }
+  const lo = if req_dw == 0 and state#[0] == 0 { result#[32..+32] } else { result#[0..+32] }
+  const done = state == 6 or state == 7
+  const accept = state == 0 and io_req_valid != 0
+  comptime const group = if cfg.divUnroll >= cfg.divEarlyOutGranularity { cfg.divUnroll } else { cfg.divEarlyOutGranularity }
+  comptime const align = 1 << (std.clog2(group+1)-1)
+  const dividendMsb = highestBit(remainder#[0..+64]) | (align-1)
+  const divisorMsb = highestBit(divisor#[0..+64]) & (64-align)
+  const skip = (63 - (dividendMsb-divisorMsb)#[0..+6])#[0..+6]
+  const fn = io_req_bits_fn#[0..+3]
+  const multiply = fn < 4
+  const high = (multiply and fn != 0) or fn >= 6
+  const lhsSigned = fn == 0 or fn == 1 or fn == 2 or fn == 4 or fn == 6
+  const rhsSigned = fn == 0 or fn == 1 or fn == 4 or fn == 6
+  const signBit = if io_req_bits_dw != 0 { 63 } else { 31 }
+  const lhsSign = U1(lhsSigned) & io_req_bits_in1#[signBit]
+  const rhsSign = U1(rhsSigned) & io_req_bits_in2#[signBit]
+  const diff = (remainder#[64..+65]-divisor)#[0..+65]
+  const divByZero = count == 0 and diff#[64] == 0
+  const skippedGroups = (skip/cfg.divUnroll)#[0..+6]
+  const early = cfg.divEarlyOut and count == 0 and !divByZero and skip >= align and skippedGroups != 0
+  const lastDiv = state == 3 and count == 64/cfg.divUnroll
+  const lastMul = state == 2 and count == 63
+  if reset != 0 { state = 0 }
+  elif accept { state = if multiply { 2 } elif (lhsSign | rhsSign) != 0 { 1 } else { 3 } }
+  elif (done and io_resp_ready != 0) or io_kill != 0 { state = 0 }
+  elif lastDiv { state = if neg_out != 0 { 5 } else { 7 } }
+  elif lastMul { state = 6 }
+  elif state == 5 { state = 7 }
+  elif state == 1 { state = 3 }
+
+  if accept {
+    req_dw = io_req_bits_dw
+    count = if multiply and io_req_bits_dw == 0 { 32 } else { 0 }
+    isHi = U1(high)
+    neg_out = if high { lhsSign } else { lhsSign ^ rhsSign }
+    resHi = 0
+    const rhsUpper = if io_req_bits_dw != 0 { io_req_bits_in2#[32..+32] } elif rhsSign != 0 { 0xffffffff } else { 0 }
+    const lhsUpper = if io_req_bits_dw != 0 { io_req_bits_in1#[32..+32] } elif lhsSign != 0 { 0xffffffff } else { 0 }
+    divisor = (rhsSign << 64) | (rhsUpper << 32) | io_req_bits_in2#[0..+32]
+    remainder = (lhsUpper << 32) | io_req_bits_in1#[0..+32]
+  } else {
+    if state == 3 {
+      mut partial:U130 = remainder
+      mut finalStep:U130 = 0
+      for i in 0..<cfg.divUnroll {
+        const difference = if i == 0 { diff } else { (partial#[64..+65]-divisor#[0..+64])#[0..+65] }
+        const less = difference#[64]
+        const hi = if less != 0 { partial#[64..+64] } else { difference#[0..+64] }
+        partial = (hi << 65) | (partial#[0..+64] << 1) | (less ^ 1)
+        if i == 64%cfg.divUnroll { finalStep = partial }
+      }
+      if early {
+        remainder = remainder#[0..+64] << (skippedGroups*cfg.divUnroll)
+        count = skippedGroups
+      } else {
+        remainder = if count == 64/cfg.divUnroll { finalStep } else { partial }
+        count = (count+1)#[0..+7]
+      }
+      if divByZero and isHi == 0 { neg_out = 0 }
+    } elif state == 2 {
+      const multiplier = ((if remainder#[64] != 0 { 0x1ffffffffffffffff } else { 0 }) << 1) | remainder#[0]
+      const multiplicand = (divisor#[64] << 65) | divisor
+      const accumulator = (remainder#[129] << 65) | remainder#[65..+65]
+      const product = (multiplier*multiplicand + accumulator)#[0..+66]
+      count = (count+1)#[0..+7]
+      remainder = (product#[1..+65] << 65) | ((U1(count == 62) & neg_out) << 64) |
+          (product#[0] << 63) | remainder#[1..+63]
+    } elif state == 5 or (state == 1 and remainder#[63] != 0) {
+      remainder = (0-result)#[0..+64]
+    }
+    if state == 1 and divisor#[63] != 0 { divisor = diff }
+    if lastDiv or lastMul { resHi = isHi } elif state == 5 { resHi = 0 }
+  }
+  const upper = if req_dw != 0 { result#[32..+32] } elif lo#[31] != 0 { 0xffffffff } else { 0 }
+  io_req_ready = U1(state == 0)
+  io_resp_valid = U1(done)
+  io_resp_bits_data = (upper << 32) | lo
+}

@@ -1,0 +1,99 @@
+const rename = import("RegisterRename.RegisterRename")
+
+pub mod RenameStage_1<fpPorts=1, width=1, physical=48, branches=8, banked=false>::[
+  timecheck=false
+](
+  clock:Clock,
+  reset:U1,
+  io_kill:U1,
+  io_dec_fire_0:Unsigned(bits=width),
+  io_dec_uops_0_br_tag:Unsigned(bits=width*std.clog2(branches)),
+  io_dec_uops_0_br_type:Unsigned(bits=width*4),
+  io_dec_uops_0_is_sfb:Unsigned(bits=width),
+  io_dec_uops_0_ldst:Unsigned(bits=width*6),
+  io_dec_uops_0_lrs1:Unsigned(bits=width*6),
+  io_dec_uops_0_lrs2:Unsigned(bits=width*6),
+  io_dec_uops_0_lrs3:Unsigned(bits=width*6),
+  io_dec_uops_0_dst_rtype:Unsigned(bits=width*2),
+  io_dec_uops_0_lrs1_rtype:Unsigned(bits=width*2),
+  io_dec_uops_0_lrs2_rtype:Unsigned(bits=width*2),
+  io_dec_uops_0_frs3_en:Unsigned(bits=width),
+  io_brupdate_b2_uop_br_tag:Unsigned(bits=std.clog2(branches)),
+  io_brupdate_b2_mispredict:U1,
+  io_dis_fire_0:Unsigned(bits=width),
+  io_dis_ready:U1,
+  io_wakeups_0_valid:Unsigned(bits=fpPorts),
+  io_wakeups_0_bits_uop_pdst:Unsigned(bits=fpPorts*std.clog2(physical)),
+  io_wakeups_0_bits_uop_dst_rtype:Unsigned(bits=2*fpPorts),
+  io_wakeups_1_valid:U1,
+  io_wakeups_1_bits_uop_pdst:Unsigned(bits=std.clog2(physical)),
+  io_wakeups_1_bits_uop_dst_rtype:U2,
+  io_com_valids_0:Unsigned(bits=width),
+  io_com_uops_0_pdst:Unsigned(bits=width*std.clog2(physical)),
+  io_com_uops_0_stale_pdst:Unsigned(bits=width*std.clog2(physical)),
+  io_com_uops_0_ldst:Unsigned(bits=width*6),
+  io_com_uops_0_dst_rtype:Unsigned(bits=width*2),
+  io_rollback:U1,
+) -> (
+  io_ren_stalls_0:Unsigned(bits=width)@[],
+  io_ren2_uops_0_pdst:Unsigned(bits=width*std.clog2(physical))@[],
+  io_ren2_uops_0_prs1:Unsigned(bits=width*std.clog2(physical))@[],
+  io_ren2_uops_0_prs2:Unsigned(bits=width*std.clog2(physical))@[],
+  io_ren2_uops_0_prs3:Unsigned(bits=width*std.clog2(physical))@[],
+  io_ren2_uops_0_prs1_busy:Unsigned(bits=width)@[],
+  io_ren2_uops_0_prs2_busy:Unsigned(bits=width)@[],
+  io_ren2_uops_0_prs3_busy:Unsigned(bits=width)@[],
+  io_ren2_uops_0_stale_pdst:Unsigned(bits=width*std.clog2(physical))@[],
+) {
+  comptime const wakePorts = fpPorts + 1
+  comptime const bits = std.clog2(physical)
+  const regs = rename<
+    aluWidth=1,
+    banked=banked,
+    branches=branches,
+    float=true,
+    physical=physical,
+    ports=wakePorts,
+    width=width,
+  >(
+    clock=clock,
+    reset=reset,
+    kill=io_kill,
+    ready=io_dis_ready,
+    decode=io_dec_fire_0,
+    dispatch=io_dis_fire_0,
+    rs1=io_dec_uops_0_lrs1,
+    rs2=io_dec_uops_0_lrs2,
+    rs3=io_dec_uops_0_lrs3,
+    rd=io_dec_uops_0_ldst,
+    src1Type=io_dec_uops_0_lrs1_rtype,
+    src2Type=io_dec_uops_0_lrs2_rtype,
+    src3En=io_dec_uops_0_frs3_en,
+    dstType=io_dec_uops_0_dst_rtype,
+    brType=io_dec_uops_0_br_type,
+    sfb=io_dec_uops_0_is_sfb,
+    brTag=io_dec_uops_0_br_tag,
+    mispredict=io_brupdate_b2_mispredict,
+    recover=io_brupdate_b2_uop_br_tag,
+    rollback=io_rollback,
+    commit=io_com_valids_0,
+    comRd=io_com_uops_0_ldst,
+    comType=io_com_uops_0_dst_rtype,
+    comDest=io_com_uops_0_pdst,
+    comStale=io_com_uops_0_stale_pdst,
+    wake=io_wakeups_0_valid | (io_wakeups_1_valid << fpPorts),
+    wakeDest=io_wakeups_0_bits_uop_pdst | (io_wakeups_1_bits_uop_pdst << (fpPorts*bits)),
+    rebusy=0,
+    speculative=0,
+    children=0,
+  )
+  io_ren_stalls_0           = regs.stall
+  io_ren2_uops_0_pdst       = regs.dest
+  io_ren2_uops_0_prs1       = regs.prs1
+  io_ren2_uops_0_prs2       = regs.prs2
+  io_ren2_uops_0_prs3       = regs.prs3
+  io_ren2_uops_0_prs1_busy  = regs.busy1
+  io_ren2_uops_0_prs2_busy  = regs.busy2
+  io_ren2_uops_0_prs3_busy  = regs.busy3
+  io_ren2_uops_0_stale_pdst = regs.stale
+}

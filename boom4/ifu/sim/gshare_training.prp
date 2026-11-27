@@ -1,0 +1,64 @@
+const gshare = import("../pyrope/GShareBank.GShareBank")
+comptime const table = (const rows=8, const history=4, const tag=7)
+pub mod gshare_training(clock:Clock, reset:Reset, history:U64, pc:U40, update:U1, mispredict:U1, meta:U32) ->
+    (prediction:U4@[], info:U32@[], pairedPrediction:U4@[], pairedInfo:U32@[]) {
+  const bank = gshare<T=table, fetchShift=3>(clock=clock, reset=reset, fetch=1, pc=pc, history=history, baseTaken=0,
+      update=update, updatePc=0x1000, updateHistory=0, branches=1, cfiValid=1, cfi=0, taken=1,
+      mispredict=mispredict, meta=meta)
+  const paired = gshare<T=table, fetchShift=4>(clock=clock, reset=reset, fetch=1, pc=pc, history=history, baseTaken=0,
+      update=update, updatePc=0x1000, updateHistory=0, branches=1, cfiValid=1, cfi=0, taken=1,
+      mispredict=mispredict, meta=meta)
+  pairedPrediction = paired.prediction
+  pairedInfo = paired.info
+  prediction = bank.prediction
+  info = bank.info
+}
+
+test gshare_training.learn {
+  mut d = gshare_training
+  mut saved:U32 = 0
+  tick 48 {
+    d.reset = clock < 2
+    d.pc = 0x1000
+    d.history = if clock < 35 { 0 } else { 1 }
+    d.update = U1(clock == 16 or clock == 26)
+    d.mispredict = U1(clock == 16)
+    d.meta = saved
+    step
+    if clock == 14 {
+      assert(d.info#[0] == 1 and d.info#[28] == 0, "a cold lane can allocate")
+      saved = d.info
+    } elif clock == 24 {
+      assert(d.info#[28] == 1 and d.info#[4..+3] == 4 and d.prediction == 0, "weak taken falls back to bimodal")
+      saved = d.info
+    } elif clock == 34 {
+      assert(d.prediction == 1 and d.info#[4..+3] == 5, "commit strengthened the tagged lane")
+    } elif clock == 44 {
+      assert(d.prediction == 0 and d.info#[28] == 0, "different history misses the trained entry")
+    }
+  }
+}
+
+test gshare_training.bank_index {
+  mut one = gshare_training
+  mut snapshot:U32 = 0
+  tick 48 {
+    const pc:U40 = if clock < 35 { 0x1000 } else { 0x1008 }
+    one.pc = pc
+    one.reset = clock < 2
+    const write = U1(clock == 16 or clock == 26)
+    one.update = write
+    one.mispredict = U1(clock == 16)
+    one.history = 0
+    one.meta = snapshot
+    step
+    if clock == 14 or clock == 24 {
+      snapshot = one.info
+      assert(one.info == one.pairedInfo, "training the same aligned address yields identical metadata")
+    } elif clock == 34 {
+      assert(one.prediction == 1 and one.pairedPrediction == 1, "both bank geometries trained the taken branch")
+    } elif clock == 44 {
+      assert(one.prediction == 0 and one.pairedPrediction == 1, "a two-bank predictor omits the physical bank bit from its row address")
+    }
+  }
+}

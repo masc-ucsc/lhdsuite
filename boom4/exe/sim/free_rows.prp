@@ -1,0 +1,34 @@
+const allocator = import("../pyrope/PhysicalFreeList.PhysicalFreeList")
+pub mod free_rows(clock:Clock, reset:U1, requests:U4, snapshot:U1, mispredict:U1, tag:U2,
+    commit:U1, rollback:U1, release:U1) -> (valid:U4@[], regs:U16@[], free:U16@[]) {
+  const pool = allocator<width=4, returns=2, physical=16, branches=4>(
+      clock=clock, reset=reset, initial=0xfff0, requests=requests,
+      releaseValid=if release != 0 { 3 } else { 0 }, releaseRegs=0x14,
+      commitValid=commit, commitRegs=4, snap=if snapshot != 0 { 10 } else { 0 }, tags=1 << 6,
+      mispredict=mispredict, recover=tag, rollback=rollback)
+  valid = pool.valid
+  regs = pool.regs
+  free = pool.debug
+}
+
+test free_rows.recovery {
+  mut d = free_rows
+  tick 18 {
+    d.reset = U1(clock < 2)
+    d.requests = if clock == 4 { 15 } else { 0 }
+    d.snapshot = U1(clock == 4)
+    d.mispredict = U1(clock == 6 or clock == 8)
+    d.tag = U2(clock == 6)
+    d.commit = U1(clock == 5)
+    d.rollback = U1(clock == 10)
+    d.release = U1(clock == 12)
+    step
+    if clock == 3 { assert(d.valid == 15 and d.regs == 0x7654, "four distinct allocations") }
+    if clock == 4 { assert(d.free == 0xff00, "requests consume all four allocations") }
+    if clock == 6 { assert(d.free == 0xff80, "younger branch returns only lane three") }
+    if clock == 8 { assert(d.free == 0xffe0, "older branch returns lanes one through three") }
+    if clock == 10 { assert(d.free == 0xffe0, "rollback preserves committed lane zero") }
+    if clock == 12 { assert(d.free == 0xffe0, "ROB returns are registered") }
+    if clock == 13 { assert(d.free == 0xfff2, "both ROB return ports restore their registers") }
+  }
+}

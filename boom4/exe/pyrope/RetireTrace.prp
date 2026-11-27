@@ -1,0 +1,41 @@
+// One trace instruction per ROB bank. Instruction and result RAMs follow the ROB pointers.
+pub type Status = (privilege:U3, exception:U1, interrupt:U1, cause:U64, tval:U64)
+pub const empty:Status = (cause=0, exception=0, interrupt=0, privilege=0, tval=0)
+
+pub mod RetireTrace<width, rows, ports, addrBits=40>(clock:Clock, reset:Reset, tail:Unsigned(bits=std.clog2(rows)), head:Unsigned(bits=std.clog2(rows)), dispatch:Unsigned(bits=width), retire:Unsigned(bits=width), pc:Unsigned(bits=width*addrBits), instructions:Unsigned(bits=32*width), compressed:Unsigned(bits=width), destType:Unsigned(bits=2*width), dest:Unsigned(bits=6*width), wb:Unsigned(bits=ports), wbTags:Unsigned(bits=ports*(std.clog2(width) + std.clog2(rows))), data:Unsigned(bits=ports*64), debug:U1, privilege:U2, trap:U1, cause:U64, tval:U64) -> (events:Unsigned(bits=width*161)@[], state:Status@[]) {
+  comptime const laneBits = std.clog2(width)
+  comptime const tagBits = laneBits + std.clog2(rows)
+  reg debug1:U1 = nil
+  reg debug2:U1 = nil
+  reg status:Status = nil
+  debug1 = debug
+  debug2 = debug1
+  status = (privilege=(debug2 << 2) | privilege, exception=trap & ~cause#[63], interrupt=trap & cause#[63], cause=cause, tval=tval)
+  state = status
+  for lane in 0..<width {
+    reg fetch:[rows]Unsigned(bits=32+addrBits):[ordering="old"] = nil
+    reg values:[rows]U64:[ordering="old"] = nil
+    if dispatch#[lane] != 0 {
+      const raw = instructions#[(lane*32)..+32]
+      const insn = if compressed#[lane] != 0 { raw#[0..+16] } else { raw }
+      fetch[tail%rows] = (pc#[(lane*addrBits)..+addrBits] << 32) | insn
+    }
+    for port in 0..<ports {
+      const tag = wbTags#[(port*tagBits)..+tagBits]
+      if wb#[port] != 0 and (tag & ((1 << laneBits) - 1)) == lane {
+        values[(tag >> laneBits)%rows] = data#[(port*64)..+64]
+      }
+    }
+    const fetched = fetch[head%rows]
+    const kind = destType#[(lane*2)..+2]
+    const write = kind == 1 or (kind == 0 and dest#[(lane*6)..+6] != 0)
+    const address = fetched#[32..+(addrBits-1)]#sext[0..<(addrBits-1)]#[0..+64]
+    reg event:U161 = nil
+    if reset {
+      event = 0
+    } else {
+      event = ((if write { values[head%rows] } else { 0 }) << 97) | (fetched#[0..+32] << 65) | (address << 1) | retire#[lane]
+    }
+    events#[(lane*161)..+161] = event
+  }
+}

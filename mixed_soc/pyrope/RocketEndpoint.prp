@@ -1,0 +1,121 @@
+const tile = import("../../rocket/pyrope2/RocketTile.RocketTile")
+const tl   = import("mixed_packet")
+
+pub mod RocketEndpoint<C, hart, host=17, accelerator=16>(
+  clock:Clock,
+  irq:U4,
+  reset:U1,
+  rx:tl.Packet,
+  rxv:U1,
+  txr:U1,
+) -> (rxr:U1@[], tx:tl.Packet@[], txv:U1@[]) {
+  cassert(C.dLen == 32 and C.dcacheBlockBytes == 64 and C.nMSHRs <= 6)
+  reg full:Bool:[async=false, initial=false, reset_pin=reset] = nil
+  reg held:tl.Packet                                          = nil
+  tx  = held
+  txv = U1(full)
+  const free = reset == 0 and !full
+  // Mesh sources 0–1 belong to the I/O and instruction port. Cache banks use 2–7.
+  const grant = rx.opcode == 4 or rx.opcode == 5 or rx.opcode == 6
+  const d     = rxv != 0 and rx.ch == tl.D
+  const hi    = rx.origin == accelerator and rx.addr#[2] != 0
+  wire takeC:Bool       = nil
+  wire takeAcquire:Bool = nil
+  wire takeIO:Bool      = nil
+  const core = tile<C>(
+    clock,
+    reset,
+    auto_hartid_in=hart,
+    auto_int_local_in_0_0=0,
+    auto_int_local_in_1_0=irq#[0],
+    auto_int_local_in_1_1=irq#[1],
+    auto_int_local_in_2_0=irq#[2],
+    supervisorExternalInterrupt=irq#[3],
+    auto_buffer_in_a_valid=0,
+    auto_buffer_in_a_bits_opcode=0,
+    auto_buffer_in_a_bits_param=0,
+    auto_buffer_in_a_bits_size=0,
+    auto_buffer_in_a_bits_source=0,
+    auto_buffer_in_a_bits_address=0,
+    auto_buffer_in_a_bits_mask=0,
+    auto_buffer_in_a_bits_data=0,
+    auto_buffer_in_a_bits_corrupt=0,
+    auto_buffer_in_d_ready=1,
+    auto_buffer_out_a_ready=U1(takeIO),
+    auto_buffer_out_d_valid=U1(d and !grant),
+    auto_buffer_out_d_bits_opcode=rx.opcode,
+    auto_buffer_out_d_bits_param=rx.param#[0..+2],
+    auto_buffer_out_d_bits_size=rx.size,
+    auto_buffer_out_d_bits_source=rx.tl_source#[0],
+    auto_buffer_out_d_bits_sink=rx.sink#[0],
+    auto_buffer_out_d_bits_denied=rx.denied,
+    auto_buffer_out_d_bits_corrupt=rx.corrupt,
+    auto_buffer_out_d_bits_data=if hi { rx.data#[32..+32] } else { rx.data#[0..+32] },
+    memAReady=takeAcquire,
+    memBValid=rxv != 0 and rx.ch == tl.B,
+    memBAddress=rx.addr,
+    memBParam=rx.param#[0..+2],
+    memBSource=rx.tl_source,
+    memCReady=takeC,
+    memDValid=d and grant,
+    memDOpcode=rx.opcode#[0..+3],
+    memDParam=rx.param#[0..+2],
+    memDSource=(rx.tl_source - 1)#[0..+5],
+    memDSink=rx.sink,
+    memDData=rx.data#[0..+32],
+    memDCorrupt=Bool(rx.corrupt),
+    memDDenied=Bool(rx.denied),
+    memEReady=free,
+  )
+  takeC       = free and !core.memEValid
+  takeAcquire = takeC and !core.memCValid
+  takeIO      = takeAcquire and !core.memAValid
+  rxr         = if rx.ch == tl.B { U1(core.memBReady) }
+    elif rx.ch != tl.D { 0 }
+    elif grant { U1(core.memDReady) }
+    else { core.auto_buffer_out_d_ready }
+  if full {
+    if txr != 0 {
+      full = false
+    }
+  } elif free and (core.memEValid or core.memCValid or core.memAValid or core.auto_buffer_out_a_valid != 0) {
+    full = true
+    mut msg:tl.Packet = tl.idle
+    msg.target = host
+    if core.memEValid {
+      msg.ch   = tl.E
+      msg.sink = core.memESink#[0..+3]
+    } elif core.memCValid {
+      msg.ch        = tl.C
+      msg.addr      = core.memCAddress
+      msg.size      = core.memCSize
+      msg.opcode    = core.memCOpcode
+      msg.param     = core.memCParam
+      msg.tl_source = if core.memCOpcode >= 6 { (core.memCSource + 1)#[0..+3] } else { core.memCSource#[0..+3] }
+      msg.data      = core.memCData
+      msg.corrupt   = U1(core.memCCorrupt)
+    } elif core.memAValid {
+      msg.ch        = tl.A
+      msg.opcode    = 6
+      msg.addr      = core.memAAddress
+      msg.param     = core.memAParam
+      msg.size      = core.memASize
+      msg.tl_source = (core.memASource + 1)#[0..+3]
+      msg.mask      = 15
+    } else {
+      const address = core.auto_buffer_out_a_bits_address
+      const acc     = address >= tl.ACC_BASE and address < tl.ACC_BASE + tl.ACC_SIZE
+      const shift   = if acc and address#[2] != 0 { 4 } else { 0 }
+      msg.target    = if acc { accelerator } else { host }
+      msg.ch        = tl.A
+      msg.addr      = address
+      msg.param     = core.auto_buffer_out_a_bits_param
+      msg.opcode    = core.auto_buffer_out_a_bits_opcode
+      msg.size      = core.auto_buffer_out_a_bits_size
+      msg.tl_source = core.auto_buffer_out_a_bits_source
+      msg.mask      = core.auto_buffer_out_a_bits_mask << shift
+      msg.data      = core.auto_buffer_out_a_bits_data << (8*shift)
+    }
+    held = msg
+  }
+}

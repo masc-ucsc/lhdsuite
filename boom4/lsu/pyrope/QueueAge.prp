@@ -1,0 +1,42 @@
+const priority = import("../../util/pyrope/ParallelFindOne.ParallelFindOne")
+
+// Entries in the circular interval [head, tail). Generation bits distinguish
+// an empty queue from a full queue when the two physical slots coincide.
+pub comb QueueAge<entries, excludeHead=false>(
+  head:Unsigned(bits=1 + std.clog2(entries)),
+  tail:Unsigned(bits=1 + std.clog2(entries)),
+) -> (mask:Unsigned(bits=entries)) {
+  cassert(entries >= 2)
+  comptime const bits = std.clog2(entries)
+  const first                         = head#[0..+bits]
+  const last                          = tail#[0..+bits]
+  const before:Unsigned(bits=entries) = ((1 << last) - 1)#[0..+entries]
+  const after:Unsigned(bits=entries)  = ((-1) << first)#[0..+entries]
+  mask = if head#[bits] == tail#[bits] { after & before } else { after | before }
+  if excludeHead {
+    mask#[first] = 0
+  }
+}
+
+// LSUAgePriorityEncoder searches from head, then wraps. Chisel's empty
+// priority vector falls through to its last physical entry.
+pub comb oldest<entries>(
+  candidates:Unsigned(bits=entries),
+  head:Unsigned(bits=1 + std.clog2(entries)),
+) -> (tag:Unsigned(bits=1 + std.clog2(entries))) {
+  comptime const bits = std.clog2(entries)
+  const base     = head#[0..+bits]
+  const suffix   = candidates & ((-1) << base)
+  const eligible = if suffix != 0 { suffix } else { candidates }
+  const first    = priority<favorHigh=false, width=entries>(mask=eligible)
+  const slot     = if first.success { first.index } else { entries - 1 }
+  tag = ((head#[bits] ^ U1(slot < base)) << bits) | slot
+}
+
+// LSU pointers retain their generation across wrap. Opposite generations
+// reverse the slot comparison; equal slots never precede each other.
+pub comb precedes<bits>(a:Unsigned(bits=bits+1), b:Unsigned(bits=bits+1)) -> (older:U1) {
+  const left = a#[0..+bits]
+  const right = b#[0..+bits]
+  older = if a#[bits] == b#[bits] { U1(left < right) } else { U1(left > right) }
+}

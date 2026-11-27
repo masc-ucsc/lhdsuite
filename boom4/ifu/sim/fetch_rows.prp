@@ -1,0 +1,56 @@
+const rows = import("../pyrope/FetchRows.FetchRows")
+
+// Number every enqueued instruction. A consumed lane must carry the next
+// sequence number even when the ring wraps in the middle of a sparse packet.
+mod checkRows<f, d>(clock:Clock, reset:U1, clear:U1, enable:U1, consume:U1, pattern:U8) -> (correct:Bool@[]) {
+  comptime const capacity = d*8
+  reg issued:U16 = nil
+  reg retired:U16 = nil
+  const count = issued-retired
+  const mask = pattern#[0..+f]
+  mut packet:Unsigned(bits=f*16) = 0
+  mut seq = issued
+  for w in 0..<f {
+    packet#[(16*w)..+16] = seq
+    if mask#[w] != 0 { wrap seq = seq+1 }
+  }
+  const q = rows<entries=capacity, fetchWidth=f, decodeWidth=d, bits=16>(
+      clock=clock, reset=reset, clear=clear, enq=enable, mask=mask, packet=packet, deq=consume)
+  correct = q.ready == U1(count+f <= capacity) and q.valid == U1(count != 0)
+  for w in 0..<d {
+    const present = count > w and reset == 0
+    correct = correct and q.lanes#[w] == U1(present)
+    if present { correct = correct and q.row#[(16*w)..+16] == retired+w }
+  }
+  if reset != 0 or clear != 0 {
+    issued = 0
+    retired = 0
+  } else {
+    if enable != 0 and q.ready != 0 { issued = seq }
+    if consume != 0 and count >= d { wrap retired = retired+d }
+  }
+}
+
+pub mod fetch_rows(clock:Clock, reset:U1, clear:U1, enable:U1, consume:U1, pattern:U8) -> (ok:Bool@[]) {
+  mut good = true
+  for width in 1..=5 {
+    comptime const fetch = if width <= 2 { 4 } else { 8 }
+    const result = checkRows<f=fetch, d=width>(clock=clock, reset=reset, clear=clear, enable=enable,
+                                               consume=consume, pattern=pattern)
+    good = good and result.correct
+  }
+  ok = good
+}
+
+test fetch_rows.allWidths {
+  mut dut = fetch_rows
+  tick 600 {
+    dut.reset = U1(clock < 2)
+    dut.clear = U1(clock == 201 or clock == 340)
+    dut.enable = U1(clock%17 < 13)
+    dut.consume = U1(clock%29 >= 7)
+    dut.pattern = (clock*93)#[0..+8]
+    step
+    if clock > 2 { assert(dut.ok, "fetch row occupancy, valid lanes and instruction order") }
+  }
+}

@@ -1,0 +1,58 @@
+const freeList = import("PhysicalFreeList.PhysicalFreeList")
+
+// Rename large immediates into the immediate file. Short immediates travel
+// in the same operand field and consume no physical register.
+pub mod ImmRenameStage<width, physical, branches, returns>(
+  clock:Clock,
+  reset:Reset,
+  kill:U1,
+  ready:U1,
+  rename:Unsigned(bits=width),
+  checkpoint:Unsigned(bits=width),
+  tag:Unsigned(bits=width*std.clog2(branches)),
+  select:Unsigned(bits=width*3),
+  operand:Unsigned(bits=width*std.clog2(physical)),
+  fire:Unsigned(bits=width),
+  releaseValid:Unsigned(bits=returns),
+  releaseRegs:Unsigned(bits=returns*std.clog2(physical)),
+  mispredict:U1,
+  recover:Unsigned(bits=std.clog2(branches)),
+  rollback:U1,
+) -> (stalls:Unsigned(bits=width)@[], immSel:Unsigned(bits=width*3)@[], pimm:Unsigned(bits=width*std.clog2(physical))@[]) {
+  comptime const p = std.clog2(physical)
+  reg needsReg:Unsigned(bits=width)                       = nil
+  reg takesSnapshot:Unsigned(bits=width)                  = nil
+  reg branchTags:Unsigned(bits=width*std.clog2(branches)) = nil
+  reg selectors:Unsigned(bits=width*3)                    = nil
+  reg operands:Unsigned(bits=width*p)                     = nil
+  const pool = freeList<branches=branches, immediate=true, physical=physical, returns=returns, width=width>(
+    clock=clock,
+    reset=reset,
+    initial=(1 << physical) - 1,
+    requests=fire & needsReg,
+    releaseValid=releaseValid,
+    releaseRegs=releaseRegs,
+    commitValid=0,
+    commitRegs=0,
+    snap=(fire & takesSnapshot) << 1,
+    tags=branchTags << std.clog2(branches),
+    mispredict=mispredict,
+    recover=recover,
+    rollback=rollback,
+  )
+  stalls = needsReg & ~pool.valid
+  immSel = selectors
+  pimm   = operands
+  for lane in 0..<width {
+    if needsReg#[lane] != 0 {
+      pimm#[(lane*p)..+p] = pool.regs#[(lane*p)..+p]
+    }
+  }
+  if ready != 0 and kill == 0 {
+    needsReg      = rename
+    takesSnapshot = checkpoint
+    branchTags    = tag
+    selectors     = select
+    operands      = operand
+  }
+}

@@ -1,0 +1,33 @@
+const alpha = import("../pyrope/AlphaDirection.AlphaDirection")
+
+pub mod local_geometry(clock:Clock, reset:Reset, train:U1, fire:U1, saved:U48) -> (snapshots:U144@[]) {
+  snapshots = 0
+  for profile in 0..<3 {
+    comptime const sizes = (0, 4, 16)
+    comptime const widths = (1, 7, 48)
+    comptime const bits = widths[profile]
+    comptime const rows = sizes[profile]
+    const p = alpha<localBits=bits, localRows=rows, globalRows=4, localCounterRows=4, chooserRows=4>(
+        clock, reset, fetch=1, pc=0x1000, global=0, fire, predictedTakenBranch=1, commit=0,
+        recover=train, updatePc=0x1000, updateGlobal=0, branches=1, cfiValid=1, cfi=0,
+        taken=1, isBranch=1, isJal=0, missed=0, meta=saved#[0..+bits] << 32)
+    snapshots#[(profile*48)..+48] = p.info#[32..+bits]
+  }
+}
+
+test local_geometry.recover {
+  mut dut = local_geometry
+  tick 50 {
+    dut.reset = clock < 2
+    dut.train = U1(clock == 25)
+    dut.fire = U1(clock == 25 or clock == 36)
+    dut.saved = (1 << 41) | 65
+    step
+    if clock == 34 or clock == 46 {
+      assert(dut.snapshots#[0..+48] == 0, "null local history stays zero")
+      assert(dut.snapshots#[48..+48] == (if clock == 34 { 65 } else { 3 }), "seven-bit local history wraps")
+      assert(dut.snapshots#[96..+48] == (if clock == 34 { (1 << 41) | 65 } else { (1 << 42) | 131 }),
+          "wide local history restores and shifts the upper bits")
+    }
+  }
+}

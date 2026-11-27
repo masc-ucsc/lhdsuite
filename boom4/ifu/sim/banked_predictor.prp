@@ -1,0 +1,66 @@
+const config    = import("../../common/pyrope/BoomConfig")
+const predictor = import("../pyrope/BranchPredictor.BranchPredictor")
+comptime const alpha = config.params(alpha21264BPD=true, fetchWidth=8)
+
+pub mod banked_predictor(
+  clock:Clock,
+  reset:Reset,
+  update:U1,
+  pc:U40, trainPc:U40, lane:U3, dest:U40,
+  fire:U1,
+  meta:U128,
+) -> (info:U128@[], target:U320@[], valid:U8@[]) {
+  const p = predictor<C=alpha>(
+    clock,
+    reset,
+    io_f0_req_valid=1,
+    io_f0_req_bits_pc=pc,
+    io_f0_req_bits_ghist_old_history=0,
+    io_f3_fire=fire,
+    io_update_valid=update,
+    io_update_bits_is_mispredict_update=0,
+    io_update_bits_is_repair_update=0,
+    io_update_bits_btb_mispredicts=0,
+    io_update_bits_pc=trainPc,
+    io_update_bits_br_mask=U8(1 << lane),
+    io_update_bits_cfi_idx_valid=1,
+    io_update_bits_cfi_idx_bits=lane,
+    io_update_bits_cfi_taken=1,
+    io_update_bits_cfi_mispredicted=1,
+    io_update_bits_cfi_is_br=1,
+    io_update_bits_cfi_is_jal=0,
+    io_update_bits_cfi_is_jalr=0,
+    io_update_bits_ghist_old_history=0,
+    io_update_bits_target=dest,
+    fetchNextHistory=0, updateNextHistory=0, io_update_bits_meta=meta,
+  )
+  info   = p.metadata
+  valid  = p.f3_valid
+  target = p.f3_target
+}
+
+
+test banked_predictor.train {
+  mut d = banked_predictor
+  mut saved:U128 = 0
+  tick 2110 {
+    d.reset = clock < 2
+    d.fire = 0
+    d.pc = if clock < 2074 { 0x1000 } else { 0x1008 }
+    d.trainPc = if clock < 2074 { 0x1000 } else { 0x1008 }
+    d.lane = if clock < 2074 { 5 } else { 6 }
+    d.dest = if clock < 2074 { 0x1100 } else { 0x1220 }
+    d.update = U1(clock == 2064 or clock == 2090)
+    d.meta = saved
+    step
+    if clock == 2060 or clock == 2085 {
+      saved = d.info
+    } elif clock == 2073 {
+      assert(d.valid == 32 and d.target#[200..+40] == 0x1100, "training lane five updates the second physical bank")
+    } elif clock == 2084 {
+      assert(d.valid == 2 and d.target#[40..+40] == 0x1100, "starting in bank one moves the same prediction to lane one")
+    } elif clock == 2104 {
+      assert(d.valid == 66 and d.target#[240..+40] == 0x1220, "the following physical bank zero receives the second-bank update")
+    }
+  }
+}

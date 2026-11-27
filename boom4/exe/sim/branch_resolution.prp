@@ -1,0 +1,69 @@
+const branch = import("../pyrope/BranchResolution.BranchResolution")
+
+pub mod branch_resolution(
+  clk:Clock,
+  flush:U1,
+  valid:U5,
+  miss:U5,
+  dependent:U5,
+) -> (killed:U12@[], redirect:U1@[], resolved:U12@[], rob:U8@[], target:U40@[]) {
+  mut masks:U60 = 0
+  for port in 0..<5 {
+    if dependent#[port] != 0 {
+      masks#[(port*12)..+12] = 128
+    }
+  }
+  const result = branch<branches=12, ftqBits=6, ports=5, robBits=8>(
+    clock=clk,
+    valid=valid,
+    miss=miss,
+    flush=flush,
+    mask=masks,
+    tag=0xb9870,
+    rob=0xcac9c8c7c6,
+    target=(16 << 160) | (8 << 120) | (4 << 80) | (2 << 40) | 1,
+    isRvc=0,
+    ftq=0,
+    edge=0,
+    pcLow=0,
+    load=0,
+    store=0,
+    taken=0,
+    cfiType=0,
+    pcSelect=0,
+    offset=0,
+  )
+  resolved = result.resolved
+  killed   = result.killed
+  redirect = result.redirect
+  rob      = result.selectedRob
+  target   = result.selectedTarget
+}
+
+test branch_resolution.simultaneous {
+  mut d = branch_resolution
+  tick 4096 {
+    const pattern   = clock >> 2
+    const v         = pattern#[0..+5]
+    const m         = pattern#[5..+5]
+    const active    = v & m
+    const dependent = 28
+    const phase     = clock & 3
+    d.flush     = U1(phase == 0)
+    d.valid     = if phase == 2 { v } else { 0 }
+    d.miss      = m
+    d.dependent = dependent
+    step
+    if phase == 2 {
+      const live     = if (active & 2) != 0 { active & ~dependent } else { active }
+      const resolved = (v & 1) | ((v & 14) << 6) | ((v & 16) << 7)
+      const killed   = (active & 1) | ((active & 14) << 6) | ((active & 16) << 7)
+      assert(d.resolved == resolved and d.killed == killed, "all resolving ports contribute their branch tag")
+      assert(d.target == live and d.redirect == U1(live != 0), "an older misprediction kills dependent redirects")
+      if live != 0 {
+        const first = if (live & 1) != 0 { 0 } elif (live & 2) != 0 { 1 } elif (live & 4) != 0 { 2 } elif (live & 8) != 0 { 3 } else { 4 }
+        assert(d.rob == 198 + first, "redirect carries the oldest surviving ROB tag")
+      }
+    }
+  }
+}

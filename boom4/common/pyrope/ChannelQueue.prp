@@ -1,0 +1,25 @@
+// A two-entry, registered TileLink channel. Ready depends on occupancy only.
+pub mod ChannelQueue<Payload>(clock:Clock, reset:U1, enqueue:U1, value:Payload, consume:U1)
+    -> (ready:U1@[], valid:U1@[], head:Payload@[]) {
+  reg storage:[2]Payload:[ordering="old"]
+  reg reader:U1 = nil
+  reg writer:U1 = nil
+  reg full:U1 = nil
+  const empty = reader == writer and full == 0
+  const filled = reader == writer and full != 0
+  const push = enqueue != 0 and !filled
+  const pop = consume != 0 and !empty
+  if push { storage[writer] = value }
+  if reset != 0 {
+    reader = 0
+    writer = 0
+    full = 0
+  } else {
+    if push { writer = ~writer }
+    if pop { reader = ~reader }
+    if push != pop { full = U1(push) }
+  }
+  ready = U1(!filled)
+  valid = U1(!empty)
+  head = storage[reader]
+}

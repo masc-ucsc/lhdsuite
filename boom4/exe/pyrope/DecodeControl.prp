@@ -1,0 +1,20 @@
+// Keep accepted lanes masked until the youngest lane fires. An exception
+// waits for older lanes to pass so that the FTQ PC reply stays aligned.
+pub comb DecodeControl<width>(packet:U1, lanes:Unsigned(bits=width), finished:Unsigned(bits=width),
+    exceptions:Unsigned(bits=width), branchFull:Unsigned(bits=width), stall:U1,
+    exceptionStall:U1, redirect:U1) ->
+    (valid:Unsigned(bits=width), fire:Unsigned(bits=width), ready:U1, nextFinished:Unsigned(bits=width)) {
+  valid = if packet != 0 { lanes & ~finished } else { 0 }
+  fire = 0
+  mut blocked = stall != 0 or redirect != 0
+  mut priorValid = false
+  for lane in 0..<width {
+    if valid#[lane] != 0 {
+      blocked = blocked or branchFull#[lane] != 0 or (exceptions#[lane] != 0 and (exceptionStall != 0 or priorValid))
+      fire#[lane] = U1(not blocked)
+      priorValid = true
+    }
+  }
+  ready = fire#[width-1]
+  nextFinished = if ready != 0 or redirect != 0 { 0 } else { finished | fire }
+}

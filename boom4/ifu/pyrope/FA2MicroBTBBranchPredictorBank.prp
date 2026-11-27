@@ -1,0 +1,99 @@
+const stages = import("PredictorResponse")
+const bim = import("BimCounters")
+const randomWay = import("../../util/pyrope/MaxPeriodFibonacciLFSR.MaxPeriodFibonacciLFSR")
+
+pub comb params(nWays=24, tagSz=12, useDualEntries=true) -> (cfg) {
+  cfg = (const nWays=nWays, const tagSz=tagSz, const useDualEntries=useDualEntries)
+}
+pub const standard = params()
+
+pub mod FA2MicroBTBBranchPredictorBank<fetchShift=3, addrBits=40, geometry=standard>(
+    clock:Clock, update:stages.Update<addrBits>, pc:Unsigned(bits=addrBits), fetch:U1, reset:U1)
+    -> (metadata:U120@[], f1:stages.BankStage<addrBits>@[], f2:stages.BankStage<addrBits>@[], f3:stages.BankStage<addrBits>@[]) {
+  comptime const ways = geometry.nWays
+  comptime const tagBits = geometry.tagSz
+  comptime const wayBits = if ways == 1 { 1 } else { std.clog2(ways) }
+  cassert(ways >= 1 and wayBits <= 16 and tagBits >= 1 and tagBits <= addrBits-fetchShift)
+  type Address = Unsigned(bits=addrBits)
+  type Entry = (tag:Unsigned(bits=tagBits), counter:U2, lane:U2, branches:U4, jumps:U4)
+  reg entries:[ways]Entry:[ordering="old"] = nil
+  comptime const targetsPerWay = if geometry.useDualEntries { 2 } else { 1 }
+  reg targets:[targetsPerWay*ways]Address:[ordering="old"] = nil
+  reg validWays:Unsigned(bits=ways) = nil
+  reg query:Unsigned(bits=tagBits) = nil
+  reg queryValid:U1 = nil
+  reg train:stages.Update<addrBits> = nil
+  train = update
+  query = pc#[fetchShift..+tagBits]
+  queryValid = fetch
+
+  mut hit:U1 = 0
+  mut branches:U4 = 0
+  mut jumps:U4 = 0
+  mut counter:U2 = 0
+  mut lane:U2 = 0
+  mut jumpTarget:Address = 0
+  mut branchTarget:Address = 0
+  mut trainHit:U1 = 0
+  mut matchedWay:Unsigned(bits=wayBits) = 0
+  const tag = train.pc#[fetchShift..+tagBits]
+  for way in 0..<ways {
+    const row = entries[way]
+    if validWays#[way] != 0 and row.tag == query {
+      hit = queryValid
+      branches = branches | row.branches
+      jumps = jumps | row.jumps
+      counter = counter | row.counter
+      lane = lane | row.lane
+      jumpTarget = jumpTarget | targets[targetsPerWay*way]
+      if geometry.useDualEntries { branchTarget = branchTarget | targets[targetsPerWay*way+1] }
+    }
+    if validWays#[way] != 0 and row.tag == tag {
+      trainHit = 1
+      matchedWay = matchedWay | way
+    }
+  }
+  mut prediction:stages.BankStage<addrBits> = nil
+  prediction.valid = if hit != 0 { (branches & (1 << lane)) | jumps } else { 0 }
+  prediction.branch = if hit != 0 { branches } else { 0 }
+  prediction.jumps = if hit != 0 { jumps } else { 0 }
+  prediction.taken = if hit != 0 { jumps | (if counter#[1] != 0 { 15 } else { 0 }) } else { 0 }
+  for slot in 0..<4 {
+    prediction.target#[(slot*addrBits)..+addrBits] = if geometry.useDualEntries and branches#[slot] != 0 { branchTarget } else { jumpTarget }
+  }
+  reg second:stages.BankStage<addrBits> = nil
+  reg third:stages.BankStage<addrBits> = nil
+  reg hit2:U1 = nil
+  reg hit3:U1 = nil
+  second = prediction
+  third = second
+  hit2 = hit
+  hit3 = hit2
+  metadata = hit3
+  f1 = prediction
+  f2 = second
+  f3 = third
+
+  const random = randomWay(clock, reset, io_increment=1)
+  const selected = if trainHit != 0 { matchedWay } elif ways == 1 { 0 } else { random#[0..+wayBits] }
+  const commit = train.valid != 0 and train.mispredict == 0 and train.repair == 0 and train.wrongTargets == 0
+  if reset != 0 { validWays = 0 }
+  elif commit and selected < ways and (train.cfiValid != 0 or train.branches != 0) {
+    const way = selected%ways
+    const old = entries[way]
+    const jump:U4 = (if train.cfiValid != 0 and (train.jal | train.jalr) != 0 { 1 << train.cfi } else { 0 })#[0..+4]
+    const initial = if (train.cfiValid & train.taken) != 0 { 3 } else { 0 }
+    const count = if trainHit == 0 { initial }
+      elif train.cfiValid != 0 and train.cfi != old.lane { initial }
+      elif train.cfiValid != 0 or train.branches#[old.lane] != 0 { bim.train(counter=old.counter, taken=train.cfiValid & train.taken) }
+      else { old.counter }
+    entries[way] = (tag=tag, counter=count, lane=if train.cfiValid != 0 { train.cfi } else { old.lane },
+        branches=train.branches | (if trainHit != 0 { old.branches } else { 0 }),
+        jumps=jump | (if trainHit != 0 { old.jumps } else { 0 }))
+    if train.cfiValid != 0 {
+      validWays#[way] = 1
+      const slot = if geometry.useDualEntries { train.branch } else { 0 }
+      targets[targetsPerWay*way+slot] = train.target
+    }
+  }
+}

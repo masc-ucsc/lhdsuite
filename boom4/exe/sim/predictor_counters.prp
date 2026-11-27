@@ -1,0 +1,20 @@
+const counters = import("../pyrope/BranchCounters.BranchCounters")
+
+pub mod predictor_counters(clock:Clock, reset:Reset, src:U3, active:U4, addr:U12) -> (data:U64@[]) {
+  const sources = src | (src << 3) | (src << 6) | (src << 9)
+  data = counters<width=4>(clock, reset, address=addr, fallback=99, retire=active, source=sources, branch=0x8761).data
+}
+
+test predictor_counters.commit {
+  mut dut = predictor_counters
+  tick 38 {
+    dut.reset = clock < 2
+    dut.src = if clock < 2 { 0 } else { (clock-2)%5 }
+    dut.active = if clock >= 2 and clock < 7 { 15 } else { 0 }
+    dut.addr = if clock < 7 { 0xb00 } elif clock < 22 { 0xb10+clock-7 } else { 0xc10+clock-22 }
+    step
+    if clock < 7 or clock == 37 { assert(dut.data == 99, "unrelated CSR preserves its value") }
+    elif (clock-7)%3 == 0 { assert(dut.data == 2, "both retired conditional branches count") }
+    else { assert(dut.data == 1, "retired immediate and register jumps count separately") }
+  }
+}

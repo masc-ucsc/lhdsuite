@@ -1,0 +1,26 @@
+// Retire ready instructions in program order. Empty banks do not block
+// younger banks. Exceptions use the same priority as BOOM's commit scan.
+pub comb select<width>(
+  busy:Unsigned(bits=width),
+  exceptions:Unsigned(bits=width),
+  hold:U1,
+  stall:U1,
+  valid:Unsigned(bits=width),
+) -> (commit:Unsigned(bits=width), thrown:U1) {
+  commit = 0
+  thrown = 0
+  mut blocked     = hold != 0
+  mut priorCommit = false
+  for lane in 0..<width {
+    const present = valid#[lane] != 0
+    const fault   = present and exceptions#[lane] != 0
+    const ready   = present and busy#[lane] == 0 and stall == 0
+    if fault and not blocked and not priorCommit {
+      thrown = 1
+    }
+    const fire = ready and not fault and not blocked
+    commit#[lane] = U1(fire)
+    blocked       = blocked or (present and (not ready or fault))
+    priorCommit   = fire
+  }
+}

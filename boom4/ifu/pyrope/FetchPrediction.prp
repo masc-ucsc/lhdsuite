@@ -1,0 +1,36 @@
+// F1 combines matching targets within the first redirecting bank. F2 selects
+// the oldest matching lane. Both stages advance history through that lane.
+const global = import("GlobalHistory.update")
+
+pub comb predict<width=4, banks=1, fast=false, historyBits=64, addrBits=40>(
+  mask:Unsigned(bits=width), taken:Unsigned(bits=width), valid:Unsigned(bits=width),
+  branch:Unsigned(bits=width), targets:Unsigned(bits=addrBits*width), enabled:U1,
+  old:Unsigned(bits=historyBits), currentMiss:U1, pendingTaken:U1, pendingMiss:U1, pc:Unsigned(bits=addrBits),
+) -> (redirect:U1, anyHit:U1, lane:Unsigned(bits=std.clog2(width)), target:Unsigned(bits=addrBits),
+      history:Unsigned(bits=historyBits), nextTaken:U1, nextMiss:U1) {
+  const hits = mask & valid & taken
+  anyHit = U1(hits != 0)
+  redirect = enabled & anyHit
+  lane = width - 1
+  for i in 0..<width {
+    if hits#[width-1-i] != 0 { lane = width-1-i }
+  }
+  if fast {
+    comptime const perBank = width/banks
+    const firstHit = hits#[0..+perBank] != 0
+    target = 0
+    for i in 0..<width {
+      if hits#[i] != 0 and (i < perBank or not firstHit) {
+        target = target | targets#[(addrBits*i)..+addrBits]
+      }
+    }
+  } else {
+    target = (targets >> (addrBits*lane))#[0..+addrBits]
+  }
+  const branches = mask & branch & (if fast { -1 } else { valid })
+  const updated = global<historyBits=historyBits, width=width, banks=banks>(old, currentMiss, pendingTaken, pendingMiss,
+      branches, valid=redirect, lane=lane, taken=redirect, isBranch=branch#[lane], lastBank=U1(pc#[3..+3] == 7))
+  history = updated.history
+  nextTaken = updated.nextTaken
+  nextMiss = updated.nextMiss
+}

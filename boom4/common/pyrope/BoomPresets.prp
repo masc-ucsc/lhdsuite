@@ -1,0 +1,134 @@
+const config = import("BoomConfig")
+
+// v4/common/config-mixins.scala resource settings used by the shared frontend,
+// rename, issue and ROB blocks. The tile supports replicated integer and FP units.
+pub const medium = config.params(
+  nPerfCounters=6,
+  decodeWidth=2,
+  numLdqEntries=16,
+  numStqEntries=16,
+  maxBrCount=12,
+  fetchWidth=4,
+  numRobEntries=64,
+  ftqEntries=32,
+  numFetchBufferEntries=16,
+  numIntPhysRegisters=80,
+  numFpPhysRegisters=64,
+  numIrfBanks=2,
+  numIrfReadPorts=5,
+  mem=config.queue(dispatchWidth=2, issueWidth=2, numEntries=12),
+  unq=config.queue(dispatchWidth=2, numEntries=12),
+  alu=config.queue(dispatchWidth=2, issueWidth=2, numEntries=20),
+  fp=config.queue(dispatchWidth=2, numEntries=12),
+)
+pub const large  = config.params(
+  decodeWidth=3,
+  numLdqEntries=24,
+  numStqEntries=24,
+  maxBrCount=16,
+  enableColumnALUIssue=true,
+  fetchWidth=8,
+  numRobEntries=96,
+  ftqEntries=32,
+  numFetchBufferEntries=24,
+  icacheWays=8,
+  dcacheMSHRs=4,
+  dTLBWays=16,
+  dcacheRowBits=128,
+  dcacheWays=8,
+  numIntPhysRegisters=100,
+  numFpPhysRegisters=96,
+  numIrfBanks=2,
+  numIrfReadPorts=6,
+  mem=config.queue(dispatchWidth=3, issueWidth=2, numEntries=16),
+  unq=config.queue(dispatchWidth=3, numEntries=16, numSlowEntries=8),
+  alu=config.queue(dispatchWidth=3, issueWidth=3, numEntries=16, numSlowEntries=8),
+  fp=config.queue(dispatchWidth=3, numEntries=24, numSlowEntries=12),
+)
+pub const mega   = config.params(
+  numDCacheBanks=4,
+  decodeWidth=4,
+  numLdqEntries=32,
+  numStqEntries=32,
+  maxBrCount=20,
+  fetchWidth=8,
+  numRobEntries=128,
+  ftqEntries=40,
+  numFetchBufferEntries=32,
+  icacheWays=8,
+  lsuWidth=2,
+  enablePrefetching=true,
+  dcacheMSHRs=8,
+  dTLBWays=32,
+  dcacheRowBits=128,
+  dcacheWays=8,
+  numIntPhysRegisters=144,
+  numFpPhysRegisters=128,
+  numIrfBanks=4,
+  numIrfReadPorts=4,
+  numFrfReadPorts=6,
+  enableFastLoadUse=true,
+  mem=config.queue(dispatchWidth=4, issueWidth=3, numEntries=32),
+  unq=config.queue(dispatchWidth=4, numEntries=20),
+  alu=config.queue(dispatchWidth=4, issueWidth=4, numEntries=40),
+  fp=config.queue(dispatchWidth=4, issueWidth=2, numEntries=32),
+)
+pub const giga   = config.params<B=mega>(
+  alu=config.queue(dispatchWidth=5, issueWidth=5, numEntries=20, numSlowEntries=10),
+  decodeWidth=5,
+  enableColumnALUIssue=true,
+  enableFastLoadUse=false,
+  enableSuperscalarSnapshots=false,
+  fp=config.queue(dispatchWidth=5, issueWidth=2, numEntries=32, numSlowEntries=20),
+  mem=config.queue(dispatchWidth=5, issueWidth=2, numEntries=32, numSlowEntries=12),
+  numDCacheBanks=1,
+  numFetchBufferEntries=40,
+  numIntPhysRegisters=128,
+  numIrfBanks=1,
+  numIrfReadPorts=3,
+  numRobEntries=130,
+  unq=config.queue(dispatchWidth=5, numEntries=32, numSlowEntries=24),
+)
+
+// WithNMegaTapeoutBooms execution widths, column policy and register files.
+pub comb megaTapeoutCore(singlePorted=true) -> (cfg) {
+  cfg = config.params<B=mega>(
+    alu=config.queue(dispatchWidth=4, issueWidth=4, numEntries=20, numSlowEntries=12),
+    dcacheSets=128,
+    dcacheSinglePorted=singlePorted,
+    dcacheWays=4,
+    enableALUSingleWideDispatch=true,
+    enableAgenStage=true,
+    enableBankedFPFreelist=true,
+    enableColumnALUIssue=true,
+    enableCompactingLSUDuringDispatch=false,
+    enableFastLoadUse=false,
+    enableSlowBTBRedirect=true,
+    enableSuperscalarSnapshots=false,
+    fastTageBPD=true,
+    fp=config.queue(dispatchWidth=4, issueWidth=2, numEntries=32, numSlowEntries=20),
+    icacheSinglePorted=singlePorted,
+    imulLatency=4,
+    mem=config.queue(dispatchWidth=4, issueWidth=2, numEntries=32, numSlowEntries=20),
+    numFrfBanks=4,
+    numFrfReadPorts=4,
+    tageSinglePorted=singlePorted,
+    slowBTBSinglePorted=singlePorted,
+    unq=config.queue(dispatchWidth=4, numEntries=20, numSlowEntries=12),
+  )
+}
+
+pub const megaTapeout = megaTapeoutCore()
+
+// The upstream teaching example assigns every ALU slot to the slow region.
+// Its issue unit requires at least decodeWidth fast slots. The lab can change
+// either the number of slow slots or the total queue depth.
+pub comb cs152Default(numSlowAluEntries=32, issueEntries=32, fetchEntries=8) -> (cfg) {
+  cfg = config.params(enableBranchPrintf=true, decodeWidth=3, fetchWidth=4, numFetchBufferEntries=fetchEntries, lsuWidth=1, numRobEntries=96,
+      numIntPhysRegisters=96, numLdqEntries=16, numStqEntries=16, maxBrCount=12,
+      numRasEntries=16, dTLBWays=32,
+      mem=config.queue(dispatchWidth=3, issueWidth=2, numEntries=issueEntries),
+      unq=config.queue(dispatchWidth=3, numEntries=issueEntries),
+      alu=config.queue(dispatchWidth=3, issueWidth=3, numEntries=issueEntries, numSlowEntries=numSlowAluEntries),
+      fp=config.queue(dispatchWidth=3, numEntries=issueEntries))
+}

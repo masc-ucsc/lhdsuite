@@ -1,0 +1,107 @@
+// Global and local HBIM tables and the tournament selector all use the
+// same folded history address and two-bit saturating counters.
+comb index<sets, bits, fetchShift, pcBits=40>(hist:Unsigned(bits=bits), pc:Unsigned(bits=pcBits)) -> (idx:Unsigned(bits=std.clog2(sets))) {
+  comptime const n = std.clog2(sets)
+  idx = pc#[fetchShift..+n]
+  for i in 0..<((bits + n - 1)/n) {
+    idx = idx ^ (hist >> (i*n))#[0..+n]
+  }
+}
+
+pub mod HistoryCounterBank<sets=2048, bits=32, lanes=4, fetchShift=3, selector=false, pcBits=40>(
+  branchMask:Unsigned(bits=lanes),
+  cfiMask:Unsigned(bits=lanes),
+  clock:Clock,
+  commit:U1,
+  fetch:U1,
+  hist:Unsigned(bits=bits),
+  meta:Unsigned(bits=2*lanes),
+  missed:U1,
+  pc:Unsigned(bits=pcBits),
+  reset:Reset,
+  takenMask:Unsigned(bits=lanes),
+  updateHist:Unsigned(bits=bits),
+  updatePc:Unsigned(bits=pcBits),
+) -> (active:Bool@[], info:Unsigned(bits=2*lanes)@[], result:Unsigned(bits=lanes)@[]) {
+  cassert(sets > 1 and sets == 1 << std.clog2(sets))
+  type Index = Unsigned(bits=std.clog2(sets))
+  type Row   = Unsigned(bits=2*lanes)
+  reg resetIdx:Index = 0
+  reg clearing:Bool  = true
+  if clearing {
+    wrap resetIdx = resetIdx + 1
+    if resetIdx == sets - 1 {
+      clearing = false
+    }
+  }
+  reg pc1:Unsigned(bits=pcBits)   = nil
+  reg valid1:U1 = nil
+  reg valid2:U1 = nil
+  reg valid3:U1 = nil
+  pc1    = pc
+  valid1 = fetch
+  valid2 = valid1
+  valid3 = valid2
+  const readIdx = index<pcBits=pcBits, bits=bits, fetchShift=fetchShift, sets=sets>(hist, pc=pc1)
+  reg writeIdx:Index                = nil
+  reg enable:U1                     = nil
+  reg mask:Unsigned(bits=lanes)     = nil
+  reg outcomes:Unsigned(bits=lanes) = nil
+  reg misses:Unsigned(bits=lanes)   = nil
+  reg saved:Row                     = nil
+  writeIdx = index<pcBits=pcBits, bits=bits, fetchShift=fetchShift, sets=sets>(hist=updateHist, pc=updatePc)
+  enable   = commit
+  mask     = branchMask | cfiMask
+  outcomes = takenMask
+  misses   = if missed != 0 { cfiMask } else { 0 }
+  saved    = meta
+  reg head:U1     = 0
+  reg tag0:Index  = nil
+  reg tag1:Index  = nil
+  reg bypass0:Row = nil
+  reg bypass1:Row = nil
+  const hit0     = !clearing and tag0 == writeIdx
+  const hit1     = !clearing and tag1 == writeIdx
+  const previous = if selector { saved } elif hit0 { bypass0 } elif hit1 { bypass1 } else { saved }
+  mut next:Row = 0
+  info   = 0
+  result = 0
+  active = !clearing
+  for lane in 0..<lanes {
+    reg data:[sets]U2:[ordering="old"] = nil
+    reg read2:U2                       = nil
+    reg read3:U2                       = nil
+    if valid1 != 0 {
+      read2 = data[readIdx]
+    }
+    read3               = read2
+    info#[(lane*2)..+2] = read3
+    result#[lane]       = read3#[1] & U1(!clearing and (selector or valid3 != 0))
+    const old       = previous#[(lane*2)..+2]
+    const increment = if selector { old#[1] ^ misses#[lane] } else { outcomes#[lane] }
+    mut counter:U2 = old
+    if increment != 0 {
+      sat counter = old + 1
+    } else {
+      sat counter = old - 1
+    }
+    next#[(2*lane)..+2] = counter
+    if clearing {
+      data[resetIdx] = 2
+    } elif enable != 0 and mask#[lane] != 0 {
+      data[writeIdx] = counter
+    }
+  }
+  if !selector and enable != 0 and mask != 0 {
+    if hit0 or (!hit1 and head == 0) {
+      tag0    = writeIdx
+      bypass0 = next
+    } else {
+      tag1    = writeIdx
+      bypass1 = next
+    }
+    if !hit0 and !hit1 {
+      head = head ^ 1
+    }
+  }
+}

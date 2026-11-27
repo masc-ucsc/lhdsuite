@@ -1,0 +1,63 @@
+// One speculative local history per fetch block. Recovery takes priority
+// over a concurrent F3 prediction before the registered SRAM write.
+pub mod LocalHistory<sets=128, bits=32, fetchShift=3, pcBits=40>(
+  clock:Clock,
+  fetch:U1,
+  fire:U1,
+  history:Unsigned(bits=bits),
+  pc:Unsigned(bits=pcBits),
+  recover:U1,
+  recoverPc:Unsigned(bits=pcBits),
+  reset:Reset,
+  taken:U1,
+) -> (f1:Unsigned(bits=bits)@[], f3:Unsigned(bits=bits)@[]) {
+  cassert(sets > 1 and sets == 1 << std.clog2(sets))
+  type Index   = Unsigned(bits=std.clog2(sets))
+  type History = Unsigned(bits=bits)
+  reg entries:[sets]History:[ordering="old"] = nil
+  reg clearing:Bool                          = true
+  reg row:Index                              = 0
+  if clearing {
+    entries[row] = 0
+    wrap row = row + 1
+    if row == sets - 1 {
+      clearing = false
+    }
+  }
+  const idx = pc#[fetchShift..+std.clog2(sets)]
+  reg idx1:Index = nil
+  reg idx2:Index = nil
+  reg idx3:Index = nil
+  idx1 = idx
+  idx2 = idx1
+  idx3 = idx2
+  reg read1:History = nil
+  reg read2:History = nil
+  reg read3:History = nil
+  if fetch != 0 {
+    read1 = entries[idx]
+  }
+  read2 = read1
+  read3 = read2
+  f1    = read1
+  f3    = read3
+  reg repair:U1           = nil
+  reg repairIdx:Index     = nil
+  reg repairValue:History = nil
+  repair      = recover
+  repairIdx   = recoverPc#[fetchShift..+std.clog2(sets)]
+  repairValue = history
+  reg write:Bool    = nil
+  reg address:Index = nil
+  reg value:History = nil
+  write   = repair != 0 or fire != 0
+  address = if repair != 0 { repairIdx } else { idx3 }
+  if repair != 0 {
+    value = repairValue
+  } else {
+    wrap value = (read3 << 1) | taken
+  }
+  if !clearing and write {
+    entries[address] = value
+  }
+}

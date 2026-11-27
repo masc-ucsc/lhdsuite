@@ -1,0 +1,52 @@
+const packet = import("../pyrope/FetchPacket")
+
+pub mod banked_fetch_packet(pattern:U8, offset:U5, carry:U1, valid:U1) -> (ok:Bool@[0]) {
+  const pc:U58 = 0x100000000001000 + (offset << 1)
+  mut data:U128 = 0
+  for i in 0..<8 {
+    // C.NOP or the first halfword of an ADDI. Distinct upper halfwords
+    // identify the physical bank and lane at both boundaries.
+    data#[(16*i)..+16] = 1 + (pattern#[i] << 1) + (i << 8)
+  }
+  const a = packet.address<banks=2, addrBits=58>(pc)
+  const p = packet.unpack<banks=2, addrBits=58>(pc, data, valid, previousValid=carry, previousHalf=0xf013)
+  const limit = if offset >= 28 { 4 } else { 8 }
+  const base = pc & ~7
+  mut right = a.nextPc == base + 2*limit
+  mut edge = carry != 0
+  mut pending:U16 = 0xf013
+  mut continuation:Bool = false
+  for i in 0..<8 {
+    const first = i == 0 or i == 4
+    const last = i == 3 or i == 7
+    const half = data#[(i*16)..+16]
+    const full = pattern#[i] != 0
+    const start = i < limit and i >= (offset & 3) and valid != 0 and not continuation and not (last and full)
+    const usePrevious = first and edge
+    const expectedPc = base + i*2 - (if usePrevious { 2 } else { 0 })
+    const high = (data >> (16*(i+1))) & 65535
+    const raw = if usePrevious { (half << 16) | pending } elif last { half } else { (high << 16) | half }
+    right = right and p.mask#[i] == U1(start) and p.raw#[(32*i)..+32] == raw and p.pcs#[(58*i)..+58] == expectedPc
+    if first { right = right and p.edges#[i/4] == U1(edge) }
+    if (raw & 3) == 3 { right = right and p.expanded#[(32*i)..+32] == raw }
+    if raw == 1 { right = right and p.expanded#[(32*i)..+32] == 0x13 }
+    if last and i < limit {
+      edge = full and not continuation
+      pending = half
+    }
+    continuation = not last and start and full and not usePrevious
+  }
+  ok = right and p.endValid == U1(edge) and p.endHalf == pending
+}
+
+test banked_fetch_packet.boundaries {
+  mut dut = banked_fetch_packet
+  tick 32768 {
+    dut.pattern = clock#[0..+8]
+    dut.offset = clock#[8..+5]
+    dut.carry = clock#[13]
+    dut.valid = clock#[14]
+    step
+    assert(dut.ok, "banked fetch packet disagrees on instruction data, address, validity or trailing halfword")
+  }
+}

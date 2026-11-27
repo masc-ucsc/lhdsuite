@@ -1,0 +1,43 @@
+const rename = import("../pyrope/RenameMap.RenameMap")
+
+// All five lanes write x7. Take one snapshot before lane zero and one after
+// each lane, then restore them in succession. Committed state advances on
+// the same edge as rollback and becomes visible on the *next* rollback.
+pub mod rename_rows(clock:Clock, reset:U1, group:U1, commit:U1, rollback:U1, recover:U1, tag:U4) ->
+    (mapping:U8@[], bypassed:U40@[]) {
+  mut names:U25 = 0
+  mut dest:U40 = 0
+  mut tags:U24 = 0
+  for i in 0..<5 {
+    names#[(5*i)..+5] = 7
+    dest#[(8*i)..+8] = 128+i
+  }
+  for i in 0..=5 { tags#[(4*i)..+4] = 6+i }
+  const bank = rename<width=5, physical=160, branches=12, sources=1, bypass=true>(
+      clock=clock, reset=reset, rollback=rollback, mispredict=recover, recoverTag=tag,
+      readers=names, writes=if group != 0 { 31 } else { 0 }, logical=names, dest=dest,
+      commits=commit, archLogical=7, archDest=144, snaps=if group != 0 { 63 } else { 0 }, tags=tags)
+  reg sample:U40 = nil
+  sample = bank.mapped
+  bypassed = sample
+  mapping = bank.mapped#[0..+8]
+}
+
+test rename_rows.restore {
+  mut d = rename_rows
+  tick 22 {
+    d.reset = U1(clock < 2)
+    d.group = U1(clock == 4)
+    d.recover = U1(clock >= 7 and clock <= 12)
+    d.tag = if clock >= 7 and clock <= 12 { clock-1 } else { 0 }
+    d.rollback = U1(clock == 7 or clock == 15 or clock == 18)
+    d.commit = U1(clock == 15)
+    step
+    if clock == 4 { assert(d.bypassed == 0x8382818007, "lanes see earlier destinations in order") }
+    if clock == 5 { assert(d.mapping == 132, "youngest mapping won") }
+    if clock == 7 { assert(d.mapping == 7, "snapshot before lane zero") }
+    if clock >= 8 and clock <= 12 { assert(d.mapping == 120+clock, "snapshot at each dispatch boundary") }
+    if clock == 15 { assert(d.mapping == 7, "rollback uses previous committed map") }
+    if clock == 18 { assert(d.mapping == 144, "next rollback sees simultaneous commit") }
+  }
+}

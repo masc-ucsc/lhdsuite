@@ -1,0 +1,79 @@
+const allocateRandom = import("TageRandom.TageRandom")
+const bankTable = import("TageBankTable.TageBankTable")
+
+pub mod TageBranchPredictorBank<C, tables>(
+    clock:Clock, reset:Reset, fetch:U1, pc:Unsigned(bits=C.addrBits), history:Unsigned(bits=C.globalHistoryLength), baseTaken:U4,
+    update:(commit:U1, pc:Unsigned(bits=C.addrBits), history:Unsigned(bits=C.globalHistoryLength), branches:U4, cfi:U2, cfiValid:U1, taken:U1, missed:U1, meta:Unsigned(bits=C.bankMetaBits)))
+    -> (prediction:U4@[], info:Unsigned(bits=C.bankMetaBits)@[]) {
+  comptime const tableCount = tables.[size]
+  comptime const tableBits = std.clog2(tableCount)
+  comptime const choice = tableBits+1
+  comptime const indexBits = if tableCount == 1 { 1 } else { tableBits }
+  comptime const indexMask = (1 << tableBits)-1
+  comptime const ctrOffset = 4*choice
+  comptime const useOffset = ctrOffset+12
+  comptime const altOffset = useOffset+8
+  comptime const providerOffset = altOffset+4
+  comptime const fetchShift = std.clog2(2*C.fetchWidth)
+  reg f1Valid:U1 = nil
+  reg f1Pc:Unsigned(bits=C.addrBits) = nil
+  f1Valid = fetch
+  f1Pc = pc & ~7
+  type Update = (commit:U1, pc:Unsigned(bits=C.addrBits), history:Unsigned(bits=C.globalHistoryLength), branches:U4, cfi:U2, cfiValid:U1, taken:U1, missed:U1, meta:Unsigned(bits=C.bankMetaBits))
+  reg train:Update = nil
+  train = update
+  train.pc = update.pc & ~7
+  reg writePc:Unsigned(bits=C.addrBits) = nil
+  reg writeHistory:Unsigned(bits=C.globalHistoryLength) = nil
+  writePc = train.pc
+  writeHistory = train.history
+
+  reg hits:Unsigned(bits=4*tableCount) = nil
+  reg counters:Unsigned(bits=12*tableCount) = nil
+  reg useful:Unsigned(bits=8*tableCount) = nil
+  for i in 0..<tableCount {
+    comptime const geometry = tables[i]
+    const table = bankTable<pcBits=C.addrBits, metaBits=C.bankMetaBits, historyBits=C.globalHistoryLength, geometry=geometry, i=i, choice=choice, tableBits=tableBits, fetchShift=fetchShift,
+      period=C.tageUBitPeriod, single=C.tageSinglePorted>(clock, reset, f1Valid, f1Pc, history=history, writePc, writeHistory, train)
+    hits#[(4*i)..+4] = table.hits
+    counters#[(12*i)..+12] = table.counters
+    useful#[(8*i)..+8] = table.useful
+  }
+  const random = allocateRandom<n=tableCount>(clock, reset)
+  prediction = baseTaken
+  info = 0
+  for w in 0..<4 {
+    mut provided:U1 = 0
+    mut alternate:U1 = 0
+    mut source:Unsigned(bits=indexBits) = 0
+    mut alt:Unsigned(bits=indexBits) = 0
+    mut available:Unsigned(bits=tableCount) = 0
+    for i in 0..<tableCount {
+      if hits#[4*i+w] != 0 {
+        alternate = provided
+        alt = source
+        provided = 1
+        source = i
+        available = 0
+      } elif useful#[(8*i+2*w)..+2] == 0 { available#[i] = 1 }
+    }
+    const ctr = counters#[(12*source+3*w)..+3]
+    const altDirection = counters#[12*alt+3*w+2]
+    if provided != 0 {
+      if ctr == 3 or ctr == 4 { prediction#[w] = if alternate != 0 { altDirection } else { baseTaken#[w] } }
+      else { prediction#[w] = ctr#[2] }
+    }
+    const sampled = available & random
+    const candidates = if sampled == 0 { available } else { sampled }
+    mut target:Unsigned(bits=indexBits) = 0
+    for j in 0..<tableCount {
+      const i = tableCount-1-j
+      if candidates#[i] != 0 { target = i }
+    }
+    info#[(w*choice)..+choice] = (U1(available != 0) << tableBits) | target
+    info#[(ctrOffset+3*w)..+3] = ctr
+    info#[(useOffset+2*w)..+2] = useful#[(8*source+2*w)..+2]
+    info#[altOffset+w] = alternate & U1(altDirection != prediction#[w])
+    info#[(providerOffset+w*choice)..+choice] = (provided << tableBits) | source
+  }
+}

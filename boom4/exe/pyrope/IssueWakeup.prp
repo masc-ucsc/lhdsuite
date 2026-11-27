@@ -1,0 +1,56 @@
+// Integer issue slots listen to load, long-latency and speculative ALU wakeups.
+// A load may retract its wakeup before its data reaches the register file.
+pub comb source<alus, bits, dispatch=false>(
+  aluTags:Unsigned(bits=alus*bits),
+  aluValid:Unsigned(bits=alus),
+  failed:Unsigned(bits=alus),
+  integer:U1,
+  loadBypass:U1,
+  loadRebusy:U1,
+  loadTag:Unsigned(bits=bits),
+  loadValid:U1,
+  longTag:Unsigned(bits=2*bits),
+  longValid:U2,
+  parents:Unsigned(bits=alus),
+  tag:Unsigned(bits=bits),
+  wasBusy:U1,
+) -> (busy:U1, bypass:U1, rebusy:U1, speculative:Unsigned(bits=alus)) {
+  speculative = 0
+  for i in 0..<alus {
+    speculative#[i] = aluValid#[i] & U1(aluTags#[(i*bits)..+bits] == tag)
+  }
+  const loadHit  = U1(tag == loadTag)
+  const loadWake = loadValid & loadHit
+  const longWake = (longValid#[0] & U1(tag == longTag#[0..+bits])) | (longValid#[1] & U1(tag == longTag#[bits..+bits]))
+  const aluWake  = U1(speculative != 0)
+  const retract  = (loadHit & loadRebusy) | U1((parents & failed) != 0)
+  rebusy = integer & retract
+  busy   = rebusy | (wasBusy & ~(loadWake | longWake | aluWake))
+  if dispatch {
+    if retract != 0 {
+      busy = integer
+    }
+    if (loadWake | longWake | aluWake) == 0 {
+      speculative = parents
+    }
+  }
+  bypass = (loadWake & loadBypass) | aluWake
+}
+
+pub comb floating<ports, bits>(
+  fast:Unsigned(bits=ports),
+  slow:U1,
+  slowTag:Unsigned(bits=bits),
+  tag:Unsigned(bits=bits),
+  tags:Unsigned(bits=ports*bits),
+  wasBusy:U1,
+) -> (busy:U1, bypass:U1, matched:U1) {
+  bypass = 0
+  for port in 0..<ports {
+    if fast#[port] != 0 and tags#[(port*bits)..+bits] == tag {
+      bypass = 1
+    }
+  }
+  matched = bypass | (slow & U1(slowTag == tag))
+  busy    = wasBusy & ~matched
+}

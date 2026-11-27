@@ -1,0 +1,37 @@
+const bank = import("../pyrope/SectoredTLB.SectoredTLB")
+pub mod tlb_sectors(clock:Clock, reset:U1, vpn:U27, lookup:U1, miss:U1, refill:U1,
+    data:U34, fence:U1, byAddress:U1, byAsid:U1) -> (hit:U1@[], value:U34@[]) {
+  const table = bank<ways=32>(clock, reset, vpn, lookup, miss, refill, refillVpn=vpn,
+    refillData=data, fence, byAddress, byAsid, flush=0)
+  hit = table.hit
+  value = table.data
+}
+test tlb_sectors.translations {
+  mut d = tlb_sectors
+  tick 195 {
+    const fill = clock >= 1 and clock <= 64
+    const loc = if fill { (clock-1)/2 } elif clock < 97 { clock-65 } elif clock == 97 { 5 } else { (clock-98)%32 }
+    const page = 4*(loc/4)*17 + loc%4
+    const payload = (page << 14) | ((loc%2) << 12)
+    d.reset = U1(clock == 0)
+    d.vpn = if clock == 0 { 0 } else { page }
+    d.lookup = U1(clock != 0)
+    d.miss = U1(fill and clock%2 == 1)
+    d.refill = U1(fill and clock%2 == 0)
+    d.data = if clock == 0 { 0 } else { payload }
+    d.fence = U1(clock == 97 or clock == 130 or clock == 163)
+    d.byAddress = U1(clock == 97)
+    d.byAsid = U1(clock == 130)
+    step
+    if clock >= 65 and clock < 97 {
+      assert(d.hit != 0 and d.value == payload, "all 32 sector translations retain data")
+    }
+    if clock >= 98 and clock < 130 {
+      assert(d.hit == U1(loc != 5), "VPN fence clears only one sector")
+    }
+    if clock >= 131 and clock < 163 {
+      assert(d.hit == U1(loc != 5 and loc%2 == 1), "ASID fence preserves global mappings")
+    }
+    if clock >= 164 { assert(d.hit == 0, "global fence clears every valid sector") }
+  }
+}

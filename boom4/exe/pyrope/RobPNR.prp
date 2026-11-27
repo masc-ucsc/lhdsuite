@@ -1,0 +1,86 @@
+// BOOM's point of no return identifies the oldest instruction that may still
+// cause misspeculation. The fast policy searches every row in parallel. The
+// incremental policy examines one row per cycle.
+pub mod RobPNR<rows, width, fast=false>(
+  clock:Clock,
+  reset:U1,
+  head:Unsigned(bits=std.clog2(rows) + std.clog2(width)),
+  tail:Unsigned(bits=std.clog2(rows)),
+  tailValid:Unsigned(bits=width),
+  unsafe:Unsigned(bits=rows*width),
+  enq:Unsigned(bits=width),
+  empty:U1,
+  full:U1,
+  normal:U1,
+  rollback:U1,
+  mispredict:U1,
+) -> (idx:Unsigned(bits=std.clog2(rows) + std.clog2(width))@[]) {
+  comptime const lb = std.clog2(width)
+  comptime const rb = std.clog2(rows)
+  comptime const bb = if width == 1 { 1 } else { lb }
+  reg row:Unsigned(bits=rb)  = nil
+  reg lane:Unsigned(bits=bb) = nil
+  idx = if width == 1 { row } else { (row << lb) | lane }
+  if fast {
+    mut nextRow                    = tail
+    mut nextLane:Unsigned(bits=bb) = 0
+    for i in 0..<width {
+      const w = width - 1 - i
+      if tailValid#[w] == 0 {
+        nextLane = w
+      }
+    }
+    // First choose the lowest occupied address. An occupied address at or
+    // above the head takes precedence over any address from the next lap.
+    for lap in 0..<2 {
+      for i in 0..<(rows*width) {
+        const pos = (rows*width) - 1 - i
+        const r   = pos/width
+        const w   = pos%width
+        if unsafe#[pos] != 0 and (lap == 0 or ((r << lb) | w) >= head) {
+          nextRow  = r
+          nextLane = w
+        }
+      }
+    }
+    row  = if reset != 0 { 0 } else { nextRow }
+    lane = if reset != 0 { 0 } else { nextLane }
+  } else {
+    const risks = unsafe#[(row*width)..+width]
+    mut enqLane:Unsigned(bits=bb)   = 0
+    mut riskLane:Unsigned(bits=bb)  = 0
+    mut remaining:Unsigned(bits=bb) = 0
+    mut aboveTail                   = true
+    for i in 0..<width {
+      const w = width - 1 - i
+      if enq#[w] != 0 {
+        enqLane = w
+      }
+      if risks#[w] != 0 {
+        riskLane = w
+      }
+      aboveTail = aboveTail and tailValid#[w] == 0
+      if risks#[w] != 0 or aboveTail {
+        remaining = w
+      }
+    }
+    if reset != 0 {
+      row  = 0
+      lane = 0
+    } elif rollback != 0 {
+      lane = 0
+    } elif empty != 0 and enq != 0 {
+      row  = head >> lb
+      lane = enqLane
+    } elif normal != 0 {
+      if risks == 0 and (row != tail or mispredict != 0) {
+        wrap row = if row == rows - 1 { 0 } else { row + 1 }
+        lane = 0
+      } elif row != tail {
+        lane = riskLane
+      } elif full == 0 and empty == 0 {
+        lane = remaining
+      }
+    }
+  }
+}

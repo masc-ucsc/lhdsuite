@@ -1,0 +1,144 @@
+// Each dispatch lane owns a bank. The row number is shared across banks.
+// On a misprediction clear younger rows and younger banks in the branch row.
+pub mod RobBank<rows, width, lane, payloadBits, wbPorts, lsPorts>(
+  clock:Clock,
+  reset:U1,
+  head:Unsigned(bits=std.clog2(rows)),
+  tail:Unsigned(bits=std.clog2(rows)),
+  enqueue:U1,
+  startsBusy:U1,
+  startsUnsafe:U1,
+  fault:U1,
+  payload:Unsigned(bits=payloadBits),
+  commit:U1,
+  rollback:U1,
+  mispredict:U1,
+  predictedTaken:U1=0,
+  resolvedTaken:U1=0,
+  branchIdx:Unsigned(bits=std.clog2(rows) + std.clog2(width)),
+  wb:Unsigned(bits=wbPorts),
+  wbIdx:Unsigned(bits=wbPorts*(std.clog2(rows) + std.clog2(width))),
+  wbPred:Unsigned(bits=wbPorts),
+  wbFlagsValid:Unsigned(bits=wbPorts),
+  wbFlags:Unsigned(bits=5*wbPorts),
+  clearBusy:Unsigned(bits=lsPorts),
+  clearIdx:Unsigned(bits=lsPorts*(std.clog2(rows) + std.clog2(width))),
+  clearUnsafe:Unsigned(bits=lsPorts),
+  unsafeIdx:Unsigned(bits=lsPorts*(std.clog2(rows) + std.clog2(width))),
+  lateFault:U1,
+  lateIdx:Unsigned(bits=std.clog2(rows) + std.clog2(width)),
+  replay:U1,
+  replayIdx:Unsigned(bits=std.clog2(rows) + std.clog2(width)),
+) -> (
+  busy:U1@[],
+  corrected:U1@[],
+  taken:U1@[],
+  data:Unsigned(bits=payloadBits)@[],
+  exception:U1@[],
+  flags:U5@[],
+  flagsValid:U1@[],
+  predicated:U1@[],
+  risks:Unsigned(bits=rows)@[],
+  tailValid:U1@[],
+  valid:U1@[],
+) {
+  comptime const laneBits = std.clog2(width)
+  comptime const addrBits = laneBits + std.clog2(rows)
+  reg valids:Unsigned(bits=rows)                            = nil
+  reg work:Unsigned(bits=rows)                              = nil
+  reg unsafe:Unsigned(bits=rows)                            = nil
+  reg faults:Unsigned(bits=rows)                            = nil
+  reg preds:Unsigned(bits=rows)                             = nil
+  reg fpValid:Unsigned(bits=rows)                           = nil
+  reg fpBits:Unsigned(bits=rows*5)                          = nil
+  reg repairs:Unsigned(bits=rows)                           = nil
+  reg ram:[rows]Unsigned(bits=payloadBits):[ordering="old"] = nil
+  tailValid  = valids#[tail]
+  risks      = valids & (unsafe | faults)
+  valid      = valids#[head]
+  busy       = work#[head]
+  exception  = faults#[head]
+  predicated = preds#[head]
+  flagsValid = fpValid#[head]
+  flags      = fpBits#[(head*5)..+5]
+  data       = ram[head%rows]
+  const bankMask = (1 << laneBits) - 1
+  const branch   = branchIdx >> laneBits
+  reg takenRows:Unsigned(bits=rows) = nil
+  const sameBank = (branchIdx & bankMask) == lane
+  taken = if mispredict != 0 and branch == head and sameBank { resolvedTaken } else { takenRows#[head] }
+  corrected = U1(repairs#[head] != 0 or (mispredict != 0 and branch == head and sameBank))
+  mut nextValid   = valids
+  mut nextBusy    = work
+  mut nextUnsafe  = unsafe
+  mut nextFault   = faults
+  mut nextPred    = preds
+  mut nextFpValid = fpValid
+  mut nextFpBits  = fpBits
+  mut nextRepairs = repairs
+  if enqueue != 0 {
+    ram[tail%rows]            = payload
+    nextValid#[tail]          = 1
+    nextBusy#[tail]           = startsBusy
+    nextUnsafe#[tail]         = startsUnsafe
+    nextFault#[tail]          = fault
+    nextPred#[tail]           = 0
+    nextFpValid#[tail]        = 0
+    nextFpBits#[(tail*5)..+5] = 0
+    nextRepairs#[tail]        = 0
+    takenRows#[tail] = predictedTaken
+  }
+  for i in 0..<wbPorts {
+    const idx = wbIdx#[(i*addrBits)..+addrBits]
+    const row = idx >> laneBits
+    if wb#[i] != 0 and (idx & bankMask) == lane {
+      nextBusy#[row]   = 0
+      nextUnsafe#[row] = 0
+      nextPred#[row]   = wbPred#[i]
+      if wbFlagsValid#[i] != 0 {
+        nextFpValid#[row]        = 1
+        nextFpBits#[(row*5)..+5] = wbFlags#[(i*5)..+5]
+      }
+    }
+  }
+  for i in 0..<lsPorts {
+    const idx = clearIdx#[(i*addrBits)..+addrBits]
+    if clearBusy#[i] != 0 and (idx & bankMask) == lane {
+      nextBusy#[idx >> laneBits]   = 0
+      nextUnsafe#[idx >> laneBits] = 0
+    }
+    const u = unsafeIdx#[(i*addrBits)..+addrBits]
+    if clearUnsafe#[i] != 0 and (u & bankMask) == lane {
+      nextUnsafe#[u >> laneBits] = 0
+    }
+  }
+  if lateFault != 0 and (lateIdx & bankMask) == lane {
+    nextFault#[lateIdx >> laneBits] = 1
+  }
+  if replay != 0 and (replayIdx & bankMask) == lane {
+    nextFault#[replayIdx >> laneBits] = 1
+  }
+  if mispredict != 0 {
+    if sameBank {
+      nextRepairs#[branch] = 1
+      takenRows#[branch] = resolvedTaken
+    }
+    for r in 0..<rows {
+      const younger = if (r < head) == (branch < head) { r > branch } else { r < head }
+      if younger or (r == branch and lane > (branchIdx & bankMask)) {
+        nextValid#[r] = 0
+      }
+    }
+  }
+  if commit != 0 {
+    nextValid#[head] = 0
+  }
+  valids  = if reset != 0 or rollback != 0 { 0 } else { nextValid }
+  work    = if rollback != 0 { 0 } else { nextBusy }
+  unsafe  = nextUnsafe
+  faults  = nextFault
+  preds   = nextPred
+  fpValid = nextFpValid
+  fpBits  = nextFpBits
+  repairs = nextRepairs
+}

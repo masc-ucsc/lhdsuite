@@ -1,0 +1,36 @@
+// Release fetch entries through the youngest retiring lane. ECALL and EBREAK
+// need their PC in the CSR one cycle earlier and release on dispatch.
+pub mod CommitFetchTarget<width, bits>(
+  clock:Clock,
+  dispatchTags:Unsigned(bits=width*bits),
+  dispatched:Unsigned(bits=width),
+  exception:U1,
+  exceptionTag:Unsigned(bits=bits),
+  retireTags:Unsigned(bits=width*bits),
+  retired:Unsigned(bits=width),
+  systemPC:Unsigned(bits=width),
+  valid:Unsigned(bits=width),
+) -> (release:U1@[], tag:Unsigned(bits=bits)@[]) {
+  reg early:U1                     = nil
+  reg earlyTag:Unsigned(bits=bits) = nil
+  const first = dispatched & -dispatched
+  early    = U1((first & systemPC) != 0)
+  earlyTag = dispatchTags#[0..+bits]
+  tag      = retireTags#[0..+bits]
+  for i in 0..<width {
+    const oldest = width - 1 - i
+    if valid#[oldest] != 0 {
+      earlyTag = dispatchTags#[(oldest*bits)..+bits]
+    }
+    if retired#[i] != 0 {
+      tag = retireTags#[(i*bits)..+bits]
+    }
+  }
+  if exception != 0 {
+    tag = exceptionTag
+  }
+  if early != 0 {
+    tag = earlyTag
+  }
+  release = early | exception | U1(retired != 0)
+}

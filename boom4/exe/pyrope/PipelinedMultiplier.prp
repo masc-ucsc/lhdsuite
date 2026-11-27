@@ -1,0 +1,26 @@
+const delay = import("../../util/pyrope/EnabledPipe.EnabledPipe")
+
+pub mod PipelinedMultiplier<latency=3>::[timecheck=false](clock:Clock, io_req_bits_dw:U1, io_req_bits_fn:U5, io_req_bits_in1:U64, io_req_bits_in2:U64, io_req_valid:U1, reset:U1) -> (io_resp_bits_data:U64@[]) {
+  cassert(latency >= 1)
+  reg valid:U1
+  reg lhs:U64
+  reg rhs:U64
+  reg operation:U2
+  reg doubleWord:U1
+  valid = io_req_valid & ~reset
+  if io_req_valid != 0 {
+    lhs = io_req_bits_in1
+    rhs = io_req_bits_in2
+    operation = io_req_bits_fn#[0..+2]
+    doubleWord = io_req_bits_dw
+  }
+  // MULH and MULHSU sign-extend the left operand. Only MULH needs
+  // a signed right operand for the upper half of the product.
+  const left:U128 = if operation == 1 or operation == 2 { lhs#sext[0..=63]#[0..+128] } else { lhs }
+  const right:U128 = if operation == 1 { rhs#sext[0..=63]#[0..+128] } else { rhs }
+  const product = (left*right)#[0..+128]
+  const result:U64 = if operation != 0 { product#[64..+64] }
+    elif doubleWord != 0 { product#[0..+64] } else { product#sext[0..=31]#[0..+64] }
+  comptime const remaining = latency - 1
+  io_resp_bits_data = delay<stages=remaining, bits=64>(clock=clock, reset=reset, valid=valid, data=result)
+}

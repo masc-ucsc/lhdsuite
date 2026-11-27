@@ -1,0 +1,137 @@
+
+comb fold<width, history, historyBits>(bits:Unsigned(bits=historyBits)) -> (result:Unsigned(bits=width)) {
+  result = 0
+  for i in 0..<history {
+    result#[i%width] = result#[i%width] ^ bits#[i]
+  }
+}
+
+// A table lane has its own counter, tag and usefulness bits. The bank
+// shares lookup hashes, reset sweep, periodic aging and bypass hit selection.
+mod lane<T>(clock:Clock, readIndex:Unsigned(bits=std.clog2(T.rows)), uRead:Unsigned(bits=std.clog2(T.rows)), tag:Unsigned(bits=T.tag), allowHit:Bool, write:Bool, wIndex:Unsigned(bits=std.clog2(T.rows)), wTag:Unsigned(bits=T.tag), wValid:Bool, count:U3, uIndex:Unsigned(bits=std.clog2(T.rows)), uMask:U2, uValue:U2) -> (ctr:U3@[], u:U2@[], valid:U1@[]) {
+  reg entries:[T.rows]Unsigned(bits=T.tag + 4):[ordering="old"] = nil
+  reg usefulLo:[T.rows]U1:[ordering="old"] = nil
+  reg usefulHi:[T.rows]U1:[ordering="old"] = nil
+  const entry = entries[readIndex]
+  valid = U1(allowHit and entry#[T.tag + 3] != 0 and entry#[3..+T.tag] == tag)
+  ctr = entry#[0..+3]
+  u = (usefulHi[uRead] << 1) | usefulLo[uRead]
+  if write {
+    entries[wIndex] = (U1(wValid) << (T.tag + 3)) | (wTag << 3) | count
+  }
+  if uMask#[0] != 0 {
+    usefulLo[uIndex] = uValue#[0]
+  }
+  if uMask#[1] != 0 {
+    usefulHi[uIndex] = uValue#[1]
+  }
+}
+
+pub mod TageTable<T, period=2048, single=false, fetchShift=3, historyBits=64, pcBits=40>::[timecheck=false](clock:Clock, io_f1_req_ghist:Unsigned(bits=historyBits), io_f1_req_pc:Unsigned(bits=pcBits), io_f1_req_valid:U1, io_update_alloc_0:U1, io_update_alloc_1:U1, io_update_alloc_2:U1, io_update_alloc_3:U1, io_update_hist:Unsigned(bits=historyBits), io_update_mask_0:U1, io_update_mask_1:U1, io_update_mask_2:U1, io_update_mask_3:U1, io_update_old_ctr_0:U3, io_update_old_ctr_1:U3, io_update_old_ctr_2:U3, io_update_old_ctr_3:U3, io_update_pc:Unsigned(bits=pcBits), io_update_taken_0:U1, io_update_taken_1:U1, io_update_taken_2:U1, io_update_taken_3:U1, io_update_u_0:(e1:U1, e0:U1), io_update_u_1:(e1:U1, e0:U1), io_update_u_2:(e1:U1, e0:U1), io_update_u_3:(e1:U1, e0:U1), io_update_u_mask_0:U1, io_update_u_mask_1:U1, io_update_u_mask_2:U1, io_update_u_mask_3:U1, reset:U1) -> (io_f2_resp_0_bits_ctr:U3@[], io_f2_resp_0_bits_u:U2@[], io_f2_resp_0_valid:U1@[], io_f2_resp_1_bits_ctr:U3@[], io_f2_resp_1_bits_u:U2@[], io_f2_resp_1_valid:U1@[], io_f2_resp_2_bits_ctr:U3@[], io_f2_resp_2_bits_u:U2@[], io_f2_resp_2_valid:U1@[], io_f2_resp_3_bits_ctr:U3@[], io_f2_resp_3_bits_u:U2@[], io_f2_resp_3_valid:U1@[]) {
+  comptime const rows = std.clog2(T.rows)
+  comptime const age = std.clog2(period)
+  cassert(T.rows >= 2 and T.rows == 1 << rows and T.history > 0 and T.history <= historyBits and T.tag > 0)
+  cassert(period >= 2)
+  const ri = io_f1_req_pc#[fetchShift..+rows] ^ fold<historyBits=historyBits, history=T.history, width=rows>(bits=io_f1_req_ghist)
+  const rt = io_f1_req_pc#[(fetchShift + rows)..+T.tag] ^ fold<historyBits=historyBits, history=T.history, width=T.tag>(bits=io_f1_req_ghist)
+  const wi = io_update_pc#[fetchShift..+rows] ^ fold<historyBits=historyBits, history=T.history, width=rows>(bits=io_update_hist)
+  const wt = io_update_pc#[(fetchShift + rows)..+T.tag] ^ fold<historyBits=historyBits, history=T.history, width=T.tag>(bits=io_update_hist)
+  reg sweeping:Bool = nil
+  reg scan:Unsigned(bits=rows) = nil
+  reg ageCount:Unsigned(bits=rows + age + 1) = nil
+  if reset != 0 {
+    sweeping = true
+    scan = 0
+    ageCount = 0
+  } else {
+    if scan == T.rows - 1 {
+      sweeping = false
+    }
+    if sweeping {
+      wrap scan = scan + 1
+    }
+    if sweeping {
+      ageCount = 1
+    } else {
+      wrap ageCount = ageCount + 1
+    }
+  }
+  const aging = ageCount#[0..+age] == 0
+  const hi = ageCount#[age + rows] != 0
+  const writeRow = if sweeping { scan } else { wi }
+  const usefulRow = if sweeping { scan } elif aging { ageCount#[age..+rows] } else { wi }
+  const mask = (io_update_mask_0, io_update_mask_1, io_update_mask_2, io_update_mask_3)
+  const taken = (io_update_taken_0, io_update_taken_1, io_update_taken_2, io_update_taken_3)
+  const alloc = (io_update_alloc_0, io_update_alloc_1, io_update_alloc_2, io_update_alloc_3)
+  const old_ctr = (io_update_old_ctr_0, io_update_old_ctr_1, io_update_old_ctr_2, io_update_old_ctr_3)
+  const u_mask = (io_update_u_mask_0, io_update_u_mask_1, io_update_u_mask_2, io_update_u_mask_3)
+  const u = (((io_update_u_0.e1 << 1) | io_update_u_0.e0), ((io_update_u_1.e1 << 1) | io_update_u_1.e0), ((io_update_u_2.e1 << 1) | io_update_u_2.e0), ((io_update_u_3.e1 << 1) | io_update_u_3.e0))
+
+  const update = (mask[0] | mask[1] | mask[2] | mask[3]) != 0
+  const updateU = (u_mask[0] | u_mask[1] | u_mask[2] | u_mask[3]) != 0
+  reg readRow:Unsigned(bits=rows) = nil
+  reg readU:Unsigned(bits=rows) = nil
+  reg tag:Unsigned(bits=T.tag) = nil
+  reg collision:Bool = nil
+  tag = rt
+  collision = single and (update or sweeping)
+  if io_f1_req_valid != 0 {
+    if not single or not (sweeping or update) {
+      readRow = ri
+    }
+    if not single or not (sweeping or aging or updateU) {
+      readU = ri
+    }
+  }
+  reg tags:[2]Unsigned(bits=T.tag) = nil
+  reg indices:[2]Unsigned(bits=rows) = nil
+  reg counters:[2]U12 = nil
+  reg next:U1 = nil
+  const h0 = not sweeping and tags[0] == wt and indices[0] == wi
+  const h1 = not sweeping and tags[1] == wt and indices[1] == wi
+  const slot = if h0 { 0 } elif h1 { 1 } else { next }
+  mut newCounts:U12 = 0
+  mut hits:U4 = 0
+  mut counts:U12 = 0
+  mut usefulness:U8 = 0
+  for i in 0..<4 {
+    const prev = if h0 or h1 { counters[slot]#[3*i..+3] } else { old_ctr[i] }
+    const cnt:U3 = if alloc[i] != 0 { if taken[i] != 0 { 4 } else { 3 } }
+      elif taken[i] != 0 { if prev == 7 { 7 } else { (prev + 1)#[0..+3] } }
+      else { if prev == 0 { 0 } else { (prev - 1)#[0..+3] } }
+    newCounts#[3*i..+3] = cnt
+    const um:U2 = if sweeping { 3 } elif aging { if hi { 2 } else { 1 } } elif u_mask[i] != 0 { 3 } else { 0 }
+    const result = lane<T>(allowHit=not sweeping and not collision, clock, count=if sweeping { 0 } else { cnt }, readIndex=readRow, tag, uIndex=usefulRow, uMask=um, uRead=readU, uValue=if sweeping or aging {
+        0
+      } else {
+        u[i]
+      }, wIndex=writeRow, wTag=if sweeping { 0 } else { wt }, wValid=not sweeping, write=sweeping or mask[i] != 0)
+    hits#[i] = result.valid
+    counts#[3*i..+3] = if collision { 0 } else { result.ctr }
+    usefulness#[2*i..+2] = result.u
+  }
+  if update {
+    counters[slot] = newCounts
+    if not (h0 or h1) {
+      tags[slot] = wt
+      indices[slot] = wi
+    }
+  }
+  if reset != 0 {
+    next = 0
+  } elif update and not (h0 or h1) {
+    next = ~next
+  }
+  io_f2_resp_0_valid = hits#[0]
+  io_f2_resp_0_bits_ctr = counts#[0..+3]
+  io_f2_resp_0_bits_u = usefulness#[0..+2]
+  io_f2_resp_1_valid = hits#[1]
+  io_f2_resp_1_bits_ctr = counts#[3..+3]
+  io_f2_resp_1_bits_u = usefulness#[2..+2]
+  io_f2_resp_2_valid = hits#[2]
+  io_f2_resp_2_bits_ctr = counts#[6..+3]
+  io_f2_resp_2_bits_u = usefulness#[4..+2]
+  io_f2_resp_3_valid = hits#[3]
+  io_f2_resp_3_bits_ctr = counts#[9..+3]
+  io_f2_resp_3_bits_u = usefulness#[6..+2]
+}

@@ -1,0 +1,31 @@
+const bim = import("../pyrope/BimCounters")
+const predictor = import("../pyrope/BIMBranchPredictorBank.BIMBranchPredictorBank")
+const stages = import("../pyrope/PredictorResponse")
+
+mod check<geometry>(clock:Clock, reset:Reset, cycle:U8) -> (ok:U1@[]) {
+  const writing = cycle >= 30 and cycle < 34
+  const address = if cycle >= 50 { 0x28 } else { 0x20 }
+  const u:stages.Update = (valid=U1(writing), mispredict=0, repair=0, wrongTargets=0,
+      pc=0x20, branches=4, cfiValid=1, cfi=2, taken=0, missed=0, branch=1, jal=0, jalr=0, target=0)
+  const bank = predictor<geometry=geometry>(clock, reset, pc=address, fetch=U1(!writing), update=u,
+      base1=stages.emptyStage, base2=stages.direction(incoming=stages.emptyStage, taken=5),
+      base3=stages.emptyStage, updateMeta=0xaa)
+  const expected = if cycle >= 40 and cycle < 50 { 11 } else { 15 }
+  const settled = cycle == 25 or cycle == 45 or cycle == 60
+  ok = U1(!settled or (bank.f2.taken == (if geometry.slow { 5 } else { expected }) and bank.f3.taken == expected))
+}
+pub mod bim_geometry(clock:Clock, reset:Reset, cycle:U8) -> (ok:U1@[]) {
+  comptime const ram = bim.params(nSets=32, nCols=4)
+  comptime const flop = bim.params(nSets=32, nCols=8, singlePorted=false, useFlops=true)
+  comptime const slow = bim.params(nSets=16, nCols=2, slow=true)
+  ok = check<geometry=ram>(clock, reset, cycle) & check<geometry=flop>(clock, reset, cycle) & check<geometry=slow>(clock, reset, cycle)
+}
+test bim_geometry.update {
+  mut d = bim_geometry
+  tick 64 {
+    d.reset = clock < 3
+    d.cycle = clock
+    step
+    if clock > 3 { assert(d.ok != 0, "train the selected fetch lane and preserve the adjacent column") }
+  }
+}

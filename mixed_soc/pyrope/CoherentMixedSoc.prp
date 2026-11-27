@@ -1,0 +1,133 @@
+// Coherent SRAM on the memory endpoint of the mixed mesh. Other addresses
+// outside the interrupt controllers remain externally managed. External Grant/GrantData must use sink IDs 0..6.
+const profiles = import("TileProfiles")
+comptime const defaultTiles = profiles.selected
+const fabric = import("MeshFabric.MeshFabric")
+const platform = import("PlatformInterrupts")
+const ram = import("CoherentRAM")
+const tl = import("mixed_packet")
+
+pub mod CoherentMixedSoc<base=0x80000000, lines=64, Tiles=defaultTiles, internalRAM=true, sources=2, boomHarts=4>(clock:Clock, reset:Reset, core_enable:U16,
+    rtcTick:Bool=true, deviceInterrupts:Unsigned(bits=sources)=0,
+    host_req_valid:U1=0, host_req_data:U64=0, host_req_addr:U32=0, host_req_meta:U40=0, host_rsp_ready:U1=1,
+    mem_req_ready:Bool, mem_rsp_valid:Bool, mem_rsp_addr:U32, mem_rsp_meta:U40, mem_rsp_data:U64) ->
+    (host_req_ready:U1@[], host_rsp_valid:U1@[], host_rsp_data:U64@[], host_rsp_addr:U32@[], host_rsp_meta:U40@[],
+     mem_req_valid:Bool@[], mem_req_addr:U32@[], mem_req_meta:U40@[], mem_req_data:U64@[], mem_rsp_ready:Bool@[],
+     host_req_fire:U1@[], host_rsp_fire:U1@[], seen_host_meta:U40@[], seen_host_data:U64@[],
+     externalRequest:Bool@[], externalAddress:U32@[], externalMeta:U40@[], externalResponse:Bool@[],
+     probe:Bool@[], dirtyBeat:Bool@[], dirtyHart:U5@[], grantBeat:Bool@[], grantData:U64@[], grantTarget:U5@[]) {
+  cassert(base >= 0 and base % (lines*64) == 0 and base+lines*64 <= 1 << 32)
+  cassert(base+lines*64 <= 0x02000000 or base >= 0x02010000)
+  cassert(base+lines*64 <= 0x0c000000 or base >= 0x10000000)
+  wire acceptRequest:Bool = nil
+  wire reply:(valid:Bool, addr:U32, meta:U40, data:U64) = nil
+  comptime const supervisors = (U16(Tiles.tile0.useSupervisor or Tiles.tile0.useVM) << 0) |
+      (U16(Tiles.tile1.useSupervisor or Tiles.tile1.useVM) << 1) |
+      (U16(Tiles.tile2.useSupervisor or Tiles.tile2.useVM) << 2) |
+      (U16(Tiles.tile3.useSupervisor or Tiles.tile3.useVM) << 3) |
+      (U16(Tiles.tile4.useSupervisor or Tiles.tile4.useVM) << 4) |
+      (U16(Tiles.tile5.useSupervisor or Tiles.tile5.useVM) << 5) |
+      (U16(Tiles.tile6.useSupervisor or Tiles.tile6.useVM) << 6) |
+      (U16(Tiles.tile7.useSupervisor or Tiles.tile7.useVM) << 7) |
+      (U16(Tiles.tile8.useSupervisor or Tiles.tile8.useVM) << 8) |
+      (U16(Tiles.tile9.useSupervisor or Tiles.tile9.useVM) << 9) |
+      (U16(Tiles.tile10.useSupervisor or Tiles.tile10.useVM) << 10) |
+      (U16(Tiles.tile11.useSupervisor or Tiles.tile11.useVM) << 11) |
+      (U16(Tiles.tile12.useSupervisor or Tiles.tile12.useVM) << 12) |
+      (U16(Tiles.tile13.useSupervisor or Tiles.tile13.useVM) << 13) |
+      (U16(Tiles.tile14.useSupervisor or Tiles.tile14.useVM) << 14) |
+      (U16(Tiles.tile15.useSupervisor or Tiles.tile15.useVM) << 15)
+  wire interruptLines:U64 = nil
+  const soc = fabric<Tiles=Tiles, boomHarts=boomHarts>(interrupts=interruptLines, clock=clock, reset=U1(reset), core_enable=core_enable,
+      host_req_valid=host_req_valid, host_req_data=host_req_data, host_req_addr=host_req_addr,
+      host_req_meta=host_req_meta, host_rsp_ready=host_rsp_ready, mem_req_ready=U1(acceptRequest),
+      mem_rsp_valid=U1(reply.valid), mem_rsp_addr=reply.addr, mem_rsp_meta=reply.meta, mem_rsp_data=reply.data)
+  host_req_fire = soc.host_req_fire
+  host_rsp_fire = soc.host_rsp_fire
+  seen_host_meta = soc.seen_host_meta
+  seen_host_data = soc.seen_host_data
+  host_req_ready = soc.host_req_ready
+  host_rsp_valid = soc.host_rsp_valid
+  host_rsp_addr = soc.host_rsp_addr
+  host_rsp_data = soc.host_rsp_data
+  host_rsp_meta = soc.host_rsp_meta
+  const ch = soc.mem_req_meta#[27..+3]
+  const local = if not internalRAM { false } elif ch == tl.E { soc.mem_req_meta#[10..+3] == ram.sinkId }
+                else { soc.mem_req_addr >= base and soc.mem_req_addr < base+lines*64 }
+  wire homeReady:Bool = nil
+  const home = ram.CoherentRAM<lines>(clock=clock, reset=reset, valid=Bool(soc.mem_req_valid) and local,
+      addr=soc.mem_req_addr, packet=soc.mem_req_meta, data=soc.mem_req_data, readyOut=homeReady)
+  const peripheral = ch == tl.A and platform.mapped(address=soc.mem_req_addr)
+  wire irqReady:Bool = nil
+  const controller = platform.PlatformInterrupts<harts=(12+boomHarts), supervisors=supervisors, sources=sources>(
+      clock, reset, tickRtc=rtcTick, devices=deviceInterrupts, valid=Bool(soc.mem_req_valid) and peripheral,
+      packet=soc.mem_req_meta, address=soc.mem_req_addr, data=soc.mem_req_data, readyOut=irqReady)
+  interruptLines = controller.interrupts
+  acceptRequest = if peripheral { controller.ready } elif local { home.ready } else { mem_req_ready }
+  mem_req_valid = Bool(soc.mem_req_valid) and not local and not peripheral
+  mem_req_addr = soc.mem_req_addr
+  mem_req_meta = soc.mem_req_meta
+  mem_req_data = soc.mem_req_data
+
+  // Lock the selected producer while stalled and across all beats of a D message.
+  reg locked:Bool = false
+  reg producer:U2 = nil
+  reg left:U4 = 0
+  const selected = if locked { producer } elif home.validOut { 1 } elif controller.validOut { 2 } else { 0 }
+  const selectHome = selected == 1
+  reply = if selectHome { (valid=home.validOut, addr=home.addrOut, meta=home.packetOut, data=home.dataOut) }
+          elif selected == 2 { (valid=controller.validOut, addr=controller.addrOut, meta=controller.packetOut, data=controller.dataOut) }
+          else { (valid=mem_rsp_valid, addr=mem_rsp_addr, meta=mem_rsp_meta, data=mem_rsp_data) }
+  const accepted = reply.valid and Bool(soc.mem_rsp_ready)
+  homeReady = selectHome and Bool(soc.mem_rsp_ready)
+  irqReady = selected == 2 and Bool(soc.mem_rsp_ready)
+  mem_rsp_ready = selected == 0 and Bool(soc.mem_rsp_ready)
+  if reply.valid {
+    producer = selected
+    if accepted {
+      const op = reply.meta#[23..+4]
+      const width = if reply.meta#[30..+5] >= 12 { 3 } else { 2 }
+      const size = reply.meta#[19..+4]
+      const multibeat = reply.meta#[27..+3] == tl.D and (op == 1 or op == 5) and size > width
+      if left != 0 {
+        locked = left != 1
+        wrap left = left-1
+      } elif multibeat {
+        locked = true
+        left = ((1 << (size-width)#[0..+4])-1)#[0..+4]
+      } else { locked = false }
+    } else { locked = true }
+  }
+  reg aFire:Bool = false
+  reg aAddr:U32 = nil
+  reg aMeta:U40 = nil
+  reg dFire:Bool = false
+  reg bFire:Bool = false
+  reg cOrigin:U5 = nil
+  reg cDirty:Bool = false
+  reg dGrant:Bool = false
+  reg dData:U64 = nil
+  reg dTarget:U5 = nil
+  aFire = mem_req_valid and mem_req_ready
+  if mem_req_valid and mem_req_ready {
+    aAddr = soc.mem_req_addr
+    aMeta = soc.mem_req_meta
+  }
+  dFire = accepted and selected == 0
+  bFire = accepted and selectHome and reply.meta#[27..+3] == tl.B
+  cOrigin = soc.mem_req_meta#[35..+5]
+  cDirty = local and Bool(soc.mem_req_valid) and acceptRequest and ch == tl.C and soc.mem_req_meta#[23..+4] == 5
+  dGrant = accepted and selectHome and reply.meta#[27..+3] == tl.D and reply.meta#[23..+4] == 5
+  dData = reply.data
+  dTarget = reply.meta#[30..+5]
+  externalRequest = aFire
+  externalAddress = aAddr
+  externalMeta = aMeta
+  externalResponse = dFire
+  probe = bFire
+  dirtyHart = cOrigin
+  dirtyBeat = cDirty
+  grantBeat = dGrant
+  grantData = dData
+  grantTarget = dTarget
+}

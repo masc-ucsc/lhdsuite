@@ -1,0 +1,71 @@
+const pmp = import("../pyrope/BoomPMP")
+
+pub mod protection(clock:Clock, reset:U1, cmd:U3, index:U12, data:U64, address:U32, size:U2, privilege:U2) ->
+    (values:U256@[], permissions:U12@[], homogeneous:U4@[]) {
+  comptime const counts = (0, 1, 9, 16)
+  for i in 0..<4 {
+    comptime const n = counts[i]
+    const regs = pmp.registers<count=n>(clock, reset, address=index, cmd, data)
+    const access = pmp.check<count=n>(table=regs.table, address, size, privilege)
+    values#[(i*64)..+64] = regs.value
+    permissions#[(i*3)..+3] = (access.io_x << 2) | (access.io_w << 1) | access.io_r
+    homogeneous#[i] = pmp.homogeneous<count=n>(table=regs.table, ppn=address >> 12, level=2)
+  }
+}
+
+test protection.upper_window {
+  mut dut = protection
+  dut.reset = 1
+  dut.cmd = 0
+  dut.index = 0
+  dut.data = 0
+  dut.address = 0x1000
+  dut.size = 0
+  dut.privilege = 1
+  step
+  dut.reset = 0
+  // Entries 7 and 8 define TOR [0x1004, 0x2000). Lock entry 8.
+  dut.cmd = 5
+  dut.index = 0x3b7
+  dut.data = 0x401
+  step
+  dut.index = 0x3b8
+  dut.data = 0x800
+  step
+  dut.index = 0x3a2
+  dut.data = 0x8d
+  step
+  dut.cmd = 0
+  dut.address = 0x1004
+  step
+  assert(dut.values#[128..+64] == 0x8d and dut.values#[192..+64] == 0x8d)
+  assert(dut.permissions == 0xb47 and dut.homogeneous == 3, "zero-entry access and first upper-window TOR")
+  dut.address = 0x1000
+  dut.size = 3
+  step
+  assert(dut.permissions == 7, "an eight-byte request cannot straddle the lower bound")
+  dut.address = 0x2000
+  step
+  assert(dut.permissions == 7 and dut.homogeneous == 15, "the page above TOR is homogeneous")
+  dut.cmd = 5
+  dut.index = 0x3b7
+  dut.data = 0
+  step
+  dut.cmd = 0
+  step
+  assert(dut.values#[128..+64] == 0x401 and dut.values#[192..+64] == 0x401, "a locked TOR also locks the preceding address")
+  dut.cmd = 5
+  dut.index = 0x3bf
+  dut.data = 0x2001
+  step
+  dut.index = 0x3a2
+  dut.data = 0x9900000000000000
+  step
+  dut.cmd = 0
+  dut.address = 0x8008
+  step
+  assert(dut.permissions#[9..+3] == 1 and dut.permissions#[6..+3] == 0, "entry 15 supplies read-only NAPOT permission")
+  dut.privilege = 3
+  step
+  assert(dut.permissions#[9..+3] == 1 and dut.permissions#[6..+3] == 7, "locked PMP restricts machine mode")
+}

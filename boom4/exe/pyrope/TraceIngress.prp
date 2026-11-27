@@ -1,0 +1,30 @@
+// Per-retirement-lane RISC-V trace groups, in Rocket Chip TraceCoreGroup order.
+pub type Context = (privilege:U4, context:U64, tval:U64, cause:U64, time:U64)
+pub const emptyContext:Context = (cause=0, context=0, privilege=0, time=0, tval=0)
+
+pub mod TraceIngress<width=1, rows=32, addrBits=40>(clock:Clock, reset:Reset, tail:Unsigned(bits=std.clog2(rows)), head:Unsigned(bits=std.clog2(rows)), dispatch:Unsigned(bits=width), retire:Unsigned(bits=width), pc:Unsigned(bits=addrBits*width), branch:Unsigned(bits=4*width), taken:Unsigned(bits=width), compressed:Unsigned(bits=width), returning:Unsigned(bits=width), trap:U1, trapCause:U64, context:Context) -> (groups:Unsigned(bits=(addrBits+6)*width)@[], state:Context@[]) {
+  reg previous:Context = nil
+  previous = context
+  state = previous
+  for lane in 0..<width {
+    reg entries:[rows]Unsigned(bits=addrBits+6):[ordering="old"] = nil
+    if dispatch#[lane] != 0 {
+      entries[tail%rows] = (pc#[(addrBits*lane)..+addrBits] << 6) | (branch#[(4*lane)..+4] << 2) | (returning#[lane] << 1) | compressed#[lane]
+    }
+    const entry = entries[head%rows]
+    const br = entry#[2..+4]
+    const kind = if lane == 0 and trap != 0 { if trapCause#[63] != 0 { 2 } else { 1 } }
+      elif entry#[1] != 0 { 13 }
+      elif br >= 1 and br <= 6 { 4 + taken#[lane] }
+      elif br == 7 { 15 }
+      elif br == 8 { 14 }
+      else { 0 }
+    reg group:Unsigned(bits=addrBits+6) = nil
+    if reset {
+      group = 0
+    } else {
+      group = (entry#[6..+addrBits] << 6) | (kind << 2) | ((retire#[lane] & ~entry#[0]) << 1) | retire#[lane]
+    }
+    groups#[((addrBits+6)*lane)..+(addrBits+6)] = group
+  }
+}

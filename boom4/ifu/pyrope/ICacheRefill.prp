@@ -1,0 +1,28 @@
+// The tile's instruction port accepts every D beat. A two-bank I-cache
+// consumes the low and high 64-bit words together on the second transfer.
+pub mod ICacheRefill<banks=1>(
+  clock:Clock,
+  data:U64,
+  hasData:U1,
+  reset:Reset,
+  size:U4,
+  valid:U1,
+) -> (outData:Unsigned(bits=64*banks)@[], outValid:U1@[]) {
+  cassert(banks == 1 or banks == 2)
+  if banks == 1 {
+    outValid = valid
+    outData  = data
+  } else {
+    reg pending:U1:[reset_pin=reset] = 0
+    reg low:U64                      = nil
+    const paired = hasData != 0 and size > 3
+    if valid != 0 and paired and not reset {
+      pending = 1 ^ pending
+      if pending == 0 {
+        low = data
+      }
+    }
+    outValid = valid & U1(not paired or pending != 0)
+    outData  = (if paired { low } else { data }) | (data << 64)
+  }
+}

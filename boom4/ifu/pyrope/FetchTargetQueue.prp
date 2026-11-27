@@ -1,0 +1,398 @@
+const advanceHistory = import("GlobalHistory.update")
+const rasIndex = import("RasIndex.RasIndex")
+
+mod snapshot<entries, Word>(clock:Clock, read:Unsigned(bits=std.clog2(entries)), write:Unsigned(bits=std.clog2(entries)), enable:U1, value:Word) -> (data:Word@[]) {
+  reg memory:[entries]Word:[ordering="old"] = nil
+  reg address:Unsigned(bits=std.clog2(entries)) = nil
+  address = read
+  if enable != 0 {
+    memory[write%entries] = value
+  }
+  data = memory[address%entries]
+}
+
+pub mod FetchTargetQueue<metaBits=120, historyBits=64, rasDepth=32, entries=16, fetchWidth=4, banks=1, addrBits=40>::[timecheck=false](clock:Clock, reset:U1, io_enq_valid:U1, io_enq_bits_pc:Unsigned(bits=addrBits), io_enq_bits_cfi_idx_valid:U1, io_enq_bits_cfi_idx_bits:Unsigned(bits=std.clog2(fetchWidth)), io_enq_bits_cfi_type:U3, io_enq_bits_cfi_is_call:U1, io_enq_bits_cfi_is_ret:U1, io_enq_bits_ras_top:Unsigned(bits=addrBits), io_enq_bits_mask:Unsigned(bits=fetchWidth), io_enq_bits_br_mask:Unsigned(bits=fetchWidth), io_enq_bits_ghist_old_history:Unsigned(bits=historyBits), io_enq_bits_ghist_current_saw_branch_not_taken:U1, io_enq_bits_ghist_new_saw_branch_not_taken:U1, io_enq_bits_ghist_new_saw_branch_taken:U1, io_enq_bits_ghist_ras_idx:Unsigned(bits=std.clog2(rasDepth)), io_enq_bits_bpd_meta_0:Unsigned(bits=metaBits*banks), io_deq_valid:U1, io_deq_bits:Unsigned(bits=std.clog2(entries)), io_arb_ftq_reqs_0:Unsigned(bits=std.clog2(entries)), io_arb_ftq_reqs_1:Unsigned(bits=std.clog2(entries)), io_arb_ftq_reqs_2:Unsigned(bits=std.clog2(entries)), io_redirect_valid:U1, io_redirect_bits:Unsigned(bits=std.clog2(entries)), io_brupdate_b2_uop_ftq_idx:Unsigned(bits=std.clog2(entries)), io_brupdate_b2_uop_pc_lob:U6, io_brupdate_b2_mispredict:U1, io_brupdate_b2_taken:U1) -> (io_enq_ready:U1@[], io_enq_idx:Unsigned(bits=std.clog2(entries))@[], io_rrd_ftq_resps_0_entry_cfi_idx_bits:Unsigned(bits=std.clog2(fetchWidth))@[], io_rrd_ftq_resps_0_entry_br_mask:Unsigned(bits=fetchWidth)@[], io_rrd_ftq_resps_0_entry_cfi_is_call:U1@[], io_rrd_ftq_resps_0_entry_cfi_is_ret:U1@[], io_rrd_ftq_resps_0_entry_ras_idx:Unsigned(bits=std.clog2(rasDepth))@[], io_rrd_ftq_resps_0_entry_start_bank:U1@[], io_rrd_ftq_resps_0_ghist_old_history:Unsigned(bits=historyBits)@[], io_rrd_ftq_resps_0_ghist_current_saw_branch_not_taken:U1@[], io_rrd_ftq_resps_0_ghist_new_saw_branch_not_taken:U1@[], io_rrd_ftq_resps_0_ghist_new_saw_branch_taken:U1@[], io_rrd_ftq_resps_0_ghist_ras_idx:Unsigned(bits=std.clog2(rasDepth))@[], io_rrd_ftq_resps_0_pc:Unsigned(bits=addrBits)@[], io_rrd_ftq_resps_1_valid:U1@[], io_rrd_ftq_resps_1_entry_cfi_idx_valid:U1@[], io_rrd_ftq_resps_1_entry_cfi_idx_bits:Unsigned(bits=std.clog2(fetchWidth))@[], io_rrd_ftq_resps_1_entry_start_bank:U1@[], io_rrd_ftq_resps_1_pc:Unsigned(bits=addrBits)@[], io_rrd_ftq_resps_2_valid:U1@[], io_rrd_ftq_resps_2_entry_cfi_idx_valid:U1@[], io_rrd_ftq_resps_2_entry_cfi_idx_bits:Unsigned(bits=std.clog2(fetchWidth))@[], io_rrd_ftq_resps_2_entry_start_bank:U1@[], io_rrd_ftq_resps_2_pc:Unsigned(bits=addrBits)@[], io_com_pc:Unsigned(bits=addrBits)@[], io_bpdupdate_valid:U1@[], io_bpdupdate_bits_is_mispredict_update:U1@[], io_bpdupdate_bits_is_repair_update:U1@[], io_bpdupdate_bits_pc:Unsigned(bits=addrBits)@[], io_bpdupdate_bits_br_mask:Unsigned(bits=fetchWidth)@[], io_bpdupdate_bits_cfi_idx_valid:U1@[], io_bpdupdate_bits_cfi_idx_bits:Unsigned(bits=std.clog2(fetchWidth))@[], io_bpdupdate_bits_cfi_taken:U1@[], io_bpdupdate_bits_cfi_mispredicted:U1@[], io_bpdupdate_bits_cfi_is_br:U1@[], io_bpdupdate_bits_cfi_is_jal:U1@[], io_bpdupdate_bits_ghist_new_saw_branch_taken:U1@[], io_bpdupdate_bits_ghist_new_saw_branch_not_taken:U1@[], io_bpdupdate_bits_ghist_old_history:Unsigned(bits=historyBits)@[], io_bpdupdate_bits_target:Unsigned(bits=addrBits)@[], io_bpdupdate_bits_meta_0:Unsigned(bits=metaBits*banks)@[], io_ras_update:U1@[], io_ras_update_idx:Unsigned(bits=std.clog2(rasDepth))@[], io_ras_update_pc:Unsigned(bits=addrBits)@[]) {
+  cassert((banks == 1 and fetchWidth == 4) or (banks == 2 and fetchWidth == 8))
+  comptime const laneBits = std.clog2(fetchWidth)
+  type Metadata = Unsigned(bits=metaBits*banks)
+  type FetchEntry = (cfi_idx_valid:U1, cfi_idx_bits:Unsigned(bits=std.clog2(fetchWidth)), cfi_taken:U1, cfi_mispredicted:U1, cfi_type:U3, br_mask:Unsigned(bits=fetchWidth), cfi_is_call:U1, cfi_is_ret:U1, ras_top:Unsigned(bits=addrBits), ras_idx:Unsigned(bits=std.clog2(rasDepth)), start_bank:U1)
+  cassert(entries >= 3)
+  type Index = Unsigned(bits=std.clog2(entries))
+  reg io_enq_ready_REG:U1
+  reg bpd_ptr:Index
+  reg deq_ptr:Index
+  reg enq_ptr:Index
+  reg pcs:[entries]Unsigned(bits=addrBits):[ordering="old"] = nil
+  reg rows:[entries]FetchEntry:[ordering="old"] = nil
+  reg prev_ghist_old_history:Unsigned(bits=historyBits)
+  reg prev_ghist_current_saw_branch_not_taken:U1
+  reg prevTaken:U1
+  reg prevMiss:U1
+  reg prevPC:Unsigned(bits=addrBits)
+  reg prev_ghist_ras_idx:Unsigned(bits=std.clog2(rasDepth))
+  reg prev_entry_cfi_idx_valid:U1
+  reg prev_entry_cfi_idx_bits:Unsigned(bits=std.clog2(fetchWidth))
+  reg prev_entry_cfi_taken:U1
+  reg prev_entry_br_mask:Unsigned(bits=fetchWidth)
+  reg prev_entry_cfi_is_call:U1
+  reg prev_entry_cfi_is_ret:U1
+  reg first_empty:U1
+  reg io_ras_update_REG:U1
+  reg io_ras_update_pc_REG:Unsigned(bits=addrBits)
+  reg io_ras_update_idx_REG:Unsigned(bits=std.clog2(rasDepth))
+  reg bpd_update_mispredict:U1
+  reg bpd_update_repair:U1
+  reg bpd_repair_idx:Index
+  reg bpd_end_idx:Index
+  reg bpd_repair_pc:Unsigned(bits=addrBits)
+  reg bpd_entry_cfi_idx_valid:U1
+  reg bpd_entry_cfi_idx_bits:Unsigned(bits=std.clog2(fetchWidth))
+  reg bpd_entry_cfi_taken:U1
+  reg bpd_entry_cfi_mispredicted:U1
+  reg bpd_entry_cfi_type:U3
+  reg bpd_entry_br_mask:Unsigned(bits=fetchWidth)
+  reg bpd_pc:Unsigned(bits=addrBits)
+  reg bpd_target:Unsigned(bits=addrBits)
+  reg REG:U1
+  reg bpd_repair_idx_REG:Index
+  reg bpd_end_idx_REG:Index
+  reg REG_1:U1
+  reg do_commit_update_REG:U1
+  reg REG_2:U1
+  reg io_bpdupdate_valid_REG:U1
+  reg io_bpdupdate_bits_is_mispredict_update_REG:U1
+  reg io_bpdupdate_bits_is_repair_update_REG:U1
+  reg REG_3:U1
+  reg prev_entry_REG_cfi_idx_valid:U1
+  reg prev_entry_REG_cfi_idx_bits:Unsigned(bits=std.clog2(fetchWidth))
+  reg prev_entry_REG_cfi_taken:U1
+  reg prev_entry_REG_br_mask:Unsigned(bits=fetchWidth)
+  reg prev_entry_REG_cfi_is_call:U1
+  reg prev_entry_REG_cfi_is_ret:U1
+  reg REG_4:Index
+  reg ram_REG_cfi_idx_valid:U1
+  reg ram_REG_cfi_idx_bits:Unsigned(bits=std.clog2(fetchWidth))
+  reg ram_REG_cfi_taken:U1
+  reg ram_REG_cfi_mispredicted:U1
+  reg ram_REG_cfi_type:U3
+  reg ram_REG_br_mask:Unsigned(bits=fetchWidth)
+  reg ram_REG_cfi_is_call:U1
+  reg ram_REG_cfi_is_ret:U1
+  reg ram_REG_ras_top:Unsigned(bits=addrBits)
+  reg ram_REG_ras_idx:Unsigned(bits=std.clog2(rasDepth))
+  reg ram_REG_start_bank:U1
+  reg io_rrd_ftq_resps_0_entry_REG_cfi_idx_bits:Unsigned(bits=std.clog2(fetchWidth))
+  reg io_rrd_ftq_resps_0_entry_REG_br_mask:Unsigned(bits=fetchWidth)
+  reg io_rrd_ftq_resps_0_entry_REG_cfi_is_call:U1
+  reg io_rrd_ftq_resps_0_entry_REG_cfi_is_ret:U1
+  reg io_rrd_ftq_resps_0_entry_REG_ras_idx:Unsigned(bits=std.clog2(rasDepth))
+  reg io_rrd_ftq_resps_0_entry_REG_start_bank:U1
+  reg io_rrd_ftq_resps_0_pc_REG:Unsigned(bits=addrBits)
+  reg io_rrd_ftq_resps_1_entry_REG_cfi_idx_valid:U1
+  reg io_rrd_ftq_resps_1_entry_REG_cfi_idx_bits:Unsigned(bits=std.clog2(fetchWidth))
+  reg io_rrd_ftq_resps_1_entry_REG_start_bank:U1
+  reg io_rrd_ftq_resps_1_pc_REG:Unsigned(bits=addrBits)
+  reg io_rrd_ftq_resps_1_valid_REG:U1
+  reg io_rrd_ftq_resps_2_entry_REG_cfi_idx_valid:U1
+  reg io_rrd_ftq_resps_2_entry_REG_cfi_idx_bits:Unsigned(bits=std.clog2(fetchWidth))
+  reg io_rrd_ftq_resps_2_entry_REG_start_bank:U1
+  reg io_rrd_ftq_resps_2_pc_REG:Unsigned(bits=addrBits)
+  reg io_rrd_ftq_resps_2_valid_REG:U1
+  reg io_com_pc_REG:Unsigned(bits=addrBits)
+  const do_enq__w1 = io_enq_ready_REG & io_enq_valid & 1
+  const predicted = advanceHistory<historyBits=historyBits, banks=banks, width=fetchWidth>(old=prev_ghist_old_history, currentMiss=prev_ghist_current_saw_branch_not_taken, pendingTaken=prevTaken, pendingMiss=prevMiss, branches=prev_entry_br_mask, valid=prev_entry_cfi_idx_valid, lane=prev_entry_cfi_idx_bits, taken=prev_entry_cfi_taken, isBranch=prev_entry_br_mask#[prev_entry_cfi_idx_bits], lastBank=U1(prevPC#[3..+3] == 7))
+  const useIncoming = io_enq_bits_ghist_current_saw_branch_not_taken != 0
+  const nextMiss = if useIncoming { io_enq_bits_ghist_new_saw_branch_not_taken } else { predicted.nextMiss }
+  const nextTaken = if useIncoming { io_enq_bits_ghist_new_saw_branch_taken } else { predicted.nextTaken }
+  const nextHistory = if useIncoming { io_enq_bits_ghist_old_history } else { predicted.history }
+  const _new_ghist_new_history_ras_idx_T__w1 = prev_entry_cfi_idx_valid & prev_entry_cfi_is_call & 1
+  const rasStep = rasIndex<entries=rasDepth>(index=prev_ghist_ras_idx)
+  const _new_ghist_new_history_ras_idx_T_4__w1 = prev_entry_cfi_idx_valid & prev_entry_cfi_is_ret & 1
+  const rasAfterReturn = if _new_ghist_new_history_ras_idx_T_4__w1 != 0 { rasStep.pop } else { prev_ghist_ras_idx }
+  const rasAfterBranch = if _new_ghist_new_history_ras_idx_T__w1 != 0 { rasStep.push } else { rasAfterReturn }
+  const snapshotRas = if io_enq_bits_ghist_current_saw_branch_not_taken != 0 { io_enq_bits_ghist_ras_idx } else { rasAfterBranch }
+  mut _mux_12:Index = if ((bpd_update_repair | bpd_update_mispredict) & 1) != 0 { bpd_repair_idx } else { bpd_ptr }
+  mut bpd_idx:Index = if io_redirect_valid != 0 { io_redirect_bits } else { _mux_12 }
+  mut _mux_14:Index = if reset != 0 { 0 } else { io_arb_ftq_reqs_0 }
+  const idx__w1 = _mux_14
+  const _enq_ptr_T__w1 = (enq_ptr + 1)%entries
+  const new_entry_br_mask__w1 = io_enq_bits_br_mask & io_enq_bits_mask
+  const _GEN_29__w1 = bpd_update_repair & REG_1 & 1
+  const _bpd_repair_idx_T_6__w1 = (bpd_repair_idx + 1)%entries
+  const _bpd_ptr_T__w1 = (bpd_ptr + 1)%entries
+  mut _b2i_31 = U1(bpd_ptr != deq_ptr)
+  mut _b2i_32 = U1(enq_ptr != _bpd_ptr_T__w1)
+  const do_commit_update__w1 = (~bpd_update_mispredict) & (~bpd_update_repair) & 1 & _b2i_31 & 1 & _b2i_32 & 1 & (~io_brupdate_b2_mispredict) & 1 & (~io_redirect_valid) & 1 & (~do_commit_update_REG) & 1
+  const _GEN_35__w1 = io_redirect_valid & io_brupdate_b2_mispredict & 1
+  const redirect_new_entry_cfi_idx_valid__w1 = (_GEN_35__w1 | rows[io_redirect_bits%entries].cfi_idx_valid) & 1
+  const redirectLane = (io_brupdate_b2_uop_pc_lob ^ (rows[io_redirect_bits%entries].start_bank << 3))#[1..+laneBits]
+  mut _mux_33:Unsigned(bits=laneBits) = if _GEN_35__w1 != 0 { redirectLane } else { rows[io_redirect_bits%entries].cfi_idx_bits }
+  mut _mux_34:U1 = if _GEN_35__w1 != 0 { io_brupdate_b2_taken & 1 } else { rows[io_redirect_bits%entries].cfi_taken }
+  mut _b2i_35 = U1(rows[io_redirect_bits%entries].cfi_idx_bits == redirectLane)
+  const _GEN_36__w1 = ((~_GEN_35__w1#[0]) | _b2i_35) & 1
+  const redirect_new_entry_cfi_is_call__w1 = _GEN_36__w1 & rows[io_redirect_bits%entries].cfi_is_call & 1
+  const redirect_new_entry_cfi_is_ret__w1 = _GEN_36__w1 & rows[io_redirect_bits%entries].cfi_is_ret & 1
+  mut _mux_52:Index = if reset != 0 { 0 } else { io_arb_ftq_reqs_1 }
+  mut _b2i_53 = U1(_mux_52 == enq_ptr)
+  const is_enq_1__w1 = _b2i_53 & do_enq__w1 & 1
+  mut _mux_54:Index = if reset != 0 { 0 } else { io_arb_ftq_reqs_2 }
+  mut _b2i_55 = U1(_mux_54 == enq_ptr)
+  const is_enq_2__w1 = _b2i_55 & do_enq__w1 & 1
+  const meta_0 = snapshot<Word=Metadata, entries=entries>(clock, enable=do_enq__w1, read=bpd_idx, value=io_enq_bits_bpd_meta_0, write=enq_ptr)
+  const io_enq_ready__w1 = io_enq_ready_REG
+  const io_enq_idx__w1 = enq_ptr
+  const io_rrd_ftq_resps_0_entry_cfi_idx_bits__w1 = io_rrd_ftq_resps_0_entry_REG_cfi_idx_bits
+  const io_rrd_ftq_resps_0_entry_br_mask__w1 = io_rrd_ftq_resps_0_entry_REG_br_mask
+  const io_rrd_ftq_resps_0_entry_cfi_is_call__w1 = io_rrd_ftq_resps_0_entry_REG_cfi_is_call
+  const io_rrd_ftq_resps_0_entry_cfi_is_ret__w1 = io_rrd_ftq_resps_0_entry_REG_cfi_is_ret
+  const io_rrd_ftq_resps_0_entry_ras_idx__w1 = io_rrd_ftq_resps_0_entry_REG_ras_idx
+  const io_rrd_ftq_resps_0_entry_start_bank__w1 = io_rrd_ftq_resps_0_entry_REG_start_bank
+  const io_rrd_ftq_resps_0_pc__w1 = io_rrd_ftq_resps_0_pc_REG
+  const io_rrd_ftq_resps_1_valid__w1 = io_rrd_ftq_resps_1_valid_REG
+  const io_rrd_ftq_resps_1_entry_cfi_idx_valid__w1 = io_rrd_ftq_resps_1_entry_REG_cfi_idx_valid
+  const io_rrd_ftq_resps_1_entry_cfi_idx_bits__w1 = io_rrd_ftq_resps_1_entry_REG_cfi_idx_bits
+  const io_rrd_ftq_resps_1_entry_start_bank__w1 = io_rrd_ftq_resps_1_entry_REG_start_bank
+  const io_rrd_ftq_resps_1_pc__w1 = io_rrd_ftq_resps_1_pc_REG
+  const io_rrd_ftq_resps_2_valid__w1 = io_rrd_ftq_resps_2_valid_REG
+  const io_rrd_ftq_resps_2_entry_cfi_idx_valid__w1 = io_rrd_ftq_resps_2_entry_REG_cfi_idx_valid
+  const io_rrd_ftq_resps_2_entry_cfi_idx_bits__w1 = io_rrd_ftq_resps_2_entry_REG_cfi_idx_bits
+  const io_rrd_ftq_resps_2_entry_start_bank__w1 = io_rrd_ftq_resps_2_entry_REG_start_bank
+  const io_rrd_ftq_resps_2_pc__w1 = io_rrd_ftq_resps_2_pc_REG
+  const io_com_pc__w1 = io_com_pc_REG
+  mut _b2i_56 = U1((((bpd_entry_cfi_idx_valid & 1) << 4) | bpd_entry_br_mask#[0..<4]) != 0)
+  mut _b2i_57 = U1(bpd_pc == bpd_repair_pc)
+  const io_bpdupdate_valid__w1 = REG_2 & (~first_empty) & 1 & _b2i_56 & 1 & (~(io_bpdupdate_valid_REG & _b2i_57 & 1)#[0]) & 1
+  const io_bpdupdate_bits_is_mispredict_update__w1 = io_bpdupdate_bits_is_mispredict_update_REG
+  const io_bpdupdate_bits_is_repair_update__w1 = io_bpdupdate_bits_is_repair_update_REG
+  const io_bpdupdate_bits_pc__w1 = bpd_pc
+  const throughCFI = if bpd_entry_cfi_idx_valid != 0 { (2 << bpd_entry_cfi_idx_bits) - 1 } else { -1 }
+  const io_bpdupdate_bits_br_mask__w1 = bpd_entry_br_mask & throughCFI
+  const io_bpdupdate_bits_cfi_idx_valid__w1 = bpd_entry_cfi_idx_valid
+  const io_bpdupdate_bits_cfi_idx_bits__w1 = bpd_entry_cfi_idx_bits
+  const io_bpdupdate_bits_cfi_taken__w1 = bpd_entry_cfi_taken
+  const io_bpdupdate_bits_cfi_mispredicted__w1 = bpd_entry_cfi_mispredicted
+  const io_bpdupdate_bits_cfi_is_br__w1 = bpd_entry_br_mask#[bpd_entry_cfi_idx_bits]
+  mut _b2i_61 = U1(bpd_entry_cfi_type == 2)
+  mut _b2i_62 = U1(bpd_entry_cfi_type == 3)
+  const io_bpdupdate_bits_target__w1 = bpd_target
+  const io_ras_update__w1 = io_ras_update_REG
+  const io_ras_update_idx__w1 = io_ras_update_idx_REG
+  const io_ras_update_pc__w1 = io_ras_update_pc_REG
+  type HistoryWord = (history:Unsigned(bits=historyBits), currentMiss:U1, nextMiss:U1, nextTaken:U1, ras:Unsigned(bits=std.clog2(rasDepth)))
+  const snapshotBits:HistoryWord = (history=nextHistory, currentMiss=io_enq_bits_ghist_current_saw_branch_not_taken, nextMiss, nextTaken, ras=snapshotRas)
+  const ghist_0 = snapshot<Word=HistoryWord, entries=entries>(clock, enable=do_enq__w1, read=bpd_idx, value=snapshotBits, write=enq_ptr)
+  const ghist_1 = snapshot<Word=HistoryWord, entries=entries>(clock, enable=do_enq__w1, read=idx__w1, value=snapshotBits, write=enq_ptr)
+  if reset != 0 {
+    bpd_ptr = 0
+    deq_ptr = 0
+    enq_ptr = 1
+    prevPC = 0
+    prevMiss = 0
+    prevTaken = 0
+    prev_ghist_old_history = 0
+    prev_ghist_current_saw_branch_not_taken = 0
+    prev_ghist_ras_idx = 0
+    prev_entry_cfi_idx_valid = 0
+    prev_entry_cfi_idx_bits = 0
+    prev_entry_cfi_taken = 0
+    prev_entry_br_mask = 0
+    prev_entry_cfi_is_call = 0
+    prev_entry_cfi_is_ret = 0
+    first_empty = 1
+    bpd_update_mispredict = 0
+    bpd_update_repair = 0
+  } else {
+    if do_commit_update__w1 != 0 {
+      bpd_ptr = _bpd_ptr_T__w1
+    }
+    if io_deq_valid != 0 {
+      deq_ptr = io_deq_bits
+    }
+    if io_redirect_valid != 0 {
+      enq_ptr = (io_redirect_bits + 1)%entries
+    } elif do_enq__w1 != 0 {
+      enq_ptr = _enq_ptr_T__w1
+    }
+    if ((io_redirect_valid | (~REG_3)) & 1) != 0 {
+      if do_enq__w1 != 0 {
+        prevPC = io_enq_bits_pc
+        prevMiss = nextMiss
+        prevTaken = nextTaken
+        prev_ghist_old_history = nextHistory
+        prev_ghist_current_saw_branch_not_taken = io_enq_bits_ghist_current_saw_branch_not_taken
+        if io_enq_bits_ghist_current_saw_branch_not_taken != 0 {
+          prev_ghist_ras_idx = io_enq_bits_ghist_ras_idx
+        } elif _new_ghist_new_history_ras_idx_T__w1 != 0 {
+          prev_ghist_ras_idx = rasStep.push
+        } elif _new_ghist_new_history_ras_idx_T_4__w1 != 0 {
+          prev_ghist_ras_idx = rasStep.pop
+        }
+        prev_entry_cfi_idx_valid = io_enq_bits_cfi_idx_valid
+        prev_entry_cfi_idx_bits = io_enq_bits_cfi_idx_bits
+        prev_entry_cfi_taken = io_enq_bits_cfi_idx_valid
+        prev_entry_br_mask = new_entry_br_mask__w1
+        prev_entry_cfi_is_call = io_enq_bits_cfi_is_call
+        prev_entry_cfi_is_ret = io_enq_bits_cfi_is_ret
+      }
+    } else {
+      prevPC = bpd_pc
+      prevMiss = ghist_0.data.nextMiss
+      prevTaken = ghist_0.data.nextTaken
+      prev_ghist_old_history = ghist_0.data.history
+      prev_ghist_current_saw_branch_not_taken = ghist_0.data.currentMiss
+      prev_ghist_ras_idx = ghist_0.data.ras
+      prev_entry_cfi_idx_valid = prev_entry_REG_cfi_idx_valid
+      prev_entry_cfi_idx_bits = prev_entry_REG_cfi_idx_bits
+      prev_entry_cfi_taken = prev_entry_REG_cfi_taken
+      prev_entry_br_mask = prev_entry_REG_br_mask
+      prev_entry_cfi_is_call = prev_entry_REG_cfi_is_call
+      prev_entry_cfi_is_ret = prev_entry_REG_cfi_is_ret
+    }
+    first_empty = (~REG_2) & first_empty & 1
+    bpd_update_mispredict = (~io_redirect_valid) & REG & 1
+    const _b2i_63 = U1(_bpd_repair_idx_T_6__w1 == bpd_end_idx)
+    const _b2i_64 = U1(bpd_pc == bpd_repair_pc)
+    const _mux_65:U1 = if REG != 0 { bpd_update_repair & 1 } else { (bpd_update_mispredict | ((_GEN_29__w1 | (~(bpd_update_repair & (_b2i_63 | _b2i_64) & 1)#[0])) & 1 & bpd_update_repair & 1)) & 1 }
+    bpd_update_repair = (~io_redirect_valid) & _mux_65 & 1
+  }
+  if do_enq__w1 != 0 {
+    pcs[enq_ptr%entries] = io_enq_bits_pc
+    rows[enq_ptr%entries] = (br_mask=new_entry_br_mask__w1, cfi_idx_bits=io_enq_bits_cfi_idx_bits, cfi_idx_valid=io_enq_bits_cfi_idx_valid, cfi_is_call=io_enq_bits_cfi_is_call, cfi_is_ret=io_enq_bits_cfi_is_ret, cfi_mispredicted=0, cfi_taken=io_enq_bits_cfi_idx_valid, cfi_type=io_enq_bits_cfi_type, ras_idx=io_enq_bits_ghist_ras_idx, ras_top=io_enq_bits_ras_top, start_bank=if banks == 2 { io_enq_bits_pc#[3] } else { 0 })
+  }
+  if io_redirect_valid == 0 and REG_3 != 0 {
+    rows[REG_4%entries] = (br_mask=ram_REG_br_mask, cfi_idx_bits=ram_REG_cfi_idx_bits, cfi_idx_valid=ram_REG_cfi_idx_valid, cfi_is_call=ram_REG_cfi_is_call, cfi_is_ret=ram_REG_cfi_is_ret, cfi_mispredicted=ram_REG_cfi_mispredicted, cfi_taken=ram_REG_cfi_taken, cfi_type=ram_REG_cfi_type, ras_idx=ram_REG_ras_idx, ras_top=ram_REG_ras_top, start_bank=ram_REG_start_bank)
+  }
+  io_ras_update_REG = io_redirect_valid
+  mut _mux_98:Unsigned(bits=addrBits) = if io_redirect_valid != 0 { rows[io_redirect_bits%entries].ras_top } else { 0 }
+  io_ras_update_pc_REG = _mux_98
+  const redirectRas = if io_redirect_valid != 0 { rows[io_redirect_bits%entries].ras_idx } else { 0 }
+  io_ras_update_idx_REG = redirectRas
+  const t1061 = io_redirect_valid != 0
+  if not t1061 {
+    if REG != 0 {
+      bpd_repair_idx = bpd_repair_idx_REG
+    } elif bpd_update_mispredict != 0 {
+      bpd_repair_idx = (bpd_repair_idx + 1)%entries
+    } elif _GEN_29__w1 != 0 {
+      bpd_repair_idx = (bpd_repair_idx + 1)%entries
+    } elif bpd_update_repair != 0 {
+      bpd_repair_idx = _bpd_repair_idx_T_6__w1
+    }
+  }
+  const t1074 = ((io_redirect_valid | (~REG)) & 1) != 0
+  if not t1074 {
+    bpd_end_idx = bpd_end_idx_REG
+  }
+  const t1083 = ((((((io_redirect_valid | REG) & 1) | bpd_update_mispredict) & 1) | (~_GEN_29__w1#[0])) & 1) != 0
+  if not t1083 {
+    bpd_repair_pc = bpd_pc
+  }
+  bpd_entry_cfi_idx_valid = rows[bpd_idx%entries].cfi_idx_valid
+  bpd_entry_cfi_idx_bits = rows[bpd_idx%entries].cfi_idx_bits
+  bpd_entry_cfi_taken = rows[bpd_idx%entries].cfi_taken
+  bpd_entry_cfi_mispredicted = rows[bpd_idx%entries].cfi_mispredicted
+  bpd_entry_cfi_type = rows[bpd_idx%entries].cfi_type
+  bpd_entry_br_mask = rows[bpd_idx%entries].br_mask
+  bpd_pc = pcs[bpd_idx%entries]
+  bpd_target = pcs[(bpd_idx + 1)%entries]
+  REG = io_brupdate_b2_mispredict
+  bpd_repair_idx_REG = io_brupdate_b2_uop_ftq_idx
+  bpd_end_idx_REG = enq_ptr
+  REG_1 = bpd_update_mispredict
+  do_commit_update_REG = io_redirect_valid
+  REG_2 = (((do_commit_update__w1 | bpd_update_repair) & 1) | bpd_update_mispredict) & 1
+  io_bpdupdate_valid_REG = bpd_update_repair
+  io_bpdupdate_bits_is_mispredict_update_REG = bpd_update_mispredict
+  io_bpdupdate_bits_is_repair_update_REG = bpd_update_repair
+  mut _b2i_100 = U1(((enq_ptr + 2)%entries) == bpd_ptr)
+  mut _b2i_101 = U1(_enq_ptr_T__w1 == bpd_ptr)
+  io_enq_ready_REG = ((~((_b2i_100 | _b2i_101) & 1)#[0]) | do_commit_update__w1) & 1
+  REG_3 = io_redirect_valid
+  prev_entry_REG_cfi_idx_valid = redirect_new_entry_cfi_idx_valid__w1
+  prev_entry_REG_cfi_idx_bits = _mux_33
+  prev_entry_REG_cfi_taken = _mux_34
+  prev_entry_REG_br_mask = rows[io_redirect_bits%entries].br_mask
+  prev_entry_REG_cfi_is_call = redirect_new_entry_cfi_is_call__w1
+  prev_entry_REG_cfi_is_ret = redirect_new_entry_cfi_is_ret__w1
+  REG_4 = io_redirect_bits
+  ram_REG_cfi_idx_valid = redirect_new_entry_cfi_idx_valid__w1
+  ram_REG_cfi_idx_bits = _mux_33
+  ram_REG_cfi_taken = _mux_34
+  ram_REG_cfi_mispredicted = (_GEN_35__w1 | rows[io_redirect_bits%entries].cfi_mispredicted) & 1
+  ram_REG_cfi_type = rows[io_redirect_bits%entries].cfi_type
+  ram_REG_br_mask = rows[io_redirect_bits%entries].br_mask
+  ram_REG_cfi_is_call = redirect_new_entry_cfi_is_call__w1
+  ram_REG_cfi_is_ret = redirect_new_entry_cfi_is_ret__w1
+  ram_REG_ras_top = rows[io_redirect_bits%entries].ras_top
+  ram_REG_ras_idx = rows[io_redirect_bits%entries].ras_idx
+  ram_REG_start_bank = rows[io_redirect_bits%entries].start_bank
+  io_rrd_ftq_resps_0_entry_REG_cfi_idx_bits = rows[idx__w1%entries].cfi_idx_bits
+  io_rrd_ftq_resps_0_entry_REG_br_mask = rows[idx__w1%entries].br_mask
+  io_rrd_ftq_resps_0_entry_REG_cfi_is_call = rows[idx__w1%entries].cfi_is_call
+  io_rrd_ftq_resps_0_entry_REG_cfi_is_ret = rows[idx__w1%entries].cfi_is_ret
+  io_rrd_ftq_resps_0_entry_REG_ras_idx = rows[idx__w1%entries].ras_idx
+  io_rrd_ftq_resps_0_entry_REG_start_bank = rows[idx__w1%entries].start_bank
+  mut _b2i_102 = U1(idx__w1 == enq_ptr)
+  mut _mux_103:Unsigned(bits=addrBits) = if (_b2i_102 & do_enq__w1 & 1) != 0 { io_enq_bits_pc } else { pcs[idx__w1%entries] }
+  io_rrd_ftq_resps_0_pc_REG = _mux_103
+  io_rrd_ftq_resps_1_entry_REG_cfi_idx_valid = rows[_mux_52%entries].cfi_idx_valid
+  io_rrd_ftq_resps_1_entry_REG_cfi_idx_bits = rows[_mux_52%entries].cfi_idx_bits
+  io_rrd_ftq_resps_1_entry_REG_start_bank = rows[_mux_52%entries].start_bank
+  mut _mux_104:Unsigned(bits=addrBits) = if is_enq_1__w1 != 0 { io_enq_bits_pc } else { pcs[_mux_52%entries] }
+  io_rrd_ftq_resps_1_pc_REG = _mux_104
+  mut _b2i_105 = U1(_mux_52 != enq_ptr)
+  io_rrd_ftq_resps_1_valid_REG = (_b2i_105 | is_enq_1__w1) & 1
+  io_rrd_ftq_resps_2_entry_REG_cfi_idx_valid = rows[_mux_54%entries].cfi_idx_valid
+  io_rrd_ftq_resps_2_entry_REG_cfi_idx_bits = rows[_mux_54%entries].cfi_idx_bits
+  io_rrd_ftq_resps_2_entry_REG_start_bank = rows[_mux_54%entries].start_bank
+  mut _mux_106:Unsigned(bits=addrBits) = if is_enq_2__w1 != 0 { io_enq_bits_pc } else { pcs[_mux_54%entries] }
+  io_rrd_ftq_resps_2_pc_REG = _mux_106
+  mut _b2i_107 = U1(_mux_54 != enq_ptr)
+  io_rrd_ftq_resps_2_valid_REG = (_b2i_107 | is_enq_2__w1) & 1
+  mut _mux_108:Index = if io_deq_valid != 0 { io_deq_bits } else { deq_ptr }
+  io_com_pc_REG = pcs[_mux_108%entries]
+  io_enq_ready = io_enq_ready__w1
+  io_enq_idx = io_enq_idx__w1
+  io_rrd_ftq_resps_0_entry_cfi_idx_bits = io_rrd_ftq_resps_0_entry_cfi_idx_bits__w1
+  io_rrd_ftq_resps_0_entry_br_mask = io_rrd_ftq_resps_0_entry_br_mask__w1
+  io_rrd_ftq_resps_0_entry_cfi_is_call = io_rrd_ftq_resps_0_entry_cfi_is_call__w1
+  io_rrd_ftq_resps_0_entry_cfi_is_ret = io_rrd_ftq_resps_0_entry_cfi_is_ret__w1
+  io_rrd_ftq_resps_0_entry_ras_idx = io_rrd_ftq_resps_0_entry_ras_idx__w1
+  io_rrd_ftq_resps_0_entry_start_bank = io_rrd_ftq_resps_0_entry_start_bank__w1
+  io_rrd_ftq_resps_0_ghist_old_history = ghist_1.data.history
+  io_rrd_ftq_resps_0_ghist_current_saw_branch_not_taken = ghist_1.data.currentMiss
+  io_rrd_ftq_resps_0_ghist_new_saw_branch_not_taken = ghist_1.data.nextMiss
+  io_rrd_ftq_resps_0_ghist_new_saw_branch_taken = ghist_1.data.nextTaken
+  io_rrd_ftq_resps_0_ghist_ras_idx = ghist_1.data.ras
+  io_rrd_ftq_resps_0_pc = io_rrd_ftq_resps_0_pc__w1
+  io_rrd_ftq_resps_1_valid = io_rrd_ftq_resps_1_valid__w1
+  io_rrd_ftq_resps_1_entry_cfi_idx_valid = io_rrd_ftq_resps_1_entry_cfi_idx_valid__w1
+  io_rrd_ftq_resps_1_entry_cfi_idx_bits = io_rrd_ftq_resps_1_entry_cfi_idx_bits__w1
+  io_rrd_ftq_resps_1_entry_start_bank = io_rrd_ftq_resps_1_entry_start_bank__w1
+  io_rrd_ftq_resps_1_pc = io_rrd_ftq_resps_1_pc__w1
+  io_rrd_ftq_resps_2_valid = io_rrd_ftq_resps_2_valid__w1
+  io_rrd_ftq_resps_2_entry_cfi_idx_valid = io_rrd_ftq_resps_2_entry_cfi_idx_valid__w1
+  io_rrd_ftq_resps_2_entry_cfi_idx_bits = io_rrd_ftq_resps_2_entry_cfi_idx_bits__w1
+  io_rrd_ftq_resps_2_entry_start_bank = io_rrd_ftq_resps_2_entry_start_bank__w1
+  io_rrd_ftq_resps_2_pc = io_rrd_ftq_resps_2_pc__w1
+  io_com_pc = io_com_pc__w1
+  io_bpdupdate_valid = io_bpdupdate_valid__w1
+  io_bpdupdate_bits_is_mispredict_update = io_bpdupdate_bits_is_mispredict_update__w1
+  io_bpdupdate_bits_is_repair_update = io_bpdupdate_bits_is_repair_update__w1
+  io_bpdupdate_bits_pc = io_bpdupdate_bits_pc__w1
+  io_bpdupdate_bits_br_mask = io_bpdupdate_bits_br_mask__w1
+  io_bpdupdate_bits_cfi_idx_valid = io_bpdupdate_bits_cfi_idx_valid__w1
+  io_bpdupdate_bits_cfi_idx_bits = io_bpdupdate_bits_cfi_idx_bits__w1
+  io_bpdupdate_bits_cfi_taken = io_bpdupdate_bits_cfi_taken__w1
+  io_bpdupdate_bits_cfi_mispredicted = io_bpdupdate_bits_cfi_mispredicted__w1
+  io_bpdupdate_bits_cfi_is_br = io_bpdupdate_bits_cfi_is_br__w1
+  io_bpdupdate_bits_cfi_is_jal = (_b2i_61 | _b2i_62) & 1
+  io_bpdupdate_bits_ghist_new_saw_branch_taken = ghist_0.data.nextTaken
+  io_bpdupdate_bits_ghist_new_saw_branch_not_taken = ghist_0.data.nextMiss
+  io_bpdupdate_bits_ghist_old_history = ghist_0.data.history
+  io_bpdupdate_bits_target = io_bpdupdate_bits_target__w1
+  io_bpdupdate_bits_meta_0 = meta_0
+  io_ras_update = io_ras_update__w1
+  io_ras_update_idx = io_ras_update_idx__w1
+  io_ras_update_pc = io_ras_update_pc__w1
+}

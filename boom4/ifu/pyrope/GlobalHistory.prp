@@ -1,0 +1,39 @@
+// BOOM delays the most recent bank's outcome in a two-bank prediction history.
+pub comb following<historyBits=64>(old:Unsigned(bits=historyBits), taken:U1, missed:U1) -> (history:Unsigned(bits=historyBits)) {
+  wrap history = if taken != 0 { (old << 1) | 1 } elif missed != 0 { old << 1 } else { old }
+}
+
+pub comb update<width=4, banks=1, historyBits=64>(
+    old:Unsigned(bits=historyBits), currentMiss:U1, pendingTaken:U1, pendingMiss:U1,
+    branches:Unsigned(bits=width), valid:U1, lane:Unsigned(bits=std.clog2(width)), taken:U1, isBranch:U1,
+    lastBank:U1,
+) -> (history:Unsigned(bits=historyBits), nextTaken:U1, nextMiss:U1) {
+  const branchTaken = U1(valid != 0 and taken != 0 and isBranch != 0)
+  const through = (2 << lane)-1
+  const takenMask:Unsigned(bits=width) = branchTaken << lane
+  const misses = branches & (if valid != 0 { through } else { -1 }) & ~takenMask
+  if banks == 1 {
+    history = following<historyBits=historyBits>(old=old, taken=branchTaken, missed=U1(misses != 0 or currentMiss != 0))
+    nextTaken = 0
+    nextMiss = 0
+  } else {
+    cassert(banks == 2)
+    comptime const bankWidth = width/2
+    const base = following<historyBits=historyBits>(old=old, taken=pendingTaken, missed=pendingMiss)
+    const firstMiss = U1(currentMiss != 0 or misses#[0..+bankWidth] != 0)
+    const firstJump = U1(valid != 0 and taken != 0 and lane < bankWidth)
+    if firstJump != 0 or lastBank != 0 {
+      history = base
+      nextTaken = isBranch & firstJump
+      nextMiss = firstMiss
+    } else {
+      history = following<historyBits=historyBits>(old=base, taken=0, missed=firstMiss)
+      nextTaken = branchTaken
+      nextMiss = U1(misses#[bankWidth..+bankWidth] != 0)
+    }
+  }
+}
+
+pub comb matches<repair=true, historyBits=64>(old:Unsigned(bits=historyBits), taken:U1, missed:U1, expected:Unsigned(bits=historyBits), expectedTaken:U1, expectedMiss:U1) -> (ok:U1) {
+  ok = U1(not repair or (old == expected and taken == expectedTaken and (taken != 0 or missed == expectedMiss)))
+}

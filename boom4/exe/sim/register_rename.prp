@@ -1,0 +1,113 @@
+const rename = import("../pyrope/RegisterRename.RegisterRename")
+
+// Every lane overwrites x7 and reads the old value on every source. After
+// dispatching half the row, the remaining lanes must retain that bypass.
+mod check<w, physical, fp, banked>(clock:Clock, cycle:U5, reset:U1) -> (ok:Bool@[]) {
+  comptime const p     = std.clog2(physical)
+  comptime const mask  = (1 << w) - 1
+  comptime const half  = w/2
+  comptime const front = (1 << half) - 1
+  mut xs:Unsigned(bits=w*6)   = 0
+  mut kind:Unsigned(bits=w*2) = 0
+  mut br:Unsigned(bits=w*4)   = 0
+  mut tags:Unsigned(bits=w*3) = 0
+  for i in 0..<w {
+    xs#[(i*6)..+6]   = 7
+    kind#[(i*2)..+2] = if fp { 1 } else { 0 }
+    if i == half - 1 {
+      br#[(i*4)..+4] = 8
+    }
+    tags#[(i*3)..+3] = 2
+  }
+  reg prior:Unsigned(bits=w*p) = nil
+  reg last:Unsigned(bits=p)    = nil
+  const dis = if cycle == 5 { front } elif cycle == 6 { mask - front } else { 0 }
+  const dut = rename<aluWidth=2, banked=banked, branches=8, float=fp, physical=physical, ports=2, width=w>(
+    clock=clock,
+    reset=reset,
+    kill=0,
+    ready=U1(cycle != 5),
+    decode=if cycle == 4 or cycle == 6 or cycle == 9 { mask } else { 0 },
+    dispatch=dis,
+    rs1=xs,
+    rs2=xs,
+    rs3=xs,
+    rd=xs,
+    src1Type=kind,
+    src2Type=kind,
+    src3En=mask,
+    dstType=kind,
+    brType=br,
+    sfb=0,
+    brTag=tags,
+    mispredict=U1(cycle == 8),
+    recover=2,
+    rollback=0,
+    commit=0,
+    comRd=0,
+    comType=0,
+    comDest=0,
+    comStale=0,
+    wake=0,
+    wakeDest=0,
+    rebusy=0,
+    speculative=0,
+    children=0,
+  )
+  mut good = true
+  if cycle == 5 or cycle == 6 or cycle == 7 or cycle == 10 {
+    good = dut.valid == (if cycle == 6 { mask - front } else { mask }) and dut.stall == 0
+    for i in 0..<w {
+      if cycle != 6 or i >= half {
+        mut expect:Unsigned(bits=p) = 7
+        if i > 0 {
+          expect = dut.dest#[((i - 1)*p)..+p]
+        }
+        if cycle == 6 and i == half {
+          expect = prior#[((half - 1)*p)..+p]
+        }
+        if cycle == 7 and i == 0 {
+          expect = last
+        }
+        if cycle == 10 and i == 0 {
+          expect = prior#[((half - 1)*p)..+p]
+        }
+        good = good
+          and dut.prs1#[(i*p)..+p] == expect
+          and dut.prs2#[(i*p)..+p] == expect
+          and dut.stale#[(i*p)..+p] == expect
+          and (not fp or dut.prs3#[(i*p)..+p] == expect)
+        good = good and dut.busy1#[i] == U1(cycle != 5 or i != 0)
+      }
+    }
+  }
+  if cycle == 5 {
+    prior = dut.dest
+  }
+  if cycle == 6 {
+    last = dut.dest#[((w - 1)*p)..+p]
+  }
+  reg checked:U1 = nil
+  checked = U1(good)
+  ok      = checked != 0
+}
+
+pub mod register_rename(clock:Clock, reset:Reset, cycle:U5) -> (ok:Bool@[]) {
+  const medium = check<banked=false, fp=false, physical=80, w=2>(clock, cycle, reset=U1(reset))
+  const large  = check<banked=false, fp=true, physical=96, w=3>(clock, cycle, reset=U1(reset))
+  const mega   = check<banked=true, fp=false, physical=144, w=4>(clock, cycle, reset=U1(reset))
+  const giga   = check<banked=false, fp=true, physical=128, w=5>(clock, cycle, reset=U1(reset))
+  ok = medium.ok and large.ok and mega.ok and giga.ok
+}
+
+test register_rename.dependencies {
+  mut d = register_rename
+  tick 12 {
+    d.reset = clock < 2
+    d.cycle = clock
+    step
+    if clock >= 2 {
+      assert(d.ok, "same-row bypass, stalled-lane carry, across-row bypass or branch recovery")
+    }
+  }
+}

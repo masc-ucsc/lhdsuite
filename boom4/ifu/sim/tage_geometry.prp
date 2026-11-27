@@ -1,0 +1,29 @@
+const cfg = import("../../common/pyrope/BoomConfig")
+comptime const longHistory = cfg.params(globalHistoryLength=80)
+const bank = import("../pyrope/TageBranchPredictorBank.TageBranchPredictorBank")
+
+pub mod tage_geometry(clock:Clock, reset:Reset, commit:U1, missed:U1) -> (trained:U3@[], allocated:U3@[]) {
+  comptime const t = (const rows=16, const history=80, const tag=5)
+  comptime const sizes = ((t,), (t,t,t), (t,t,t,t,t,t,t,t,t))
+  for k in 0..<3 {
+    comptime const geometry = sizes[k]
+    comptime const bits = std.clog2(geometry.[size])
+    reg meta:U120 = nil
+    const p = bank<C=longHistory, tables=geometry>(clock, reset, fetch=1, pc=0x400, history=(1 << 77) | 7, baseTaken=0,
+      update=(commit=commit, pc=0x400, history=(1 << 77) | 7, branches=4, cfi=2, cfiValid=1, taken=1, missed=missed, meta=meta))
+    meta = p.info
+    allocated#[k] = p.info#[2*(1+bits)+bits]
+    trained#[k] = p.prediction#[2]
+  }
+}
+test tage_geometry.train {
+  mut d = tage_geometry
+  tick 256 {
+    d.reset = clock < 2
+    d.commit = U1(clock > 32)
+    d.missed = U1(clock == 40)
+    step
+    if clock == 30 { assert(d.allocated == 7 and d.trained == 0, "all three geometries can allocate") }
+    if clock == 250 { assert(d.trained == 7, "one, three and nine TAGE tables predict the trained branch") }
+  }
+}

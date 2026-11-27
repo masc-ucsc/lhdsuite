@@ -1,0 +1,246 @@
+const allocatingBranches = import("BranchMaskGenerationLogic.allocating")
+const map        = import("RenameMap.RenameMap")
+const busyTable  = import("RenameBusy.RenameBusy")
+const freeList   = import("PhysicalFreeList.PhysicalFreeList")
+const bankedList = import("BankedPhysicalFreeList.BankedPhysicalFreeList")
+
+// The last older writer wins on RAW and WAW dependencies. At dispatch, only
+// earlier lanes are visible. At the pipeline register, every firing lane
+// forwards to the next decode group or to the retained part of the old group.
+comb forward<width, p, sources, sameGroup>(
+  ldst:Unsigned(bits=width*6),
+  logical:Unsigned(bits=width*sources*6),
+  mapped:Unsigned(bits=width*sources*p),
+  pdst:Unsigned(bits=width*p),
+  writers:Unsigned(bits=width),
+) -> (hits:Unsigned(bits=width*sources), regs:Unsigned(bits=width*sources*p)) {
+  regs = mapped
+  hits = 0
+  for lane in 0..<width {
+    for src in 0..<sources {
+      const slot = (lane*sources) + src
+      for older in 0..<width {
+        if (not sameGroup or older < lane) and writers#[older] != 0 and logical#[(slot*6)..+6]
+            == ldst#[(older*6)..+6] {
+          regs#[(slot*p)..+p] = pdst#[(older*p)..+p]
+          hits#[slot]         = 1
+        }
+      }
+    }
+  }
+}
+
+pub mod RegisterRename<width, physical, branches, ports, aluWidth, float=false, banked=false>(
+  clock:Clock,
+  reset:U1,
+  kill:U1,
+  ready:U1,
+  decode:Unsigned(bits=width),
+  dispatch:Unsigned(bits=width),
+  rs1:Unsigned(bits=width*6),
+  rs2:Unsigned(bits=width*6),
+  rs3:Unsigned(bits=width*6),
+  rd:Unsigned(bits=width*6),
+  src1Type:Unsigned(bits=width*2),
+  src2Type:Unsigned(bits=width*2),
+  src3En:Unsigned(bits=width),
+  dstType:Unsigned(bits=width*2),
+  brType:Unsigned(bits=width*4),
+  sfb:Unsigned(bits=width),
+  brTag:Unsigned(bits=width*std.clog2(branches)),
+  mispredict:U1,
+  recover:Unsigned(bits=std.clog2(branches)),
+  rollback:U1,
+  commit:Unsigned(bits=width),
+  comRd:Unsigned(bits=width*6),
+  comType:Unsigned(bits=width*2),
+  comDest:Unsigned(bits=width*std.clog2(physical)),
+  comStale:Unsigned(bits=width*std.clog2(physical)),
+  wake:Unsigned(bits=ports),
+  wakeDest:Unsigned(bits=ports*std.clog2(physical)),
+  rebusy:Unsigned(bits=ports),
+  speculative:Unsigned(bits=ports*aluWidth),
+  children:Unsigned(bits=aluWidth),
+) -> (
+  valid:Unsigned(bits=width)@[],
+  stall:Unsigned(bits=width)@[],
+  dest:Unsigned(bits=width*std.clog2(physical))@[],
+  prs1:Unsigned(bits=width*std.clog2(physical))@[],
+  prs2:Unsigned(bits=width*std.clog2(physical))@[],
+  prs3:Unsigned(bits=width*std.clog2(physical))@[],
+  stale:Unsigned(bits=width*std.clog2(physical))@[],
+  busy1:Unsigned(bits=width)@[],
+  busy2:Unsigned(bits=width)@[],
+  busy3:Unsigned(bits=width)@[],
+  columns:Unsigned(bits=width*width)@[],
+) {
+  comptime const p        = std.clog2(physical)
+  comptime const b        = std.clog2(branches)
+  comptime const sources  = if float { 4 } else { 3 }
+  comptime const operands = sources - 1
+  comptime const rtype    = if float { 1 } else { 0 }
+  reg present:Unsigned(bits=width)           = nil
+  reg logical:Unsigned(bits=width*sources*6) = nil
+  reg mapped:Unsigned(bits=width*sources*p)  = nil
+  reg claims:Unsigned(bits=width)            = nil
+  reg readEn:Unsigned(bits=width*operands)   = nil
+  reg checkpoint:Unsigned(bits=width)        = nil
+  reg tags:Unsigned(bits=width*b)            = nil
+  mut decLogical:Unsigned(bits=width*sources*6)       = 0
+  mut readers:Unsigned(bits=width*sources*5)          = 0
+  mut decReads:Unsigned(bits=width*operands)          = 0
+  mut decClaims:Unsigned(bits=width)                  = 0
+  const decBr = allocatingBranches<width=width>(brType=brType, sfb=sfb)
+  mut ldst:Unsigned(bits=width*6)                     = 0
+  mut mapLd:Unsigned(bits=width*5)                    = 0
+  mut archLd:Unsigned(bits=width*5)                   = 0
+  mut commits:Unsigned(bits=width)                    = 0
+  mut writes:Unsigned(bits=width)                     = 0
+  mut archWrites:Unsigned(bits=width)                 = 0
+  mut physicalReaders:Unsigned(bits=width*operands*p) = 0
+  const wants = claims & present
+  const fire  = wants & dispatch
+  for lane in 0..<width {
+    const first = lane*sources
+    decLogical#[(first*6)..+6]       = rs1#[(lane*6)..+6]
+    decLogical#[((first + 1)*6)..+6] = rs2#[(lane*6)..+6]
+    if float {
+      decLogical#[((first + 2)*6)..+6] = rs3#[(lane*6)..+6]
+    }
+    decLogical#[((first + operands)*6)..+6] = rd#[(lane*6)..+6]
+    for i in 0..<sources {
+      readers#[((first + i)*5)..+5] = decLogical#[((first + i)*6)..+5]
+    }
+    decReads#[(lane*operands)]     = U1(src1Type#[(lane*2)..+2] == rtype)
+    decReads#[(lane*operands) + 1] = U1(src2Type#[(lane*2)..+2] == rtype)
+    if float {
+      decReads#[(lane*operands) + 2] = src3En#[lane]
+    }
+    decClaims#[lane] = U1(dstType#[(lane*2)..+2] == rtype)
+    const target = logical#[((first + operands)*6)..+6]
+    ldst#[(lane*6)..+6]                                = target
+    mapLd#[(lane*5)..+5]                               = target#[0..+5]
+    archLd#[(lane*5)..+5]                              = comRd#[(lane*6)..+5]
+    commits#[lane]                                     = commit#[lane] & U1(comType#[(lane*2)..+2] == rtype)
+    writes#[lane]                                      = fire#[lane] & U1(target < 32)
+    archWrites#[lane]                                  = commits#[lane] & U1(comRd#[(lane*6)..+6] < 32)
+    physicalReaders#[(lane*operands*p)..+(operands*p)] = mapped#[(first*p)..+(operands*p)]
+  }
+  const snap      = (dispatch & checkpoint) << 1
+  const snapshots = tags << b
+  const initial   = ((1 << physical) - 1) ^ ((1 << 32) - 1)
+  mut allocValid:Unsigned(bits=width) = 0
+  if banked {
+    const pool = bankedList<branches=branches, physical=physical, width=width>(
+      clock=clock,
+      reset=reset,
+      initial=initial,
+      requests=fire,
+      releaseValid=commits,
+      releaseRegs=comStale,
+      commitValid=commits,
+      commitRegs=comDest,
+      snap=snap,
+      tags=snapshots,
+      mispredict=mispredict,
+      recover=recover,
+      rollback=rollback,
+    )
+    dest       = pool.regs
+    allocValid = pool.valid
+  } else {
+    const pool = freeList<branches=branches, physical=physical, returns=width, width=width>(
+      clock=clock,
+      reset=reset,
+      initial=initial,
+      requests=fire,
+      releaseValid=commits,
+      releaseRegs=comStale,
+      commitValid=commits,
+      commitRegs=comDest,
+      snap=snap,
+      tags=snapshots,
+      mispredict=mispredict,
+      recover=recover,
+      rollback=rollback,
+    )
+    dest       = pool.regs
+    allocValid = pool.valid
+  }
+  const table       = map<branches=branches, physical=physical, sources=sources, width=width>(
+    clock=clock,
+    reset=reset,
+    rollback=rollback,
+    mispredict=mispredict,
+    recoverTag=recover,
+    readers=readers,
+    writes=writes,
+    logical=mapLd,
+    dest=dest,
+    commits=archWrites,
+    archLogical=archLd,
+    archDest=comDest,
+    snaps=snap,
+    tags=snapshots,
+  )
+  const board       = busyTable<aluWidth=aluWidth, physical=physical, ports=ports, sources=operands, width=width>(
+    clock=clock,
+    reset=reset,
+    readers=physicalReaders,
+    claims=fire,
+    dest=dest,
+    wake=wake,
+    wakeDest=wakeDest,
+    rebusy=rebusy,
+    speculative=speculative,
+    children=children,
+  )
+  const take        = kill == 0 and ready != 0
+  const nextLogical = if take { decLogical } else { logical }
+  const nextMapped  = if take { table.mapped } else { mapped }
+  const next        = forward<p=p, sameGroup=false, sources=sources, width=width>(
+    ldst,
+    logical=nextLogical,
+    mapped=nextMapped,
+    pdst=dest,
+    writers=fire,
+  )
+  const bypass      = forward<p=p, sameGroup=true, sources=sources, width=width>(
+    ldst,
+    logical,
+    mapped,
+    pdst=dest,
+    writers=wants,
+  )
+  mapped = next.regs
+  if take {
+    logical    = decLogical
+    readEn     = decReads
+    claims     = decClaims
+    checkpoint = decBr
+    tags       = brTag
+  }
+  present = if reset != 0 or kill != 0 { 0 } elif ready != 0 { decode } else { present & ~dispatch }
+  valid   = present
+  stall   = claims & ~allocValid
+  prs3    = 0
+  busy3   = 0
+  columns = 0
+  for lane in 0..<width {
+    const first = lane*sources
+    const op    = lane*operands
+    prs1#[(lane*p)..+p]  = bypass.regs#[(first*p)..+p]
+    prs2#[(lane*p)..+p]  = bypass.regs#[((first + 1)*p)..+p]
+    stale#[(lane*p)..+p] = bypass.regs#[((first + operands)*p)..+p]
+    busy1#[lane]         = (readEn#[op] & board.busy#[op]) | bypass.hits#[first]
+    busy2#[lane]         = (readEn#[op + 1] & board.busy#[op + 1]) | bypass.hits#[first + 1]
+    if float {
+      prs3#[(lane*p)..+p] = bypass.regs#[((first + 2)*p)..+p]
+      busy3#[lane]        = (readEn#[op + 2] & board.busy#[op + 2]) | bypass.hits#[first + 2]
+    }
+    if width > 1 {
+      const col = dest#[(lane*p)..+std.clog2(width)]
+      columns#[(lane*width)..+width] = (1 << col)#[0..+width]
+    }
+  }
+}

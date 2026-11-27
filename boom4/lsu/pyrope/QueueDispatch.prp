@@ -1,0 +1,90 @@
+// Advance the physical slot and flip the generation at the configured depth.
+pub comb advance<entries>(tag:Unsigned(bits=1 + std.clog2(entries))) -> (next:Unsigned(bits=1 + std.clog2(entries))) {
+  comptime const bits = std.clog2(entries)
+  if tag#[0..+bits] == entries - 1 {
+    next = (1 ^ tag#[bits]) << bits
+  } else {
+    wrap next = tag + 1
+  }
+}
+
+// Each tag includes the wrap bit. The fullness lookahead counts queue users
+// even if dispatch stalls. Allocation advances only on an accepted uop.
+pub comb QueueDispatch<entries, lanes, compact=true>(
+  tail:Unsigned(bits=1 + std.clog2(entries)),
+  occupied:Unsigned(bits=entries),
+  uses:Unsigned(bits=lanes),
+  valid:Unsigned(bits=lanes),
+  exceptions:Unsigned(bits=lanes),
+) -> (
+  tags:Unsigned(bits=lanes*(1 + std.clog2(entries))),
+  full:Unsigned(bits=lanes),
+  allocated:Unsigned(bits=entries),
+  owner:Unsigned(bits=entries*(if lanes == 1 { 1 } else { std.clog2(lanes) })),
+  nextTail:Unsigned(bits=1 + std.clog2(entries)),
+) {
+  cassert(entries >= lanes and entries > 1)
+  comptime const bits = std.clog2(entries)
+  mut actual:Unsigned(bits=bits + 1) = tail
+  mut probe:Unsigned(bits=bits)      = tail#[0..+bits]
+  comptime const laneBits = (if lanes == 1 { 1 } else { std.clog2(lanes) })
+  owner     = 0
+  full      = 0
+  tags      = 0
+  allocated = 0
+  const needs = uses & ~exceptions
+  for lane in 0..<lanes {
+    tags#[(lane*(bits + 1))..+(bits + 1)] = actual
+    if (needs & valid)#[lane] != 0 {
+      owner#[(actual#[0..+bits]*laneBits)..+laneBits] = lane
+      allocated#[actual#[0..+bits]]                   = 1
+      actual = advance<entries=entries>(tag=actual).next
+    }
+  }
+  // Occupancy lookahead feeds dispatch ready and is independent of acceptance.
+  for lane in 0..<lanes {
+    full#[lane] = occupied#[probe]
+    if needs#[lane] != 0 or !compact {
+      if probe == entries - 1 {
+        probe = 0
+      } else {
+        wrap probe = probe + 1
+      }
+    }
+  }
+  nextTail = actual
+}
+
+// Commit lanes walk the queue heads in program order. A uop using both
+// queues advances both pointers; its store takes precedence for the entry update.
+pub comb retire<loadEntries, storeEntries, lanes>(
+  loadHead:Unsigned(bits=1 + std.clog2(loadEntries)),
+  storeHead:Unsigned(bits=1 + std.clog2(storeEntries)),
+  valid:Unsigned(bits=lanes),
+  loads:Unsigned(bits=lanes),
+  stores:Unsigned(bits=lanes),
+) -> (
+  loadSlots:Unsigned(bits=lanes*std.clog2(loadEntries)),
+  storeSlots:Unsigned(bits=lanes*std.clog2(storeEntries)),
+  loadMask:Unsigned(bits=loadEntries),
+  storeMask:Unsigned(bits=storeEntries),
+  nextLoad:Unsigned(bits=1 + std.clog2(loadEntries)),
+  nextStore:Unsigned(bits=1 + std.clog2(storeEntries)),
+) {
+  nextLoad  = loadHead
+  nextStore = storeHead
+  loadMask  = 0
+  storeMask = 0
+  for lane in 0..<lanes {
+    loadSlots#[(lane*std.clog2(loadEntries))..+std.clog2(loadEntries)] = nextLoad#[0..+std.clog2(loadEntries)]
+    storeSlots#[(lane*std.clog2(storeEntries))..+std.clog2(storeEntries)] = nextStore#[0..+std.clog2(storeEntries)]
+    if (valid & stores)#[lane] != 0 {
+      storeMask#[nextStore#[0..+std.clog2(storeEntries)]] = 1
+      nextStore = advance<entries=storeEntries>(tag=nextStore).next
+    }
+    if (valid & loads)#[lane] != 0 {
+      loadMask#[nextLoad#[0..+std.clog2(loadEntries)]] = 1 ^ stores#[lane]
+      nextLoad = advance<entries=loadEntries>(tag=nextLoad).next
+    }
+  }
+}

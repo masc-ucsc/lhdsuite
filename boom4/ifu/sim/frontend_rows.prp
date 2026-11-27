@@ -1,0 +1,59 @@
+const presets  = import("../../common/pyrope/BoomPresets")
+const frontend = import("../pyrope/BoomFrontend.BoomFrontend")
+
+mod trial<cfg>(clock:Clock, reset:Reset) -> (done:Bool@[], error:Bool@[]) {
+  comptime const lanes   = cfg.coreWidth
+  comptime const ftqBits = std.clog2(cfg.ftqEntries)
+  reg beats:U4:[reset_pin=reset]     = 0
+  reg count:U8:[reset_pin=reset]     = 0
+  reg commit:U1                      = nil
+  reg retired:Unsigned(bits=ftqBits) = nil
+  reg failed:Bool:[reset_pin=reset]  = false
+  const f = frontend<C=cfg>(clock, reset, auto_icache_master_out_a_ready=U1(beats == 0), auto_icache_master_out_d_valid=U1(beats != 0), auto_icache_master_out_d_bits_opcode=1, auto_icache_master_out_d_bits_size=6, auto_icache_master_out_d_bits_data=0x0000001300000013, io_cpu_fetchpacket_ready=1, io_ptw_status_prv=3, io_cpu_arb_ftq_reqs_0=0, io_cpu_arb_ftq_reqs_1=0, io_cpu_arb_ftq_reqs_2=0, io_cpu_sfence_valid=0, io_cpu_sfence_bits_rs1=0, io_cpu_sfence_bits_rs2=0, io_cpu_sfence_bits_addr=0, io_cpu_brupdate_b2_uop_ftq_idx=0, io_cpu_brupdate_b2_uop_pc_lob=0, io_cpu_brupdate_b2_mispredict=0, io_cpu_brupdate_b2_taken=0, io_cpu_redirect_flush=0, io_cpu_redirect_val=0, io_cpu_redirect_pc=0, io_cpu_redirect_ftq_idx=0, io_cpu_redirect_ghist_old_history=0, io_cpu_redirect_ghist_current_saw_branch_not_taken=0, io_cpu_redirect_ghist_new_saw_branch_not_taken=0, io_cpu_redirect_ghist_new_saw_branch_taken=0, io_cpu_redirect_ghist_ras_idx=0, io_cpu_commit_valid=commit, io_cpu_commit_bits=retired, io_cpu_flush_icache=0, io_cpu_enable_bpd=1, io_ptw_req_ready=0, io_ptw_resp_valid=0, io_ptw_resp_bits_ae_ptw=0, io_ptw_resp_bits_ae_final=0, io_ptw_resp_bits_pf=0, io_ptw_resp_bits_gf=0, io_ptw_resp_bits_hr=0, io_ptw_resp_bits_hw=0, io_ptw_resp_bits_hx=0, io_ptw_resp_bits_pte_ppn=0, io_ptw_resp_bits_pte_d=0, io_ptw_resp_bits_pte_a=0, io_ptw_resp_bits_pte_g=0, io_ptw_resp_bits_pte_u=0, io_ptw_resp_bits_pte_x=0, io_ptw_resp_bits_pte_w=0, io_ptw_resp_bits_pte_r=0, io_ptw_resp_bits_pte_v=0, io_ptw_resp_bits_level=0, io_ptw_resp_bits_homogeneous=0, io_ptw_ptbr_mode=0, io_ptw_status_debug=0, pmpTable=0, )
+  commit = 0
+  if not reset {
+    if beats != 0 {
+      wrap beats = beats - 1
+    } elif f.auto_icache_master_out_a_valid != 0 {
+      beats = 8
+    }
+    if f.io_cpu_fetchpacket_valid != 0 and count < 32 {
+      for i in 0..<lanes {
+        if f.io_cpu_fetchpacket_bits_uops_0_valid#[i] != 0 {
+          if f.io_cpu_fetchpacket_bits_uops_0_bits_inst#[(32*i)..+32] != 0x13
+            or f.io_cpu_fetchpacket_bits_uops_0_bits_debug_pc#[(40*i)..+40] != 0x10000 + 4*(count + i) {
+            failed = true
+          }
+        }
+      }
+      if f.io_cpu_fetchpacket_bits_uops_0_valid == (1 << lanes) - 1 {
+        wrap count = count + lanes
+        commit  = 1
+        retired = f.io_cpu_fetchpacket_bits_uops_0_bits_ftq_idx#[(ftqBits*(lanes - 1))..+ftqBits]
+      }
+    }
+  }
+  done  = count >= 32
+  error = failed
+}
+
+pub mod frontend_rows(clock:Clock, reset:Reset) -> (done:Bool@[], error:Bool@[]) {
+  const medium = trial<cfg=presets.medium>(clock, reset)
+  const large  = trial<cfg=presets.large>(clock, reset)
+  const mega   = trial<cfg=presets.mega>(clock, reset)
+  const giga   = trial<cfg=presets.giga>(clock, reset)
+  done  = medium.done and large.done and mega.done and giga.done
+  error = medium.error or large.error or mega.error or giga.error
+}
+
+test frontend_rows.sequential {
+  mut d = frontend_rows
+  tick 256 {
+    d.reset = clock < 3
+    step
+    assert(not d.error, "frontend skipped or repeated an instruction in a decode row")
+    if clock == 255 {
+      assert(d.done, "every frontend must deliver at least 32 instructions")
+    }
+  }
+}

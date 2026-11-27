@@ -1,0 +1,30 @@
+const decode = import("../pyrope/DecodeUnit.DecodeUnit")
+
+pub mod immediate_decode(clock:Clock, value:U12) -> (correct:Bool@[]) {
+  const inst = (value << 20) | 0x8093
+  correct = true
+  for bits in (3, 4, 5, 6, 7) {
+    const decoded = decode<immBits=bits>(
+      io_csr_decode_fp_illegal=0, io_csr_decode_read_illegal=0, io_csr_decode_system_illegal=0,
+      io_csr_decode_write_flush=0, io_csr_decode_write_illegal=0, io_enq_uop_bp_debug_if=0,
+      io_enq_uop_bp_xcpt_if=0, io_enq_uop_debug_fsrc=0, io_enq_uop_debug_inst=inst,
+      io_enq_uop_debug_pc=0, io_enq_uop_edge_inst=0, io_enq_uop_ftq_idx=0,
+      io_enq_uop_inst=inst, io_enq_uop_is_rvc=0, io_enq_uop_is_sfb=0,
+      io_enq_uop_pc_lob=0, io_enq_uop_taken=0, io_enq_uop_xcpt_ae_if=0,
+      io_enq_uop_xcpt_pf_if=0, io_fcsr_rm=0, io_interrupt=0,
+      io_interrupt_cause=0,
+    )
+    const fits = value < (1 << (bits-1)) or value >= 4096 - (1 << (bits-1))
+    correct = correct and decoded.io_deq_uop_imm_rename == U1(!fits) and
+      decoded.io_deq_uop_pimm == (if fits { value#[0..+bits] } else { 0 })
+  }
+}
+
+test immediate_decode.addi {
+  mut dut = immediate_decode
+  tick 4096 {
+    dut.value = clock
+    step
+    assert(dut.correct, "decode must preserve every signed ADDI immediate at each tag width")
+  }
+}

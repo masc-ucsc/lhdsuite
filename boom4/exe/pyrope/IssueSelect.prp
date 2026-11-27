@@ -1,0 +1,26 @@
+// Oldest eligible slot first, then lowest eligible port. A slot receives at
+// most one grant even when several execution units can run its operation.
+pub comb select<Q>(requests:Unsigned(bits=Q.numEntries*Q.issueWidth)) ->
+    (grants:Unsigned(bits=Q.numEntries*Q.issueWidth), valid:Unsigned(bits=Q.issueWidth)) {
+  grants = 0
+  valid = 0
+  for slot in 0..<Q.numEntries {
+    mut issued = false
+    for port in 0..<Q.issueWidth {
+      const i = (slot*Q.issueWidth)+port
+      const eligible = Q.useFullIssueSel or slot == 0 or port%2 == slot%2
+      if not issued and valid#[port] == 0 and requests#[i] != 0 and eligible {
+        valid#[port] = 1
+        grants#[i] = 1
+        issued = true
+      }
+    }
+  }
+}
+
+// A wrapping ROB tag is ordered relative to the current head.
+pub comb permitted<bits>(tag:Unsigned(bits=bits), head:Unsigned(bits=bits), pnr:Unsigned(bits=bits),
+    waitForPnr:Bool, address:Bool) -> (allowed:U1) {
+  const reached = if (tag < head) == (pnr < head) { tag <= pnr } else { pnr < head }
+  allowed = if waitForPnr { U1(reached) } elif address { U1(tag == head) } else { 1 }
+}

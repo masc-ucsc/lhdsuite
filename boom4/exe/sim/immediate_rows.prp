@@ -1,0 +1,54 @@
+const immediate = import("../pyrope/ImmRenameStage.ImmRenameStage")
+
+pub mod immediate_rows(
+  clock:Clock,
+  reset:Reset,
+  kill:U1,
+  ready:U1,
+  rename:U5,
+  operand:U30,
+  fire:U5,
+  select:U15,
+) -> (immSel:U15@[], pimm:U30@[], stalls:U5@[]) {
+  const r = immediate<branches=8, physical=48, returns=4, width=5>(
+    clock=clock,
+    reset=reset,
+    kill=kill,
+    ready=ready,
+    rename=rename,
+    checkpoint=0,
+    tag=0,
+    select=select,
+    operand=operand,
+    fire=fire,
+    releaseValid=0,
+    releaseRegs=0,
+    mispredict=0,
+    recover=0,
+    rollback=0,
+  )
+  pimm   = r.pimm
+  immSel = r.immSel
+  stalls = r.stalls
+}
+
+test immediate_rows.operands {
+  mut d = immediate_rows
+  tick 13 {
+    d.reset   = clock < 2
+    d.kill    = U1(clock == 5)
+    d.ready   = U1(clock != 4)
+    d.rename  = if clock == 3 { 21 } else { 31 }
+    d.operand = (44 << 18) | (45 << 6)
+    d.select  = if clock == 3 { 0x4321 } else { 0 }
+    d.fire    = if clock >= 6 { 31 } else { 0 }
+    step
+    if clock >= 3 and clock <= 5 {
+      assert(d.pimm == ((4 << 24) | (44 << 18) | (2 << 12) | (45 << 6)), "preserve inline operands through stall and kill")
+      assert(d.immSel == 0x4321 and d.stalls == 0, "hold each lane selector")
+    }
+    if clock == 12 {
+      assert(d.pimm#[24..+6] > 31 and d.pimm#[24..+6] < 48, "six-bit immediate file allocation")
+    }
+  }
+}

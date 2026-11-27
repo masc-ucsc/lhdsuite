@@ -1,0 +1,41 @@
+const stages = import("PredictorResponse")
+const LoopBranchPredictorColumn = import("LoopBranchPredictorColumn.LoopBranchPredictorColumn")
+
+pub mod LoopBranchPredictorBank<fetchShift=3, pcBits=40>::[timecheck=false](clock:Clock, update:stages.Update<pcBits>, mask:U4, pc:Unsigned(bits=pcBits), fetch:U1, io_f3_fire:U1, base1:stages.BankStage<pcBits>, base2:stages.BankStage<pcBits>, base3:stages.BankStage<pcBits>, updateMeta:U120, reset:Reset) -> (metadata:U120@[], f1:stages.BankStage<pcBits>@[], f2:stages.BankStage<pcBits>@[], f3:stages.BankStage<pcBits>@[]) {
+
+  reg index1:Unsigned(bits=pcBits-fetchShift) = nil
+  reg index2:Unsigned(bits=pcBits-fetchShift) = nil
+  reg mask1:U4 = nil
+  reg mask2:U4 = nil
+  reg mask3:U4 = nil
+  reg branchHits:U4 = nil
+  index1 = pc >> fetchShift
+  index2 = index1
+  mask1 = if fetch != 0 { mask } else { 0 }
+  mask2 = mask1
+  mask3 = mask2
+  branchHits = base2.valid & base2.branch
+
+  reg trainIndex:Unsigned(bits=pcBits-fetchShift) = nil
+  reg trainMeta:U40 = nil
+  reg repair:U4 = nil
+  reg mispredict:U4 = nil
+  trainIndex = update.pc >> fetchShift
+  trainMeta = updateMeta#[0..+40]
+  repair = if (update.valid & update.repair) != 0 { update.branches } else { 0 }
+  mispredict = if (update.valid & update.mispredict & update.missed) != 0 { update.branches } else { 0 }
+
+  mut taken:U4 = 0
+  metadata = 0
+  for lane in 0..<4 {
+    const column = LoopBranchPredictorColumn<indexBits=(pcBits-fetchShift)>(clock, reset, io_f2_req_idx=index2,
+        io_f3_req_fire=mask3#[lane] & branchHits#[lane] & io_f3_fire, io_f3_pred_in=base3.taken#[lane],
+        io_update_mispredict=mispredict#[lane], io_update_repair=repair#[lane],
+        io_update_idx=trainIndex, io_update_meta_s_cnt=trainMeta#[(10*lane)..+10])
+    taken#[lane] = column.io_f3_pred
+    metadata#[(10*lane)..+10] = column.io_f3_meta_s_cnt
+  }
+  f1 = base1
+  f2 = base2
+  f3 = stages.direction<addrBits=pcBits>(incoming=base3, taken)
+}

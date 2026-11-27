@@ -1,0 +1,36 @@
+// Reset invalidates one set each cycle. An accepted read holds its set until
+// the next read, including across writes to other sets.
+pub mod L1MetadataArray<sets=64, ways=4, tagBits=20>(clock:Clock, reset:U1,
+    read:U1, readSet:Unsigned(bits=std.clog2(sets)), write:U1,
+    writeSet:Unsigned(bits=std.clog2(sets)), writeWays:Unsigned(bits=ways),
+    tag:Unsigned(bits=tagBits), state:U2)
+    -> (readReady:U1@[], writeReady:U1@[], tags:Unsigned(bits=ways*tagBits)@[], states:Unsigned(bits=ways*2)@[]) {
+  cassert(sets >= 2 and sets == 1 << std.clog2(sets))
+  comptime const width = std.clog2(sets)
+  reg init:Unsigned(bits=width+1):[initial=0, reset_pin=reset]
+  reg index:Unsigned(bits=width) = nil
+  const ready = init#[width]
+  if ready == 0 { wrap init = init + 1 }
+  readReady = ready & ~write
+  writeReady = ready
+  if ready != 0 and write == 0 and read != 0 { index = readSet }
+  const address = if ready != 0 { writeSet } else { init#[0..+width] }
+  type TagRow = Unsigned(bits=ways*tagBits)
+  type StateRow = Unsigned(bits=ways*2)
+  reg tagRam:[sets]TagRow:[ordering="old"]
+  reg stateRam:[sets]StateRow:[ordering="old"]
+  mut nextTags:TagRow = tagRam[address]
+  mut nextStates:StateRow = stateRam[address]
+  for way in 0..<ways {
+    if writeWays#[way] != 0 {
+      nextTags#[(way*tagBits)..+tagBits] = tag
+      nextStates#[(way*2)..+2] = state
+    }
+  }
+  if ready == 0 or write != 0 {
+    tagRam[address] = if ready == 0 { 0 } else { nextTags }
+    stateRam[address] = if ready == 0 { 0 } else { nextStates }
+  }
+  tags = tagRam[index]
+  states = stateRam[index]
+}

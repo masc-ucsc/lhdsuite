@@ -1,0 +1,26 @@
+const triggers = import("../pyrope/BoomTriggers")
+
+pub mod triggers_test(clock:Clock, reset:Reset, addr:U12, cmd:U3, data:U64, pc:U58, contextValue:U64)
+    -> (fetch:U1@[], load:U1@[], read:U64@[]) {
+  const bank = triggers.registers<vaddrBits=57, count=2, machineBits=5>(clk=clock, rst=reset, index=addr, cmd, data,
+      privilege=3, debug=0, mcontext=contextValue, scontext=0)
+  const matchResult = triggers.lookup<vaddrBits=57, count=2>(table=bank.table, value=pc, access=7)
+  fetch = matchResult.exception#[2]
+  load = matchResult.exception#[0]
+  read = bank.read
+}
+
+test triggers_test.context_and_range {
+  mut d = triggers_test
+  tick 16 {
+    d.reset = clock < 2
+    d.addr = if clock == 2 { 0x7a2 } elif clock == 4 { 0x7a3 } else { 0x7a1 }
+    d.data = if clock == 2 { 0x100000000001000 } elif clock == 4 { (3 << 51) | (1 << 50) } else { 0x145 }
+    d.cmd = if clock >= 2 and clock <= 4 { 5 } else { 0 }
+    d.contextValue = if clock < 7 { 2 } else { 3 }
+    d.pc = if clock == 10 { 0x1800 } else { 0x100000000001800 }
+    step
+    if clock == 3 or (clock >= 7 and clock != 10) { assert(d.fetch == 1 and d.load == 1) }
+    elif clock >= 4 { assert(d.fetch == 0 and d.load == 0) }
+  }
+}

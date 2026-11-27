@@ -1,0 +1,93 @@
+const replacementPolicy = import("../../util/pyrope/ReplacementPolicy.replacementPolicy")
+comb find<ways, depth, vpnBits>(vpn:Unsigned(bits=vpnBits), tags:Unsigned(bits=ways/4*(vpnBits-2)), payload:Unsigned(bits=ways*34), valid:Unsigned(bits=ways))
+    -> (data:U34, hit:U1, multiple:U1, sectorHit:U1, sectorWay:Unsigned(bits=depth), empty:Unsigned(bits=ways/4)) {
+  comptime const rows = ways/4
+  sectorHit = 0
+  sectorWay = 0
+  empty = 0
+  mut hits:Unsigned(bits=rows) = 0
+  data = 0
+  for row in 0..<rows {
+    const mask = valid#[(row*4)..+4]
+    const tagMatch = tags#[(row*(vpnBits-2))..+(vpnBits-2)] == vpn#[2..+(vpnBits-2)]
+    const sector = vpn#[0..+2]
+    empty#[row] = U1(mask == 0)
+    if tagMatch and mask != 0 {
+      sectorHit = 1
+      sectorWay = row
+      if mask#[sector] != 0 {
+        hits#[row] = 1
+        data = data | payload#[((row*4+sector)*34)..+34]
+      }
+    }
+  }
+  hit = U1(hits != 0)
+  multiple = U1((hits & (hits-1)) != 0)
+}
+
+// Four adjacent 4 KiB translations share a VPN tag. A miss captures the
+// replacement before the page-table walk, including partial-sector hits.
+pub mod SectoredTLB<ways=8, ports=1, vpnBits=27>(clock:Clock, reset:U1, vpn:Unsigned(bits=vpnBits), secondVpn:Unsigned(bits=vpnBits)=0, secondValid:U1=0, lookup:U1, miss:U1,
+    refill:U1, refillVpn:Unsigned(bits=vpnBits), refillData:U34, fence:U1, byAddress:U1, byAsid:U1, flush:U1)
+    -> (hit:U1@[], multiple:U1@[], data:U34@[], secondHit:U1@[], secondMultiple:U1@[], secondData:U34@[]) {
+  comptime const rows = ways/4
+  comptime const depth = std.clog2(rows)
+  cassert(rows >= 1 and ways == 4*rows)
+  comptime const indexBits = if rows == 1 { 1 } else { depth }
+  comptime const treeBits = if rows == 1 { 1 } else { (1 << depth)-1 }
+  type Index = Unsigned(bits=indexBits)
+  reg tags:Unsigned(bits=rows*(vpnBits-2)) = nil
+  reg payload:Unsigned(bits=ways*34) = nil
+  reg valid:Unsigned(bits=ways) = nil
+  reg tree:Unsigned(bits=treeBits) = nil
+  reg allocated:Index = nil
+  reg same:U1 = nil
+  const first = find<ways=ways, depth=indexBits, vpnBits=vpnBits>(vpn, tags, payload, valid)
+  hit = first.hit
+  multiple = first.multiple
+  data = first.data
+  mut touch:U1 = first.sectorHit & lookup
+  mut touched:Index = first.sectorWay
+  if ports == 2 {
+    const other = find<ways=ways, depth=indexBits, vpnBits=vpnBits>(vpn=secondVpn, tags, payload, valid)
+    secondHit = other.hit
+    secondMultiple = other.multiple
+    secondData = other.data
+    if secondValid != 0 and other.sectorHit != 0 {
+      touch = 1
+      touched = other.sectorWay
+    }
+  } else {
+    secondHit = 0
+    secondMultiple = 0
+    secondData = 0
+  }
+  const policy = replacementPolicy<count=rows, depth=depth, indexBits=indexBits, treeBits=treeBits>(
+      tree=tree, touch=touched, empty=first.empty)
+  if miss != 0 {
+    same = first.sectorHit
+    allocated = if first.sectorHit != 0 { first.sectorWay } else { policy.victim }
+  }
+  if reset != 0 { tree = 0 }
+  elif touch != 0 { tree = policy.updated }
+  mut nextValid:Unsigned(bits=ways) = valid
+  if refill != 0 {
+    const sector = refillVpn#[0..+2]
+    if same == 0 { nextValid#[(allocated*4)..+4] = 0 }
+    nextValid#[allocated*4+sector] = 1
+    tags#[(allocated*(vpnBits-2))..+(vpnBits-2)] = refillVpn#[2..+(vpnBits-2)]
+    payload#[((allocated*4+sector)*34)..+34] = refillData
+  }
+  if fence != 0 {
+    for i in 0..<ways {
+      const tag = tags#[((i/4)*(vpnBits-2))..+(vpnBits-2)]
+      const entry = payload#[(i*34)..+34]
+      const exact = tag == vpn#[2..+(vpnBits-2)] and i%4 == vpn#[0..+2]
+      const fragmented = tag#[(vpnBits-11)..+9] == vpn#[(vpnBits-9)..+9] and entry#[0] != 0
+      if (byAddress != 0 and (exact or fragmented)) or (byAddress == 0 and (byAsid == 0 or entry#[12] == 0)) {
+        nextValid#[i] = 0
+      }
+    }
+  }
+  valid = if reset != 0 or flush != 0 { 0 } else { nextValid }
+}

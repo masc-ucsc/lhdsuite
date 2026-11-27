@@ -1,0 +1,107 @@
+const predictorRAM = import("PredictorRAM.PredictorRAM")
+
+pub type Training<pcBits=40> = (pc:Unsigned(bits=pcBits), commit:U1, branches:U4, lane:U2, cfi:U1, taken:U1, isBr:U1, jal:U1)
+
+pub comb params(nSets=2048, nCols=8, singlePorted=true, useFlops=false, slow=false) -> (cfg) {
+  cfg = (const nSets=nSets, const nCols=nCols, const singlePorted=singlePorted, const useFlops=useFlops, const slow=slow)
+}
+pub const standard = params()
+pub const fast = params(nSets=128, useFlops=true, singlePorted=false)
+pub const late = params(nCols=2, slow=true)
+
+pub comb train(counter:U2, taken:U1) -> (value:U2) {
+  if taken != 0 { value = if counter == 3 { 3 } else { (counter+1)#[0..+2] } }
+  else { value = if counter == 0 { 0 } else { (counter-1)#[0..+2] } }
+}
+
+pub mod counters<geometry, shift, pcBits=40>(clock:Clock, reset:U1, valid:U1, pc:Unsigned(bits=pcBits), update:Training<pcBits>, meta:U8)
+    -> (taken2:U4@[], taken3:U4@[], meta3:U8@[]) {
+  comptime const sets = geometry.nSets
+  comptime const cols = geometry.nCols
+  comptime const slow = geometry.slow
+  cassert(cols > 1 and cols < sets and cols == 1 << std.clog2(cols) and sets == 1 << std.clog2(sets))
+  comptime const addrBits = std.clog2(sets)
+  comptime const colBits = std.clog2(cols)
+  comptime const rows = sets/cols
+  type Index = Unsigned(bits=addrBits)
+  type Row = Unsigned(bits=std.clog2(rows))
+  reg resetting:U1 = nil
+  reg clearRow:Row = nil
+  if reset != 0 { resetting = 1; clearRow = 0 }
+  elif resetting != 0 {
+    wrap clearRow = clearRow+1
+    if clearRow == rows-1 { resetting = 0 }
+  }
+  reg idx1:Index = nil
+  reg valid1:U1 = nil
+  idx1 = pc#[shift..+addrBits]
+  valid1 = valid
+  const readIdx = if slow { idx1 } else { pc#[shift..+addrBits] }
+  const readValid = if slow { valid1 } else { valid }
+  const writeIdx = update.pc#[shift..+addrBits]
+  reg bypassTag:[2]Index:[ordering="old"] = nil
+  reg bypassData:[2]U8:[ordering="old"] = nil
+  reg head:U1 = nil
+  const hit0 = resetting == 0 and bypassTag[0] == writeIdx
+  const hit1 = resetting == 0 and bypassTag[1] == writeIdx
+  const old = if hit0 { bypassData[0] } elif hit1 { bypassData[1] } else { meta }
+  mut newData:U8 = 0
+  mut writeMask:U4 = update.branches
+  if update.cfi != 0 { writeMask#[update.lane] = 1 }
+  for lane in 0..<4 {
+    const taken = U1(update.cfi != 0 and update.lane == lane and (update.jal != 0 or
+      (update.isBr != 0 and update.branches#[lane] != 0 and update.taken != 0)))
+    newData#[(lane*2)..+2] = train(counter=old#[(lane*2)..+2], taken=taken)
+  }
+  if reset != 0 { head = 0 }
+  elif update.commit != 0 and writeMask != 0 {
+    const dest = if hit0 { 0 } elif hit1 { 1 } else { head }
+    bypassTag[dest] = writeIdx
+    bypassData[dest] = newData
+    if not hit0 and not hit1 { head = 1 ^ head }
+  }
+  mut result:U8 = 0
+  for col in 0..<cols {
+    const read = readValid != 0 and readIdx#[0..+colBits] == col
+    const write = update.commit != 0 and writeIdx#[0..+colBits] == col and not read
+    const r = readIdx#[colBits..+std.clog2(rows)]
+    const w = writeIdx#[colBits..+std.clog2(rows)]
+    const writing = U1(resetting != 0 or write)
+    const wrow = if resetting != 0 { clearRow } else { w }
+    const data:U8 = if resetting != 0 { 0xaa } else { newData }
+    const mask:U4 = if resetting != 0 { 15 } else { writeMask }
+    const enable = U1(read and (!geometry.singlePorted or writing == 0))
+    reg selected:U1 = nil
+    selected = U1(read)
+    mut readValue:U8 = 0
+    if geometry.useFlops {
+      reg array:[rows]U8:[ordering="old"] = nil
+      reg addr:Row = nil
+      addr = r
+      if writing != 0 {
+        for lane in 0..<4 {
+          if mask#[lane] != 0 { array[wrow]#[(lane*2)..+2] = data#[(lane*2)..+2] }
+        }
+      }
+      readValue = if selected != 0 and (!geometry.singlePorted or writing == 0) { array[addr] } else { 0 }
+    } else {
+      readValue = predictorRAM<rows=rows, lanes=4, bits=2>(clock, read=enable, readRow=r,
+          write=writing, writeRow=wrow, data=data, mask=mask)
+    }
+    if selected != 0 { result = result | readValue }
+  }
+  reg fast2:U8 = nil
+  fast2 = result
+  const rowCounters = if slow { result } else { fast2 }
+  reg valid2:U1 = nil
+  valid2 = valid1
+  mut decisions:U4 = 0
+  for lane in 0..<4 { decisions#[lane] = valid2 & ~resetting & rowCounters#[lane*2+1] }
+  reg decisions3:U4 = nil
+  reg lastMeta:U8 = nil
+  decisions3 = decisions
+  lastMeta = rowCounters
+  taken2 = decisions
+  taken3 = decisions3
+  meta3 = lastMeta
+}

@@ -1,0 +1,18 @@
+const stages = import("PredictorResponse")
+const bim = import("BimCounters")
+
+pub mod BIMBranchPredictorBank<fetchShift=3, geometry=bim.standard, pcBits=40>(clock:Clock, update:stages.Update<pcBits>,
+    pc:Unsigned(bits=pcBits), fetch:U1, base1:stages.BankStage<pcBits>, base2:stages.BankStage<pcBits>, base3:stages.BankStage<pcBits>,
+    updateMeta:U120, reset:U1) -> (metadata:U120@[], f1:stages.BankStage<pcBits>@[], f2:stages.BankStage<pcBits>@[], f3:stages.BankStage<pcBits>@[]) {
+  reg training:bim.Training<pcBits> = nil
+  reg trainMeta:U8 = nil
+  trainMeta = updateMeta#[0..+8]
+  training = (pc=update.pc, commit=U1(update.valid != 0 and update.mispredict == 0 and update.repair == 0 and update.wrongTargets == 0),
+      branches=update.branches, lane=update.cfi, cfi=update.cfiValid, taken=update.taken,
+      isBr=update.branch, jal=update.jal)
+  const bank = bim.counters<pcBits=pcBits, geometry=geometry, shift=fetchShift>(clock, reset, valid=fetch, pc, update=training, meta=trainMeta)
+  metadata = bank.meta3
+  f1 = base1
+  f2 = stages.direction<addrBits=pcBits>(incoming=base2, taken=if geometry.slow { base2.taken } else { bank.taken2 })
+  f3 = stages.direction<addrBits=pcBits>(incoming=base3, taken=bank.taken3)
+}

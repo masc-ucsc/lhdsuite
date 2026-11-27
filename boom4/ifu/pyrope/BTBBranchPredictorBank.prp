@@ -1,0 +1,164 @@
+const stages = import("PredictorResponse")
+const ram = import("PredictorRAM.PredictorRAM")
+
+pub comb params(nSets=128, nWays=2, offsetSz=13, extendedNSets=128, useFlops=false) -> (cfg) {
+  cfg = (const nSets=nSets, const nWays=nWays, const offsetSz=offsetSz, const extendedNSets=extendedNSets, const useFlops=useFlops)
+}
+pub const standard = (const nSets=128, const nWays=2, const offsetSz=13, const extendedNSets=128, const useFlops=false)
+pub const fastGeometry = (const nSets=32, const nWays=2, const offsetSz=13, const extendedNSets=32, const useFlops=true)
+
+pub mod BTBBranchPredictorBank<fetchShift=3, addrBits=40, geometry=standard, slow=false, singlePorted=false>(
+    clock:Clock, reset:Reset, update:stages.Update<addrBits>, pc:Unsigned(bits=addrBits), fetch:U1,
+    base1:stages.BankStage<addrBits>, base2:stages.BankStage<addrBits>, base3:stages.BankStage<addrBits>, updateMeta:U120)
+    -> (metadata:U120@[], f1:stages.BankStage<addrBits>@[], f2:stages.BankStage<addrBits>@[], f3:stages.BankStage<addrBits>@[]) {
+  comptime const sets = geometry.nSets
+  comptime const ways = geometry.nWays
+  comptime const indexBits = std.clog2(sets)
+  comptime const tagBits = addrBits-fetchShift-indexBits
+  comptime const offsetBits = geometry.offsetSz
+  comptime const wayBits = if ways == 1 { 1 } else { std.clog2(ways) }
+  comptime const extSets = geometry.extendedNSets
+  cassert(sets >= 1 and sets == 1 << indexBits and ways >= 1)
+  cassert(geometry.extendedNSets >= 1 and geometry.extendedNSets <= sets and geometry.extendedNSets == 1 << std.clog2(extSets))
+  cassert(tagBits > 0 and offsetBits >= 2 and offsetBits < addrBits)
+  type Address = Unsigned(bits=addrBits)
+  type Stage = stages.BankStage<addrBits>
+  reg pc1:Address = nil
+  reg valid1:U1 = nil
+  reg train:stages.Update<addrBits> = nil
+  reg writeWay:Unsigned(bits=wayBits) = nil
+  pc1 = pc & ~7
+  valid1 = fetch
+  train = update
+  train.pc = update.pc & ~7
+  writeWay = updateMeta#[0..+wayBits]
+
+  reg clearing:U1 = nil
+  reg cursor:Unsigned(bits=if sets == 1 { 1 } else { indexBits }) = nil
+  if reset { clearing = 1; cursor = 0 }
+  elif clearing != 0 {
+    wrap cursor = cursor+1
+    if cursor == sets-1 { clearing = 0 }
+  }
+  reg pc2:Address = nil
+  reg valid2:U1 = nil
+  pc2 = pc1
+  valid2 = valid1
+  const readPc = if slow { pc1 } else { pc }
+  const read = if slow { valid1 } else { fetch }
+  const lookupPc = if slow { pc2 } else { pc1 }
+  const lookupValid = if slow { valid2 } else { valid1 }
+  const readSet = ((readPc >> fetchShift) & (sets-1))
+  const writeSet = if clearing != 0 { cursor%sets } else { ((train.pc >> fetchShift) & (sets-1)) }
+  const commit = train.valid != 0 and train.mispredict == 0 and train.repair == 0 and train.wrongTargets == 0
+  const writeTarget = commit and train.cfiValid != 0 and train.taken != 0
+  const dataMask:U4 = if writeTarget { (1 << train.cfi)#[0..+4] } else { 0 }
+  const metaMask = (dataMask | train.branches) & (if commit { 15 } elif train.valid != 0 { train.wrongTargets } else { 0 })
+  const delta:Address = (train.target - train.pc - 2*train.cfi)#[0..+addrBits]
+  const extended = U1(delta != delta#[0..+offsetBits]#sext[0..<offsetBits]#[0..+addrBits])
+  const entry = (delta#[0..+offsetBits] << 1) | extended
+  mut tagWrites:Unsigned(bits=4*(tagBits+1)) = 0
+  mut offsets:Unsigned(bits=4*(offsetBits+1)) = 0
+  for lane in 0..<4 {
+    const tag = if train.wrongTargets#[lane] != 0 { 0 } else { train.pc#[(fetchShift+indexBits)..+tagBits] }
+    tagWrites#[(lane*(tagBits+1))..+(tagBits+1)] = (train.branches#[lane] << tagBits) | tag
+    offsets#[(lane*(offsetBits+1))..+(offsetBits+1)] = entry
+  }
+  mut longTarget:Address = 0
+  if geometry.useFlops {
+    // Store full targets for jumps outside the signed offset range.
+    reg targets:[geometry.extendedNSets]Address:[ordering="old"] = nil
+    if writeTarget and extended != 0 { targets[((train.pc >> fetchShift) & (extSets-1))] = train.target }
+    longTarget = targets[((pc1 >> fetchShift) & (extSets-1))]
+  } else {
+    longTarget = ram<rows=extSets, lanes=1, bits=addrBits>(clock, read=read & U1(not singlePorted or not writeTarget or extended == 0), readRow=((readPc >> fetchShift) & (extSets-1)),
+        write=U1(writeTarget) & extended, writeRow=((train.pc >> fetchShift) & (extSets-1)), data=train.target, mask=1)
+  }
+
+  const queryTag = lookupPc#[(fetchShift+indexBits)..+tagBits]
+  mut allTags:Unsigned(bits=tagBits*(1+4*ways)) = queryTag
+  mut hitWays:Unsigned(bits=ways) = 0
+  mut hits:U4 = 0
+  mut result:Stage = (taken=0, branch=0, jumps=0, valid=0, target=0)
+  for n in 0..<ways {
+    comptime const way = ways-1-n
+    const selected = U1(ways == 1 or writeWay == way or clearing != 0)
+    const tagMask = if clearing != 0 { 15 } else { metaMask }
+    const writeMask = if clearing != 0 { 15 } else { dataMask }
+    const newTags = if clearing != 0 { 0 } else { tagWrites }
+    const newData = if clearing != 0 { 0 } else { offsets }
+    mut tags:Unsigned(bits=4*(tagBits+1)) = 0
+    mut data:Unsigned(bits=4*(offsetBits+1)) = 0
+    if geometry.useFlops {
+      for lane in 0..<4 {
+        reg meta:[sets]Unsigned(bits=tagBits+1):[ordering="old"] = nil
+        reg values:[sets]Unsigned(bits=offsetBits+1):[ordering="old"] = nil
+        if (selected & tagMask#[lane]) != 0 { meta[writeSet] = newTags#[(lane*(tagBits+1))..+(tagBits+1)] }
+        if (selected & writeMask#[lane]) != 0 { values[writeSet] = newData#[(lane*(offsetBits+1))..+(offsetBits+1)] }
+        tags#[(lane*(tagBits+1))..+(tagBits+1)] = meta[((pc1 >> fetchShift) & (sets-1))]
+        data#[(lane*(offsetBits+1))..+(offsetBits+1)] = values[((pc1 >> fetchShift) & (sets-1))]
+      }
+    } else {
+      const writeTags = selected & U1(tagMask != 0)
+      const writeData = selected & U1(writeMask != 0)
+      const stored = ram<rows=sets, lanes=4, bits=(tagBits+1)>(clock, read=read & U1(not singlePorted or writeTags == 0), readRow=readSet, write=writeTags, writeRow=writeSet, data=newTags, mask=tagMask)
+      reg conflict:U1 = nil
+      conflict = writeTags | writeData
+      tags = if singlePorted and conflict != 0 { 0 } else { stored }
+      data = ram<rows=sets, lanes=4, bits=(offsetBits+1)>(clock, read=read & U1(not singlePorted or writeData == 0), readRow=readSet, write=writeData, writeRow=writeSet, data=newData, mask=writeMask)
+    }
+    for lane in 0..<4 {
+      const tag = tags#[(lane*(tagBits+1))..+tagBits]
+      allTags#[((1+4*way+lane)*tagBits)..+tagBits] = tag
+      if tag == queryTag {
+        hitWays#[way] = 1
+        hits#[lane] = 1
+        const valid = lookupValid & ~clearing
+        const branch = tags#[(lane*(tagBits+1))+tagBits]
+        result.valid#[lane] = valid
+        result.branch#[lane] = valid & branch
+        result.jumps#[lane] = valid & ~branch
+        const item = data#[(lane*(offsetBits+1))..+(offsetBits+1)]
+        result.target#[(lane*addrBits)..+addrBits] = if item#[0] != 0 { longTarget }
+            else { (lookupPc + lane*2 + item#[1..+offsetBits]#sext[0..<offsetBits])#[0..+addrBits] }
+      }
+    }
+  }
+  mut victim:Unsigned(bits=wayBits) = 0
+  for bit in 0..<(tagBits*(1+4*ways)) { victim#[bit%wayBits] = victim#[bit%wayBits] ^ allTags#[bit] }
+  for n in 0..<ways { if hitWays#[ways-1-n] != 0 { victim = ways-1-n } }
+  reg way2:Unsigned(bits=wayBits) = nil
+  reg way3:Unsigned(bits=wayBits) = nil
+  reg hit2:U4 = nil
+  reg hit3:U4 = nil
+  reg second:Stage = nil
+  reg third:Stage = nil
+  way2 = if ways == 1 { 0 } else { victim }
+  way3 = if slow { if ways == 1 { 0 } else { victim } } else { way2 }
+  metadata = way3
+  hit2 = hits
+  hit3 = if slow { hits } else { hit2 }
+  second = result
+  if slow { third = result } else { third = second }
+  f1 = base1
+  f2 = base2
+  f3 = base3
+  for lane in 0..<4 {
+    if not slow and hit2#[lane] != 0 {
+      f2.valid#[lane] = second.valid#[lane]
+      f2.branch#[lane] = second.branch#[lane]
+      f2.jumps#[lane] = second.jumps#[lane]
+      f2.taken#[lane] = base2.taken#[lane] | second.jumps#[lane]
+      f2.target#[(lane*addrBits)..+addrBits] = second.target#[(lane*addrBits)..+addrBits]
+    }
+    if hit3#[lane] != 0 {
+      f3.valid#[lane] = third.valid#[lane]
+      if not slow {
+        f3.branch#[lane] = third.branch#[lane]
+        f3.jumps#[lane] = third.jumps#[lane]
+        f3.taken#[lane] = base3.taken#[lane] | third.jumps#[lane]
+      }
+      f3.target#[(lane*addrBits)..+addrBits] = third.target#[(lane*addrBits)..+addrBits]
+    }
+  }
+}

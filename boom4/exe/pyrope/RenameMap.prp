@@ -1,0 +1,47 @@
+// Snapshot position zero precedes the first remap. Each subsequent position
+// sees the writes of all earlier lanes in this dispatch group.
+pub mod RenameMap<width, physical, branches, sources, bypass=false>(
+    clock:Clock, reset:U1, rollback:U1, mispredict:U1, recoverTag:Unsigned(bits=std.clog2(branches)),
+    readers:Unsigned(bits=5*width*sources), writes:Unsigned(bits=width), logical:Unsigned(bits=5*width),
+    dest:Unsigned(bits=width*std.clog2(physical)), commits:Unsigned(bits=width),
+    archLogical:Unsigned(bits=5*width), archDest:Unsigned(bits=width*std.clog2(physical)),
+    snaps:Unsigned(bits=width+1), tags:Unsigned(bits=(width+1)*std.clog2(branches))) ->
+    (mapped:Unsigned(bits=std.clog2(physical)*width*sources)@[]) {
+  cassert(width > 0 and physical >= 32 and branches >= 2)
+  comptime const p = std.clog2(physical)
+  comptime const b = std.clog2(branches)
+  reg spec:Unsigned(bits=32*p) = nil
+  reg arch:Unsigned(bits=32*p) = nil
+  reg saved:[branches]Unsigned(bits=32*p):[ordering="old"] = nil
+  mut next = spec
+  mut committed = arch
+  mapped = 0
+  for i in 0..=width {
+    if snaps#[i] != 0 { saved[tags#[(i*b)..+b]%branches] = next }
+    if i < width {
+      const visible = if bypass { next } else { spec }
+      for j in 0..<sources {
+        const port = (i*sources)+j
+        const addr = readers#[(port*5)..+5]
+        mapped#[(port*p)..+p] = visible#[(addr*p)..+p]
+      }
+      if writes#[i] != 0 {
+        const addr = logical#[(i*5)..+5]
+        next#[(addr*p)..+p] = dest#[(i*p)..+p]
+      }
+      if commits#[i] != 0 {
+        const addr = archLogical#[(i*5)..+5]
+        committed#[(addr*p)..+p] = archDest#[(i*p)..+p]
+      }
+    }
+  }
+  if reset != 0 {
+    for i in 0..<32 {
+      spec#[(i*p)..+p] = i
+      arch#[(i*p)..+p] = i
+    }
+  } else {
+    arch = committed
+    spec = if mispredict != 0 { saved[recoverTag%branches] } elif rollback != 0 { arch } else { next }
+  }
+}

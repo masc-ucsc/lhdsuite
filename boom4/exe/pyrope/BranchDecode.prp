@@ -1,0 +1,34 @@
+// Decode the control-flow and short-forward-branch fields before rename.
+pub comb BranchDecode<addrBits=40>(io_inst:U32, io_pc:Unsigned(bits=addrBits)) ->
+    (io_out_is_ret:U1, io_out_is_call:U1, io_out_target:Unsigned(bits=addrBits),
+     io_out_cfi_type:U3, io_out_sfb_offset_valid:U1, io_out_sfb_offset_bits:U6, io_out_shadowable:U1) {
+  const opcode = io_inst#[0..+7]
+  const rd = io_inst#[7..+5]
+  const funct = io_inst#[12..+3]
+  const rs1 = io_inst#[15..+5]
+  const upper = io_inst#[25..+7]
+  const branch = opcode == 0x63 and (funct < 2 or funct >= 4)
+  const jal = opcode == 0x6f
+  const jalr = opcode == 0x67 and funct == 0
+  io_out_cfi_type = if jalr { 3 } elif jal { 2 } elif branch { 1 } else { 0 }
+  io_out_is_call = U1((jal or jalr) and rd == 1)
+  io_out_is_ret = U1(jalr and (rs1 == 1 or rs1 == 5) and rd == 0)
+
+  const boff:U13 = (io_inst#[31] << 12) | (io_inst#[7] << 11) | (io_inst#[25..+6] << 5) | (io_inst#[8..+4] << 1)
+  const joff:U21 = (io_inst#[31] << 20) | (io_inst#[12..+8] << 12) | (io_inst#[20] << 11) | (io_inst#[21..+10] << 1)
+  const delta = if branch { boff#sext[0..+13] } else { joff#sext[0..+21] }
+  wrap io_out_target = (io_pc + delta) & ~1
+  io_out_sfb_offset_valid = U1(branch and boff > 0 and boff < 64)
+  io_out_sfb_offset_bits = boff#[0..+6]
+
+  const normal = upper == 0
+  const alternate = upper == 0x20
+  const wordOp = funct == 0 or funct == 1 or funct == 5
+  const shiftOp = funct == 1 or funct == 5
+  const alternateOp = funct == 0 or funct == 5
+  const rr = (opcode == 0x33 or (opcode == 0x3b and wordOp)) and (normal or (alternate and alternateOp))
+  const imm = opcode == 0x13 and (!shiftOp or upper >> 1 == 0 or (funct == 5 and upper >> 1 == 0x10))
+  const immWord = opcode == 0x1b and (funct == 0 or (shiftOp and normal) or (funct == 5 and alternate))
+  const move = opcode == 0x33 and funct == 0 and normal and rs1 == 0
+  io_out_shadowable = U1(imm or immWord or opcode == 0x37 or (rr and (rd == rs1 or move)))
+}

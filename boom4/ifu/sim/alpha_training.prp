@@ -1,0 +1,68 @@
+const alpha = import("../pyrope/AlphaDirection.AlphaDirection")
+pub mod alpha_training(
+  clock:Clock,
+  reset:Reset,
+  gh:U32,
+  fire:U1,
+  commit:U1,
+  recover:U1,
+  missed:U1,
+  meta:U64,
+) -> (info:U64@[], prediction:U4@[]) {
+  const p = alpha<chooserRows=8, localRows=8, globalRows=8, localCounterRows=16>(
+    clock,
+    reset,
+    fetch=1,
+    pc=0x1008,
+    global=gh,
+    fire=fire,
+    predictedTakenBranch=1,
+    commit=commit,
+    recover=recover,
+    updatePc=0x1008,
+    updateGlobal=0,
+    branches=1,
+    cfiValid=1,
+    cfi=0,
+    taken=0,
+    isBranch=1,
+    isJal=0,
+    missed=missed,
+    meta=meta,
+  )
+  prediction = p.prediction
+  info       = p.info
+}
+test alpha_training.choose {
+  mut d          = alpha_training
+  mut saved:U64 = 0
+  tick 96 {
+    d.reset   = clock < 2 or clock == 71
+    d.gh      = 0
+    d.commit  = U1(clock == 26 or clock == 45 or clock == 46)
+    d.fire    = U1(clock == 33 or clock == 56)
+    d.recover = U1(clock == 55)
+    d.missed  = U1(clock == 26)
+    d.meta    = if clock == 55 { 5 << 32 } else { saved }
+    step
+    if clock == 24 {
+      assert(d.prediction == 15 and d.info#[0..+8] == 0xaa, "reset favors local weak taken")
+      saved = d.info
+    } elif clock == 32 {
+      assert(d.prediction == 14 and d.info#[0..+2] == 1, "misprediction flips chooser to global")
+    } elif clock == 42 {
+      assert(
+        d.info#[32..+32] == 1 and d.info#[17..+2] == 2 and d.info#[8..+2] == 1,
+        "speculation selects a new local row",
+      )
+      assert(d.prediction == 14, "global wins when the direction banks disagree")
+      saved = d.info
+    } elif clock == 53 {
+      assert(d.info#[17..+2] == 0 and d.info#[8..+2] == 0, "back-to-back training bypasses stale metadata")
+    } elif clock == 67 {
+      assert(d.info#[32..+32] == 5, "repair has priority over speculative history update")
+    } elif clock == 93 {
+      assert(d.info#[32..+32] == 0 and d.prediction == 15, "reset restarts both history and counter sweeps")
+    }
+  }
+}

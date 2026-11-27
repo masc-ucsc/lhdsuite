@@ -1,0 +1,38 @@
+// Check single/double conversion results and exception flags across bubbles.
+const convert = import("../pyrope/IntToFP.IntToFP")
+pub mod int_to_fp_latency(clock:Clock, reset:U1, valid:U1, word:U64, rounding:U3, kind:U2, tag:U1, flags:U1) -> (ok:Bool@[]) {
+  const one = convert<latency=1>(clock=clock, reset=reset, io_in_valid=valid, io_in_bits_typeTagIn=tag,
+    io_in_bits_wflags=flags, io_in_bits_rm=rounding, io_in_bits_typ=kind, io_in_bits_in1=word)
+  reg history:[4]U70:[ordering="old"]
+  reg seen:U5
+  wrap seen = if reset != 0 { 0 } else { (seen << 1) | valid }
+  const result:U70 = (one.io_out_bits_data, one.io_out_bits_exc)#[..]
+  history[0] = result
+  for i in 1..<4 { history[i] = history[i-1] }
+  mut good = true
+  for stages in 2..=5 {
+    const conv = convert<latency=stages>(clock=clock, reset=reset, io_in_valid=valid, io_in_bits_typeTagIn=tag,
+      io_in_bits_wflags=flags, io_in_bits_rm=rounding, io_in_bits_typ=kind, io_in_bits_in1=word)
+    const delayed:U70 = (conv.io_out_bits_data, conv.io_out_bits_exc)#[..]
+    if seen#[stages-1] != 0 { good = good and delayed == history[stages-2] }
+  }
+  ok = good
+}
+test int_to_fp_latency.alignment {
+  mut dut = int_to_fp_latency
+  mut x:U64 = 0x1d473825
+  tick 8192 {
+    wrap x = x ^ (x << 13)
+    wrap x = x ^ x#[7..+57]
+    wrap x = x ^ (x << 17)
+    dut.reset = U1(clock < 4 or clock%251 == 0)
+    dut.valid = x#[3]
+    dut.word = x
+    dut.kind = x#[0..+2]
+    dut.tag = x#[7]
+    dut.rounding = x#[4..+3]%5
+    dut.flags = x#[2]
+    step
+    if clock >= 8 { assert(dut.ok, "integer to FP result or flags arrived at the wrong cycle") }
+  }
+}

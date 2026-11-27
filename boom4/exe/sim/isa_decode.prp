@@ -1,0 +1,35 @@
+const decode = import("../pyrope/DecodeUnit.DecodeUnit")
+
+pub mod isa_decode(clock:Clock, inst:U32) -> (correct:Bool@[]) {
+  correct = true
+  for features in 0..<4 {
+    comptime const atomics = features%2 == 1
+    comptime const floating = features >= 2
+    const decoded = decode<useAtomics=atomics, usingFPU=floating>(
+      io_csr_decode_fp_illegal=0, io_csr_decode_read_illegal=0, io_csr_decode_system_illegal=0,
+      io_csr_decode_write_flush=0, io_csr_decode_write_illegal=0, io_enq_uop_bp_debug_if=0,
+      io_enq_uop_bp_xcpt_if=0, io_enq_uop_debug_fsrc=0, io_enq_uop_debug_inst=inst,
+      io_enq_uop_debug_pc=0, io_enq_uop_edge_inst=0, io_enq_uop_ftq_idx=0,
+      io_enq_uop_inst=inst, io_enq_uop_is_rvc=0, io_enq_uop_is_sfb=0,
+      io_enq_uop_pc_lob=0, io_enq_uop_taken=0, io_enq_uop_xcpt_ae_if=0,
+      io_enq_uop_xcpt_pf_if=0, io_fcsr_rm=0, io_interrupt=0,
+      io_interrupt_cause=0,
+    )
+    const isAtomic = inst#[0..+7] == 0x2f
+    const isFloat = inst#[0..+7] == 0x53 or inst#[0..+7] == 7 or inst#[0..+7] == 0x27
+    const illegal = (isAtomic and !atomics) or (isFloat and !floating)
+    correct = correct and decoded.io_deq_uop_exception == U1(illegal) and
+        (!illegal or decoded.io_deq_uop_exc_cause == 2)
+  }
+}
+
+test isa_decode.capabilities {
+  mut dut = isa_decode
+  tick 7 {
+    dut.inst = if clock == 0 { 0x1000b1af } elif clock == 1 { 0x1820b1af }
+      elif clock == 2 { 0x0020b1af } elif clock == 3 { 0x022081d3 }
+      elif clock == 4 { 0x0000b187 } elif clock == 5 { 0x0030b027 } else { 0x00100193 }
+    step
+    assert(dut.correct, "each tile must enforce its configured atomic and floating-point extensions")
+  }
+}

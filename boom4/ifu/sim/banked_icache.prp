@@ -1,0 +1,41 @@
+const adapter = import("../pyrope/ICacheRefill.ICacheRefill")
+const cache = import("../pyrope/ICache.ICache")
+const config = import("../../common/pyrope/BoomConfig")
+
+mod trial<C>(clock:Clock, reset:U1, cycle:U8) -> (ok:Bool@[]) {
+  const scan = cycle >= 56
+  const offset = if scan { (cycle-56)/5 } elif cycle >= 28 { 8 } else { 0 }
+  const address = 0x10000 + offset*8
+  const grant = (cycle >= 8 and cycle < 24) or (cycle >= 36 and cycle < 52)
+  const request = (cycle >= 3 and cycle < 6) or (cycle >= 31 and cycle < 34) or scan
+  const beat = if cycle >= 36 { (cycle-36)/2+8 } else { (cycle-8)/2 }
+  const refill = adapter<banks=2>(clock, reset, valid=U1(grant and cycle#[0] == 0),
+      hasData=1, size=6, data=(0x12345670+beat)#[0..+64])
+  const c = cache<C>(clock=clock, reset=reset, auto_master_out_a_ready=1, auto_master_out_d_valid=refill.outValid,
+    auto_master_out_d_bits_opcode=(e2=1,e1=0,e0=1), auto_master_out_d_bits_size=6, auto_master_out_d_bits_data=refill.outData,
+    io_req_valid=U1(request), io_req_bits_addr=address, io_s1_paddr=address, io_s1_kill=0, io_s2_kill=0, io_invalidate=0)
+  const first = 0x12345670+offset
+  ok = !scan or (cycle-56)%5 < 3 or
+       (c.io_resp_valid != 0 and c.io_resp_bits_data#[0..+64] == first and c.io_resp_bits_data#[64..+64] == first+1)
+}
+
+pub mod banked_icache(clock:Clock, reset:U1, cycle:U8) -> (ok:Bool@[]) {
+  mut good = true
+  for single in 0..=1 {
+    for delayed in 0..=1 {
+      comptime const cfg = config.params(fetchWidth=8, icacheSets=8, icacheWays=2,
+        icacheSinglePorted=(single != 0), enableICacheDelay=(delayed != 0))
+      good = good and trial<C=cfg>(clock=clock, reset=reset, cycle=cycle)
+    }
+  }
+  ok = good
+}
+test banked_icache.interleaving {
+  mut d = banked_icache
+  tick 131 {
+    d.reset = U1(clock < 2)
+    d.cycle = clock
+    step
+    assert(d.ok, "wrong bank order or data when fetching across a refill beat or cache line")
+  }
+}

@@ -1,0 +1,93 @@
+mod registerBank<bank, physical, bits, banks, logical, reads, writes, dedicated>(
+  clock:Clock,
+  valid:Unsigned(bits=logical),
+  addr:Unsigned(bits=logical*std.clog2(physical)),
+  write:Unsigned(bits=writes),
+  writeAddr:Unsigned(bits=writes*std.clog2(physical)),
+  writeData:Unsigned(bits=writes*bits),
+) -> (data:Unsigned(bits=logical*bits)@[], ready:Unsigned(bits=logical)@[]) {
+  comptime const p       = std.clog2(physical)
+  comptime const b       = std.clog2(banks)
+  comptime const rows    = physical/banks
+  comptime const a       = if rows > 1 { std.clog2(rows) } else { 1 }
+  comptime const selBits = if reads > 1 { std.clog2(reads) } else { 1 }
+  ready = 0
+  data  = 0
+  reg ram:[rows]Unsigned(bits=bits):[ordering="old"] = nil
+  reg addresses:Unsigned(bits=reads*a)               = nil
+  reg selects:Unsigned(bits=logical*selBits)         = nil
+  reg selectedBank:Unsigned(bits=logical)            = nil
+  mut count                                     = 0
+  mut nextAddress:Unsigned(bits=reads*a)        = 0
+  mut nextSelect:Unsigned(bits=logical*selBits) = 0
+  mut targets:Unsigned(bits=logical)            = 0
+  for i in 0..<logical {
+    const regno  = addr#[(i*p)..+p]
+    const target = (regno & (banks - 1)) == bank
+    targets#[i] = U1(target)
+    if target and count < reads {
+      ready#[i] = 1
+      if valid#[i] != 0 {
+        for port in 0..<reads {
+          if count == port {
+            nextSelect#[(i*selBits)..+selBits] = port
+            nextAddress#[(port*a)..+a]         = regno >> b
+          }
+        }
+        count = count + 1
+      }
+    }
+  }
+  selects      = nextSelect
+  selectedBank = targets
+  addresses    = nextAddress
+  for port in 0..<reads {
+    const word = ram[addresses#[(port*a)..+a]%rows]
+    for i in 0..<logical {
+      if selectedBank#[i] != 0 and selects#[(i*selBits)..+selBits] == port {
+        data#[(i*bits)..+bits] = word
+      }
+    }
+  }
+  for i in 0..<writes {
+    const regno = writeAddr#[(i*p)..+p]
+    const fixed = (dedicated >> (i*4)) & 15
+    if fixed == 0 or fixed == bank + 1 {
+      if write#[i] != 0 and (fixed != 0 or (regno & (banks - 1)) == bank) {
+        assert((regno & (banks - 1)) == bank, "physical register must match the dedicated write bank")
+        ram[(regno >> b)%rows] = writeData#[(i*bits)..+bits]
+      }
+    }
+  }
+}
+
+// Low physical-register bits select the bank. Within each bank, read
+// requests take ports in logical-port order. The selection and SRAM address
+// advance together to register read one cycle later.
+pub mod PhysicalRegisterFile<physical, bits, banks, logical, reads, writes, dedicated=0>(
+  clock:Clock,
+  valid:Unsigned(bits=logical),
+  addr:Unsigned(bits=logical*std.clog2(physical)),
+  write:Unsigned(bits=writes),
+  writeAddr:Unsigned(bits=writes*std.clog2(physical)),
+  writeData:Unsigned(bits=writes*bits),
+) -> (data:Unsigned(bits=logical*bits)@[], ready:Unsigned(bits=logical)@[]) {
+  cassert(banks > 0 and banks == 1 << std.clog2(banks) and physical%banks == 0)
+  cassert(logical > 0 and reads > 0 and writes > 0)
+  ready = 0
+  data  = 0
+  for i in 0..<banks {
+    const result = registerBank<
+      bank=i,
+      banks=banks,
+      bits=bits,
+      dedicated=dedicated,
+      logical=logical,
+      physical=physical,
+      reads=reads,
+      writes=writes,
+    >(addr, clock, valid, write, writeAddr, writeData)
+    ready = ready | result.ready
+    data  = data | result.data
+  }
+}

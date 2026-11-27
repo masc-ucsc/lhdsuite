@@ -1,0 +1,51 @@
+const divide = import("../pyrope/MulDiv.MulDiv")
+const configs = import("../../common/pyrope/BoomConfig")
+
+pub mod divider_profiles(clock:Clock, reset:U1, start:U1, op:U5, left:U64, right:U64, wide:U1, expected:U64) ->
+    (done:U5@[], wrong:U5@[]) {
+  comptime const profiles = (configs.defaultMulDiv, configs.integerDivide(divEarlyOut=false),
+      configs.integerDivide(divUnroll=3, divEarlyOut=false), configs.integerDivide(divUnroll=4, divEarlyOutGranularity=8),
+      configs.integerDivide(divUnroll=3, divEarlyOut=true))
+  for port in 0..<5 {
+    comptime const cfg = profiles[port]
+    const d = divide<cfg>(clock, reset, io_req_valid=start, io_kill=0, io_req_bits_fn=op,
+        io_req_bits_dw=wide, io_req_bits_in1=left, io_req_bits_in2=right, io_resp_ready=1)
+    done#[port] = d.io_resp_valid
+    wrong#[port] = d.io_resp_valid & U1(d.io_resp_bits_data != expected)
+  }
+}
+
+test divider_profiles.quotient_and_remainder {
+  mut dut = divider_profiles
+  mut seen:U5 = 0
+  tick 2000 {
+    const phase = clock%100
+    const group = clock/100
+    const mode = group%5
+    const negative = mode == 1
+    const lhs = if mode == 4 { 0x8000000000000000 } elif negative { 0xffffffffffffff9c } else { 100 }
+    const rhs = if mode == 2 { 0 } elif mode == 4 { 0xffffffffffffffff } else { 7 }
+    const rem = group%2 != 0
+    const unsigned = mode == 3
+    const expected = if mode == 2 { if rem { 100 } else { 0xffffffffffffffff } }
+        elif mode == 4 { if rem { 0 } else { 0x8000000000000000 } }
+        elif negative { if rem { 0xfffffffffffffffe } else { 0xfffffffffffffff2 } }
+        else { if rem { 2 } else { 14 } }
+    dut.reset = U1(phase == 0)
+    dut.start = U1(phase == 2)
+    dut.op = 4 + U1(unsigned) + (U1(rem) << 1)
+    dut.wide = U1(mode == 4 or group < 10)
+    dut.expected = expected
+    dut.left = lhs
+    dut.right = rhs
+    step
+    if phase == 0 { seen = 0 }
+    assert((seen & dut.done) == 0, "one response per division")
+    assert(dut.wrong == 0, "RV64 and word quotient or remainder")
+    if mode == 0 and !rem and phase == 67 {
+      assert(dut.done == 2 and seen == 29, "unrolling and early out reduce latency")
+    }
+    seen = seen | dut.done
+    if phase == 99 { assert(seen == 31, "all divider profiles complete") }
+  }
+}

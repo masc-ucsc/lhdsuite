@@ -1,0 +1,81 @@
+const lsu = import("../pyrope/LSU.LSU")
+
+pub mod lsu_rows<loadEntries=8, storeEntries=8>(
+  clock:Clock,
+  reset:U1,
+  enqueue:U5,
+  commit:U5,
+  completeStores:U1,
+  addressPair:U1=0,
+  load:U5,
+  store:U5,
+) -> (request:U1@[], address:U40@[], loadFull:U5@[], loadTags:Unsigned(bits=5*(1+std.clog2(loadEntries)))@[], storeFull:U5@[], storeTags:Unsigned(bits=5*(1+std.clog2(storeEntries)))@[]) {
+  wire allocatedLoads:Unsigned(bits=5*(1+std.clog2(loadEntries)))  = nil
+  wire allocatedStores:Unsigned(bits=5*(1+std.clog2(storeEntries))) = nil
+  comptime const ldBits = 1+std.clog2(loadEntries)
+  comptime const stBits = 1+std.clog2(storeEntries)
+  const core = lsu<addressPorts=2, loadEntries=loadEntries, storeEntries=storeEntries,
+    ldBits=ldBits, stBits=stBits, dataPorts=2, lanes=5>(clock=clock, second=(valid=addressPair, ldq=1, stq=0, load=1, store=0, addr=0x80000180, mask=0), io_core_agen_0_bits_data=0x80000080, io_core_agen_0_bits_uop_br_mask=0, io_core_agen_0_bits_uop_dst_rtype=0, io_core_agen_0_bits_uop_fp_val=0, io_core_agen_0_bits_uop_ldq_idx=0, io_core_agen_0_bits_uop_pdst=0, io_core_agen_0_bits_uop_stq_idx=0, io_core_agen_0_bits_uop_uses_ldq=addressPair, io_core_agen_0_bits_uop_uses_stq=0, io_core_agen_0_valid=addressPair, io_core_brupdate_b1_mispredict_mask=0, io_core_brupdate_b1_resolve_mask=0, io_core_brupdate_b2_mispredict=0, io_core_brupdate_b2_uop_ldq_idx=0, io_core_brupdate_b2_uop_stq_idx=0, io_core_commit_load_at_rob_head=0, io_core_commit_uops_0_uses_ldq=load, io_core_commit_uops_0_uses_stq=store, io_core_commit_valids_0=commit, io_core_dgen_0_bits_data=(U64(100), U64(101))#[..], io_core_dgen_0_bits_uop_stq_idx=1 << stBits, io_core_dgen_0_valid=if completeStores != 0 { 3 } else { 0 }, io_core_dgen_1_bits_data=102, io_core_dgen_1_bits_uop_stq_idx=2, io_core_dgen_1_valid=completeStores, io_core_dgen_2_bits_data=103, io_core_dgen_2_bits_uop_stq_idx=3, io_core_dgen_2_valid=completeStores, io_core_dis_uops_0_bits_bp_debug_if=0, io_core_dis_uops_0_bits_bp_xcpt_if=0, io_core_dis_uops_0_bits_br_mask=0, io_core_dis_uops_0_bits_br_tag=0, io_core_dis_uops_0_bits_br_type=0, io_core_dis_uops_0_bits_csr_cmd=0, io_core_dis_uops_0_bits_debug_fsrc=0, io_core_dis_uops_0_bits_debug_inst=0, io_core_dis_uops_0_bits_debug_pc=0, io_core_dis_uops_0_bits_debug_tsrc=0, io_core_dis_uops_0_bits_dst_rtype=0, io_core_dis_uops_0_bits_edge_inst=0, io_core_dis_uops_0_bits_exc_cause=0, io_core_dis_uops_0_bits_exception=0, io_core_dis_uops_0_bits_fcn_dw=0, io_core_dis_uops_0_bits_fcn_op=0, io_core_dis_uops_0_bits_flush_on_commit=0, io_core_dis_uops_0_bits_fp_ctrl_div=0, io_core_dis_uops_0_bits_fp_ctrl_fastpipe=0, io_core_dis_uops_0_bits_fp_ctrl_fma=0, io_core_dis_uops_0_bits_fp_ctrl_fromint=0, io_core_dis_uops_0_bits_fp_ctrl_ldst=0, io_core_dis_uops_0_bits_fp_ctrl_ren1=0, io_core_dis_uops_0_bits_fp_ctrl_ren2=0, io_core_dis_uops_0_bits_fp_ctrl_ren3=0, io_core_dis_uops_0_bits_fp_ctrl_sqrt=0, io_core_dis_uops_0_bits_fp_ctrl_swap12=0, io_core_dis_uops_0_bits_fp_ctrl_swap23=0, io_core_dis_uops_0_bits_fp_ctrl_toint=0, io_core_dis_uops_0_bits_fp_ctrl_typeTagIn=0, io_core_dis_uops_0_bits_fp_ctrl_typeTagOut=0, io_core_dis_uops_0_bits_fp_ctrl_vec=0, io_core_dis_uops_0_bits_fp_ctrl_wen=0, io_core_dis_uops_0_bits_fp_ctrl_wflags=0, io_core_dis_uops_0_bits_fp_rm=0, io_core_dis_uops_0_bits_fp_typ=0, io_core_dis_uops_0_bits_fp_val=0, io_core_dis_uops_0_bits_frs3_en=0, io_core_dis_uops_0_bits_ftq_idx=0, io_core_dis_uops_0_bits_fu_code_0=0, io_core_dis_uops_0_bits_fu_code_1=0, io_core_dis_uops_0_bits_fu_code_2=0, io_core_dis_uops_0_bits_fu_code_3=0, io_core_dis_uops_0_bits_fu_code_4=0, io_core_dis_uops_0_bits_fu_code_5=0, io_core_dis_uops_0_bits_fu_code_6=0, io_core_dis_uops_0_bits_fu_code_7=0, io_core_dis_uops_0_bits_fu_code_8=0, io_core_dis_uops_0_bits_fu_code_9=0, io_core_dis_uops_0_bits_imm_packed=0, io_core_dis_uops_0_bits_imm_rename=0, io_core_dis_uops_0_bits_imm_sel=0, io_core_dis_uops_0_bits_inst=0, io_core_dis_uops_0_bits_iq_type_0=0, io_core_dis_uops_0_bits_iq_type_1=0, io_core_dis_uops_0_bits_iq_type_2=0, io_core_dis_uops_0_bits_iq_type_3=0, io_core_dis_uops_0_bits_is_amo=0, io_core_dis_uops_0_bits_is_eret=0, io_core_dis_uops_0_bits_is_fence=0, io_core_dis_uops_0_bits_is_fencei=0, io_core_dis_uops_0_bits_is_mov=0, io_core_dis_uops_0_bits_is_rocc=0, io_core_dis_uops_0_bits_is_rvc=0, io_core_dis_uops_0_bits_is_sfb=0, io_core_dis_uops_0_bits_is_sfence=0, io_core_dis_uops_0_bits_is_sys_pc2epc=0, io_core_dis_uops_0_bits_is_unique=0, io_core_dis_uops_0_bits_iw_issued=0, io_core_dis_uops_0_bits_iw_issued_partial_agen=0, io_core_dis_uops_0_bits_iw_issued_partial_dgen=0, io_core_dis_uops_0_bits_iw_p1_bypass_hint=0, io_core_dis_uops_0_bits_iw_p1_speculative_child=0, io_core_dis_uops_0_bits_iw_p2_bypass_hint=0, io_core_dis_uops_0_bits_iw_p2_speculative_child=0, io_core_dis_uops_0_bits_iw_p3_bypass_hint=0, io_core_dis_uops_0_bits_ldq_idx=allocatedLoads, io_core_dis_uops_0_bits_ldst=0, io_core_dis_uops_0_bits_ldst_is_rs1=0, io_core_dis_uops_0_bits_lrs1=0, io_core_dis_uops_0_bits_lrs1_rtype=0, io_core_dis_uops_0_bits_lrs2=0, io_core_dis_uops_0_bits_lrs2_rtype=0, io_core_dis_uops_0_bits_lrs3=0, io_core_dis_uops_0_bits_mem_cmd=0, io_core_dis_uops_0_bits_mem_signed=0, io_core_dis_uops_0_bits_mem_size=0, io_core_dis_uops_0_bits_op1_sel=0, io_core_dis_uops_0_bits_op2_sel=0, io_core_dis_uops_0_bits_pc_lob=0, io_core_dis_uops_0_bits_pdst=0, io_core_dis_uops_0_bits_pimm=0, io_core_dis_uops_0_bits_ppred=0, io_core_dis_uops_0_bits_ppred_busy=0, io_core_dis_uops_0_bits_prs1=0, io_core_dis_uops_0_bits_prs1_busy=0, io_core_dis_uops_0_bits_prs2=0, io_core_dis_uops_0_bits_prs2_busy=0, io_core_dis_uops_0_bits_prs3=0, io_core_dis_uops_0_bits_prs3_busy=0, io_core_dis_uops_0_bits_rob_idx=0, io_core_dis_uops_0_bits_rxq_idx=0, io_core_dis_uops_0_bits_stale_pdst=0, io_core_dis_uops_0_bits_stq_idx=allocatedStores, io_core_dis_uops_0_bits_taken=0, io_core_dis_uops_0_bits_uses_ldq=load, io_core_dis_uops_0_bits_uses_stq=store, io_core_dis_uops_0_bits_xcpt_ae_if=0, io_core_dis_uops_0_bits_xcpt_ma_if=0, io_core_dis_uops_0_bits_xcpt_pf_if=0, io_core_dis_uops_0_valid=enqueue, io_core_exception=0, io_core_fence_dmem=0, io_core_rob_head_idx=0, io_core_sfence_bits_addr=0, io_core_sfence_bits_rs1=0, io_core_sfence_bits_rs2=0, io_core_sfence_valid=0, io_dmem_ll_resp_bits_data=0, io_dmem_ll_resp_bits_is_hella=0, io_dmem_ll_resp_bits_uop_is_amo=0, io_dmem_ll_resp_bits_uop_ldq_idx=0, io_dmem_ll_resp_bits_uop_stq_idx=0, io_dmem_ll_resp_bits_uop_uses_ldq=0, io_dmem_ll_resp_bits_uop_uses_stq=0, io_dmem_ll_resp_valid=0, io_dmem_nack_0_bits_addr=0, io_dmem_nack_0_bits_is_hella=0, io_dmem_nack_0_bits_uop_ldq_idx=0, io_dmem_nack_0_bits_uop_mem_size=0, io_dmem_nack_0_bits_uop_stq_idx=0, io_dmem_nack_0_bits_uop_uses_ldq=0, io_dmem_nack_0_bits_uop_uses_stq=0, io_dmem_nack_0_valid=0, io_dmem_ordered=0, io_dmem_perf_acquire=0, io_dmem_perf_release=0, io_dmem_release_bits_address=0, io_dmem_release_valid=0, io_dmem_req_ready=1, io_dmem_resp_0_bits_data=0, io_dmem_resp_0_bits_is_hella=0, io_dmem_resp_0_bits_uop_is_amo=0, io_dmem_resp_0_bits_uop_ldq_idx=0, io_dmem_resp_0_bits_uop_stq_idx=0, io_dmem_resp_0_bits_uop_uses_ldq=0, io_dmem_resp_0_bits_uop_uses_stq=0, io_dmem_resp_0_valid=0, io_dmem_store_ack_0_bits_is_hella=0, io_dmem_store_ack_0_bits_uop_stq_idx=0, io_dmem_store_ack_0_valid=0, io_hellacache_req_bits_addr=0, io_hellacache_req_valid=0, io_hellacache_s1_kill=0, pmpTable=0, io_ptw_ptbr_mode=0, io_ptw_req_ready=0, io_ptw_resp_bits_ae_final=0, io_ptw_resp_bits_homogeneous=0, io_ptw_resp_bits_level=0, io_ptw_resp_bits_pte_a=0, io_ptw_resp_bits_pte_d=0, io_ptw_resp_bits_pte_g=0, io_ptw_resp_bits_pte_ppn=0, io_ptw_resp_bits_pte_r=0, io_ptw_resp_bits_pte_u=0, io_ptw_resp_bits_pte_v=0, io_ptw_resp_bits_pte_w=0, io_ptw_resp_bits_pte_x=0, io_ptw_resp_valid=0, io_ptw_status_debug=0, io_ptw_status_dprv=0, io_ptw_status_mxr=0, io_ptw_status_sum=0, reset=reset, )
+  loadFull        = core.io_core_ldq_full_0
+  storeFull       = core.io_core_stq_full_0
+  allocatedLoads  = core.io_core_dis_ldq_idx_0
+  allocatedStores = core.io_core_dis_stq_idx_0
+  loadTags        = core.io_core_dis_ldq_idx_0
+  storeTags       = core.io_core_dis_stq_idx_0
+  request = core.io_dmem_req_valid & core.io_dmem_req_bits_0_valid
+  address = core.io_dmem_req_bits_0_bits_addr
+}
+
+test lsu_rows.mixed {
+  mut d = lsu_rows
+  tick 10 {
+    d.completeStores = U1(clock == 5)
+    d.reset   = U1(clock < 2)
+    d.load    = if clock == 2 or clock == 3 or clock == 5 { 21 } else { 31 }
+    d.store   = if clock == 2 or clock == 3 or clock == 5 { 10 } else { 0 }
+    d.enqueue = if clock == 2 or clock == 3 { 31 } elif clock == 4 { 3 } else { 0 }
+    d.commit  = if clock == 5 { 31 } else { 0 }
+    step
+    if clock == 2 {
+      assert(d.loadTags == 0x55443 and d.storeTags == 0x43322, "second dispatch row sees three loads and two stores")
+    }
+    if clock == 3 {
+      assert(d.loadFull == 24 and d.storeFull == 0, "two free load entries before wrap")
+    }
+    if clock == 4 {
+      assert(d.loadFull == 31 and d.loadTags == 0xaaa98, "wrapped load queue and two accepted lanes")
+    }
+    if clock == 5 {
+      assert(d.core.storeDataValid#[0..+4] == 15, "all three memory issue ports and the FP store deliver together")
+      assert(d.core.storeDataBits#[0..+64] == 100 and d.core.storeDataBits#[64..+64] == 101, "both data-only memory ports write their own slots")
+      assert(d.core.storeDataBits#[128..+64] == 102 and d.core.storeDataBits#[192..+64] == 103, "address/data and FP ports write their own slots")
+    }
+    if clock >= 6 {
+      assert(d.loadFull == 24 and d.loadTags == 0x88888, "three independently retired loads free the oldest entries")
+      assert(d.storeFull == 0 and d.storeTags == 0x44444, "store commit preserves younger store slots")
+    }
+  }
+}
+
+test lsu_rows.address_pair {
+  mut d = lsu_rows
+  mut seen:U2 = 0
+  tick 48 {
+    d.reset = U1(clock == 0)
+    d.enqueue = if clock == 2 { 3 } else { 0 }
+    d.load = 3
+    d.store = 0
+    d.commit = 0
+    d.completeStores = 0
+    d.addressPair = U1(clock == 5)
+    step
+    if clock == 5 {
+      assert(d.core.loadAddrBits#[40..+40] == 0x80000180, "second address generator writes its own queue entry")
+    }
+    if d.request != 0 {
+      if d.address == 0x80000080 { seen = seen | 1 }
+      if d.address == 0x80000180 { seen = seen | 2 }
+    }
+    if clock == 47 { assert(seen == 3, "both simultaneous addresses reach the data cache") }
+  }
+}

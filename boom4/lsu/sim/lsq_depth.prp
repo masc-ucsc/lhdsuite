@@ -1,0 +1,35 @@
+const rows = import("lsu_rows.lsu_rows")
+
+pub mod lsq_depth(clock:Clock, reset:U1, enqueue:U5, commit:U5, load:U5, store:U5)
+    -> (loads:U30@[], stores:U25@[], loadFull:U5@[], storeFull:U5@[]) {
+  const queue = rows<loadEntries=24, storeEntries=12>(clock=clock, reset=reset,
+    enqueue=enqueue, commit=commit, load=load, store=store, completeStores=0)
+  loads = queue.loadTags
+  stores = queue.storeTags
+  loadFull = queue.loadFull
+  storeFull = queue.storeFull
+}
+
+test lsq_depth.all_slots {
+  mut d = lsq_depth
+  tick 26 {
+    d.reset = U1(clock < 2)
+    d.load = if clock < 14 { 31 } else { 0 }
+    d.store = if clock >= 14 { 31 } else { 0 }
+    d.enqueue = if clock >= 2 and clock <= 5 { 31 } elif clock == 6 { 15 }
+                elif clock >= 14 and clock <= 15 { 31 } elif clock == 16 { 3 } else { 0 }
+    d.commit = if clock >= 8 and clock <= 11 { 31 } elif clock == 12 { 15 } else { 0 }
+    step
+    if clock >= 2 and clock <= 5 {
+      assert(d.loads#[0..+6] == 5*(clock-1), "allocation reaches upper load entries")
+    } elif clock == 6 or clock == 7 {
+      assert(d.loads#[0..+6] == 32 and d.loadFull == 31, "all 24 load entries occupied at wrap")
+    } elif clock == 13 {
+      assert(d.loadFull == 0 and d.loads#[0..+6] == 32, "retirement frees all 24 slots")
+    } elif clock == 14 or clock == 15 {
+      assert(d.stores#[0..+5] == 5*(clock-13), "store allocation progresses independently")
+    } elif clock >= 16 {
+      assert(d.stores#[0..+5] == 16 and d.storeFull == 31, "all 12 store entries occupied at wrap")
+    }
+  }
+}

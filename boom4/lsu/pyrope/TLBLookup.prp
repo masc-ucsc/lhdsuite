@@ -1,0 +1,256 @@
+const geometry = import("../../common/pyrope/PageGeometry")
+const types = import("TLBTypes")
+const regions = import("../../common/pyrope/BoomPMP")
+
+pub comb TLBLookup<pgLevels=3, haveCFlush=false, atomics=true, atomicsOnlyForIO=false, nPMPs=8>(
+    protection:types.Protection,
+    entries:(tags:Unsigned(bits=45*pgLevels), levels:Unsigned(bits=5*std.clog2(pgLevels)), data:U170, valid:U5),
+    ordinary:(hit:U1, multiple:U1, data:U34), command:U5, passthrough:U1, size:U2, address:Unsigned(bits=13+9*pgLevels))
+    -> (ae_ld:U1, ae_st:U1, cacheable:U1, ma_ld:U1, ma_st:U1, miss:U1, paddr:U32, pf_ld:U1, pf_st:U1,
+    pageHits:U5,
+    multipleHits:U1, cacheableRefill:U1, sideEffects:U1, atomicArithmetic:U1,
+    atomicLogical:U1, readable:U1, writable:U1, executable:U1,
+    needsRefill:U1, translationEnabled:U1) {
+  const vm_enabled_0__w1 = protection.ptbr_mode#[3..<4] & (~protection.status_dprv#[1]#[0]) & 1 & (~passthrough) & 1
+  const vpn = address#[12..+(9*pgLevels)]
+  const privilege = if protection.resp_valid != 0 or passthrough != 0 { 1 }
+                    else { (protection.status_debug << 2) | protection.status_dprv }
+  mut translated:U20 = 0
+  mut specialPPN:U20 = 0
+  pageHits = 0
+  for i in 0..<5 {
+    const level = entries.levels#[(i*std.clog2(pgLevels))..+std.clog2(pgLevels)]
+    const tag = entries.tags#[(i*9*pgLevels)..+(9*pgLevels)]
+    const mask = geometry.pageMask<levels=pgLevels>(level)
+    const ppn:U20 = entries.data#[(i*34+14)..+20] | (vpn & mask)#[0..+20]
+    const hit = entries.valid#[i] != 0 and ((tag ^ vpn) & ~mask) == 0
+    pageHits#[i] = U1(hit)
+    if hit and vm_enabled_0__w1 != 0 { translated = translated | ppn }
+    if i == 4 { specialPPN = ppn }
+  }
+  const ordinaryHits = ordinary.hit | (ordinary.multiple << 1)
+  const pageMatches:U7 = if vm_enabled_0__w1 != 0 { (pageHits << 2) | ordinaryHits } else { 0 }
+  const hits_0__w1 = ((1 ^ vm_enabled_0__w1) << 7) | pageMatches
+  const _GEN_16__w1 = (address#[0..<4] & ((1 << size)#[0..<4] - 1)#[0..<4])#[0..<4]
+  const bad_va_0__w1 = vm_enabled_0__w1 & ~geometry.canonical<levels=pgLevels>(address, mode=protection.ptbr_mode)
+  const logical = command == 4 or (command >= 9 and command <= 11)
+  const arithmetic = command == 8 or (command >= 12 and command <= 15)
+  const lrsc = command == 6 or command == 7
+  const read = U1(command == 0 or command == 16 or lrsc or logical or arithmetic)
+  const write = U1(command == 1 or command == 17 or command == 7 or logical or arithmetic)
+  const writePermission = write | U1(haveCFlush and command == 5)
+  const ae_valid_array_0__w1 = (1 << 7) | ((~protection.resp_valid) << 6) | 63
+  const tlb_miss_0__w1 = vm_enabled_0__w1 & ~bad_va_0__w1#[0] & U1(pageMatches == 0)
+  const multipleHits_0__w1 = U1((pageMatches & (pageMatches-1)) != 0)
+  const _GEN_17__w1 = pageMatches
+  const special = types.unpack(data=entries.data#[136..+34])
+  const basePage = types.unpack(data=ordinary.data)
+  const emptyPage = types.unpack(data=0)
+  const super0 = types.unpack(data=entries.data#[0..+34])
+  const super1 = types.unpack(data=entries.data#[34..+34])
+  const super2 = types.unpack(data=entries.data#[68..+34])
+  const super3 = types.unpack(data=entries.data#[102..+34])
+  const io_resp_0_miss__w1 = (((protection.resp_valid | tlb_miss_0__w1) & 1) | multipleHits_0__w1) & 1
+  const basePPN:U20 = if vm_enabled_0__w1 == 0 { address#[12..+20] } elif ordinary.hit != 0 { basePage.ppn } else { 0 }
+  const mpu_ppn_0:U28 = if protection.resp_valid != 0 { protection.resp_bits_pte_ppn#[0..+20] }
+      elif vm_enabled_0__w1 != 0 { specialPPN } else { address#[12..+28] }
+  const _GEN__w1 = (mpu_ppn_0#[0..<9] ^ 0x100)#[0..<9]
+  const _GEN_0__w1 = (mpu_ppn_0#[4..<14] ^ 0x200)#[0..<10]
+  const _GEN_1__w1 = (mpu_ppn_0#[0..<14] ^ 0x2010)#[0..<14]
+  const _GEN_2__w1 = (mpu_ppn_0#[4..<16] ^ 0x800)#[0..<12]
+  const _GEN_3__w1 = (mpu_ppn_0#[16..<20] ^ 8)#[0..<4]
+  mut _b2i_96 = U1(mpu_ppn_0 != 0)
+  mut _b2i_97 = U1(((mpu_ppn_0#[1..<28] << 1) | (~(mpu_ppn_0 & 1)#[0])) == 0)
+  mut _b2i_98 = U1(((mpu_ppn_0#[2..<28] << 2) | (~mpu_ppn_0#[0..<2])) == 0)
+  mut _b2i_99 = U1(((mpu_ppn_0#[5..<28] << 1) | (~mpu_ppn_0#[4..<5])) == 0)
+  mut _b2i_100 = U1(((mpu_ppn_0#[9..<28] << 9) | _GEN__w1#[0..<9]) == 0)
+  mut _b2i_101 = U1(((mpu_ppn_0#[9..<28] << 9) | (mpu_ppn_0#[0..<9] ^ 0x110)#[0..<9]) == 0)
+  mut _b2i_102 = U1(((mpu_ppn_0#[14..<28] << 10) | _GEN_0__w1#[0..<10]) == 0)
+  mut _b2i_103 = U1(((mpu_ppn_0#[14..<28] << 14) | _GEN_1__w1#[0..<14]) == 0)
+  mut _b2i_104 = U1(((mpu_ppn_0#[16..<28] << 12) | _GEN_2__w1#[0..<12]) == 0)
+  mut _b2i_105 = U1(((mpu_ppn_0#[16..<28] << 2) | (~mpu_ppn_0#[14..<16])) == 0)
+  mut _b2i_106 = U1(((mpu_ppn_0#[17..<28] << 17) | (mpu_ppn_0#[0..<17] ^ 0x10020)#[0..<17]) == 0)
+  mut _b2i_107 = U1(((mpu_ppn_0#[20..<28] << 4) | _GEN_3__w1#[0..<4]) == 0)
+  const legal_address_0__w1 = ((((((((((((((((((((((~_b2i_96#[0]) | _b2i_97) & 1) | _b2i_98) & 1) | _b2i_99) & 1) | _b2i_100) & 1) | _b2i_101) & 1) | _b2i_102) & 1) | _b2i_103) & 1) | _b2i_104) & 1) | _b2i_105) & 1) | _b2i_106) & 1) | _b2i_107) & 1
+  mut _b2i_108 = U1(((mpu_ppn_0#[19..<20] << 3) | (_GEN_2__w1#[10..<12] << 1) | mpu_ppn_0#[4..<5]) == 0)
+  const newEntry_c__w1 = legal_address_0__w1 & (_b2i_108 | (~_GEN_3__w1#[3..<4])) & 1
+  mut _b2i_109 = U1(mpu_ppn_0 != 0)
+  const deny_access_to_debug_0__w1 = (~privilege#[2..<3]) & (~_b2i_109#[0]) & 1
+  const _GEN_4__w1 = (mpu_ppn_0#[19..<20] << 4) | (mpu_ppn_0#[15..<17] << 2) | (mpu_ppn_0#[8..<9] << 1) | mpu_ppn_0#[4..<5]
+  const _GEN_5__w1 = (mpu_ppn_0#[19..<20] << 5) | (mpu_ppn_0#[15..<17] << 3) | (mpu_ppn_0#[13..<14] << 2) | (_GEN__w1#[8..<9] << 1) | (mpu_ppn_0 & 1)
+  const _GEN_6__w1 = (mpu_ppn_0#[19..<20] << 6) | (mpu_ppn_0#[15..<17] << 4) | (_GEN_1__w1#[13..<14] << 3) | (mpu_ppn_0#[8..<9] << 2) | (_GEN_1__w1#[4..<5] << 1) | (mpu_ppn_0 & 1)
+  const _GEN_7__w1 = (mpu_ppn_0#[19..<20] << 2) | (mpu_ppn_0#[16..<17] << 1) | _GEN_2__w1#[11..<12]
+  const _GEN_8__w1 = (mpu_ppn_0#[19..<20] << 5) | (mpu_ppn_0#[16..<17] << 4) | (_GEN_2__w1#[11..<12] << 3) | (mpu_ppn_0#[13..<14] << 2) | (mpu_ppn_0#[8..<9] << 1) | mpu_ppn_0#[4..<5]
+  const _GEN_9__w1 = (mpu_ppn_0#[13..<17] ^ 8)#[0..<4]
+  const _GEN_10__w1 = (mpu_ppn_0#[19..<20] << 6) | (_GEN_9__w1#[2..<4] << 4) | (mpu_ppn_0#[13..<14] << 3) | (mpu_ppn_0#[8..<9] << 2) | (mpu_ppn_0#[4..<5] << 1) | (mpu_ppn_0 & 1)
+  const _GEN_11__w1 = (_GEN_3__w1#[3..<4] << 1) | mpu_ppn_0#[16..<17]
+  mut _b2i_110 = U1(_GEN_4__w1 != 0)
+  mut _b2i_111 = U1(_GEN_5__w1 != 0)
+  mut _b2i_112 = U1(_GEN_6__w1 != 0)
+  mut _b2i_113 = U1(_GEN_7__w1 != 0)
+  mut _b2i_114 = U1(_GEN_8__w1 != 0)
+  mut _b2i_115 = U1(_GEN_10__w1 != 0)
+  mut _b2i_116 = U1(_GEN_11__w1 != 0)
+  const newEntry_pal__w1 = legal_address_0__w1 & ((((((((((((~_b2i_110#[0]) | (~_b2i_111#[0])) & 1) | (~_b2i_112#[0])) & 1) | (~_b2i_113#[0])) & 1) | (~_b2i_114#[0])) & 1) | (~_b2i_115#[0])) & 1) | (~_b2i_116#[0])) & 1
+  mut _b2i_117 = U1(_GEN_4__w1 != 0)
+  mut _b2i_118 = U1(_GEN_5__w1 != 0)
+  mut _b2i_119 = U1(_GEN_6__w1 != 0)
+  mut _b2i_120 = U1(_GEN_7__w1 != 0)
+  mut _b2i_121 = U1(_GEN_8__w1 != 0)
+  mut _b2i_122 = U1(_GEN_10__w1 != 0)
+  mut _b2i_123 = U1(_GEN_11__w1 != 0)
+  const newEntry_paa__w1 = legal_address_0__w1 & ((((((((((((~_b2i_117#[0]) | (~_b2i_118#[0])) & 1) | (~_b2i_119#[0])) & 1) | (~_b2i_120#[0])) & 1) | (~_b2i_121#[0])) & 1) | (~_b2i_122#[0])) & 1) | (~_b2i_123#[0])) & 1
+  mut _b2i_124 = if ((mpu_ppn_0#[19..<20] << 7) | (mpu_ppn_0#[13..<17] << 3) | (mpu_ppn_0#[8..<9] << 2) | (mpu_ppn_0#[4..<5] << 1) | mpu_ppn_0#[1..<2]) == 0 {
+    1
+  } else {
+    0
+  }
+  mut _b2i_125 = if ((mpu_ppn_0#[19..<20] << 7) | (mpu_ppn_0#[13..<17] << 3) | (_GEN__w1#[8..<9] << 2) | mpu_ppn_0#[0..<2]) == 0 {
+    1
+  } else {
+    0
+  }
+  mut _b2i_126 = if ((mpu_ppn_0#[19..<20] << 6) | (mpu_ppn_0#[14..<17] << 3) | (_GEN_0__w1#[9..<10] << 2) | (mpu_ppn_0#[8..<9] << 1) | mpu_ppn_0#[4..<5]) == 0 {
+    1
+  } else {
+    0
+  }
+  mut _b2i_127 = if ((mpu_ppn_0#[19..<20] << 8) | (mpu_ppn_0#[14..<17] << 5) | (_GEN_1__w1#[13..<14] << 4) | (mpu_ppn_0#[8..<9] << 3) | (_GEN_1__w1#[4..<5] << 2) | mpu_ppn_0#[0..<2]) == 0 {
+    1
+  } else {
+    0
+  }
+  mut _b2i_128 = U1(((mpu_ppn_0#[19..<20] << 3) | (mpu_ppn_0#[16..<17] << 2) | (~mpu_ppn_0#[14..<16])) == 0)
+  mut _b2i_129 = if ((mpu_ppn_0#[19..<20] << 8) | (_GEN_9__w1#[0..<4] << 4) | (mpu_ppn_0#[8..<9] << 3) | (mpu_ppn_0#[4..<5] << 2) | mpu_ppn_0#[0..<2]) == 0 {
+    1
+  } else {
+    0
+  }
+  const newEntry_eff__w1 = legal_address_0__w1 & (((((((((_b2i_124 | _b2i_125) & 1) | _b2i_126) & 1) | _b2i_127) & 1) | _b2i_128) & 1) | _b2i_129) & 1
+  mut _mux_130:U7 = if (((~protection.status_dprv#[0]#[0]) | protection.status_sum) & 1) != 0 {
+    ((special.u & 1) << 6) | ((super3.u & 1) << 5) | ((super2.u & 1) << 4) | ((super1.u & 1) << 3) | ((super0.u & 1) << 2) | ((emptyPage.u & 1) << 1) | (basePage.u & 1)
+  } else {
+    0
+  }
+  mut _mux_131:U7 = if protection.status_dprv#[0] != 0 {
+    ~(((special.u & 1) << 6) | ((super3.u & 1) << 5) | ((super2.u & 1) << 4) | ((super1.u & 1) << 3) | ((super0.u & 1) << 2) | ((emptyPage.u & 1) << 1) | (basePage.u & 1))#[0..=6]
+  } else {
+    0
+  }
+  const priv_rw_ok_0__w1 = (_mux_130 | _mux_131)#[0..<7]
+  mut _mux_132:U7 = if protection.status_mxr != 0 {
+    ((special.sx & 1) << 6) | ((super3.sx & 1) << 5) | ((super2.sx & 1) << 4) | ((super1.sx & 1) << 3) | ((super0.sx & 1) << 2) | ((emptyPage.sx & 1) << 1) | (basePage.sx & 1)
+  } else {
+    0
+  }
+  const _r_array_T_4__w1 = (priv_rw_ok_0__w1 & ((((special.sr & 1) << 6) | ((super3.sr & 1) << 5) | ((super2.sr & 1) << 4) | ((super1.sr & 1) << 3) | ((super0.sr & 1) << 2) | ((emptyPage.sr & 1) << 1) | (basePage.sr & 1)) | _mux_132)#[0..<7])#[0..<7]
+  const _w_array_T_1__w1 = (priv_rw_ok_0__w1 & (((special.sw & 1) << 6) | ((super3.sw & 1) << 5) | ((super2.sw & 1) << 4) | ((super1.sw & 1) << 3) | ((super0.sw & 1) << 2) | ((emptyPage.sw & 1) << 1) | (basePage.sw & 1)))#[0..<7]
+  const _px_array_T_3__w1 = (1 << 7) | ((~special.ae#[0]) << 6) | ((~super3.ae#[0]) << 5) | ((~super2.ae#[0]) << 4) | ((~super1.ae#[0]) << 3) | ((~super0.ae#[0]) << 2) | ((~emptyPage.ae#[0]) << 1) | (~basePage.ae#[0])
+  mut _rep_133:U2 = if (newEntry_eff__w1 & 1) != 0 { 3 } else { 0 }
+  const eff_array_0__w1 = (_rep_133#[0..<2] << 6) | ((super3.eff & 1) << 5) | ((super2.eff & 1) << 4) | ((super1.eff & 1) << 3) | ((super0.eff & 1) << 2) | ((emptyPage.eff & 1) << 1) | (basePage.eff & 1)
+  mut _rep_134:U2 = if (newEntry_c__w1 & 1) != 0 { 3 } else { 0 }
+  const cacheableMask = (_rep_134#[0..<2] << 6) | ((super3.c & 1) << 5) | ((super2.c & 1) << 4) | ((super1.c & 1) << 3) | ((super0.c & 1) << 2) | ((emptyPage.c & 1) << 1) | (basePage.c & 1)
+  mut _mux_135:U8 = if _GEN_16__w1 != 0 { eff_array_0__w1#[0..<8] } else { 0 }
+  const cachedAtomics:U8 = if atomics and !atomicsOnlyForIO { cacheableMask } else { 0 }
+  mut _mux_136:U8 = if atomics and lrsc { ~cachedAtomics#[0..=7] } else { 0 }
+  const ae_array_0__w1 = (_mux_135 | _mux_136)#[0..<8]
+  mut pmp_0 = regions.check<count=nPMPs>(table=protection.pmpTable, privilege=privilege#[0..+2], address=(mpu_ppn_0#[0..<20] << 12) | address#[0..<12], size=size)
+  mut _mux_137:U7 = if read != 0 {
+    ((~((_r_array_T_4__w1#[6..<7] | special.ae) & 1)#[0]) << 6) | ((~((_r_array_T_4__w1#[5..<6] | super3.ae) & 1)#[0]) << 5) | ((~((_r_array_T_4__w1#[4..<5] | super2.ae) & 1)#[0]) << 4) | ((~((_r_array_T_4__w1#[3..<4] | super1.ae) & 1)#[0]) << 3) | ((~((_r_array_T_4__w1#[2..<3] | super0.ae) & 1)#[0]) << 2) | ((~((_r_array_T_4__w1#[1..<2] | emptyPage.ae) & 1)#[0]) << 1) | (~(((_r_array_T_4__w1 & 1) | basePage.ae) & 1)#[0])
+  } else {
+    0
+  }
+  mut _b2i_138 = U1((((bad_va_0__w1 & read & 1) << 7) | (_mux_137 & _GEN_17__w1)#[0..<7]) != 0)
+  mut _mux_139:U7 = if writePermission != 0 {
+    ((~((_w_array_T_1__w1#[6..<7] | special.ae) & 1)#[0]) << 6) | ((~((_w_array_T_1__w1#[5..<6] | super3.ae) & 1)#[0]) << 5) | ((~((_w_array_T_1__w1#[4..<5] | super2.ae) & 1)#[0]) << 4) | ((~((_w_array_T_1__w1#[3..<4] | super1.ae) & 1)#[0]) << 3) | ((~((_w_array_T_1__w1#[2..<3] | super0.ae) & 1)#[0]) << 2) | ((~((_w_array_T_1__w1#[1..<2] | emptyPage.ae) & 1)#[0]) << 1) | (~(((_w_array_T_1__w1 & 1) | basePage.ae) & 1)#[0])
+  } else {
+    0
+  }
+  mut _b2i_140 = U1((((bad_va_0__w1 & writePermission & 1) << 7) | (_mux_139 & _GEN_17__w1)#[0..<7]) != 0)
+  mut _mux_142:U8 = if (U1(_GEN_16__w1 != 0) & read & 1) != 0 { ~eff_array_0__w1#[0..=7] } else { 0 }
+  mut _b2i_143 = U1((_mux_142 & hits_0__w1)#[0..<8] != 0)
+  mut _mux_145:U8 = if (U1(_GEN_16__w1 != 0) & write & 1) != 0 { ~eff_array_0__w1#[0..=7] } else { 0 }
+  mut _b2i_146 = U1((_mux_145 & hits_0__w1)#[0..<8] != 0)
+  mut _b2i_147 = U1((cacheableMask & hits_0__w1)#[0..<8] != 0)
+  const newEntry_pr__w1 = legal_address_0__w1 & (~deny_access_to_debug_0__w1#[0]) & 1 & pmp_0.io_r & 1
+  mut _b2i_148 = U1(_GEN_4__w1 != 0)
+  mut _b2i_149 = U1(_GEN_5__w1 != 0)
+  mut _b2i_150 = U1(_GEN_6__w1 != 0)
+  mut _b2i_151 = U1(_GEN_7__w1 != 0)
+  mut _b2i_152 = U1(_GEN_8__w1 != 0)
+  mut _b2i_153 = U1(_GEN_10__w1 != 0)
+  mut _b2i_154 = U1(_GEN_11__w1 != 0)
+  const newEntry_pw__w1 = legal_address_0__w1 & ((((((((((((~_b2i_148#[0]) | (~_b2i_149#[0])) & 1) | (~_b2i_150#[0])) & 1) | (~_b2i_151#[0])) & 1) | (~_b2i_152#[0])) & 1) | (~_b2i_153#[0])) & 1) | (~_b2i_154#[0])) & 1 & (~deny_access_to_debug_0__w1#[0]) & 1 & pmp_0.io_w & 1
+  mut _b2i_155 = if ((mpu_ppn_0#[19..<20] << 8) | (mpu_ppn_0#[13..<17] << 4) | (mpu_ppn_0#[8..<9] << 3) | (mpu_ppn_0#[4..<5] << 2) | mpu_ppn_0#[0..<2]) == 0 {
+    1
+  } else {
+    0
+  }
+  mut _b2i_156 = if ((mpu_ppn_0#[19..<20] << 8) | (mpu_ppn_0#[13..<17] << 4) | (mpu_ppn_0#[8..<9] << 3) | (mpu_ppn_0#[4..<5] << 2) | (~mpu_ppn_0#[0..<2])) == 0 {
+    1
+  } else {
+    0
+  }
+  mut _b2i_157 = if ((mpu_ppn_0#[19..<20] << 6) | (mpu_ppn_0#[13..<17] << 2) | (mpu_ppn_0#[8..<9] << 1) | (~mpu_ppn_0#[4..<5])) == 0 {
+    1
+  } else {
+    0
+  }
+  mut _b2i_158 = if ((mpu_ppn_0#[19..<20] << 6) | (mpu_ppn_0#[16..<17] << 5) | (_GEN_2__w1#[9..<12] << 2) | (mpu_ppn_0#[8..<9] << 1) | mpu_ppn_0#[4..<5]) == 0 {
+    1
+  } else {
+    0
+  }
+  mut _b2i_159 = U1(_GEN_11__w1 != 0)
+  const newEntry_px__w1 = legal_address_0__w1 & (((((((_b2i_155 | _b2i_156) & 1) | _b2i_157) & 1) | _b2i_158) & 1) | (~_b2i_159#[0])) & 1 & (~deny_access_to_debug_0__w1#[0]) & 1 & pmp_0.io_x & 1
+  mut _rep_218:U2 = if (newEntry_pr__w1 & 1) != 0 { 3 } else { 0 }
+  mut _mux_219:U8 = if read != 0 {
+    (ae_array_0__w1 | (~(((_rep_218#[0..<2] << 6) | ((super3.pr & 1) << 5) | ((super2.pr & 1) << 4) | ((super1.pr & 1) << 3) | ((super0.pr & 1) << 2) | ((emptyPage.pr & 1) << 1) | (basePage.pr & 1)) & _px_array_T_3__w1)#[0..<8]#[0..=7]))#[0..<8]
+  } else {
+    0
+  }
+  mut _b2i_220 = U1(((ae_valid_array_0__w1 & _mux_219)#[0..<8] & hits_0__w1)#[0..<8] != 0)
+  const t2249 = (newEntry_pw__w1 & 1) != 0
+  mut _rep_221:U2 = if t2249 { 3 } else { 0 }
+  mut _mux_222:U8 = if writePermission != 0 {
+    (ae_array_0__w1 | (~(((_rep_221#[0..<2] << 6) | ((super3.pw & 1) << 5) | ((super2.pw & 1) << 4) | ((super1.pw & 1) << 3) | ((super0.pw & 1) << 2) | ((emptyPage.pw & 1) << 1) | (basePage.pw & 1)) & _px_array_T_3__w1)#[0..<8]#[0..=7]))#[0..<8]
+  } else {
+    0
+  }
+  mut _rep_223:U2 = if (newEntry_pal__w1 & 1) != 0 { 3 } else { 0 }
+  mut _mux_224:U8 = if atomics and logical {
+    ~(((_rep_223#[0..<2] << 6) | ((super3.pal & 1) << 5) | ((super2.pal & 1) << 4) | ((super1.pal & 1) << 3) | ((super0.pal & 1) << 2) | ((emptyPage.pal & 1) << 1) | (basePage.pal & 1)) | cachedAtomics)#[0..<8]#[0..=7]
+  } else {
+    0
+  }
+  mut _rep_225:U2 = if (newEntry_paa__w1 & 1) != 0 { 3 } else { 0 }
+  mut _mux_226:U8 = if atomics and arithmetic {
+    ~(((_rep_225#[0..<2] << 6) | ((super3.paa & 1) << 5) | ((super2.paa & 1) << 4) | ((super1.paa & 1) << 3) | ((super0.paa & 1) << 2) | ((emptyPage.paa & 1) << 1) | (basePage.paa & 1)) | cachedAtomics)#[0..<8]#[0..=7]
+  } else {
+    0
+  }
+  mut _b2i_227 = if ((ae_valid_array_0__w1 & ((_mux_222 | _mux_224)#[0..<8] | _mux_226)#[0..<8])#[0..<8] & hits_0__w1)#[0..<8] != 0 {
+    1
+  } else {
+    0
+  }
+  miss = io_resp_0_miss__w1
+  paddr = ((basePPN | translated) << 12) | address#[0..+12]
+  pf_ld = _b2i_138
+  pf_st = _b2i_140
+  ae_ld = _b2i_220
+  ae_st = _b2i_227
+  ma_ld = _b2i_143
+  ma_st = _b2i_146
+  cacheable = _b2i_147
+  multipleHits = multipleHits_0__w1
+  cacheableRefill = newEntry_c__w1
+  sideEffects = newEntry_eff__w1
+  atomicArithmetic = newEntry_paa__w1
+  atomicLogical = newEntry_pal__w1
+  readable = newEntry_pr__w1
+  writable = newEntry_pw__w1
+  executable = newEntry_px__w1
+  needsRefill = tlb_miss_0__w1
+  translationEnabled = vm_enabled_0__w1
+}
